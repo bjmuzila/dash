@@ -761,6 +761,15 @@ export default function OptionsChainPage() {
     return [...set].sort((a, b) => a - b);
   }, [columns]);
 
+  const grandTotal = useMemo(
+    () => columns.reduce((sum, c) => {
+      let s = 0;
+      c.cells.forEach(cell => { s += cell[greekMode]; });
+      return sum + s;
+    }, 0),
+    [columns, greekMode],
+  );
+
   const nearestStrike = useMemo(() => {
     if (!allStrikes.length) return 0;
     const ref = spot > 0 ? spot : allStrikes[Math.floor(allStrikes.length / 2)];
@@ -1066,6 +1075,12 @@ export default function OptionsChainPage() {
             {autoPercentNote}
           </span>
         ) : null}
+
+        <span style={{ color: HT.border }}>|</span>
+        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HT.muted, fontFamily: "var(--font-mono)" }}>
+          Total {greekMode}:{" "}
+          <span style={{ color: grandTotal >= 0 ? HT.green : HT.red }}>{fmtMoney(grandTotal)}</span>
+        </span>
 
         <div style={{ flex: 1 }} />
 

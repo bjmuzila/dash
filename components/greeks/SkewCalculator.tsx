@@ -12,8 +12,68 @@
  * plus a highlighted regime band and an if-this-then-that lookup table.
  * ──────────────────────────────────────────────────────────────────────────── */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, homeInputStyle } from "@/components/shared/homeTheme";
+
+/* ── Live SPX 0DTE auto-fill ──────────────────────────────────────────────────
+ * Pulls the active-expiry (0DTE) chain from /api/gex — the same feed the Greeks
+ * page / GEX heatmap use — and derives the three IVs the skew needs:
+ *   • OTM put IV  = strike whose |putDelta| is nearest 0.25 (25Δ), below spot
+ *   • OTM call IV = strike whose callDelta is nearest 0.25 (25Δ), above spot
+ *   • ATM IV      = strike nearest spot (avg of call/put IV)
+ * IV fields arrive as decimals (0.15) → shown as percent (15.0).
+ * ──────────────────────────────────────────────────────────────────────────── */
+interface ChainRow {
+  strike: number;
+  callIV?: number;
+  putIV?: number;
+  callDelta?: number;
+  putDelta?: number;
+}
+interface SkewPick {
+  put: number; call: number; atm: number;        // IVs as percent
+  putK: number; callK: number; atmK: number;      // source strikes
+  spot: number; expiry: string | null; ts: number;
+}
+const TARGET_DELTA = 0.25;
+
+function derivePick(rows: ChainRow[], spot: number, expiry: string | null): SkewPick | null {
+  if (!rows.length || !(spot > 0)) return null;
+  const valid = rows.filter(r => Number.isFinite(r.strike));
+  if (!valid.length) return null;
+
+  // ATM: strike nearest spot; IV = mean of call/put where present.
+  const atmRow = valid.reduce((best, r) =>
+    Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, valid[0]);
+  const atmIvs = [atmRow.callIV, atmRow.putIV].filter((v): v is number => Number.isFinite(v) && (v as number) > 0);
+  if (!atmIvs.length) return null;
+  const atm = (atmIvs.reduce((s, v) => s + v, 0) / atmIvs.length) * 100;
+
+  // OTM call: strike above spot with callDelta nearest 0.25 (fallback ~+5%).
+  const calls = valid.filter(r => r.strike > spot && Number.isFinite(r.callIV) && (r.callIV as number) > 0);
+  const puts  = valid.filter(r => r.strike < spot && Number.isFinite(r.putIV)  && (r.putIV  as number) > 0);
+  if (!calls.length || !puts.length) return null;
+
+  const pickBy = (arr: ChainRow[], delta: (r: ChainRow) => number | undefined, fallbackK: number) => {
+    const withD = arr.filter(r => Number.isFinite(delta(r)) && Math.abs(delta(r) as number) > 0);
+    if (withD.length) {
+      return withD.reduce((best, r) =>
+        Math.abs(Math.abs(delta(r) as number) - TARGET_DELTA) < Math.abs(Math.abs(delta(best) as number) - TARGET_DELTA) ? r : best, withD[0]);
+    }
+    // no deltas → nearest strike to the ±5% fallback level
+    return arr.reduce((best, r) => Math.abs(r.strike - fallbackK) < Math.abs(best.strike - fallbackK) ? r : best, arr[0]);
+  };
+  const callRow = pickBy(calls, r => r.callDelta, spot * 1.05);
+  const putRow  = pickBy(puts,  r => r.putDelta,  spot * 0.95);
+
+  return {
+    put: (putRow.putIV as number) * 100,
+    call: (callRow.callIV as number) * 100,
+    atm,
+    putK: putRow.strike, callK: callRow.strike, atmK: atmRow.strike,
+    spot, expiry, ts: Date.now(),
+  };
+}
 
 // Skew regime bands (skew expressed as a percentage: 100 * (Pput−Pcall)/ATM).
 interface Band {
@@ -82,6 +142,51 @@ export default function SkewCalculator() {
   const [callIv, setCallIv] = useState(""); // OTM call IV, %
   const [atmIv, setAtmIv] = useState("");   // ATM IV, %
 
+  // ── Live SPX 0DTE auto-fill ──
+  const [linked, setLinked] = useState(true);         // true = auto-fill from feed
+  const [pick, setPick] = useState<SkewPick | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [feedErr, setFeedErr] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  const applyPick = useCallback((sp: SkewPick) => {
+    setPutIv(sp.put.toFixed(1));
+    setCallIv(sp.call.toFixed(1));
+    setAtmIv(sp.atm.toFixed(1));
+  }, []);
+
+  const fetchLive = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/gex", { cache: "no-store" });
+      const j = res.ok ? await res.json() : null;
+      const sp = j ? derivePick(
+        (Array.isArray(j.chain) ? j.chain : []) as ChainRow[],
+        Number(j.spotPrice ?? 0),
+        j.expiration ?? null,
+      ) : null;
+      if (!mounted.current) return;
+      if (sp) { setPick(sp); setFeedErr(false); if (linked) applyPick(sp); }
+      else setFeedErr(true);
+    } catch { if (mounted.current) setFeedErr(true); }
+    finally { if (mounted.current) setLoading(false); }
+  }, [linked, applyPick]);
+
+  // Poll the 0DTE chain every 60s while linked; one-shot pull when re-linked.
+  useEffect(() => {
+    if (!linked) return;
+    fetchLive();
+    const t = setInterval(fetchLive, 60_000);
+    return () => clearInterval(t);
+  }, [linked, fetchLive]);
+
+  // Editing an input breaks the live link until the user re-links.
+  const editPut  = (v: string) => { setLinked(false); setPutIv(v); };
+  const editCall = (v: string) => { setLinked(false); setCallIv(v); };
+  const editAtm  = (v: string) => { setLinked(false); setAtmIv(v); };
+  const relink = () => { setLinked(true); if (pick) applyPick(pick); };
+
   const p = parseNum(putIv);
   const c = parseNum(callIv);
   const a = parseNum(atmIv);
@@ -120,7 +225,7 @@ export default function SkewCalculator() {
       background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.12) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
     }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12, flexWrap: "wrap" }}>
         <div style={{
           width: 30, height: 30, borderRadius: 8, border: `1px solid ${LIGHT_BLUE}66`,
           display: "flex", alignItems: "center", justifyContent: "center", color: LIGHT_BLUE, fontWeight: 800, fontSize: 15,
@@ -131,13 +236,41 @@ export default function SkewCalculator() {
             (OTM Put IV − OTM Call IV) / ATM IV
           </div>
         </div>
+
+        {/* Live-link control */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: ".06em",
+            color: feedErr ? "#ff5252" : linked ? "#00e676" : "#7e8ea0" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%",
+              background: feedErr ? "#ff5252" : linked ? "#00e676" : "#7e8ea0",
+              boxShadow: linked && !feedErr ? "0 0 8px #00e676" : "none" }} />
+            {feedErr ? "FEED ERR" : linked ? (loading ? "SYNCING…" : "LIVE SPX 0DTE") : "MANUAL"}
+          </span>
+          {linked ? (
+            <button onClick={fetchLive} disabled={loading} title="Refresh 0DTE IVs"
+              style={{ ...homeInputStyle, padding: "4px 10px", fontSize: 10, fontWeight: 800, letterSpacing: ".06em",
+                textTransform: "uppercase", cursor: loading ? "wait" : "pointer", borderColor: `${LIGHT_BLUE}55`, color: LIGHT_BLUE }}>↻ Sync</button>
+          ) : (
+            <button onClick={relink} title="Re-link to live SPX 0DTE IVs"
+              style={{ ...homeInputStyle, padding: "4px 10px", fontSize: 10, fontWeight: 800, letterSpacing: ".06em",
+                textTransform: "uppercase", cursor: "pointer", borderColor: "#00e67655", color: "#00e676" }}>⟲ Link live</button>
+          )}
+        </div>
       </div>
+
+      {/* Source line — which SPX 0DTE strikes feed the calc */}
+      {pick && (
+        <div style={{ fontSize: 10.5, color: "#9fb3c8", fontWeight: 600, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
+          SPX 0DTE{pick.expiry ? ` ${pick.expiry}` : ""} · spot {pick.spot.toFixed(0)} · 25Δ put {pick.putK}
+          {" "}· 25Δ call {pick.callK} · ATM {pick.atmK}
+        </div>
+      )}
 
       {/* Inputs */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-        {inputRow("OTM Put IV", "25Δ / −5-10%", putIv, setPutIv, COLORS.bear)}
-        {inputRow("OTM Call IV", "25Δ / +5-10%", callIv, setCallIv, COLORS.bull)}
-        {inputRow("ATM IV", "spot IV", atmIv, setAtmIv, LIGHT_BLUE)}
+        {inputRow("OTM Put IV", "25Δ / −5-10%", putIv, editPut, COLORS.bear)}
+        {inputRow("OTM Call IV", "25Δ / +5-10%", callIv, editCall, COLORS.bull)}
+        {inputRow("ATM IV", "spot IV", atmIv, editAtm, LIGHT_BLUE)}
 
         {/* Result */}
         <div style={{

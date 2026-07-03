@@ -174,10 +174,19 @@ export default function GexChart({
     const W = container.clientWidth;
     const H = container.clientHeight;
     if (W < 10 || H < 10) return;
-    canvas.width  = W;
-    canvas.height = H;
+    // Back the canvas at devicePixelRatio so it's crisp AND so html2canvas (which
+    // captures at scale=DPR) sees a bitmap that fills the whole output. A CSS-px
+    // backing store rendered only the top 1/DPR of the screenshot (blank bottom).
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width  = `${W}px`;
+    canvas.style.height = `${H}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // All draw math below is in CSS px; scale the context so it maps to the
+    // DPR-backed bitmap.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // ── Background fill — skipped in transparent mode so the panel shows through ──
     if (!transparentBg) {

@@ -95,13 +95,13 @@ const MOTIF={bars:mBars,levels:mLevels,zones:mZones,conf:mConf,bullseye:mBullsey
 function logoAt(x,y,anchor){const a=anchor||"start";return `<g font-family="Inter,Segoe UI,Arial" text-anchor="${a}">
   <text x="${x}" y="${y}" font-size="44" font-weight="800" fill="url(#chrome)" stroke="#5a636d" stroke-width="0.6" letter-spacing="2">CB Edge</text>
   <text x="${x}" y="${y+28}" font-size="15" font-style="italic" fill="${C.text}">&#8220;Real Edge - Real Orderflow&#8221;</text></g>`;}
-function footerCenter(){return `<g font-family="Inter,Segoe UI,Arial" text-anchor="middle"><circle cx="${W/2-118}" cy="${H-67}" r="6" fill="${C.green}"/><text x="${W/2-102}" y="${H-60}" text-anchor="start" font-size="18" font-weight="700" fill="${C.green}">LIVE</text><text x="${W/2+20}" y="${H-58}" font-size="32" font-weight="800" fill="${C.cyan}">cbedge.net</text></g>`;}
+function footerCenter(){return `<g font-family="Inter,Segoe UI,Arial"><circle cx="${W/2-118}" cy="${H-67}" r="6" fill="${C.green}"/><text x="${W/2}" y="${H-58}" text-anchor="middle" font-size="32" font-weight="800" fill="${C.cyan}">cbedge.net</text></g>`;}
 function HL(lines,small,x,y,size,anchor){const a=anchor||"start";let t=`<g font-family="Inter,Segoe UI,Arial" text-anchor="${a}">`;
   lines.forEach((ln,i)=>{t+=`<text x="${x}" y="${y+i*(size*1.12)}" font-size="${size}" font-weight="800" fill="${ln[1]||C.text}">${esc(ln[0])}</text>`;});
   t+=`<text x="${x}" y="${y+lines.length*(size*1.12)-(size*0.40)}" font-size="30" font-weight="500" fill="${C.text}">${esc(small)}</text></g>`;return t;}
 
 function buildSVG(p,idx){
-  const motif=(MOTIF[p.motif]||mBars)();
+  const motif=mBars();
   const style=["hero","center","framed","band"][idx%4];
   let body;
   if(style==="center"){

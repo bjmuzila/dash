@@ -1232,7 +1232,7 @@ export default function EsCandlesPage() {
   }, []);
 
   return (
-    <div className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
+    <div ref={captureRef} className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
       <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
         <FitScale align="center" min={0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
@@ -1366,7 +1366,7 @@ export default function EsCandlesPage() {
         })()}
       </div>
 
-      <div ref={captureRef} className="flex flex-1 flex-row gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
+      <div className="flex flex-1 flex-row gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
        <div className="flex flex-1 flex-col gap-2" style={{ minWidth: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="relative flex-1 overflow-hidden" style={{ ...dissolveCard, minHeight: 320 }}>
