@@ -20,7 +20,7 @@ function keyMode(v: string | undefined): string | null {
 export async function GET() {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (OWNER_USER_ID && userId !== OWNER_USER_ID) {
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

@@ -9,9 +9,9 @@ import { loadLegacyEmails } from "@/lib/emails/legacyEmails";
 // returns the resolvable recipient lists (all signed-up users / paid subscribers
 // only) so the admin page can preview who'll receive a send.
 //
-// SECURITY: gated to OWNER_USER_ID (same pattern as /api/feedback, /dev/*). If
-// OWNER_USER_ID isn't set yet, any signed-in user passes so the owner can't lock
-// themselves out — signed-out requests are always rejected.
+// SECURITY: gated to OWNER_USER_ID (same pattern as /api/feedback, /dev/*).
+// Fails CLOSED — if OWNER_USER_ID is unset/misconfigured, all requests are
+// rejected (403) rather than opened to any signed-in user.
 export const dynamic = "force-dynamic";
 
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
@@ -22,7 +22,7 @@ const FROM_EMAIL = (process.env.EMAIL_FROM || "CB Edge <hello@cbedge.net>").trim
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
   const userId = await getServerUserId();
   if (!userId) return { ok: false, status: 401 };
-  if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };
 }
 

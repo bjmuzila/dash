@@ -23,10 +23,9 @@ import {
   type RecurringFrequency,
 } from "@/lib/db";
 
-// Budget is owner-only. If OWNER_USER_ID is configured, only that Clerk user may
-// read/write; otherwise (not yet set) any signed-in user is allowed so the owner
-// isn't locked out before configuring env. All data lives under one stable
-// profile so it's the owner's single budget regardless of which key is active.
+// Budget is owner-only. Fails CLOSED: only the configured OWNER_USER_ID may
+// read/write, and if OWNER_USER_ID is unset/misconfigured all access is denied.
+// All data lives under one stable profile so it's the owner's single budget.
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 const BUDGET_PROFILE_KEY = "owner";
 
@@ -34,7 +33,7 @@ const BUDGET_PROFILE_KEY = "owner";
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
   const userId = await getServerUserId();
   if (!userId) return { ok: false, status: 401 };
-  if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };
 }
 

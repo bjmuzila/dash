@@ -3,14 +3,14 @@ import { getSupabaseServer, getServerUserId } from "@/lib/supabase/server";
 import { addFeedback, listFeedback, setFeedbackStatus } from "@/lib/db";
 
 // Customer feedback. Any signed-in user may POST a note. Reading the feed and
-// resolving items is owner-only (same gate as /budget). If OWNER_USER_ID is not
-// yet configured, any signed-in user is allowed so the owner isn't locked out.
+// resolving items is owner-only (same gate as /budget). Fails CLOSED: if
+// OWNER_USER_ID is unset/misconfigured, owner-only reads/actions are denied.
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
 async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }> {
   const userId = await getServerUserId();
   if (!userId) return { ok: false, status: 401 };
-  if (OWNER_USER_ID && userId !== OWNER_USER_ID) return { ok: false, status: 403 };
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };
 }
 

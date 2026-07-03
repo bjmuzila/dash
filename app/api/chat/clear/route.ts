@@ -17,7 +17,7 @@ const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 export async function POST() {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (OWNER_USER_ID && userId !== OWNER_USER_ID) {
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!SUPABASE_URL || !SERVICE_KEY) {

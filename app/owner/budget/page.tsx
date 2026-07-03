@@ -293,7 +293,7 @@ export default function BudgetPage() {
             { label: "Total Outflows", value: Math.abs(computed.payments), color: HOME_THEME.red, icon: "📉" },
             { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? HOME_THEME.red : HOME_THEME.green, icon: "💵" },
           ].map((t) => (
-            <div key={t.label} style={{ ...card(), padding: 16, borderTop: `2px solid ${bRgba(t.color, 0.85)}`, background: `radial-gradient(circle at 50% 0%, ${bRgba(t.color, 0.16)} 0%, transparent 62%), ${HOME_THEME.panelBg}` }}>
+            <div key={t.label} style={{ ...card(), padding: 16, borderTop: `2px solid ${bRgba("#7dd3fc", 0.85)}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 14 }}>{t.icon}</span>
                 <span style={labelCap()}>{t.label}</span>
@@ -806,15 +806,13 @@ function bRgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
-// Warm-weighted accent rotation (no cyan) so the cards alternate color instead
-// of reading all-blue. Each adds a colored top strip + radial glow over card().
-const CARD_ACCENTS = [HOME_THEME.orange, HOME_THEME.purple, HOME_THEME.green, HOME_THEME.red];
-function cardAccent(i: number): React.CSSProperties {
-  const c = CARD_ACCENTS[((i % CARD_ACCENTS.length) + CARD_ACCENTS.length) % CARD_ACCENTS.length];
+// Single light-blue highlight strip on every card — no rotating accent colors,
+// no radial color glow.
+const LIGHT_BLUE = "#7dd3fc";
+function cardAccent(_i: number): React.CSSProperties {
   return {
     ...card(),
-    borderTop: `2px solid ${bRgba(c, 0.85)}`,
-    background: `radial-gradient(circle at 50% 0%, ${bRgba(c, 0.16)} 0%, transparent 62%), ${HOME_THEME.panelBg}`,
+    borderTop: `2px solid ${bRgba(LIGHT_BLUE, 0.85)}`,
   };
 }
 function field(): React.CSSProperties {
