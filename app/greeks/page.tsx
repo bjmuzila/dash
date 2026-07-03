@@ -605,6 +605,31 @@ function evaluateGamma(history: GreekPoint[], vol?: VolData | null): GammaSignal
       desc: `DEX has violently flipped the zero-line (${dir}).`,
       edge: "Immediate structural shift in dealer hedging. Expect sudden, aggressive directional momentum — treat as a high-conviction regime change.",
     });
+  } else {
+    // ── 1b. Pre-flip warning: range spikes ≥2× prior 15-min avg while avg stalls ──
+    const now = cur.ts;
+    const recent = history.filter(h => now - h.ts <= 300_000);          // last 5 min
+    const prior  = history.filter(h => now - h.ts > 300_000 && now - h.ts <= 1_200_000); // prior 15 min
+    if (recent.length >= 3 && prior.length >= 3) {
+      const rng  = (a: GreekPoint[]) => Math.max(...a.map(p => p.dex)) - Math.min(...a.map(p => p.dex));
+      const mean = (a: GreekPoint[]) => a.reduce((s, p) => s + p.dex, 0) / a.length;
+      const priRange  = rng(prior) || 1e-6;
+      const rangeMult = rng(recent) / priRange;
+      const avgStall  = Math.abs(mean(recent) - mean(prior)) < priRange;
+      if (rangeMult >= 2 && avgStall) {
+        // Backtest (13 RTH days): open/close windows carry the signal (~58% @2×, 80% @3×);
+        // 13:00–14:00 ET midday fires went 0-for-4. Tag reliability by ET time-of-day.
+        const etM = (() => { const s = new Date(cur.ts).toLocaleString("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }); return Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5)); })();
+        const primeWindow = (etM >= 570 && etM < 690) || (etM >= 840 && etM < 960); // 09:30–11:30 or 14:00–16:00
+        const ctx = primeWindow ? "Prime window (open/close)" : "Midday — lower reliability";
+        sigs.push({
+          id: "dex-preflip", priority: 0, color: primeWindow ? "#fbbf24" : "#a3a3a3", pulse: primeWindow && rangeMult >= 3,
+          title: `WARNING: DEX Pre-Flip Instability (${rangeMult.toFixed(1)}×)`,
+          desc: `DEX 5-min range is ${rangeMult.toFixed(1)}× the prior 15-min while the average stalls. ${ctx}.`,
+          edge: "Consolidation is ending — internal range is exploding while price stays flat. A sharp DEX move or zero-line flip is likely imminent.",
+        });
+      }
+    }
   }
 
   // ── Rapid DEX velocity surge (|Δ| > $15B over window) ──
