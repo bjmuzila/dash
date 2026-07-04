@@ -1522,7 +1522,7 @@ export default function AnalyticsPage() {
   }, []);
   return (
     <PageShell>
-      <div className={`analytics-grid${embed ? " analytics-embed" : ""}`} style={{ display: "grid", gap: 14, gridTemplateColumns: embed ? "1fr" : "repeat(auto-fit, minmax(320px, 1fr))", alignItems: "start" }}>
+      <div className={`analytics-grid${embed ? " analytics-embed" : ""}`} style={{ display: "grid", gap: 14, gridTemplateColumns: embed ? "1fr" : "repeat(4, 1fr)", alignItems: "start" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
         <PremarketCard />

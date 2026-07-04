@@ -24,6 +24,9 @@ const fmtB = (n: number) => {
   return `${s}${a.toFixed(0)}`;
 };
 
+const fmtInt = (n: number) => Math.round(n).toLocaleString();
+const fmtChg = (n: number) => `${n >= 0 ? "+" : ""}${Math.round(n).toLocaleString()}`;
+
 // ── style helpers ─────────────────────────────────────────────────────────────
 
 const th: React.CSSProperties = { padding: "6px 10px", textAlign: "right", fontWeight: 700, letterSpacing: "0.05em" };
@@ -44,7 +47,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gex" | "greeks" | "volpin" | "strike" | "play";
+type MainTab = "gex" | "greeks" | "volpin" | "strike" | "play" | "oi";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -958,8 +961,8 @@ function PlayScanner() {
                   </td>
                   <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{px(r.equilibrium)}</td>
                   <td style={{ ...td, color: HOME_THEME.cyan }}>{px(r.liq_level)}</td>
-                  <td style={{ ...td, color: r.dist_liq_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                    {`${r.dist_liq_pct >= 0 ? "+" : ""}${(r.dist_liq_pct * 100).toFixed(2)}%`}
+                  <td style={{ ...td, color: r.dist_liq_pct == null ? "rgba(255,255,255,0.4)" : r.dist_liq_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                    {r.dist_liq_pct == null ? "—" : `${r.dist_liq_pct >= 0 ? "+" : ""}${(r.dist_liq_pct * 100).toFixed(2)}%`}
                   </td>
                 </tr>
               );
@@ -975,11 +978,163 @@ function PlayScanner() {
 
       {/* Legend */}
       <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
-        <span><span style={{ color: HOME_THEME.cyan }}>FORMING</span> = ≥50% retrace into equilibrium, structure intact</span>
-        <span><span style={{ color: HOME_THEME.orange }}>TRIGGERED</span> = broke swing low/high (liquidity taken)</span>
-        <span><span style={{ color: HOME_THEME.red }}>SHORT</span> down-leg · <span style={{ color: HOME_THEME.green }}>LONG</span> up-leg</span>
-        <span>Liq Level = major swing low (short) / high (long)</span>
+        <span><span style={{ color: HOME_THEME.cyan }}>FORMING</span> = pulled back ≥50% into the discount/premium zone</span>
+        <span><span style={{ color: HOME_THEME.orange }}>TRIGGERED</span> = swept a prior pivot low/high past the 0.5 (liquidity grab)</span>
+        <span><span style={{ color: HOME_THEME.green }}>LONG</span> = uptrend continuation · <span style={{ color: HOME_THEME.red }}>SHORT</span> = downtrend continuation</span>
+        <span>Liq Level = swept low (long) / high (short) past the 0.5</span>
         <span>dominant trend leg · ATR-filtered</span>
+      </div>
+    </Card>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  OI CHANGE SCANNER (new tab) — day-over-day OTM open-interest change, EM watchlist
+// ══════════════════════════════════════════════════════════════════════════════
+
+type OiRow = {
+  symbol: string;
+  expiry: string;
+  strike: number;
+  opt_type: "C" | "P";
+  oi_now: number;
+  oi_prev: number;
+  oi_chg: number;
+  oi_chg_pct: number | null;
+  spot: number;
+  otm_dist_pct: number | null;
+  date: string;
+};
+
+type OiSide = "all" | "call" | "put";
+type OiDir = "all" | "up" | "down";
+
+function OiChangeScanner() {
+  const [rows, setRows] = useState<OiRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [side, setSide] = useState<OiSide>("all");
+  const [dir, setDir] = useState<OiDir>("all");
+  const [limit, setLimit] = useState(100);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const u = new URL("/proxy/oi-change", window.location.origin);
+      u.searchParams.set("side", side);
+      u.searchParams.set("dir", dir);
+      u.searchParams.set("limit", String(limit));
+      const res = await fetch(u.toString(), { cache: "no-store" });
+      const text = await res.text();
+      let j: any;
+      try { j = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status} (non-JSON).`); }
+      if (!j.ok) throw new Error(j.error || "load failed");
+      setRows(j.rows || []);
+    } catch (e: any) { setErr(String(e?.message || e)); }
+    finally { setLoading(false); }
+  }, [side, dir, limit]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
+
+  const asOfDate = rows[0]?.date;
+
+  return (
+    <Card variant="budget" title="OI Change Scanner"
+      subtitle={`Day-over-day OTM open interest · EM watchlist${asOfDate ? ` · as of ${asOfDate}` : ""}${loading ? " · refreshing…" : ""}`}>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setSide("all")} style={seg(side === "all")}>All</button>
+          <button onClick={() => setSide("call")} style={seg(side === "call")}>Calls</button>
+          <button onClick={() => setSide("put")} style={seg(side === "put")}>Puts</button>
+        </div>
+        <span style={{ color: HOME_THEME.border }}>|</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setDir("all")} style={seg(dir === "all")}>Biggest |Δ|</button>
+          <button onClick={() => setDir("up")} style={seg(dir === "up")}>Builds only</button>
+          <button onClick={() => setDir("down")} style={seg(dir === "down")}>Unwinds only</button>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+          rows
+          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}
+            style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+          </select>
+        </label>
+        <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
+      </div>
+
+      {err && (
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+          {err.includes("no DB") || err.includes("503")
+            ? "Recorder hasn't posted today's OI yet — Theta publishes OI ~06:30 ET, retried every 30m."
+            : err}
+        </div>
+      )}
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+              <th style={{ ...th, textAlign: "left" }}>#</th>
+              <th style={{ ...th, textAlign: "left" }}>Symbol</th>
+              <th style={{ ...th, textAlign: "left" }}>Type</th>
+              <th style={th}>Strike</th>
+              <th style={{ ...th, textAlign: "left" }}>Expiry</th>
+              <th style={th}>OTM Dist</th>
+              <th style={th}>OI Prev</th>
+              <th style={th}>OI Now</th>
+              <th style={th}>ΔOI</th>
+              <th style={th}>Δ%</th>
+              <th style={th}>Spot</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const up = r.oi_chg >= 0;
+              const chgCol = up ? HOME_THEME.green : HOME_THEME.red;
+              const isCall = r.opt_type === "C";
+              return (
+                <tr key={`${r.symbol}-${r.expiry}-${r.strike}-${r.opt_type}`}
+                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
+                  <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
+                  <td style={{ ...td, textAlign: "left", color: isCall ? HOME_THEME.green : HOME_THEME.red, fontWeight: 700 }}>
+                    {isCall ? "CALL" : "PUT"}
+                  </td>
+                  <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{r.expiry}</td>
+                  <td style={{ ...td, color: (r.otm_dist_pct ?? 0) <= 3 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>
+                    {r.otm_dist_pct == null ? "—" : `${r.otm_dist_pct.toFixed(1)}%`}
+                  </td>
+                  <td style={{ ...td, color: "rgba(255,255,255,0.6)" }}>{fmtInt(r.oi_prev)}</td>
+                  <td style={td}>{fmtInt(r.oi_now)}</td>
+                  <td style={{ ...td, color: chgCol, fontWeight: 800 }}>{fmtChg(r.oi_chg)}</td>
+                  <td style={{ ...td, color: r.oi_chg_pct == null ? "rgba(255,255,255,0.4)" : r.oi_chg_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                    {r.oi_chg_pct == null ? "—" : `${r.oi_chg_pct >= 0 ? "+" : ""}${r.oi_chg_pct.toFixed(0)}%`}
+                  </td>
+                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot.toFixed(2)}</td>
+                </tr>
+              );
+            })}
+            {!rows.length && !loading && !err && (
+              <tr><td colSpan={11} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                No data yet. OI posts once daily ~06:30 ET — the recorder sweeps the ~380-name EM watchlist and retries every 30m until it's posted.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legend */}
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+        <span>OTM only · calls strike&gt;spot, puts strike&lt;spot</span>
+        <span>ΔOI = today&apos;s posted OI − prior session&apos;s OI</span>
+        <span>Ranked by |ΔOI| · EM watchlist (~380 names) · ≤45 DTE</span>
       </div>
     </Card>
   );
@@ -1017,6 +1172,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "play" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
           background: tab === "play" ? `${HOME_THEME.green}22` : "transparent",
         }}>The Play</button>
+        <button onClick={() => setTab("oi")} style={{
+          ...tabStyle(tab === "oi"),
+          border: `1px solid ${tab === "oi" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
+          background: tab === "oi" ? `${HOME_THEME.orange}22` : "transparent",
+        }}>OI Change</button>
       </div>
 
       {tab === "gex"    && <GexScanner />}
@@ -1024,6 +1184,7 @@ export default function ScannerPage() {
       {tab === "volpin" && <VolPinScanner />}
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "play"   && <PlayScanner />}
+      {tab === "oi"     && <OiChangeScanner />}
     </PageShell>
   );
 }

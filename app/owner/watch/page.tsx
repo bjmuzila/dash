@@ -81,7 +81,7 @@ const METRICS = [
 type MetricKey = (typeof METRICS)[number]["key"];
 
 function HistoryChart({ history, metric }: { history: Snapshot[]; metric: MetricKey }) {
-  const W = 720, H = 200, PADL = 52, PADR = 12, PADT = 14, PADB = 24;
+  const W = 960, H = 360, PADL = 56, PADR = 16, PADT = 16, PADB = 28;
   const pts = history
     .map((s) => ({ ts: s.ts, v: s[metric] as number | null }))
     .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];

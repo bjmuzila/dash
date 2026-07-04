@@ -300,7 +300,8 @@ function detectPlay(bars, L = SWING_LOOKBACK) {
   const close = bars[lastIdx].close;
   if (!(close > 0)) return null;
 
-  const leg = dominantLeg(pivots(bars, L));
+  const piv = pivots(bars, L);
+  const leg = dominantLeg(piv);
   if (!leg) return null;
   const { A, B } = leg;
   const barsSince = lastIdx - B.idx;
@@ -312,51 +313,60 @@ function detectPlay(bars, L = SWING_LOOKBACK) {
   const range = Math.abs(B.price - A.price);
   if (!(range >= minMove)) return null;
 
-  // SHORT — down-leg (high → low): retrace UP to equilibrium, break the swing low.
-  if (A.kind === 'H' && B.kind === 'L') {
-    const H = A.price, Lo = B.price;
+  const eq = (A.price + B.price) / 2; // 0.5 equilibrium of the dominant leg
 
-    let retraceHigh = -Infinity;
-    for (let i = B.idx + 1; i <= lastIdx; i += 1) if (bars[i].high > retraceHigh) retraceHigh = bars[i].high;
-    if (retraceHigh === -Infinity) retraceHigh = close;
-
-    const retr = (retraceHigh - Lo) / range; // 0 at low → ~1 back at high
-    if (retr >= 1.0) return null;            // swing high breached → leg invalidated
-
-    let status = null;
-    if (retr >= RETRACE_MIN && close >= Lo) status = 'forming';
-    else if (retr >= RETRACE_MIN && close < Lo) status = 'triggered';
-    if (!status) return null;
-
-    return {
-      direction: 'short', status,
-      swing_high: H, swing_low: Lo, leg_range: range,
-      retrace_pct: retr, equilibrium: Lo + 0.5 * range, liq_level: Lo,
-      close, dist_liq_pct: (close - Lo) / close, bars_since: barsSince,
-    };
-  }
-
-  // LONG — up-leg (low → high): retrace DOWN to equilibrium, break the swing high.
+  // LONG — dominant UP-leg (A low → B high): with-trend continuation. Price pulls
+  // back ≥50% into discount and SWEEPS a prior pivot low resting UNDER the 0.5
+  // (liquidity grab), then continues up.
   if (A.kind === 'L' && B.kind === 'H') {
-    const Lo = A.price, H = B.price;
+    let retraceLow = Infinity, rIdx = B.idx;
+    for (let i = B.idx + 1; i <= lastIdx; i += 1) {
+      if (bars[i].low < retraceLow) { retraceLow = bars[i].low; rIdx = i; }
+    }
+    if (retraceLow === Infinity || retraceLow <= A.price) return null; // no pullback / origin broken
+    const retr = (B.price - retraceLow) / range;
+    if (retr < RETRACE_MIN) return null;                               // need ≥ 0.5 pullback
 
-    let retraceLow = Infinity;
-    for (let i = B.idx + 1; i <= lastIdx; i += 1) if (bars[i].low < retraceLow) retraceLow = bars[i].low;
-    if (retraceLow === Infinity) retraceLow = close;
-
-    const retr = (H - retraceLow) / range;
-    if (retr >= 1.0) return null;            // swing low breached → leg invalidated
-
-    let status = null;
-    if (retr >= RETRACE_MIN && close <= H) status = 'forming';
-    else if (retr >= RETRACE_MIN && close > H) status = 'triggered';
-    if (!status) return null;
+    // liquidity = most recent prior pivot low resting UNDER the 0.5 (discount shelf)
+    let shelf = null;
+    for (const p of piv) {
+      if (p.kind === 'L' && p.idx > A.idx && p.idx < rIdx && p.price < eq && p.price > A.price) shelf = p;
+    }
+    const liq = shelf ? shelf.price : null;
+    const status = (liq != null && retraceLow < liq) ? 'triggered' : 'forming';
 
     return {
       direction: 'long', status,
-      swing_high: H, swing_low: Lo, leg_range: range,
-      retrace_pct: retr, equilibrium: H - 0.5 * range, liq_level: H,
-      close, dist_liq_pct: (close - H) / close, bars_since: barsSince,
+      swing_high: B.price, swing_low: A.price, leg_range: range,
+      retrace_pct: retr, equilibrium: eq, liq_level: liq,
+      close, dist_liq_pct: liq != null ? (close - liq) / close : null, bars_since: barsSince,
+    };
+  }
+
+  // SHORT — dominant DOWN-leg (A high → B low): with-trend continuation. Price
+  // pulls back ≥50% into premium and SWEEPS a prior pivot high resting OVER the
+  // 0.5, then continues down.
+  if (A.kind === 'H' && B.kind === 'L') {
+    let retraceHigh = -Infinity, rIdx = B.idx;
+    for (let i = B.idx + 1; i <= lastIdx; i += 1) {
+      if (bars[i].high > retraceHigh) { retraceHigh = bars[i].high; rIdx = i; }
+    }
+    if (retraceHigh === -Infinity || retraceHigh >= A.price) return null;
+    const retr = (retraceHigh - B.price) / range;
+    if (retr < RETRACE_MIN) return null;
+
+    let shelf = null;
+    for (const p of piv) {
+      if (p.kind === 'H' && p.idx > A.idx && p.idx < rIdx && p.price > eq && p.price < A.price) shelf = p;
+    }
+    const liq = shelf ? shelf.price : null;
+    const status = (liq != null && retraceHigh > liq) ? 'triggered' : 'forming';
+
+    return {
+      direction: 'short', status,
+      swing_high: A.price, swing_low: B.price, leg_range: range,
+      retrace_pct: retr, equilibrium: eq, liq_level: liq,
+      close, dist_liq_pct: liq != null ? (close - liq) / close : null, bars_since: barsSince,
     };
   }
 

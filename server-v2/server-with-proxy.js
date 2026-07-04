@@ -40,6 +40,7 @@ const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startPlayRecorder, runSweep: runPlaySweep, ensureSchema: playEnsureSchema, getPool: playGetPool } = require('./play-recorder');
+const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { checkProxyAccess } = require('./proxy-auth');
@@ -1119,6 +1120,53 @@ async function main() {
         return;
       }
 
+      // ── OI Change Scanner ────────────────────────────────────────────────
+      // GET /proxy/oi-change?limit=100&side=all&dir=all
+      // Top day-over-day OTM open-interest changes for the latest recorded
+      // date, across the EM watchlist. side: all|call|put. dir: all|up|down
+      // (up = OI added, down = OI unwound), ranked by |oi_chg|.
+      if (pathname === '/proxy/oi-change' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await oiChangeEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = oiChangeGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 100)));
+            const side  = (u.searchParams.get('side') || 'all').toLowerCase();
+            const dir   = (u.searchParams.get('dir') || 'all').toLowerCase();
+
+            const where = ['date = (SELECT MAX(date) FROM oi_change_snapshots)', 'otm = TRUE'];
+            const params = [];
+            if (side === 'call' || side === 'put') {
+              params.push(side === 'call' ? 'C' : 'P');
+              where.push(`opt_type = $${params.length}`);
+            }
+            if (dir === 'up') where.push('oi_chg > 0');
+            else if (dir === 'down') where.push('oi_chg < 0');
+            params.push(limit);
+
+            const sql = `
+              SELECT symbol, expiry, strike, opt_type, oi_now, oi_prev, oi_chg, oi_chg_pct,
+                     spot, otm_dist_pct, date
+              FROM oi_change_snapshots
+              WHERE ${where.join(' AND ')}
+              ORDER BY ABS(oi_chg) DESC
+              LIMIT $${params.length}`;
+
+            const { rows } = await p.query(sql, params);
+            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual sweep fire: POST /proxy/oi-change-run  (force = bypass the daily window gate)
+      if (pathname === '/proxy/oi-change-run' && req.method === 'POST') {
+        runOiChangeSweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // GET /proxy/signals?limit=50&since=<ms>&kind=<kind>
       // Recent actionable GEX/CB signals (newest first) for the ES Candles
       // Signals panel and the trading bot. Alerts-only; never places orders.
@@ -1457,6 +1505,9 @@ async function main() {
     // "The Play": 1H/4H swing 50%-retrace + liquidity-break setups across the
     // scanner universe (Yahoo candles), swept every 15m during RTH.
     startPlayRecorder();
+    // OI Change scanner: day-over-day open-interest change (OTM only) across
+    // the full EM watchlist, once per day (retried inside 06:00-20:00 ET).
+    startOiChangeRecorder();
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();

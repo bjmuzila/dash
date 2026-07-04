@@ -619,6 +619,17 @@ async function probeRest({ ticker, expiry, type, strike }) {
   const bid = n(ttIt?.bid);
   const ask = n(ttIt?.ask);
   const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
+  const mark = n(ttIt?.mark) || mid;
+
+  // Black-Scholes fallback greeks — calculated for THIS contract's side
+  // (call/put), so a Theta gap never blanks delta/theta/etc: sign always
+  // matches the side being watched. Uses Theta IV when present, otherwise
+  // backs out IV from the live quote.
+  const T = yearsToExpiry(best.expiration);
+  const ivForBs = g.iv > 0 ? g.iv : impliedVol({ price: mark, S: spot, K: best.strike, T, r: RISK_FREE, type });
+  const bs = (spot > 0 && T > 0 && ivForBs > 0)
+    ? bsGreeks({ S: spot, K: best.strike, T, sigma: ivForBs, r: RISK_FREE, type })
+    : null;
 
   const feeds = {
     Quote: {
@@ -643,12 +654,15 @@ async function probeRest({ ticker, expiry, type, strike }) {
       _src: 'Theta OI / TT prevClose',
     },
     Greeks: {
-      iv: g.iv || null,           // Theta
-      delta: g.delta || null,     // Theta
-      gamma: g.gamma || null,     // Theta
-      theta: g.theta || null,     // Theta
-      vega: g.vega || null,       // Theta
-      _src: 'Theta',
+      // Theta live greeks when available; otherwise fall back to Black-Scholes
+      // computed for THIS contract's side (call/put), so delta/theta always
+      // carry the correct sign for the side being watched rather than nulling out.
+      iv: g.iv || (ivForBs > 0 ? ivForBs : null),
+      delta: g.delta ?? bs?.delta ?? null,
+      gamma: g.gamma ?? bs?.gamma ?? null,
+      theta: g.theta ?? bs?.theta ?? null,
+      vega: g.vega ?? bs?.vega ?? null,
+      _src: g.delta != null ? 'Theta' : 'Black-Scholes (calculated, this side)',
     },
   };
 
@@ -657,10 +671,6 @@ async function probeRest({ ticker, expiry, type, strike }) {
   const sign = isCall ? 1 : -1;
   const oi = thetaOI;
   const vol = thetaVol;
-  const T = yearsToExpiry(best.expiration);
-  const bs = (spot > 0 && g.iv > 0 && T > 0)
-    ? bsGreeks({ S: spot, K: best.strike, T, sigma: g.iv, r: RISK_FREE, type })
-    : null;
   const exposures = (spot > 0 && oi != null)
     ? {
         spot,

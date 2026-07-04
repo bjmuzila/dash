@@ -132,6 +132,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, row });
     }
 
+    // Bulk insert from the screenshot importer — one round-trip for N rows.
+    if (action === "registerRowsBulk") {
+      const rows = Array.isArray(body?.rows) ? body.rows : [];
+      let inserted = 0;
+      for (const r of rows) {
+        const entry_date = String(r?.date ?? "").trim();
+        const label = String(r?.label ?? "").trim();
+        const amount = Number(r?.amount ?? 0);
+        if (!entry_date || !label || !Number.isFinite(amount) || amount === 0) continue;
+        await insertRegisterRow({
+          profile_id: profile.id,
+          entry_date,
+          sort_order: (Date.now() % 100000) + inserted,
+          label,
+          bank: normBank(r?.bank),
+          amount,
+        });
+        inserted++;
+      }
+      return NextResponse.json({ ok: true, inserted });
+    }
+
     if (action === "updateRow") {
       await updateRegisterRow(profile.id, Number(body?.id ?? 0), {
         entry_date: body?.date != null ? String(body.date) : undefined,

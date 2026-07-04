@@ -238,7 +238,7 @@ export default function EsCandlesPage() {
   const [showHeatmap, setShowHeatmap] = useState(true);
   // Momentum Bias oscillator sub-pane + TP arrow markers. On by default on the
   // full page; OFF in the dock embed (like the heatmap) to keep the card clean.
-  const [showBias, setShowBias] = useState(true);
+  const [showBias, setShowBias] = useState(false);
   // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
   // profile OFF (user can still toggle it on). Done as an effect, not a lazy
   // initializer, so it applies client-side after SSR hydration.
@@ -325,7 +325,7 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
-  const [showSignals, setShowSignals] = useState(true); // bottom actionable-signals strip
+  const [showSignals, setShowSignals] = useState(false); // bottom actionable-signals strip
   // Recent signals from the engine (/proxy/signals), polled every 15s while the
   // tab is visible. Newest first; the engine dedupes + scores server-side.
   const [signals, setSignals] = useState<Signal[]>([]);

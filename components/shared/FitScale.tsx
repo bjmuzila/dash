@@ -27,6 +27,7 @@ export default function FitScale({
   const scaleRef = useRef(1);
   const [scale, setScale] = useState(1);
   const [boxH, setBoxH] = useState(0);
+  const [overflowing, setOverflowing] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current, box = boxRef.current;
@@ -46,6 +47,10 @@ export default function FitScale({
       const next = natural > avail + 1 ? Math.max(min, avail / natural) : 1;
       if (Math.abs(next - s) > 0.005) { scaleRef.current = next; setScale(next); }
       setBoxH(naturalH);
+      // If even the clamped min scale still doesn't fit (too many toolbar
+      // items), fall back to horizontal scroll instead of silently clipping
+      // the right-side buttons.
+      setOverflowing(natural * next > avail + 1);
     };
     const ro = new ResizeObserver(fit);
     ro.observe(host);
@@ -61,7 +66,7 @@ export default function FitScale({
   }, [min]);
 
   return (
-    <div ref={hostRef} style={{ width: "100%", overflow: "hidden" }}>
+    <div ref={hostRef} style={{ width: "100%", overflowX: overflowing ? "auto" : "hidden", overflowY: "hidden" }}>
       <div
         ref={boxRef}
         style={{
