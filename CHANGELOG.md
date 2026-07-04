@@ -6,6 +6,24 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-04 — EM grader Theta cutover fixed (Estimated Moves scoring restored, 379 scored)
+
+Fixed Theta-based EM grading (was scoring 0 for the whole roster → now 379 evaluated, 279 hit / 100 miss) with two edits to `server-v2/proxy-thetadata.js`: `ymdCompact` now formats a JS `Date` → `YYYYMMDD` (it was passing a raw `Date.toString()` and 500-ing `/v3/stock/history/eod` with "Cannot parse date string"), and `_mapDailyOhlc` now derives each bar's date from the `created`/`last_trade` column since the v3 stock/index EOD JSON has no `date` field (every row was being dropped → "No finalized weekly candle"). Supporting edits: per-ticker skip-logging in `server-v2/levels-engine.js` `evaluateCompletedWeek` (this is what surfaced both bugs), `seedUpcomingWeek` now runs on retries in `server-v2/levels-auto-publish.js`, and the evaluate-route base port aligned `3000`→`3001` in `app/api/em-tracker/evaluate/route.ts`; shipped as direct VPS edits + `docker compose build --no-cache` (routine `--build` kept caching the `COPY . .` layer) — still needs a git reconcile so the next deploy doesn't revert.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-04 — ES Candles: actionable GEX/CB signals engine (alerts-only)
+
+Added `server-v2/signals-engine.js`, which polls `marketState.getState()` every ~3s and turns the ES Candles heatmap levels into long/short **ES-futures** signals in ES-price space — flip cross, Call/Put wall reject+break, size-gated CB reaction (`mvcValueOIVol` ≥ `CB_MIN_SIZE`), and multi-level confluence — scored 1–5, deduped per (kind,direction,level) with a cooldown, persisted to a self-creating `trade_signals` table, and optionally pushed to Discord (`SIGNALS_DISCORD_WEBHOOK`); alerts only, never places orders. Wired `startSignalsEngine(PORT)` + `GET /proxy/signals` + `POST /proxy/signals-run` into `server-v2/server-with-proxy.js`, added a "Signals" dock toggle + live bottom strip (polls `/proxy/signals`) to `app/es-candles/page.tsx`, and shipped `server-v2/signals-engine.selftest.js` (9-case pure-logic test) + `server-v2/SIGNALS_ENGINE.md`; hand-trace fixed a break-detection bug (must be a threshold-cross through ±brk, not merely "currently beyond," else spurious CB breaks every cooldown). NOT build-verified — sandbox down (HYPERVISOR_VIRT_DISABLED); needs `next build` + VPS `dashboard` rebuild.
+
+## 2026-07-04 — EM Customer: Recent Track Record (last week hit/miss + trailing-5 %)
+
+Added a **Recent Track Record** card to `components/dashboard/EmCustomer.tsx` with two theme-matched boxes — last finalized week HIT/MISS (with week label) and trailing-5-week hit % — fed by a new per-ticker `fetchTrackerRows()` hit to `/api/em-tracker?ticker=` (ES/NQ alias-folded ESU↔ESM, NQU↔NQM; forming/unevaluated weeks excluded via the `result` filter, so "last week" is always the last closed candle). Not build-verified (sandbox down); needs VPS rebuild.
+
 ## 2026-07-03 — Options Chain: grand-total greek readout in toolbar
 
 Added a `grandTotal` useMemo in `app/options-chain/page.tsx` summing the active greek (`greekMode`) across all strikes and all loaded expiration columns, and rendered it in the Dock toolbar as `Total <greek>: <value>` styled to match sibling labels (11px, cyan `HT.cyan`, uppercase). Not build-verified.

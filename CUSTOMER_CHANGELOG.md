@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Saturday 7/4/2026
+
+* The Estimated Moves page now shows a Recent Track Record for any ticker you look up — whether last week's estimated move was a hit or miss, plus the hit rate over the last 5 weeks.
+* ES Candles now calls out actionable trade signals — it watches the key levels on the heatmap (the flip, the call and put walls, and the CB level) and flags long or short setups in a new "Signals" strip as price reacts to them.
+* Fixed Estimated Moves weekly scoring — the latest week's win/loss results now record correctly (this Saturday's run scored the full 379-ticker board).
+* Each signal is rated 1–5 so the strongest setups — especially where several levels stack up — stand out at a glance. These are alerts to guide your own trades; the dashboard never places orders for you.
+
 ## Friday 7/3/2026
 
 * The Options Chain toolbar now shows a running total of the selected greek across every strike and expiration on screen, updating instantly as you switch between GEX, DEX, CHEX and VEX.

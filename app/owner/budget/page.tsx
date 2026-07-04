@@ -165,16 +165,27 @@ export default function BudgetPage() {
     const anyBeginning = BANKS.some((b) => beginningByBank[b] !== null);
 
     // Manual (non-beginning) rows.
-    type Line = { id: number; entry_date: string; sort_order: number; label: string; bank: Bank; amount: number; recurring: boolean };
+    type Line = { id: number; entry_date: string; sort_order: number; label: string; bank: Bank; amount: number; recurring: boolean; recurTag?: string };
     const lines: Line[] = register
       .filter((r) => !r.is_beginning)
       .map((r) => ({ id: r.id, entry_date: r.entry_date, sort_order: r.sort_order, label: r.label, bank: r.bank, amount: r.amount, recurring: false }));
+
+    // A recurring occurrence the user edited is "materialized" into a real
+    // register row tagged __recur__:<ruleId>:<date>. Skip the synthetic twin so
+    // that instance isn't double-counted — the real (editable) row stands in.
+    const materialized = new Set(
+      register
+        .filter((r) => !r.is_beginning && typeof r.recurring_tag === "string" && r.recurring_tag.startsWith("__recur__:"))
+        .map((r) => r.recurring_tag as string)
+    );
 
     // Recurring occurrences for this month (synthetic negative ids per rule+date).
     for (const rule of recurring) {
       if (!rule.active) continue;
       for (const date of occurrencesInMonth(rule, month)) {
-        lines.push({ id: -(rule.id * 100 + Number(date.split("-")[2])), entry_date: date, sort_order: 40, label: rule.label, bank: rule.bank, amount: rule.amount, recurring: true });
+        const tag = `__recur__:${rule.id}:${date}`;
+        if (materialized.has(tag)) continue;
+        lines.push({ id: -(rule.id * 100 + Number(date.split("-")[2])), entry_date: date, sort_order: 40, label: rule.label, bank: rule.bank, amount: rule.amount, recurring: true, recurTag: tag });
       }
     }
 
@@ -208,7 +219,7 @@ export default function BudgetPage() {
         payments += ln.amount;
         expenseByLabel[ln.label] = (expenseByLabel[ln.label] || 0) + Math.abs(ln.amount);
       }
-      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, balance: running, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
+      rows.push({ id: ln.id, entry_date: ln.entry_date, label: ln.label, bank: ln.bank, amount: ln.amount, is_beginning: 0, recurring: ln.recurring, recurTag: ln.recurTag, balance: running, balances: { ...bal }, total: bal.coastal + bal.truist + bal.secu });
       series.push({ date: ln.entry_date, balance: running });
     }
 
@@ -261,6 +272,10 @@ export default function BudgetPage() {
   };
   const editRow = async (id: number, patch: Record<string, unknown>) => post({ action: "updateRow", id, ...patch });
   const deleteRow = async (id: number) => post({ action: "deleteRow", id });
+  // Convert one recurring occurrence into a real, per-instance editable row
+  // (the bill changed or was paid early) without touching the recurring rule.
+  const materializeRecurring = async (row: ComputedRow) =>
+    post({ action: "registerRow", date: row.entry_date, label: row.label, bank: row.bank, amount: row.amount, recurringTag: row.recurTag });
   const saveBeginning = async (balances: Record<Bank, number>) =>
     post({ action: "setBeginning", month, balances });
   const addRecurring = async (rule: { label: string; bank: Bank; amount: number; frequency: Frequency; anchorDate: string }) =>
@@ -358,6 +373,7 @@ export default function BudgetPage() {
               selectedDate={selectedDate}
               onEdit={editRow}
               onDelete={deleteRow}
+              onMaterialize={materializeRecurring}
             />
           ) : (
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
@@ -439,7 +455,7 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
   );
 }
 
-type ComputedRow = { id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; balance: number; balances: Record<Bank, number>; total: number };
+type ComputedRow = { id: number; entry_date: string; label: string; bank: Bank; amount: number; is_beginning: number; recurring: boolean; recurTag?: string; balance: number; balances: Record<Bank, number>; total: number };
 
 function RecurringManager({
   rules,
@@ -608,7 +624,7 @@ function CalendarGrid({
         const net = g?.dailyNet ?? 0;
         const isSel = selected === iso(d);
         const pos = net > 0, neg = net < 0;
-        const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+        const tint = neg ? "rgba(239,68,68,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
         return (
           <button
             key={d}
@@ -642,6 +658,7 @@ function MonthlyRegister({
   selectedDate,
   onEdit,
   onDelete,
+  onMaterialize,
 }: {
   groups: DayGroup[];
   beginningBalance: number | null;
@@ -649,6 +666,7 @@ function MonthlyRegister({
   selectedDate: string | null;
   onEdit: (id: number, patch: Record<string, unknown>) => void;
   onDelete: (id: number) => void;
+  onMaterialize: (row: ComputedRow) => void;
 }) {
   const selRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -688,16 +706,25 @@ function MonthlyRegister({
                 const isIncome = r.amount > 0;
                 return (
                   <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 12, alignItems: "center", padding: "8px 12px", borderTop: `1px solid rgba(255,255,255,0.04)` }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      {r.recurring
-                        ? <span style={{ fontWeight: 700, fontStyle: "italic" }}>{r.label}</span>
-                        : <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      {r.recurring ? (
+                        <span style={{ fontWeight: 700, fontStyle: "italic" }}>🔁 {r.label}</span>
+                      ) : (
+                        <>
+                          <EditableDate value={r.entry_date} onCommit={(v) => onEdit(r.id, { date: v })} />
+                          <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />
+                        </>
+                      )}
                     </div>
                     <span style={{ fontWeight: 800, textAlign: "right", minWidth: 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
                     </span>
                     <span style={{ textAlign: "right", minWidth: 100, fontWeight: 800, color: r.balance < 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(r.balance, currency)}</span>
-                    <span style={{ width: 30, textAlign: "center" }}>{!r.recurring && <DeleteButton onClick={() => onDelete(r.id)} />}</span>
+                    <span style={{ width: 30, textAlign: "center" }}>
+                      {r.recurring
+                        ? <EditButton title="Recurring entry — click to edit just this occurrence (amount changed or paid early)" onClick={() => onMaterialize(r)} />
+                        : <DeleteButton onClick={() => onDelete(r.id)} />}
+                    </span>
                   </div>
                 );
               })}
@@ -723,8 +750,8 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         width: 26,
         height: 26,
         borderRadius: 8,
-        border: `1px solid ${hover ? SOFT_RED : "rgba(244,148,142,0.30)"}`,
-        background: hover ? "rgba(244,148,142,0.16)" : "rgba(244,148,142,0.07)",
+        border: `1px solid ${hover ? SOFT_RED : "rgba(239,68,68,0.30)"}`,
+        background: hover ? "rgba(239,68,68,0.16)" : "rgba(239,68,68,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
         fontSize: 32,
@@ -737,6 +764,64 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
     >
       ×
     </button>
+  );
+}
+
+// Pencil control on a recurring occurrence — materializes it into a real row
+// that can then be edited (amount, label, date) or deleted on its own.
+function EditButton({ onClick, title }: { onClick: () => void; title?: string }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={title ?? "Edit this entry"}
+      aria-label="Edit this entry"
+      style={{
+        width: 26,
+        height: 26,
+        borderRadius: 8,
+        border: `1px solid ${hover ? HOME_THEME.cyan : HOME_THEME.border}`,
+        background: hover ? "rgba(33,158,188,0.16)" : "rgba(33,158,188,0.07)",
+        color: HOME_THEME.cyan,
+        cursor: "pointer",
+        fontSize: 26,
+        lineHeight: 1,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "all 0.12s ease",
+      }}
+    >
+      ✎
+    </button>
+  );
+}
+
+// Inline-editable date (click the M-D chip to change a row's date, e.g. a bill
+// paid early). Commits an entry_date change through onEdit.
+function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="date"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => { setEditing(false); if (draft && draft !== value) onCommit(draft); }}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
+        style={{ ...field(), padding: "4px 8px", width: 160 }}
+      />
+    );
+  }
+  return (
+    <span onClick={() => setEditing(true)} title="Change date (e.g. paid early)" style={{ cursor: "text", fontSize: 20, fontWeight: 700, color: HOME_THEME.muted, borderBottom: "1px dotted rgba(139,148,167,0.35)", whiteSpace: "nowrap" }}>
+      {shortDate(value)}
+    </span>
   );
 }
 
