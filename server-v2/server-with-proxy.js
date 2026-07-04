@@ -41,6 +41,7 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startPlayRecorder, runSweep: runPlaySweep, ensureSchema: playEnsureSchema, getPool: playGetPool } = require('./play-recorder');
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
+const { startFarCbRecorder, runSweep: runFarCbSweep, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { checkProxyAccess } = require('./proxy-auth');
@@ -1167,6 +1168,38 @@ async function main() {
         return;
       }
 
+      // ── Far CB Watch ─────────────────────────────────────────────────────
+      // GET /proxy/far-cb-watch — today's flagged tickers (highest OI+Vol GEX
+      // strike within 30d sits > OTM_THRESHOLD_PCT% away from spot), ranked by
+      // how far OTM. Each row = one "Watch this" card.
+      if (pathname === '/proxy/far-cb-watch' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await farCbEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = farCbGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
+            const { rows } = await p.query(
+              `SELECT symbol, strike, expiry, gex_value, spot, otm_pct, dte_days, date
+               FROM far_cb_watch
+               WHERE date = (SELECT MAX(date) FROM far_cb_watch)
+               ORDER BY otm_pct DESC
+               LIMIT $1`,
+              [limit]
+            );
+            sendJson(res, 200, { ok: true, rows, threshold: FAR_CB_OTM_PCT, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual sweep fire: POST /proxy/far-cb-watch-run (force = bypass RTH gate)
+      if (pathname === '/proxy/far-cb-watch-run' && req.method === 'POST') {
+        runFarCbSweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // GET /proxy/signals?limit=50&since=<ms>&kind=<kind>
       // Recent actionable GEX/CB signals (newest first) for the ES Candles
       // Signals panel and the trading bot. Alerts-only; never places orders.
@@ -1508,6 +1541,9 @@ async function main() {
     // OI Change scanner: day-over-day open-interest change (OTM only) across
     // the full EM watchlist, once per day (retried inside 06:00-20:00 ET).
     startOiChangeRecorder();
+    // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
+    // strike (within 30d expirations) sits unusually far OTM vs spot.
+    startFarCbRecorder();
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();

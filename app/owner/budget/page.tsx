@@ -27,8 +27,9 @@ type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 
-// Normal red for the dashboard. Used for amounts, balances and delete accents.
-const SOFT_RED = "#EF4444";
+// Desaturated red for the dashboard — the theme's #EF4444 reads harsh on the
+// dark table, so amounts, deficits and delete accents use this (per BUDGET_UI_STYLE).
+const SOFT_RED = "#f4948e";
 
 // Swatch palette for category dots.
 const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", "#EF4444"];
@@ -122,9 +123,6 @@ export default function BudgetPage() {
 
   // Recurring rules manager
   const [showRecurring, setShowRecurring] = useState(false);
-
-  // Screenshot importer
-  const [showImport, setShowImport] = useState(false);
 
   // Amazon composer
   const [azDate, setAzDate] = useState(todayIso());
@@ -326,9 +324,6 @@ export default function BudgetPage() {
   // (the bill changed or was paid early) without touching the recurring rule.
   const materializeRecurring = async (row: ComputedRow) =>
     post({ action: "registerRow", date: row.entry_date, label: row.label, bank: row.bank, amount: row.amount, recurringTag: row.recurTag });
-  // Bulk-add rows parsed from a pasted screenshot.
-  const importRegisterRows = async (rows: { date: string; label: string; bank: Bank; amount: number }[]) =>
-    post({ action: "registerRowsBulk", rows });
   // Categories.
   const addCategory = async (name: string, amount: number, color: string) =>
     post({ action: "category", name: name.trim(), amount, period: "monthly", color });
@@ -378,7 +373,7 @@ export default function BudgetPage() {
             { label: "Total Outflows", value: Math.abs(computed.payments), color: SOFT_RED, icon: "📉" },
             { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green, icon: "💵" },
           ].map((t) => (
-            <div key={t.label} style={{ ...card(), padding: 16, background: `radial-gradient(circle at 50% 0%, ${bRgba("#7dd3fc", 0.10)} 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+            <div key={t.label} style={{ ...dissolveCard(), padding: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 14 }}>{t.icon}</span>
                 <span style={labelCap()}>{t.label}</span>
@@ -390,11 +385,11 @@ export default function BudgetPage() {
 
         {/* Projection chart + cashflow calendar */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 14 }}>
-          <div style={{ ...cardAccent(0), padding: 16 }}>
+          <div style={{ ...dissolveCard(), padding: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
             <ProjectionChart series={computed.series} currency={currency} />
           </div>
-          <div style={{ ...cardAccent(1), padding: 16 }}>
+          <div style={{ ...dissolveCard(), padding: 16 }}>
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
             <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
           </div>
@@ -410,11 +405,6 @@ export default function BudgetPage() {
               🔁 Recurring{recurring.length ? ` (${recurring.filter((r) => r.active).length})` : ""}
             </button>
           )}
-          {tab === "register" && (
-            <button onClick={() => setShowImport((v) => !v)} style={{ ...pill(showImport), marginLeft: 4 }}>
-              📋 Paste import
-            </button>
-          )}
           {loading && <span style={{ fontSize: 12, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
 
@@ -427,10 +417,6 @@ export default function BudgetPage() {
             onDelete={deleteRecurringRule}
             onClose={() => setShowRecurring(false)}
           />
-        )}
-
-        {showImport && tab === "register" && (
-          <ImportPanel onImport={importRegisterRows} onClose={() => setShowImport(false)} />
         )}
 
         {/* Content */}
@@ -721,7 +707,7 @@ function CalendarGrid({
         const net = g?.dailyNet ?? 0;
         const isSel = selected === iso(d);
         const pos = net > 0, neg = net < 0;
-        const tint = neg ? "rgba(239,68,68,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+        const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
         return (
           <button
             key={d}
@@ -847,8 +833,8 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         width: 26,
         height: 26,
         borderRadius: 8,
-        border: `1px solid ${hover ? SOFT_RED : "rgba(239,68,68,0.30)"}`,
-        background: hover ? "rgba(239,68,68,0.16)" : "rgba(239,68,68,0.07)",
+        border: `1px solid ${hover ? SOFT_RED : "rgba(244,148,142,0.30)"}`,
+        background: hover ? "rgba(244,148,142,0.16)" : "rgba(244,148,142,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
         fontSize: 16,
@@ -1407,6 +1393,18 @@ function cardAccent(_i: number): React.CSSProperties {
   return {
     ...card(),
     background: `radial-gradient(circle at 50% 0%, ${bRgba(LIGHT_BLUE, 0.10)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+  };
+}
+// Borderless "dissolve" surface (per BUDGET_UI_STYLE) — fill fades toward the
+// edges, heavy frosted blur, no hard boundary. For chart/overview panels + tiles.
+function dissolveCard(): React.CSSProperties {
+  return {
+    background: `radial-gradient(120% 130% at 50% 0%, ${bRgba(LIGHT_BLUE, 0.06)} 0%, rgba(13,17,25,0.30) 30%, rgba(13,17,25,0.16) 60%, rgba(13,17,25,0.04) 85%, transparent 100%)`,
+    backdropFilter: "blur(30px) saturate(1.15)",
+    WebkitBackdropFilter: "blur(30px) saturate(1.15)",
+    borderRadius: 24,
+    border: "none",
+    boxShadow: "0 40px 90px -45px rgba(0,0,0,0.5)",
   };
 }
 function field(): React.CSSProperties {

@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
@@ -47,7 +47,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gex" | "greeks" | "volpin" | "strike" | "play" | "oi";
+type MainTab = "gex" | "greeks" | "volpin" | "strike" | "play" | "oi" | "watch";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -1153,6 +1153,111 @@ function OiChangeScanner() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  WATCH THIS (new tab) — farther-out CB level: highest GEX strike within 30d
+//  expirations sitting unusually far OTM vs spot, EM watchlist
+// ══════════════════════════════════════════════════════════════════════════════
+
+type WatchRow = {
+  symbol: string;
+  strike: number;
+  expiry: string;
+  gex_value: number;
+  spot: number;
+  otm_pct: number;
+  dte_days: number;
+  date: string;
+};
+
+function WatchThisScanner() {
+  const [rows, setRows] = useState<WatchRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [threshold, setThreshold] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const res = await fetch("/proxy/far-cb-watch?limit=50", { cache: "no-store" });
+      const text = await res.text();
+      let j: any;
+      try { j = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status} (non-JSON).`); }
+      if (!j.ok) throw new Error(j.error || "load failed");
+      setRows(j.rows || []);
+      setThreshold(j.threshold ?? null);
+    } catch (e: any) { setErr(String(e?.message || e)); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
+
+  return (
+    <Card variant="budget" title="Watch This — Far CB"
+      subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · EM watchlist${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+          Refreshes every 2m · recorder sweeps every 30m during RTH
+        </span>
+      </div>
+
+      {err && (
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+          {err.includes("no DB") || err.includes("503")
+            ? "Recorder hasn't run yet — data appears after the first RTH sweep."
+            : err}
+        </div>
+      )}
+
+      {!rows.length && !loading && !err && (
+        <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+          Nothing flagged right now — no watchlist ticker has an unusually far-OTM dominant CB level.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+        {rows.map((r) => {
+          const up = r.gex_value >= 0;
+          const chainHref = `/options-chain?symbol=${encodeURIComponent(r.symbol)}&expiry=${encodeURIComponent(r.expiry)}&strike=${r.strike}`;
+          return (
+            <div key={`${r.symbol}-${r.expiry}-${r.strike}`} style={{
+              borderRadius: 12,
+              padding: "14px 16px",
+              background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.20)`,
+              backdropFilter: "blur(20px)",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>{r.symbol}</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
+              </div>
+              <div style={{ fontSize: 13, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
+                ${r.strike} <span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}>· {r.expiry} · {r.dte_days}d</span>
+              </div>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 8 }}>
+                Highest GEX level for {r.symbol} is the ${r.strike} strike ({r.expiry}), {r.otm_pct.toFixed(0)}% away from spot (${r.spot.toFixed(2)}) —
+                farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: up ? HOME_THEME.green : SOFT_RED }}>{fmtB(r.gex_value)}</span>
+                <a href={chainHref} style={{ fontSize: 12, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
+                  View chain →
+                </a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+        <span>Basis: OI+Vol net GEX (canonical) · single highest |GEX| strike per ticker across expiries ≤30 DTE</span>
+        <span>Flagged when that strike is &gt;{threshold ?? 15}% away from spot</span>
+      </div>
+    </Card>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  PAGE SHELL — tab switcher
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1189,6 +1294,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "oi" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
           background: tab === "oi" ? `${HOME_THEME.orange}22` : "transparent",
         }}>OI Change</button>
+        <button onClick={() => setTab("watch")} style={{
+          ...tabStyle(tab === "watch"),
+          border: `1px solid ${tab === "watch" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
+          background: tab === "watch" ? `${LIGHT_BLUE}22` : "transparent",
+        }}>Watch This</button>
       </div>
 
       {tab === "gex"    && <GexScanner />}
@@ -1197,6 +1307,7 @@ export default function ScannerPage() {
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "play"   && <PlayScanner />}
       {tab === "oi"     && <OiChangeScanner />}
+      {tab === "watch"  && <WatchThisScanner />}
     </PageShell>
   );
 }
