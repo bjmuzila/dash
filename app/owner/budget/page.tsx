@@ -25,9 +25,8 @@ type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 
-// Softer, desaturated red for the dashboard — the theme's #EF4444 reads harsh
-// against the dark table. Used for amounts, balances and delete accents here.
-const SOFT_RED = "#f4948e";
+// Normal red for the dashboard. Used for amounts, balances and delete accents.
+const SOFT_RED = "#EF4444";
 
 const BANKS: Bank[] = ["coastal", "truist", "secu"];
 const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST", secu: "SECU" };

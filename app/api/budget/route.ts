@@ -125,6 +125,9 @@ export async function POST(req: NextRequest) {
         label: String(body?.label ?? "").trim(),
         bank: normBank(body?.bank),
         amount: Number(body?.amount ?? 0),
+        // Set when a recurring occurrence is edited into a concrete row so the
+        // client can suppress the synthetic twin (format __recur__:ruleId:date).
+        recurring_tag: body?.recurringTag ? String(body.recurringTag) : null,
       });
       return NextResponse.json({ ok: true, row });
     }
