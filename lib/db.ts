@@ -660,9 +660,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       vega          REAL,
       open_interest REAL,
       volume        REAL,
-      net_prem      REAL                    -- volume * mark * 100 (flow proxy)
+      net_prem      REAL,                   -- volume * mark * 100 (flow proxy)
+      prev_close    REAL                    -- prior session close (mark), for day-change %
     );
     CREATE INDEX IF NOT EXISTS idx_watch_snapshots_wid_ts ON watch_snapshots(watch_id, ts);
+    ALTER TABLE watch_snapshots ADD COLUMN IF NOT EXISTS prev_close REAL;
   `);
 }
 
@@ -725,6 +727,7 @@ export interface WatchSnapshot {
   open_interest?: number | null;
   volume?: number | null;
   net_prem?: number | null;
+  prev_close?: number | null;
 }
 
 export async function getWatchOptions(): Promise<WatchOption[]> {
@@ -759,11 +762,11 @@ export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {
   await getDb();
   await queryAll(
     `INSERT INTO watch_snapshots
-       (watch_id, ts, spot, bid, ask, mark, last, iv, delta, gamma, theta, vega, open_interest, volume, net_prem)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (watch_id, ts, spot, bid, ask, mark, last, iv, delta, gamma, theta, vega, open_interest, volume, net_prem, prev_close)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [s.watch_id, s.ts, s.spot ?? null, s.bid ?? null, s.ask ?? null, s.mark ?? null,
      s.last ?? null, s.iv ?? null, s.delta ?? null, s.gamma ?? null, s.theta ?? null,
-     s.vega ?? null, s.open_interest ?? null, s.volume ?? null, s.net_prem ?? null]
+     s.vega ?? null, s.open_interest ?? null, s.volume ?? null, s.net_prem ?? null, s.prev_close ?? null]
   );
 }
 

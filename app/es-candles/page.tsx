@@ -46,7 +46,7 @@ type VolumeProfile = {
 type Signal = {
   id: number;
   ts: number;
-  kind: string;            // flip_cross | wall_reject | wall_break | cb_reject | cb_break | confluence
+  kind: string;            // flip_cross | wall_reject | wall_break | cb_reject | cb_break | confluence | bzila_confluence
   direction: "long" | "short";
   setup: string;           // human label, e.g. "Call Wall reject"
   level_name: string | null;
@@ -1579,16 +1579,22 @@ export default function EsCandlesPage() {
                 {signals.map((s) => {
                   const long = s.direction === "long";
                   const col = long ? HOME_THEME.green : SOFT_RED;
+                  const isBzila = s.kind === "bzila_confluence";
                   const mins = Math.max(0, Math.round((Date.now() - s.ts) / 60000));
                   const age = mins < 1 ? "now" : mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`;
                   return (
                     <div
                       key={s.id}
                       title={s.reason ?? ""}
-                      style={{ flex: "0 0 auto", minWidth: 194, maxWidth: 234, display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px", borderRadius: 12, border: `1px solid ${col}33`, background: `${col}0f` }}
+                      style={{ flex: "0 0 auto", minWidth: 194, maxWidth: 234, display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px", borderRadius: 12, border: `1px solid ${col}33`, background: `${col}0f`, ...(isBzila ? { boxShadow: `inset 0 0 0 1px ${LIGHT_BLUE}55` } : {}) }}
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                        <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.08em", color: "#001018", background: col, padding: "2px 6px", borderRadius: 6 }}>{long ? "LONG" : "SHORT"}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.08em", color: "#001018", background: col, padding: "2px 6px", borderRadius: 6 }}>{long ? "LONG" : "SHORT"}</span>
+                          {isBzila ? (
+                            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", color: LIGHT_BLUE, border: `1px solid ${LIGHT_BLUE}66`, padding: "1px 5px", borderRadius: 6 }}>BZILA</span>
+                          ) : null}
+                        </span>
                         <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.7 }}>{age}</span>
                       </div>
                       <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.setup}</span>

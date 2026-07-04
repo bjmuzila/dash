@@ -43,6 +43,21 @@
  *        stacked level +1 score. When price reacts at a ≥2-level cluster that no
  *        primary detector already fired on, a standalone CONFLUENCE signal fires.
  *
+ *   5) BZILA CONFLUENCE  ("Bzila GEX Confluence System", kind='bzila_confluence')
+ *        a separate, independently-scored setup ported from the polished
+ *        strategy doc. Needs ≥4 of 5 criteria to fire (Regime, Level, Flow,
+ *        Greek/DEX, ICT bias) AND the live Confidence Score ≥ BZ_CONFIDENCE_MIN
+ *        (a hard gate, not one of the 5). Reuses the same wall/CB/flip levels
+ *        as 1-3 above but its own touch/reject/break state so it doesn't
+ *        interfere with the primary detectors' cooldowns.
+ *          Regime : +GEX & spot>flip (mean-revert) / -GEX & spot<flip (trend)
+ *          Level  : reacting at Put/Call Wall, CB, or breaking Call/Put Wall/Flip
+ *          Flow   : net call-buy+put-sell (long) or net put-buy+call-sell (short)
+ *                   from market-state's live flow bucket
+ *          Greek  : net DEX (totals.totalDeltaOiVol) sign agrees with direction
+ *          ICT    : most recent /api/ict-setups bull/bear setup within 60 min
+ *        Confidence pulled from /api/confidence (score.hit), cached 60s.
+ *
  * Dedup: per (kind,direction,rounded-level) cooldown = COOLDOWN_MS.
  * Gates:  futures session + a real basis + chartReady (skips warmup/off-hours).
  *
@@ -69,6 +84,8 @@ const CONFLUENCE_DIST= Number(process.env.SIGNALS_CONFLUENCE_DIST|| 2.0);    // 
 const TOUCH_WINDOW_MS= Number(process.env.SIGNALS_TOUCH_WINDOW_MS|| 5 * 60_000); // touch validity
 const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000);
 const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || '';
+const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
+const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
 
 // ── PG pool (same lazy, no-DB-safe pattern as gex-history-writer / play-recorder) ──
 let pool = null;
@@ -438,6 +455,133 @@ function evaluateFrame(cur, mem, cfg = {}) {
   return out;
 }
 
+// ── pure detector #2: Bzila GEX Confluence System (kind='bzila_confluence') ──
+// cur adds: totalNetGex, dex, flowScore, ictBias ('bull'|'bear'|null), confidence
+// (0-100|null). Independent touch/reject/break state (mem.bzLevels/bzPrev) so it
+// never shares cooldown state with evaluateFrame's primary detectors.
+function evaluateBzilaConfluence(cur, mem, cfg = {}) {
+  const C = {
+    WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
+    CROSS_BUFFER, TOUCH_WINDOW_MS, COOLDOWN_MS, BZ_MIN_SCORE, BZ_CONFIDENCE_MIN, ...cfg,
+  };
+  const out = [];
+  const { ts, priceEs, basis } = cur;
+  if (!(priceEs > 0)) return out;
+
+  const toEs = (spx) => (spx != null && Number.isFinite(spx) ? spx + (basis || 0) : null);
+  const flipEs = toEs(cur.flipSpx);
+  const callEs = toEs(cur.callSpx);
+  const putEs  = toEs(cur.putSpx);
+  const cbEs   = toEs(cur.cbSpx);
+
+  // Regime (doc §1): sign of Net GEX sets the session mode — positive = fade
+  // walls (mean-revert), negative = trade breakouts (trend). Checked on GEX
+  // sign alone (not "spot vs flip" too) so a breakout that itself carries price
+  // through the flip doesn't self-disqualify the Regime criterion it's part of.
+  const positiveGexRegime = (cur.totalNetGex || 0) > 0;
+  const negativeGexRegime = (cur.totalNetGex || 0) < 0;
+
+  const flowBias = cur.flowScore > 0 ? 'long' : cur.flowScore < 0 ? 'short' : null;
+  const dexBias  = cur.dex > 0 ? 'long' : cur.dex < 0 ? 'short' : null;
+  const ictBias  = cur.ictBias === 'bull' ? 'long' : cur.ictBias === 'bear' ? 'short' : null;
+  const confOk   = cur.confidence == null ? true : cur.confidence >= C.BZ_CONFIDENCE_MIN;
+
+  const scoreOf = (direction, regimeOk, levelOk) => {
+    let n = 0;
+    if (regimeOk) n++;
+    if (levelOk) n++;
+    if (flowBias === direction) n++;
+    if (dexBias === direction) n++;
+    if (ictBias === direction) n++;
+    return n;
+  };
+
+  const prev = mem.bzPrev;
+  const st = (key) => mem.bzLevels[key] || (mem.bzLevels[key] = { touchedAt: 0, side: 0 });
+
+  // Same touch→reject/break machinery as evaluateFrame's reactLevel, but keyed
+  // into mem.bzLevels so state never collides with the primary detectors.
+  const reactLevel = (key, es, opts) => {
+    if (es == null || es <= 0 || !prev) return;
+    const s = st(key);
+    const dist = priceEs - es;
+    if (Math.abs(dist) <= opts.touch) { s.touchedAt = ts; if (s.side === 0) s.side = Math.sign(prev.priceEs - es) || 1; }
+    const touchedRecently = ts - s.touchedAt <= C.TOUCH_WINDOW_MS;
+    const prevDist = prev.priceEs - es;
+    if (prevDist < opts.brk && dist >= opts.brk) { opts.onBreak('up'); s.touchedAt = 0; s.side = 0; return; }
+    if (prevDist > -opts.brk && dist <= -opts.brk) { opts.onBreak('down'); s.touchedAt = 0; s.side = 0; return; }
+    if (touchedRecently) {
+      if (s.side < 0 && dist <= -opts.rej) { opts.onReject('from_below'); s.touchedAt = 0; s.side = 0; }
+      else if (s.side > 0 && dist >= opts.rej) { opts.onReject('from_above'); s.touchedAt = 0; s.side = 0; }
+    }
+    if (Math.abs(dist) > Math.max(opts.brk, opts.touch) * 2) s.side = 0;
+  };
+
+  const fire = (direction, setup, levelName, levelEs, regimeOk, levelOk) => {
+    if (!confOk) return; // No-Trade Rule: Confidence < BZ_CONFIDENCE_MIN
+    const n = scoreOf(direction, regimeOk, levelOk);
+    if (n < C.BZ_MIN_SCORE) return; // "only enter if 4/5 confluence criteria met"
+    const key = `bzila_confluence:${direction}:${levelEs != null ? Math.round(levelEs) : 'x'}`;
+    const last = mem.cooldowns.get(key) || 0;
+    if (ts - last < C.COOLDOWN_MS) return;
+    mem.cooldowns.set(key, ts);
+    const parts = [];
+    if (regimeOk) parts.push('Regime');
+    if (levelOk) parts.push('Level');
+    if (flowBias === direction) parts.push('Flow');
+    if (dexBias === direction) parts.push('Greek');
+    if (ictBias === direction) parts.push('ICT');
+    out.push({
+      ts, kind: 'bzila_confluence', direction, setup, levelName,
+      levelEs: levelEs != null ? +levelEs.toFixed(2) : null,
+      levelSpx: levelEs != null ? +(levelEs - (basis || 0)).toFixed(2) : null,
+      priceEs: +priceEs.toFixed(2),
+      priceSpx: +(priceEs - (basis || 0)).toFixed(2),
+      score: n,
+      confluence: parts.join(', '),
+      reason: `Bzila GEX Confluence — ${n}/5 (${parts.join('+')})`
+        + (cur.confidence != null ? `, Confidence ${cur.confidence.toFixed(0)}` : ''),
+      meta: {
+        basis: +(basis || 0).toFixed(2), confidence: cur.confidence ?? null,
+        flowScore: cur.flowScore ?? null, dex: cur.dex ?? null, ictBias: cur.ictBias ?? null,
+      },
+    });
+  };
+
+  // ── Flip cross (trend regime confirmation) ──
+  if (prev && flipEs != null && prev.flipEs != null) {
+    const upCross   = prev.priceEs <= prev.flipEs && priceEs >= flipEs + C.CROSS_BUFFER;
+    const downCross = prev.priceEs >= prev.flipEs && priceEs <= flipEs - C.CROSS_BUFFER;
+    if (upCross) fire('long', 'Trend breakout long (Flip cross)', 'Flip', flipEs, negativeGexRegime, true);
+    else if (downCross) fire('short', 'Trend breakdown short (Flip cross)', 'Flip', flipEs, negativeGexRegime, true);
+  }
+
+  // ── Mean-reversion: Put Wall support / Call Wall resistance reject ──
+  reactLevel('bz_put', putEs, {
+    touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
+    onReject: (from) => { if (from === 'from_above') fire('long', 'Mean-reversion long (Put Wall)', 'Put Wall', putEs, positiveGexRegime, true); },
+    onBreak: (dir) => { if (dir === 'down') fire('short', 'Trend breakdown short (Put Wall break)', 'Put Wall', putEs, negativeGexRegime, true); },
+  });
+  reactLevel('bz_call', callEs, {
+    touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
+    onReject: (from) => { if (from === 'from_below') fire('short', 'Mean-reversion short (Call Wall)', 'Call Wall', callEs, positiveGexRegime, true); },
+    onBreak: (dir) => { if (dir === 'up') fire('long', 'Trend breakout long (Call Wall break)', 'Call Wall', callEs, negativeGexRegime, true); },
+  });
+
+  // ── CB key-level reaction ──
+  reactLevel('bz_cb', cbEs, {
+    touch: C.CB_TOUCH, rej: C.CB_REJECT, brk: C.CB_BREAK,
+    onReject: (from) => {
+      if (from === 'from_above') fire('long', 'CB support hold', 'CB', cbEs, positiveGexRegime, true);
+      else fire('short', 'CB resistance hold', 'CB', cbEs, positiveGexRegime, true);
+    },
+    onBreak: (dir) => fire(dir === 'up' ? 'long' : 'short', `CB break ${dir === 'up' ? '↑' : '↓'}`, 'CB', cbEs, negativeGexRegime, true),
+  });
+
+  mem.bzPrev = { priceEs, flipEs, ts };
+  return out;
+}
+
 // ── engine loop ───────────────────────────────────────────────────────────────
 let cbCache = { spx: null, size: null, at: 0 };
 async function refreshCb(base) {
@@ -460,6 +604,45 @@ async function refreshCb(base) {
   } catch { /* keep last */ }
 }
 
+// ICT bias: most recent bull/bear setup from /api/ict-setups (today), only
+// trusted for 60 min so a stale morning setup doesn't linger all session.
+let ictCache = { bias: null, at: 0 };
+async function refreshIct(base) {
+  if (Date.now() - ictCache.at < 60_000) return;
+  try {
+    const res = await fetch(`${base}/api/ict-setups?date=${etDateStr()}`, {
+      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+      cache: 'no-store',
+    });
+    if (!res.ok) { ictCache = { bias: null, at: Date.now() }; return; }
+    const j = await res.json().catch(() => ({}));
+    const setups = Array.isArray(j.setups) ? j.setups : [];
+    const cutoff = Date.now() - 60 * 60_000;
+    const recent = setups
+      .filter((s) => s && (s.dir === 'bull' || s.dir === 'bear') && Number(s.trigger_ts) >= cutoff)
+      .sort((a, b) => Number(b.trigger_ts) - Number(a.trigger_ts))[0];
+    ictCache = { bias: recent ? recent.dir : null, at: Date.now() };
+  } catch { /* keep last */ }
+}
+
+// Confidence Score (score.hit, 0-100) from /api/confidence — the doc's ≥65
+// no-trade filter. Cached 60s; treated as "pass" if the route errors/404s
+// (e.g. no MVC snapshot yet) so a data hiccup doesn't silently gate everything.
+let confCache = { value: null, at: 0 };
+async function refreshConfidence(base) {
+  if (Date.now() - confCache.at < 60_000) return;
+  try {
+    const res = await fetch(`${base}/api/confidence`, {
+      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+      cache: 'no-store',
+    });
+    if (!res.ok) { confCache = { value: null, at: Date.now() }; return; }
+    const j = await res.json().catch(() => ({}));
+    const hit = Number(j?.score?.hit);
+    confCache = { value: Number.isFinite(hit) ? hit : null, at: Date.now() };
+  } catch { /* keep last */ }
+}
+
 async function sendDiscord(sig) {
   if (!DISCORD_WEBHOOK) return;
   const dot = sig.direction === 'long' ? '🟢' : '🔴';
@@ -474,13 +657,17 @@ async function sendDiscord(sig) {
   } catch { /* alerts are best-effort */ }
 }
 
-const mem = { prev: null, levels: {}, cooldowns: new Map() };
+const mem = { prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {} };
 
 function readFrame() {
   const s = marketState.getState();
   const priceEs = Number(s.esFut);
   const spx = Number(s.spot);
   const basis = Number(s.basis) || (priceEs > 0 && spx > 0 ? priceEs - spx : 0);
+  const totals = s.totals || {};
+  const flow = s.flow || {};
+  const callNet = Number(flow.callBuyVol || 0) - Number(flow.callSellVol || 0);
+  const putNet  = Number(flow.putBuyVol  || 0) - Number(flow.putSellVol  || 0);
   return {
     ts: Date.now(),
     priceEs,
@@ -493,16 +680,22 @@ function readFrame() {
     cbSize:  cbCache.size,
     ctx:     computeContextLevels(s.esCandles),
     chartReady: !!(s.status && s.status.chartReady),
+    // ── Bzila Confluence inputs ──
+    totalNetGex: Number(s.totalNetGex) || 0,
+    dex: Number(totals.totalDeltaOiVol ?? totals.totalDeltaVol ?? 0),
+    flowScore: callNet - putNet, // bullish = net call-buy + net put-sell
+    ictBias: ictCache.bias,
+    confidence: confCache.value,
   };
 }
 
 async function runOnce(base, { force = false } = {}) {
   if (!force && !inSession()) return { skipped: 'off-session' };
-  await refreshCb(base);
+  await Promise.all([refreshCb(base), refreshIct(base), refreshConfidence(base)]);
   const frame = readFrame();
   if (!force && !frame.chartReady) return { skipped: 'warming' };
   if (!(frame.priceEs > 0) || !(frame.basis !== 0)) return { skipped: 'no-price-or-basis' };
-  const sigs = evaluateFrame(frame, mem);
+  const sigs = [...evaluateFrame(frame, mem), ...evaluateBzilaConfluence(frame, mem)];
   for (const sig of sigs) {
     sig.sessionDate = etDateStr(new Date(sig.ts));
     await insertSignal(sig);
@@ -532,6 +725,7 @@ module.exports = {
   getRecentSignals,
   runOnce,
   evaluateFrame,   // pure — used by signals-engine.selftest.js
+  evaluateBzilaConfluence, // pure — used by signals-engine.selftest.js
   computeContextLevels,
   inSession,
   _mem: mem,

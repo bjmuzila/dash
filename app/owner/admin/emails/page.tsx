@@ -121,6 +121,27 @@ export default function AdminEmailsPage() {
     : audience === "old_emails2" ? counts?.oldEmails2 ?? 0
     : customTo.split(/[\s,;]+/).filter(Boolean).length;
 
+  // Resolve the email array for the current (non-custom) audience.
+  function listFor(a: Audience): string[] {
+    if (!lists) return [];
+    return a === "all" ? lists.all
+      : a === "waitlist" ? lists.waitlist
+      : a === "not_paying" ? lists.notPaying
+      : a === "old_emails" ? lists.oldEmails
+      : a === "old_emails2" ? lists.oldEmails2
+      : lists.subscribers;
+  }
+
+  // Copy the selected list into the editable Custom box so specific recipients
+  // can be removed before sending. The send then goes only to what's left.
+  function editList() {
+    const emails = listFor(audience);
+    if (emails.length === 0) return;
+    setCustomTo(emails.join(", "));
+    setAudience("custom");
+    setShowList(false);
+  }
+
   async function send() {
     const subj = subject.trim();
     const html = body.trim();
@@ -214,18 +235,26 @@ export default function AdminEmailsPage() {
                 {from ? ` · from ${from}` : ""}
               </span>
               {audience !== "custom" && lists && recipientCount > 0 && (
-                <button
-                  onClick={() => setShowList((s) => !s)}
-                  style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 13, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                >
-                  {showList ? "Hide list" : "View list"}
-                </button>
+                <>
+                  <button
+                    onClick={() => setShowList((s) => !s)}
+                    style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 13, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                  >
+                    {showList ? "Hide list" : "View list"}
+                  </button>
+                  <button
+                    onClick={editList}
+                    style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 13, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                  >
+                    Edit list
+                  </button>
+                </>
               )}
             </div>
 
             {showList && audience !== "custom" && lists && (
               <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.25)" }}>
-                {(audience === "all" ? lists.all : audience === "waitlist" ? lists.waitlist : audience === "not_paying" ? lists.notPaying : audience === "old_emails" ? lists.oldEmails : audience === "old_emails2" ? lists.oldEmails2 : lists.subscribers).map((email) => (
+                {listFor(audience).map((email) => (
                   <div key={email} style={{ fontSize: 14, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "var(--font-mono)" }}>
                     {email}
                   </div>
@@ -237,11 +266,14 @@ export default function AdminEmailsPage() {
           {audience === "custom" && (
             <div>
               {label("Recipients")}
+              <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.75, marginBottom: 6 }}>
+                Delete any address to remove them from this send. Separate with commas, spaces, or new lines.
+              </div>
               <textarea
                 value={customTo}
                 onChange={(e) => setCustomTo(e.target.value)}
                 placeholder="email@example.com, another@example.com"
-                rows={3}
+                rows={6}
                 style={{ ...homeInputStyle, fontSize: 17, width: "100%", resize: "vertical", fontFamily: "inherit" }}
               />
             </div>

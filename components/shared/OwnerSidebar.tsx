@@ -32,6 +32,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Activity", href: "/owner/dev/owner?tab=activity", glyph: "📡" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤" },
+      { label: "Backtests", href: "/owner/backtests", glyph: "∿" },
       { label: "Tree", href: "/owner/dev/tree", glyph: "⌥" },
     ],
   },

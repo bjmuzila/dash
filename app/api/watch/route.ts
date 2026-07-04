@@ -81,6 +81,7 @@ async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
     open_interest: num(su.openInterest) ?? num(ex.oi),
     volume,
     net_prem: netPrem,
+    prev_close: num(su.prevClose),
   };
 }
 

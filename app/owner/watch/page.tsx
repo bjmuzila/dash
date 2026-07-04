@@ -30,6 +30,7 @@ interface Snapshot {
   iv: number | null; delta: number | null; gamma: number | null;
   theta: number | null; vega: number | null;
   open_interest: number | null; volume: number | null; net_prem: number | null;
+  prev_close: number | null;
 }
 interface Row {
   id: number; ticker: string; expiration: string; strike: number;
@@ -55,6 +56,11 @@ const fmtMoney = (v: number | null | undefined) => {
 };
 const signColor = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) || v === 0 ? HOME_THEME.text : v > 0 ? HOME_THEME.green : HOME_THEME.red;
+/** Option-price day-change %, from the latest mark vs. the prior session's close. */
+const dayChgPct = (mark: number | null | undefined, prevClose: number | null | undefined) => {
+  if (mark == null || prevClose == null || !Number.isFinite(mark) || !Number.isFinite(prevClose) || prevClose === 0) return null;
+  return ((mark - prevClose) / prevClose) * 100;
+};
 const timeAgo = (ts: number | null | undefined) => {
   if (!ts) return "—";
   const s = Math.round((Date.now() - ts) / 1000);
@@ -241,22 +247,18 @@ export default function WatchPage() {
     textTransform: "uppercase", letterSpacing: ".1em",
   };
   const input: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 15, colorScheme: "dark" };
-  const th: React.CSSProperties = {
-    padding: "10px 12px", textAlign: "right", fontSize: 12, fontWeight: 700,
-    letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted, whiteSpace: "nowrap",
+  const statLabel: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted,
   };
-  const td: React.CSSProperties = {
-    padding: "11px 12px", textAlign: "right", fontSize: 15,
-    color: HOME_THEME.text, whiteSpace: "nowrap", fontFamily: "var(--font-mono)",
+  const statValue: React.CSSProperties = {
+    fontSize: 16, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono)",
   };
-
-  const HEADERS = ["Spot", "Bid", "Ask", "Mark", "Δ", "Γ", "Θ", "V", "IV", "OI", "Vol", "Net Prem", "Updated"];
 
   return (
     <div style={homeShellStyle}>
       <style>{`
-        .wrow{transition:background .15s ease;}
-        .wrow:hover{background:${rgba(HOME_THEME.cyan, 0.05)};}
+        .wcard{transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease; cursor:pointer;}
+        .wcard:hover{transform:translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.35); border-color:rgba(0,240,255,.35);}
       `}</style>
 
       {/* Header */}
@@ -312,114 +314,106 @@ export default function WatchPage() {
           </div>
         )}
 
-        {/* Table */}
-        <div style={{ ...homePanelStyle, padding: 0, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${HOME_THEME.border}` }}>
-                <th style={{ ...th, textAlign: "left" }}>Contract</th>
-                {HEADERS.map((h) => <th key={h} style={th}>{h}</th>)}
-                <th style={{ ...th, textAlign: "center" }} />
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={HEADERS.length + 2} style={{ ...td, textAlign: "center", color: HOME_THEME.muted, padding: 28 }}>Loading…</td></tr>
-              ) : rows.length === 0 ? (
-                <tr><td colSpan={HEADERS.length + 2} style={{ ...td, textAlign: "center", color: HOME_THEME.muted, padding: 28 }}>No contracts yet — add one above.</td></tr>
-              ) : rows.map((r) => {
-                const s = r.snapshot;
-                const sideCol = r.side === "C" ? HOME_THEME.green : HOME_THEME.orange;
-                const npCol = s?.net_prem == null ? HOME_THEME.text : s.net_prem >= 0 ? HOME_THEME.green : HOME_THEME.red;
-                const isOpen = expandedId === r.id;
-                const hist = historyById[r.id] || [];
-                return (
-                  <React.Fragment key={r.id}>
-                  <tr className="wrow" onClick={() => toggleRow(r.id)} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, cursor: "pointer", background: isOpen ? rgba(HOME_THEME.cyan, 0.06) : undefined }}>
-                    <td style={{ ...td, textAlign: "left" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ color: HOME_THEME.muted, fontSize: 12, transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
-                        <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "inherit" }}>{r.ticker}</span>
-                        <span style={{ fontSize: 13, fontWeight: 700, padding: "2px 7px", borderRadius: 4, color: sideCol, background: rgba(sideCol, 0.12), border: `1px solid ${rgba(sideCol, 0.3)}` }}>
-                          {fmt(r.strike, r.strike % 1 ? 1 : 0)}{r.side}
-                        </span>
-                        <span style={{ fontSize: 13, color: HOME_THEME.muted }}>{r.expiration}</span>
-                        {r.note && <span style={{ fontSize: 12, color: HOME_THEME.muted, fontStyle: "italic" }}>· {r.note}</span>}
-                      </div>
-                    </td>
-                    <td style={td}>{fmt(s?.spot, 2)}</td>
-                    <td style={td}>{fmt(s?.bid)}</td>
-                    <td style={td}>{fmt(s?.ask)}</td>
-                    <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{fmt(s?.mark)}</td>
-                    <td style={{ ...td, color: signColor(s?.delta), fontWeight: 700 }}>{fmt(s?.delta, 3)}</td>
-                    <td style={{ ...td, color: signColor(s?.gamma), fontWeight: 700 }}>{fmt(s?.gamma, 4)}</td>
-                    <td style={{ ...td, color: signColor(s?.theta), fontWeight: 700 }}>{fmt(s?.theta, 3)}</td>
-                    <td style={{ ...td, color: signColor(s?.vega), fontWeight: 700 }}>{fmt(s?.vega, 3)}</td>
-                    <td style={td}>{s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`}</td>
-                    <td style={td}>{fmtInt(s?.open_interest)}</td>
-                    <td style={td}>{fmtInt(s?.volume)}</td>
-                    <td style={{ ...td, color: npCol, fontWeight: 700 }}>{fmtMoney(s?.net_prem)}</td>
-                    <td style={{ ...td, color: HOME_THEME.muted, fontSize: 13 }}>{timeAgo(s?.ts)}</td>
-                    <td style={{ ...td, textAlign: "center" }}>
-                      <button onClick={(e) => { e.stopPropagation(); remove(r.id); }} title="Remove" style={{
-                        background: "none", border: "none", color: HOME_THEME.muted,
-                        cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px",
-                      }}>×</button>
-                    </td>
-                  </tr>
+        {/* Cards */}
+        {loading ? (
+          <div style={{ ...homePanelStyle, padding: 28, textAlign: "center", color: HOME_THEME.muted }}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ ...homePanelStyle, padding: 28, textAlign: "center", color: HOME_THEME.muted }}>No contracts yet — add one above.</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+            {rows.map((r) => {
+              const s = r.snapshot;
+              const sideCol = r.side === "C" ? HOME_THEME.green : HOME_THEME.orange;
+              const npCol = s?.net_prem == null ? HOME_THEME.text : s.net_prem >= 0 ? HOME_THEME.green : HOME_THEME.red;
+              const isOpen = expandedId === r.id;
+              const hist = historyById[r.id] || [];
+              const chg = dayChgPct(s?.mark, s?.prev_close);
+              const chgCol = chg == null ? HOME_THEME.muted : chg >= 0 ? HOME_THEME.green : HOME_THEME.red;
+              return (
+                <div
+                  key={r.id}
+                  className="wcard"
+                  onClick={() => toggleRow(r.id)}
+                  style={{ ...homePanelStyle, padding: 16, borderColor: isOpen ? rgba(HOME_THEME.cyan, 0.35) : undefined }}
+                >
+                  {/* Front */}
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 18, fontWeight: 800, color: HOME_THEME.text }}>{r.ticker}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, padding: "2px 7px", borderRadius: 4, color: sideCol, background: rgba(sideCol, 0.12), border: `1px solid ${rgba(sideCol, 0.3)}` }}>
+                        {fmt(r.strike, r.strike % 1 ? 1 : 0)}{r.side}
+                      </span>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); remove(r.id); }} title="Remove" style={{
+                      background: "none", border: "none", color: HOME_THEME.muted,
+                      cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 2px",
+                    }}>×</button>
+                  </div>
+                  <div style={{ fontSize: 13, color: HOME_THEME.muted, marginTop: 4 }}>
+                    {r.expiration}{r.note && <span style={{ fontStyle: "italic" }}> · {r.note}</span>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 14 }}>
+                    <span style={{ fontSize: 26, fontWeight: 800, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>
+                      {fmt(s?.mark)}
+                    </span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: chgCol, fontFamily: "var(--font-mono)" }}>
+                      {chg == null ? "—" : `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+                    <span style={{ fontSize: 12, color: HOME_THEME.muted }}>Updated {timeAgo(s?.ts)}</span>
+                    <span style={{ color: HOME_THEME.muted, fontSize: 12, transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
+                  </div>
+
+                  {/* Expanded */}
                   {isOpen && (
-                    <tr>
-                      <td colSpan={HEADERS.length + 2} style={{ padding: 0, background: rgba(HOME_THEME.cyan, 0.02), borderBottom: `1px solid ${HOME_THEME.border}` }}>
-                        <div style={{ padding: 16 }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                              {METRICS.map((m) => {
-                                const on = metric === m.key;
-                                return (
-                                  <button key={m.key} onClick={(e) => { e.stopPropagation(); setMetric(m.key); }} style={{
-                                    fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-                                    color: on ? HOME_THEME.cyan : HOME_THEME.muted,
-                                    background: on ? rgba(HOME_THEME.cyan, 0.12) : "transparent",
-                                    border: `1px solid ${on ? rgba(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
-                                  }}>{m.label}</button>
-                                );
-                              })}
-                            </div>
-                            <span style={{ fontSize: 11, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
-                              {hist.length} snapshot{hist.length === 1 ? "" : "s"} · since {hist.length ? new Date(hist[0].ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
-                            </span>
-                          </div>
-                          {historyLoading && !hist.length
-                            ? <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.muted, fontSize: 12 }}>Loading history…</div>
-                            : <HistoryChart history={hist} metric={metric} />}
-                          {/* Strike greeks (this contract, not chain-side aggregate) */}
-                          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 12, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                            {([
-                              ["Delta", fmt(s?.delta, 3), signColor(s?.delta)],
-                              ["Gamma", fmt(s?.gamma, 4), signColor(s?.gamma)],
-                              ["Theta", fmt(s?.theta, 3), signColor(s?.theta)],
-                              ["Vega", fmt(s?.vega, 3), signColor(s?.vega)],
-                              ["IV", s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`, HOME_THEME.text],
-                            ] as [string, string, string][]).map(([k, v, col]) => (
-                              <div key={k} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>{k}</span>
-                                <span style={{ fontSize: 17, fontWeight: 700, color: col, fontFamily: "var(--font-mono)" }}>{v}</span>
-                              </div>
-                            ))}
-                          </div>
+                    <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${HOME_THEME.border}`, cursor: "default" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 14 }}>
+                        <div><div style={statLabel}>Spot</div><div style={statValue}>{fmt(s?.spot, 2)}</div></div>
+                        <div><div style={statLabel}>Bid</div><div style={statValue}>{fmt(s?.bid)}</div></div>
+                        <div><div style={statLabel}>Ask</div><div style={statValue}>{fmt(s?.ask)}</div></div>
+                        <div><div style={statLabel}>Δ Delta</div><div style={{ ...statValue, color: signColor(s?.delta) }}>{fmt(s?.delta, 3)}</div></div>
+                        <div><div style={statLabel}>Γ Gamma</div><div style={{ ...statValue, color: signColor(s?.gamma) }}>{fmt(s?.gamma, 4)}</div></div>
+                        <div><div style={statLabel}>Θ Theta</div><div style={{ ...statValue, color: signColor(s?.theta) }}>{fmt(s?.theta, 3)}</div></div>
+                        <div><div style={statLabel}>V Vega</div><div style={{ ...statValue, color: signColor(s?.vega) }}>{fmt(s?.vega, 3)}</div></div>
+                        <div><div style={statLabel}>IV</div><div style={statValue}>{s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`}</div></div>
+                        <div><div style={statLabel}>OI</div><div style={statValue}>{fmtInt(s?.open_interest)}</div></div>
+                        <div><div style={statLabel}>Volume</div><div style={statValue}>{fmtInt(s?.volume)}</div></div>
+                        <div><div style={statLabel}>Net Prem</div><div style={{ ...statValue, color: npCol }}>{fmtMoney(s?.net_prem)}</div></div>
+                        <div><div style={statLabel}>Prev Close</div><div style={statValue}>{fmt(s?.prev_close)}</div></div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {METRICS.map((m) => {
+                            const on = metric === m.key;
+                            return (
+                              <button key={m.key} onClick={() => setMetric(m.key)} style={{
+                                fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                                color: on ? HOME_THEME.cyan : HOME_THEME.muted,
+                                background: on ? rgba(HOME_THEME.cyan, 0.12) : "transparent",
+                                border: `1px solid ${on ? rgba(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
+                              }}>{m.label}</button>
+                            );
+                          })}
                         </div>
-                      </td>
-                    </tr>
+                        <span style={{ fontSize: 11, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
+                          {hist.length} snapshot{hist.length === 1 ? "" : "s"} · since {hist.length ? new Date(hist[0].ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
+                        </span>
+                      </div>
+                      {historyLoading && !hist.length
+                        ? <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.muted, fontSize: 12 }}>Loading history…</div>
+                        : <HistoryChart history={hist} metric={metric} />}
+                    </div>
                   )}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div style={{ fontSize: 13, color: HOME_THEME.muted, padding: "0 2px" }}>
-          Net Prem = mark × volume × 100 (a directional flow proxy from today&apos;s traded volume). Greeks/OI from Theta, quote from Tastytrade. Auto-refreshes every {REFRESH_MS / 1000}s.
+          Day-chg % = mark vs. prior session close. Net Prem = mark × volume × 100 (a directional flow proxy from today&apos;s traded volume). Greeks/OI from Theta, quote from Tastytrade. Auto-refreshes every {REFRESH_MS / 1000}s.
         </div>
       </div>
     </div>
