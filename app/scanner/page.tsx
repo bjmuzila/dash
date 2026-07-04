@@ -47,7 +47,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gex" | "greeks" | "volpin" | "strike" | "play" | "oi" | "watch";
+type MainTab = "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -837,170 +837,6 @@ function StrikeQueryScanner() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  THE PLAY (new tab) — 50% retrace + liquidity/pivot break on 1H/4H structure
-// ══════════════════════════════════════════════════════════════════════════════
-
-type PlayTf = "1h" | "4h";
-type PlayStatusFilter = "all" | "forming" | "triggered";
-
-type PlayRow = {
-  symbol: string;
-  timeframe: string;
-  direction: "short" | "long";
-  status: "forming" | "triggered";
-  swing_high: number;
-  swing_low: number;
-  leg_range: number;
-  retrace_pct: number;
-  equilibrium: number;
-  liq_level: number;
-  close: number;
-  dist_liq_pct: number;
-  bars_since: number;
-  updated_at: string;
-};
-
-const px = (v: number | null) =>
-  v == null || !isFinite(v) ? "—" : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
-
-function PlayScanner() {
-  const [rows, setRows] = useState<PlayRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [tf, setTf] = useState<PlayTf>("1h");
-  const [status, setStatus] = useState<PlayStatusFilter>("all");
-  const [showDetails, setShowDetails] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true); setErr(null);
-    try {
-      const u = new URL("/proxy/play-scanner", window.location.origin);
-      u.searchParams.set("timeframe", tf);
-      u.searchParams.set("status", status);
-      u.searchParams.set("limit", "40");
-      const res = await fetch(u.toString(), { cache: "no-store" });
-      const text = await res.text();
-      let j: any;
-      try { j = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status} (non-JSON).`); }
-      if (!j.ok) throw new Error(j.error || "load failed");
-      setRows(j.rows || []);
-    } catch (e: any) { setErr(String(e?.message || e)); }
-    finally { setLoading(false); }
-  }, [tf, status]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
-
-  return (
-    <Card variant="budget" title="The Play"
-      subtitle={`50% retrace → liquidity break · ${tf.toUpperCase()} swing structure${loading ? " · refreshing…" : ""}`}>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 6 }}>
-          {(["1h", "4h"] as PlayTf[]).map((t) => (
-            <button key={t} onClick={() => setTf(t)} style={seg(tf === t)}>{t.toUpperCase()}</button>
-          ))}
-        </div>
-        <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setStatus("all")} style={seg(status === "all")}>All</button>
-          <button onClick={() => setStatus("triggered")} style={seg(status === "triggered")}>Triggered</button>
-          <button onClick={() => setStatus("forming")} style={seg(status === "forming")}>Forming</button>
-        </div>
-        <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <button onClick={() => setShowDetails((v) => !v)} style={seg(showDetails)}>
-          {showDetails ? "▾ Details" : "▸ Details"}
-        </button>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Yahoo candles · sweeps every 15m during RTH</span>
-      </div>
-
-      {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
-          {err.includes("no DB") || err.includes("503")
-            ? "Recorder hasn't run yet — data appears after the first RTH sweep (or POST /proxy/play-run)."
-            : err}
-        </div>
-      )}
-
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
-              <th style={{ ...th, textAlign: "left" }}>#</th>
-              <th style={{ ...th, textAlign: "left" }}>Symbol</th>
-              <th style={{ ...th, textAlign: "left" }}>Dir</th>
-              <th style={{ ...th, textAlign: "left" }}>Status</th>
-              <th style={th}>Trigger</th>
-              {showDetails && (
-                <>
-                  <th style={th}>Close</th>
-                  <th style={th}>Swing H</th>
-                  <th style={th}>Swing L</th>
-                  <th style={th}>Retrace</th>
-                  <th style={th}>Equilib</th>
-                  <th style={th}>Dist Liq</th>
-                </>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const short = r.direction === "short";
-              const dirCol = short ? HOME_THEME.red : HOME_THEME.green;
-              const trig = r.status === "triggered";
-              return (
-                <tr key={`${r.symbol}-${r.timeframe}`} style={{
-                  borderTop: "1px solid rgba(255,255,255,0.06)",
-                  background: trig ? `${HOME_THEME.orange}14` : i % 2 ? "rgba(255,255,255,0.02)" : "transparent",
-                }}>
-                  <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{i + 1}</td>
-                  <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
-                  <td style={{ ...td, textAlign: "left", color: dirCol, fontWeight: 800 }}>{short ? "SHORT" : "LONG"}</td>
-                  <td style={{ ...td, textAlign: "left" }}>
-                    <span style={{ color: trig ? HOME_THEME.orange : HOME_THEME.cyan, fontWeight: 800, fontSize: 11 }}>
-                      {trig ? "TRIGGERED" : "FORMING"}
-                    </span>
-                  </td>
-                  <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{px(r.liq_level)}</td>
-                  {showDetails && (
-                    <>
-                      <td style={td}>{px(r.close)}</td>
-                      <td style={td}>{px(r.swing_high)}</td>
-                      <td style={td}>{px(r.swing_low)}</td>
-                      <td style={{ ...td, color: r.retrace_pct >= 0.5 ? HOME_THEME.text : "rgba(255,255,255,0.6)" }}>
-                        {(r.retrace_pct * 100).toFixed(0)}%
-                      </td>
-                      <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{px(r.equilibrium)}</td>
-                      <td style={{ ...td, color: r.dist_liq_pct == null ? "rgba(255,255,255,0.4)" : r.dist_liq_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                        {r.dist_liq_pct == null ? "—" : `${r.dist_liq_pct >= 0 ? "+" : ""}${(r.dist_liq_pct * 100).toFixed(2)}%`}
-                      </td>
-                    </>
-                  )}
-                </tr>
-              );
-            })}
-            {!rows.length && !loading && !err && (
-              <tr><td colSpan={showDetails ? 11 : 5} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
-                No {tf.toUpperCase()} setups right now. Recorder sweeps every 15m during RTH — or POST /proxy/play-run to populate.
-              </td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
-        <span><span style={{ color: HOME_THEME.cyan }}>FORMING</span> = pulled back ≥50% into the discount/premium zone</span>
-        <span><span style={{ color: HOME_THEME.orange }}>TRIGGERED</span> = swept a prior pivot low/high past the 0.5 (liquidity grab)</span>
-        <span><span style={{ color: HOME_THEME.green }}>LONG</span> = uptrend continuation · <span style={{ color: HOME_THEME.red }}>SHORT</span> = downtrend continuation</span>
-        <span>Liq Level = swept low (long) / high (short) past the 0.5</span>
-        <span>dominant trend leg · ATR-filtered</span>
-      </div>
-    </Card>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 //  OI CHANGE SCANNER (new tab) — day-over-day OTM open-interest change, EM watchlist
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1168,11 +1004,30 @@ type WatchRow = {
   date: string;
 };
 
+type OutcomeRow = {
+  symbol: string;
+  strike: number;
+  expiry: string;
+  first_flagged: string;
+  spot_at_flag: number;
+  otm_pct_at_flag: number;
+  side: "above" | "below";
+  last_checked: string | null;
+  last_spot: number | null;
+  closest_pct: number | null;
+  touched: boolean;
+  touched_date: string | null;
+  status: "open" | "touched" | "expired";
+};
+
 function WatchThisScanner() {
   const [rows, setRows] = useState<WatchRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [threshold, setThreshold] = useState<number | null>(null);
+
+  const [outcomes, setOutcomes] = useState<OutcomeRow[]>([]);
+  const [outcomeStatus, setOutcomeStatus] = useState<"all" | "open" | "touched" | "expired">("all");
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -1188,11 +1043,20 @@ function WatchThisScanner() {
     finally { setLoading(false); }
   }, []);
 
+  const loadOutcomes = useCallback(async () => {
+    try {
+      const res = await fetch(`/proxy/far-cb-outcomes?status=${outcomeStatus}&limit=100`, { cache: "no-store" });
+      const j = await res.json();
+      if (j.ok) setOutcomes(j.rows || []);
+    } catch {}
+  }, [outcomeStatus]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { loadOutcomes(); }, [loadOutcomes]);
 
   return (
-    <Card variant="budget" title="Watch This — Far CB"
+    <Card variant="budget" title={<span style={{ fontSize: 18 }}>Watch This — Far CB</span>}
       subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · EM watchlist${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
@@ -1253,6 +1117,67 @@ function WatchThisScanner() {
         <span>Basis: OI+Vol net GEX (canonical) · single highest |GEX| strike per ticker across expiries ≤30 DTE</span>
         <span>Flagged when that strike is &gt;{threshold ?? 15}% away from spot</span>
       </div>
+
+      {/* Tracked results — did the flagged strike ever get touched? */}
+      <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["all", "open", "touched", "expired"] as const).map((s) => (
+              <button key={s} onClick={() => setOutcomeStatus(s)} style={seg(outcomeStatus === s)}>
+                {s[0].toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+          </div>
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+            Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike
+          </span>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+                <th style={{ ...th, textAlign: "left" }}>Symbol</th>
+                <th style={th}>Strike</th>
+                <th style={{ ...th, textAlign: "left" }}>Expiry</th>
+                <th style={{ ...th, textAlign: "left" }}>Flagged</th>
+                <th style={th}>OTM at flag</th>
+                <th style={th}>Closest</th>
+                <th style={{ ...th, textAlign: "left" }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {outcomes.map((o, i) => (
+                <tr key={`${o.symbol}-${o.expiry}-${o.strike}`}
+                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                  <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>${o.strike}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{o.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 12 }}>{o.first_flagged}</td>
+                  <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
+                  <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
+                    {o.closest_pct != null ? `${o.closest_pct.toFixed(1)}%` : "—"}
+                  </td>
+                  <td style={{ ...td, textAlign: "left" }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 800, letterSpacing: "0.05em",
+                      color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? "rgba(255,255,255,0.4)" : HOME_THEME.green,
+                    }}>
+                      {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {!outcomes.length && (
+                <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                  No tracked flags yet.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </Card>
   );
 }
@@ -1284,11 +1209,6 @@ export default function ScannerPage() {
           background: tab === "volpin" ? `${HOME_THEME.purple}22` : "transparent",
         }}>Vol Pin</button>
         <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
-        <button onClick={() => setTab("play")} style={{
-          ...tabStyle(tab === "play"),
-          border: `1px solid ${tab === "play" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
-          background: tab === "play" ? `${HOME_THEME.green}22` : "transparent",
-        }}>The Play</button>
         <button onClick={() => setTab("oi")} style={{
           ...tabStyle(tab === "oi"),
           border: `1px solid ${tab === "oi" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
@@ -1305,7 +1225,6 @@ export default function ScannerPage() {
       {tab === "greeks" && <GreeksScanner />}
       {tab === "volpin" && <VolPinScanner />}
       {tab === "strike" && <StrikeQueryScanner />}
-      {tab === "play"   && <PlayScanner />}
       {tab === "oi"     && <OiChangeScanner />}
       {tab === "watch"  && <WatchThisScanner />}
     </PageShell>

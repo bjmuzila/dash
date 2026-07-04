@@ -32,6 +32,7 @@ const {
   fetchIndexPriceTheta,
 } = require('./proxy-thetadata');
 const { EQUITY_TICKERS } = require('./em-tickers');
+const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta } = require('./proxy-thetadata');
 
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
@@ -111,6 +112,32 @@ async function ensureSchema() {
     );
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_far_cb_watch_date ON far_cb_watch (date, otm_pct DESC);`);
+
+  // Persistent outcome log — one row per (symbol, strike, expiry) ever flagged.
+  // Not a win/loss grade, just the observed result: did spot ever reach that
+  // strike before expiry, and how close did it get. Graded once daily after
+  // close by runGrading().
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS far_cb_outcomes (
+      symbol            TEXT              NOT NULL,
+      strike            DOUBLE PRECISION  NOT NULL,
+      expiry            TEXT              NOT NULL,
+      first_flagged     DATE              NOT NULL,
+      spot_at_flag      DOUBLE PRECISION  NOT NULL,
+      otm_pct_at_flag   DOUBLE PRECISION  NOT NULL,
+      gex_value_at_flag DOUBLE PRECISION  NOT NULL,
+      side              TEXT              NOT NULL,
+      last_checked      DATE,
+      last_spot         DOUBLE PRECISION,
+      closest_pct       DOUBLE PRECISION,
+      touched           BOOLEAN           NOT NULL DEFAULT FALSE,
+      touched_date      DATE,
+      status            TEXT              NOT NULL DEFAULT 'open',
+      updated_at        TIMESTAMPTZ       NOT NULL DEFAULT now(),
+      PRIMARY KEY (symbol, strike, expiry)
+    );
+  `);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_far_cb_outcomes_status ON far_cb_outcomes (status, expiry);`);
   _schemaReady = true;
   console.log(`[far-cb] schema ready — OTM threshold ${OTM_THRESHOLD_PCT}%, ${MAX_DTE_DAYS}d window`);
   return true;
@@ -240,6 +267,17 @@ async function upsertOrClear(p, date, symbol, result) {
          spot = EXCLUDED.spot, otm_pct = EXCLUDED.otm_pct, dte_days = EXCLUDED.dte_days, ts = now()`,
       [date, symbol, result.strike, result.expiry, result.gexValue, result.spot, result.otmPct, result.dteDays]
     );
+    // Log this (symbol, strike, expiry) once — first time it's ever flagged.
+    // Later sweeps that re-flag the same triple are no-ops here (ON CONFLICT
+    // DO NOTHING); the daily grader is what evolves the row after that.
+    const side = result.strike > result.spot ? 'above' : 'below';
+    await p.query(
+      `INSERT INTO far_cb_outcomes
+         (symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag, gex_value_at_flag, side, last_checked, last_spot, closest_pct)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$4,$5,$6)
+       ON CONFLICT (symbol, strike, expiry) DO NOTHING`,
+      [symbol, result.strike, result.expiry, date, result.spot, result.otmPct, result.gexValue, side]
+    );
   } else {
     // No longer qualifies (or no data) — drop any stale row for today.
     await p.query(`DELETE FROM far_cb_watch WHERE date = $1 AND symbol = $2`, [date, symbol]);
@@ -280,25 +318,121 @@ async function runSweep(opts = {}) {
   return { date, flagged, failed: failed.length, failures: failed.slice(0, 10) };
 }
 
+// ── daily outcome grading ─────────────────────────────────────────────────────
+
+/**
+ * Grade every OPEN outcome row once: pull daily OHLC from first_flagged through
+ * today, check whether spot ever touched the strike (high >= strike for an
+ * "above" side, low <= strike for "below"), and record the closest approach.
+ * No win/loss judgement — just the observed result. Rows past their expiry
+ * that were never touched flip to status='expired'; touched rows flip to
+ * status='touched' and stop being re-graded.
+ */
+async function gradeOne(p, row) {
+  const { symbol, strike, expiry, first_flagged, side } = row;
+  const today = etDateStr();
+  const fromDate = new Date(first_flagged);
+  const toDate = new Date();
+
+  let bars;
+  try {
+    bars = INDEX_SYMBOLS.has(symbol.toUpperCase())
+      ? await fetchIndexDailyHistoryTheta(symbol, fromDate, toDate)
+      : await fetchStockDailyHistoryTheta(symbol, fromDate, toDate);
+  } catch (e) {
+    console.warn(`[far-cb] grade ${symbol} — history fetch failed: ${e.message}`);
+    return;
+  }
+  if (!bars?.length) return;
+
+  let touched = row.touched;
+  let touchedDate = row.touched_date;
+  let closestPct = row.closest_pct;
+  let lastSpot = row.last_spot;
+
+  for (const b of bars) {
+    const barDate = new Date(b.time).toISOString().slice(0, 10);
+    lastSpot = b.close;
+    const dist = side === 'above'
+      ? Math.max(0, strike - b.high)
+      : Math.max(0, b.low - strike);
+    const distPct = (dist / strike) * 100;
+    if (closestPct == null || distPct < closestPct) closestPct = distPct;
+    if (!touched) {
+      const hit = side === 'above' ? b.high >= strike : b.low <= strike;
+      if (hit) { touched = true; touchedDate = barDate; }
+    }
+  }
+
+  const expired = !touched && today > expiry;
+  const status = touched ? 'touched' : expired ? 'expired' : 'open';
+
+  await p.query(
+    `UPDATE far_cb_outcomes SET
+       last_checked = $1, last_spot = $2, closest_pct = $3,
+       touched = $4, touched_date = $5, status = $6, updated_at = now()
+     WHERE symbol = $7 AND strike = $8 AND expiry = $9`,
+    [today, lastSpot, closestPct, touched, touchedDate, status, symbol, strike, expiry]
+  );
+}
+
+async function runGrading() {
+  if (!(await ensureSchema())) return { skipped: 'no DB' };
+  const p = getPool();
+  const { rows } = await p.query(
+    `SELECT symbol, strike, expiry, first_flagged, side, touched, touched_date, closest_pct, last_spot
+     FROM far_cb_outcomes WHERE status = 'open'`
+  );
+  console.log(`[far-cb] grading ${rows.length} open outcome(s)`);
+  let ok = 0;
+  const failed = [];
+  for (const row of rows) {
+    try { await gradeOne(p, row); ok += 1; }
+    catch (e) { failed.push(`${row.symbol}:${e.message}`); }
+    await sleep(200);
+  }
+  console.log(`[far-cb] grading done — ${ok} graded, ${failed.length} failed`);
+  return { graded: ok, failed: failed.length };
+}
+
 // ── scheduler ─────────────────────────────────────────────────────────────────
 
 let _timer = null;
 let _sweeping = false;
 let _lastKey = null;
+let _lastGradeDate = null;
+
+// Grade once daily inside this ET window (minutes-since-midnight) — well after
+// the close so the day's final OHLC bar is posted, but same-day so it doesn't
+// silently slip to the next morning if the server restarts overnight.
+const GRADE_WINDOW_START_MINS = 16 * 60 + 10; // 16:10 ET
+const GRADE_WINDOW_END_MINS   = 20 * 60;      // 20:00 ET
 
 function startFarCbRecorder() {
-  console.log(`[far-cb] enabled — ${SWEEP_MINS}m sweeps during RTH, OTM>${OTM_THRESHOLD_PCT}%, ≤${MAX_DTE_DAYS}d`);
+  console.log(`[far-cb] enabled — ${SWEEP_MINS}m sweeps during RTH, OTM>${OTM_THRESHOLD_PCT}%, ≤${MAX_DTE_DAYS}d, daily grading ~16:10 ET`);
   const tick = async () => {
-    if (!isRthWindow()) return;
     const { hour, minute } = etParts();
-    if (minute % SWEEP_MINS !== 0) return;
-    const key = `${etDateStr()} ${hour}:${minute}`;
-    if (key === _lastKey || _sweeping) return;
-    _lastKey = key;
-    _sweeping = true;
-    runSweep()
-      .catch((e) => console.warn('[far-cb] sweep error:', e.message))
-      .finally(() => { _sweeping = false; });
+    const mins = hour * 60 + minute;
+
+    if (isRthWindow() && minute % SWEEP_MINS === 0) {
+      const key = `${etDateStr()} ${hour}:${minute}`;
+      if (key !== _lastKey && !_sweeping) {
+        _lastKey = key;
+        _sweeping = true;
+        runSweep()
+          .catch((e) => console.warn('[far-cb] sweep error:', e.message))
+          .finally(() => { _sweeping = false; });
+      }
+    }
+
+    // Daily outcome grading — once per day, first tick inside the window.
+    if (mins >= GRADE_WINDOW_START_MINS && mins <= GRADE_WINDOW_END_MINS) {
+      const gKey = etDateStr();
+      if (gKey !== _lastGradeDate) {
+        _lastGradeDate = gKey;
+        runGrading().catch((e) => console.warn('[far-cb] grading error:', e.message));
+      }
+    }
   };
   _timer = setInterval(() => { void tick(); }, 60_000);
   _timer.unref?.();
@@ -309,6 +443,7 @@ function startFarCbRecorder() {
 module.exports = {
   startFarCbRecorder,
   runSweep,
+  runGrading,
   ensureSchema,
   getPool,
   scanTicker,

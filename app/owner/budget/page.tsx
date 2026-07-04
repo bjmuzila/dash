@@ -23,6 +23,7 @@ type RegisterRow = {
   category_id?: number | null;
 };
 type Category = { id: number; name: string; amount: number; color?: string | null };
+type DailyBalance = { day: string; coastal: number; truist: number; secu: number };
 type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
@@ -109,6 +110,7 @@ export default function BudgetPage() {
   const [recurring, setRecurring] = useState<RecurringRule[]>([]);
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon">("overview");
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
@@ -140,6 +142,7 @@ export default function BudgetPage() {
     setRecurring(data.recurring || []);
     setAmazonRows(data.amazonRows || []);
     setCategories(data.categories || []);
+    setDailyBalance(data.dailyBalance || null);
     setLoading(false);
   };
 
@@ -332,6 +335,9 @@ export default function BudgetPage() {
   // Log an upcoming recurring bill as paid (materialize this occurrence).
   const markBillPaid = async (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) =>
     post({ action: "registerRow", date: bill.date, label: bill.label, bank: bill.bank, amount: bill.amount, recurringTag: bill.tag });
+  // Daily opening balance (input each morning).
+  const saveDailyBalance = async (day: string, coastal: number, truist: number, secu: number) =>
+    post({ action: "dailyBalance", day, coastal, truist, secu });
   const saveBeginning = async (balances: Record<Bank, number>) =>
     post({ action: "setBeginning", month, balances });
   const addRecurring = async (rule: { label: string; bank: Bank; amount: number; frequency: Frequency; anchorDate: string }) =>
@@ -353,8 +359,8 @@ export default function BudgetPage() {
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: 0, overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center", padding: "14px 18px 6px" }}>
-            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
-            <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
+            <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 20, flexWrap: "wrap", padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
             <div>
@@ -375,10 +381,10 @@ export default function BudgetPage() {
           ].map((t) => (
             <div key={t.label} style={{ ...dissolveCard(), padding: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 14 }}>{t.icon}</span>
+                <span style={{ fontSize: 18 }}>{t.icon}</span>
                 <span style={labelCap()}>{t.label}</span>
               </div>
-              <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
+              <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
             </div>
           ))}
         </div>
@@ -386,11 +392,11 @@ export default function BudgetPage() {
         {/* Projection chart + cashflow calendar */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 14 }}>
           <div style={{ ...dissolveCard(), padding: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
             <ProjectionChart series={computed.series} currency={currency} />
           </div>
           <div style={{ ...dissolveCard(), padding: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
             <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
           </div>
         </div>
@@ -405,7 +411,7 @@ export default function BudgetPage() {
               🔁 Recurring{recurring.length ? ` (${recurring.filter((r) => r.active).length})` : ""}
             </button>
           )}
-          {loading && <span style={{ fontSize: 12, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
+          {loading && <span style={{ fontSize: 15, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
 
         {showRecurring && tab === "register" && (
@@ -427,6 +433,8 @@ export default function BudgetPage() {
             out={Math.abs(computed.payments)}
             projected={computed.projectedBalance}
             billsDue={billsDue}
+            dailyBalance={dailyBalance}
+            onSaveDaily={saveDailyBalance}
             currency={currency}
             onMarkPaid={markBillPaid}
           />
@@ -509,16 +517,16 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
   return (
     <div>
       <div style={{ ...labelCap(), color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-        <span style={{ fontSize: 14 }}>🏦</span> Account balances
+        <span style={{ fontSize: 18 }}>🏦</span> Account balances
       </div>
       <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
         {BANKS.map((b) => (
           <div key={b} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
+            <span style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
             {(() => {
               const shown = beginningByBank[b] ?? 0;
               return (
-                <span style={{ fontSize: 18, fontWeight: 900, color: shown < 0 ? SOFT_RED : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
+                <span style={{ fontSize: 22, fontWeight: 900, color: shown < 0 ? SOFT_RED : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
               );
             })()}
             <input
@@ -528,7 +536,7 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
               placeholder="set balance…"
               type="number"
               title="Set this account's balance"
-              style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 12 }}
+              style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 15 }}
             />
           </div>
         ))}
@@ -574,8 +582,8 @@ function RecurringManager({
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 900 }}>Recurring entries</div>
-          <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
+          <div style={{ fontSize: 18, fontWeight: 900 }}>Recurring entries</div>
+          <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
         </div>
         <button onClick={onClose} style={ghost()}>Done</button>
       </div>
@@ -588,13 +596,13 @@ function RecurringManager({
             return (
               <div key={rule.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.9fr 1fr auto auto", gap: 10, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 12px", opacity: rule.active ? 1 : 0.45 }}>
                 <span style={{ fontWeight: 800 }}>{rule.label}</span>
-                <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
-                <span style={{ fontSize: 12, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
+                <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
+                <span style={{ fontSize: 15, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
                 <span style={{ fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(rule.amount, currency)}</span>
                 <button
                   onClick={() => onUpdate(rule.id, { active: rule.active ? 0 : 1 })}
                   title={rule.active ? "Pause (hide from Payments)" : "Resume"}
-                  style={{ ...ghost(), padding: "6px 10px", fontSize: 11 }}
+                  style={{ ...ghost(), padding: "6px 10px", fontSize: 14 }}
                 >
                   {rule.active ? "Pause" : "Resume"}
                 </button>
@@ -628,7 +636,7 @@ type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: numb
 function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
   if (series.length < 2) {
-    return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 12 }}>Add entries to see the projection.</div>;
+    return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 15 }}>Add entries to see the projection.</div>;
   }
   const W = 560, H = 150, padL = 4, padR = 4, padT = 8, padB = 18;
   const ys = series.map((p) => p.balance);
@@ -657,13 +665,13 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
         {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
         {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={HOME_THEME.text} stroke="#05060A" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
         {ticks.map((p, i) => (
-          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={9} textAnchor="middle">{shortDate(p.date)}</text>
+          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={11} textAnchor="middle">{shortDate(p.date)}</text>
         ))}
       </svg>
       {hp && (
         <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(10,13,20,0.96)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
-          <div style={{ fontSize: 14, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
+          <div style={{ fontSize: 18, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
         </div>
       )}
     </div>
@@ -699,7 +707,7 @@ function CalendarGrid({
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
       {WD.map((w, i) => (
-        <div key={i} style={{ textAlign: "center", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+        <div key={i} style={{ textAlign: "center", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
       ))}
       {cells.map((d, i) => {
         if (d === null) return <div key={`e${i}`} />;
@@ -721,8 +729,8 @@ function CalendarGrid({
               color: HOME_THEME.text, transition: "all 0.12s ease",
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
-            {g && <div style={{ fontSize: 12, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+            <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
+            {g && <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
         );
       })}
@@ -769,8 +777,8 @@ function MonthlyRegister({
     <div style={{ padding: 16 }}>
       {beginningBalance !== null && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "9px 12px", borderRadius: 10, background: "rgba(126,211,252,0.06)", border: `1px solid ${HOME_THEME.border}` }}>
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
-          <span style={{ fontWeight: 900, fontSize: 15, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
+          <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
+          <span style={{ fontWeight: 900, fontSize: 19, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -783,7 +791,7 @@ function MonthlyRegister({
               style={{ borderRadius: 12, border: `1px solid ${isSel ? "#7dd3fc" : HOME_THEME.border}`, boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.35)" : "none", overflow: "hidden" }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.04)" }}>
-                <span style={{ fontWeight: 900, fontSize: 13 }}>{longDate(g.date)}</span>
+                <span style={{ fontWeight: 900, fontSize: 16 }}>{longDate(g.date)}</span>
               </div>
               {g.rows.map((r) => {
                 const isIncome = r.amount > 0;
@@ -837,7 +845,7 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         background: hover ? "rgba(244,148,142,0.16)" : "rgba(244,148,142,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
-        fontSize: 16,
+        fontSize: 20,
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
@@ -869,7 +877,7 @@ function EditButton({ onClick, title }: { onClick: () => void; title?: string })
         background: hover ? "rgba(33,158,188,0.16)" : "rgba(33,158,188,0.07)",
         color: HOME_THEME.cyan,
         cursor: "pointer",
-        fontSize: 13,
+        fontSize: 16,
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
@@ -902,7 +910,7 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
     );
   }
   return (
-    <span onClick={() => setEditing(true)} title="Change date (e.g. paid early)" style={{ cursor: "text", fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, borderBottom: "1px dotted rgba(139,148,167,0.35)", whiteSpace: "nowrap" }}>
+    <span onClick={() => setEditing(true)} title="Change date (e.g. paid early)" style={{ cursor: "text", fontSize: 13, fontWeight: 700, color: HOME_THEME.muted, borderBottom: "1px dotted rgba(139,148,167,0.35)", whiteSpace: "nowrap" }}>
       {shortDate(value)}
     </span>
   );
@@ -912,8 +920,57 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
 function StatLine({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
-      <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 800, color }}>{value}</span>
+      <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, color }}>{value}</span>
+    </div>
+  );
+}
+
+// Manually-entered opening balance, updated each morning. Sums the three banks.
+function DailyOpeningBalanceCard({
+  value,
+  currency,
+  onSave,
+}: {
+  value: DailyBalance | null;
+  currency: string;
+  onSave: (day: string, coastal: number, truist: number, secu: number) => void;
+}) {
+  const [c, setC] = useState(value ? String(value.coastal) : "");
+  const [t, setT] = useState(value ? String(value.truist) : "");
+  const [s, setS] = useState(value ? String(value.secu) : "");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    if (value) {
+      setC(String(value.coastal));
+      setT(String(value.truist));
+      setS(String(value.secu));
+    }
+  }, [value?.coastal, value?.truist, value?.secu]);
+  const sum = (Number(c) || 0) + (Number(t) || 0) + (Number(s) || 0);
+  const today = todayIso();
+  const isToday = value?.day === today;
+  const save = () => {
+    onSave(today, Number(c) || 0, Number(t) || 0, Number(s) || 0);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+  return (
+    <div style={{ ...dissolveCard(), padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+        <div style={labelCap()}>Daily opening balance</div>
+        {value && <span style={{ fontSize: 13, color: isToday ? HOME_THEME.green : HOME_THEME.muted }}>{isToday ? "updated today" : `as of ${shortDate(value.day)}`}</span>}
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 900, color: sum < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(sum, currency)}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12 }}>
+        {([["COASTAL", c, setC], ["TRUIST", t, setT], ["SECU", s, setS]] as const).map(([lab, val, setter]) => (
+          <div key={lab}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em", marginBottom: 4 }}>{lab}</div>
+            <input value={val} onChange={(e) => setter(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} type="number" placeholder="0" style={{ ...field(), padding: "8px 10px" }} />
+          </div>
+        ))}
+      </div>
+      <button onClick={save} style={{ ...primary(), marginTop: 10, width: "100%" }}>{saved ? "Saved ✓" : "Save opening balance"}</button>
     </div>
   );
 }
@@ -924,6 +981,8 @@ function OverviewPanel({
   out,
   projected,
   billsDue,
+  dailyBalance,
+  onSaveDaily,
   currency,
   onMarkPaid,
 }: {
@@ -932,6 +991,8 @@ function OverviewPanel({
   out: number;
   projected: number;
   billsDue: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[];
+  dailyBalance: DailyBalance | null;
+  onSaveDaily: (day: string, coastal: number, truist: number, secu: number) => void;
   currency: string;
   onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
 }) {
@@ -939,50 +1000,49 @@ function OverviewPanel({
   const good = safeToSpend >= 0;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 14, alignItems: "start" }}>
-      <div style={{ ...cardAccent(0), padding: 18 }}>
-        <div style={labelCap()}>Safe to spend this month</div>
-        <div style={{ fontSize: 34, fontWeight: 900, color: good ? HOME_THEME.cyan : SOFT_RED, letterSpacing: "-0.01em", marginTop: 4 }}>{fmtMoney(safeToSpend, currency)}</div>
-        <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>{good ? "You're good. You've got this." : "You're over budget this month."}</div>
-        <div style={{ height: 8, borderRadius: 99, background: "rgba(255,255,255,0.07)", margin: "14px 0 6px" }}>
-          <div style={{ height: 8, borderRadius: 99, background: HOME_THEME.cyan, width: `${ratio}%` }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ ...dissolveCard(), padding: 18 }}>
+          <div style={labelCap()}>Safe to spend this month</div>
+          <div style={{ fontSize: 42, fontWeight: 900, color: good ? HOME_THEME.cyan : SOFT_RED, letterSpacing: "-0.01em", marginTop: 4 }}>{fmtMoney(safeToSpend, currency)}</div>
+          <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 4 }}>{good ? "You're good. You've got this." : "You're over budget this month."}</div>
+          <div style={{ height: 8, borderRadius: 99, background: "rgba(255,255,255,0.07)", margin: "14px 0 6px" }}>
+            <div style={{ height: 8, borderRadius: 99, background: HOME_THEME.cyan, width: `${ratio}%` }} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.muted }}>
+            <span>Out {fmtMoney(out, currency)}</span>
+            <span>of {fmtMoney(income, currency)} in</span>
+          </div>
+          <div style={{ marginTop: 14, fontSize: 14, color: HOME_THEME.muted }}>Projected end balance <span style={{ color: projected < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>{fmtMoney(projected, currency)}</span></div>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HOME_THEME.muted }}>
-          <span>Out {fmtMoney(out, currency)}</span>
-          <span>of {fmtMoney(income, currency)} in</span>
-        </div>
-        <div style={{ marginTop: 14, fontSize: 11, color: HOME_THEME.muted }}>Projected end balance <span style={{ color: projected < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>{fmtMoney(projected, currency)}</span></div>
+
+        <DailyOpeningBalanceCard value={dailyBalance} currency={currency} onSave={onSaveDaily} />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ ...card(), padding: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 900, marginBottom: 10 }}>This period</div>
+        <div style={{ ...dissolveCard(), padding: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 10 }}>This period</div>
           <StatLine label="Money in" value={fmtMoney(income, currency)} color={HOME_THEME.green} />
           <StatLine label="Money out" value={fmtMoney(out, currency)} color={SOFT_RED} />
           <StatLine label="Bills due soon" value={String(billsDue.length)} color={HOME_THEME.text} />
         </div>
 
         {billsDue.length > 0 && (
-          <div style={{ ...card(), padding: 14, border: `1px solid ${bRgba("#fbbf24", 0.28)}` }}>
-            <div style={{ fontSize: 11, fontWeight: 900, color: "#FBBF24", marginBottom: 10 }}>⚠ Bills due soon</div>
+          <div style={{ ...dissolveCard(), padding: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 900, color: SOFT_RED, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.1em" }}>Bills due soon</div>
             {billsDue.map((b) => (
               <div key={b.tag} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
                 <div>
-                  <div style={{ fontSize: 12, color: HOME_THEME.text }}>{b.label}</div>
-                  <div style={{ fontSize: 11, color: HOME_THEME.muted }}>{b.days <= 0 ? "Due today" : `Due in ${b.days} day${b.days === 1 ? "" : "s"}`}</div>
+                  <div style={{ fontSize: 15, color: HOME_THEME.text }}>{b.label}</div>
+                  <div style={{ fontSize: 14, color: HOME_THEME.muted }}>{b.days <= 0 ? "Due today" : `Due in ${b.days} day${b.days === 1 ? "" : "s"}`}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 12, fontWeight: 800 }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
-                  <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "6px 10px", fontSize: 11 }}>Mark paid</button>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
+                  <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "6px 10px", fontSize: 14 }}>Mark paid</button>
                 </div>
               </div>
             ))}
           </div>
         )}
-
-        <div style={{ ...card(), padding: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 900, marginBottom: 4 }}>Keep it safe</div>
-          <div style={{ fontSize: 11, color: HOME_THEME.muted, lineHeight: 1.5 }}>Your budget lives in your own database — private to you. Export a backup from the register now and then.</div>
-        </div>
       </div>
     </div>
   );
@@ -1026,29 +1086,29 @@ function CategoriesPanel({
   return (
     <div style={{ ...cardAccent(2), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 15, fontWeight: 900 }}>Categories</div>
-        <span style={{ fontSize: 11, color: HOME_THEME.muted }}>{categories.length} categor{categories.length === 1 ? "y" : "ies"}</span>
+        <div style={{ fontSize: 19, fontWeight: 900 }}>Categories</div>
+        <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{categories.length} categor{categories.length === 1 ? "y" : "ies"}</span>
       </div>
 
       {unsorted.length > 0 && (
         <div style={{ borderRadius: 12, border: `1px dashed ${bRgba("#7dd3fc", 0.3)}`, background: bRgba("#7dd3fc", 0.05), padding: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 800 }}>🧠 Brain dump — to sort</div>
-              <div style={{ fontSize: 11, color: HOME_THEME.muted }}>Give each one a home</div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>🧠 Brain dump — to sort</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.muted }}>Give each one a home</div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(unsortedTotal, currency)}</div>
-              <div style={{ fontSize: 11, color: HOME_THEME.muted }}>{unsorted.length} item{unsorted.length === 1 ? "" : "s"}</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(unsortedTotal, currency)}</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.muted }}>{unsorted.length} item{unsorted.length === 1 ? "" : "s"}</div>
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {unsorted.map((r) => (
               <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr 150px 90px", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 11, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
-                <span style={{ fontSize: 12, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
+                <span style={{ fontSize: 15, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
                 <ThemedSelect value="" onChange={(v) => onAssign(r.id, v ? Number(v) : null)} options={catOptions} />
-                <span style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED, textAlign: "right" }}>{fmtMoney(r.amount, currency)}</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED, textAlign: "right" }}>{fmtMoney(r.amount, currency)}</span>
               </div>
             ))}
           </div>
@@ -1056,7 +1116,7 @@ function CategoriesPanel({
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-        {categories.length === 0 && <div style={{ fontSize: 12, color: HOME_THEME.muted, padding: "6px 2px" }}>No categories yet — add one below to start budgeting.</div>}
+        {categories.length === 0 && <div style={{ fontSize: 15, color: HOME_THEME.muted, padding: "6px 2px" }}>No categories yet — add one below to start budgeting.</div>}
         {categories.map((c) => {
           const s = spent[c.id] || 0;
           const budgetAmt = c.amount || 0;
@@ -1067,12 +1127,12 @@ function CategoriesPanel({
           return (
             <div key={c.id} style={{ ...card(), padding: 12 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 800, minWidth: 0 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 800, minWidth: 0 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: dot, flex: "none" }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
-                  <span style={{ fontSize: 12, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
+                  <span style={{ fontSize: 15, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
                   <DeleteButton onClick={() => onDelete(c.id)} />
                 </span>
               </div>
@@ -1081,10 +1141,10 @@ function CategoriesPanel({
                   <div style={{ height: 5, borderRadius: 99, background: "rgba(255,255,255,0.06)", marginBottom: 6 }}>
                     <div style={{ height: 5, borderRadius: 99, background: over ? SOFT_RED : dot, width: `${pct}%` }} />
                   </div>
-                  <div style={{ fontSize: 11, color: over ? SOFT_RED : HOME_THEME.muted }}>{over ? `${fmtMoney(-left, currency)} over` : `${fmtMoney(left, currency)} left`}</div>
+                  <div style={{ fontSize: 14, color: over ? SOFT_RED : HOME_THEME.muted }}>{over ? `${fmtMoney(-left, currency)} over` : `${fmtMoney(left, currency)} left`}</div>
                 </>
               ) : (
-                <div style={{ fontSize: 11, color: HOME_THEME.muted }}>No budget — just tracking</div>
+                <div style={{ fontSize: 14, color: HOME_THEME.muted }}>No budget — just tracking</div>
               )}
             </div>
           );
@@ -1222,8 +1282,8 @@ function ImportPanel({
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 900 }}>📋 Import from screenshot</div>
-          <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>Paste a screenshot of your transactions (⌘/Ctrl+V), then set the bank and label for each and import.</div>
+          <div style={{ fontSize: 18, fontWeight: 900 }}>📋 Import from screenshot</div>
+          <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 3 }}>Paste a screenshot of your transactions (⌘/Ctrl+V), then set the bank and label for each and import.</div>
         </div>
         <button onClick={onClose} style={ghost()}>Done</button>
       </div>
@@ -1235,13 +1295,13 @@ function ImportPanel({
         {image ? (
           <img src={image} alt="pasted screenshot" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 8, border: `1px solid ${HOME_THEME.border}` }} />
         ) : (
-          <span style={{ width: 44, height: 44, borderRadius: 9, background: bRgba("#7dd3fc", 0.12), display: "inline-flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.cyan, fontSize: 20 }}>🖼️</span>
+          <span style={{ width: 44, height: 44, borderRadius: 9, background: bRgba("#7dd3fc", 0.12), display: "inline-flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.cyan, fontSize: 25 }}>🖼️</span>
         )}
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>
             {loading ? "Reading transactions…" : image ? (error ? "Try another screenshot" : `Parsed ${rows.length} row${rows.length === 1 ? "" : "s"}`) : "Paste a screenshot (⌘/Ctrl+V) — or click to choose a file"}
           </div>
-          {error && <div style={{ fontSize: 11, color: SOFT_RED, marginTop: 2 }}>{error}</div>}
+          {error && <div style={{ fontSize: 14, color: SOFT_RED, marginTop: 2 }}>{error}</div>}
         </div>
         <button onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }} style={ghost()}>Choose file</button>
         <input
@@ -1262,11 +1322,11 @@ function ImportPanel({
           {rows.map((r, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: "22px 130px 1fr 110px 110px 110px 30px", gap: 8, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 10px", opacity: r.include ? 1 : 0.45 }}>
               <input type="checkbox" checked={r.include} onChange={(e) => setRow(i, { include: e.target.checked })} style={{ accentColor: HOME_THEME.cyan, width: 16, height: 16 }} />
-              <input type="date" value={r.date} onChange={(e) => setRow(i, { date: e.target.value })} style={{ ...field(), padding: "6px 8px", fontSize: 12 }} />
-              <input value={r.label} onChange={(e) => setRow(i, { label: e.target.value.toUpperCase() })} title={r.description} placeholder={r.description} style={{ ...field(), padding: "6px 8px", fontSize: 12 }} />
+              <input type="date" value={r.date} onChange={(e) => setRow(i, { date: e.target.value })} style={{ ...field(), padding: "6px 8px", fontSize: 15 }} />
+              <input value={r.label} onChange={(e) => setRow(i, { label: e.target.value.toUpperCase() })} title={r.description} placeholder={r.description} style={{ ...field(), padding: "6px 8px", fontSize: 15 }} />
               <ThemedSelect value={r.bank} onChange={(v) => setRow(i, { bank: v as Bank })} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
               <ThemedSelect value={r.sign} onChange={(v) => setRow(i, { sign: v as "-" | "+" })} options={[{ value: "-", label: "− Pay" }, { value: "+", label: "+ Income" }]} />
-              <input value={r.amount} onChange={(e) => setRow(i, { amount: e.target.value })} type="number" style={{ ...field(), padding: "6px 8px", fontSize: 12, textAlign: "right", color: r.sign === "-" ? SOFT_RED : HOME_THEME.green }} />
+              <input value={r.amount} onChange={(e) => setRow(i, { amount: e.target.value })} type="number" style={{ ...field(), padding: "6px 8px", fontSize: 15, textAlign: "right", color: r.sign === "-" ? SOFT_RED : HOME_THEME.green }} />
               <DeleteButton onClick={() => removeRow(i)} />
             </div>
           ))}
@@ -1275,7 +1335,7 @@ function ImportPanel({
 
       {rows.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
-          <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{rows.length} found · {selected.length} selected</span>
+          <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{rows.length} found · {selected.length} selected</span>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={onClose} style={ghost()}>Cancel</button>
             <button onClick={doImport} style={{ ...primary(), opacity: selected.length > 0 && !importing ? 1 : 0.5 }}>{importing ? "Importing…" : `Import ${selected.length} row${selected.length === 1 ? "" : "s"}`}</button>
@@ -1291,7 +1351,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
   const totalGas = rows.reduce((s, r) => s + r.gas, 0);
   const totalNet = totalPay - totalGas;
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 16 }}>
       <thead>
         <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)", zIndex: 1 }}>
           <th style={th("left")}>Date</th>
@@ -1309,7 +1369,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
           <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
             <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
               <span style={{ fontWeight: 800 }}>{shortDate(r.work_date)}</span>
-              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 11 }}>{weekday(r.work_date)}</span>
+              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 14 }}>{weekday(r.work_date)}</span>
             </td>
             <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
             <td style={{ padding: "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
@@ -1323,7 +1383,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
       {rows.length > 0 && (
         <tfoot>
           <tr style={{ position: "sticky", bottom: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)" }}>
-            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 11, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
+            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(totalNet, currency)}</td>
@@ -1348,7 +1408,7 @@ function EditableText({ value, onCommit, style }: { value: string; onCommit: (v:
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => { setEditing(false); if (draft !== value) onCommit(draft.trim()); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
-        style={{ ...field(), padding: "4px 8px", fontSize: 13 }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 16 }}
       />
     );
   }
@@ -1369,7 +1429,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => { setEditing(false); const n = Number(draft); if (n !== value && draft.trim() !== "") onCommit(n); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(String(value)); setEditing(false); } }}
-        style={{ ...field(), padding: "4px 8px", fontSize: 13, width: 100, textAlign: "right" }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 16, width: 100, textAlign: "right" }}
       />
     );
   }
@@ -1377,7 +1437,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
 }
 
 function th(align: "left" | "right" | "center"): React.CSSProperties {
-  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
+  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
 }
 function card(): React.CSSProperties {
   return { background: HOME_THEME.panelBg, backdropFilter: "blur(16px)", borderRadius: 18, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 18px 40px rgba(0,0,0,0.22)" };
@@ -1408,10 +1468,10 @@ function dissolveCard(): React.CSSProperties {
   };
 }
 function field(): React.CSSProperties {
-  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 13, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
+  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 16, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
 }
 function labelCap(): React.CSSProperties {
-  return { fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
+  return { fontSize: 13, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.25)", background: "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.05))", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap" };
@@ -1420,5 +1480,5 @@ function ghost(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" };
 }
 function pill(active: boolean): React.CSSProperties {
-  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(33,158,188,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(33,158,188,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 13, fontWeight: 800, cursor: "pointer" };
+  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(33,158,188,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(33,158,188,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 16, fontWeight: 800, cursor: "pointer" };
 }

@@ -9,6 +9,8 @@ import {
   upsertBudgetCategory,
   deleteBudgetCategory,
   setRegisterCategory,
+  upsertDailyBalance,
+  getLatestDailyBalance,
   insertRegisterRow,
   updateRegisterRow,
   deleteRegisterRow,
@@ -70,14 +72,15 @@ export async function GET(req: NextRequest) {
 
     await adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
     const profile = await getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
-    const [categories, entries, register, recurring, amazonRows] = await Promise.all([
+    const [categories, entries, register, recurring, amazonRows, dailyBalance] = await Promise.all([
       listBudgetCategories(profile.id),
       listBudgetEntries(profile.id, 500),
       listRegister(profile.id, from, to),
       listRecurring(profile.id),
       listAmazonRows(profile.id, from, to),
+      getLatestDailyBalance(profile.id),
     ]);
-    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows });
+    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, dailyBalance });
   } catch (err) {
     return NextResponse.json({ error: "Budget load failed", detail: String(err) }, { status: 500 });
   }
@@ -108,6 +111,18 @@ export async function POST(req: NextRequest) {
     if (action === "categoryDelete") {
       await deleteBudgetCategory(profile.id, Number(body?.id ?? 0));
       return NextResponse.json({ ok: true });
+    }
+
+    // Manually-entered opening balance for a given day (upsert per day).
+    if (action === "dailyBalance") {
+      const row = await upsertDailyBalance({
+        profile_id: profile.id,
+        day: String(body?.day ?? "").trim() || currentMonth() + "-01",
+        coastal: Number(body?.coastal ?? 0),
+        truist: Number(body?.truist ?? 0),
+        secu: Number(body?.secu ?? 0),
+      });
+      return NextResponse.json({ ok: true, dailyBalance: row });
     }
 
     // Assign a register row to a category (or clear it with categoryId = null).

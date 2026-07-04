@@ -97,6 +97,8 @@ const QUICK_META: Record<string, { label: string; emoji: string }> = {
   "/em": { label: "Estimated Moves", emoji: "↔️" },
   "/estimated-move": { label: "Estimated Move", emoji: "🔀" },
   "/analytics": { label: "Analytics", emoji: "📈" },
+  "/scanner": { label: "Scanner", emoji: "🔍" },
+  "/flow": { label: "Flow", emoji: "≈" },
   "/premarket": { label: "Premarket", emoji: "☀️" },
   "/trading": { label: "Trading", emoji: "✏️" },
   "/docs": { label: "Help & Docs", emoji: "📖" },
@@ -104,11 +106,6 @@ const QUICK_META: Record<string, { label: string; emoji: string }> = {
   "/pricing": { label: "Pricing", emoji: "💲" },
   "/changelog": { label: "Changelog", emoji: "🔄" },
   "/whats-new": { label: "What's New", emoji: "✨" },
-  "/owner": { label: "Owner Hub", emoji: "⭐" },
-  "/owner/budget": { label: "Budget", emoji: "⚖️" },
-  "/owner/dev": { label: "Dev", emoji: "⚙️" },
-  "/owner/dev/owner": { label: "Owner", emoji: "🌟" },
-  "/owner/personal/todo": { label: "To-Do", emoji: "☑️" },
   "/feedback": { label: "Feedback", emoji: "✉️" },
 };
 

@@ -39,9 +39,8 @@ const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
-const { startPlayRecorder, runSweep: runPlaySweep, ensureSchema: playEnsureSchema, getPool: playGetPool } = require('./play-recorder');
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
-const { startFarCbRecorder, runSweep: runFarCbSweep, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
+const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { checkProxyAccess } = require('./proxy-auth');
@@ -1079,48 +1078,6 @@ async function main() {
         return;
       }
 
-      // ── The Play Scanner ─────────────────────────────────────────────────
-      // GET /proxy/play-scanner?timeframe=1h&status=all&limit=40
-      // Returns forming/triggered 50%-retrace + liquidity-break setups for the
-      // requested timeframe. Triggered ranked above forming, then freshest leg,
-      // then closest to the liquidity level.
-      if (pathname === '/proxy/play-scanner' && req.method === 'GET') {
-        (async () => {
-          try {
-            if (!(await playEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
-            const p = playGetPool();
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const tf     = (u.searchParams.get('timeframe') || '1h').toLowerCase() === '4h' ? '4h' : '1h';
-            const status = (u.searchParams.get('status') || 'all').toLowerCase();
-            const limit  = Math.min(100, Math.max(1, Number(u.searchParams.get('limit') || 40)));
-
-            const where = ['timeframe = $1', `updated_at > NOW() - INTERVAL '2 days'`];
-            const params = [tf];
-            if (status === 'forming' || status === 'triggered') { params.push(status); where.push(`status = $${params.length}`); }
-            params.push(limit);
-
-            const sql = `
-              SELECT symbol, timeframe, direction, status, swing_high, swing_low, leg_range,
-                     retrace_pct, equilibrium, liq_level, close, dist_liq_pct, bars_since, updated_at
-              FROM play_setups
-              WHERE ${where.join(' AND ')}
-              ORDER BY (status = 'triggered') DESC, bars_since ASC, ABS(dist_liq_pct) ASC
-              LIMIT $${params.length}`;
-
-            const { rows } = await p.query(sql, params);
-            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Manual sweep fire: POST /proxy/play-run  (force = bypass RTH gate)
-      if (pathname === '/proxy/play-run' && req.method === 'POST') {
-        runPlaySweep({ force: true })
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-
       // ── OI Change Scanner ────────────────────────────────────────────────
       // GET /proxy/oi-change?limit=100&side=all&dir=all
       // Top day-over-day OTM open-interest changes for the latest recorded
@@ -1195,6 +1152,43 @@ async function main() {
       // Manual sweep fire: POST /proxy/far-cb-watch-run (force = bypass RTH gate)
       if (pathname === '/proxy/far-cb-watch-run' && req.method === 'POST') {
         runFarCbSweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
+      // GET /proxy/far-cb-outcomes?status=all|open|touched|expired&limit=100
+      // The tracked result of every far-CB flag ever logged — not win/loss,
+      // just whether spot ever reached the strike and how close it got.
+      if (pathname === '/proxy/far-cb-outcomes' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await farCbEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = farCbGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const status = (u.searchParams.get('status') || 'all').toLowerCase();
+            const limit  = Math.min(300, Math.max(1, Number(u.searchParams.get('limit') || 100)));
+            const where = [];
+            const params = [];
+            if (['open', 'touched', 'expired'].includes(status)) { params.push(status); where.push(`status = $${params.length}`); }
+            params.push(limit);
+            const sql = `
+              SELECT symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag,
+                     gex_value_at_flag, side, last_checked, last_spot, closest_pct,
+                     touched, touched_date, status
+              FROM far_cb_outcomes
+              ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+              ORDER BY first_flagged DESC
+              LIMIT $${params.length}`;
+            const { rows } = await p.query(sql, params);
+            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual grade fire: POST /proxy/far-cb-grade-run
+      if (pathname === '/proxy/far-cb-grade-run' && req.method === 'POST') {
+        runFarCbGrading()
           .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
@@ -1535,9 +1529,6 @@ async function main() {
     startGreekScannerRecorder(PORT);
     // Vol-pin snapshots: ATM IV, RV, pin strike, range per equity ticker every 5m.
     startVolPinRecorder();
-    // "The Play": 1H/4H swing 50%-retrace + liquidity-break setups across the
-    // scanner universe (Yahoo candles), swept every 15m during RTH.
-    startPlayRecorder();
     // OI Change scanner: day-over-day open-interest change (OTM only) across
     // the full EM watchlist, once per day (retried inside 06:00-20:00 ET).
     startOiChangeRecorder();

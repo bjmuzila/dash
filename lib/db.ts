@@ -296,6 +296,19 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Self-heal for databases created before per-row categories existed.
     ALTER TABLE budget_register ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES budget_categories(id) ON DELETE SET NULL;
 
+    -- One manually-entered opening balance snapshot per day (updated each morning).
+    CREATE TABLE IF NOT EXISTS budget_daily_balance (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      coastal REAL NOT NULL DEFAULT 0,
+      truist REAL NOT NULL DEFAULT 0,
+      secu REAL NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, day)
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_daily_balance_profile ON budget_daily_balance(profile_id);
+
     -- Recurring rules: a payment/income that repeats (weekly/biweekly/monthly).
     -- Occurrences are computed live for the displayed month, not stored as rows.
     -- amount is signed (payment negative, income positive). anchor_date is the
@@ -2940,6 +2953,35 @@ export async function listBudgetCategories(profileId: number): Promise<BudgetCat
 export async function deleteBudgetCategory(profileId: number, id: number): Promise<void> {
   const pool = await getDb();
   await pool.query("DELETE FROM budget_categories WHERE id = $1 AND profile_id = $2", [id, profileId]);
+}
+
+export interface DailyBalanceRecord {
+  id: number;
+  profile_id: number;
+  day: string;
+  coastal: number;
+  truist: number;
+  secu: number;
+}
+
+export async function upsertDailyBalance(input: { profile_id: number; day: string; coastal: number; truist: number; secu: number }): Promise<DailyBalanceRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_daily_balance (profile_id, day, coastal, truist, secu)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT(profile_id, day) DO UPDATE SET coastal = EXCLUDED.coastal, truist = EXCLUDED.truist, secu = EXCLUDED.secu, updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [input.profile_id, input.day, input.coastal, input.truist, input.secu]
+  );
+  return result.rows[0] as DailyBalanceRecord;
+}
+
+export async function getLatestDailyBalance(profileId: number): Promise<DailyBalanceRecord | null> {
+  const rows = await queryAll<DailyBalanceRecord>(
+    "SELECT * FROM budget_daily_balance WHERE profile_id = ? ORDER BY day DESC LIMIT 1",
+    [profileId]
+  );
+  return rows[0] ?? null;
 }
 
 // Assign (or clear, with null) a register row's category.
