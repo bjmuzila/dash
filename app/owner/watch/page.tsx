@@ -334,7 +334,7 @@ export default function WatchPage() {
                   key={r.id}
                   className="wcard"
                   onClick={() => toggleRow(r.id)}
-                  style={{ ...homePanelStyle, padding: 16, borderColor: isOpen ? rgba(HOME_THEME.cyan, 0.35) : undefined }}
+                  style={{ ...homePanelStyle, padding: 16, borderColor: isOpen ? rgba(HOME_THEME.cyan, 0.35) : undefined, gridColumn: isOpen ? "1 / -1" : undefined }}
                 >
                   {/* Front */}
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>

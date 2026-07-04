@@ -8,10 +8,15 @@ import { useState, type CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
+// Budget UI language (see BUDGET_UI_STYLE.md): one accent only — light blue —
+// no rotating card colors, no top bars, soft red instead of the harsh #EF4444.
+const LIGHT_BLUE = "#7dd3fc";
+const SOFT_RED = "#f4948e";
+
 type FieldType = "number" | "select" | "checkbox";
 type Field = { key: string; label: string; type: FieldType; def: string | number | boolean; options?: string[] };
 
-const th: CSSProperties = { textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.green, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+const th: CSSProperties = { textAlign: "left", padding: "6px 10px", fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 const td: CSSProperties = { padding: "6px 10px", fontSize: 13, color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
@@ -26,8 +31,9 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
             <tr key={i}>{cols.map((c) => {
               const v = r[c];
               const s = String(v ?? "");
-              const strong = s === "REJECT" || s === "held" || s === "yes";
-              return <td key={c} style={{ ...td, color: strong ? HOME_THEME.green : s === "broke" || s === "no" ? HOME_THEME.orange : HOME_THEME.text }}>{s}</td>;
+              const positive = s === "REJECT" || s === "held" || s === "yes";
+              const negative = s === "broke" || s === "no";
+              return <td key={c} style={{ ...td, color: positive ? HOME_THEME.green : negative ? SOFT_RED : HOME_THEME.text }}>{s}</td>;
             })}</tr>
           ))}
         </tbody>
@@ -36,7 +42,7 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
   );
 }
 
-function Panel({ title, subtitle, accent, test, fields }: { title: string; subtitle: string; accent: string; test: string; fields: Field[] }) {
+function Panel({ title, subtitle, test, fields }: { title: string; subtitle: string; test: string; fields: Field[] }) {
   const [params, setParams] = useState<Record<string, string | number | boolean>>(
     Object.fromEntries(fields.map((f) => [f.key, f.def])),
   );
@@ -64,10 +70,10 @@ function Panel({ title, subtitle, accent, test, fields }: { title: string; subti
   const detail = data && Array.isArray(data.detail) ? (data.detail as Record<string, unknown>[]) : null;
 
   return (
-    <Card accent={accent} title={title} subtitle={subtitle}>
+    <Card variant="budget" accent={LIGHT_BLUE} title={title} subtitle={subtitle}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
         {fields.map((f) => (
-          <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: HOME_THEME.green }}>
+          <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
             {f.label}
             {f.type === "select" ? (
               <select style={{ ...homeInputStyle, width: 120 }} value={String(params[f.key])} onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}>
@@ -85,19 +91,19 @@ function Panel({ title, subtitle, accent, test, fields }: { title: string; subti
         </button>
       </div>
 
-      {err && <div style={{ marginTop: 12, fontSize: 13, color: HOME_THEME.red }}>Error: {err}</div>}
+      {err && <div style={{ marginTop: 12, fontSize: 13, color: SOFT_RED }}>Error: {err}</div>}
       {data && (
         <div style={{ marginTop: 14 }}>
-          {typeof data.note === "string" && <div style={{ fontSize: 12, color: HOME_THEME.green, marginBottom: 8, lineHeight: 1.5 }}>{data.note}</div>}
+          {typeof data.note === "string" && <div style={{ fontSize: 12, color: LIGHT_BLUE, marginBottom: 8, lineHeight: 1.5 }}>{data.note}</div>}
           {sections.map(([k, v]) => (
             <div key={k} style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7 }}>{k}</div>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>{k}</div>
               <DataTable rows={v as Record<string, unknown>[]} />
             </div>
           ))}
           {detail && (
             <details style={{ marginTop: 6 }}>
-              <summary style={{ cursor: "pointer", fontSize: 12, color: HOME_THEME.cyan }}>Per-day detail ({detail.length})</summary>
+              <summary style={{ cursor: "pointer", fontSize: 12, color: LIGHT_BLUE }}>Per-day detail ({detail.length})</summary>
               <DataTable rows={detail} />
             </details>
           )}
@@ -110,7 +116,7 @@ function Panel({ title, subtitle, accent, test, fields }: { title: string; subti
 export default function BacktestsPage() {
   return (
     <PageShell>
-      <Card accent="cyan" title="Backtests" subtitle="Re-runnable edge studies over the live Postgres data. Owner-only.">
+      <Card variant="budget" accent={LIGHT_BLUE} title="Backtests" subtitle="Re-runnable edge studies over the live Postgres data. Owner-only.">
         <p style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.6, margin: 0 }}>
           Each panel runs server-side against the same tables the dashboard writes. Adjust the inputs and hit Run.
           Samples are still small — treat results as directional. Expand “Per-day detail” to see the underlying rows.
@@ -118,19 +124,19 @@ export default function BacktestsPage() {
       </Card>
 
       <Panel
-        title="CB size → reach" accent="orange" test="cb-size"
+        title="CB size → reach" test="cb-size"
         subtitle="Does a bigger CB level get touched / held more often?"
         fields={[{ key: "tol", label: "strike tol (pt)", type: "number", def: 10 }]}
       />
 
       <Panel
-        title="Confidence calibration" accent="green" test="confidence"
+        title="Confidence calibration" test="confidence"
         subtitle="Predicted reach / hold / break vs what actually happened."
         fields={[]}
       />
 
       <Panel
-        title="DEX pre-flip alert" accent="purple" test="dex-preflip"
+        title="DEX pre-flip alert" test="dex-preflip"
         subtitle="Range-expansion + stall → does a sharp move follow? (2× vs 3×)"
         fields={[
           { key: "greek", label: "greek", type: "select", def: "dex", options: ["dex", "gex"] },
@@ -142,7 +148,7 @@ export default function BacktestsPage() {
       />
 
       <Panel
-        title="Gamma wall — pin / reject" accent="cyan" test="gamma-wall"
+        title="Gamma wall — pin / reject" test="gamma-wall"
         subtitle="Does price gravitate to / reject off the largest GEX wall?"
         fields={[
           { key: "near", label: "wall ≤ pt from spot", type: "number", def: 150 },
