@@ -759,11 +759,12 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
   );
 }
 
-// Flow ticker visit tracker — ranks tickers by how often they've been opened
-// (click) across the flow/scanner surfaces, from the ticker_events log via
-// GET /api/ticker-event. Self-contained (own fetch) so it can drop into the
-// Activity section without touching the parent's state.
-function TickerVisitsCard() {
+// Ticker visit tracker — ranks tickers by how often they've been opened
+// (click) on a given surface, from the ticker_events log via GET
+// /api/ticker-event?source=... Self-contained (own fetch) so it can drop into
+// the Activity section without touching the parent's state. Shared between
+// the Flow and Estimated Moves visit cards below (source scopes each one).
+function TickerVisitsCard({ source, icon, label }: { source: string; icon: string; label: string }) {
   const [rows, setRows] = useState<{ ticker: string; clicks: number; renders: number }[] | null>(null);
   const [days, setDays] = useState<number>(7);
   const [err, setErr] = useState<string | null>(null);
@@ -771,12 +772,12 @@ function TickerVisitsCard() {
   useEffect(() => {
     let alive = true;
     setRows(null); setErr(null);
-    fetch(`/api/ticker-event?sinceDays=${days}`)
+    fetch(`/api/ticker-event?sinceDays=${days}&source=${encodeURIComponent(source)}`)
       .then((r) => r.json())
       .then((j) => { if (alive) setRows((j.rows as typeof rows) ?? []); })
       .catch((e) => { if (alive) setErr(String(e)); });
     return () => { alive = false; };
-  }, [days]);
+  }, [days, source]);
 
   const ranked = (rows ?? []).slice().sort((a, b) => b.clicks - a.clicks).slice(0, 20);
   const max = ranked.length ? Math.max(...ranked.map((r) => r.clicks), 1) : 1;
@@ -784,8 +785,8 @@ function TickerVisitsCard() {
   return (
     <div style={{ ...homePanelStyle, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${HOME_THEME.border}`, background: "rgba(13,17,25,0.60)" }}>
-        <span style={{ fontSize: 15 }}>📡</span>
-        <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow · Ticker Visits</span>
+        <span style={{ fontSize: 15 }}>{icon}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>{label}</span>
         <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
           {[1, 7, 30].map((d) => (
             <button
@@ -3101,7 +3102,10 @@ export default function OwnerDashboard() {
             </div>
 
             {/* Flow ticker visit tracker */}
-            <TickerVisitsCard />
+            <TickerVisitsCard source="flow" icon="📡" label="Flow · Ticker Visits" />
+
+            {/* Estimated Moves ticker visit tracker */}
+            <TickerVisitsCard source="em" icon="🎯" label="EM · Ticker Visits" />
 
             {/* Per-group grid */}
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, 1fr)", gap: 10 }}>

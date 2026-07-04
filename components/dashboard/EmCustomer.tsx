@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
 import { BoxSnapBtn } from "@/components/shared/DataBox";
+import { trackTickerClick } from "@/lib/trackTicker";
 
 interface TickerEmStats {
   recentAvg: number | null;
@@ -113,15 +114,17 @@ export default function EmCustomer() {
       const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym)}`, { cache: "no-store" });
       if (!r.ok) throw new Error("Lookup failed");
       const json = (await r.json()) as Levels | null;
+      let fetchedData = false;
       if (!json) {
         // No published row at all — still try on-demand zones (static for the
         // week). EM only exists if the weekly publisher computed it, so a brand
         // new ticker shows zones now and EM after the next weekend run.
         const zones = await fetchZones(sym);
-        if (zones) setData(zones);
+        if (zones) { setData(zones); fetchedData = true; }
         else setError(`No levels published for ${sym} yet.`);
       } else {
         setData(json);
+        fetchedData = true;
         // Fill in zones on demand when the published row has EM but no zones
         // (the long-tail names aren't pre-published with zones).
         const hasZones = json.buy_near || json.sell_near || json.pivot;
@@ -130,6 +133,9 @@ export default function EmCustomer() {
           if (zones) setData((prev) => (prev ? { ...prev, ...zones } : zones));
         }
       }
+      // Only log a "visit" once data actually came back for this ticker (mirrors
+      // the flow-ticker click tracker), so lookups that 404 don't skew counts.
+      if (fetchedData) trackTickerClick(sym, "em");
       // Fetch EM history stats, confidence, and win/loss record in parallel
       const [statsRes, confRes, trackerRes, weeksRes] = await Promise.allSettled([
         fetch(`/api/em/ticker-em-stats?ticker=${encodeURIComponent(sym)}`).then((r) => r.ok ? r.json() : null),

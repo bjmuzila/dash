@@ -978,8 +978,8 @@ function PlayScanner() {
         <span><span style={{ color: HOME_THEME.cyan }}>FORMING</span> = ≥50% retrace into equilibrium, structure intact</span>
         <span><span style={{ color: HOME_THEME.orange }}>TRIGGERED</span> = broke swing low/high (liquidity taken)</span>
         <span><span style={{ color: HOME_THEME.red }}>SHORT</span> down-leg · <span style={{ color: HOME_THEME.green }}>LONG</span> up-leg</span>
-        <span>Liq Level = swing low (short) / high (long)</span>
-        <span>5-bar swing fractal</span>
+        <span>Liq Level = major swing low (short) / high (long)</span>
+        <span>dominant trend leg · ATR-filtered</span>
       </div>
     </Card>
   );

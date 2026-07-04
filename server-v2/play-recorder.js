@@ -41,9 +41,12 @@ const { SCANNER_TICKERS } = require('./scanner-tickers');
 
 const SWEEP_MINS    = Number(process.env.PLAY_SWEEP_MINS    || 15);
 const TICKER_DELAY  = Number(process.env.PLAY_TICKER_DELAY_MS || 500);
-const SWING_LOOKBACK = Number(process.env.PLAY_SWING_LOOKBACK || 5); // 5-bar fractal
-const MIN_LEG_PCT   = Number(process.env.PLAY_MIN_LEG_PCT   || 0.005); // ignore <0.5% legs
-const MAX_BARS_SINCE = Number(process.env.PLAY_MAX_BARS_SINCE || 60);  // stale legs drop off
+// Swing detection — the leg/liquidity must be a MAJOR trend swing, not a wiggle.
+const SWING_LOOKBACK = Number(process.env.PLAY_SWING_LOOKBACK || 4);   // N-bar fractal (each side)
+const ATR_PERIOD    = Number(process.env.PLAY_ATR_PERIOD    || 14);
+const MIN_LEG_ATR   = Number(process.env.PLAY_MIN_LEG_ATR   || 2.5);   // leg must span ≥ 2.5×ATR …
+const MIN_LEG_PCT   = Number(process.env.PLAY_MIN_LEG_PCT   || 0.04);  // … and ≥ 4% of price
+const MAX_BARS_SINCE = Number(process.env.PLAY_MAX_BARS_SINCE || 80);  // stale legs drop off
 const RETRACE_MIN   = Number(process.env.PLAY_RETRACE_MIN   || 0.5);   // 50% equilibrium
 
 // Index / futures roots Yahoo addresses under special tickers.
@@ -241,27 +244,77 @@ function zigzag(pivs) {
   return z;
 }
 
+/** Simple ATR (average true range) over `period` bars ending at endIdx. */
+function atrAt(bars, endIdx, period) {
+  const start = Math.max(1, endIdx - period + 1);
+  let sum = 0, n = 0;
+  for (let i = start; i <= endIdx; i += 1) {
+    const tr = Math.max(
+      bars[i].high - bars[i].low,
+      Math.abs(bars[i].high - bars[i - 1].close),
+      Math.abs(bars[i].low - bars[i - 1].close),
+    );
+    sum += tr; n += 1;
+  }
+  return n ? sum / n : (bars[endIdx].high - bars[endIdx].low);
+}
+
+/**
+ * Reduce fractal pivots to the ONE dominant trend leg { A (origin), B (extreme) }.
+ * A new extreme in the trend direction EXTENDS B; a counter-swing that does NOT
+ * break the origin A is an internal retracement and is IGNORED — so B, the
+ * liquidity level, stays the MAJOR swing high/low (e.g. AMD 584.64 / UPST 36.90),
+ * never a local wiggle. Only a pivot that breaks A flips the trend into a new
+ * leg. Returns null until an alternating pair exists.
+ */
+function dominantLeg(piv) {
+  let A = null, B = null;
+  for (const p of piv) {
+    if (A === null) { A = p; continue; }
+    if (B === null) {
+      if (p.kind === A.kind) {
+        if (p.kind === 'H' ? p.price > A.price : p.price < A.price) A = p; // extend origin extreme
+      } else { B = p; }
+      continue;
+    }
+    if (p.kind === B.kind) {
+      if (B.kind === 'H' ? p.price > B.price : p.price < B.price) B = p;   // new trend extreme → extend
+    } else {
+      const breaksOrigin = B.kind === 'H' ? p.price < A.price : p.price > A.price;
+      if (breaksOrigin) { A = B; B = p; }                                   // reversal → new leg
+      // else: internal retracement → ignore, keep the leg intact
+    }
+  }
+  return B ? { A, B } : null;
+}
+
 /**
  * Detect the active Play setup on a bar series. Returns null if none, else the
- * computed row (without symbol/timeframe). Fully derived from candles each call
- * — no cross-sweep state needed.
+ * computed row (without symbol/timeframe). Uses the DOMINANT trend leg, so the
+ * swing/liquidity is a big trend swing (gated by ATR + % of price), not a local
+ * wiggle. Fully derived from candles each call — no cross-sweep state.
  */
 function detectPlay(bars, L = SWING_LOOKBACK) {
   if (bars.length < 2 * L + 5) return null;
-  const z = zigzag(pivots(bars, L));
-  if (z.length < 2) return null;
-
-  const A = z[z.length - 2]; // earlier pivot (leg origin)
-  const B = z[z.length - 1]; // later pivot (leg extreme)
   const lastIdx = bars.length - 1;
   const close = bars[lastIdx].close;
+  if (!(close > 0)) return null;
+
+  const leg = dominantLeg(pivots(bars, L));
+  if (!leg) return null;
+  const { A, B } = leg;
   const barsSince = lastIdx - B.idx;
-  if (!(close > 0) || barsSince > MAX_BARS_SINCE) return null;
+  if (barsSince > MAX_BARS_SINCE) return null;
+
+  // Major-swing gate: leg must span ≥ MIN_LEG_ATR×ATR AND ≥ MIN_LEG_PCT of price.
+  const atr = atrAt(bars, lastIdx, ATR_PERIOD);
+  const minMove = Math.max(MIN_LEG_ATR * atr, MIN_LEG_PCT * close);
+  const range = Math.abs(B.price - A.price);
+  if (!(range >= minMove)) return null;
 
   // SHORT — down-leg (high → low): retrace UP to equilibrium, break the swing low.
   if (A.kind === 'H' && B.kind === 'L') {
-    const H = A.price, Lo = B.price, range = H - Lo;
-    if (!(range > 0) || range / close < MIN_LEG_PCT) return null;
+    const H = A.price, Lo = B.price;
 
     let retraceHigh = -Infinity;
     for (let i = B.idx + 1; i <= lastIdx; i += 1) if (bars[i].high > retraceHigh) retraceHigh = bars[i].high;
@@ -285,8 +338,7 @@ function detectPlay(bars, L = SWING_LOOKBACK) {
 
   // LONG — up-leg (low → high): retrace DOWN to equilibrium, break the swing high.
   if (A.kind === 'L' && B.kind === 'H') {
-    const Lo = A.price, H = B.price, range = H - Lo;
-    if (!(range > 0) || range / close < MIN_LEG_PCT) return null;
+    const Lo = A.price, H = B.price;
 
     let retraceLow = Infinity;
     for (let i = B.idx + 1; i <= lastIdx; i += 1) if (bars[i].low < retraceLow) retraceLow = bars[i].low;
@@ -394,5 +446,5 @@ function startPlayRecorder() {
 module.exports = {
   startPlayRecorder, runSweep, ensureSchema, getPool,
   // exported for tests / static verification
-  detectPlay, pivots, zigzag, resample4h,
+  detectPlay, pivots, zigzag, dominantLeg, atrAt, resample4h,
 };

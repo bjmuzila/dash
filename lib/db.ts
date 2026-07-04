@@ -2038,12 +2038,20 @@ export async function insertTickerEvent(
   );
 }
 
-// Aggregated click/render counts per ticker. Optional sinceDays window (e.g. 7).
-export async function getTickerEventCounts(sinceDays?: number): Promise<TickerEventCount[]> {
+// Aggregated click/render counts per ticker. Optional sinceDays window (e.g. 7)
+// and optional source filter (e.g. "em") to scope the ranking to one surface.
+export async function getTickerEventCounts(sinceDays?: number, source?: string): Promise<TickerEventCount[]> {
   const pool = await getDb();
-  const where = sinceDays && sinceDays > 0
-    ? `WHERE created_at >= NOW() - INTERVAL '${Math.floor(sinceDays)} days'`
-    : "";
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (sinceDays && sinceDays > 0) {
+    conds.push(`created_at >= NOW() - INTERVAL '${Math.floor(sinceDays)} days'`);
+  }
+  if (source) {
+    params.push(source);
+    conds.push(`source = $${params.length}`);
+  }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const { rows } = await pool.query(
     `SELECT ticker,
             COUNT(*) FILTER (WHERE event = 'click')  AS clicks,
@@ -2051,7 +2059,8 @@ export async function getTickerEventCounts(sinceDays?: number): Promise<TickerEv
      FROM ticker_events
      ${where}
      GROUP BY ticker
-     ORDER BY clicks DESC, renders DESC`
+     ORDER BY clicks DESC, renders DESC`,
+    params
   );
   return rows.map((r: { ticker: string; clicks: string; renders: string }) => ({
     ticker: r.ticker,

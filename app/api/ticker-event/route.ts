@@ -51,12 +51,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET /api/ticker-event?sinceDays=7 → aggregated click/render counts per ticker.
+// GET /api/ticker-event?sinceDays=7&source=em → aggregated click/render counts
+// per ticker, optionally scoped to one surface (source omitted = all surfaces).
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const sinceDays = Number(searchParams.get("sinceDays") ?? 0) || undefined;
-    const rows = await getTickerEventCounts(sinceDays);
+    const source = searchParams.get("source") || undefined;
+    const rows = await getTickerEventCounts(sinceDays, source);
     return NextResponse.json({ rows });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
