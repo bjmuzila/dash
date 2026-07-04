@@ -10,7 +10,6 @@ import {
   homeShellStyle,
   homeSecondaryButtonStyle,
 } from "@/components/shared/ownerTheme";
-import { OwnerQuickLinks } from "@/components/shared/OwnerQuickLinks";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -607,7 +606,7 @@ function UnsubscribePanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Unsubscribes · Do Not Email</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Unsubscribes · Do Not Email</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
@@ -713,7 +712,6 @@ export default function AdminDashboard() {
           >
             {loading ? "Loading…" : "↻ Refresh"}
           </button>
-          <OwnerQuickLinks current="/owner/dev/admin" />
         </div>
       </div>
 

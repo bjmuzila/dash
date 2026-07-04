@@ -282,14 +282,14 @@ function buildFeatFull(){
   s+=`<g font-family="Inter,Segoe UI,Arial"><text x="40" y="58" font-size="36" font-weight="800" fill="url(#chrome)" stroke="#5a636d" stroke-width="0.5" letter-spacing="1">CB Edge</text><text x="42" y="82" font-size="13" font-style="italic" fill="#ffffff">&#8220;Real Edge - Real Orderflow&#8221;</text></g>`;
   s+=`<circle cx="${W-192}" cy="52" r="6" fill="${GRN}"/><text x="${W-176}" y="59" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="700" fill="${GRN}">LIVE</text><text x="${W-40}" y="60" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="26" font-weight="800" fill="${LB}">cbedge.net</text>`;
   s+=`<text x="${W/2}" y="178" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="62" font-weight="800" fill="#ffffff">THIS ISN'T JUST ANOTHER <tspan fill="${LB}">HEATMAP.</tspan></text>`;
-  s+=`<text x="${W/2}" y="224" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="500" fill="#ffffff">A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index traders.</text>`;
+  s+=`<text x="${W/2}" y="226" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="700" letter-spacing="3"><tspan fill="${LB}">CB EDGE</tspan><tspan fill="#ffffff">  |  YOUR UNFAIR EDGE IN THE MARKETS</tspan></text>`;
   const cards=[
     ["Real-time SPX GEX",["Live gamma exposure profiles and flip","levels straight from the options chain."]],
     ["Confidence Score",["Each key level scored 0–100 for Hit,","Pivot or Chop — live positioning blended","with historical analogs."]],
     ["ICT — Inner Circle Trader",["Live FVGs, order blocks, liquidity and","market structure on ES and NQ — called","as they form."]],
     ["Estimated moves",["Weekly estimated-move levels with high-","confidence zones, backed by 2+ years of","historical data and results."]],
   ];
-  const gx=48,gw=W-96,gap=72,cw=(gw-gap)/2,gy=262,ch=(H-262-74-gap)/2;
+  const gx=110,gw=W-220,gap=70,cw=(gw-gap)/2,gy=284,ch=(H-284-96-gap)/2;
   cards.forEach((c,i)=>{const cx=gx+(i%2)*(cw+gap),cy=gy+Math.floor(i/2)*(ch+gap);
     // tight neon light-blue glow hugging the rounded edge (blurred outline, 2 passes)
     s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="none" stroke="${LB}" stroke-width="6" filter="url(#cardGlow)"/>`;
@@ -297,9 +297,9 @@ function buildFeatFull(){
     // frosted card on top — crisp light-blue edge + inner light-blue highlight
     s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="${PANEL}" stroke="rgba(125,211,252,0.6)" stroke-width="1.5"/>`;
     s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="url(#cardhi)"/>`;
-    s+=`<text x="${cx+30}" y="${cy+60}" font-family="Inter,Segoe UI,Arial" font-size="30" font-weight="800" fill="${LB}">${c[0]}</text>`;
-    c[1].forEach((ln,j)=>{s+=`<text x="${cx+30}" y="${cy+106+j*30}" font-family="Inter,Segoe UI,Arial" font-size="19" font-weight="500" fill="#cdd7e6">${ln}</text>`;});
-    s+=`<text x="${cx+30}" y="${cy+ch-26}" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="800" fill="${LB}">Explore →</text>`;});
+    const mx=cx+cw/2, n=c[1].length, contentH=30+18+n*29, ty=cy+(ch-contentH)/2+24;
+    s+=`<text x="${mx}" y="${ty}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="30" font-weight="800" fill="${LB}">${c[0]}</text>`;
+    c[1].forEach((ln,j)=>{s+=`<text x="${mx}" y="${ty+44+j*29}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="19" font-weight="500" fill="#cdd7e6">${ln}</text>`;});});
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${s}</svg>`;
 }
 function buildSVG(p,idx){
