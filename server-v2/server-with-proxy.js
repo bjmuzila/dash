@@ -41,6 +41,7 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startPlayRecorder, runSweep: runPlaySweep, ensureSchema: playEnsureSchema, getPool: playGetPool } = require('./play-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool } = require('./scanner-recorder');
+const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -1118,6 +1119,31 @@ async function main() {
         return;
       }
 
+      // GET /proxy/signals?limit=50&since=<ms>&kind=<kind>
+      // Recent actionable GEX/CB signals (newest first) for the ES Candles
+      // Signals panel and the trading bot. Alerts-only; never places orders.
+      if (pathname === '/proxy/signals' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
+            const since = Number(u.searchParams.get('since') || 0) || 0;
+            const kind  = u.searchParams.get('kind') || '';
+            const rows = await getSignalRows({ limit, since, kind });
+            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // POST /proxy/signals-run — force one detection pass now (bypasses the
+      // session/warmup gate). For manual testing from the dashboard or curl.
+      if (pathname === '/proxy/signals-run' && req.method === 'POST') {
+        runSignalsOnce(`http://localhost:${PORT}`, { force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
       if (pathname === '/proxy/mvc-snapshot' && req.method === 'POST') {
@@ -1450,6 +1476,16 @@ async function main() {
     // setup (same analyzeICT the /ict page renders), records new ones, and grades
     // pending ones by follow-through → /api/ict-setups.
     require('./ict-setup-tracker').startIctSetupTracker(PORT);
+    // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
+    // by the feed in _flushEsCandles) via follow-through every 5m → the
+    // momentum_bias_signals table. Read via /api/momentum-bias.
+    require('./momentum-bias-tracker').startMomentumBiasGrader();
+    // GEX/CB actionable signal engine for the ES Candles page: every few seconds
+    // during the futures session it turns the live heatmap levels (flip cross,
+    // Call/Put wall reject+break, CB reaction, level confluence) into long/short
+    // ES signals → trade_signals table (+ optional Discord). Alerts only, no
+    // orders. Read via /proxy/signals; force a pass via POST /proxy/signals-run.
+    startSignalsEngine(PORT);
     // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.

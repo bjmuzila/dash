@@ -423,7 +423,8 @@ async function fetchStockEodTheta(symbol, date) {
 function _mapDailyOhlc(json) {
   return rowsFromV3(json)
     .map((r) => {
-      const ymd = String(r.date ?? r.Date ?? '');
+      let ymd = String(r.date ?? r.Date ?? '');
+      if (ymd.length !== 8) { const iso = String(r.created ?? r.last_trade ?? ''); const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) ymd = m[1] + m[2] + m[3]; }
       const time = ymd.length === 8
         ? Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00.000-05:00`)
         : NaN;

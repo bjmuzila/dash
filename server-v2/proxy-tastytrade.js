@@ -30,6 +30,8 @@ const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
 const { writeFlowTape } = require('./state/flow-history-writer');
 const { writeEsCandles, writeNqCandles } = require('./state/es-candle-writer');
+const { recordSignals } = require('./state/momentum-bias-writer');
+const { getMomentumBiasIndex } = require('../lib/momentumBias.js');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
@@ -2380,6 +2382,42 @@ class TastytradeProxy {
           console.log(`[FEED] ES baseline=${prevClose} prevSettleDate=${prevDate} live=${lastClose} -> chg=${(lastClose - prevClose).toFixed(2)} (candle FALLBACK; no REST/Summary settle; skipped non-settle: ${[...ES_NON_SETTLE_DATES].filter(d => d > prevDate && d < todayDate).join(",") || "none"})`);
         }
         marketState.setAux({ esFutPrevClose: prevClose });
+      }
+    }
+
+    // ── Momentum Bias TP/reversal signals (recorded for grading) ──────────
+    // Compute the bias index over the rolling candle array and record any TP
+    // trigger that fired on a CLOSED bar. The last bar is still forming and its
+    // crossunder repaints, so it is never recorded (same lesson as EM weekly
+    // scoring). Idempotent on signal_key, so re-scanning the last few closed
+    // bars each flush is harmless and cheap. Display is computed client-side
+    // from the same lib/momentumBias module — the WS payload is left untouched.
+    if (rows.length > 40) {
+      try {
+        const bias = getMomentumBiasIndex(
+          rows.map((r) => ({ high: +r.high, low: +r.low, close: +r.close }))
+        );
+        const events = [];
+        const formingIdx = rows.length - 1; // skip the forming bar
+        for (let i = Math.max(2, rows.length - 5); i < formingIdx; i++) {
+          const b = bias[i];
+          if (!b || (!b.bullishTp && !b.bearishTp)) continue;
+          const r = rows[i];
+          const dir = b.bullishTp ? 'bull' : 'bear';
+          // ATR = avg (high-low) over the 14 bars before the signal (grade scale).
+          let atrSum = 0, atrN = 0;
+          for (let k = Math.max(0, i - 14); k < i; k++) { atrSum += (+rows[k].high - +rows[k].low); atrN++; }
+          events.push({
+            signalKey: `${dir}:${r.slotKey}`,
+            date: r.date, symbol: '/ES', dir,
+            triggerTs: Number(r.timestamp), slotKey: r.slotKey, time: r.time,
+            price: +r.close, upBias: b.momentumUpBias, downBias: b.momentumDownBias,
+            boundary: b.boundary, atr: atrN ? atrSum / atrN : 0,
+          });
+        }
+        if (events.length) recordSignals(events).catch(() => {});
+      } catch (e) {
+        console.warn('[momentum-bias] compute failed:', e.message);
       }
     }
 

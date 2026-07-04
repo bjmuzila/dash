@@ -508,6 +508,47 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_ict_setups_ts ON ict_setups(trigger_ts);
     CREATE INDEX IF NOT EXISTS idx_ict_setups_outcome ON ict_setups(outcome);
 
+    -- Momentum Bias take-profit / reversal signals. One row per fired trigger on
+    -- a CLOSED 5m ES bar (the forming bar is never recorded — it repaints). The
+    -- feed computes lib/momentumBias.js over the rolling candle array; a crossunder
+    -- of the up/down bias above the impulse boundary fires a signal. Keyed on a
+    -- stable signature so re-scans never double-log: signal_key = "<dir>:<slotKey>".
+    --   dir      — 'bull' (down-bias crossunder → TP for shorts / bullish reversal)
+    --            | 'bear' (up-bias crossunder → TP for longs / bearish reversal)
+    --   price    — ES close of the signal bar
+    --   up/down_bias, boundary — indicator state at the trigger
+    -- Outcome is graded by follow-through over the bars AFTER trigger_ts, with an
+    -- ATR-scaled target (atr = avg H-L of the 14 bars before the signal):
+    --   outcome  — 'pending' | 'win' | 'loss' | 'chop'
+    --   mfe/mae  — max favorable / adverse excursion (pts) in the signal's direction
+    --   r_multiple — favorable move achieved / initial risk (atr)
+    CREATE TABLE IF NOT EXISTS momentum_bias_signals (
+      id             SERIAL PRIMARY KEY,
+      signal_key     TEXT NOT NULL UNIQUE,
+      date           TEXT NOT NULL,
+      symbol         TEXT NOT NULL DEFAULT '/ES',
+      dir            TEXT NOT NULL,
+      trigger_ts     BIGINT NOT NULL,
+      slot_key       TEXT,
+      time           TEXT,
+      price          DOUBLE PRECISION,
+      up_bias        DOUBLE PRECISION,
+      down_bias      DOUBLE PRECISION,
+      boundary       DOUBLE PRECISION,
+      atr            DOUBLE PRECISION,
+      outcome        TEXT NOT NULL DEFAULT 'pending',
+      mfe            DOUBLE PRECISION NOT NULL DEFAULT 0,
+      mae            DOUBLE PRECISION NOT NULL DEFAULT 0,
+      r_multiple     DOUBLE PRECISION,
+      resolved_ts    BIGINT,
+      resolved_price DOUBLE PRECISION,
+      created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_mbs_date ON momentum_bias_signals(date);
+    CREATE INDEX IF NOT EXISTS idx_mbs_ts ON momentum_bias_signals(trigger_ts);
+    CREATE INDEX IF NOT EXISTS idx_mbs_outcome ON momentum_bias_signals(outcome);
+
     -- Stripe subscription state. One row per Clerk user (clerk_user_id is the PK
     -- and the only identity we trust — never a client-supplied value). Mirrors
     -- the live state of the user's Stripe subscription, written exclusively by
@@ -2384,6 +2425,95 @@ export async function getPendingIctSetups(date: string): Promise<IctSetupRecord[
     `SELECT * FROM ict_setups WHERE date = ? AND outcome = 'pending' ORDER BY trigger_ts ASC`,
     [date]
   );
+}
+
+/** One recorded Momentum Bias TP/reversal signal (see momentum_bias_signals). */
+export interface MomentumBiasSignalRecord {
+  id: number;
+  signal_key: string;
+  date: string;
+  symbol: string;
+  dir: "bull" | "bear";
+  trigger_ts: number;
+  slot_key: string | null;
+  time: string | null;
+  price: number | null;
+  up_bias: number | null;
+  down_bias: number | null;
+  boundary: number | null;
+  atr: number | null;
+  outcome: "pending" | "win" | "loss" | "chop";
+  mfe: number;
+  mae: number;
+  r_multiple: number | null;
+  resolved_ts: number | null;
+  resolved_price: number | null;
+}
+
+/** Recorded Momentum Bias signals, newest first. Filter by date or sinceDate. */
+export async function getMomentumBiasSignals(
+  opts?: { date?: string; sinceDate?: string; limit?: number }
+): Promise<MomentumBiasSignalRecord[]> {
+  const limit = opts?.limit ?? 200;
+  if (opts?.date) {
+    return queryAll<MomentumBiasSignalRecord>(
+      `SELECT * FROM momentum_bias_signals WHERE date = ? ORDER BY trigger_ts DESC LIMIT ?`,
+      [opts.date, limit]
+    );
+  }
+  if (opts?.sinceDate) {
+    return queryAll<MomentumBiasSignalRecord>(
+      `SELECT * FROM momentum_bias_signals WHERE date >= ? ORDER BY trigger_ts DESC LIMIT ?`,
+      [opts.sinceDate, limit]
+    );
+  }
+  return queryAll<MomentumBiasSignalRecord>(
+    `SELECT * FROM momentum_bias_signals ORDER BY trigger_ts DESC LIMIT ?`, [limit]
+  );
+}
+
+/** Win/loss/chop tally + win-rate + avg peak-R for Momentum Bias signals, per direction. */
+export interface MomentumBiasSummary {
+  dir: string;            // 'bull' | 'bear'
+  wins: number; losses: number; chop: number; pending: number;
+  graded: number;         // wins + losses (win-rate denominator)
+  total: number;
+  win_rate: number | null;
+  avg_r: number | null;   // mean peak-R over resolved rows
+  avg_mfe: number | null; // mean max-favorable-excursion (pts)
+}
+
+export async function getMomentumBiasSummary(
+  opts?: { date?: string; sinceDate?: string }
+): Promise<MomentumBiasSummary[]> {
+  const pool = await getDb();
+  let where = ``;
+  const params: unknown[] = [];
+  if (opts?.date) { where = `WHERE date = $1`; params.push(opts.date); }
+  else if (opts?.sinceDate) { where = `WHERE date >= $1`; params.push(opts.sinceDate); }
+  const result = await pool.query(`
+    SELECT dir,
+      COUNT(*) FILTER (WHERE outcome = 'win')::int  AS wins,
+      COUNT(*) FILTER (WHERE outcome = 'loss')::int AS losses,
+      COUNT(*) FILTER (WHERE outcome = 'chop')::int AS chop,
+      COUNT(*) FILTER (WHERE outcome = 'pending')::int AS pending,
+      COUNT(*) FILTER (WHERE outcome IN ('win','loss'))::int AS graded,
+      COUNT(*)::int AS total,
+      AVG(r_multiple) FILTER (WHERE outcome IN ('win','loss','chop')) AS avg_r,
+      AVG(mfe) AS avg_mfe
+    FROM momentum_bias_signals ${where}
+    GROUP BY dir ORDER BY dir`, params);
+  return result.rows.map((r: Record<string, unknown>) => {
+    const wins = Number(r.wins), graded = Number(r.graded);
+    return {
+      dir: String(r.dir),
+      wins, losses: Number(r.losses), chop: Number(r.chop), pending: Number(r.pending),
+      graded, total: Number(r.total),
+      win_rate: graded > 0 ? wins / graded : null,
+      avg_r: r.avg_r != null ? Number(r.avg_r) : null,
+      avg_mfe: r.avg_mfe != null ? Number(r.avg_mfe) : null,
+    };
+  });
 }
 
 /** Per-kind win/loss tally + averages for the results cards. */

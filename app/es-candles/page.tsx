@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
-import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
+import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, LineSeries, createChart, createSeriesMarkers } from "lightweight-charts";
+import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -13,6 +13,7 @@ import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/c
 import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
+import { getMomentumBiasIndex } from "@/lib/momentumBias";
 
 
 // Card/accent styling now sourced from the shared theme (see BUDGET_UI_STYLE.md).
@@ -38,6 +39,24 @@ type VolumeProfile = {
   vah: number | null;      // value area high
   val: number | null;      // value area low
   lvn: number | null;      // most significant low-volume node inside the range
+};
+
+// One actionable signal from the server-v2 signals-engine (/proxy/signals).
+// Alerts only — the engine never places orders. Levels are ES-price space.
+type Signal = {
+  id: number;
+  ts: number;
+  kind: string;            // flip_cross | wall_reject | wall_break | cb_reject | cb_break | confluence
+  direction: "long" | "short";
+  setup: string;           // human label, e.g. "Call Wall reject"
+  level_name: string | null;
+  level_es: number | null;
+  level_spx: number | null;
+  price_es: number;
+  price_spx: number | null;
+  score: number;           // 1..5 (base + confluence)
+  confluence: string | null;
+  reason: string | null;
 };
 
 /** Minutes-since-ET-midnight for a slot timestamp. */
@@ -172,6 +191,13 @@ export default function EsCandlesPage() {
     for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
   }, [historical, liveRows]);
+  // Momentum Bias Index over the visible candles, aligned 1:1 with `rows`.
+  // Same lib/momentumBias module the server records TP signals with — the arrows
+  // rendered here are the events that get logged/graded server-side.
+  const biasBars = useMemo(
+    () => getMomentumBiasIndex(rows.map((r) => ({ high: r.high, low: r.low, close: r.close }))),
+    [rows]
+  );
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
   const chartRef = useRef<HTMLDivElement>(null);
@@ -180,6 +206,13 @@ export default function EsCandlesPage() {
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  // Momentum Bias oscillator sub-pane (pane 1) + the TP arrow-marker plugin on
+  // the candle series (pane 0). Created lazily by drawBiasRef when Bias is on.
+  const biasUpSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const biasDownSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const biasBoundarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const biasMarkersRef = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
+  const drawBiasRef = useRef<() => void>(() => {});
   const didFitRef = useRef(false);
   // ET date of the latest bar the last fitContent() ran for. When the session
   // rolls to a new ET day, new bars append far to the right; without re-fitting
@@ -288,6 +321,25 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
+  const [showSignals, setShowSignals] = useState(true); // bottom actionable-signals strip
+  // Recent signals from the engine (/proxy/signals), polled every 15s while the
+  // tab is visible. Newest first; the engine dedupes + scores server-side.
+  const [signals, setSignals] = useState<Signal[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await fetch(`/proxy/signals?limit=40`, { cache: "no-store" });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (!cancelled && Array.isArray(j.rows)) setSignals(j.rows as Signal[]);
+      } catch { /* keep last list on a transient failure */ }
+    };
+    void load();
+    const id = setInterval(load, 15_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.
@@ -1318,6 +1370,7 @@ export default function EsCandlesPage() {
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
+          <ToggleTile label="Signals"  on={showSignals}  onClick={() => setShowSignals((v) => !v)} accent={LIGHT_BLUE} />
 
           <DockGap />
 
@@ -1439,6 +1492,61 @@ export default function EsCandlesPage() {
         ) : null}
 
       </div>
+
+      {/* ── Actionable signals strip ──────────────────────────────────────────
+          Live long/short setups from the engine (flip cross, wall reject/break,
+          CB reaction, confluence), newest first. Alerts only — no orders. */}
+      {showSignals ? (
+        <div className="px-4 pb-4" style={{ flexShrink: 0 }}>
+          <div style={{ ...dissolveCard, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>Signals</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>alerts only · no orders</span>
+            </div>
+            {signals.length === 0 ? (
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,.5)", padding: "6px 2px" }}>
+                No signals yet — long/short setups appear here as price reacts at the flip, Call/Put walls, CB level, or a confluence zone.
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+                {signals.map((s) => {
+                  const long = s.direction === "long";
+                  const col = long ? HOME_THEME.green : SOFT_RED;
+                  const mins = Math.max(0, Math.round((Date.now() - s.ts) / 60000));
+                  const age = mins < 1 ? "now" : mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`;
+                  return (
+                    <div
+                      key={s.id}
+                      title={s.reason ?? ""}
+                      style={{ flex: "0 0 auto", minWidth: 194, maxWidth: 234, display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px", borderRadius: 12, border: `1px solid ${col}33`, background: `${col}0f` }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.08em", color: "#001018", background: col, padding: "2px 6px", borderRadius: 6 }}>{long ? "LONG" : "SHORT"}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.7 }}>{age}</span>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.setup}</span>
+                      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {s.level_name ? `${s.level_name} ` : ""}{s.level_es != null ? s.level_es.toFixed(2) : ""}
+                        <span style={{ opacity: 0.5 }}> · ES {s.price_es.toFixed(2)}</span>
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ display: "inline-flex", gap: 2 }}>
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <span key={i} style={{ width: 6, height: 6, borderRadius: 99, background: i < s.score ? col : "rgba(255,255,255,.15)" }} />
+                          ))}
+                        </span>
+                        {s.confluence ? (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: LIGHT_BLUE, opacity: 0.85, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>+{s.confluence}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       </div>
     </div>
   );

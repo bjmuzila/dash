@@ -283,8 +283,8 @@ export default function BudgetPage() {
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: 0, overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center", padding: "14px 18px 6px" }}>
-            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
-            <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
+            <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
+            <div style={{ fontSize: 48, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 20, flexWrap: "wrap", padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
             <div>
@@ -305,10 +305,10 @@ export default function BudgetPage() {
           ].map((t) => (
             <div key={t.label} style={{ ...card(), padding: 16, background: `radial-gradient(circle at 50% 0%, ${bRgba("#7dd3fc", 0.10)} 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 14 }}>{t.icon}</span>
+                <span style={{ fontSize: 28 }}>{t.icon}</span>
                 <span style={labelCap()}>{t.label}</span>
               </div>
-              <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
+              <div style={{ marginTop: 8, fontSize: 48, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
             </div>
           ))}
         </div>
@@ -316,11 +316,11 @@ export default function BudgetPage() {
         {/* Projection chart + cashflow calendar */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 14 }}>
           <div style={{ ...cardAccent(0), padding: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
             <ProjectionChart series={computed.series} currency={currency} />
           </div>
           <div style={{ ...cardAccent(1), padding: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
             <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
           </div>
         </div>
@@ -335,7 +335,7 @@ export default function BudgetPage() {
               🔁 Recurring{recurring.length ? ` (${recurring.filter((r) => r.active).length})` : ""}
             </button>
           )}
-          {loading && <span style={{ fontSize: 12, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
+          {loading && <span style={{ fontSize: 24, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
 
         {showRecurring && tab === "register" && (
@@ -411,16 +411,16 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
   return (
     <div>
       <div style={{ ...labelCap(), color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-        <span style={{ fontSize: 14 }}>🏦</span> Account balances
+        <span style={{ fontSize: 28 }}>🏦</span> Account balances
       </div>
       <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
         {BANKS.map((b) => (
           <div key={b} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
+            <span style={{ fontSize: 18, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
             {(() => {
               const shown = beginningByBank[b] ?? 0;
               return (
-                <span style={{ fontSize: 18, fontWeight: 900, color: shown < 0 ? SOFT_RED : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
+                <span style={{ fontSize: 36, fontWeight: 900, color: shown < 0 ? SOFT_RED : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
               );
             })()}
             <input
@@ -430,7 +430,7 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
               placeholder="set balance…"
               type="number"
               title="Set this account's balance"
-              style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 12 }}
+              style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 24 }}
             />
           </div>
         ))}
@@ -476,8 +476,8 @@ function RecurringManager({
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 900 }}>Recurring entries</div>
-          <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
+          <div style={{ fontSize: 28, fontWeight: 900 }}>Recurring entries</div>
+          <div style={{ fontSize: 24, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
         </div>
         <button onClick={onClose} style={ghost()}>Done</button>
       </div>
@@ -490,13 +490,13 @@ function RecurringManager({
             return (
               <div key={rule.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.9fr 1fr auto auto", gap: 10, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 12px", opacity: rule.active ? 1 : 0.45 }}>
                 <span style={{ fontWeight: 800 }}>{rule.label}</span>
-                <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
-                <span style={{ fontSize: 12, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
+                <span style={{ fontSize: 24, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
+                <span style={{ fontSize: 24, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
                 <span style={{ fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(rule.amount, currency)}</span>
                 <button
                   onClick={() => onUpdate(rule.id, { active: rule.active ? 0 : 1 })}
                   title={rule.active ? "Pause (hide from Payments)" : "Resume"}
-                  style={{ ...ghost(), padding: "6px 10px", fontSize: 11 }}
+                  style={{ ...ghost(), padding: "6px 10px", fontSize: 22 }}
                 >
                   {rule.active ? "Pause" : "Resume"}
                 </button>
@@ -530,7 +530,7 @@ type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: numb
 function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
   if (series.length < 2) {
-    return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 12 }}>Add entries to see the projection.</div>;
+    return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 24 }}>Add entries to see the projection.</div>;
   }
   const W = 560, H = 150, padL = 4, padR = 4, padT = 8, padB = 18;
   const ys = series.map((p) => p.balance);
@@ -559,13 +559,13 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
         {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
         {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={HOME_THEME.text} stroke="#05060A" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
         {ticks.map((p, i) => (
-          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={9} textAnchor="middle">{shortDate(p.date)}</text>
+          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={18} textAnchor="middle">{shortDate(p.date)}</text>
         ))}
       </svg>
       {hp && (
         <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(10,13,20,0.96)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
-          <div style={{ fontSize: 14, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
+          <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
+          <div style={{ fontSize: 28, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
         </div>
       )}
     </div>
@@ -601,7 +601,7 @@ function CalendarGrid({
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
       {WD.map((w, i) => (
-        <div key={i} style={{ textAlign: "center", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+        <div key={i} style={{ textAlign: "center", fontSize: 24, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
       ))}
       {cells.map((d, i) => {
         if (d === null) return <div key={`e${i}`} />;
@@ -623,8 +623,8 @@ function CalendarGrid({
               color: HOME_THEME.text, transition: "all 0.12s ease",
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
-            {g && <div style={{ fontSize: 12, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+            <div style={{ fontSize: 26, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
+            {g && <div style={{ fontSize: 24, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
         );
       })}
@@ -669,8 +669,8 @@ function MonthlyRegister({
     <div style={{ padding: 16 }}>
       {beginningBalance !== null && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "9px 12px", borderRadius: 10, background: "rgba(126,211,252,0.06)", border: `1px solid ${HOME_THEME.border}` }}>
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
-          <span style={{ fontWeight: 900, fontSize: 15, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
+          <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
+          <span style={{ fontWeight: 900, fontSize: 30, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -683,7 +683,7 @@ function MonthlyRegister({
               style={{ borderRadius: 12, border: `1px solid ${isSel ? "#7dd3fc" : HOME_THEME.border}`, boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.35)" : "none", overflow: "hidden" }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.04)" }}>
-                <span style={{ fontWeight: 900, fontSize: 13 }}>{longDate(g.date)}</span>
+                <span style={{ fontWeight: 900, fontSize: 26 }}>{longDate(g.date)}</span>
               </div>
               {g.rows.map((r) => {
                 const isIncome = r.amount > 0;
@@ -728,7 +728,7 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         background: hover ? "rgba(244,148,142,0.16)" : "rgba(244,148,142,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
-        fontSize: 16,
+        fontSize: 32,
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
@@ -746,7 +746,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
   const totalGas = rows.reduce((s, r) => s + r.gas, 0);
   const totalNet = totalPay - totalGas;
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 26 }}>
       <thead>
         <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)", zIndex: 1 }}>
           <th style={th("left")}>Date</th>
@@ -764,7 +764,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
           <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
             <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
               <span style={{ fontWeight: 800 }}>{shortDate(r.work_date)}</span>
-              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 11 }}>{weekday(r.work_date)}</span>
+              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 22 }}>{weekday(r.work_date)}</span>
             </td>
             <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
             <td style={{ padding: "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
@@ -778,7 +778,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
       {rows.length > 0 && (
         <tfoot>
           <tr style={{ position: "sticky", bottom: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)" }}>
-            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 11, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
+            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 22, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(totalNet, currency)}</td>
@@ -803,7 +803,7 @@ function EditableText({ value, onCommit, style }: { value: string; onCommit: (v:
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => { setEditing(false); if (draft !== value) onCommit(draft.trim()); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
-        style={{ ...field(), padding: "4px 8px", fontSize: 13 }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 26 }}
       />
     );
   }
@@ -824,7 +824,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => { setEditing(false); const n = Number(draft); if (n !== value && draft.trim() !== "") onCommit(n); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(String(value)); setEditing(false); } }}
-        style={{ ...field(), padding: "4px 8px", fontSize: 13, width: 100, textAlign: "right" }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 26, width: 100, textAlign: "right" }}
       />
     );
   }
@@ -832,7 +832,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
 }
 
 function th(align: "left" | "right" | "center"): React.CSSProperties {
-  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
+  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 20, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
 }
 function card(): React.CSSProperties {
   return { background: HOME_THEME.panelBg, backdropFilter: "blur(16px)", borderRadius: 18, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 18px 40px rgba(0,0,0,0.22)" };
@@ -851,10 +851,10 @@ function cardAccent(_i: number): React.CSSProperties {
   };
 }
 function field(): React.CSSProperties {
-  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 13, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
+  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 26, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
 }
 function labelCap(): React.CSSProperties {
-  return { fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
+  return { fontSize: 20, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.25)", background: "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.05))", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap" };
@@ -863,5 +863,5 @@ function ghost(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" };
 }
 function pill(active: boolean): React.CSSProperties {
-  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(33,158,188,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(33,158,188,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 13, fontWeight: 800, cursor: "pointer" };
+  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(33,158,188,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(33,158,188,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 26, fontWeight: 800, cursor: "pointer" };
 }
