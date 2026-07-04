@@ -21,6 +21,7 @@ import {
   homeShellStyle,
 } from "@/components/shared/ownerTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 interface Snapshot {
@@ -54,8 +55,12 @@ const fmtMoney = (v: number | null | undefined) => {
   if (a >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
   return `$${v.toFixed(0)}`;
 };
+// Real, unsoftened up/down colors — deliberately not OWNER_THEME's desaturated
+// red/green, so positive/negative pops against the frosted cards.
+const REAL_BLUE = "#3B82F6";
+const REAL_RED = "#EF4444";
 const signColor = (v: number | null | undefined) =>
-  v == null || !Number.isFinite(v) || v === 0 ? HOME_THEME.text : v > 0 ? HOME_THEME.green : HOME_THEME.red;
+  v == null || !Number.isFinite(v) || v === 0 ? HOME_THEME.text : v > 0 ? REAL_BLUE : REAL_RED;
 /** Option-price day-change %, from the latest mark vs. the prior session's close. */
 const dayChgPct = (mark: number | null | undefined, prevClose: number | null | undefined) => {
   if (mark == null || prevClose == null || !Number.isFinite(mark) || !Number.isFinite(prevClose) || prevClose === 0) return null;
@@ -80,6 +85,14 @@ const METRICS = [
 ] as const;
 type MetricKey = (typeof METRICS)[number]["key"];
 
+const RANGES = [
+  { key: "1d", label: "1D" },
+  { key: "3d", label: "3D" },
+  { key: "1w", label: "1W" },
+  { key: "1m", label: "1M" },
+] as const;
+type RangeKey = (typeof RANGES)[number]["key"];
+
 function HistoryChart({ history, metric }: { history: Snapshot[]; metric: MetricKey }) {
   const W = 960, H = 360, PADL = 56, PADR = 16, PADT = 16, PADB = 28;
   const pts = history
@@ -101,7 +114,12 @@ function HistoryChart({ history, metric }: { history: Snapshot[]; metric: Metric
   const area = `${path} L${sx(pts[pts.length - 1].ts).toFixed(1)},${H - PADB} L${sx(pts[0].ts).toFixed(1)},${H - PADB} Z`;
   const dec = METRICS.find((m) => m.key === metric)!.d;
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
-  const fmtT = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // Spans over ~a day: show the date alongside the time so multi-day ranges are legible.
+  const multiDay = maxX - minX > 20 * 3600_000;
+  const fmtT = (ts: number) =>
+    multiDay
+      ? new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+      : new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
       <defs>
@@ -147,19 +165,20 @@ export default function WatchPage() {
   const [historyById, setHistoryById] = useState<Record<number, Snapshot[]>>({});
   const [historyLoading, setHistoryLoading] = useState(false);
   const [metric, setMetric] = useState<MetricKey>("mark");
+  const [range, setRange] = useState<RangeKey>("1d");
 
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadHistory = useCallback(async (id: number) => {
+  const loadHistory = useCallback(async (id: number, r: RangeKey = range) => {
     setHistoryLoading(true);
     try {
-      const res = await fetch(`/api/watch?history=${id}`, { cache: "no-store" });
+      const res = await fetch(`/api/watch?history=${id}&range=${r}`, { cache: "no-store" });
       const j = await res.json();
       setHistoryById((m) => ({ ...m, [id]: j.history || [] }));
     } catch { /* keep prior */ } finally {
       setHistoryLoading(false);
     }
-  }, []);
+  }, [range]);
 
   const toggleRow = useCallback((id: number) => {
     setExpandedId((cur) => {
@@ -168,6 +187,11 @@ export default function WatchPage() {
       return next;
     });
   }, [loadHistory]);
+
+  const changeRange = useCallback((r: RangeKey) => {
+    setRange(r);
+    if (expandedId != null) loadHistory(expandedId, r);
+  }, [expandedId, loadHistory]);
 
   const load = useCallback(async () => {
     try {
@@ -247,8 +271,10 @@ export default function WatchPage() {
     textTransform: "uppercase", letterSpacing: ".1em",
   };
   const input: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 15, colorScheme: "dark" };
+  // OWNER_THEME.muted is white (same as .text), so titles and numbers were
+  // indistinguishable — dim the label explicitly instead.
   const statLabel: React.CSSProperties = {
-    fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted,
+    fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)",
   };
   const statValue: React.CSSProperties = {
     fontSize: 16, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono)",
@@ -289,7 +315,7 @@ export default function WatchPage() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label style={label}>Expiry</label>
-            <input style={input} type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} required />
+            <ThemedDatePicker value={expiry} onChange={setExpiry} width="100%" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <label style={label}>Strike</label>
@@ -324,11 +350,11 @@ export default function WatchPage() {
             {rows.map((r) => {
               const s = r.snapshot;
               const sideCol = r.side === "C" ? HOME_THEME.green : HOME_THEME.orange;
-              const npCol = s?.net_prem == null ? HOME_THEME.text : s.net_prem >= 0 ? HOME_THEME.green : HOME_THEME.red;
+              const npCol = s?.net_prem == null ? HOME_THEME.text : s.net_prem >= 0 ? REAL_BLUE : REAL_RED;
               const isOpen = expandedId === r.id;
               const hist = historyById[r.id] || [];
               const chg = dayChgPct(s?.mark, s?.prev_close);
-              const chgCol = chg == null ? HOME_THEME.muted : chg >= 0 ? HOME_THEME.green : HOME_THEME.red;
+              const chgCol = chg == null ? HOME_THEME.muted : chg >= 0 ? REAL_BLUE : REAL_RED;
               return (
                 <div
                   key={r.id}
@@ -381,6 +407,22 @@ export default function WatchPage() {
                         <div><div style={statLabel}>Volume</div><div style={statValue}>{fmtInt(s?.volume)}</div></div>
                         <div><div style={statLabel}>Net Prem</div><div style={{ ...statValue, color: npCol }}>{fmtMoney(s?.net_prem)}</div></div>
                         <div><div style={statLabel}>Prev Close</div><div style={statValue}>{fmt(s?.prev_close)}</div></div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {RANGES.map((r) => {
+                            const on = range === r.key;
+                            return (
+                              <button key={r.key} onClick={() => changeRange(r.key)} style={{
+                                fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                                color: on ? HOME_THEME.text : "rgba(255,255,255,0.45)",
+                                background: on ? "rgba(255,255,255,0.10)" : "transparent",
+                                border: `1px solid ${on ? HOME_THEME.borderStrong : HOME_THEME.border}`,
+                              }}>{r.label}</button>
+                            );
+                          })}
+                        </div>
                       </div>
 
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>

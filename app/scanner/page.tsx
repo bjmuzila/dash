@@ -869,6 +869,7 @@ function PlayScanner() {
   const [err, setErr] = useState<string | null>(null);
   const [tf, setTf] = useState<PlayTf>("1h");
   const [status, setStatus] = useState<PlayStatusFilter>("all");
+  const [showDetails, setShowDetails] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -907,6 +908,9 @@ function PlayScanner() {
           <button onClick={() => setStatus("forming")} style={seg(status === "forming")}>Forming</button>
         </div>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
+        <button onClick={() => setShowDetails((v) => !v)} style={seg(showDetails)}>
+          {showDetails ? "▾ Details" : "▸ Details"}
+        </button>
         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Yahoo candles · sweeps every 15m during RTH</span>
       </div>
 
@@ -926,13 +930,17 @@ function PlayScanner() {
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
               <th style={{ ...th, textAlign: "left" }}>Dir</th>
               <th style={{ ...th, textAlign: "left" }}>Status</th>
-              <th style={th}>Close</th>
-              <th style={th}>Swing H</th>
-              <th style={th}>Swing L</th>
-              <th style={th}>Retrace</th>
-              <th style={th}>Equilib</th>
-              <th style={th}>Liq Level</th>
-              <th style={th}>Dist Liq</th>
+              <th style={th}>Trigger</th>
+              {showDetails && (
+                <>
+                  <th style={th}>Close</th>
+                  <th style={th}>Swing H</th>
+                  <th style={th}>Swing L</th>
+                  <th style={th}>Retrace</th>
+                  <th style={th}>Equilib</th>
+                  <th style={th}>Dist Liq</th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -953,22 +961,26 @@ function PlayScanner() {
                       {trig ? "TRIGGERED" : "FORMING"}
                     </span>
                   </td>
-                  <td style={td}>{px(r.close)}</td>
-                  <td style={td}>{px(r.swing_high)}</td>
-                  <td style={td}>{px(r.swing_low)}</td>
-                  <td style={{ ...td, color: r.retrace_pct >= 0.5 ? HOME_THEME.text : "rgba(255,255,255,0.6)" }}>
-                    {(r.retrace_pct * 100).toFixed(0)}%
-                  </td>
-                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{px(r.equilibrium)}</td>
-                  <td style={{ ...td, color: HOME_THEME.cyan }}>{px(r.liq_level)}</td>
-                  <td style={{ ...td, color: r.dist_liq_pct == null ? "rgba(255,255,255,0.4)" : r.dist_liq_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                    {r.dist_liq_pct == null ? "—" : `${r.dist_liq_pct >= 0 ? "+" : ""}${(r.dist_liq_pct * 100).toFixed(2)}%`}
-                  </td>
+                  <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{px(r.liq_level)}</td>
+                  {showDetails && (
+                    <>
+                      <td style={td}>{px(r.close)}</td>
+                      <td style={td}>{px(r.swing_high)}</td>
+                      <td style={td}>{px(r.swing_low)}</td>
+                      <td style={{ ...td, color: r.retrace_pct >= 0.5 ? HOME_THEME.text : "rgba(255,255,255,0.6)" }}>
+                        {(r.retrace_pct * 100).toFixed(0)}%
+                      </td>
+                      <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{px(r.equilibrium)}</td>
+                      <td style={{ ...td, color: r.dist_liq_pct == null ? "rgba(255,255,255,0.4)" : r.dist_liq_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                        {r.dist_liq_pct == null ? "—" : `${r.dist_liq_pct >= 0 ? "+" : ""}${(r.dist_liq_pct * 100).toFixed(2)}%`}
+                      </td>
+                    </>
+                  )}
                 </tr>
               );
             })}
             {!rows.length && !loading && !err && (
-              <tr><td colSpan={11} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+              <tr><td colSpan={showDetails ? 11 : 5} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                 No {tf.toUpperCase()} setups right now. Recorder sweeps every 15m during RTH — or POST /proxy/play-run to populate.
               </td></tr>
             )}

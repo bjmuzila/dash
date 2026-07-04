@@ -7,6 +7,8 @@ import {
   listBudgetCategories,
   listBudgetEntries,
   upsertBudgetCategory,
+  deleteBudgetCategory,
+  setRegisterCategory,
   insertRegisterRow,
   updateRegisterRow,
   deleteRegisterRow,
@@ -101,6 +103,18 @@ export async function POST(req: NextRequest) {
         color: body?.color ? String(body.color) : null,
       });
       return NextResponse.json({ ok: true, category });
+    }
+
+    if (action === "categoryDelete") {
+      await deleteBudgetCategory(profile.id, Number(body?.id ?? 0));
+      return NextResponse.json({ ok: true });
+    }
+
+    // Assign a register row to a category (or clear it with categoryId = null).
+    if (action === "assignCategory") {
+      const catId = body?.categoryId == null ? null : Number(body.categoryId);
+      await setRegisterCategory(profile.id, Number(body?.id ?? 0), catId);
+      return NextResponse.json({ ok: true });
     }
 
     if (action === "entry") {

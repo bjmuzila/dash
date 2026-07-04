@@ -20,13 +20,18 @@ type RegisterRow = {
   amount: number;
   is_beginning: number;
   recurring_tag?: string | null;
+  category_id?: number | null;
 };
+type Category = { id: number; name: string; amount: number; color?: string | null };
 type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 
 // Normal red for the dashboard. Used for amounts, balances and delete accents.
 const SOFT_RED = "#EF4444";
+
+// Swatch palette for category dots.
+const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", "#EF4444"];
 
 const BANKS: Bank[] = ["coastal", "truist", "secu"];
 const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST", secu: "SECU" };
@@ -59,6 +64,11 @@ function addDays(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(y, m - 1, d + days);
   return isoDate(dt);
+}
+function daysBetween(aIso: string, bIso: string): number {
+  const [ay, am, ad] = aIso.split("-").map(Number);
+  const [by, bm, bd] = bIso.split("-").map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
 }
 
 // All dates a recurring rule fires within "YYYY-MM". Weekly/biweekly step from
@@ -97,8 +107,9 @@ export default function BudgetPage() {
   const [register, setRegister] = useState<RegisterRow[]>([]);
   const [recurring, setRecurring] = useState<RecurringRule[]>([]);
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"register" | "amazon">("register");
+  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon">("overview");
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -130,6 +141,7 @@ export default function BudgetPage() {
     setRegister(data.register || []);
     setRecurring(data.recurring || []);
     setAmazonRows(data.amazonRows || []);
+    setCategories(data.categories || []);
     setLoading(false);
   };
 
@@ -261,6 +273,41 @@ export default function BudgetPage() {
     return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
   }, [amazonRows]);
 
+  // Spend per category (this month's expense rows) + the "unsorted" bucket.
+  const categoryStats = useMemo(() => {
+    const spent: Record<number, number> = {};
+    const unsorted: RegisterRow[] = [];
+    for (const r of register) {
+      if (r.is_beginning || r.amount >= 0) continue;
+      if (r.category_id == null) unsorted.push(r);
+      else spent[r.category_id] = (spent[r.category_id] || 0) + Math.abs(r.amount);
+    }
+    unsorted.sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
+    const unsortedTotal = unsorted.reduce((s, r) => s + Math.abs(r.amount), 0);
+    return { spent, unsorted, unsortedTotal };
+  }, [register]);
+
+  // Upcoming recurring payments in the next ~10 days not yet logged (materialized).
+  const billsDue = useMemo(() => {
+    const today = todayIso();
+    const horizon = addDays(today, 10);
+    const materialized = new Set(
+      register.filter((r) => !r.is_beginning && !!r.recurring_tag && r.recurring_tag.startsWith("__recur__:")).map((r) => r.recurring_tag as string)
+    );
+    const out: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[] = [];
+    for (const rule of recurring) {
+      if (!rule.active || rule.amount >= 0) continue;
+      for (const date of occurrencesInMonth(rule, month)) {
+        if (date < today || date > horizon) continue;
+        const tag = `__recur__:${rule.id}:${date}`;
+        if (materialized.has(tag)) continue;
+        out.push({ label: rule.label, amount: rule.amount, date, days: daysBetween(today, date), tag, bank: rule.bank });
+      }
+    }
+    out.sort((a, b) => (a.date < b.date ? -1 : 1));
+    return out;
+  }, [recurring, register, month]);
+
   const monthLabel = (() => {
     const [y, m] = month.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -282,6 +329,14 @@ export default function BudgetPage() {
   // Bulk-add rows parsed from a pasted screenshot.
   const importRegisterRows = async (rows: { date: string; label: string; bank: Bank; amount: number }[]) =>
     post({ action: "registerRowsBulk", rows });
+  // Categories.
+  const addCategory = async (name: string, amount: number, color: string) =>
+    post({ action: "category", name: name.trim(), amount, period: "monthly", color });
+  const deleteCategory = async (id: number) => post({ action: "categoryDelete", id });
+  const assignCategory = async (rowId: number, categoryId: number | null) => post({ action: "assignCategory", id: rowId, categoryId });
+  // Log an upcoming recurring bill as paid (materialize this occurrence).
+  const markBillPaid = async (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) =>
+    post({ action: "registerRow", date: bill.date, label: bill.label, bank: bill.bank, amount: bill.amount, recurringTag: bill.tag });
   const saveBeginning = async (balances: Record<Bank, number>) =>
     post({ action: "setBeginning", month, balances });
   const addRecurring = async (rule: { label: string; bank: Bank; amount: number; frequency: Frequency; anchorDate: string }) =>
@@ -346,8 +401,8 @@ export default function BudgetPage() {
         </div>
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {([["register", "Payments"], ["amazon", "Amazon"]] as const).map(([k, l]) => (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
@@ -379,8 +434,19 @@ export default function BudgetPage() {
         )}
 
         {/* Content */}
-        <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
-          {tab === "register" ? (
+        {tab === "overview" && (
+          <OverviewPanel
+            safeToSpend={computed.netCashFlow}
+            income={computed.income}
+            out={Math.abs(computed.payments)}
+            projected={computed.projectedBalance}
+            billsDue={billsDue}
+            currency={currency}
+            onMarkPaid={markBillPaid}
+          />
+        )}
+        {tab === "register" && (
+          <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
             <MonthlyRegister
               groups={computed.groups}
               beginningBalance={computed.anyBeginning ? computed.beginningBalance : null}
@@ -390,13 +456,28 @@ export default function BudgetPage() {
               onDelete={deleteRow}
               onMaterialize={materializeRecurring}
             />
-          ) : (
+          </div>
+        )}
+        {tab === "categories" && (
+          <CategoriesPanel
+            categories={categories}
+            spent={categoryStats.spent}
+            unsorted={categoryStats.unsorted}
+            unsortedTotal={categoryStats.unsortedTotal}
+            currency={currency}
+            onAdd={addCategory}
+            onDelete={deleteCategory}
+            onAssign={assignCategory}
+          />
+        )}
+        {tab === "amazon" && (
+          <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Composer */}
-        {tab === "register" ? (
+        {tab === "register" && (
           <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 1fr 130px 120px 130px 110px", gap: 10, alignItems: "center", position: "relative", zIndex: 20 }}>
             <input type="date" value={rwDate} onChange={(e) => setRwDate(e.target.value)} style={field()} />
             <input value={rwLabel} onChange={(e) => setRwLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Item (RENT, H PAY, VENMO…)" style={field()} />
@@ -405,7 +486,8 @@ export default function BudgetPage() {
             <input value={rwAmount} onChange={(e) => setRwAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Amount" type="number" style={field()} />
             <button onClick={addRow} style={primary()}>Add Row</button>
           </div>
-        ) : (
+        )}
+        {tab === "amazon" && (
           <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 1fr 1fr 110px", gap: 10, alignItems: "center" }}>
             <input type="date" value={azDate} onChange={(e) => setAzDate(e.target.value)} style={field()} />
             <input value={azPay} onChange={(e) => setAzPay(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Pay" type="number" style={field()} />
@@ -837,6 +919,203 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
     <span onClick={() => setEditing(true)} title="Change date (e.g. paid early)" style={{ cursor: "text", fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, borderBottom: "1px dotted rgba(139,148,167,0.35)", whiteSpace: "nowrap" }}>
       {shortDate(value)}
     </span>
+  );
+}
+
+// Safe-to-spend overview: hero + this period + bills due (from recurring) + note.
+function StatLine({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
+      <span style={{ fontSize: 12, color: HOME_THEME.muted }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 800, color }}>{value}</span>
+    </div>
+  );
+}
+
+function OverviewPanel({
+  safeToSpend,
+  income,
+  out,
+  projected,
+  billsDue,
+  currency,
+  onMarkPaid,
+}: {
+  safeToSpend: number;
+  income: number;
+  out: number;
+  projected: number;
+  billsDue: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[];
+  currency: string;
+  onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
+}) {
+  const ratio = income > 0 ? Math.min(100, (out / income) * 100) : 0;
+  const good = safeToSpend >= 0;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 14, alignItems: "start" }}>
+      <div style={{ ...cardAccent(0), padding: 18 }}>
+        <div style={labelCap()}>Safe to spend this month</div>
+        <div style={{ fontSize: 34, fontWeight: 900, color: good ? HOME_THEME.cyan : SOFT_RED, letterSpacing: "-0.01em", marginTop: 4 }}>{fmtMoney(safeToSpend, currency)}</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>{good ? "You're good. You've got this." : "You're over budget this month."}</div>
+        <div style={{ height: 8, borderRadius: 99, background: "rgba(255,255,255,0.07)", margin: "14px 0 6px" }}>
+          <div style={{ height: 8, borderRadius: 99, background: HOME_THEME.cyan, width: `${ratio}%` }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HOME_THEME.muted }}>
+          <span>Out {fmtMoney(out, currency)}</span>
+          <span>of {fmtMoney(income, currency)} in</span>
+        </div>
+        <div style={{ marginTop: 14, fontSize: 11, color: HOME_THEME.muted }}>Projected end balance <span style={{ color: projected < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>{fmtMoney(projected, currency)}</span></div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ ...card(), padding: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 900, marginBottom: 10 }}>This period</div>
+          <StatLine label="Money in" value={fmtMoney(income, currency)} color={HOME_THEME.green} />
+          <StatLine label="Money out" value={fmtMoney(out, currency)} color={SOFT_RED} />
+          <StatLine label="Bills due soon" value={String(billsDue.length)} color={HOME_THEME.text} />
+        </div>
+
+        {billsDue.length > 0 && (
+          <div style={{ ...card(), padding: 14, border: `1px solid ${bRgba("#fbbf24", 0.28)}` }}>
+            <div style={{ fontSize: 11, fontWeight: 900, color: "#FBBF24", marginBottom: 10 }}>⚠ Bills due soon</div>
+            {billsDue.map((b) => (
+              <div key={b.tag} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
+                <div>
+                  <div style={{ fontSize: 12, color: HOME_THEME.text }}>{b.label}</div>
+                  <div style={{ fontSize: 11, color: HOME_THEME.muted }}>{b.days <= 0 ? "Due today" : `Due in ${b.days} day${b.days === 1 ? "" : "s"}`}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800 }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
+                  <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "6px 10px", fontSize: 11 }}>Mark paid</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ ...card(), padding: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 900, marginBottom: 4 }}>Keep it safe</div>
+          <div style={{ fontSize: 11, color: HOME_THEME.muted, lineHeight: 1.5 }}>Your budget lives in your own database — private to you. Export a backup from the register now and then.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Categories tab: brain-dump/unsorted assignment, per-category budget tiles, and
+// an add-category composer. Budgets live in budget_categories; spend is summed
+// from this month's assigned register rows.
+function CategoriesPanel({
+  categories,
+  spent,
+  unsorted,
+  unsortedTotal,
+  currency,
+  onAdd,
+  onDelete,
+  onAssign,
+}: {
+  categories: Category[];
+  spent: Record<number, number>;
+  unsorted: RegisterRow[];
+  unsortedTotal: number;
+  currency: string;
+  onAdd: (name: string, amount: number, color: string) => void;
+  onDelete: (id: number) => void;
+  onAssign: (rowId: number, categoryId: number | null) => void;
+}) {
+  const [name, setName] = useState("");
+  const [budget, setBudget] = useState("");
+  const [color, setColor] = useState(CATEGORY_COLORS[0]);
+
+  const add = () => {
+    if (!name.trim()) return;
+    onAdd(name, Number(budget || 0), color);
+    setName("");
+    setBudget("");
+  };
+
+  const catOptions = [{ value: "", label: "Unsorted" }, ...categories.map((c) => ({ value: String(c.id), label: c.name }))];
+
+  return (
+    <div style={{ ...cardAccent(2), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 15, fontWeight: 900 }}>Categories</div>
+        <span style={{ fontSize: 11, color: HOME_THEME.muted }}>{categories.length} categor{categories.length === 1 ? "y" : "ies"}</span>
+      </div>
+
+      {unsorted.length > 0 && (
+        <div style={{ borderRadius: 12, border: `1px dashed ${bRgba("#7dd3fc", 0.3)}`, background: bRgba("#7dd3fc", 0.05), padding: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800 }}>🧠 Brain dump — to sort</div>
+              <div style={{ fontSize: 11, color: HOME_THEME.muted }}>Give each one a home</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(unsortedTotal, currency)}</div>
+              <div style={{ fontSize: 11, color: HOME_THEME.muted }}>{unsorted.length} item{unsorted.length === 1 ? "" : "s"}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {unsorted.map((r) => (
+              <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr 150px 90px", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
+                <span style={{ fontSize: 12, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                <ThemedSelect value="" onChange={(v) => onAssign(r.id, v ? Number(v) : null)} options={catOptions} />
+                <span style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED, textAlign: "right" }}>{fmtMoney(r.amount, currency)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+        {categories.length === 0 && <div style={{ fontSize: 12, color: HOME_THEME.muted, padding: "6px 2px" }}>No categories yet — add one below to start budgeting.</div>}
+        {categories.map((c) => {
+          const s = spent[c.id] || 0;
+          const budgetAmt = c.amount || 0;
+          const left = budgetAmt - s;
+          const pct = budgetAmt > 0 ? Math.min(100, (s / budgetAmt) * 100) : 0;
+          const over = budgetAmt > 0 && s > budgetAmt;
+          const dot = c.color || HOME_THEME.cyan;
+          return (
+            <div key={c.id} style={{ ...card(), padding: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 800, minWidth: 0 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: dot, flex: "none" }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                </span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
+                  <span style={{ fontSize: 12, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
+                  <DeleteButton onClick={() => onDelete(c.id)} />
+                </span>
+              </div>
+              {budgetAmt > 0 ? (
+                <>
+                  <div style={{ height: 5, borderRadius: 99, background: "rgba(255,255,255,0.06)", marginBottom: 6 }}>
+                    <div style={{ height: 5, borderRadius: 99, background: over ? SOFT_RED : dot, width: `${pct}%` }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: over ? SOFT_RED : HOME_THEME.muted }}>{over ? `${fmtMoney(-left, currency)} over` : `${fmtMoney(left, currency)} left`}</div>
+                </>
+              ) : (
+                <div style={{ fontSize: 11, color: HOME_THEME.muted }}>No budget — just tracking</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 140px auto auto", gap: 10, alignItems: "center", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="New category (Groceries, Fun…)" style={field()} />
+        <input value={budget} onChange={(e) => setBudget(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Monthly budget" type="number" style={field()} />
+        <div style={{ display: "flex", gap: 6 }}>
+          {CATEGORY_COLORS.map((cc) => (
+            <button key={cc} onClick={() => setColor(cc)} aria-label="Pick colour" style={{ width: 22, height: 22, borderRadius: 6, background: cc, border: color === cc ? `2px solid ${HOME_THEME.text}` : `1px solid ${HOME_THEME.border}`, cursor: "pointer" }} />
+          ))}
+        </div>
+        <button onClick={add} style={primary()}>Add category</button>
+      </div>
+    </div>
   );
 }
 

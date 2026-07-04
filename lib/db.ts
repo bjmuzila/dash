@@ -287,11 +287,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       amount REAL NOT NULL DEFAULT 0,
       is_beginning INTEGER NOT NULL DEFAULT 0,
       recurring_tag TEXT,
+      category_id INTEGER REFERENCES budget_categories(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_budget_register_profile ON budget_register(profile_id);
     CREATE INDEX IF NOT EXISTS idx_budget_register_date ON budget_register(entry_date);
+    -- Self-heal for databases created before per-row categories existed.
+    ALTER TABLE budget_register ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES budget_categories(id) ON DELETE SET NULL;
 
     -- Recurring rules: a payment/income that repeats (weekly/biweekly/monthly).
     -- Occurrences are computed live for the displayed month, not stored as rows.
@@ -786,6 +789,16 @@ export async function getWatchHistory(watchId: number, limit = 300): Promise<Wat
   const rows = await queryAll<WatchSnapshot>(
     `SELECT * FROM watch_snapshots WHERE watch_id = ? ORDER BY ts DESC LIMIT ?`,
     [watchId, limit]
+  );
+  return rows.reverse();
+}
+
+/** Time series since a given epoch-ms cutoff (oldest→newest), capped — powers the chart's multi-day ranges. */
+export async function getWatchHistorySince(watchId: number, sinceTs: number, limit = 5000): Promise<WatchSnapshot[]> {
+  await getDb();
+  const rows = await queryAll<WatchSnapshot>(
+    `SELECT * FROM watch_snapshots WHERE watch_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`,
+    [watchId, sinceTs, limit]
   );
   return rows.reverse();
 }
@@ -2924,6 +2937,20 @@ export async function listBudgetCategories(profileId: number): Promise<BudgetCat
   );
 }
 
+export async function deleteBudgetCategory(profileId: number, id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query("DELETE FROM budget_categories WHERE id = $1 AND profile_id = $2", [id, profileId]);
+}
+
+// Assign (or clear, with null) a register row's category.
+export async function setRegisterCategory(profileId: number, id: number, categoryId: number | null): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    "UPDATE budget_register SET category_id = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND profile_id = $2",
+    [id, profileId, categoryId]
+  );
+}
+
 export async function insertBudgetEntry(input: Omit<BudgetEntryRecord, "id" | "created_at" | "updated_at">): Promise<BudgetEntryRecord> {
   const pool = await getDb();
   const result = await pool.query(
@@ -2953,6 +2980,7 @@ export interface BudgetRegisterRecord {
   amount: number;
   is_beginning: number;
   recurring_tag?: string | null;
+  category_id?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -2966,12 +2994,13 @@ export async function insertRegisterRow(input: {
   amount: number;
   is_beginning?: number;
   recurring_tag?: string | null;
+  category_id?: number | null;
 }): Promise<BudgetRegisterRecord> {
   const pool = await getDb();
   const result = await pool.query(
-    `INSERT INTO budget_register (profile_id, entry_date, sort_order, label, bank, amount, is_beginning, recurring_tag)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [input.profile_id, input.entry_date, input.sort_order, input.label, input.bank, input.amount, input.is_beginning ?? 0, input.recurring_tag ?? null]
+    `INSERT INTO budget_register (profile_id, entry_date, sort_order, label, bank, amount, is_beginning, recurring_tag, category_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [input.profile_id, input.entry_date, input.sort_order, input.label, input.bank, input.amount, input.is_beginning ?? 0, input.recurring_tag ?? null, input.category_id ?? null]
   );
   return result.rows[0] as BudgetRegisterRecord;
 }

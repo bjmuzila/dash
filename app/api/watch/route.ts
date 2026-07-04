@@ -2,9 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { proxyBase } from "@/lib/proxyForward";
 import {
   getWatchOptions, insertWatchOption, deleteWatchOption,
-  insertWatchSnapshot, getLatestWatchSnapshots, getWatchHistory,
+  insertWatchSnapshot, getLatestWatchSnapshots, getWatchHistory, getWatchHistorySince,
   type WatchOption, type WatchSnapshot,
 } from "@/lib/db";
+
+// Chart range → lookback window. "1d" (default, no ?range=) keeps the old
+// last-300-snapshots behavior; anything wider queries by timestamp cutoff.
+const RANGE_MS: Record<string, number> = {
+  "1d": 24 * 3600_000,
+  "3d": 3 * 24 * 3600_000,
+  "1w": 7 * 24 * 3600_000,
+  "1m": 30 * 24 * 3600_000,
+};
 
 // Owner options-watchlist tracker.
 //   GET                       → { rows } where each row = contract + latest snapshot
@@ -89,7 +98,11 @@ export async function GET(req: NextRequest) {
   try {
     const historyId = req.nextUrl.searchParams.get("history");
     if (historyId) {
-      const history = await getWatchHistory(Number(historyId));
+      const range = req.nextUrl.searchParams.get("range") || "";
+      const windowMs = RANGE_MS[range];
+      const history = windowMs
+        ? await getWatchHistorySince(Number(historyId), Date.now() - windowMs)
+        : await getWatchHistory(Number(historyId));
       return NextResponse.json({ history });
     }
     const [options, latest] = await Promise.all([

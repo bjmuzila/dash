@@ -7,6 +7,7 @@
 import { useState, type CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // Budget UI language (see BUDGET_UI_STYLE.md): one accent only — light blue —
 // no rotating card colors, no top bars, soft red instead of the harsh #EF4444.
@@ -16,7 +17,9 @@ const SOFT_RED = "#f4948e";
 type FieldType = "number" | "select" | "checkbox";
 type Field = { key: string; label: string; type: FieldType; def: string | number | boolean; options?: string[] };
 
-const th: CSSProperties = { textAlign: "left", padding: "6px 10px", fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+// Column titles are a neutral muted white so they read distinctly from the
+// blue (positive) / red (negative) value cells below them.
+const th: CSSProperties = { textAlign: "left", padding: "6px 10px", fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.55, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 const td: CSSProperties = { padding: "6px 10px", fontSize: 13, color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
@@ -31,9 +34,10 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
             <tr key={i}>{cols.map((c) => {
               const v = r[c];
               const s = String(v ?? "");
+              const numeric = typeof v === "number" ? v : NaN;
               const positive = s === "REJECT" || s === "held" || s === "yes";
-              const negative = s === "broke" || s === "no";
-              return <td key={c} style={{ ...td, color: positive ? HOME_THEME.green : negative ? SOFT_RED : HOME_THEME.text }}>{s}</td>;
+              const negative = s === "broke" || s === "no" || (Number.isFinite(numeric) && numeric < 0);
+              return <td key={c} style={{ ...td, color: positive ? LIGHT_BLUE : negative ? HOME_THEME.red : HOME_THEME.text }}>{s}</td>;
             })}</tr>
           ))}
         </tbody>
@@ -76,9 +80,13 @@ function Panel({ title, subtitle, test, fields }: { title: string; subtitle: str
           <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
             {f.label}
             {f.type === "select" ? (
-              <select style={{ ...homeInputStyle, width: 120 }} value={String(params[f.key])} onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))}>
-                {f.options!.map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
+              <ThemedSelect
+                width={120}
+                ariaLabel={f.label}
+                value={String(params[f.key])}
+                options={f.options!.map((o) => ({ value: o, label: o.toUpperCase() }))}
+                onChange={(v) => setParams((p) => ({ ...p, [f.key]: v }))}
+              />
             ) : f.type === "checkbox" ? (
               <input type="checkbox" checked={!!params[f.key]} onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.checked }))} style={{ width: 18, height: 18, accentColor: HOME_THEME.cyan }} />
             ) : (
