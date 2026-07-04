@@ -281,7 +281,19 @@ async function buildExpiryRows(underlying = SYMBOL, expiration) {
 // dollars; right CALL/PUT. `strike_range=n` trims to ±n strikes around that
 // date's spot server-side (no need to know historical spot up front).
 // ---------------------------------------------------------------------------
-const ymdCompact = (iso) => String(iso).replace(/-/g, '');
+// Theta v3 wants YYYYMMDD. Accept an ISO 'YYYY-MM-DD' string (strip dashes) OR a
+// JS Date (the daily-history callers pass `new Date(...)`, which String()-ifies
+// to "Sat Feb 14 2026 …" and 500s Theta with "Cannot parse date string").
+const ymdCompact = (iso) => {
+  if (!(iso instanceof Date) && /^\d{4}-\d{2}-\d{2}$/.test(String(iso))) {
+    return String(iso).replace(/-/g, '');
+  }
+  const d = iso instanceof Date ? iso : new Date(iso);
+  if (!Number.isNaN(d.getTime())) {
+    return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+  return String(iso).replace(/-/g, '');
+};
 
 async function fetchEodHistoryTheta(underlying, date, { strikeRange = 40, maxDte } = {}) {
   const root = thetaRoot(underlying);
