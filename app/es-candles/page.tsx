@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, LineSeries, createChart, createSeriesMarkers } from "lightweight-charts";
-import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
+import type { UTCTimestamp, Time, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -211,7 +211,7 @@ export default function EsCandlesPage() {
   const biasUpSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const biasDownSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const biasBoundarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const biasMarkersRef = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
+  const biasMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const drawBiasRef = useRef<() => void>(() => {});
   const didFitRef = useRef(false);
   // ET date of the latest bar the last fitContent() ran for. When the session
@@ -236,12 +236,16 @@ export default function EsCandlesPage() {
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
   const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
+  // Momentum Bias oscillator sub-pane + TP arrow markers. On by default on the
+  // full page; OFF in the dock embed (like the heatmap) to keep the card clean.
+  const [showBias, setShowBias] = useState(true);
   // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
   // profile OFF (user can still toggle it on). Done as an effect, not a lazy
   // initializer, so it applies client-side after SSR hydration.
   useEffect(() => {
     if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("embed") === "1") {
       setShowHeatmap(false);
+      setShowBias(false);
     }
   }, []);
   // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
@@ -370,11 +374,12 @@ export default function EsCandlesPage() {
     profile: setShowProfile,
     levels: setShowLevels,
     pdhon: setShowSessions,
+    bias: setShowBias,
   }), []);
   const overlayState = useMemo(() => ({
     heatmap: showHeatmap, profile: showProfile,
-    levels: showLevels, pdhon: showSessions,
-  }), [showHeatmap, showProfile, showLevels, showSessions]);
+    levels: showLevels, pdhon: showSessions, bias: showBias,
+  }), [showHeatmap, showProfile, showLevels, showSessions, showBias]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
@@ -766,6 +771,11 @@ export default function EsCandlesPage() {
       });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
+      // TP arrow markers live on the candle series (pane 0); the plugin is created
+      // once here and fed by drawBiasRef. Empty until Bias is on + data arrives.
+      biasMarkersRef.current = createSeriesMarkers(candleSeries, []);
+      // Paint the bias pane as soon as the chart exists (data may already be in).
+      drawBiasRef.current();
 
       // lightweight-charts v5 renders candles into internal canvases that
       // html2canvas copies blank. Expose the library's own takeScreenshot()
@@ -844,8 +854,64 @@ export default function EsCandlesPage() {
       chartApiRef.current?.remove();
       chartApiRef.current = null;
       candleSeriesRef.current = null;
+      // chart.remove() disposes every pane/series; just drop our stale handles.
+      biasUpSeriesRef.current = null;
+      biasDownSeriesRef.current = null;
+      biasBoundarySeriesRef.current = null;
+      biasMarkersRef.current = null;
     };
   }, []);
+
+  // ── Momentum Bias oscillator pane + TP markers ────────────────────────────
+  // A sub-pane below price holds the HMA-smoothed up/down bias and the stdev
+  // impulse boundary; crossunder take-profit triggers render as arrows on the
+  // candles. Series are created lazily (and torn down when toggled off) so the
+  // pane fully disappears rather than lingering empty. NaN warmup bars are
+  // dropped by the null filter. Kept out of the WS payload — computed here from
+  // the same lib/momentumBias the server records with, so display == recorded.
+  useEffect(() => {
+    drawBiasRef.current = () => {
+      const chart = chartApiRef.current;
+      const candleSeries = candleSeriesRef.current;
+      if (!chart || !candleSeries) return;
+
+      if (!showBias) {
+        for (const ref of [biasUpSeriesRef, biasDownSeriesRef, biasBoundarySeriesRef]) {
+          if (ref.current) { try { chart.removeSeries(ref.current); } catch {} ref.current = null; }
+        }
+        biasMarkersRef.current?.setMarkers([]);
+        return;
+      }
+
+      if (!biasUpSeriesRef.current) {
+        const base = { priceLineVisible: false, lastValueVisible: false } as const;
+        biasUpSeriesRef.current = chart.addSeries(LineSeries, { ...base, color: "#30d158", lineWidth: 2, title: "Up bias" }, 1);
+        biasDownSeriesRef.current = chart.addSeries(LineSeries, { ...base, color: "#ff5b5b", lineWidth: 2, title: "Down bias" }, 1);
+        biasBoundarySeriesRef.current = chart.addSeries(LineSeries, { ...base, color: "rgba(255,255,255,.40)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "Boundary" }, 1);
+        try { chartApiRef.current?.panes()[1]?.setHeight(150); } catch {}
+      }
+
+      const up: LineData[] = [];
+      const down: LineData[] = [];
+      const bound: LineData[] = [];
+      const markers: SeriesMarker<Time>[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const b = biasBars[i];
+        if (!b) continue;
+        const t = toChartTime(rows[i].timestamp);
+        if (b.momentumUpBias != null) up.push({ time: t, value: b.momentumUpBias });
+        if (b.momentumDownBias != null) down.push({ time: t, value: b.momentumDownBias });
+        if (b.boundary != null) bound.push({ time: t, value: b.boundary });
+        if (b.bullishTp) markers.push({ time: t, position: "belowBar", color: "#30d158", shape: "arrowUp", text: "TP" });
+        else if (b.bearishTp) markers.push({ time: t, position: "aboveBar", color: "#ff5b5b", shape: "arrowDown", text: "TP" });
+      }
+      biasUpSeriesRef.current?.setData(up);
+      biasDownSeriesRef.current?.setData(down);
+      biasBoundarySeriesRef.current?.setData(bound);
+      biasMarkersRef.current?.setMarkers(markers);
+    };
+    drawBiasRef.current();
+  }, [biasBars, rows, showBias]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -1370,6 +1436,7 @@ export default function EsCandlesPage() {
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
+          <ToggleTile label="Bias"     on={showBias}     onClick={() => setShowBias((v) => !v)}     accent={LIGHT_BLUE} />
           <ToggleTile label="Signals"  on={showSignals}  onClick={() => setShowSignals((v) => !v)} accent={LIGHT_BLUE} />
 
           <DockGap />

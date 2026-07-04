@@ -363,11 +363,14 @@ function evaluateFrame(cur, mem, cfg = {}) {
     if (Math.abs(dist) <= opts.touch) { st.touchedAt = ts; if (st.side === 0) st.side = Math.sign(prev ? prev.priceEs - es : dist) || 1; }
     const touchedRecently = ts - st.touchedAt <= C.TOUCH_WINDOW_MS;
 
-    // Breakout: decisive close beyond the level.
-    if (dist >= opts.brk) {
+    // Breakout = a THRESHOLD CROSS through ±brk this frame, not merely being
+    // beyond it. Sitting far on one side of a level (price is always >brk from
+    // at least one wall/the CB) must NOT re-fire a break every cooldown window.
+    const prevDist = (prev ? prev.priceEs : priceEs) - es;
+    if (prevDist < opts.brk && dist >= opts.brk) {
       opts.onBreak('up'); st.touchedAt = 0; st.side = 0; return;
     }
-    if (dist <= -opts.brk) {
+    if (prevDist > -opts.brk && dist <= -opts.brk) {
       opts.onBreak('down'); st.touchedAt = 0; st.side = 0; return;
     }
     // Reject: touched, then pushed back to the side it came from by ≥ reject.

@@ -44,7 +44,7 @@ export function betaCouponExpiryText(opts: BetaCouponExpiryOpts = {}): string {
     "",
     "After that it's gone for good — 50% off will never be offered again. A 15% off launch sale runs next, and that will be the best deal available going forward.",
     "",
-    "Heads up: with CB Edge v2 landing in April, prices will most likely increase. Locking in now at 50% is the lowest this will ever be.",
+    "Heads up: with CB Edge v2 landing in August, prices will most likely increase. Locking in now at 50% is the lowest this will ever be.",
     "",
     `Get in while you can: ${cta}`,
     "Use code CB-BETA at checkout for 50% off.",
@@ -132,7 +132,7 @@ export function betaCouponExpiryEmail(opts: BetaCouponExpiryOpts = {}): string {
               <p style="margin:0 0 6px 0;font:400 14px/1.8 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#aeb9c4;">
                 <span style="color:#8ECAE6;">›</span> After Monday, <strong style="color:#ffffff;">50% off will never be offered again.</strong><br>
                 <span style="color:#8ECAE6;">›</span> A <strong style="color:#ffffff;">15% off launch sale</strong> runs next — the best deal from then on.<br>
-                <span style="color:#8ECAE6;">›</span> With <strong style="color:#ffffff;">CB Edge v2</strong> arriving in April, prices will most likely increase.
+                <span style="color:#8ECAE6;">›</span> With <strong style="color:#ffffff;">CB Edge v2</strong> arriving in August, prices will most likely increase.
               </p>
               <p style="margin:14px 0 0 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
                 Locking in now is the <strong style="color:#8ECAE6;">lowest this will ever be</strong>. Get in while you can.

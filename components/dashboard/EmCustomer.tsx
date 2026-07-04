@@ -58,6 +58,32 @@ async function fetchZones(sym: string): Promise<Partial<Levels> | null> {
   }
 }
 
+interface TrackerWeekRow {
+  week_label?: string | null;
+  week_start?: string | null;
+  result?: "hit" | "miss" | null;
+}
+
+/** Per-ticker weekly hit/miss rows (newest first). ES/NQ futures live under
+ *  their internal month codes, so fold the alias in. */
+async function fetchTrackerRows(sym: string): Promise<TrackerWeekRow[]> {
+  const aliases: Record<string, string[]> = { ESU: ["ESU", "ESM"], NQU: ["NQU", "NQM"] };
+  const candidates = aliases[sym] ?? [sym];
+  const sets = await Promise.all(
+    candidates.map((c) =>
+      fetch(`/api/em-tracker?ticker=${encodeURIComponent(c)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    )
+  );
+  const rows: TrackerWeekRow[] = [];
+  for (const s of sets) if (s?.rows) rows.push(...s.rows);
+  rows.sort((a, b) =>
+    String(b.week_start ?? b.week_label ?? "").localeCompare(String(a.week_start ?? a.week_label ?? ""))
+  );
+  return rows;
+}
+
 export default function EmCustomer() {
   const [input, setInput] = useState("");
   const [ticker, setTicker] = useState("");
@@ -69,6 +95,7 @@ export default function EmCustomer() {
   const [emStats, setEmStats] = useState<TickerEmStats | null>(null);
   const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
   const [winRate, setWinRate] = useState<{ hits: number; evaluated: number; hit_rate: number } | null>(null);
+  const [recentRec, setRecentRec] = useState<{ lastResult: "hit" | "miss" | null; lastLabel: string | null; last5Hits: number; last5Total: number } | null>(null);
   const snapRef = useRef<HTMLDivElement>(null);
 
   const lookup = useCallback(async (raw: string) => {
@@ -81,6 +108,7 @@ export default function EmCustomer() {
     setEmStats(null);
     setConfidenceScore(null);
     setWinRate(null);
+    setRecentRec(null);
     try {
       const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym)}`, { cache: "no-store" });
       if (!r.ok) throw new Error("Lookup failed");
@@ -103,13 +131,14 @@ export default function EmCustomer() {
         }
       }
       // Fetch EM history stats, confidence, and win/loss record in parallel
-      const [statsRes, confRes, trackerRes] = await Promise.allSettled([
+      const [statsRes, confRes, trackerRes, weeksRes] = await Promise.allSettled([
         fetch(`/api/em/ticker-em-stats?ticker=${encodeURIComponent(sym)}`).then((r) => r.ok ? r.json() : null),
         fetch("/api/confidence").then((r) => r.ok ? r.json() : null),
         Promise.all([
           fetch("/api/em-tracker").then((r) => r.ok ? r.json() : null),
           fetch("/api/em-tracker/history").then((r) => r.ok ? r.json() : null),
         ]).then(([live, hist]) => live ? { summary: live.summary, history: hist } : null),
+        fetchTrackerRows(sym),
       ]);
       if (statsRes.status === "fulfilled" && statsRes.value) {
         setEmStats({ recentAvg: statsRes.value.recentAvg ?? null, midAvg: statsRes.value.midAvg ?? null, sampleSize: statsRes.value.sampleSize ?? 0 });
@@ -137,6 +166,19 @@ export default function EmCustomer() {
         const totalEval = histTotal + liveEval;
         if (totalEval > 0) {
           setWinRate({ hits: totalHits, evaluated: totalEval, hit_rate: totalHits / totalEval });
+        }
+      }
+      // Recent record: most-recent finalized week + trailing-5 hit rate.
+      if (weeksRes.status === "fulfilled" && Array.isArray(weeksRes.value)) {
+        const evaluated = weeksRes.value.filter((r) => r.result === "hit" || r.result === "miss");
+        if (evaluated.length > 0) {
+          const last5 = evaluated.slice(0, 5);
+          setRecentRec({
+            lastResult: evaluated[0].result ?? null,
+            lastLabel: evaluated[0].week_label ?? null,
+            last5Hits: last5.filter((r) => r.result === "hit").length,
+            last5Total: last5.length,
+          });
         }
       }
     } catch (e) {
@@ -317,6 +359,33 @@ export default function EmCustomer() {
                       Based on {emStats.sampleSize} week{emStats.sampleSize !== 1 ? "s" : ""} of recorded data
                     </div>
                   )}
+                </section>
+              );
+            })()}
+
+            {/* Recent track record — last finalized week + trailing-5 hit rate */}
+            {recentRec && (() => {
+              const isHit = recentRec.lastResult === "hit";
+              const pct = recentRec.last5Total > 0 ? Math.round((recentRec.last5Hits / recentRec.last5Total) * 100) : 0;
+              const pctCol = pct >= 65 ? "#00e676" : pct >= 50 ? "#ffc107" : "#ff5a6a";
+              return (
+                <section style={{ ...S.card, marginBottom: 14 }}>
+                  <div style={S.cardTitle}>Recent Track Record</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div style={{ ...S.avgStat, border: `1px solid ${isHit ? "rgba(0,230,118,.3)" : "rgba(255,90,106,.3)"}` }}>
+                      <div style={S.statLabel}>Last Week{recentRec.lastLabel ? ` (${recentRec.lastLabel})` : ""}</div>
+                      <div style={{ ...S.statValue, fontSize: 20, color: isHit ? "#00e676" : "#ff5a6a" }}>
+                        {isHit ? "HIT" : "MISS"}
+                      </div>
+                    </div>
+                    <div style={{ ...S.avgStat, border: `1px solid ${pctCol}4d` }}>
+                      <div style={S.statLabel}>Last {recentRec.last5Total} Wk{recentRec.last5Total !== 1 ? "s" : ""} Hit %</div>
+                      <div style={{ ...S.statValue, fontSize: 20, color: pctCol }}>{pct}%</div>
+                      <div style={{ fontSize: 10, color: HOME_THEME.text, marginTop: 4, letterSpacing: ".06em" }}>
+                        {recentRec.last5Hits} / {recentRec.last5Total} hit
+                      </div>
+                    </div>
+                  </div>
                 </section>
               );
             })()}
