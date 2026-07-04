@@ -727,7 +727,7 @@ async function evaluateCompletedWeek(base) {
   let hits = 0, misses = 0;
   for (let i = 0; i < pending.length; i += 4) {
     const batch = pending.slice(i, i + 4);
-    await Promise.allSettled(batch.map(async (row) => {
+    const settled = await Promise.allSettled(batch.map(async (row) => {
       // Map the stored API ticker back to a weekly-candle symbol.
       const candleTicker = row.ticker === 'ESU' ? 'ESM' : row.ticker === 'NQU' ? 'NQM' : row.ticker;
       const { close, high, low, open } = await fetchWeeklyClose(engine, candleTicker, completedWeek);
@@ -760,6 +760,11 @@ async function evaluateCompletedWeek(base) {
       });
       console.log(`[em-eval] ${row.ticker} ${row.week_label}: close ${close} band [${lo}, ${hi}] -> ${result}`);
     }));
+    // Surface per-ticker failures instead of letting allSettled swallow them —
+    // an empty weekly history or refused fetch now logs "TICKER skipped — reason".
+    settled.forEach((s, j) => {
+      if (s.status === 'rejected') console.log(`[em-eval] ${batch[j].ticker} skipped — ${(s.reason && s.reason.message) || s.reason}`);
+    });
     if (i + 4 < pending.length) await new Promise((r) => setTimeout(r, 250));
   }
 

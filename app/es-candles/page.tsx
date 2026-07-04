@@ -203,6 +203,14 @@ export default function EsCandlesPage() {
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
   const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
+  // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
+  // profile OFF (user can still toggle it on). Done as an effect, not a lazy
+  // initializer, so it applies client-side after SSR hydration.
+  useEffect(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("embed") === "1") {
+      setShowHeatmap(false);
+    }
+  }, []);
   // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
   // history columns than 1-day and visibly slows the chart, so default to
   // the fast 1-day window and let the user opt into 5-day when they want it.

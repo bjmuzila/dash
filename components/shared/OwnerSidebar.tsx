@@ -23,13 +23,13 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: HOME_THEME.cyan,
     links: [
       { label: "Hub", href: "/owner", glyph: "⌂" },
+      { label: "Admin", href: "/owner/dev/admin", glyph: "⚿" },
       { label: "Watch", href: "/owner/watch", glyph: "◉" },
       // Control Panel sections promoted to top-level entries (no longer nested).
       { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞" },
       { label: "Infra", href: "/owner/dev/owner?tab=infra", glyph: "◈" },
       { label: "Database", href: "/owner/dev/owner?tab=database", glyph: "⛁" },
       { label: "Activity", href: "/owner/dev/owner?tab=activity", glyph: "📡" },
-      { label: "Admin", href: "/owner/dev/admin", glyph: "⚿" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤" },
       { label: "Tree", href: "/owner/dev/tree", glyph: "⌥" },

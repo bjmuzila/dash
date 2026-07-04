@@ -50,6 +50,12 @@ export default function FitScale({
     const ro = new ResizeObserver(fit);
     ro.observe(host);
     ro.observe(box);
+    // Also watch the content itself: bar items can grow AFTER mount (async
+    // badges/labels), which overflows the fixed-size box WITHOUT changing box's
+    // own border-box. Observing only host/box misses that, leaving the scale
+    // stuck at 1 and clipping the right edge.
+    const content = box.firstElementChild as HTMLElement | null;
+    if (content) ro.observe(content);
     fit();
     return () => ro.disconnect();
   }, [min]);

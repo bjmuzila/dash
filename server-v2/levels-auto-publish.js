@@ -176,9 +176,11 @@ async function publishOnce(base, reason, opts = {}) {
       (failedEm.length ? ` — no EM: ${failedEm.map((f) => f.ticker).join(', ')}` : '') +
       ` in ${Math.round((Date.now() - t0) / 1000)}s`);
 
-    // Seed em_tracker rows for the upcoming week (best-effort). Skip on retries —
-    // seeding already happened on the Saturday full run.
-    if (!only) { try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); } }
+    // Seed em_tracker rows for the upcoming week (best-effort). Runs on retries
+    // too, so a ticker that only prices on a later pass still gets a row to grade
+    // next Saturday. upsert is idempotent and the upcoming week is always
+    // ungraded, so re-seeding never clobbers a result.
+    try { await seedUpcomingWeek(base, payloads); } catch (e) { console.log('[levels-pub] seed failed:', e.message); }
 
     // Push the new levels to the Pine Seeds repo (best-effort; no-op if unset).
     if (posted > 0) exportToPineSeeds();

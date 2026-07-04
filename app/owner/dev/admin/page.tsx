@@ -78,7 +78,7 @@ const STATUS_COLORS: Record<string, string> = {
 function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: T.cyan, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ fontSize: 32, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ fontSize: 13, color: T.textSecondary }}>{sub}</div>}
     </div>
@@ -163,7 +163,7 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
       <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 3 }}>New Subscriptions</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan, marginBottom: 3 }}>New Subscriptions</div>
             <div style={{ fontSize: 12, color: T.muted }}>
               By signup date · {gran === "daily" ? "last 30 days" : gran === "weekly" ? "last 12 weeks" : "last 12 months"}
             </div>
@@ -174,6 +174,9 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
             const barH = Math.max(4, (b.mrr / maxMrr) * 128);
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                {b.count > 0 && (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
+                )}
                 <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR`} style={{
                   width: "100%",
                   height: barH,
@@ -193,7 +196,7 @@ function RevenueChart({ subs }: { subs: StripeSubscription[] }) {
 
       {/* Billing interval breakdown */}
       <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Billing Intervals</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan }}>Billing Intervals</div>
         {[
           { label: "Monthly", count: monthly.length, mrr: monthlyMrr, color: T.cyan },
           { label: "Yearly", count: yearly.length, mrr: yearlyMrr, color: T.green, note: "(÷12)" },
@@ -230,7 +233,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
@@ -289,7 +292,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
     <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 12 }}>Recent Customers</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: T.cyan, marginBottom: 12 }}>Recent Customers</div>
       {customers.length === 0 ? (
         <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 12 }}>No customers yet</div>
       ) : (
@@ -359,7 +362,7 @@ function NotPayingPanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Signed Up · Not Paying</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Signed Up · Not Paying</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
           {emails ? emails.length : "—"}
         </span>
@@ -469,7 +472,7 @@ function CustomerActivityPanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Customer Activity</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Customer Activity</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>

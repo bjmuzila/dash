@@ -169,18 +169,22 @@ function mockChart(){
 function mockFeatures(){
   const px=858,py=132,pw=690,ph=636,ix=px+22,iw=pw-44;
   let s=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12" fill="#0a121e" stroke="#16233b"/>`;
-  s+=`<text x="${ix}" y="${py+36}" font-family="Inter,Segoe UI,Arial" font-size="15" font-weight="800" fill="${C.cyan}" letter-spacing="1">ONE PLATFORM · NOT A WIDGET</text>`;
-  const tiles=[[C.cyan,"LIVE CHARTING","ES candles on the","GEX heatmap"],
-    [C.green,"AUTOMATED STRATEGIES","rules that run","themselves"],
-    [C.blueHi,"TRADER DASHBOARD","greeks · levels · EM","confidence score"],
-    [C.gold,"ICT AUTOMATION","setups graded live","+ instant alerts"]];
-  const gap=16,tw=(iw-gap)/2,th=(ph-58-22-gap)/2,x0=ix,y0=py+56;
-  tiles.forEach((t,i)=>{const cx=x0+(i%2)*(tw+gap),cy=y0+Math.floor(i/2)*(th+gap);
-    s+=`<rect x="${cx}" y="${cy}" width="${tw}" height="${th}" rx="10" fill="#0d1524" stroke="${t[0]}" stroke-opacity=".45"/>
-      <circle cx="${cx+28}" cy="${cy+34}" r="7" fill="${t[0]}"/>
-      <text x="${cx+22}" y="${cy+80}" font-family="Inter,Segoe UI,Arial" font-size="19" font-weight="800" fill="${t[0]}">${t[1]}</text>
-      <text x="${cx+22}" y="${cy+116}" font-family="Inter,Segoe UI,Arial" font-size="15" fill="${C.text}">${t[2]}</text>
-      <text x="${cx+22}" y="${cy+140}" font-family="Inter,Segoe UI,Arial" font-size="15" fill="${C.text}">${t[3]}</text>`;});
+  const intro=["A real-time SPX gamma-exposure & options-flow dashboard",
+    "for serious 0DTE and index traders. See dealer positioning,",
+    "flow, and key levels the moment they move."];
+  intro.forEach((ln,i)=>{s+=`<text x="${ix}" y="${py+34+i*22}" font-family="Inter,Segoe UI,Arial" font-size="14" font-weight="500" fill="${C.text}">${ln}</text>`;});
+  const cards=[
+    ["Real-time SPX GEX",["Live gamma exposure profiles and","flip levels straight from the","options chain."]],
+    ["Confidence Score",["Each key level scored 0–100 for","Hit, Pivot or Chop — live positioning","blended with historical analogs."]],
+    ["ICT — Inner Circle Trader",["Live FVGs, order blocks, liquidity","and market structure on ES and NQ","— called as they form."]],
+    ["Estimated moves",["Weekly estimated-move levels with","high-confidence zones, backed by","2+ years of historical data."]],
+  ];
+  const gap=14,cw=(iw-gap)/2,y0=py+118,ch=(ph-118-22-gap)/2;
+  cards.forEach((c,i)=>{const cx=ix+(i%2)*(cw+gap),cy=y0+Math.floor(i/2)*(ch+gap);
+    s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="10" fill="#0d1524" stroke="#16233b"/>`;
+    s+=`<text x="${cx+18}" y="${cy+34}" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="800" fill="${C.text}">${c[0]}</text>`;
+    c[1].forEach((ln,j)=>{s+=`<text x="${cx+18}" y="${cy+62+j*20}" font-family="Inter,Segoe UI,Arial" font-size="12" fill="#c6d1e0">${ln}</text>`;});
+    s+=`<text x="${cx+18}" y="${cy+ch-18}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${C.cyan}">Explore →</text>`;});
   return s;
 }
 function mockICT(){
@@ -266,8 +270,41 @@ function buildICTFull(p){
   s+=`<text x="${W-40}" y="${H-22}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${C.cyan}">cbedge.net</text><circle cx="44" cy="${H-30}" r="6" fill="${C.green}"/><text x="58" y="${H-24}" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="700" fill="${C.green}">LIVE</text>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${s}</svg>`;
 }
+function buildFeatFull(){
+  const LB="#7dd3fc", GRN="#8ECAE6", PANEL="#0D1119", BORDER="rgba(255,255,255,0.10)";
+  const d=`<defs>
+    <radialGradient id="fbg" cx="50%" cy="-10%" r="120%"><stop offset="0%" stop-color="#0a1220"/><stop offset="42%" stop-color="#070a11"/><stop offset="100%" stop-color="#05060a"/></radialGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fff"/><stop offset="40%" stop-color="#cfd6dd"/><stop offset="52%" stop-color="#7d8792"/><stop offset="64%" stop-color="#aab2bb"/><stop offset="100%" stop-color="#eef1f4"/></linearGradient>
+    <filter id="cardGlow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="8"/></filter>
+    <radialGradient id="cardhi" cx="50%" cy="0%" r="85%"><stop offset="0%" stop-color="${LB}" stop-opacity="0.12"/><stop offset="60%" stop-color="${LB}" stop-opacity="0"/></radialGradient>
+  </defs>`;
+  let s=`${d}<rect width="${W}" height="${H}" fill="url(#fbg)"/>`;
+  s+=`<g font-family="Inter,Segoe UI,Arial"><text x="40" y="58" font-size="36" font-weight="800" fill="url(#chrome)" stroke="#5a636d" stroke-width="0.5" letter-spacing="1">CB Edge</text><text x="42" y="82" font-size="13" font-style="italic" fill="#ffffff">&#8220;Real Edge - Real Orderflow&#8221;</text></g>`;
+  s+=`<circle cx="${W-192}" cy="52" r="6" fill="${GRN}"/><text x="${W-176}" y="59" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="700" fill="${GRN}">LIVE</text><text x="${W-40}" y="60" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="26" font-weight="800" fill="${LB}">cbedge.net</text>`;
+  s+=`<text x="${W/2}" y="178" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="62" font-weight="800" fill="#ffffff">THIS ISN'T JUST ANOTHER <tspan fill="${LB}">HEATMAP.</tspan></text>`;
+  s+=`<text x="${W/2}" y="224" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="500" fill="#ffffff">A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index traders.</text>`;
+  const cards=[
+    ["Real-time SPX GEX",["Live gamma exposure profiles and flip","levels straight from the options chain."]],
+    ["Confidence Score",["Each key level scored 0–100 for Hit,","Pivot or Chop — live positioning blended","with historical analogs."]],
+    ["ICT — Inner Circle Trader",["Live FVGs, order blocks, liquidity and","market structure on ES and NQ — called","as they form."]],
+    ["Estimated moves",["Weekly estimated-move levels with high-","confidence zones, backed by 2+ years of","historical data and results."]],
+  ];
+  const gx=48,gw=W-96,gap=72,cw=(gw-gap)/2,gy=262,ch=(H-262-74-gap)/2;
+  cards.forEach((c,i)=>{const cx=gx+(i%2)*(cw+gap),cy=gy+Math.floor(i/2)*(ch+gap);
+    // tight neon light-blue glow hugging the rounded edge (blurred outline, 2 passes)
+    s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="none" stroke="${LB}" stroke-width="6" filter="url(#cardGlow)"/>`;
+    s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="none" stroke="${LB}" stroke-width="3" filter="url(#cardGlow)"/>`;
+    // frosted card on top — crisp light-blue edge + inner light-blue highlight
+    s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="${PANEL}" stroke="rgba(125,211,252,0.6)" stroke-width="1.5"/>`;
+    s+=`<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="18" fill="url(#cardhi)"/>`;
+    s+=`<text x="${cx+30}" y="${cy+60}" font-family="Inter,Segoe UI,Arial" font-size="30" font-weight="800" fill="${LB}">${c[0]}</text>`;
+    c[1].forEach((ln,j)=>{s+=`<text x="${cx+30}" y="${cy+106+j*30}" font-family="Inter,Segoe UI,Arial" font-size="19" font-weight="500" fill="#cdd7e6">${ln}</text>`;});
+    s+=`<text x="${cx+30}" y="${cy+ch-26}" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="800" fill="${LB}">Explore →</text>`;});
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${s}</svg>`;
+}
 function buildSVG(p,idx){
   if(p.layout==="ictfull") return buildICTFull(p);
+  if(p.layout==="featfull") return buildFeatFull(p);
   if(p.layout==="mockup"){
     const panel=p.mock==="ict"?mockICT():p.mock==="chart"?mockChart():p.mock==="em"?mockEM():p.mock==="features"?mockFeatures():mockHeatmap();
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
@@ -353,8 +390,8 @@ const POSTS=[
  {n:20,motif:"bars",section:"ONE DASHBOARD",stat:`GEX · FLOW · EM · <tspan fill="${C.cyan}">LEVELS</tspan>`,
   lines:[["ONE"],["DASHBOARD",C.cyan]],small:"GEX heatmap · ES candles · flow · EM tracker · levels before the open.",
   copy:"one dashboard.\n\nlive GEX heatmap. ES candles on top. options flow. EM tracker. confidence scores. levels before the open.\n\ncbedge.net"},
- {n:21,layout:"mockup",mock:"features",section:"MORE THAN A HEATMAP",stat:`CHARTING · BOTS · <tspan fill="${C.cyan}">ICT</tspan>`,
-  lines:[["THIS ISN'T JUST"],["ANOTHER HEATMAP.",C.cyan]],small:"charting · automated strategies · full dashboard · ICT alerts.",
+ {n:21,layout:"featfull",section:"MORE THAN A HEATMAP",stat:`CHARTING · BOTS · <tspan fill="${C.cyan}">ICT</tspan>`,
+  lines:[["THIS ISN'T JUST"],["ANOTHER HEATMAP.",C.cyan]],small:"charting · bots · dashboard · ICT.",
   copy:"this isn't just another heatmap.\n\nit's live charting, a full trader dashboard, fully automated strategies, and fully automated ICT setups + alerts — all in one place.\n\nthe whole edge, not a widget. cbedge.net"},
 ];
 

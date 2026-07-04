@@ -59,8 +59,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, evaluated: hits + misses, hits, misses, mode: "ohlc-backfill" });
     }
 
-    // Default path: run the same evaluator the Saturday cron uses.
-    const base = `http://localhost:${process.env.PORT || 3000}`;
+    // Default path: run the same evaluator the Saturday cron uses. Match the
+    // server's own port fallback (server-with-proxy.js uses PORT || 3001) so a
+    // missing PORT env can't aim the self-fetches at a dead port and silently
+    // return evaluated:0.
+    const base = `http://localhost:${process.env.PORT || 3001}`;
     const engine = loadEngine();
     const out = await engine.evaluateCompletedWeek(base);
     return NextResponse.json({ ok: true, ...out, mode: "weekly" });
