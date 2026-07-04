@@ -220,8 +220,6 @@ function Gauge({ label, value, hint, tip, accent }: { label: string; value: numb
       gap: 10,
       flex: 1,
       minWidth: 180,
-      borderTop: `2px solid ${rgba(accent, hot ? 0.9 : 0.55)}`,
-      background: `radial-gradient(circle at 50% 0%, ${rgba(accent, hot ? 0.16 : 0.08)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
       animation: hot ? "confPulse 1.8s ease-in-out infinite" : undefined,
     }}>
       <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: accent }}>
@@ -263,8 +261,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
     : "Neutral — smaller size until a clear reaction at the level";
   return (
     <div className="conf-hover" style={{ ...budgetCard, padding: "14px 18px", display: "flex",
-      flexDirection: "column", gap: 10, borderTop: `2px solid ${rgba(col, 0.6)}`,
-      background: `radial-gradient(circle at ${defend ? "100%" : "0%"} 0%, ${rgba(col, 0.1)} 0%, transparent 60%), ${HOME_THEME.panelBg}` }}>
+      flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: col }}>
           <Tip text="Net Wall Bias = Pivot − Break. Positive = expect defense; negative = respect the break.">Net Wall Bias</Tip>
@@ -365,9 +362,7 @@ function MvcHero({
     );
 
   return (
-    <div className="conf-hover" style={{ ...budgetCard, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16,
-      borderTop: `3px solid ${rgba(leanColor, 0.7)}`,
-      background: `radial-gradient(circle at 50% -10%, ${rgba(leanColor, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+    <div className="conf-hover" style={{ ...budgetCard, padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 24, flexWrap: "wrap" }}>
         {/* MVC level */}
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -926,8 +921,7 @@ export default function ConfidenceScorePage() {
             {/* 84% open-at-MVC alert — high-priority setup callout */}
             {s.openAtMVC && (
               <div style={{ ...budgetCard, padding: "12px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-                borderLeft: `3px solid ${HOME_THEME.green}`,
-                background: `radial-gradient(circle at 0% 0%, ${rgba(HOME_THEME.green, 0.12)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+                borderLeft: `3px solid ${HOME_THEME.green}` }}>
                 <span style={{ fontSize: 22, color: HOME_THEME.green }}>⤞</span>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                   <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Opened AT the CB - Core Bullseye — 85% pivot setup</span>
@@ -975,8 +969,7 @@ export default function ConfidenceScorePage() {
               const sc = SCENARIO[o.kind];
               return (
                 <div className="conf-hover" style={{ ...budgetCard, padding: 20, display: "flex", flexDirection: "column", gap: 14,
-                  borderLeft: `2px solid ${rgba(sc.color, 0.55)}`,
-                  background: `radial-gradient(circle at 0% 0%, ${rgba(sc.color, 0.08)} 0%, transparent 55%), ${HOME_THEME.panelBg}` }}>
+                  borderLeft: `2px solid ${rgba(sc.color, 0.55)}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                     <SectionTitle text="Outcome" accent={sc.color} />
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 9, fontWeight: 800,

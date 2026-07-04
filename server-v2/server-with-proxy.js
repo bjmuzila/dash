@@ -39,6 +39,7 @@ const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
+const { startPlayRecorder, runSweep: runPlaySweep, ensureSchema: playEnsureSchema, getPool: playGetPool } = require('./play-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool } = require('./scanner-recorder');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
@@ -1075,6 +1076,48 @@ async function main() {
         return;
       }
 
+      // ── The Play Scanner ─────────────────────────────────────────────────
+      // GET /proxy/play-scanner?timeframe=1h&status=all&limit=40
+      // Returns forming/triggered 50%-retrace + liquidity-break setups for the
+      // requested timeframe. Triggered ranked above forming, then freshest leg,
+      // then closest to the liquidity level.
+      if (pathname === '/proxy/play-scanner' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await playEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = playGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const tf     = (u.searchParams.get('timeframe') || '1h').toLowerCase() === '4h' ? '4h' : '1h';
+            const status = (u.searchParams.get('status') || 'all').toLowerCase();
+            const limit  = Math.min(100, Math.max(1, Number(u.searchParams.get('limit') || 40)));
+
+            const where = ['timeframe = $1', `updated_at > NOW() - INTERVAL '2 days'`];
+            const params = [tf];
+            if (status === 'forming' || status === 'triggered') { params.push(status); where.push(`status = $${params.length}`); }
+            params.push(limit);
+
+            const sql = `
+              SELECT symbol, timeframe, direction, status, swing_high, swing_low, leg_range,
+                     retrace_pct, equilibrium, liq_level, close, dist_liq_pct, bars_since, updated_at
+              FROM play_setups
+              WHERE ${where.join(' AND ')}
+              ORDER BY (status = 'triggered') DESC, bars_since ASC, ABS(dist_liq_pct) ASC
+              LIMIT $${params.length}`;
+
+            const { rows } = await p.query(sql, params);
+            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual sweep fire: POST /proxy/play-run  (force = bypass RTH gate)
+      if (pathname === '/proxy/play-run' && req.method === 'POST') {
+        runPlaySweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
       if (pathname === '/proxy/mvc-snapshot' && req.method === 'POST') {
@@ -1385,6 +1428,9 @@ async function main() {
     startGreekScannerRecorder(PORT);
     // Vol-pin snapshots: ATM IV, RV, pin strike, range per equity ticker every 5m.
     startVolPinRecorder();
+    // "The Play": 1H/4H swing 50%-retrace + liquidity-break setups across the
+    // scanner universe (Yahoo candles), swept every 15m during RTH.
+    startPlayRecorder();
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();

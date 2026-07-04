@@ -1,0 +1,124 @@
+<!-- CB Edge — Screenshot Brander. Double-click to open. Pick/drop a screenshot; it adds CB Edge branding and lets you download a PNG. No server needed. -->
+<meta charset="utf-8">
+<title>CB Edge — Screenshot Brander</title>
+<style>
+  :root{--cyan:#35d6e8;--green:#35d38a;--border:#16233b;--text:#e9eff7;--muted:#9fb0c6}
+  *{box-sizing:border-box}
+  body{margin:0;background:#04060b;color:var(--text);font-family:Inter,"Segoe UI",system-ui,Arial,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:24px}
+  h1{font-size:18px;margin:0 0 4px}
+  p.sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  #drop{border:1.5px dashed #2a3b52;border-radius:12px;padding:34px;text-align:center;color:var(--muted);
+    background:#070d16;cursor:pointer;transition:.15s}
+  #drop.hot{border-color:var(--cyan);background:#0a1622;color:var(--text)}
+  #drop b{color:var(--cyan)}
+  .row{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:16px 0}
+  label.opt{font-size:13px;color:var(--muted);display:flex;gap:6px;align-items:center}
+  select,button{border:1px solid #1e9fb0;background:#0a2028;color:var(--cyan);font-weight:700;
+    padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer}
+  button:hover{background:#0e2c37}
+  button:disabled{opacity:.4;cursor:default}
+  #frame{margin-top:16px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#000}
+  canvas{display:block;width:100%;height:auto}
+  input[type=file]{display:none}
+</style>
+<div class="wrap">
+  <h1>CB&nbsp;Edge — Screenshot Brander</h1>
+  <p class="sub">drop a dashboard screenshot (or click to choose). it adds the CB Edge logo, tagline, and cbedge.net, then downloads a PNG. everything stays on your machine.</p>
+
+  <div id="drop">📷 &nbsp;<b>Click to choose</b> or drop a screenshot here</div>
+  <input type="file" id="file" accept="image/*">
+
+  <div class="row">
+    <label class="opt">Logo corner
+      <select id="corner">
+        <option value="tl">top-left</option>
+        <option value="tr">top-right</option>
+        <option value="bl">bottom-left</option>
+        <option value="br">bottom-right</option>
+      </select>
+    </label>
+    <label class="opt">CTA corner
+      <select id="cta">
+        <option value="br">bottom-right</option>
+        <option value="bl">bottom-left</option>
+        <option value="tr">top-right</option>
+        <option value="tl">top-left</option>
+      </select>
+    </label>
+    <button id="dl" disabled>⬇ Download branded PNG</button>
+  </div>
+
+  <div id="frame"><canvas id="cv" width="1200" height="700"></canvas></div>
+</div>
+
+<script>
+const C={cyan:"#35d6e8",green:"#35d38a",text:"#ffffff",muted:"#c6d1e0"};
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+const drop=document.getElementById("drop"), file=document.getElementById("file");
+const dl=document.getElementById("dl"), cornerSel=document.getElementById("corner"), ctaSel=document.getElementById("cta");
+let img=null;
+
+function pad(w){return Math.round(w*0.022);}          // scale paddings/text to image width
+function draw(){
+  if(!img) return;
+  cv.width=img.naturalWidth; cv.height=img.naturalHeight;
+  ctx.drawImage(img,0,0);
+  const W=cv.width,H=cv.height,u=W/1600;               // unit scale relative to 1600px design
+  const P=Math.round(40*u);
+  // ---- logo block ----
+  const logoSize=Math.round(40*u), tagSize=Math.round(15*u);
+  const lc=cornerSel.value;
+  const lx = (lc==="tl"||lc==="bl") ? P : W-P;
+  const ly = (lc==="tl"||lc==="tr") ? P+logoSize : H-P-tagSize-6*u;
+  const lAlign=(lc==="tl"||lc==="bl")?"left":"right";
+  // scrim behind logo
+  scrim(lc, Math.round(360*u), Math.round(120*u));
+  ctx.textAlign=lAlign; ctx.textBaseline="alphabetic";
+  const grad=ctx.createLinearGradient(0,ly-logoSize,0,ly+4);
+  grad.addColorStop(0,"#ffffff");grad.addColorStop(.45,"#cfd6dd");grad.addColorStop(.55,"#7d8792");grad.addColorStop(1,"#eef1f4");
+  ctx.fillStyle=grad; ctx.font=`800 ${logoSize}px Inter, "Segoe UI", Arial`;
+  ctx.fillText("CB Edge", lx, ly);
+  ctx.fillStyle=C.text; ctx.font=`italic 500 ${tagSize}px Inter, "Segoe UI", Arial`;
+  ctx.fillText('“Real Edge - Real Orderflow”', lx, ly+Math.round(24*u));
+  // ---- CTA block ----
+  const ctaSize=Math.round(32*u), cc=ctaSel.value;
+  const cx=(cc==="tl"||cc==="bl")?P:W-P;
+  const cy=(cc==="tl"||cc==="tr")?P+ctaSize:H-P;
+  const cAlign=(cc==="tl"||cc==="bl")?"left":"right";
+  scrim(cc, Math.round(300*u), Math.round(70*u));
+  ctx.textAlign=cAlign;
+  ctx.fillStyle=C.cyan; ctx.font=`800 ${ctaSize}px Inter, "Segoe UI", Arial`;
+  ctx.fillText("cbedge.net", cx, cy);
+  // green LIVE dot before cbedge.net
+  const tw=ctx.measureText("cbedge.net").width;
+  const dotX = cAlign==="right" ? cx-tw-Math.round(70*u) : cx+tw+Math.round(20*u);
+  ctx.beginPath();ctx.arc(dotX, cy-ctaSize*0.32, Math.round(6*u), 0, 7);ctx.fillStyle=C.green;ctx.fill();
+  ctx.fillStyle=C.green; ctx.font=`700 ${Math.round(18*u)}px Inter, "Segoe UI", Arial`;
+  ctx.textAlign="left";
+  ctx.fillText("LIVE", dotX+Math.round(12*u), cy-ctaSize*0.18);
+}
+function scrim(corner,w,h){
+  const W=cv.width,H=cv.height;
+  const x=(corner==="tl"||corner==="bl")?0:W-w;
+  const y=(corner==="tl"||corner==="tr")?0:H-h;
+  const g=ctx.createRadialGradient(x+(corner.includes("l")?0:w),y+(corner.includes("t")?0:h),0,
+    x+(corner.includes("l")?0:w),y+(corner.includes("t")?0:h), Math.max(w,h));
+  g.addColorStop(0,"rgba(4,6,11,0.72)");g.addColorStop(1,"rgba(4,6,11,0)");
+  ctx.fillStyle=g; ctx.fillRect(x,y,w,h);
+}
+function load(f){
+  if(!f||!f.type.startsWith("image/"))return;
+  const url=URL.createObjectURL(f);
+  img=new Image();
+  img.onload=()=>{draw(); dl.disabled=false; URL.revokeObjectURL(url);};
+  img.src=url;
+}
+drop.onclick=()=>file.click();
+file.onchange=e=>load(e.target.files[0]);
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("hot");}));
+drop.addEventListener("drop",e=>load(e.dataTransfer.files[0]));
+cornerSel.onchange=draw; ctaSel.onchange=draw;
+dl.onclick=()=>{cv.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="cbedge-branded.png";a.click();},"image/png");};
+</script>

@@ -44,7 +44,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gex" | "greeks" | "volpin" | "strike";
+type MainTab = "gex" | "greeks" | "volpin" | "strike" | "play";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -834,6 +834,158 @@ function StrikeQueryScanner() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  THE PLAY (new tab) — 50% retrace + liquidity/pivot break on 1H/4H structure
+// ══════════════════════════════════════════════════════════════════════════════
+
+type PlayTf = "1h" | "4h";
+type PlayStatusFilter = "all" | "forming" | "triggered";
+
+type PlayRow = {
+  symbol: string;
+  timeframe: string;
+  direction: "short" | "long";
+  status: "forming" | "triggered";
+  swing_high: number;
+  swing_low: number;
+  leg_range: number;
+  retrace_pct: number;
+  equilibrium: number;
+  liq_level: number;
+  close: number;
+  dist_liq_pct: number;
+  bars_since: number;
+  updated_at: string;
+};
+
+const px = (v: number | null) =>
+  v == null || !isFinite(v) ? "—" : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+function PlayScanner() {
+  const [rows, setRows] = useState<PlayRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [tf, setTf] = useState<PlayTf>("1h");
+  const [status, setStatus] = useState<PlayStatusFilter>("all");
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const u = new URL("/proxy/play-scanner", window.location.origin);
+      u.searchParams.set("timeframe", tf);
+      u.searchParams.set("status", status);
+      u.searchParams.set("limit", "40");
+      const res = await fetch(u.toString(), { cache: "no-store" });
+      const text = await res.text();
+      let j: any;
+      try { j = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status} (non-JSON).`); }
+      if (!j.ok) throw new Error(j.error || "load failed");
+      setRows(j.rows || []);
+    } catch (e: any) { setErr(String(e?.message || e)); }
+    finally { setLoading(false); }
+  }, [tf, status]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
+
+  return (
+    <Card variant="budget" title="The Play"
+      subtitle={`50% retrace → liquidity break · ${tf.toUpperCase()} swing structure${loading ? " · refreshing…" : ""}`}>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["1h", "4h"] as PlayTf[]).map((t) => (
+            <button key={t} onClick={() => setTf(t)} style={seg(tf === t)}>{t.toUpperCase()}</button>
+          ))}
+        </div>
+        <span style={{ color: HOME_THEME.border }}>|</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setStatus("all")} style={seg(status === "all")}>All</button>
+          <button onClick={() => setStatus("triggered")} style={seg(status === "triggered")}>Triggered</button>
+          <button onClick={() => setStatus("forming")} style={seg(status === "forming")}>Forming</button>
+        </div>
+        <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Yahoo candles · sweeps every 15m during RTH</span>
+      </div>
+
+      {err && (
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+          {err.includes("no DB") || err.includes("503")
+            ? "Recorder hasn't run yet — data appears after the first RTH sweep (or POST /proxy/play-run)."
+            : err}
+        </div>
+      )}
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+              <th style={{ ...th, textAlign: "left" }}>#</th>
+              <th style={{ ...th, textAlign: "left" }}>Symbol</th>
+              <th style={{ ...th, textAlign: "left" }}>Dir</th>
+              <th style={{ ...th, textAlign: "left" }}>Status</th>
+              <th style={th}>Close</th>
+              <th style={th}>Swing H</th>
+              <th style={th}>Swing L</th>
+              <th style={th}>Retrace</th>
+              <th style={th}>Equilib</th>
+              <th style={th}>Liq Level</th>
+              <th style={th}>Dist Liq</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const short = r.direction === "short";
+              const dirCol = short ? HOME_THEME.red : HOME_THEME.green;
+              const trig = r.status === "triggered";
+              return (
+                <tr key={`${r.symbol}-${r.timeframe}`} style={{
+                  borderTop: "1px solid rgba(255,255,255,0.06)",
+                  background: trig ? `${HOME_THEME.orange}14` : i % 2 ? "rgba(255,255,255,0.02)" : "transparent",
+                }}>
+                  <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{i + 1}</td>
+                  <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
+                  <td style={{ ...td, textAlign: "left", color: dirCol, fontWeight: 800 }}>{short ? "SHORT" : "LONG"}</td>
+                  <td style={{ ...td, textAlign: "left" }}>
+                    <span style={{ color: trig ? HOME_THEME.orange : HOME_THEME.cyan, fontWeight: 800, fontSize: 11 }}>
+                      {trig ? "TRIGGERED" : "FORMING"}
+                    </span>
+                  </td>
+                  <td style={td}>{px(r.close)}</td>
+                  <td style={td}>{px(r.swing_high)}</td>
+                  <td style={td}>{px(r.swing_low)}</td>
+                  <td style={{ ...td, color: r.retrace_pct >= 0.5 ? HOME_THEME.text : "rgba(255,255,255,0.6)" }}>
+                    {(r.retrace_pct * 100).toFixed(0)}%
+                  </td>
+                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{px(r.equilibrium)}</td>
+                  <td style={{ ...td, color: HOME_THEME.cyan }}>{px(r.liq_level)}</td>
+                  <td style={{ ...td, color: r.dist_liq_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                    {`${r.dist_liq_pct >= 0 ? "+" : ""}${(r.dist_liq_pct * 100).toFixed(2)}%`}
+                  </td>
+                </tr>
+              );
+            })}
+            {!rows.length && !loading && !err && (
+              <tr><td colSpan={11} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                No {tf.toUpperCase()} setups right now. Recorder sweeps every 15m during RTH — or POST /proxy/play-run to populate.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legend */}
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+        <span><span style={{ color: HOME_THEME.cyan }}>FORMING</span> = ≥50% retrace into equilibrium, structure intact</span>
+        <span><span style={{ color: HOME_THEME.orange }}>TRIGGERED</span> = broke swing low/high (liquidity taken)</span>
+        <span><span style={{ color: HOME_THEME.red }}>SHORT</span> down-leg · <span style={{ color: HOME_THEME.green }}>LONG</span> up-leg</span>
+        <span>Liq Level = swing low (short) / high (long)</span>
+        <span>5-bar swing fractal</span>
+      </div>
+    </Card>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  PAGE SHELL — tab switcher
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -860,12 +1012,18 @@ export default function ScannerPage() {
           background: tab === "volpin" ? `${HOME_THEME.purple}22` : "transparent",
         }}>Vol Pin</button>
         <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
+        <button onClick={() => setTab("play")} style={{
+          ...tabStyle(tab === "play"),
+          border: `1px solid ${tab === "play" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
+          background: tab === "play" ? `${HOME_THEME.green}22` : "transparent",
+        }}>The Play</button>
       </div>
 
       {tab === "gex"    && <GexScanner />}
       {tab === "greeks" && <GreeksScanner />}
       {tab === "volpin" && <VolPinScanner />}
       {tab === "strike" && <StrikeQueryScanner />}
+      {tab === "play"   && <PlayScanner />}
     </PageShell>
   );
 }

@@ -10,7 +10,7 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 const FEATURES = [
   { slug: "gex", t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
   { slug: "confidence-score", t: "Confidence Score", d: "Each key level scored 0–100 for Hit, Pivot or Chop — live positioning blended with historical analogs." },
-  { slug: "greeks", t: "Greeks & exposure", d: "DEX, VEX and charm intraday — the dealer-positioning picture in one view." },
+  { slug: "ict", t: "ICT — Inner Circle Trader", d: "Live FVGs, order blocks, liquidity and market structure on ES and NQ — called as they form." },
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 

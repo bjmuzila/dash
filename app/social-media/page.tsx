@@ -1721,8 +1721,192 @@ function GexImageCards({ updated, today, form }: { updated: string; today: strin
   );
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * Screenshot Brander — stamp the CB Edge logo + tagline + cbedge.net onto ANY
+ * uploaded/pasted screenshot (e.g. the ICT chart, heatmap, a greeks card) and
+ * push it to X. Draws the image + branding to a <canvas> at its native size, so
+ * "Copy + Open X" copies the branded PNG to the clipboard (Ctrl+V into the X
+ * composer). Falls back to a PNG download when the browser blocks image copy.
+ * ════════════════════════════════════════════════════════════════════════════ */
+const BR_CSS = `
+  .br-wrap { max-width: 1100px; margin: 0 auto; padding-bottom: 40px; }
+  .br-help { font-size:12px; color:#9aa4b2; line-height:1.55; max-width:920px; margin:0 auto 18px; }
+  .br-help b { color:#fff; }
+  .br-drop { border:1.5px dashed rgba(255,255,255,.20); border-radius:12px; padding:30px; text-align:center; color:#9aa4b2; background:rgba(255,255,255,.02); cursor:pointer; font-size:13px; transition:.15s; }
+  .br-drop.hot { border-color:var(--cyan); color:#fff; background:rgba(33,158,188,.05); }
+  .br-drop b { color:#fff; }
+  .br-row { display:flex; gap:18px; align-items:center; flex-wrap:wrap; margin:16px 0; }
+  .br-row label { font-size:12px; color:#cfd6df; display:flex; gap:7px; align-items:center; }
+  .br-row select { font-family:var(--sm-mono); font-size:12px; padding:7px 10px; border-radius:6px; border:1px solid var(--sm-border); background:rgba(0,0,0,.4); color:#fff; cursor:pointer; }
+  .br-cap-h { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:#fff; margin:0 0 6px; }
+  .br-cap { width:100%; resize:vertical; min-height:110px; font-family:inherit; font-size:13px; line-height:1.5; padding:10px 12px; border-radius:8px; border:1px solid var(--sm-border); background:rgba(0,0,0,.4); color:#fff; box-sizing:border-box; }
+  .br-acts { display:flex; gap:10px; flex-wrap:wrap; margin:16px 0 8px; }
+  .br-btn { font-family:var(--sm-mono); font-size:12px; font-weight:700; letter-spacing:.03em; cursor:pointer; padding:10px 16px; border-radius:7px; border:1px solid var(--sm-border); background:rgba(255,255,255,.05); color:#fff; transition:.12s; }
+  .br-btn:hover { opacity:.9; } .br-btn:disabled { opacity:.45; cursor:default; }
+  .br-btn.x { background:#1d9bf0; border-color:#1d9bf0; color:#fff; box-shadow:0 0 16px rgba(29,155,240,.3); }
+  .br-btn.dl { background:var(--cyan); border-color:var(--cyan); color:#05060a; }
+  .br-status { font-size:12px; color:#8ECAE6; margin:0 0 8px; min-height:16px; }
+  .br-frame { margin-top:12px; border:1px solid var(--sm-border); border-radius:12px; overflow:hidden; background:#000; min-height:130px; display:flex; align-items:center; justify-content:center; }
+  .br-frame canvas { display:block; width:100%; height:auto; }
+  .br-frame .ph { font-size:12px; color:#9aa4b2; padding:24px; }
+`;
+
+type BrCorner = "tl" | "tr" | "bl" | "br";
+const BR_CORNERS: { v: BrCorner; label: string }[] = [
+  { v: "tl", label: "top-left" }, { v: "tr", label: "top-right" },
+  { v: "bl", label: "bottom-left" }, { v: "br", label: "bottom-right" },
+];
+const BR_DEFAULT_CAPTION =
+  `this isn't just another heatmap.\n\nlive charting, automated strategies, a full trader dashboard, and automated ICT setups + alerts — all in one place.\n\ncbedge.net\n\nCB Edge - "Your Unfair Edge in the Markets"`;
+
+function ScreenshotBrander() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [hasImg, setHasImg] = useState(false);
+  const [logoCorner, setLogoCorner] = useState<BrCorner>("tl");
+  const [ctaCorner, setCtaCorner] = useState<BrCorner>("br");
+  const [caption, setCaption] = useState(BR_DEFAULT_CAPTION);
+  const [status, setStatus] = useState("");
+  const [hot, setHot] = useState(false);
+
+  const draw = useCallback(() => {
+    const cv = canvasRef.current, img = imgRef.current;
+    if (!cv || !img) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+    const W = cv.width, H = cv.height, u = W / 1600, P = Math.round(40 * u);
+    const scrim = (corner: BrCorner, w: number, h: number) => {
+      const x = corner === "tl" || corner === "bl" ? 0 : W - w;
+      const y = corner === "tl" || corner === "tr" ? 0 : H - h;
+      const gx = x + (corner.includes("l") ? 0 : w), gy = y + (corner.includes("t") ? 0 : h);
+      const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, Math.max(w, h));
+      g.addColorStop(0, "rgba(4,6,11,0.76)"); g.addColorStop(1, "rgba(4,6,11,0)");
+      ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+    };
+    // logo
+    const logoSize = Math.round(40 * u), tagSize = Math.round(15 * u);
+    const lLeft = logoCorner === "tl" || logoCorner === "bl", lTop = logoCorner === "tl" || logoCorner === "tr";
+    const lx = lLeft ? P : W - P, ly = lTop ? P + logoSize : H - P - tagSize - Math.round(8 * u);
+    scrim(logoCorner, Math.round(390 * u), Math.round(122 * u));
+    ctx.textAlign = lLeft ? "left" : "right"; ctx.textBaseline = "alphabetic";
+    const grad = ctx.createLinearGradient(0, ly - logoSize, 0, ly + 4);
+    grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.45, "#cfd6dd"); grad.addColorStop(0.55, "#7d8792"); grad.addColorStop(1, "#eef1f4");
+    ctx.fillStyle = grad; ctx.font = `800 ${logoSize}px Inter, "Segoe UI", Arial`;
+    ctx.fillText("CB Edge", lx, ly);
+    ctx.fillStyle = "#ffffff"; ctx.font = `italic 500 ${tagSize}px Inter, "Segoe UI", Arial`;
+    ctx.fillText("“Real Edge - Real Orderflow”", lx, ly + Math.round(24 * u));
+    // cta
+    const ctaSize = Math.round(32 * u);
+    const cLeft = ctaCorner === "tl" || ctaCorner === "bl", cTop = ctaCorner === "tl" || ctaCorner === "tr";
+    const cx = cLeft ? P : W - P, cy = cTop ? P + ctaSize : H - P;
+    scrim(ctaCorner, Math.round(320 * u), Math.round(72 * u));
+    ctx.textAlign = cLeft ? "left" : "right";
+    ctx.fillStyle = "#35D6E8"; ctx.font = `800 ${ctaSize}px Inter, "Segoe UI", Arial`;
+    ctx.fillText("cbedge.net", cx, cy);
+    const tw = ctx.measureText("cbedge.net").width;
+    const dotX = cLeft ? cx + tw + Math.round(20 * u) : cx - tw - Math.round(70 * u);
+    ctx.beginPath(); ctx.arc(dotX, cy - ctaSize * 0.32, Math.round(6 * u), 0, 7); ctx.fillStyle = "#8ECAE6"; ctx.fill();
+    ctx.textAlign = "left"; ctx.fillStyle = "#8ECAE6"; ctx.font = `700 ${Math.round(18 * u)}px Inter, "Segoe UI", Arial`;
+    ctx.fillText("LIVE", dotX + Math.round(12 * u), cy - ctaSize * 0.18);
+  }, [logoCorner, ctaCorner]);
+
+  useEffect(() => { if (hasImg) draw(); }, [hasImg, draw]);
+
+  const loadFile = useCallback((f?: File | null) => {
+    if (!f || !f.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => { imgRef.current = img; setHasImg(true); setStatus(""); URL.revokeObjectURL(url); };
+    img.src = url;
+  }, []);
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items; if (!items) return;
+      for (const it of Array.from(items)) { if (it.type.startsWith("image/")) { loadFile(it.getAsFile()); break; } }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [loadFile]);
+
+  const toBlob = () => new Promise<Blob | null>((res) => canvasRef.current?.toBlob(res, "image/png"));
+  const download = useCallback(async () => {
+    const b = await toBlob(); if (!b) return false;
+    const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+    a.download = `cbedge-branded-${todayETStr()}.png`; document.body.appendChild(a); a.click(); a.remove();
+    return true;
+  }, []);
+  const openX = useCallback(() => {
+    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(caption)}`, "_blank", "noopener");
+  }, [caption]);
+  const copyAndPost = useCallback(async () => {
+    const b = await toBlob(); if (!b) return;
+    try {
+      const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+      if (!ClipItem || !navigator.clipboard?.write) throw new Error("no-clip");
+      await navigator.clipboard.write([new ClipItem({ "image/png": b })]);
+      openX(); setStatus("Image copied — paste it in the X composer with Ctrl+V.");
+    } catch {
+      await download(); openX();
+      setStatus("Clipboard image copy needs https — downloaded the PNG instead; drag it into X.");
+    }
+  }, [download, openX]);
+
+  return (
+    <div className="br-wrap">
+      <style>{BR_CSS}</style>
+      <p className="br-help">
+        Drop, choose, or <b>paste (Ctrl+V)</b> any dashboard screenshot. It gets the CB Edge logo, tagline
+        and cbedge.net stamped on. <b>Copy + Open X</b> puts the branded PNG on your clipboard and opens the
+        X composer — paste with Ctrl+V.
+      </p>
+      <div
+        className={`br-drop${hot ? " hot" : ""}`}
+        onClick={() => fileRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setHot(true); }}
+        onDragLeave={() => setHot(false)}
+        onDrop={(e) => { e.preventDefault(); setHot(false); loadFile(e.dataTransfer.files?.[0]); }}
+      >
+        Click to choose, drag a screenshot here, or press <b>Ctrl+V</b> to paste
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => loadFile(e.target.files?.[0])} />
+
+      <div className="br-row">
+        <label>Logo corner
+          <select value={logoCorner} onChange={(e) => setLogoCorner(e.target.value as BrCorner)}>
+            {BR_CORNERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
+          </select>
+        </label>
+        <label>cbedge.net corner
+          <select value={ctaCorner} onChange={(e) => setCtaCorner(e.target.value as BrCorner)}>
+            {BR_CORNERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="br-cap-h">Tweet caption</div>
+      <textarea className="br-cap" value={caption} onChange={(e) => setCaption(e.target.value)} />
+
+      <div className="br-acts">
+        <button type="button" className="br-btn x" onClick={copyAndPost} disabled={!hasImg}>Copy + Open X</button>
+        <button type="button" className="br-btn dl" onClick={download} disabled={!hasImg}>Download PNG</button>
+        <button type="button" className="br-btn" onClick={openX}>Open X (text only)</button>
+      </div>
+      {status && <div className="br-status">{status}</div>}
+
+      <div className="br-frame">
+        <canvas ref={canvasRef} style={{ display: hasImg ? "block" : "none" }} />
+        {!hasImg && <span className="ph">Branded preview appears here</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function SocialMediaPage() {
-  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen">("levels");
+  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen" | "brander">("levels");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   // Live per-strike GEX ladder (netGex in $millions) for the Explainer tab.
   // Kept out of FormState (which is string-only) and refreshed alongside it.
@@ -2190,9 +2374,10 @@ export default function SocialMediaPage() {
             { label: "GEX Image Cards", value: "cards" },
             { label: "Explainer Mockup", value: "explainer" },
             { label: "GEX Data", value: "postgen" },
+            { label: "Screenshot Brander", value: "brander" },
           ]}
           active={tab}
-          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen")}
+          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen" | "brander")}
         />
         <span className="sm-live"><i />{refreshing ? "Loading…" : hydrated ? "Loaded" : "Not loaded · on demand"}</span>
         <span className="sm-date">{today}</span>
@@ -2245,6 +2430,7 @@ export default function SocialMediaPage() {
         />
       )}
       {tab === "postgen" && <PostGenerator form={form} />}
+      {tab === "brander" && <ScreenshotBrander />}
 
       <div className="sm-grid" style={tab !== "levels" ? { display: "none" } : undefined}>
         {/* LEFT: dashboard-derived input */}

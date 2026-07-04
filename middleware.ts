@@ -40,6 +40,8 @@ const isPublicRoute = (path: string) => PUBLIC_PATTERNS.some((re) => re.test(pat
 // New owner pages under app/owner/ need no extra gating anywhere.
 const OWNER_PATTERNS: RegExp[] = [
   /^\/owner(\/.*)?$/,
+  // Owner-group backend tools that live at the root (shown under the owner rail).
+  /^\/social-media(\/.*)?$/,
 ];
 const isOwnerRoute = (path: string) => OWNER_PATTERNS.some((re) => re.test(path));
 

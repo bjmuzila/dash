@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
 import Confidence7dTracker from "@/components/explore/Confidence7dTracker";
+import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
 // Sells the feature with copy + a frozen static teaser, then drives to
@@ -123,6 +124,9 @@ export default async function ExplorePage({
         {/* Real last-7-session tracker (confidence-score only) */}
         {slug === "confidence-score" && <Confidence7dTracker />}
 
+        {/* Full ICT concept glossary (ict only) */}
+        {slug === "ict" && <IctGlossary />}
+
         {/* Join Now CTA → single pricing hub */}
         <div style={ctaBlock}>
           <h2 style={{ fontSize: "clamp(22px,4vw,30px)", fontWeight: 800, margin: "0 0 8px" }}>
@@ -166,6 +170,36 @@ export default async function ExplorePage({
         <Link href="/disclaimer" style={legalLink}>Disclaimer</Link>
       </footer>
     </div>
+  );
+}
+
+/* ── ICT glossary (all the info from the live /ict page) ──────────────────── */
+
+function IctGlossary() {
+  const liveCount = ICT_CONCEPTS.filter((c) => c.live).length;
+  return (
+    <section style={{ marginTop: "clamp(36px,6vw,56px)" }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+        <h2 style={{ fontSize: "clamp(20px,3.5vw,28px)", fontWeight: 800, margin: 0 }}>The ICT playbook</h2>
+        <span style={{ fontSize: 12.5, color: T.muted }}>{liveCount} of {ICT_CONCEPTS.length} detected live</span>
+      </div>
+      <p style={{ color: T.muted, fontSize: 14.5, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 640 }}>
+        Every concept the live page detects and labels on the chart. A{" "}
+        <span style={{ color: T.green, fontWeight: 700 }}>Live</span> tag means it&apos;s auto-detected on ES &amp; NQ in real time.
+      </p>
+      <div style={glossaryGrid}>
+        {ICT_CONCEPTS.map((c) => (
+          <div key={c.id} style={glossaryCard}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 14.5, fontWeight: 800, color: T.text }}>{c.name}</span>
+              {c.live && <span style={liveChip}>Live</span>}
+            </div>
+            <p style={{ color: T.muted, fontSize: 13, lineHeight: 1.55, margin: 0 }}>{c.body}</p>
+            <a href={c.href} target="_blank" rel="noopener noreferrer" style={glossaryLink}>Learn more ↗</a>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -293,3 +327,38 @@ const legalLink: React.CSSProperties = {
 };
 
 const legalDot: React.CSSProperties = { color: "rgba(139,148,167,0.5)" };
+
+const glossaryGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 300px), 1fr))",
+  gap: 12,
+  alignItems: "start",
+};
+
+const glossaryCard: React.CSSProperties = {
+  background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
+  border: `1px solid ${T.border}`,
+  borderRadius: 14,
+  padding: 16,
+};
+
+const liveChip: React.CSSProperties = {
+  fontSize: 9.5,
+  fontWeight: 800,
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
+  color: T.green,
+  border: "1px solid rgba(48,209,88,0.3)",
+  background: "rgba(48,209,88,0.08)",
+  borderRadius: 999,
+  padding: "2px 7px",
+};
+
+const glossaryLink: React.CSSProperties = {
+  display: "inline-block",
+  marginTop: 10,
+  fontSize: 12,
+  fontWeight: 700,
+  color: T.cyan,
+  textDecoration: "none",
+};

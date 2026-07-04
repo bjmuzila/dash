@@ -20,7 +20,7 @@
     border:1px solid #14202f;border-radius:8px;padding:10px 12px}
 </style>
 <header>
-  <h1>CB&nbsp;Edge — 20 Post Graphics</h1>
+  <h1>CB&nbsp;Edge — 19 Post Graphics</h1>
   <span class="sub">click a graphic's button for a 1600×900 PNG (3200×1800 export)</span>
   <button onclick="downloadAll()">⬇ Download all PNGs</button>
 </header>
@@ -166,9 +166,110 @@ function mockChart(){
   for(let t=0;t<=5;t++){const y=T+PH2*t/5;s+=`<text x="${px+pw-52}" y="${y+4}" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#7e8da6">${(7600-t*30)}</text>`;}
   return s;
 }
+function mockFeatures(){
+  const px=858,py=132,pw=690,ph=636,ix=px+22,iw=pw-44;
+  let s=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12" fill="#0a121e" stroke="#16233b"/>`;
+  s+=`<text x="${ix}" y="${py+36}" font-family="Inter,Segoe UI,Arial" font-size="15" font-weight="800" fill="${C.cyan}" letter-spacing="1">ONE PLATFORM · NOT A WIDGET</text>`;
+  const tiles=[[C.cyan,"LIVE CHARTING","ES candles on the","GEX heatmap"],
+    [C.green,"AUTOMATED STRATEGIES","rules that run","themselves"],
+    [C.blueHi,"TRADER DASHBOARD","greeks · levels · EM","confidence score"],
+    [C.gold,"ICT AUTOMATION","setups graded live","+ instant alerts"]];
+  const gap=16,tw=(iw-gap)/2,th=(ph-58-22-gap)/2,x0=ix,y0=py+56;
+  tiles.forEach((t,i)=>{const cx=x0+(i%2)*(tw+gap),cy=y0+Math.floor(i/2)*(th+gap);
+    s+=`<rect x="${cx}" y="${cy}" width="${tw}" height="${th}" rx="10" fill="#0d1524" stroke="${t[0]}" stroke-opacity=".45"/>
+      <circle cx="${cx+28}" cy="${cy+34}" r="7" fill="${t[0]}"/>
+      <text x="${cx+22}" y="${cy+80}" font-family="Inter,Segoe UI,Arial" font-size="19" font-weight="800" fill="${t[0]}">${t[1]}</text>
+      <text x="${cx+22}" y="${cy+116}" font-family="Inter,Segoe UI,Arial" font-size="15" fill="${C.text}">${t[2]}</text>
+      <text x="${cx+22}" y="${cy+140}" font-family="Inter,Segoe UI,Arial" font-size="15" fill="${C.text}">${t[3]}</text>`;});
+  return s;
+}
+function mockICT(){
+  const px=858,py=132,pw=690,ph=636;
+  let s=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12" fill="#0a121e" stroke="#16233b"/>`;
+  const cx0=px+10,cy0=py+10,cw2=pw-20,chh=284;
+  const L=cx0+2,R=cx0+cw2-48,T=cy0+8,B=cy0+chh-8,PW2=R-L,PH2=B-T;
+  s+=`<clipPath id="ic"><rect x="${cx0}" y="${cy0}" width="${cw2}" height="${chh}" rx="8"/></clipPath>`;
+  s+=`<rect x="${cx0}" y="${cy0}" width="${cw2}" height="${chh}" rx="8" fill="#08101c" stroke="#16233b"/><g clip-path="url(#ic)">`;
+  const n=54,cw=PW2/n,closes=[];let price=0;
+  for(let i=0;i<n;i++){price+=(rnd(i*3+4)-0.46)*2;closes.push(price);}
+  const mn=Math.min(...closes)-2,mx=Math.max(...closes)+2,yOf=v=>T+(1-(v-mn)/(mx-mn))*PH2;
+  s+=`<rect x="${L+PW2*0.62}" y="${T}" width="${PW2*0.38}" height="${Math.abs(yOf(mx-4)-T)}" fill="${C.green}" opacity="0.05"/>`;
+  let prev=closes[0];
+  for(let i=0;i<n;i++){const c=closes[i],o=prev,hi=Math.max(o,c)+rnd(i*5+2)*0.8,lo=Math.min(o,c)-rnd(i*7+2)*0.8,x=L+i*cw+cw/2,up=c>=o,col=up?'#26c281':'#e24b4a';
+    s+=`<line x1="${x}" y1="${yOf(hi)}" x2="${x}" y2="${yOf(lo)}" stroke="${col}" stroke-width="1"/><rect x="${x-cw*0.32}" y="${yOf(Math.max(o,c))}" width="${cw*0.64}" height="${Math.max(0.8,Math.abs(yOf(o)-yOf(c)))}" fill="${col}"/>`;prev=c;}
+  const fvg=(i0,i1,vT,vB,lbl)=>`<rect x="${L+i0*cw}" y="${yOf(vT)}" width="${(i1-i0)*cw}" height="${Math.abs(yOf(vB)-yOf(vT))}" fill="${C.cyan}" opacity="0.14" stroke="${C.cyan}" stroke-opacity=".5"/><text x="${L+i0*cw+3}" y="${yOf(vT)+12}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="700" fill="${C.cyan}">${lbl}</text>`;
+  s+=fvg(12,22,closes[15]+1.4,closes[15]-0.3,"FVG↑")+fvg(30,44,closes[37]+1.1,closes[37]-1.1,"FVG↑");
+  const tag=(i,v,txt,col)=>`<text x="${L+i*cw}" y="${yOf(v)-5}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="800" fill="${col}">${txt}</text>`;
+  s+=tag(8,closes[8],"BOS↑",C.cyan)+tag(18,closes[18],"MSS↓",C.red)+tag(33,closes[33],"OB",C.blueHi)+tag(46,closes[46],"BSL",C.gold);
+  s+=`</g>`;
+  const pdh=yOf(mx-0.5),pdl=yOf(mn+0.5);
+  s+=`<line x1="${cx0}" y1="${pdh}" x2="${R}" y2="${pdh}" stroke="${C.gold}" stroke-width="1" opacity=".8"/><text x="${cx0+2}" y="${pdh-3}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="700" fill="${C.gold}">PDH 30320</text>`;
+  s+=`<line x1="${cx0}" y1="${pdl}" x2="${R}" y2="${pdl}" stroke="${C.gold}" stroke-width="1" opacity=".8"/><text x="${cx0+2}" y="${pdl-3}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="700" fill="${C.gold}">PDL 29328</text>`;
+  const cur=yOf(closes[n-1]);
+  s+=`<rect x="${R}" y="${cur-9}" width="46" height="18" rx="2" fill="#3a4656"/><text x="${R+23}" y="${cur+4}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="800" fill="#fff">29901</text>`;
+  const gx=px+10,gy=cy0+chh+8,gw=pw-20,gap=8,colW=(gw-2*gap)/3,rowH=(ph-(chh+18)-20)/2;
+  const pnl=(cxx,cyy,title,rows)=>{let o=`<rect x="${cxx}" y="${cyy}" width="${colW}" height="${rowH}" rx="8" fill="#0d1524" stroke="#16233b"/><text x="${cxx+10}" y="${cyy+18}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="800" fill="${C.cyan}" letter-spacing="1">${title}</text>`;
+    rows.forEach((r,i)=>{const yy=cyy+40+i*22;o+=`<text x="${cxx+10}" y="${yy}" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#9fb0c6">${r[0]}</text><text x="${cxx+colW-10}" y="${yy}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="11" font-weight="700" fill="${r[2]||C.text}">${r[1]}</text>`;});
+    return o;};
+  s+=pnl(gx,gy,"DAILY BIAS",[["above PD mid","BULL",C.green],["draw on","PDH / BSL",C.text]]);
+  s+=pnl(gx+colW+gap,gy,"OPEN FVGS",[["FVG↑","29769–782",C.green],["FVG↑","29572–646",C.green],["FVG↓","30006–131",C.red]]);
+  s+=pnl(gx+2*(colW+gap),gy,"LIQUIDITY",[["SSL ×3","29826",C.red],["BSL","29884",C.green],["BSL","29929",C.green]]);
+  const gy2=gy+rowH+gap;
+  s+=pnl(gx,gy2,"DEALING RANGE",[["High","29929",C.text],["EQ","29906",C.text],["OTE","29919–912",C.cyan]]);
+  s+=pnl(gx+colW+gap,gy2,"MODELS & SIGNALS",[["Inducement↑","29888",C.green],["Judas Swing↓","29955",C.red],["CISD↑","29615",C.green]]);
+  s+=pnl(gx+2*(colW+gap),gy2,"POWER OF 3",[["Asia","29764–841",C.text],["Manip","↑29900",C.green],["Dist","↑ up",C.green]]);
+  return s;
+}
+function buildICTFull(p){
+  let s=`${defs()}<rect width="${W}" height="${H}" fill="url(#bg)"/>`;
+  s+=`<g font-family="Inter,Segoe UI,Arial"><text x="40" y="46" font-size="34" font-weight="800" fill="url(#chrome)" stroke="#5a636d" stroke-width="0.5" letter-spacing="1">CB Edge</text><text x="42" y="70" font-size="13" font-style="italic" fill="${C.text}">&#8220;Real Edge - Real Orderflow&#8221;</text></g>`;
+  s+=`<text x="${W-40}" y="44" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="30" font-weight="800" fill="${C.text}">ICT, <tspan fill="${C.cyan}">FULLY AUTOMATED</tspan></text>`;
+  s+=`<text x="${W-40}" y="72" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="15" font-weight="500" fill="${C.text}">FVG · OB · BOS · MSS · liquidity — auto-marked, with alerts.</text>`;
+  const cx=40,cy=96,cwd=1520,chd=440,L=cx+4,R=cx+cwd-70,T=cy+8,B=cy+chd-8,PW2=R-L,PH2=B-T;
+  s+=`<clipPath id="icf"><rect x="${cx}" y="${cy}" width="${cwd}" height="${chd}" rx="10"/></clipPath>`;
+  s+=`<rect x="${cx}" y="${cy}" width="${cwd}" height="${chd}" rx="10" fill="#08101c" stroke="#16233b"/><g clip-path="url(#icf)">`;
+  const n=72,cw=PW2/n,closes=[];let price=0;
+  for(let i=0;i<n;i++){price+=(rnd(i*3+4)-0.46)*2.1;closes.push(price);}
+  const mn=Math.min(...closes)-3,mx=Math.max(...closes)+3,yOf=v=>T+(1-(v-mn)/(mx-mn))*PH2;
+  s+=`<rect x="${L+PW2*0.60}" y="${T}" width="${PW2*0.40}" height="${Math.abs(yOf(mx-5)-T)}" fill="${C.green}" opacity="0.05"/>`;
+  [mx-3,mx-5,closes[n-1]+0.4,mn+12,mn+8,mn+4.5].forEach(v=>{s+=`<line x1="${L+PW2*0.5}" y1="${yOf(v)}" x2="${R}" y2="${yOf(v)}" stroke="${C.gold}" stroke-width="1" opacity="0.45"/>`;});
+  let prev=closes[0];
+  for(let i=0;i<n;i++){const c=closes[i],o=prev,hi=Math.max(o,c)+rnd(i*5+2)*1.0,lo=Math.min(o,c)-rnd(i*7+2)*1.0,x=L+i*cw+cw/2,up=c>=o,col=up?'#26c281':'#e24b4a';
+    s+=`<line x1="${x}" y1="${yOf(hi)}" x2="${x}" y2="${yOf(lo)}" stroke="${col}" stroke-width="1"/><rect x="${x-cw*0.32}" y="${yOf(Math.max(o,c))}" width="${cw*0.64}" height="${Math.max(0.8,Math.abs(yOf(o)-yOf(c)))}" fill="${col}"/>`;prev=c;}
+  const fvg=(i0,i1,vT,vB,lbl)=>`<rect x="${L+i0*cw}" y="${yOf(vT)}" width="${(i1-i0)*cw}" height="${Math.abs(yOf(vB)-yOf(vT))}" fill="${C.cyan}" opacity="0.12" stroke="${C.cyan}" stroke-opacity=".45"/><text x="${L+i0*cw+4}" y="${yOf(vT)+13}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="700" fill="${C.cyan}">${lbl}</text>`;
+  s+=fvg(10,20,closes[14]+1.6,closes[14]-0.3,"FVG↑")+fvg(24,33,closes[28]+1.3,closes[28]-0.6,"FVG↑")+fvg(40,60,closes[50]+1.4,closes[50]-1.3,"FVG↑");
+  const tag=(i,v,txt,col)=>`<text x="${L+i*cw}" y="${yOf(v)-5}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="800" fill="${col}">${txt}</text>`;
+  s+=tag(6,closes[6],"BOS↑",C.cyan)+tag(16,closes[16],"MSS↓",C.red)+tag(27,closes[27],"OB↓",C.blueHi)+tag(38,closes[38],"BOS↓",C.cyan)+tag(50,closes[50],"BOS↑",C.cyan)+tag(63,closes[63],"BSL",C.gold);
+  s+=`</g>`;
+  const pdh=yOf(mx-1),pdl=yOf(mn+1);
+  s+=`<line x1="${L}" y1="${pdh}" x2="${R}" y2="${pdh}" stroke="${C.gold}" stroke-width="1.2" opacity=".85"/><text x="${L+2}" y="${pdh-4}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="700" fill="${C.gold}">PDH 30320.00</text>`;
+  s+=`<line x1="${L}" y1="${pdl}" x2="${R}" y2="${pdl}" stroke="${C.gold}" stroke-width="1.2" opacity=".85"/><text x="${L+2}" y="${pdl-4}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="700" fill="${C.gold}">PDL 29328.50</text>`;
+  const cur=yOf(closes[n-1]);
+  s+=`<rect x="${R}" y="${cur-10}" width="66" height="20" rx="2" fill="#3a4656"/><text x="${R+33}" y="${cur+5}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="11" font-weight="800" fill="#fff">29901.75</text>`;
+  for(let t=0;t<=8;t++){const y=T+PH2*t/8;s+=`<text x="${cx+cwd-58}" y="${y+4}" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#7e8da6">${(30600-t*175)}.00</text>`;}
+  const gx=40,gw=W-80,gy=cy+chd+14;
+  const pnl=(x,y,w,h,title,rows,big)=>{let o=`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="#0d1524" stroke="#16233b"/><text x="${x+12}" y="${y+20}" font-family="Inter,Segoe UI,Arial" font-size="11" font-weight="800" fill="${C.cyan}" letter-spacing="1">${title}</text>`;
+    if(big){o+=`<text x="${x+12}" y="${y+50}" font-family="Inter,Segoe UI,Arial" font-size="24" font-weight="800" fill="${C.green}">${big}</text>`;}
+    const y0=big?y+70:y+40, rh=Math.min(22,(h-(big?76:44))/Math.max(1,rows.length));
+    rows.forEach((r,i)=>{const yy=y0+i*rh;o+=`<text x="${x+12}" y="${yy}" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#9fb0c6">${r[0]}</text><text x="${x+w-12}" y="${yy}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="11" font-weight="700" fill="${r[2]||C.text}">${r[1]}</text>`;});
+    return o;};
+  const c5=(gw-4*12)/5,h1=120;
+  s+=pnl(gx,gy,c5,h1,"DAILY BIAS",[["above prior-day mid",""],["draw on","PDH / BSL",C.text],["PDH · PDL","30320 · 29328",C.text]],"BULL");
+  s+=pnl(gx+(c5+12),gy,c5,h1,"ACTIVE WINDOWS (1)",[["NY AM Killzone","",C.cyan],["","07:00–10:00 ET",C.text]]);
+  s+=pnl(gx+2*(c5+12),gy,c5,h1,"OPEN FVGS (SM)",[["FVG↑","29769.75–782.50",C.green],["FVG↑","29572.25–646.50",C.green],["FVG↑","29475.50–514.00",C.green],["FVG↓","30006.25–131.50",C.red]]);
+  s+=pnl(gx+3*(c5+12),gy,c5,h1,"LIQUIDITY (UNSWEPT)",[["SSL ×3","29826.42",C.red],["SSL","29884.50",C.red],["BSL","29929.00",C.green],["BSL","29955.25",C.green],["SSL","29866.75",C.red],["SSL","29856.00",C.red]]);
+  s+=pnl(gx+4*(c5+12),gy,c5,h1,"DEALING RANGE",[["High","29929.00",C.text],["EQ (0.5)","29906.75",C.text],["Low","29884.50",C.text],["OTE","29919–29912",C.cyan]]);
+  const gy2=gy+h1+12,c3=(gw-2*12)/3,h2=150;
+  s+=pnl(gx,gy2,c3,h2,"MODELS & SIGNALS",[["Inducement↑","29888.50",C.green],["Inducement↓","29924.25",C.red],["Judas Swing↓","29955.25",C.red],["Inducement↓","29900.25",C.red],["Inducement↓","29869.00",C.red],["CISD↑","29615.00",C.green],["Inducement↓","29622.25",C.red]]);
+  s+=pnl(gx+(c3+12),gy2,c3,h2,"POWER OF 3 (TODAY)",[["Asia range","29764.00–29841.50",C.text],["Manipulation","↑ 29900.00",C.green],["Distribution","↑ up",C.green]]);
+  s+=pnl(gx+2*(c3+12),gy2,c3,h2,"CRT (PRIOR HOUR)",[["Range","29884.50–29925.00",C.text],["EQ","29904.75",C.text],["Swept","none yet",C.text]]);
+  s+=`<text x="${W-40}" y="${H-22}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${C.cyan}">cbedge.net</text><circle cx="44" cy="${H-30}" r="6" fill="${C.green}"/><text x="58" y="${H-24}" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="700" fill="${C.green}">LIVE</text>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${s}</svg>`;
+}
 function buildSVG(p,idx){
+  if(p.layout==="ictfull") return buildICTFull(p);
   if(p.layout==="mockup"){
-    const panel=p.mock==="chart"?mockChart():p.mock==="em"?mockEM():mockHeatmap();
+    const panel=p.mock==="ict"?mockICT():p.mock==="chart"?mockChart():p.mock==="em"?mockEM():p.mock==="features"?mockFeatures():mockHeatmap();
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
       ${defs()}<rect width="${W}" height="${H}" fill="url(#bg)"/>
       ${logo()}${panel}${HL(p.lines,p.small,92,372,74,"start")}${footer()}</svg>`;
@@ -252,6 +353,9 @@ const POSTS=[
  {n:20,motif:"bars",section:"ONE DASHBOARD",stat:`GEX · FLOW · EM · <tspan fill="${C.cyan}">LEVELS</tspan>`,
   lines:[["ONE"],["DASHBOARD",C.cyan]],small:"GEX heatmap · ES candles · flow · EM tracker · levels before the open.",
   copy:"one dashboard.\n\nlive GEX heatmap. ES candles on top. options flow. EM tracker. confidence scores. levels before the open.\n\ncbedge.net"},
+ {n:21,layout:"mockup",mock:"features",section:"MORE THAN A HEATMAP",stat:`CHARTING · BOTS · <tspan fill="${C.cyan}">ICT</tspan>`,
+  lines:[["THIS ISN'T JUST"],["ANOTHER HEATMAP.",C.cyan]],small:"charting · automated strategies · full dashboard · ICT alerts.",
+  copy:"this isn't just another heatmap.\n\nit's live charting, a full trader dashboard, fully automated strategies, and fully automated ICT setups + alerts — all in one place.\n\nthe whole edge, not a widget. cbedge.net"},
 ];
 
 const wrap=document.getElementById("wrap");

@@ -1512,9 +1512,17 @@ function StrategyBuilderCard() {
 
 // ── PAGE ──────────────────────────────────────────────────────────────────────
 export default function AnalyticsPage() {
+  // In the GEX dock the page is iframed at ?embed=1 into a narrow column. The
+  // frosted (55%-translucent + backdrop-blur) cards see-through/smear when
+  // stacked there, so embed mode renders them opaque + single-column (see
+  // .analytics-embed in globals.css).
+  const [embed, setEmbed] = useState(false);
+  useEffect(() => {
+    if (typeof window !== "undefined") setEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
+  }, []);
   return (
     <PageShell>
-      <div className="analytics-grid" style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", alignItems: "start" }}>
+      <div className={`analytics-grid${embed ? " analytics-embed" : ""}`} style={{ display: "grid", gap: 14, gridTemplateColumns: embed ? "1fr" : "repeat(auto-fit, minmax(320px, 1fr))", alignItems: "start" }}>
         <MultiGreekCard />
         <EstimatedMoveCard />
         <PremarketCard />

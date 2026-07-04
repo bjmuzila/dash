@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { HOME_THEME } from "./homeTheme";
 import { useGexPanel } from "./GexPanelContext";
 
@@ -32,12 +32,46 @@ const GROUPS: GexGroup[] = [
 ];
 
 const PANEL_WIDTH = "40vw";
+// Embedded pages render at >= this logical width (above the 899px phone
+// breakpoint) and the iframe is scaled down to fit the narrow dock, so every
+// page uses its working desktop layout instead of the phone rules that collapse
+// charts (e.g. the ES Candles chart column going to 0 width → blank chart).
+const DESKTOP_MIN = 920;
 
 export default function GexDock() {
   const { open, closePanel } = useGexPanel();
   const onClose = closePanel;
   const [selectedId, setSelectedId] = useState<string>("es-candles");
   const selected = GROUPS.find((g) => g.id === selectedId) ?? null;
+
+  // Measure the content viewport so the embedded iframe can be sized + scaled.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  }, [open]);
+
+  // Below DESKTOP_MIN: render at DESKTOP_MIN logical px and scale to fit. At/above
+  // it: the iframe fills the panel 1:1 (no scaling).
+  const scale = box.w > 0 && box.w < DESKTOP_MIN ? box.w / DESKTOP_MIN : 1;
+  const iframeStyle: CSSProperties =
+    scale < 1
+      ? {
+          width: DESKTOP_MIN,
+          height: box.h > 0 ? box.h / scale : "100%",
+          transform: `scale(${scale})`,
+          transformOrigin: "top left",
+          border: "none",
+          display: "block",
+        }
+      : { width: "100%", height: "100%", border: "none", display: "block" };
+
   return (
     <aside
       aria-label="GEX groups"
@@ -138,6 +172,7 @@ export default function GexDock() {
 
         {/* Content area — selected group fills the rest of the drawer */}
         <div
+          ref={contentRef}
           style={{
             flex: 1,
             minHeight: 0,
@@ -153,7 +188,7 @@ export default function GexDock() {
               key={selected.id}
               src={selected.embed}
               title={selected.title}
-              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              style={iframeStyle}
             />
           ) : (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.muted, fontSize: 13, padding: 24, textAlign: "center" }}>

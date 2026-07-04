@@ -1,4 +1,4 @@
-# CB Edge — 18 X Posts
+# CB Edge — 20 X Posts
 
 Voice: lowercase, punchy, feature-specific. short declarative fragments. real trading language (GEX, gamma, flip, walls, EM, 0DTE). close with cb edge / cbedge.net, then the brand sign-off.
 
@@ -151,5 +151,23 @@ one dashboard.
 live GEX heatmap. ES candles on top. options flow. EM tracker. confidence scores. levels before the open.
 
 everything you need to trade the walls. cbedge.net
+
+CB Edge - "Your Unfair Edge in the Markets"
+
+**21.**
+this isn't just another heatmap.
+
+it's live charting, a full trader dashboard, fully automated strategies, and fully automated ICT setups + alerts — all in one place.
+
+the whole edge, not a widget. cbedge.net
+
+CB Edge - "Your Unfair Edge in the Markets"
+
+**22.**
+ICT, fully automated.
+
+FVG, order blocks, BOS/MSS, liquidity sweeps, killzones, daily bias — marked live on the chart and pushed to you as alerts. no more squinting for setups.
+
+cbedge.net
 
 CB Edge - "Your Unfair Edge in the Markets"
