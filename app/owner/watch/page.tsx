@@ -53,6 +53,8 @@ const fmtMoney = (v: number | null | undefined) => {
   if (a >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
   return `$${v.toFixed(0)}`;
 };
+const signColor = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) || v === 0 ? HOME_THEME.text : v > 0 ? HOME_THEME.green : HOME_THEME.red;
 const timeAgo = (ts: number | null | undefined) => {
   if (!ts) return "—";
   const s = Math.round((Date.now() - ts) / 1000);
@@ -235,16 +237,16 @@ export default function WatchPage() {
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const label: React.CSSProperties = {
-    fontSize: 10, fontWeight: 700, color: HOME_THEME.muted,
+    fontSize: 12, fontWeight: 700, color: HOME_THEME.muted,
     textTransform: "uppercase", letterSpacing: ".1em",
   };
-  const input: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 13, colorScheme: "dark" };
+  const input: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 15, colorScheme: "dark" };
   const th: React.CSSProperties = {
-    padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 700,
+    padding: "10px 12px", textAlign: "right", fontSize: 12, fontWeight: 700,
     letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted, whiteSpace: "nowrap",
   };
   const td: React.CSSProperties = {
-    padding: "9px 10px", textAlign: "right", fontSize: 12.5,
+    padding: "11px 12px", textAlign: "right", fontSize: 15,
     color: HOME_THEME.text, whiteSpace: "nowrap", fontFamily: "var(--font-mono)",
   };
 
@@ -260,10 +262,10 @@ export default function WatchPage() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>
+          <span style={{ fontSize: 15, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>
             Owner · Watch
           </span>
-          <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
             {rows.length} contract{rows.length === 1 ? "" : "s"} · greeks · price · flow
           </span>
         </div>
@@ -336,28 +338,28 @@ export default function WatchPage() {
                   <tr className="wrow" onClick={() => toggleRow(r.id)} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, cursor: "pointer", background: isOpen ? rgba(HOME_THEME.cyan, 0.06) : undefined }}>
                     <td style={{ ...td, textAlign: "left" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ color: HOME_THEME.muted, fontSize: 10, transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
-                        <span style={{ fontWeight: 800, color: HOME_THEME.text, fontFamily: "inherit" }}>{r.ticker}</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 4, color: sideCol, background: rgba(sideCol, 0.12), border: `1px solid ${rgba(sideCol, 0.3)}` }}>
+                        <span style={{ color: HOME_THEME.muted, fontSize: 12, transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "inherit" }}>{r.ticker}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, padding: "2px 7px", borderRadius: 4, color: sideCol, background: rgba(sideCol, 0.12), border: `1px solid ${rgba(sideCol, 0.3)}` }}>
                           {fmt(r.strike, r.strike % 1 ? 1 : 0)}{r.side}
                         </span>
-                        <span style={{ fontSize: 11, color: HOME_THEME.muted }}>{r.expiration}</span>
-                        {r.note && <span style={{ fontSize: 10, color: HOME_THEME.muted, fontStyle: "italic" }}>· {r.note}</span>}
+                        <span style={{ fontSize: 13, color: HOME_THEME.muted }}>{r.expiration}</span>
+                        {r.note && <span style={{ fontSize: 12, color: HOME_THEME.muted, fontStyle: "italic" }}>· {r.note}</span>}
                       </div>
                     </td>
                     <td style={td}>{fmt(s?.spot, 2)}</td>
                     <td style={td}>{fmt(s?.bid)}</td>
                     <td style={td}>{fmt(s?.ask)}</td>
                     <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{fmt(s?.mark)}</td>
-                    <td style={td}>{fmt(s?.delta, 3)}</td>
-                    <td style={td}>{fmt(s?.gamma, 4)}</td>
-                    <td style={td}>{fmt(s?.theta, 3)}</td>
-                    <td style={td}>{fmt(s?.vega, 3)}</td>
+                    <td style={{ ...td, color: signColor(s?.delta), fontWeight: 700 }}>{fmt(s?.delta, 3)}</td>
+                    <td style={{ ...td, color: signColor(s?.gamma), fontWeight: 700 }}>{fmt(s?.gamma, 4)}</td>
+                    <td style={{ ...td, color: signColor(s?.theta), fontWeight: 700 }}>{fmt(s?.theta, 3)}</td>
+                    <td style={{ ...td, color: signColor(s?.vega), fontWeight: 700 }}>{fmt(s?.vega, 3)}</td>
                     <td style={td}>{s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`}</td>
                     <td style={td}>{fmtInt(s?.open_interest)}</td>
                     <td style={td}>{fmtInt(s?.volume)}</td>
                     <td style={{ ...td, color: npCol, fontWeight: 700 }}>{fmtMoney(s?.net_prem)}</td>
-                    <td style={{ ...td, color: HOME_THEME.muted, fontSize: 11 }}>{timeAgo(s?.ts)}</td>
+                    <td style={{ ...td, color: HOME_THEME.muted, fontSize: 13 }}>{timeAgo(s?.ts)}</td>
                     <td style={{ ...td, textAlign: "center" }}>
                       <button onClick={(e) => { e.stopPropagation(); remove(r.id); }} title="Remove" style={{
                         background: "none", border: "none", color: HOME_THEME.muted,
@@ -392,14 +394,16 @@ export default function WatchPage() {
                             : <HistoryChart history={hist} metric={metric} />}
                           {/* Strike greeks (this contract, not chain-side aggregate) */}
                           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 12, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                            {[
-                              ["Delta", fmt(s?.delta, 3)], ["Gamma", fmt(s?.gamma, 4)],
-                              ["Theta", fmt(s?.theta, 3)], ["Vega", fmt(s?.vega, 3)],
-                              ["IV", s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`],
-                            ].map(([k, v]) => (
+                            {([
+                              ["Delta", fmt(s?.delta, 3), signColor(s?.delta)],
+                              ["Gamma", fmt(s?.gamma, 4), signColor(s?.gamma)],
+                              ["Theta", fmt(s?.theta, 3), signColor(s?.theta)],
+                              ["Vega", fmt(s?.vega, 3), signColor(s?.vega)],
+                              ["IV", s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`, HOME_THEME.text],
+                            ] as [string, string, string][]).map(([k, v, col]) => (
                               <div key={k} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>{k}</span>
-                                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{v}</span>
+                                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>{k}</span>
+                                <span style={{ fontSize: 17, fontWeight: 700, color: col, fontFamily: "var(--font-mono)" }}>{v}</span>
                               </div>
                             ))}
                           </div>
@@ -414,7 +418,7 @@ export default function WatchPage() {
           </table>
         </div>
 
-        <div style={{ fontSize: 11, color: HOME_THEME.muted, padding: "0 2px" }}>
+        <div style={{ fontSize: 13, color: HOME_THEME.muted, padding: "0 2px" }}>
           Net Prem = mark × volume × 100 (a directional flow proxy from today&apos;s traded volume). Greeks/OI from Theta, quote from Tastytrade. Auto-refreshes every {REFRESH_MS / 1000}s.
         </div>
       </div>

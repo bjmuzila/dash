@@ -89,6 +89,16 @@ function rthBoundsToday(): { openSec: number; closeSec: number } {
   const { y, m, d } = etDateParts(new Date());
   return { openSec: etWallToUtcSec(y, m, d, 9, 30), closeSec: etWallToUtcSec(y, m, d, 16, 0) };
 }
+// RTH bounds for an explicit "YYYY-MM-DD" (ET session date) — used for lookback.
+function rthBoundsForYmd(ymd: string): { openSec: number; closeSec: number } {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return { openSec: etWallToUtcSec(y, m, d, 9, 30), closeSec: etWallToUtcSec(y, m, d, 16, 0) };
+}
+// Today's ET session date as "YYYY-MM-DD" (matches the server's todayYmdET()).
+function todayYmdET(): string {
+  const { y, m, d } = etDateParts(new Date());
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
 
 // ── Filter state ────────────────────────────────────────────────────────────
 type SideFilter = "all" | "buy" | "sell";
@@ -111,6 +121,11 @@ export default function FlowPage() {
   const shouldConnect = useWsLifecycle();
   const [orders, setOrders] = useState<FlowOrder[]>([]);
   const [status, setStatus] = useState<"LIVE" | "RECONNECTING" | "WAITING">("WAITING");
+
+  // ── Session date (lookback). Defaults to today's ET session; past dates pull
+  // the persisted tape only (live WS is ignored so it can't bleed into history). ──
+  const [date, setDate] = useState<string>(() => todayYmdET());
+  const isToday = date === todayYmdET();
 
   // ── View: per-ticker vs combined (all tickers) ──
   const [view, setView] = useState<"ticker" | "combined">("ticker");
@@ -139,15 +154,16 @@ export default function FlowPage() {
   useEffect(() => {
     let cancelled = false;
     const load = () =>
-      fetch(`/proxy/flow-netprem?underlying=${encodeURIComponent(active)}&bin=${BIN_SEC}`)
+      fetch(`/proxy/flow-netprem?underlying=${encodeURIComponent(active)}&bin=${BIN_SEC}&date=${date}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => { if (!cancelled && j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]); })
         .catch(() => {});
     setNetBins([]);
     load();
-    const id = setInterval(load, 5000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [active]);
+    // Past sessions are static — only poll the live edge for today.
+    const id = isToday ? setInterval(load, 5000) : null;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [active, date, isToday]);
 
   // ── Backfill the ACTIVE ticker's full session whenever it changes. ──
   // Per-ticker so the whole day is returned (an unfiltered newest-N cap drops a
@@ -155,7 +171,7 @@ export default function FlowPage() {
   useEffect(() => {
     let cancelled = false;
     setHistory([]);
-    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000`)
+    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (cancelled || !j || !Array.isArray(j.tape)) return;
@@ -163,7 +179,7 @@ export default function FlowPage() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [active]);
+  }, [active, date]);
 
   // ── Combined view backfill: the whole day's tape (ALL tickers), fetched once
   // when the Combined tab is opened. Live prints still arrive via the WS `orders`
@@ -176,16 +192,16 @@ export default function FlowPage() {
     // prints across the WHOLE session, not just the most recent slice.
     const premParam = minPremium > 0 ? `&minPremium=${minPremium}` : "";
     const load = () =>
-      fetch(`/proxy/flow-history?limit=20000${premParam}`)
+      fetch(`/proxy/flow-history?limit=20000&date=${date}${premParam}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => { if (!cancelled && j && Array.isArray(j.tape)) setCombinedHistory(j.tape as FlowOrder[]); })
         .catch(() => {});
     // Debounce the initial pull so dragging the premium slider doesn't spray
-    // requests; the 15s interval then keeps the "now" edge fresh.
+    // requests; the 15s interval then keeps the "now" edge fresh (today only).
     const kick = setTimeout(load, 400);
-    const id = setInterval(load, 15000);
-    return () => { cancelled = true; clearTimeout(kick); clearInterval(id); };
-  }, [view, minPremium]);
+    const id = isToday ? setInterval(load, 15000) : null;
+    return () => { cancelled = true; clearTimeout(kick); if (id) clearInterval(id); };
+  }, [view, minPremium, date, isToday]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -245,9 +261,9 @@ export default function FlowPage() {
   const merged = useMemo(() => {
     const byKey = new Map<string, FlowOrder>();
     for (const o of history) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
-    for (const o of orders) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
+    if (isToday) for (const o of orders) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
     return [...byKey.values()].sort((a, b) => a.ts - b.ts);
-  }, [history, orders]);
+  }, [history, orders, isToday]);
 
   const expiryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -282,9 +298,9 @@ export default function FlowPage() {
   const mergedCombined = useMemo(() => {
     const byKey = new Map<string, FlowOrder>();
     for (const o of combinedHistory) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
-    for (const o of orders) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
+    if (isToday) for (const o of orders) byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
     return [...byKey.values()].sort((a, b) => a.ts - b.ts);
-  }, [combinedHistory, orders]);
+  }, [combinedHistory, orders, isToday]);
 
   const filteredCombined = useMemo(() => {
     const rows = mergedCombined.filter((o) => {
@@ -328,7 +344,7 @@ export default function FlowPage() {
   // shows both sides) — but premium/size/expiry/dte/otm DO apply for consistency
   // with the tape's "what am I looking at" framing.
   const netSeries = useMemo(() => {
-    const { openSec, closeSec } = rthBoundsToday();
+    const { openSec, closeSec } = isToday ? rthBoundsToday() : rthBoundsForYmd(date);
     const byBin = new Map<number, NetBin>();
     for (const b of netBins) byBin.set(b.sec, b);
     const hasData = netBins.length > 0;
@@ -357,7 +373,7 @@ export default function FlowPage() {
       }
     }
     return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData, byBin };
-  }, [netBins]);
+  }, [netBins, isToday, date]);
 
   // ── lightweight-charts setup ──
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -606,10 +622,36 @@ export default function FlowPage() {
 
   return (
     <PageShell className="no-card-lift">
-      {/* ── View tabs ───────────────────────────────────────────────── */}
-      <div style={{ ...segWrapStyle, maxWidth: 320, flexShrink: 0 }}>
-        <button className="flow-chip" style={segBtn(view === "ticker")} onClick={() => setView("ticker")}>By Ticker</button>
-        <button className="flow-chip" style={segBtn(view === "combined")} onClick={() => setView("combined")}>Combined</button>
+      {/* ── View tabs + session date (lookback) ─────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
+        <div style={{ ...segWrapStyle, maxWidth: 320 }}>
+          <button className="flow-chip" style={segBtn(view === "ticker")} onClick={() => setView("ticker")}>By Ticker</button>
+          <button className="flow-chip" style={segBtn(view === "combined")} onClick={() => setView("combined")}>Combined</button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
+          <input
+            type="date"
+            value={date}
+            max={todayYmdET()}
+            onChange={(e) => setDate(e.target.value || todayYmdET())}
+            style={{ ...homeInputStyle, width: 150, colorScheme: "dark" }}
+          />
+          {!isToday && (
+            <button
+              className="flow-chip"
+              onClick={() => setDate(todayYmdET())}
+              style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.04em", borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.cyan }}
+            >
+              Today
+            </button>
+          )}
+          {!isToday && (
+            <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: "rgba(142,202,230,0.12)", color: C.cyan }}>
+              HISTORICAL
+            </span>
+          )}
+        </div>
       </div>
 
       {/* ── Filters ─────────────────────────────────────────────────── */}
@@ -751,7 +793,7 @@ export default function FlowPage() {
           <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
           {!netSeries.hasData && (
             <p style={{ fontSize: 13, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
-              {status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
+              {!isToday ? `No ${active} flow recorded for ${date}.` : status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
             </p>
           )}
           {view === "ticker" && renderPremiumSplit()}
@@ -779,8 +821,8 @@ export default function FlowPage() {
             <span style={{ fontSize: 12, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
             <span style={{ fontSize: 12, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
           </div>
-          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: status === "LIVE" ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: status === "LIVE" ? C.cyan : C.red }}>
-            {status}
+          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: (!isToday || status === "LIVE") ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: (!isToday || status === "LIVE") ? C.cyan : C.red }}>
+            {isToday ? status : `${date} · HISTORICAL`}
           </span>
         </div>
 
@@ -799,7 +841,7 @@ export default function FlowPage() {
         <div>
           {tapeRows.length === 0 ? (
             <p style={{ fontSize: 13, padding: 24, color: C.muted }}>
-              {status === "LIVE" ? `No ${view === "combined" ? combinedLabel : active} flow matches the current filters.` : "Connecting to feed…"}
+              {!isToday ? `No ${view === "combined" ? combinedLabel : active} flow recorded for ${date}.` : status === "LIVE" ? `No ${view === "combined" ? combinedLabel : active} flow matches the current filters.` : "Connecting to feed…"}
             </p>
           ) : (
             visibleRows.map((o, i) => {

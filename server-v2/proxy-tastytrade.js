@@ -29,7 +29,7 @@ const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
 const { writeFlowTape } = require('./state/flow-history-writer');
-const { writeEsCandles } = require('./state/es-candle-writer');
+const { writeEsCandles, writeNqCandles } = require('./state/es-candle-writer');
 const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
@@ -1481,6 +1481,13 @@ class TastytradeProxy {
     this.esCandlesDirty = false; // set when a candle slot changed since last flush
     this.esCandlesDirtySlots = new Set(); // slotKeys changed since last flush (delta broadcast)
     this.candleFlushTimer = null;
+    // NQ 5m candles — parallel to ES, own map/table/state so the ICT NQU tab has
+    // an identical feed. dxLink delivers these on this.nqCandleSymbol ("…{=5m}").
+    this.nqCandleSymbol = null; // e.g. "/NQU26:XCME{=5m}"
+    this.nqCandles = new Map();
+    this.nqCandlesDirty = false;
+    this.nqCandlesDirtySlots = new Set();
+    this.nqCandleFlushTimer = null;
     // Live front-ES/NQ quotes, used by _publishEsFut/_publishNqFut to clamp the
     // last trade into the current spread. Set by Quote handler; *LastTrade by Trade.
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
@@ -1577,7 +1584,8 @@ class TastytradeProxy {
     try {
       const nqRes = await resolveFrontNqSymbol();
       this.nqSymbol = nqRes.streamerSymbol;
-      console.log(`[FEED] NQ front streamer=${this.nqSymbol}`);
+      this.nqCandleSymbol = `${this.nqSymbol}{=5m}`;
+      console.log(`[FEED] NQ front streamer=${this.nqSymbol} candle=${this.nqCandleSymbol}`);
     } catch (err) {
       console.warn('[FEED] NQ resolve failed:', err.message.slice(0, 120));
     }
@@ -1660,6 +1668,14 @@ class TastytradeProxy {
       console.log(`[FEED] subscribed ES candles ${this.esCandleSymbol} from ${new Date(fromTime).toISOString()}`);
       // Flush aggregated candles to state + DB on a steady cadence.
       this.candleFlushTimer = setInterval(() => this._flushEsCandles(), CANDLE_FLUSH_MS);
+    }
+
+    // Subscribe the parallel 5-minute NQ candle stream (drives the ICT NQU tab).
+    if (this.nqCandleSymbol) {
+      const fromTime = Date.now() - 15 * 86400_000;
+      this.client.subscribeCandle(this.nqCandleSymbol, fromTime);
+      console.log(`[FEED] subscribed NQ candles ${this.nqCandleSymbol} from ${new Date(fromTime).toISOString()}`);
+      this.nqCandleFlushTimer = setInterval(() => this._flushNqCandles(), CANDLE_FLUSH_MS);
     }
 
     // Backfill OI + volume from REST now. OI is once-daily (OPRA ~06:30 ET) and
@@ -2377,6 +2393,31 @@ class TastytradeProxy {
     writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
+  /**
+   * NQ candle flush — the ES flush's simple twin. No day-change/baseline logic
+   * (NQ's esFut-equivalent is published from the live Quote/Trade in _onEvent);
+   * this only mirrors the bar array into state (silent full + small delta) and
+   * persists real-volume bars to nq_candles.
+   */
+  _flushNqCandles() {
+    if (!this.nqCandlesDirty) return;
+    this.nqCandlesDirty = false;
+    const dirtySlots = this.nqCandlesDirtySlots;
+    this.nqCandlesDirtySlots = new Set();
+
+    const rows = [...this.nqCandles.values()]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-600);
+
+    // Full array only feeds the connect-time snapshot (silent → no full broadcast).
+    marketState.setStateSilent({ nqCandles: rows });
+
+    const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
+    if (delta.length) marketState.setState({ nqCandlesDelta: delta });
+
+    writeNqCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+  }
+
   _onEvent(ev) {
     marketState.setStatus({ lastFeedAt: Date.now() });
     const sym = ev.eventSymbol;
@@ -2527,7 +2568,10 @@ class TastytradeProxy {
       if (!Number.isFinite(volume)) volume = 0;
       if (!(barTime > 0) || !(open > 0) || !(high > 0) || !(low > 0) || !(close > 0)) return;
       const { slotKey, date, time, slotMs } = etFiveMinSlot(barTime);
-      const prev = this.esCandles.get(slotKey);
+      // Route to the ES or NQ map by which {=5m} stream this bar came from.
+      const isNq = this.nqCandleSymbol && sym === this.nqCandleSymbol;
+      const map = isNq ? this.nqCandles : this.esCandles;
+      const prev = map.get(slotKey);
       const merged = prev
         ? {
             ...prev,
@@ -2536,12 +2580,12 @@ class TastytradeProxy {
             close, // last close wins
             volume: Math.max(prev.volume, volume), // dxFeed candle volume is cumulative-per-bar
           }
-        : { timestamp: slotMs, date, slotKey, time, symbol: '/ES', intervalMinutes: 5, source: 'dxlink', open, high, low, close, volume };
-      this.esCandles.set(slotKey, merged);
-      this.esCandlesDirty = true;
+        : { timestamp: slotMs, date, slotKey, time, symbol: isNq ? '/NQ' : '/ES', intervalMinutes: 5, source: 'dxlink', open, high, low, close, volume };
+      map.set(slotKey, merged);
       // Track WHICH slots changed so the flush can broadcast just those bars
       // instead of the whole 600-bar array every cycle.
-      this.esCandlesDirtySlots.add(slotKey);
+      if (isNq) { this.nqCandlesDirty = true; this.nqCandlesDirtySlots.add(slotKey); }
+      else { this.esCandlesDirty = true; this.esCandlesDirtySlots.add(slotKey); }
       return;
     }
 

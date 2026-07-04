@@ -401,6 +401,16 @@ export async function queryEsCandlesHistorical(daysBack = 20): Promise<EsCandleR
   return _dedupeCandles(`/api/snapshots/candles?daysBack=${daysBack}&limit=10000`);
 }
 
+// NQ variants — same endpoint, symbol=/NQ selects the nq_candles table.
+export async function queryNqCandlesToday(): Promise<EsCandleRecord[]> {
+  const today = etDateStr();
+  return _dedupeCandles(`/api/snapshots/candles?symbol=/NQ&date=${today}&limit=2000`);
+}
+
+export async function queryNqCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
+  return _dedupeCandles(`/api/snapshots/candles?symbol=/NQ&daysBack=${daysBack}&limit=10000`);
+}
+
 // ── IB Levels (locked Initial Balance per day) ──────────────────────────────────
 
 export interface IbLevelsRecord {

@@ -69,28 +69,19 @@ function mBars(){let s="";const n=64,bw=W/n,base=H*0.60,amp=150,cycles=1;
   }
   s+=`<line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="${C.cyan}" stroke-width="1.5" stroke-dasharray="9 8" opacity=".4"/>`;
   return s;}
-function mLevels(){const L=[["CALL WALL 7,520",C.green,210],["FLIP 7,482",C.cyan,470],["PUT WALL 7,475",C.red,690]];
-  let s="";for(const [t,c,y] of L){s+=`<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="${c}" stroke-width="1.5" stroke-dasharray="10 8" opacity=".28"/>
-    <text x="${W-86}" y="${y-12}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" fill="${c}" opacity=".5">${t}</text>`;}return s;}
-function mZones(){return `<rect x="0" y="150" width="${W}" height="150" fill="${C.green}" opacity="0.07"/>
-  <rect x="0" y="610" width="${W}" height="160" fill="${C.red}" opacity="0.07"/>
-  <line x1="0" y1="300" x2="${W}" y2="300" stroke="${C.green}" stroke-width="1.5" stroke-dasharray="10 8" opacity=".3"/>
-  <line x1="0" y1="610" x2="${W}" y2="610" stroke="${C.red}" stroke-width="1.5" stroke-dasharray="10 8" opacity=".3"/>
-  <text x="${W-86}" y="290" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" fill="${C.green}" opacity=".5">EM UP 7,469</text>
-  <text x="${W-86}" y="600" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" fill="${C.red}" opacity=".5">EM DOWN 7,238</text>`;}
-function mConf(){const y=705,x0=86,x1=W-86,pct=0.72;
-  return `<rect x="${x0}" y="${y}" width="${x1-x0}" height="14" rx="7" fill="#12202e"/>
-  <rect x="${x0}" y="${y}" width="${(x1-x0)*pct}" height="14" rx="7" fill="${C.greenBar}" opacity=".55"/>
-  <text x="${x0}" y="${y-16}" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" fill="${C.muted}">CONFIDENCE SCORE</text>
-  <text x="${x1}" y="${y-16}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${C.greenBar}">72 / 100 · HIT</text>`;}
-function mBullseye(){const cps=[["9:45","67%","6.0"],["10:30","67%","7.4"],["12:00","67%","5.8"]];
-  let s="";cps.forEach((c,i)=>{const x=830+i*250,y=180;
-    s+=`<g font-family="Inter,Segoe UI,Arial" opacity=".6">
-      <text x="${x}" y="${y}" font-size="17" font-weight="700" fill="${C.muted}">${c[0]}</text>
-      <text x="${x}" y="${y+42}" font-size="40" font-weight="800" fill="${C.green}">${c[1]}</text>
-      <text x="${x}" y="${y+70}" font-size="15" fill="${C.muted}">avg ${c[2]} pt · 4/6</text></g>`;});
-  return s;}
-const MOTIF={bars:mBars,levels:mLevels,zones:mZones,conf:mConf,bullseye:mBullseye};
+function mLevels(){const L=[[C.green,210],[C.cyan,470],[C.red,690]];
+  let s="";for(const [c,y] of L){s+=`<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="${c}" stroke-width="3" stroke-dasharray="14 10" opacity=".18"/>`;}return s;}
+function mZones(){return `<rect x="0" y="150" width="${W}" height="170" fill="${C.green}" opacity="0.06"/>
+  <rect x="0" y="600" width="${W}" height="180" fill="${C.red}" opacity="0.06"/>
+  <line x1="0" y1="320" x2="${W}" y2="320" stroke="${C.green}" stroke-width="3" stroke-dasharray="14 10" opacity=".18"/>
+  <line x1="0" y1="600" x2="${W}" y2="600" stroke="${C.red}" stroke-width="3" stroke-dasharray="14 10" opacity=".18"/>`;}
+function mTarget(){const cx=1300,cy=460;let s="";[220,158,96,42].forEach((r,i)=>{
+    s+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${i%2?C.green:C.cyan}" stroke-width="7" opacity="${0.08+i*0.03}"/>`;});
+  s+=`<circle cx="${cx}" cy="${cy}" r="16" fill="${C.green}" opacity=".28"/>`;return s;}
+function mFlow(){let s="";for(let i=0;i<8;i++){const y=176+i*48;s+=`<rect x="900" y="${y}" width="600" height="30" rx="5" fill="${i%2?C.red:C.green}" opacity="0.06"/>`;}
+  let p=`M 0 ${H*0.6}`;for(let i=1;i<=24;i++)p+=` L ${i*(W/24)} ${H*0.6-(30+i*3+Math.sin(i)*22)}`;
+  s+=`<path d="${p}" fill="none" stroke="${C.cyan}" stroke-width="2.5" opacity=".22"/>`;return s;}
+const MOTIF={bars:mBars,levels:mLevels,zones:mZones,target:mTarget,flow:mFlow};
 
 function logoAt(x,y,anchor){const a=anchor||"start";return `<g font-family="Inter,Segoe UI,Arial" text-anchor="${a}">
   <text x="${x}" y="${y}" font-size="44" font-weight="800" fill="url(#chrome)" stroke="#5a636d" stroke-width="0.6" letter-spacing="2">CB Edge</text>
@@ -100,8 +91,89 @@ function HL(lines,small,x,y,size,anchor){const a=anchor||"start";let t=`<g font-
   lines.forEach((ln,i)=>{t+=`<text x="${x}" y="${y+i*(size*1.12)}" font-size="${size}" font-weight="800" fill="${ln[1]||C.text}">${esc(ln[0])}</text>`;});
   t+=`<text x="${x}" y="${y+lines.length*(size*1.12)-(size*0.40)}" font-size="30" font-weight="500" fill="${C.text}">${esc(small)}</text></g>`;return t;}
 
+function mockHeatmap(){
+  const px=858,py=132,pw=690,ph=636;
+  let s=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12" fill="#0a121e" stroke="#16233b"/>`;
+  s+=`<text x="${px+22}" y="${py+36}" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="800" fill="${C.cyan}" letter-spacing="1">LIVE GEX HEATMAP</text>`;
+  s+=`<text x="${px+pw-22}" y="${py+36}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${C.text}">0DTE · 07-06</text>`;
+  const cx={strike:px+22,gex:px+300,dex:px+470,vex:px+pw-22};
+  const hy=py+66;
+  [["STRIKE",cx.strike,"start"],["NET GEX",cx.gex,"end"],["DEX",cx.dex,"end"],["NET VEX",cx.vex,"end"]]
+    .forEach(([k,x,a])=>{s+=`<text x="${x}" y="${hy}" text-anchor="${a}" font-family="Inter,Segoe UI,Arial" font-size="12" font-weight="700" fill="#7e8da6" letter-spacing="1">${k}</text>`;});
+  const rows=[[7545,172,51,18],[7540,193,28,19],[7535,90,19,8],[7530,117,-3,9],[7525,44,-508,7],[7520,646,370,36,1],[7515,440,279,20,2],[7510,261,111,10],[7505,-5,-9,-11],[7500,-590,-199,-60,1],[7495,-142,-47,-6],[7490,-105,-1,-2],[7485,-132,-41,421,0]];
+  const rh=(ph-88)/rows.length;
+  rows.forEach((r,i)=>{const ry=py+80+i*rh, atm=(r[4]===0), ng=r[1];
+    const tint=ng>=0?C.blueHi:C.red, op=Math.min(0.42,Math.abs(ng)/700*0.42);
+    s+=`<rect x="${px+150}" y="${ry}" width="240" height="${rh-3}" fill="${tint}" opacity="${op}"/>`;
+    if(r[4]===1||r[4]===2) s+=`<rect x="${px+22}" y="${ry+rh/2-9}" width="26" height="18" rx="3" fill="${C.gold}"/><text x="${px+35}" y="${ry+rh/2+4}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="11" font-weight="800" fill="#0a121e">#${r[4]}</text>`;
+    if(atm) s+=`<rect x="${px+8}" y="${ry-1}" width="${pw-16}" height="${rh-1}" fill="none" stroke="${C.gold}" stroke-width="1.5" opacity=".6"/>`;
+    s+=`<text x="${px+ (r[4]===1||r[4]===2?60:22)}" y="${ry+rh/2+4}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${atm?C.cyan:C.text}">${r[0].toLocaleString()}${atm?" ATM":""}</text>`;
+    s+=`<text x="${cx.gex}" y="${ry+rh/2+4}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${ng>=0?C.green:C.red}">${ng>=0?"+":"-"}$${Math.abs(ng)}M</text>`;
+    s+=`<text x="${cx.dex}" y="${ry+rh/2+4}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="13" fill="${r[2]>=0?C.green:C.red}">${r[2]>=0?"+":"-"}$${Math.abs(r[2])}M</text>`;
+    s+=`<text x="${cx.vex}" y="${ry+rh/2+4}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="13" fill="${r[3]>=0?C.green:C.red}">${r[3]>=0?"+":"-"}$${Math.abs(r[3])}M</text>`;});
+  return s;
+}
+function mockEM(){
+  const px=858,py=132,pw=690,ph=636,ix=px+22,iw=pw-44,ir=px+pw-22;
+  let s=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12" fill="#0a121e" stroke="#16233b"/>`;
+  s+=`<text x="${ix}" y="${py+36}" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="800" fill="${C.text}">SPX <tspan font-size="13" font-weight="600" fill="#7e8da6">WEEK OF 7/2</tspan></text>`;
+  s+=`<text x="${ir}" y="${py+36}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${C.cyan}">ESTIMATED MOVE</text>`;
+  const cards=[["CLOSE","7,354.02",C.text],["EM","115.5",C.gold],["UP","7,469.54",C.green],["DOWN","7,238.50",C.red]];
+  const cw=(iw-3*12)/4;
+  cards.forEach((c,i)=>{const x=ix+i*(cw+12),y=py+54;
+    s+=`<rect x="${x}" y="${y}" width="${cw}" height="94" rx="8" fill="#0d1524" stroke="#16233b"/>
+      <text x="${x+cw/2}" y="${y+30}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="12" font-weight="700" fill="#7e8da6" letter-spacing="1">${c[0]}</text>
+      <text x="${x+cw/2}" y="${y+66}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${c[2]}">${c[1]}</text>`;});
+  const hy=py+170;
+  s+=`<rect x="${ix}" y="${hy}" width="${iw}" height="96" rx="8" fill="#0d1524" stroke="#16233b"/>
+    <text x="${ix+iw/2}" y="${hy+28}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="#7e8da6" letter-spacing="1">EM HIT RATE</text>
+    <text x="${ix+iw/2}" y="${hy+52}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${C.gold}">63% Hit</text>
+    <rect x="${ix+20}" y="${hy+66}" width="${iw-40}" height="10" rx="5" fill="#12202e"/>
+    <rect x="${ix+20}" y="${hy+66}" width="${(iw-40)*0.63}" height="10" rx="5" fill="${C.green}"/>
+    <text x="${ix+20}" y="${hy+90}" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#7e8da6">Miss (25)</text>
+    <text x="${ir-20}" y="${hy+90}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#7e8da6">Hit (43)</text>`;
+  const zy=py+288,zw=(iw-16)/2,zh=200;
+  const zone=(x,title,col,near,far)=>`<rect x="${x}" y="${zy}" width="${zw}" height="${zh}" rx="8" fill="#0d1524" stroke="${col}" stroke-opacity=".5"/>
+    <text x="${x+20}" y="${zy+34}" font-family="Inter,Segoe UI,Arial" font-size="15" font-weight="800" fill="${col}" letter-spacing="1">${title}</text>
+    <text x="${x+20}" y="${zy+92}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="#7e8da6">NEAR</text>
+    <text x="${x+zw-20}" y="${zy+92}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${col}">${near}</text>
+    <text x="${x+20}" y="${zy+150}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="#7e8da6">FAR</text>
+    <text x="${x+zw-20}" y="${zy+150}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${col}">${far}</text>`;
+  s+=zone(ix,"BUY ZONE",C.green,"7,157.00","7,066.75");
+  s+=zone(ix+zw+16,"SELL ZONE",C.red,"7,628.50","7,718.75");
+  return s;
+}
+function mockChart(){
+  const px=858,py=132,pw=690,ph=636,L=px+8,R=px+pw-62,T=py+30,B=py+ph-26,PW2=R-(px+8),PH2=(py+ph-26)-(py+30);
+  let s=`<clipPath id="cc"><rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12"/></clipPath>`;
+  s+=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="12" fill="#08101c" stroke="#16233b"/><g clip-path="url(#cc)">`;
+  const bands=26,bh=PH2/bands;
+  for(let b=0;b<bands;b++){const yy=T+b*bh,upper=b<bands*0.5,segs=6,sw=PW2/segs;
+    for(let c=0;c<segs;c++){const op=(rnd(b*segs+c+1)*0.34).toFixed(2);
+      s+=`<rect x="${L+c*sw}" y="${yy}" width="${sw+1}" height="${bh+1}" fill="${upper?'#1e6fb0':'#7a1e1e'}" opacity="${op}"/>`;}}
+  const n=46,cw=PW2/n,closes=[];let price=0;
+  for(let i=0;i<n;i++){price+=(rnd(i*3+2)-0.47)*2;closes.push(price);}
+  const mn=Math.min(...closes)-1.5,mx=Math.max(...closes)+1.5,yOf=v=>T+(1-(v-mn)/(mx-mn))*PH2;
+  let prev=closes[0];
+  for(let i=0;i<n;i++){const c=closes[i],o=prev,hi=Math.max(o,c)+rnd(i*5+1)*0.8,lo=Math.min(o,c)-rnd(i*7+1)*0.8;
+    const x=L+i*cw+cw/2,up=c>=o,col=up?'#26c281':'#e24b4a';
+    s+=`<line x1="${x}" y1="${yOf(hi)}" x2="${x}" y2="${yOf(lo)}" stroke="${col}" stroke-width="1.4"/>
+      <rect x="${x-cw*0.3}" y="${yOf(Math.max(o,c))}" width="${cw*0.6}" height="${Math.max(1,Math.abs(yOf(o)-yOf(c)))}" fill="${col}"/>`;prev=c;}
+  const wl=yOf(mx-1.0);s+=`<line x1="${L}" y1="${wl}" x2="${L+PW2*0.52}" y2="${wl}" stroke="#ffffff" stroke-width="2"/>`;
+  const cur=yOf(closes[n-1]);s+=`<line x1="${L}" y1="${cur}" x2="${R}" y2="${cur}" stroke="${C.green}" stroke-width="1" stroke-dasharray="4 4" opacity=".8"/></g>`;
+  s+=`<rect x="${R}" y="${cur-13}" width="60" height="26" rx="3" fill="${C.red}"/><text x="${R+30}" y="${cur+5}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="12" font-weight="800" fill="#fff">7,554</text>`;
+  s+=`<rect x="${L+8}" y="${py+40}" width="108" height="24" rx="4" fill="#0b2a3a" stroke="${C.cyan}"/><text x="${L+62}" y="${py+57}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="12" font-weight="800" fill="${C.cyan}">SPX 7,554</text>`;
+  for(let t=0;t<=5;t++){const y=T+PH2*t/5;s+=`<text x="${px+pw-52}" y="${y+4}" font-family="Inter,Segoe UI,Arial" font-size="11" fill="#7e8da6">${(7600-t*30)}</text>`;}
+  return s;
+}
 function buildSVG(p,idx){
-  const motif=mBars();
+  if(p.layout==="mockup"){
+    const panel=p.mock==="chart"?mockChart():p.mock==="em"?mockEM():mockHeatmap();
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+      ${defs()}<rect width="${W}" height="${H}" fill="url(#bg)"/>
+      ${logo()}${panel}${HL(p.lines,p.small,92,372,74,"start")}${footer()}</svg>`;
+  }
+  const motif=(MOTIF[p.motif]||mBars)();
   const style=["hero","center","framed","band"][idx%4];
   let body;
   if(style==="center"){
@@ -116,7 +188,7 @@ function buildSVG(p,idx){
     body=`<rect x="0" y="558" width="${W}" height="${H-558}" fill="#060b14" opacity="0.82"/>`
       +`<line x1="0" y1="558" x2="${W}" y2="558" stroke="${C.cyan}" stroke-width="1.5" opacity=".35"/>`
       +logoAt(92,120,"start")+header(p.section,p.stat)
-      +HL(p.lines,p.small,92,682,80,"start")+footer();
+      +HL(p.lines,p.small,92,636,74,"start")+footer();
   }else{
     body=logo()+header(p.section,p.stat)+headline(p.lines,p.small)+footer();
   }
@@ -129,7 +201,7 @@ const POSTS=[
  {n:1,motif:"bars",section:"LIVE GEX HEATMAP",stat:`NET GEX <tspan fill="${C.red}">-$345.0M</tspan>   FLIP <tspan fill="${C.cyan}">7,482</tspan>`,
   lines:[["GAMMA ZONES."],["LIVE.",C.cyan]],small:"ES candles plotted on the GEX heatmap — hit the wall, reject, run the next zone.",
   copy:"no other platform shows you this.\n\nlive GEX heatmap with ES candles plotted right on top. you watch price hit the wall, reject, and run to the next zone in real time.\n\nstop guessing where price goes. cb edge."},
- {n:3,motif:"bullseye",section:"CB CORE BULLSEYE",stat:`9:45 <tspan fill="${C.green}">67%</tspan>   10:30 <tspan fill="${C.green}">67%</tspan>   12:00 <tspan fill="${C.green}">67%</tspan>`,
+ {n:3,motif:"target",section:"CB CORE BULLSEYE",stat:`9:45 <tspan fill="${C.green}">67%</tspan>   10:30 <tspan fill="${C.green}">67%</tspan>   12:00 <tspan fill="${C.green}">67%</tspan>`,
   lines:[["67% HIT RATE"],["ALL DAY.",C.green]],small:"CB Core Bullseye · hit = within 8 pts · avg closest 6.0 / 7.4 / 5.8 pt.",
   copy:"CB Core Bullseye — last 6 sessions are in.\n9:45 · 10:30 · 12:00 — 67% hit rate at every checkpoint (hit = within 8 pts).\navg closest: 6.0 / 7.4 / 5.8 pt.\n\nstop guessing the level. cbedge.net"},
  {n:4,motif:"levels",section:"KEY LEVELS · SPX",stat:`CALL <tspan fill="${C.green}">7,520</tspan>   PUT <tspan fill="${C.red}">7,475</tspan>`,
@@ -138,19 +210,19 @@ const POSTS=[
  {n:5,motif:"bars",section:"NET GREEKS · 0DTE",stat:`NET GEX <tspan fill="${C.green}">+129M</tspan>   NET VEX <tspan fill="${C.green}">+788M</tspan>`,
   lines:[["0DTE,"],["MAPPED",C.cyan]],small:"net GEX · DEX · charm · vanna — live for today's expiry.",
   copy:"0DTE without the gamma map is just gambling.\n\nnet GEX, DEX, charm, vanna — all live for today's expiry. see where dealers are pinned.\n\ncbedge.net"},
- {n:6,motif:"levels",section:"DEALER POSITIONING",stat:`OI + VOL <tspan fill="${C.cyan}">STACKED</tspan>`,
-  lines:[["THE LEVEL WITH"],["THE MATH",C.cyan]],small:"dealer positioning, gamma concentration, OI + volume behind every line.",
+ {n:6,layout:"mockup",mock:"heatmap",motif:"levels",section:"DEALER POSITIONING",stat:`OI + VOL <tspan fill="${C.cyan}">STACKED</tspan>`,
+  lines:[["THE LEVEL"],["WITH THE MATH",C.cyan]],small:"the OI + volume math behind every level.",
   copy:"everybody sells you \"levels.\"\n\nwe show you WHY the level holds. dealer positioning, gamma concentration, OI + volume stacked at the strike.\n\ncb edge."},
- {n:7,motif:"zones",section:"ESTIMATED MOVE TRACKER",stat:`EM <tspan fill="${C.gold}">115.5</tspan>   HIT RATE <tspan fill="${C.gold}">63%</tspan>`,
-  lines:[["380+"],["TICKERS",C.cyan]],small:"weekly EM, prior week high/low, the zones that contain price.",
+ {n:7,layout:"mockup",mock:"em",motif:"zones",section:"ESTIMATED MOVE TRACKER",stat:`EM <tspan fill="${C.gold}">115.5</tspan>   HIT RATE <tspan fill="${C.gold}">63%</tspan>`,
+  lines:[["KNOW THE"],["RANGE",C.cyan]],small:"weekly EM + buy / sell zones, 380+ tickers.",
   copy:"the estimated move tracker covers 380+ tickers.\n\nweekly EM, prior week high/low, the zones that actually contain price.\n\nfind your edge. cbedge.net"},
  {n:8,motif:"bars",section:"LIVE GEX HEATMAP",stat:`CALL WALL <tspan fill="${C.green}">7,520</tspan>`,
   lines:[["REJECTED"],["THE WALL",C.green]],small:"positioning, not luck — the wall was on the chart at 9:15.",
   copy:"watched SPX reject the call wall to the tick today.\n\nnot luck. positioning. the wall was on the chart at 9:15.\n\nlive GEX. cbedge.net"},
- {n:9,motif:"bars",section:"LIVE GEX HEATMAP",stat:`ES CANDLES <tspan fill="${C.cyan}">ON GAMMA</tspan>`,
-  lines:[["SAME CHART."],["DIFFERENT GAME.",C.cyan]],small:"a candle sitting inside a live gamma heatmap with cluster levels + walls.",
+ {n:9,layout:"mockup",mock:"chart",motif:"bars",section:"LIVE GEX HEATMAP",stat:`ES CANDLES <tspan fill="${C.cyan}">ON GAMMA</tspan>`,
+  lines:[["SAME CHART."],["DIFFERENT GAME.",C.cyan]],small:"candles inside a live gamma map.",
   copy:"your broker gives you a candle.\n\nwe give you a candle sitting inside a live gamma heatmap with cluster levels, flip points, and the walls that move price.\n\ncb edge."},
- {n:10,motif:"bars",section:"LIVE OPTIONS FLOW",stat:`NET PREMIUM <tspan fill="${C.green}">▲ session</tspan>`,
+ {n:10,motif:"flow",section:"LIVE OPTIONS FLOW",stat:`NET PREMIUM <tspan fill="${C.green}">▲ session</tspan>`,
   lines:[["FLOW DOESN'T"],["SLEEP",C.cyan]],small:"live options flow, net premium, buy/sell pressure — all session.",
   copy:"flow tape doesn't sleep.\n\nlive options flow, net premium, buy/sell pressure streaming all session. see the size before it moves the tape.\n\ncbedge.net"},
  {n:11,motif:"bars",section:"NET GEX BY STRIKE",stat:`NET GEX <tspan fill="${C.red}">-$345M</tspan>`,
@@ -159,7 +231,7 @@ const POSTS=[
  {n:12,motif:"levels",section:"LEVELS & FAILS",stat:`PWH <tspan fill="${C.text}">7,599</tspan>   PDH <tspan fill="${C.text}">7,593</tspan>`,
   lines:[["LEVELS BEFORE"],["THE BELL",C.cyan]],small:"PDH · PDL · PWH · PWL · EM zones — live before you wake up.",
   copy:"levels published before you wake up.\n\nPDH, PDL, prior week high/low, EM zones — all live on the dash before the bell.\n\ncbedge.net"},
- {n:14,motif:"conf",section:"CONFIDENCE SCORE",stat:`SCORE <tspan fill="${C.green}">72 / 100</tspan>   <tspan fill="${C.green}">HIT</tspan>`,
+ {n:14,motif:"target",section:"CONFIDENCE SCORE",stat:`SCORE <tspan fill="${C.green}">72 / 100</tspan>   <tspan fill="${C.green}">HIT</tspan>`,
   lines:[["0–100 ON"],["EVERY LEVEL",C.green]],small:"hit, pivot or chop — scored live off dealer positioning + analogs.",
   copy:"confidence score: 0–100 on every key level.\n\nhit, pivot, or chop — scored live off dealer positioning and historical analogs.\n\ncb edge."},
  {n:15,motif:"bars",section:"NET GEX BY STRIKE",stat:`GAMMA <tspan fill="${C.cyan}">= THE TIDE</tspan>`,
@@ -174,7 +246,7 @@ const POSTS=[
  {n:18,motif:"bars",section:"STRIKE GROWTH",stat:`GEX PEAK <tspan fill="${C.green}">7,520</tspan>  <tspan fill="${C.green}">+706M</tspan>`,
   lines:[["WHERE SIZE"],["IS STACKING",C.gold]],small:"live strike growth ranks the biggest gamma changes vs the open.",
   copy:"which strikes are dealers loading up on TODAY?\n\nlive strike growth ranks the biggest gamma changes vs the open. follow where the size is stacking.\n\ncb edge."},
- {n:19,motif:"conf",section:"CONFIDENCE SCORE",stat:`<tspan fill="${C.green}">HIT</tspan>   TOOLS <tspan fill="${C.cyan}">LIVE</tspan>`,
+ {n:19,motif:"target",section:"CONFIDENCE SCORE",stat:`<tspan fill="${C.green}">HIT</tspan>   TOOLS <tspan fill="${C.cyan}">LIVE</tspan>`,
   lines:[["FIND YOUR EDGE."],["KILL THE MARKET.",C.green]],small:"the tools are live. the data is stacking. this is your edge.",
   copy:"the tools are live. the data is stacking. this is your edge.\n\nstop guessing. start hitting the level that matters.\n\nfind your edge. kill the market. cbedge.net"},
  {n:20,motif:"bars",section:"ONE DASHBOARD",stat:`GEX · FLOW · EM · <tspan fill="${C.cyan}">LEVELS</tspan>`,

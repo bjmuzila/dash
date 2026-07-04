@@ -1,0 +1,187 @@
+"use client";
+
+/**
+ * useNqCandles — NQ (NASDAQ futures) twin of useEsCandles.
+ *
+ * Identical shape and behaviour to useEsCandles, but sourced from the parallel
+ * NQ pipeline:
+ *   - Loads today's bars + history from the nq_candles table
+ *     (/api/snapshots/candles?symbol=/NQ) on mount.
+ *   - Connects to /ws/gex and merges live `nqCandles` messages (and the
+ *     `nqCandles` field of the initial `snapshot`).
+ *
+ * Consumed by the ICT page's NQU tab so it renders the same layout on NQ data.
+ */
+
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import {
+  queryNqCandlesToday,
+  queryNqCandlesHistorical,
+  type EsCandleRecord,
+} from "@/lib/snapdb";
+import type { EsCandle } from "@/hooks/useEsCandles";
+
+function todayETStr(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const m: Record<string, string> = {};
+  parts.forEach((p) => { m[p.type] = p.value; });
+  return `${m.year}-${m.month}-${m.day}`;
+}
+
+function slotTimeOf(c: EsCandleRecord): string {
+  return (c.slotKey ?? "").slice(11, 16) || (c.time ?? "").slice(0, 5);
+}
+function dateOf(c: EsCandleRecord): string {
+  return c.date ?? (c.slotKey ?? "").slice(0, 10);
+}
+
+function buildSlotAverages(historical: EsCandleRecord[], today: string, nDays: number): Map<string, number> {
+  const dates = [...new Set(historical.map(dateOf).filter((d) => d && d < today))].sort().reverse().slice(0, nDays);
+  const dateSet = new Set(dates);
+  const acc = new Map<string, { sum: number; days: Set<string> }>();
+  for (const c of historical) {
+    const d = dateOf(c);
+    if (!dateSet.has(d)) continue;
+    const vol = Number(c.volume || 0);
+    if (!(vol > 0)) continue;
+    const slot = slotTimeOf(c);
+    if (!slot) continue;
+    const e = acc.get(slot) ?? { sum: 0, days: new Set() };
+    e.sum += vol;
+    e.days.add(d);
+    acc.set(slot, e);
+  }
+  const out = new Map<string, number>();
+  for (const [slot, e] of acc) {
+    if (e.days.size) out.set(slot, e.sum / e.days.size);
+  }
+  return out;
+}
+
+export function useNqCandles(enabled: boolean = true, historyDays: number = 20) {
+  const lifecycle = useWsLifecycle();
+  const shouldConnect = lifecycle && enabled;
+  const shouldConnectRef = useRef(shouldConnect);
+  shouldConnectRef.current = shouldConnect;
+  const [todayRows, setTodayRows] = useState<EsCandleRecord[]>([]);
+  const [historical, setHistorical] = useState<EsCandleRecord[]>([]);
+  const [connected, setConnected] = useState(false);
+  const liveMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
+  const sessionMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
+  const [sessionTick, setSessionTick] = useState(0);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
+
+  const loadFromDb = useCallback(async () => {
+    const [today, hist] = await Promise.all([queryNqCandlesToday(), queryNqCandlesHistorical(historyDays)]);
+    if (unmountedRef.current) return;
+    if (hist.length) setHistorical(hist);
+    if (today.length) {
+      for (const r of today) {
+        if (!liveMapRef.current.has(r.slotKey)) liveMapRef.current.set(r.slotKey, r);
+        if (!sessionMapRef.current.has(r.slotKey)) sessionMapRef.current.set(r.slotKey, r);
+      }
+      setTodayRows([...liveMapRef.current.values()]);
+      setSessionTick((n) => n + 1);
+    }
+  }, [historyDays]);
+
+  useEffect(() => { if (enabled) loadFromDb().catch(() => {}); }, [enabled, loadFromDb]);
+
+  const refresh = useCallback(async () => {
+    if (liveMapRef.current.size > 0) return;
+    await loadFromDb().catch(() => {});
+  }, [loadFromDb]);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    const today = todayETStr();
+
+    const ingest = (rows: unknown) => {
+      if (!Array.isArray(rows)) return;
+      let changed = false;
+      let sessionChanged = false;
+      for (const raw of rows as EsCandleRecord[]) {
+        if (!raw || !raw.slotKey) continue;
+        sessionMapRef.current.set(raw.slotKey, raw);
+        sessionChanged = true;
+        if (dateOf(raw) !== today) continue;
+        liveMapRef.current.set(raw.slotKey, raw);
+        changed = true;
+      }
+      if (changed) setTodayRows([...liveMapRef.current.values()]);
+      if (sessionChanged) setSessionTick((n) => n + 1);
+    };
+
+    const handle = (rawMsg: string) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(rawMsg); } catch { return; }
+      const type = String(msg.type ?? "");
+      const data = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
+      if (type === "snapshot") ingest(data.nqCandles);
+      else if (type === "nqCandles") ingest(Array.isArray(data) ? data : data.nqCandles);
+    };
+
+    const connect = () => {
+      if (unmountedRef.current || !shouldConnectRef.current) return;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      let ws: WebSocket;
+      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
+      catch { schedule(); return; }
+      wsRef.current = ws;
+      ws.onopen = () => setConnected(true);
+      ws.onmessage = (e) => handle(String(e.data));
+      ws.onerror = () => { try { ws.close(); } catch {} };
+      ws.onclose = () => { setConnected(false); schedule(); };
+    };
+    const schedule = () => {
+      if (unmountedRef.current || !shouldConnectRef.current) return;
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      reconnectRef.current = setTimeout(connect, 2500);
+    };
+
+    unmountedRef.current = false;
+    if (shouldConnect) connect();
+    return () => {
+      unmountedRef.current = true;
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws.close(); } catch {} };
+        else { ws.onopen = null; try { ws.close(); } catch {} }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldConnect]);
+
+  const candles = useMemo<EsCandle[]>(() => {
+    const today = todayETStr();
+    const avg5 = buildSlotAverages(historical, today, 5);
+    const avg14 = buildSlotAverages(historical, today, 14);
+    return [...todayRows]
+      .sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey))
+      .map((c) => {
+        const slot = slotTimeOf(c);
+        return { ...c, avg5: avg5.get(slot) ?? 0, avg14: avg14.get(slot) ?? 0 };
+      });
+  }, [todayRows, historical]);
+
+  const sessionCandles = useMemo<EsCandleRecord[]>(() => {
+    void sessionTick;
+    const WINDOW_MS = 30 * 60 * 60 * 1000;
+    const cutoff = Date.now() - WINDOW_MS;
+    const map = new Map<string, EsCandleRecord>();
+    for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
+    for (const c of sessionMapRef.current.values()) if (c.timestamp >= cutoff) map.set(c.slotKey, c);
+    return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
+  }, [historical, sessionTick]);
+
+  return { candles, sessionCandles, historical, connected, refresh };
+}

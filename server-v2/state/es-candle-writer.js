@@ -51,11 +51,14 @@ function getPool() {
  * Fire-and-forget: never throws into the caller.
  * @param {object|object[]} rows
  */
-async function writeEsCandles(rows) {
+async function writeCandles(rows, table = 'es_candles') {
   const p = getPool();
   if (!p) return;
   const list = Array.isArray(rows) ? rows : [rows];
   if (!list.length) return;
+  // Whitelist the table name (it's interpolated into SQL, never user-supplied).
+  const tbl = table === 'nq_candles' ? 'nq_candles' : 'es_candles';
+  const defSymbol = tbl === 'nq_candles' ? '/NQ' : '/ES';
 
   for (const r of list) {
     const ts = Number(r.timestamp);
@@ -63,19 +66,19 @@ async function writeEsCandles(rows) {
     if (!(ts > 0) || !slotKey) continue;
     try {
       await p.query(
-        `INSERT INTO es_candles
+        `INSERT INTO ${tbl}
            (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT("slotKey") DO UPDATE SET
            timestamp=EXCLUDED.timestamp,
-           high=GREATEST(es_candles.high,EXCLUDED.high),
-           low=LEAST(es_candles.low,EXCLUDED.low),
+           high=GREATEST(${tbl}.high,EXCLUDED.high),
+           low=LEAST(${tbl}.low,EXCLUDED.low),
            close=EXCLUDED.close,
            volume=EXCLUDED.volume,
            "avgVolume"=EXCLUDED."avgVolume"`,
         [
           ts, String(r.date || slotKey.slice(0, 10)), slotKey, String(r.time ?? slotKey.slice(11)),
-          String(r.symbol ?? '/ES'), Number(r.intervalMinutes ?? 5), String(r.source ?? 'dxlink'),
+          String(r.symbol ?? defSymbol), Number(r.intervalMinutes ?? 5), String(r.source ?? 'dxlink'),
           Number(r.open), Number(r.high), Number(r.low), Number(r.close),
           Number(r.volume), Number(r.avgVolume ?? 0),
         ]
@@ -102,4 +105,7 @@ async function writeEsCandles(rows) {
   }
 }
 
-module.exports = { writeEsCandles };
+const writeEsCandles = (rows) => writeCandles(rows, 'es_candles');
+const writeNqCandles = (rows) => writeCandles(rows, 'nq_candles');
+
+module.exports = { writeEsCandles, writeNqCandles, writeCandles };

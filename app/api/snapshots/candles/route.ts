@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { upsertEsCandle, getEsCandles } from "@/lib/db";
+import { upsertEsCandle, getEsCandles, upsertNqCandle, getNqCandles } from "@/lib/db";
+
+/** "/NQ" (any NQ-ish symbol) selects the nq_candles table; everything else = ES. */
+function isNq(sym?: string | null): boolean {
+  return !!sym && /nq/i.test(sym);
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -7,7 +12,8 @@ export async function POST(req: NextRequest) {
     // Accept single candle or array
     const candles = Array.isArray(body) ? body : [body];
     for (const c of candles) {
-      await upsertEsCandle({
+      const upsert = isNq(c.symbol) ? upsertNqCandle : upsertEsCandle;
+      await upsert({
         timestamp:       Number(c.timestamp),
         date:            String(c.date),
         slotKey:         String(c.slotKey),
@@ -35,7 +41,9 @@ export async function GET(req: NextRequest) {
     const date     = searchParams.get("date")     ?? undefined;
     const daysBack = searchParams.get("daysBack") ? Number(searchParams.get("daysBack")) : undefined;
     const limit    = Math.min(Number(searchParams.get("limit") ?? 2000), 10000);
-    const rows     = await getEsCandles(date, daysBack, limit);
+    const rows     = isNq(searchParams.get("symbol"))
+      ? await getNqCandles(date, daysBack, limit)
+      : await getEsCandles(date, daysBack, limit);
     return NextResponse.json({ rows });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

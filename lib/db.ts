@@ -127,6 +127,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles("slotKey");
 
+    CREATE TABLE IF NOT EXISTS nq_candles (
+      id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
+      "slotKey" TEXT NOT NULL UNIQUE, time TEXT, symbol TEXT, "intervalMinutes" INTEGER,
+      source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_nc_date ON nq_candles(date);
+    CREATE INDEX IF NOT EXISTS idx_nc_slot ON nq_candles("slotKey");
+
     CREATE TABLE IF NOT EXISTS es_footprint (
       day TEXT PRIMARY KEY, symbol TEXT, updated_at BIGINT NOT NULL, payload JSONB NOT NULL
     );
@@ -2058,6 +2066,42 @@ export async function getEsCandles(date?: string, daysBack?: number, limit = 200
   }
   return queryAll<EsCandleDbRecord>(
     `SELECT * FROM es_candles ORDER BY timestamp DESC LIMIT ?`,
+    [limit]
+  );
+}
+
+// ── NQ candles (5m NASDAQ futures — parallel to es_candles, own table so ES
+//    stays untouched and the unique-slotKey conflict target doesn't collide) ────
+
+export async function upsertNqCandle(r: Omit<EsCandleDbRecord, "id">): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO nq_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT("slotKey") DO UPDATE SET
+       timestamp=EXCLUDED.timestamp, high=GREATEST(nq_candles.high,EXCLUDED.high), low=LEAST(nq_candles.low,EXCLUDED.low),
+       close=EXCLUDED.close, volume=EXCLUDED.volume, "avgVolume"=EXCLUDED."avgVolume"`,
+    [r.timestamp, r.date, r.slotKey, r.time ?? "", r.symbol ?? "/NQ", r.intervalMinutes ?? 5,
+     r.source ?? "dxlink", r.open, r.high, r.low, r.close, r.volume, r.avgVolume ?? 0]
+  );
+}
+
+export async function getNqCandles(date?: string, daysBack?: number, limit = 2000): Promise<EsCandleDbRecord[]> {
+  if (date) {
+    return queryAll<EsCandleDbRecord>(
+      `SELECT * FROM nq_candles WHERE date = ? ORDER BY timestamp ASC LIMIT ?`,
+      [date, limit]
+    );
+  }
+  if (daysBack) {
+    const cutoff = new Date(Date.now() - daysBack * 86400_000).toISOString().slice(0, 10);
+    return queryAll<EsCandleDbRecord>(
+      `SELECT * FROM nq_candles WHERE date >= ? ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, limit]
+    );
+  }
+  return queryAll<EsCandleDbRecord>(
+    `SELECT * FROM nq_candles ORDER BY timestamp DESC LIMIT ?`,
     [limit]
   );
 }

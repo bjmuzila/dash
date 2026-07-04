@@ -1077,9 +1077,8 @@ export default function OptionsChainPage() {
         ) : null}
 
         <span style={{ color: HT.border }}>|</span>
-        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HT.muted, fontFamily: "var(--font-mono)" }}>
-          Total {greekMode}:{" "}
-          <span style={{ color: grandTotal >= 0 ? HT.green : HT.red }}>{fmtMoney(grandTotal)}</span>
+        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
+          Total {greekMode}: {fmtMoney(grandTotal)}
         </span>
 
         <div style={{ flex: 1 }} />

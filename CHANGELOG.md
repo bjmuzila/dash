@@ -6,6 +6,10 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-03 — Options Chain: grand-total greek readout in toolbar
+
+Added a `grandTotal` useMemo in `app/options-chain/page.tsx` summing the active greek (`greekMode`) across all strikes and all loaded expiration columns, and rendered it in the Dock toolbar as `Total <greek>: <value>` styled to match sibling labels (11px, cyan `HT.cyan`, uppercase). Not build-verified.
+
 ## 2026-07-03 — GEX drawer pop-out + embed fixes + shared card system
 
 Added a right-side GEX-groups pop-out drawer launched from a new 🧮 toolbar button next to Notes: new `components/shared/GexDock.tsx` (2/5-width `40vw` panel, single compact row of 9 page-selector tiles) + `GexPanelContext.tsx` (persisted open state), mounted in `LayoutShell.tsx` and toggled from `GlobalToolbar.tsx`. Tiles render each non-owner page (all nav GEX pages except Options Chain + the not-live ICT/Journal/Order-Flow) in-drawer via `?embed=1` iframes. Fixed `app/es-candles/page.tsx` in the drawer: chart re-fits once real size lands (zero-size iframe parking bug), GEX rail auto-collapses under 560px, and the dock toolbar is wrapped in `FitScale` (min 0.2) to scale-to-fit. Forced `app/mult-greek/page.tsx` SPX/SPY/QQQ panels to stay side-by-side in embed mode and softened its bright `#ffffff` value text to `#c3ccda`. Added the Budget/gex2 card system to `components/shared/homeTheme.ts` (`LIGHT_BLUE`, `SOFT_RED`, `classicCardStyle`, `dissolveCardStyle`, `statTileStyle`) as the single source of truth, gave shared `Card` a `variant` prop (gloss/classic/dissolve), and deduped es-candles + gex2 onto the shared styles. UNVERIFIED — sandbox down, no build; needs VPS rebuild.

@@ -4,6 +4,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Friday 7/3/2026
 
+* The Options Chain toolbar now shows a running total of the selected greek across every strike and expiration on screen, updating instantly as you switch between GEX, DEX, CHEX and VEX.
 * Added a Volatility Skew Calculator to the Greeks page — plug in put, call, and at-the-money implied vol to see the skew instantly, with a plain-English guide on what each skew level means and how to trade it.
 * New quick-access GEX panel — tap the new toolbar button to slide open a side panel and jump between Home, ES Candles, Multi Greek, Flow, Analytics and more without leaving your current page.
 * ES Candles now opens cleanly inside the new panel, with the toolbar and chart resizing to fit the space.

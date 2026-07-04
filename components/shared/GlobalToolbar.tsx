@@ -286,9 +286,18 @@ function QuickPagesEditor({
           backdropFilter: "blur(16px)",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <span style={{ fontWeight: 700, color: HOME_THEME.text, fontSize: 13 }}>Quick Pages</span>
-          <span style={{ fontSize: 11, color: cyanA(0.9) }}>{picked.length}/{QUICK_MAX}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, color: cyanA(0.9) }}>{picked.length}/{QUICK_MAX}</span>
+            <button
+              type="button"
+              onClick={() => { onSave(picked); onClose(); }}
+              style={{ padding: "5px 14px", borderRadius: 8, border: "none", background: CYAN, color: "#04222b", fontWeight: 700, fontSize: 12, cursor: "pointer" }}
+            >
+              Save
+            </button>
+          </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           {Object.entries(QUICK_META).map(([href, meta]) => {
@@ -322,22 +331,13 @@ function QuickPagesEditor({
             );
           })}
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <button
-            type="button"
-            onClick={() => { onSave(picked); onClose(); }}
-            style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: "none", background: CYAN, color: "#04222b", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{ flex: 1, padding: "7px 0", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.text, fontSize: 13, cursor: "pointer" }}
-          >
-            Cancel
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ width: "100%", padding: "7px 0", marginTop: 10, borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.text, fontSize: 13, cursor: "pointer" }}
+        >
+          Cancel
+        </button>
       </div>
     </>
   );

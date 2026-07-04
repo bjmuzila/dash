@@ -64,6 +64,9 @@ const state = {
   // Delta of just-changed 5m bars (forming bar + any newly-closed one). Emitted
   // on each flush so the WS broadcast carries only the moved bars, not all 600.
   esCandlesDelta: [],
+  // 5-minute NQ futures candles — parallel to esCandles, drives the ICT NQU tab.
+  nqCandles: [],
+  nqCandlesDelta: [],
   // Feed health
   status: {
     ttAuthenticated: false,

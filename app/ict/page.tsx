@@ -22,6 +22,7 @@ import {
 } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useNqCandles } from "@/hooks/useNqCandles";
 import { BoxDiscordBtn } from "@/components/shared/DataBox";
 import {
   analyzeICT, activeWindows, ICT_WINDOWS, etMinutes,
@@ -110,7 +111,14 @@ const WIN_COLOR: Record<TimeWindow["kind"], string> = {
 };
 
 export default function IctPage() {
-  const { sessionCandles, historical, connected } = useEsCandles();
+  // Instrument tab: ES (default) or NQU. Only the active feed connects — the
+  // idle hook opens no socket + loads nothing, so switching tabs swaps feeds
+  // without doubling /ws/gex bandwidth.
+  const [instrument, setInstrument] = useState<"ES" | "NQU">("ES");
+  const esFeed = useEsCandles(instrument === "ES");
+  const nqFeed = useNqCandles(instrument === "NQU");
+  const { sessionCandles, historical, connected } = instrument === "NQU" ? nqFeed : esFeed;
+  const instLabel = instrument === "NQU" ? "NQ" : "ES";
 
   // Timeframe switcher — base feed is 5m; higher TFs are aggregated from it.
   const [tf, setTf] = useState<5 | 15 | 30 | 60>(5);
@@ -530,6 +538,10 @@ export default function IctPage() {
   // Re-draw overlay whenever analysis or toggles change.
   useEffect(() => { drawOverlayRef.current(); }, [ict, showFvg, showOb, showLiq, showStruct, showKz, showPd]);
 
+  // Switching instrument swaps the whole candle set (different price range), so
+  // force the chart to re-fit to the new feed on the next data push.
+  useEffect(() => { didFitRef.current = false; lastFitDayRef.current = ""; }, [instrument]);
+
   const status = connected ? "live" : "offline";
   // Panel lists gaps still in play: live boxes (no endTs) plus inverted IFVGs.
   // A box that ended (2nd pass-through or break) drops off the panel.
@@ -644,14 +656,29 @@ export default function IctPage() {
       {/* Header */}
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h1 className="text-lg font-bold tracking-tight">ICT</h1>
-        <span className="text-[11px] uppercase tracking-[0.18em] text-white">Inner Circle Trader · live ES detection</span>
+        {/* Instrument tab switcher: ES ⇄ NQU (same layout, own feed) */}
+        <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+          {(["ES", "NQU"] as const).map((sym) => (
+            <button key={sym} onClick={() => setInstrument(sym)}
+              className="rounded-md px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] transition"
+              style={{
+                color: instrument === sym ? "#219EBC" : "rgba(255,255,255,0.55)",
+                background: instrument === sym ? "linear-gradient(180deg, rgba(33,158,188,.18), rgba(33,158,188,.05))" : "transparent",
+                border: `1px solid ${instrument === sym ? "rgba(33,158,188,.4)" : "transparent"}`,
+                boxShadow: instrument === sym ? "0 0 14px rgba(33,158,188,.22)" : "none",
+              }}>
+              {sym}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] uppercase tracking-[0.18em] text-white">Inner Circle Trader · live {instLabel} detection</span>
         <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${connected ? "text-emerald-300" : "text-white"}`}
           style={{ border: `1px solid ${connected ? "rgba(0,230,118,.4)" : "rgba(255,255,255,.18)"}`, background: connected ? "rgba(0,230,118,.08)" : "transparent" }}>
           ● {status}
         </span>
         <div className="ml-auto flex items-center gap-2">
           <CopyshotBtn targetRef={captureRef} overlayRef={overlayRef} chartRef={chartRef} />
-          <BoxDiscordBtn targetRef={captureRef} label="ICT — live ES" />
+          <BoxDiscordBtn targetRef={captureRef} label={`ICT — live ${instLabel}`} />
         </div>
       </div>
 
@@ -766,7 +793,7 @@ export default function IctPage() {
               </div>
             )}
             {!candles.length && (
-              <div className="absolute inset-0 grid place-items-center text-sm text-white">waiting for ES candles…</div>
+              <div className="absolute inset-0 grid place-items-center text-sm text-white">waiting for {instLabel} candles…</div>
             )}
           </div>
         </div>
@@ -1000,7 +1027,7 @@ export default function IctPage() {
           Concept definitions adapted from{" "}
           <a href="https://innercircletrader.net/tutorials/most-important-ict-concepts-to-conquer-market-complete-list/" target="_blank" rel="noopener noreferrer" className="underline hover:text-cyan-300">
             innercircletrader.net — Most Important ICT Concepts
-          </a>. Live detection runs on the dashboard&apos;s 5-min ES futures feed.
+          </a>. Live detection runs on the dashboard&apos;s 5-min {instLabel} futures feed.
         </p>
       </div>
     </div>

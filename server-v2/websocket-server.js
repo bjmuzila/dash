@@ -74,6 +74,7 @@ function buildSnapshot(state) {
     totalNetGex: state.totalNetGex,
     flow: trimSnapshotFlow(state.flow),
     esCandles: trimSnapshotCandles(state.esCandles),
+    nqCandles: trimSnapshotCandles(state.nqCandles),
     status: {
       ...state.status,
       // Server uptime in seconds (process lifetime).
@@ -316,6 +317,9 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     // slotKey merge ingests it unchanged, carrying only the bars that moved.
     if (changed.has('esCandles')) out.push(msg('esCandles', state.esCandles, state.symbol));
     if (changed.has('esCandlesDelta')) out.push(msg('esCandles', state.esCandlesDelta, state.symbol));
+    // NQ candles: same pattern, own message type so the NQU tab merges them separately.
+    if (changed.has('nqCandles')) out.push(msg('nqCandles', state.nqCandles, state.symbol));
+    if (changed.has('nqCandlesDelta')) out.push(msg('nqCandles', state.nqCandlesDelta, state.symbol));
     if (changed.has('spot') || changed.has('prevClose') || changed.has('basis')) {
       // basis rides on the 'spot' message too (not just 'aux') so a client
       // that only just connected/re-subscribed gets the authoritative value
