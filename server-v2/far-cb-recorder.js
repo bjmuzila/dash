@@ -31,7 +31,7 @@ const {
   fetchStockQuoteTheta,
   fetchIndexPriceTheta,
 } = require('./proxy-thetadata');
-const { EQUITY_TICKERS } = require('./em-tickers');
+const { getActiveRoster } = require('./far-cb-tickers');
 const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta } = require('./proxy-thetadata');
 
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
@@ -299,8 +299,8 @@ async function runSweep(opts = {}) {
   const date = etDateStr();
   await pruneOld(p).catch((e) => console.warn('[far-cb] prune error:', e.message));
 
-  const roster = [...new Set(EQUITY_TICKERS)].map((s) => String(s).trim().toUpperCase()).filter(Boolean);
-  console.log(`[far-cb] sweep ${date} — ${roster.length} symbols, OTM>${OTM_THRESHOLD_PCT}%, ${MAX_DTE_DAYS}d window`);
+  const roster = (await getActiveRoster()).map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+  console.log(`[far-cb] sweep ${date} — ${roster.length} symbols (curated + custom), OTM>${OTM_THRESHOLD_PCT}%, ${MAX_DTE_DAYS}d window`);
 
   let flagged = 0;
   const failed = [];

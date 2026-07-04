@@ -371,6 +371,18 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_feedback_created ON customer_feedback(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_feedback_status ON customer_feedback(status);
 
+    -- Far CB Watch: customer-added tickers on top of the curated CORE roster
+    -- (server-v2/far-cb-tickers.js). Any signed-in user can add one; owner
+    -- reviews who added what on /owner/dev (Page Activity-style panel).
+    CREATE TABLE IF NOT EXISTS far_cb_custom_tickers (
+      symbol        TEXT PRIMARY KEY,
+      added_by_id   TEXT,
+      added_by_email TEXT,
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      active        BOOLEAN NOT NULL DEFAULT TRUE
+    );
+    CREATE INDEX IF NOT EXISTS idx_far_cb_custom_created ON far_cb_custom_tickers(created_at DESC);
+
     -- Email broadcast history. One row per send from /admin/emails. Summary only
     -- (no per-recipient rows). recipients is a JSON array of the addresses sent.
     CREATE TABLE IF NOT EXISTS email_sends (
@@ -1456,6 +1468,42 @@ export async function setFeedbackStatus(id: number, status: "open" | "resolved")
   await pgQuery(
     `UPDATE customer_feedback SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
     [status, id]
+  );
+}
+
+// ── Far CB Watch — customer-added tickers ────────────────────────────────────
+
+export interface FarCbCustomTicker {
+  symbol: string;
+  added_by_id: string | null;
+  added_by_email: string | null;
+  created_at: string | null;
+  active: boolean;
+}
+
+const TICKER_RE = /^[A-Z]{1,6}$/;
+
+export async function addFarCbTicker(input: {
+  symbol: string;
+  added_by_id?: string | null;
+  added_by_email?: string | null;
+}): Promise<{ ok: true; row: FarCbCustomTicker } | { ok: false; error: string }> {
+  const symbol = input.symbol.trim().toUpperCase();
+  if (!TICKER_RE.test(symbol)) return { ok: false, error: "Enter a valid ticker (letters only, up to 6 characters)." };
+  const row = await queryOne<FarCbCustomTicker>(
+    `INSERT INTO far_cb_custom_tickers (symbol, added_by_id, added_by_email)
+     VALUES (?, ?, ?)
+     ON CONFLICT (symbol) DO UPDATE SET active = TRUE
+     RETURNING *`,
+    [symbol, input.added_by_id ?? null, input.added_by_email ?? null]
+  );
+  return row ? { ok: true, row } : { ok: false, error: "Save failed" };
+}
+
+export async function listFarCbTickers(limit = 200): Promise<FarCbCustomTicker[]> {
+  return queryAll<FarCbCustomTicker>(
+    "SELECT * FROM far_cb_custom_tickers WHERE active = TRUE ORDER BY created_at DESC LIMIT ?",
+    [limit]
   );
 }
 

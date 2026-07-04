@@ -474,6 +474,15 @@ export default function OptionsChainPage() {
   // Hydrate recents from browser cache after mount (avoids SSR mismatch).
   useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
   const [selectedExpiry, setSelectedExpiry] = useState(fallbackExpiries[0]?.value ?? "");
+  // Prefill (don't auto-load) from a deep link like /options-chain?symbol=AAPL&expiry=2026-07-31 —
+  // e.g. the Scanner "Watch This" cards. User still has to click GO themselves.
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    const sym = u.searchParams.get("symbol")?.trim().toUpperCase();
+    const exp = u.searchParams.get("expiry")?.trim();
+    if (sym) setTickerInput(sym);
+    if (exp) setSelectedExpiry(exp);
+  }, []);
   const [displayPercent, setDisplayPercent] = useState<number>(10);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [intensity, setIntensity] = useState(1.75);

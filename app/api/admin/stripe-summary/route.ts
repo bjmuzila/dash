@@ -35,6 +35,15 @@ export async function GET() {
       }
     }
 
+    // Real paying customers only, counted from launch (2026-07-01 forward) —
+    // excludes stale/test Stripe subscriptions created before that date.
+    const launchCutoff = Math.floor(new Date("2026-07-01T00:00:00Z").getTime() / 1000);
+    const payingCustomerIds = new Set(
+      subList.data
+        .filter((sub) => sub.created >= launchCutoff)
+        .map((sub) => (typeof sub.customer === "string" ? sub.customer : sub.customer.id))
+    );
+
     // Churned this month
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
@@ -86,7 +95,7 @@ export async function GET() {
       summary: {
         mrr,
         activeSubscriptions: subList.data.length,
-        totalCustomers: customerList.data.length,
+        totalCustomers: payingCustomerIds.size,
         churnedThisMonth: canceledThisMonth.data.length,
       },
       subscriptions,

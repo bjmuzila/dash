@@ -299,7 +299,7 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
           {customers.filter(c => c.email && c.email !== "—").map((c) => (
             <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.cyan, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
                 <div style={{ fontSize: 11, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
               </div>
               <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -359,7 +359,7 @@ function NotPayingPanel() {
   };
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Signed Up · Not Paying</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
@@ -469,7 +469,7 @@ function CustomerActivityPanel() {
   const COLS = "1.6fr 100px 90px 70px 70px 1fr";
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Customer Activity</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
@@ -533,6 +533,79 @@ function CustomerActivityPanel() {
       </div>
       <div style={{ padding: "8px 16px", borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.muted }}>
         Time on site is estimated from page-load timestamps (30-min session gap) and is a lower bound — the last page of each session isn&apos;t counted.
+      </div>
+    </div>
+  );
+}
+
+// ─── Far CB Watch — customer-added tickers ────────────────────────────────────
+
+interface FarCbTickerRow {
+  symbol: string;
+  added_by_id: string | null;
+  added_by_email: string | null;
+  created_at: string | null;
+  active: boolean;
+}
+
+function FarCbTickersPanel() {
+  const [rows, setRows] = useState<FarCbTickerRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/far-cb-tickers");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows((j.rows as FarCbTickerRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const COLS = "100px 1.6fr 1fr";
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Far CB Watch — Tickers Added</span>
+        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
+          {rows ? rows.length : "—"}
+        </span>
+        <span style={{ fontSize: 11, color: T.textSecondary }}>customer additions on top of the curated core list</span>
+        <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1, marginLeft: "auto" }}>
+          {loading ? "…" : "↻"}
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 9, fontWeight: 500, color: T.muted, letterSpacing: "0.01em" }}>
+        <span>Ticker</span>
+        <span>Added by</span>
+        <span>Added</span>
+      </div>
+
+      <div style={{ maxHeight: 280, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+        ) : !rows || rows.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>No customer-added tickers yet</div>
+        ) : (
+          rows.map((r) => (
+            <div key={r.symbol} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 12, alignItems: "center" }}>
+              <span style={{ color: T.text, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{r.symbol}</span>
+              <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.added_by_email ?? r.added_by_id ?? "—"}</span>
+              <span style={{ color: T.textSecondary, fontSize: 11 }}>{r.created_at ? new Date(r.created_at).toLocaleString() : "—"}</span>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -604,7 +677,7 @@ function UnsubscribePanel() {
   };
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Unsubscribes · Do Not Email</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}>
@@ -729,6 +802,9 @@ export default function AdminDashboard() {
 
         {/* Customer engagement — last login, ~time on site, pages visited. */}
         <CustomerActivityPanel />
+
+        {/* Far CB Watch — which customers added which tickers to the roster. */}
+        <FarCbTickersPanel />
 
         {/* Global email suppression list — who unsubscribed + manual edits. */}
         <UnsubscribePanel />

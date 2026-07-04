@@ -1029,6 +1029,31 @@ function WatchThisScanner() {
   const [outcomes, setOutcomes] = useState<OutcomeRow[]>([]);
   const [outcomeStatus, setOutcomeStatus] = useState<"all" | "open" | "touched" | "expired">("all");
 
+  const [newTicker, setNewTicker] = useState("");
+  const [addStatus, setAddStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  const addTicker = useCallback(async () => {
+    const symbol = newTicker.trim().toUpperCase();
+    if (!symbol) return;
+    setAdding(true); setAddStatus(null);
+    try {
+      const res = await fetch("/api/far-cb-tickers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "Add failed");
+      setAddStatus({ kind: "ok", msg: `${symbol} added — appears after the next sweep.` });
+      setNewTicker("");
+    } catch (e: any) {
+      setAddStatus({ kind: "err", msg: String(e?.message || e) });
+    } finally {
+      setAdding(false);
+    }
+  }, [newTicker]);
+
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
@@ -1059,11 +1084,34 @@ function WatchThisScanner() {
     <Card variant="budget" title={<span style={{ fontSize: 18 }}>Watch This — Far CB</span>}
       subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · EM watchlist${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
           Refreshes every 2m · recorder sweeps every 30m during RTH
         </span>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <input
+          value={newTicker}
+          onChange={(e) => setNewTicker(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") addTicker(); }}
+          placeholder="Add a ticker (e.g. RDDT)"
+          maxLength={6}
+          style={{
+            fontSize: 12, padding: "7px 10px", borderRadius: 6, width: 160,
+            background: "rgba(0,0,0,0.30)", color: HOME_THEME.text,
+            border: "1px solid rgba(255,255,255,0.15)", colorScheme: "dark",
+          }}
+        />
+        <button onClick={addTicker} disabled={adding || !newTicker.trim()} style={seg(false)}>
+          {adding ? "Adding…" : "+ Add"}
+        </button>
+        {addStatus && (
+          <span style={{ fontSize: 12, color: addStatus.kind === "ok" ? LIGHT_BLUE : SOFT_RED }}>
+            {addStatus.msg}
+          </span>
+        )}
       </div>
 
       {err && (
