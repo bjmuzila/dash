@@ -268,8 +268,7 @@ function AmTbrPanel({ info }: { info: AmTbrInfo | null }) {
         Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
         sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
         (8am open). MAE is shown for reverted vs. non-reverted events; MFE beyond TBR Open is shown for
-        reverted events. Reversions within the first hour (8am hour) have the highest hit rate. Source
-        concept: nqstats.com/am_tbr.html — 10 years of data.
+        reverted events. Reversions within the first hour (8am hour) have the highest hit rate.
       </div>
     </Card>
   );

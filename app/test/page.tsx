@@ -836,30 +836,6 @@ function ChartLegend({ items }: { items: { label: string; color: string }[] }) {
   );
 }
 
-function ToggleSwitch({ label, on, onChange }: { label: string; on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!on)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "8px 12px",
-        borderRadius: 8,
-        border: `1px solid ${on ? HOME_THEME.red : HOME_THEME.border}`,
-        background: on ? `${HOME_THEME.red}1a` : "rgba(255,255,255,0.04)",
-        cursor: "pointer",
-      }}
-    >
-      <span style={{ position: "relative", width: 34, height: 18, borderRadius: 999, background: on ? HOME_THEME.red : "rgba(255,255,255,0.15)", flexShrink: 0, transition: "background .15s" }}>
-        <span style={{ position: "absolute", top: 2, left: on ? 18 : 2, width: 14, height: 14, borderRadius: "50%", background: HOME_THEME.text, transition: "left .15s" }} />
-      </span>
-      <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: on ? HOME_THEME.red : HOME_THEME.text }}>{label}</span>
-    </button>
-  );
-}
-
 // Semi-circle gauge — needle + colored bands. `bands` are given in raw value
 // units (min..max), converted to angle fractions internally.
 function SemiGauge({
@@ -945,46 +921,71 @@ function ChartTooltip({ x, y, children }: { x: number; y: number; children: Reac
   );
 }
 
-// Net Gamma by strike — bar chart (blue = positive/supportive, red =
-// negative/volatile), hover shows the exact strike + $ value.
-function NetGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
-  const W = 720, H = 220, padL = 50, padR = 16, padB = 26, padT = 18;
+// Cumulative running sum of net GEX from the LOWEST strike in the full chain
+// upward — the exact math server-side findGexFlip (gex-calculator.js) uses to
+// find the gamma flip. Computed over the whole chain (not the windowed/visible
+// subset) so the crossing point lands on the real flip strike even though we
+// only render a slice of it.
+function glCumulativeByStrike(rows: GexLevelsRow[]): { strike: number; cum: number }[] {
+  const sorted = rows.slice().sort((a, b) => a.strike - b.strike);
+  let cum = 0;
+  return sorted.map((r) => {
+    cum += glOiVolNet(r);
+    return { strike: r.strike, cum };
+  });
+}
+
+// Net Gamma by strike — cumulative area/mountain chart (matches the
+// SqueezeMetrics-style reference: a red-filled curve whose zero-crossing IS
+// the gamma flip). The previous version drew a discrete per-strike bar chart,
+// whose own "sign change" is a different thing entirely from the cumulative
+// flip — that mismatch was why the flip/Neutral stat looked wrong against the
+// chart. This curve crosses zero exactly at `neutral` (d.neutral / gexFlip).
+function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; spot: number; neutral?: number | null }) {
+  const W = 720, H = 220, padL = 54, padR = 16, padB = 26, padT = 18;
   const { containerRef, hover, show, hide } = useChartHover();
   if (!rows.length) return <GlEmpty note="no chain rows" />;
-  const shown = glWindowedRows(rows, spot);
+
+  const cumAll = glCumulativeByStrike(rows);
+  const lo = spot * 0.94, hi = spot * 1.06;
+  let shown = cumAll.filter((p) => p.strike >= lo && p.strike <= hi);
+  if (shown.length <= 4) shown = cumAll;
+
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
-  const vals = shown.map((r) => glOiVolNet(r));
-  let minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
-  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const vals = shown.map((p) => p.cum);
+  let rawMin = Math.min(0, ...vals), rawMax = Math.max(0, ...vals);
+  if (rawMin === rawMax) { rawMin -= 1; rawMax += 1; }
+  const span = rawMax - rawMin;
+  const minV = rawMin - span * 0.08, maxV = rawMax + span * 0.08;
   const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
   const y0 = y(0);
-  const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
+
+  const linePath = shown.map((p, i) => `${i === 0 ? "M" : "L"} ${x(p.strike).toFixed(2)} ${y(p.cum).toFixed(2)}`).join(" ");
+  const areaPath = `${linePath} L ${x(xhi).toFixed(2)} ${y0.toFixed(2)} L ${x(xlo).toFixed(2)} ${y0.toFixed(2)} Z`;
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
-        {shown.map((r, i) => {
-          const v = glOiVolNet(r);
-          const top = v >= 0 ? y(v) : y0;
-          const h = Math.max(1, Math.abs(y(v) - y0));
-          return (
-            <rect
-              key={r.strike}
-              x={x(r.strike) - barW / 2}
-              y={top}
-              width={barW}
-              height={h}
-              fill={v >= 0 ? LIGHT_BLUE : HOME_THEME.red}
-              opacity={hover?.idx === i ? 1 : 0.85}
-              style={{ cursor: "crosshair" }}
-              onMouseMove={(e) => show(i, e)}
-            />
-          );
-        })}
-        <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
-        {[minV, 0, maxV].map((v, i) => (
+        <path d={areaPath} fill={`${HOME_THEME.red}33`} stroke="none" />
+        <path d={linePath} fill="none" stroke={HOME_THEME.red} strokeWidth={2} />
+        {Number.isFinite(neutral as number) && (
+          <line x1={x(neutral as number)} x2={x(neutral as number)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.55} />
+        )}
+        <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={LIGHT_BLUE} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+        {shown.map((p, i) => (
+          <circle
+            key={p.strike}
+            cx={x(p.strike)}
+            cy={y(p.cum)}
+            r={hover?.idx === i ? 4 : 7}
+            fill={hover?.idx === i ? HOME_THEME.red : "transparent"}
+            style={{ cursor: "crosshair" }}
+            onMouseMove={(e) => show(i, e)}
+          />
+        ))}
+        {[rawMin, 0, rawMax].map((v, i) => (
           <text key={i} x={padL - 8} y={y(v) + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(v)}</text>
         ))}
         {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
@@ -994,7 +995,7 @@ function NetGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
       {hover && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
-          <div>Net Gamma: {glFmtBn(glOiVolNet(shown[hover.idx]))}</div>
+          <div>Cumulative Gamma$: {glFmtBn(shown[hover.idx].cum)}</div>
         </ChartTooltip>
       )}
     </div>
@@ -1056,6 +1057,64 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
   );
 }
 
+// Call/Put Gamma Exposure by strike — the reference mock's 3rd panel: raw
+// callGEX (calls contribute positive gamma → drawn above zero, blue) and
+// putGEX (puts contribute negative gamma → drawn below zero, red) as two
+// side-by-side bars per strike, NOT netted together (that's the chart above).
+function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
+  const W = 720, H = 220, padL = 54, padR = 16, padB = 26, padT = 18;
+  const { containerRef, hover, show, hide } = useChartHover();
+  if (!rows.length) return <GlEmpty note="no chain rows" />;
+  const shown = glWindowedRows(rows, spot);
+  const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
+  const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
+  const callVals = shown.map((r) => r.callGEX ?? 0);
+  const putVals = shown.map((r) => r.putGEX ?? 0);
+  let minV = Math.min(0, ...putVals), maxV = Math.max(0, ...callVals);
+  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
+  const y0 = y(0);
+  const slotW = (W - padL - padR) / shown.length;
+  const barW = Math.max(1.5, slotW * 0.34);
+
+  return (
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+        <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+        {shown.map((r, i) => {
+          const cv = r.callGEX ?? 0, pv = r.putGEX ?? 0;
+          const cTop = cv >= 0 ? y(cv) : y0;
+          const cH = Math.max(1, Math.abs(y(cv) - y0));
+          const pTop = pv >= 0 ? y(pv) : y0;
+          const pH = Math.max(1, Math.abs(y(pv) - y0));
+          const cx = x(r.strike) - barW - 0.5;
+          const px = x(r.strike) + 0.5;
+          return (
+            <g key={r.strike}>
+              <rect x={cx} y={cTop} width={barW} height={cH} fill={LIGHT_BLUE} opacity={hover?.idx === i ? 1 : 0.85} style={{ cursor: "crosshair" }} onMouseMove={(e) => show(i, e)} />
+              <rect x={px} y={pTop} width={barW} height={pH} fill={HOME_THEME.red} opacity={hover?.idx === i ? 1 : 0.85} style={{ cursor: "crosshair" }} onMouseMove={(e) => show(i, e)} />
+            </g>
+          );
+        })}
+        <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+        {[minV, 0, maxV].map((v, i) => (
+          <text key={i} x={padL - 8} y={y(v) + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(v)}</text>
+        ))}
+        {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
+          <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
+        ))}
+      </svg>
+      {hover && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
+          <div>CallGEX: {glFmtBn(shown[hover.idx].callGEX)}</div>
+          <div>PutGEX: {glFmtBn(shown[hover.idx].putGEX)}</div>
+        </ChartTooltip>
+      )}
+    </div>
+  );
+}
+
 // Open interest by date — total (call+put) OI from the browser-local daily
 // history log (GlHistoryEntry.openInt), one bar per trading day recorded so far.
 function OiByDateChart({ rows }: { rows: GlHistoryEntry[] }) {
@@ -1107,84 +1166,223 @@ function OiByDateChart({ rows }: { rows: GlHistoryEntry[] }) {
   );
 }
 
-// Call OI / Call Vol / Put OI / Put Vol — 4-row heatmap by strike. Each row is
-// normalized independently (its own min/max) since OI and volume run on very
-// different scales; cell alpha encodes intensity, calls in blue / puts in red.
-const OI_HEATMAP_ROWS: { key: keyof GexLevelsRow; label: string; base: string }[] = [
-  { key: "callOI", label: "Call OI", base: LIGHT_BLUE },
-  { key: "callVolume", label: "Call Vol", base: LIGHT_BLUE },
-  { key: "putOI", label: "Put OI", base: HOME_THEME.red },
-  { key: "putVolume", label: "Put Vol", base: HOME_THEME.red },
-];
+// ── Open Interest by Expiration ─────────────────────────────────────────────
+// OPRA OI is a once-daily value (posted ~06:30 ET, reflects the prior close —
+// same fact server-v2/oi-change-recorder.js relies on), so this doesn't need
+// to ride the 15s /proxy/gex poll: fetch once per ET trading day, cache in
+// localStorage, and let the card's own Refresh button force a re-pull. Sums
+// real call/put OI per expiration via /api/chains (same endpoint /options-chain
+// and /mult-greek already use for per-expiry chain data) across the nearest
+// listed expirations for the live symbol.
+type OiByExpiryRow = { expiry: string; callOI: number; putOI: number };
 
-function OiVolHeatmap({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [hover, setHover] = useState<{ row: number; col: number; x: number; y: number } | null>(null);
-  if (!rows.length) return <GlEmpty note="no chain rows" />;
-  const shown = glWindowedRows(rows, spot);
-  const strikeStep = shown.length > 1 ? Math.abs(shown[1].strike - shown[0].strike) : 1;
+const OI_EXPIRY_MAX = 12;
+const OI_EXPIRY_CACHE_PREFIX = "gexlevels-oi-by-expiry-v1";
 
-  const showCell = (row: number, col: number, e: { clientX: number; clientY: number }) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setHover({ row, col, x: e.clientX - rect.left, y: e.clientY - rect.top });
-  };
+type OiExpiryCache = { date: string; symbol: string; rows: OiByExpiryRow[] };
+
+function loadOiExpiryCache(symbol: string): OiExpiryCache | null {
+  try {
+    const raw = localStorage.getItem(`${OI_EXPIRY_CACHE_PREFIX}:${symbol}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as OiExpiryCache;
+    return parsed?.date && parsed?.symbol === symbol ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveOiExpiryCache(symbol: string, rows: OiByExpiryRow[]) {
+  try {
+    const entry: OiExpiryCache = { date: todayEtDate(), symbol, rows };
+    localStorage.setItem(`${OI_EXPIRY_CACHE_PREFIX}:${symbol}`, JSON.stringify(entry));
+  } catch {
+    // localStorage unavailable — just won't cache, refetches every mount.
+  }
+}
+
+async function fetchOiTotalsForExpiry(symbol: string, expiry: string): Promise<{ callOI: number; putOI: number }> {
+  const res = await fetch(`/api/chains?ticker=${encodeURIComponent(symbol)}&expiration=${encodeURIComponent(expiry)}&range=all`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  const items: unknown[] = Array.isArray(json?.data?.items) ? json.data.items : [];
+  let callOI = 0, putOI = 0;
+  for (const group of items) {
+    const g = group as { "expiration-date"?: string; strikes?: unknown[] };
+    const groupExp = String(g["expiration-date"] ?? "").slice(0, 10);
+    if (groupExp && groupExp !== expiry.slice(0, 10)) continue;
+    for (const item of g.strikes ?? []) {
+      const it = item as { call?: Record<string, unknown>; put?: Record<string, unknown> };
+      const oi = (o: Record<string, unknown> | undefined) => (o ? parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0 : 0);
+      callOI += oi(it.call);
+      putOI += oi(it.put);
+    }
+  }
+  return { callOI, putOI };
+}
+
+function useOiByExpiration(symbol: string, expirations: string[]) {
+  const [rows, setRows] = useState<OiByExpiryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  const run = useCallback(async (force: boolean) => {
+    if (!symbol || !expirations.length) return;
+    if (!force) {
+      const cached = loadOiExpiryCache(symbol);
+      if (cached && cached.date === todayEtDate()) {
+        setRows(cached.rows);
+        setLoadedAt(Date.now());
+        return;
+      }
+    }
+    setLoading(true);
+    setErr(null);
+    try {
+      const targets = expirations.slice().sort().slice(0, OI_EXPIRY_MAX);
+      const settled = await Promise.allSettled(targets.map((expiry) => fetchOiTotalsForExpiry(symbol, expiry)));
+      const next: OiByExpiryRow[] = [];
+      settled.forEach((r, i) => {
+        if (r.status === "fulfilled") next.push({ expiry: targets[i], callOI: r.value.callOI, putOI: r.value.putOI });
+      });
+      if (!next.length) throw new Error("no expirations resolved");
+      setRows(next);
+      saveOiExpiryCache(symbol, next);
+      setLoadedAt(Date.now());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [symbol, expirations]);
+
+  useEffect(() => {
+    void run(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, expirations.join(",")]);
+
+  return { rows, loading, err, loadedAt, refresh: () => run(true) };
+}
+
+function glFmtExpiryLabel(ymd: string): string {
+  const [, m, d] = ymd.split("-").map(Number);
+  return m && d ? `${m}/${d}` : ymd;
+}
+
+// One CALL or PUT mini bar chart, x-axis = expiration date, y-axis = total OI.
+function OiByExpiryMiniChart({ rows, valueKey, color, label }: { rows: OiByExpiryRow[]; valueKey: "callOI" | "putOI"; color: string; label: string }) {
+  const W = 340, H = 190, padL = 40, padR = 10, padB = 32, padT = 20;
+  const { containerRef, hover, show, hide } = useChartHover();
+  if (!rows.length) return <GlEmpty note="no expirations" />;
+  const n = rows.length;
+  const maxV = Math.max(1, ...rows.map((r) => r[valueKey]));
+  const slotW = (W - padL - padR) / n;
+  const barW = Math.max(3, slotW * 0.55);
+  const y0 = H - padB;
+  const barH = (v: number) => (v / maxV) * (y0 - padT);
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        {OI_HEATMAP_ROWS.map((rowDef, ri) => {
-          const values = shown.map((r) => r[rowDef.key]);
-          const maxV = Math.max(1, ...values);
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color, textAlign: "center", marginBottom: 2 }}>{label}</div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 200 }} onMouseLeave={hide}>
+        <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+        {rows.map((r, i) => {
+          const cx = padL + slotW * (i + 0.5);
+          const h = Math.max(1, barH(r[valueKey]));
           return (
-            <div key={rowDef.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 64, flexShrink: 0, fontSize: 11, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.65, textAlign: "right" }}>
-                {rowDef.label}
-              </div>
-              <div style={{ display: "flex", flex: 1, gap: 1, height: 26 }}>
-                {shown.map((r, ci) => {
-                  const v = r[rowDef.key];
-                  const alphaPct = maxV > 0 ? Math.round((v / maxV) * 90) + 8 : 8;
-                  const alphaHex = Math.round((alphaPct / 100) * 255).toString(16).padStart(2, "0");
-                  const isSpotCol = Math.abs(r.strike - spot) < strikeStep;
-                  return (
-                    <div
-                      key={r.strike}
-                      onMouseMove={(e) => showCell(ri, ci, e)}
-                      onMouseLeave={() => setHover(null)}
-                      style={{
-                        flex: 1,
-                        height: "100%",
-                        background: `${rowDef.base}${alphaHex}`,
-                        outline: isSpotCol ? `1px solid ${HOME_THEME.text}` : "none",
-                        cursor: "crosshair",
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            </div>
+            <rect
+              key={r.expiry}
+              x={cx - barW / 2}
+              y={y0 - h}
+              width={barW}
+              height={h}
+              fill={color}
+              opacity={hover?.idx === i ? 1 : 0.85}
+              style={{ cursor: "crosshair" }}
+              onMouseMove={(e) => show(i, e)}
+            />
           );
         })}
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginLeft: 72, marginTop: 4, fontSize: 10, color: HOME_THEME.text, opacity: 0.55 }}>
-        <span>{glFmt0(shown[0].strike)}</span>
-        <span>{glFmt0(shown[Math.floor(shown.length / 2)].strike)}</span>
-        <span>{glFmt0(shown[shown.length - 1].strike)}</span>
-      </div>
+        {rows.map((r, i) => (
+          (n <= 8 || i % Math.ceil(n / 8) === 0) && (
+            <text key={r.expiry} x={padL + slotW * (i + 0.5)} y={y0 + 14} textAnchor="middle" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>
+              {glFmtExpiryLabel(r.expiry)}
+            </text>
+          )
+        ))}
+        <text x={padL - 6} y={padT + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(maxV)}</text>
+        <text x={padL - 6} y={y0 + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>0</text>
+      </svg>
       {hover && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.col].strike)}</div>
-          <div>{OI_HEATMAP_ROWS[hover.row].label}: {glFmt0(shown[hover.col][OI_HEATMAP_ROWS[hover.row].key])}</div>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(rows[hover.idx].expiry)}</div>
+          <div>{label} OI: {glFmt0(rows[hover.idx][valueKey])}</div>
         </ChartTooltip>
       )}
     </div>
   );
 }
 
+function OiByExpirationPanel({ symbol, expirations }: { symbol: string; expirations: string[] }) {
+  const { rows, loading, err, loadedAt, refresh } = useOiByExpiration(symbol, expirations);
+  const updatedLabel = loadedAt
+    ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).format(new Date(loadedAt))
+    : null;
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
+          {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · once/day (OPRA OI)` : "—"}
+        </div>
+        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 12, marginLeft: "auto" }}>Refresh</button>
+      </div>
+      {err && <div style={{ fontSize: 13, color: HOME_THEME.red, marginBottom: 8 }}>OI-by-expiration error: {err}</div>}
+      {!rows.length && !err ? (
+        <GlEmpty note={loading ? "loading expirations…" : "no data yet"} />
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <OiByExpiryMiniChart rows={rows} valueKey="callOI" color={LIGHT_BLUE} label="Call" />
+          <OiByExpiryMiniChart rows={rows} valueKey="putOI" color={HOME_THEME.red} label="Put" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Bar-underlay helper for the strike table — same left-anchored, magnitude-
+// scaled gradient bar treatment as the home page's GEX table (see
+// app/home/HomeClient.tsx `barEl`). Drawn behind the cell's text (z-index 0),
+// text sits on top (z-index 1). This is where the old standalone "Call/Put OI
+// & volume by strike" heatmap card's data now lives — as underlays in the
+// Call OI / Call Vol / Put OI / Put Vol columns instead of a separate chart.
+function slBarEl(value: number | null | undefined, max: number, positiveColor: string, negativeColor?: string): ReactNode {
+  if (value == null || !Number.isFinite(value) || !max) return null;
+  const ratio = Math.min(Math.abs(value) / max, 1);
+  const pct = ratio * 92;
+  if (!pct) return null;
+  const isNeg = value < 0 && negativeColor;
+  const color = isNeg ? negativeColor! : positiveColor;
+  const a = (0.16 + ratio * 0.22).toFixed(2);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 3,
+        bottom: 3,
+        left: 0,
+        width: `${pct}%`,
+        background: `${color}${Math.round(Number(a) * 255).toString(16).padStart(2, "0")}`,
+        borderRadius: 3,
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
 function StrikeLevelTable({
-  rows, spot, callsItmRed, putsItmRed,
-}: { rows: GexLevelsRow[]; spot: number; callsItmRed: boolean; putsItmRed: boolean }) {
+  rows, spot,
+}: { rows: GexLevelsRow[]; spot: number }) {
   const sorted = rows.slice().sort((a, b) => b.strike - a.strike);
   const totals = rows.reduce(
     (acc, r) => ({
@@ -1199,7 +1397,17 @@ function StrikeLevelTable({
   );
 
   const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, whiteSpace: "nowrap" };
-  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
+  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, position: "relative", overflow: "hidden" };
+  const cellText: CSSProperties = { position: "relative", zIndex: 1 };
+
+  // Column maxes for the bar underlays — magnitude-scaled against the whole
+  // chain (not just the windowed/visible rows), same convention as the charts.
+  const maxNetGEX = Math.max(1, ...rows.map((r) => Math.abs(glOiVolNet(r))));
+  const maxNetDEX = Math.max(1, ...rows.map((r) => Math.abs(r.netDEX ?? 0)));
+  const maxCallOI = Math.max(1, ...rows.map((r) => r.callOI ?? 0));
+  const maxCallVol = Math.max(1, ...rows.map((r) => r.callVolume ?? 0));
+  const maxPutOI = Math.max(1, ...rows.map((r) => r.putOI ?? 0));
+  const maxPutVol = Math.max(1, ...rows.map((r) => r.putVolume ?? 0));
 
   return (
     <div style={{ maxHeight: 460, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
@@ -1217,18 +1425,34 @@ function StrikeLevelTable({
         </thead>
         <tbody>
           {sorted.map((r) => {
-            const callItm = callsItmRed && r.strike < spot;
-            const putItm = putsItmRed && r.strike > spot;
             const netG = glOiVolNet(r);
             return (
               <tr key={r.strike} style={{ background: Math.abs(r.strike - spot) < 0.5 ? `${LIGHT_BLUE}14` : "transparent" }}>
-                <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{glFmt2(r.strike)}</td>
-                <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>{glFmt0(netG)}</td>
-                <td style={td}>{glFmt0(r.netDEX)}</td>
-                <td style={{ ...td, color: callItm ? HOME_THEME.red : HOME_THEME.text, fontWeight: callItm ? 800 : 400 }}>{glFmt0(r.callOI)}</td>
-                <td style={td}>{glFmt0(r.callVolume)}</td>
-                <td style={{ ...td, color: putItm ? HOME_THEME.red : HOME_THEME.text, fontWeight: putItm ? 800 : 400 }}>{glFmt0(r.putOI)}</td>
-                <td style={td}>{glFmt0(r.putVolume)}</td>
+                <td style={{ ...td, textAlign: "left", fontWeight: 700 }}><span style={cellText}>{glFmt2(r.strike)}</span></td>
+                <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>
+                  {slBarEl(netG, maxNetGEX, LIGHT_BLUE, HOME_THEME.red)}
+                  <span style={cellText}>{glFmt0(netG)}</span>
+                </td>
+                <td style={td}>
+                  {slBarEl(r.netDEX, maxNetDEX, LIGHT_BLUE, HOME_THEME.red)}
+                  <span style={cellText}>{glFmt0(r.netDEX)}</span>
+                </td>
+                <td style={td}>
+                  {slBarEl(r.callOI, maxCallOI, LIGHT_BLUE)}
+                  <span style={cellText}>{glFmt0(r.callOI)}</span>
+                </td>
+                <td style={td}>
+                  {slBarEl(r.callVolume, maxCallVol, LIGHT_BLUE)}
+                  <span style={cellText}>{glFmt0(r.callVolume)}</span>
+                </td>
+                <td style={td}>
+                  {slBarEl(r.putOI, maxPutOI, HOME_THEME.red)}
+                  <span style={cellText}>{glFmt0(r.putOI)}</span>
+                </td>
+                <td style={td}>
+                  {slBarEl(r.putVolume, maxPutVol, HOME_THEME.red)}
+                  <span style={cellText}>{glFmt0(r.putVolume)}</span>
+                </td>
               </tr>
             );
           })}
@@ -1348,8 +1572,6 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
 function GexLevelsTab() {
   const { snap, err, load } = useGexLevels();
   const { trigger, label, style: refreshStyle } = useRefreshButton(load);
-  const [callsItmRed, setCallsItmRed] = useState(true);
-  const [putsItmRed, setPutsItmRed] = useState(true);
   const [history, setHistory] = useState<GlHistoryEntry[]>([]);
 
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
@@ -1439,10 +1661,6 @@ function GexLevelsTab() {
                 { from: 1.3, to: 2, color: HOME_THEME.red },
               ]}
             />
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <ToggleSwitch label="Calls ITM = Red" on={callsItmRed} onChange={setCallsItmRed} />
-              <ToggleSwitch label="Puts ITM = Red" on={putsItmRed} onChange={setPutsItmRed} />
-            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 170 }}>
               <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
               <ThemedSelect
@@ -1463,22 +1681,31 @@ function GexLevelsTab() {
 
       {d && (
         // Left half: history of key level changes + strike-level table.
-        // Right half: the 3 charts (Net Gamma, Net Delta, OI by Date) + the
-        // Call/Put OI+Vol heatmap. Both columns stack on narrow viewports.
+        // Right half, in reference-mock order: Open Interest by Expiration,
+        // Net Gamma (cumulative — crosses zero at the flip), Call/Put Gamma
+        // by strike, then Net Delta + Open Interest by Date underneath (real,
+        // already-working panels kept below the 3-panel reference layout).
         <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
           <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
             <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
               {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
             </Card>
             <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
-              <StrikeLevelTable rows={d.rows} spot={d.spot} callsItmRed={callsItmRed} putsItmRed={putsItmRed} />
+              <StrikeLevelTable rows={d.rows} spot={d.spot} />
             </Card>
           </div>
 
           <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net gamma exposure by strike</span>}>
-              <NetGammaByStrikeChart rows={d.rows} spot={d.spot} />
-              <ChartLegend items={[{ label: "Positive (supportive)", color: LIGHT_BLUE }, { label: "Negative (volatile)", color: HOME_THEME.red }]} />
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by expiration</span>} subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}>
+              <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
+            </Card>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net gamma exposure by strike</span>} subtitle="Cumulative — crosses zero at the gamma flip (Neutral)">
+              <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
+              <ChartLegend items={[{ label: "Cumulative Gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
+            </Card>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Call/put gamma exposure by strike</span>}>
+              <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
+              <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
             </Card>
             <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net delta exposure by strike</span>}>
               <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
@@ -1486,9 +1713,6 @@ function GexLevelsTab() {
             </Card>
             <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by date</span>} subtitle="Total call+put OI, one bar per trading day logged (this browser only)">
               <OiByDateChart rows={history} />
-            </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Call / put OI &amp; volume by strike</span>} subtitle={`${snap?.expiry ?? ""} · current 0DTE chain only`}>
-              <OiVolHeatmap rows={d.rows} spot={d.spot} />
             </Card>
           </div>
         </div>
@@ -1529,9 +1753,8 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     blurb: "SqueezeMetrics-style GEX dashboard for the live 0DTE symbol.",
     points: [
       "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
-      "Strike-level net gamma, net delta, and call/put OI table",
-      "Interactive net gamma, net delta, and open-interest-by-date charts",
-      "Call/put OI + volume heatmap by strike",
+      "Strike-level table with hover-bar underlays for gamma, delta, and call/put OI &amp; volume",
+      "Open interest by expiration (real, once/day), cumulative net gamma, call/put gamma, net delta, and OI-by-date charts",
       "Browser-local daily history of level changes",
     ],
   },

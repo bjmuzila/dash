@@ -6,6 +6,30 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-05 — GEX Levels tab 3rd pass (`app/test/page.tsx`) + AM TBR source line removed (`app/es-candles/page.tsx`)
+
+Reworked `GexLevelsTab` layout to a two-column split (History+Strike table left; Net Gamma/Net Delta bar charts, Open Interest by Date, and a new `OiVolHeatmap` right), added `useChartHover`/`ChartTooltip` for hover tooltips, and swapped `SOFT_RED`→`HOME_THEME.red` across GexLevelsTab/OptionsPositioningTab/ToggleSwitch to match the rest of the dashboard's red. Also removed the "Source concept: nqstats.com/am_tbr.html" attribution line from `AmTbrPanel`'s description text on `/es-candles`. NOT build-verified — no shell access this session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-05 — /test wired into nav dropdown + Overview landing tab
+
+Added `{label:"Test Lab", href:"/test"}` to `GEX_ITEMS`/`ROUTE_SYMBOL` in `components/shared/NavMenu.tsx` and `QUICK_META` in `components/shared/GlobalToolbar.tsx` so `/test` is reachable from the toolbar hamburger and pinnable to Quick Pages. Added a new default "Overview" tab to `app/test/page.tsx` (`TestTab` union now overview/gexlevels/flow/positioning) with one themed card per existing tab (GEX Levels, Flow Inventory, Options Positioning) describing what it does + an "Open →" jump button, plus a banner noting these are early-stage test pages linking to `/feedback`. NOT build-verified — sandbox had no shell access this session (HYPERVISOR_VIRT_DISABLED).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-05 — AM TBR overlay moved onto the real ES candle chart (`app/es-candles/page.tsx`)
+
+Removed the standalone AM TBR SVG mini-chart (mock candle generator, rescaled-real-ES normalizer, its own `useEsCandles` fetch, Mock/Live toggle) and replaced it with a new "section 4" in the existing canvas `draw()` overlay that paints the TBR Open/±0.25 lines and MAE/MFE bands directly over the real candles via `series.priceToCoordinate`/`ts.timeToCoordinate`, anchored to today's real 8am ES open computed by a new `computeAmTbrInfo()`/`amTbrInfo` memo off the same merged `rows`; `AmTbrPanel` is now a status/legend card fed by `amTbrInfo` instead of a duplicate chart. NOT build-verified — sandbox failed to start this session.
+
 ## 2026-07-05 — Delayed-preview tier for unpaid signed-in users (/preview, /home, /mult-greek) + nav/drawer gating
 
 Built a "delayed" free tier: `app/preview/page.tsx` (new), plus `app/home/page.tsx`+`HomeClient.tsx` and `app/mult-greek/page.tsx`+`MultGreekClient.tsx` (split into server/client) branch on `getAccess()` to render frozen snapshots — new `preview_snapshots`, `home_static_snapshots`, `mult_greek_static_snapshots` tables/helpers in `lib/db.ts` — instead of live WS/chain data, fed every 30m by `server-v2/{preview,home,mult-greek}-snapshot-recorder.js` (+ `/proxy/*-snapshot?force=1` manual triggers) and gated in `middleware.ts` (PAID_EXEMPT now redirects unpaid users to `/home` instead of `/pricing`), with a CB-BETA 50%-off promo banner on all three. Added `isPaid`/`isOwnerClaim` JWT-claim fields to `components/auth/AuthProvider.tsx` so `components/shared/NavMenu.tsx` and `GexDock.tsx` can lock every page except Home/Multi Greek behind an "Upgrade" prompt for unpaid viewers, and GexDock's default tile now auto-swaps Home↔Multi Greek depending which one you opened it from.
