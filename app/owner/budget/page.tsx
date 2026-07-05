@@ -111,6 +111,7 @@ export default function BudgetPage() {
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
+  const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
@@ -146,6 +147,7 @@ export default function BudgetPage() {
     setAmazonRows(data.amazonRows || []);
     setCategories(data.categories || []);
     setDailyBalance(data.dailyBalance || null);
+    setPrevDailyBalance(data.prevDailyBalance || null);
     setLoading(false);
   };
 
@@ -517,6 +519,7 @@ export default function BudgetPage() {
             projected={computed.projectedBalance}
             billsDue={billsDue}
             dailyBalance={dailyBalance}
+            prevDailyBalance={prevDailyBalance}
             onSaveDaily={saveDailyBalance}
             currency={currency}
             onMarkPaid={markBillPaid}
@@ -1023,10 +1026,12 @@ function StatLine({ label, value, color }: { label: string; value: string; color
 // Manually-entered opening balance, updated each morning. Sums the three banks.
 function DailyOpeningBalanceCard({
   value,
+  prevValue,
   currency,
   onSave,
 }: {
   value: DailyBalance | null;
+  prevValue: DailyBalance | null;
   currency: string;
   onSave: (day: string, coastal: number, truist: number, secu: number) => void;
 }) {
@@ -1049,6 +1054,12 @@ function DailyOpeningBalanceCard({
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
+
+  // Day-over-day delta: today's entered balance vs. the last saved balance.
+  // A drop means bills/payments went out since then; a rise means money came in.
+  const prevSum = prevValue ? prevValue.coastal + prevValue.truist + prevValue.secu : null;
+  const diff = prevSum !== null ? sum - prevSum : null;
+
   return (
     <div style={{ ...dissolveCard(), padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
@@ -1056,6 +1067,12 @@ function DailyOpeningBalanceCard({
         {value && <span style={{ fontSize: 13, color: isToday ? HOME_THEME.green : HOME_THEME.muted }}>{isToday ? "updated today" : `as of ${shortDate(value.day)}`}</span>}
       </div>
       <div style={{ fontSize: 30, fontWeight: 900, color: sum < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(sum, currency)}</div>
+      {diff !== null && prevValue && (
+        <div style={{ fontSize: 14, fontWeight: 700, color: diff < 0 ? SOFT_RED : diff > 0 ? HOME_THEME.green : HOME_THEME.muted, marginTop: 2 }}>
+          {diff === 0 ? "No change" : `${diff > 0 ? "+" : ""}${fmtMoney(diff, currency)}`} vs {shortDate(prevValue.day)}
+          {diff !== 0 && <span style={{ color: HOME_THEME.muted, fontWeight: 500 }}> ({diff < 0 ? "bills out" : "payment in"})</span>}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12 }}>
         {([["COASTAL", c, setC], ["TRUIST", t, setT], ["SECU", s, setS]] as const).map(([lab, val, setter]) => (
           <div key={lab}>
@@ -1076,6 +1093,7 @@ function OverviewPanel({
   projected,
   billsDue,
   dailyBalance,
+  prevDailyBalance,
   onSaveDaily,
   currency,
   onMarkPaid,
@@ -1086,6 +1104,7 @@ function OverviewPanel({
   projected: number;
   billsDue: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[];
   dailyBalance: DailyBalance | null;
+  prevDailyBalance: DailyBalance | null;
   onSaveDaily: (day: string, coastal: number, truist: number, secu: number) => void;
   currency: string;
   onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
@@ -1109,7 +1128,7 @@ function OverviewPanel({
           <div style={{ marginTop: 14, fontSize: 14, color: HOME_THEME.muted }}>Projected end balance <span style={{ color: projected < 0 ? SOFT_RED : HOME_THEME.text, fontWeight: 800 }}>{fmtMoney(projected, currency)}</span></div>
         </div>
 
-        <DailyOpeningBalanceCard value={dailyBalance} currency={currency} onSave={onSaveDaily} />
+        <DailyOpeningBalanceCard value={dailyBalance} prevValue={prevDailyBalance} currency={currency} onSave={onSaveDaily} />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>

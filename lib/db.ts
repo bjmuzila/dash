@@ -3137,6 +3137,17 @@ export async function getLatestDailyBalance(profileId: number): Promise<DailyBal
   return rows[0] ?? null;
 }
 
+// Most recent saved opening balance strictly before `day` — used to show the
+// day-over-day delta (today's balance vs. what was left after yesterday's
+// bills/payments) on the Daily Opening Balance card.
+export async function getDailyBalanceBefore(profileId: number, day: string): Promise<DailyBalanceRecord | null> {
+  const rows = await queryAll<DailyBalanceRecord>(
+    "SELECT * FROM budget_daily_balance WHERE profile_id = ? AND day < ? ORDER BY day DESC LIMIT 1",
+    [profileId, day]
+  );
+  return rows[0] ?? null;
+}
+
 // Assign (or clear, with null) a register row's category.
 export async function setRegisterCategory(profileId: number, id: number, categoryId: number | null): Promise<void> {
   const pool = await getDb();

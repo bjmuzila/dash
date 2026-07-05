@@ -72,11 +72,19 @@ for (const r of priceRows) {
 }
 
 // ── build the per-day report ─────────────────────────────────────────────
+// Data-quality guard: a real SPX 2-4pm ET range is almost never >150pt. Rows
+// that blow past that are near-certainly bad spot data (e.g. leftover rows
+// from before the 2026-06-29 ThetaData cutover), not real price action —
+// drop them rather than let them distort the touch-rate stats.
+const RANGE_CAP = Number(process.env.RANGE_CAP ?? 150);
+let dropped = 0;
 const days = [];
 for (const [date, prices] of pricesByDate) {
   const cbRow = cbByDate.get(date);
   if (!cbRow || !prices.length) continue; // no known CB by 2pm, or no price data that day
   prices.sort((a, b) => a.ts - b.ts);
+  const spots = prices.map((p) => p.spot);
+  if (Math.max(...spots) - Math.min(...spots) > RANGE_CAP) { dropped++; continue; }
   const cb = cbRow.cb;
   const first = prices[0], last = prices[prices.length - 1];
   let minAbsDist = Infinity, touchedAt = null;
@@ -101,6 +109,7 @@ for (const [date, prices] of pricesByDate) {
 }
 days.sort((a, b) => a.date.localeCompare(b.date));
 
+if (dropped) console.log(`Dropped ${dropped} day(s) with a >${RANGE_CAP}pt 2-4pm range as bad spot data.`);
 if (!days.length) { console.log("No days with both a known 2pm CB level and 2-4pm price data. Nothing to report."); process.exit(0); }
 
 console.log(`\n=== Per-day: SPX vs CB (frozen as of 2pm ET), tolerance ±${TOL}pt ===`);

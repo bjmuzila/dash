@@ -11,6 +11,7 @@ import {
   setRegisterCategory,
   upsertDailyBalance,
   getLatestDailyBalance,
+  getDailyBalanceBefore,
   insertRegisterRow,
   updateRegisterRow,
   deleteRegisterRow,
@@ -80,7 +81,8 @@ export async function GET(req: NextRequest) {
       listAmazonRows(profile.id, from, to),
       getLatestDailyBalance(profile.id),
     ]);
-    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, dailyBalance });
+    const prevDailyBalance = dailyBalance ? await getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
+    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, dailyBalance, prevDailyBalance });
   } catch (err) {
     return NextResponse.json({ error: "Budget load failed", detail: String(err) }, { status: 500 });
   }
