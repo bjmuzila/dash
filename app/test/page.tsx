@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, DragEvent, ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -873,13 +873,6 @@ function SemiGauge({
   );
 }
 
-// Shared "windowed strikes around spot" helper for all three strike charts.
-function glWindowedRows(rows: GexLevelsRow[], spot: number): GexLevelsRow[] {
-  const lo = spot * 0.94, hi = spot * 1.06;
-  const win = rows.filter((r) => r.strike >= lo && r.strike <= hi);
-  return (win.length > 4 ? win : rows).slice();
-}
-
 // Shared hover state for the strike/date charts below: tracks which data
 // index is under the cursor + the cursor's position relative to the chart's
 // wrapping <div> (position:relative), so a floating HTML tooltip can follow it.
@@ -893,6 +886,55 @@ function useChartHover() {
   }, []);
   const hide = useCallback(() => setHover(null), []);
   return { containerRef, hover, show, hide };
+}
+
+// Shared click-drag panning for the continuous strike charts (Net Gamma,
+// Call/Put Gamma, Net Delta): mousedown+move inside the chart slides the
+// visible strike window left/right, clamped to the real chain's min/max
+// strike, so you can drag to see strikes further from spot without the
+// window auto-recentering. A ref (not state) tracks "currently dragging" so
+// the per-point hover handlers below can synchronously skip the tooltip
+// mid-drag — state updates are one tick too slow for that check. Double-click
+// recenters back on spot.
+function useChartPan(rows: GexLevelsRow[], spot: number, windowFrac = 0.06) {
+  const sorted = useMemo(() => rows.slice().sort((a, b) => a.strike - b.strike), [rows]);
+  const minStrike = sorted[0]?.strike ?? spot;
+  const maxStrike = sorted[sorted.length - 1]?.strike ?? spot;
+  const winHalf = Math.max(spot * windowFrac, 1);
+  const [panOffset, setPanOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const draggingRef = useRef<{ startX: number; startPan: number; pxPerStrike: number } | null>(null);
+
+  const clampPan = useCallback((raw: number) => {
+    const lo = minStrike + winHalf, hi = maxStrike - winHalf;
+    if (lo > hi) return 0; // chain narrower than the window — nothing to pan
+    const center = Math.min(hi, Math.max(lo, spot + raw));
+    return center - spot;
+  }, [spot, minStrike, maxStrike, winHalf]);
+
+  const onDragStart = useCallback((clientX: number, pxPerStrike: number) => {
+    draggingRef.current = { startX: clientX, startPan: panOffset, pxPerStrike };
+    setIsDragging(true);
+  }, [panOffset]);
+
+  const onDragMove = useCallback((clientX: number) => {
+    const d = draggingRef.current;
+    if (!d) return;
+    const deltaPx = clientX - d.startX;
+    const deltaStrikes = d.pxPerStrike > 0 ? deltaPx / d.pxPerStrike : 0;
+    setPanOffset(clampPan(d.startPan - deltaStrikes));
+  }, [clampPan]);
+
+  const onDragEnd = useCallback(() => {
+    draggingRef.current = null;
+    setIsDragging(false);
+  }, []);
+
+  const resetPan = useCallback(() => setPanOffset(0), []);
+  const canPan = maxStrike - minStrike > winHalf * 2;
+  const center = spot + panOffset;
+
+  return { center, winHalf, isDragging, draggingRef, onDragStart, onDragMove, onDragEnd, resetPan, canPan };
 }
 
 function ChartTooltip({ x, y, children }: { x: number; y: number; children: ReactNode }) {
@@ -944,15 +986,16 @@ function glCumulativeByStrike(rows: GexLevelsRow[]): { strike: number; cum: numb
 function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; spot: number; neutral?: number | null }) {
   const W = 720, H = 220, padL = 54, padR = 16, padB = 26, padT = 18;
   const { containerRef, hover, show, hide } = useChartHover();
+  const pan = useChartPan(rows, spot);
   if (!rows.length) return <GlEmpty note="no chain rows" />;
 
   const cumAll = glCumulativeByStrike(rows);
-  const lo = spot * 0.94, hi = spot * 1.06;
-  let shown = cumAll.filter((p) => p.strike >= lo && p.strike <= hi);
+  let shown = cumAll.filter((p) => p.strike >= pan.center - pan.winHalf && p.strike <= pan.center + pan.winHalf);
   if (shown.length <= 4) shown = cumAll;
 
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
+  const pxPerStrike = (W - padL - padR) / ((xhi - xlo) || 1);
   const vals = shown.map((p) => p.cum);
   let rawMin = Math.min(0, ...vals), rawMax = Math.max(0, ...vals);
   if (rawMin === rawMax) { rawMin -= 1; rawMax += 1; }
@@ -965,8 +1008,16 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
   const areaPath = `${linePath} L ${x(xhi).toFixed(2)} ${y0.toFixed(2)} L ${x(xlo).toFixed(2)} ${y0.toFixed(2)} Z`;
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+    <div
+      ref={containerRef}
+      style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
+      onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
+      onMouseMove={(e) => pan.onDragMove(e.clientX)}
+      onMouseUp={pan.onDragEnd}
+      onMouseLeave={() => { pan.onDragEnd(); hide(); }}
+      onDoubleClick={pan.resetPan}
+    >
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
         <path d={areaPath} fill={`${HOME_THEME.red}33`} stroke="none" />
         <path d={linePath} fill="none" stroke={HOME_THEME.red} strokeWidth={2} />
@@ -981,8 +1032,8 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
             cy={y(p.cum)}
             r={hover?.idx === i ? 4 : 7}
             fill={hover?.idx === i ? HOME_THEME.red : "transparent"}
-            style={{ cursor: "crosshair" }}
-            onMouseMove={(e) => show(i, e)}
+            style={{ cursor: "inherit" }}
+            onMouseMove={(e) => { if (!pan.draggingRef.current) show(i, e); }}
           />
         ))}
         {[rawMin, 0, rawMax].map((v, i) => (
@@ -992,7 +1043,7 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && (
+      {hover && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
           <div>Cumulative Gamma$: {glFmtBn(shown[hover.idx].cum)}</div>
@@ -1006,10 +1057,14 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
 function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
   const W = 720, H = 220, padL = 50, padR = 16, padB = 26, padT = 18;
   const { containerRef, hover, show, hide } = useChartHover();
+  const pan = useChartPan(rows, spot);
   if (!rows.length) return <GlEmpty note="no chain rows" />;
-  const shown = glWindowedRows(rows, spot);
+  const sortedAll = rows.slice().sort((a, b) => a.strike - b.strike);
+  let shown = sortedAll.filter((r) => r.strike >= pan.center - pan.winHalf && r.strike <= pan.center + pan.winHalf);
+  if (shown.length <= 4) shown = sortedAll;
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
+  const pxPerStrike = (W - padL - padR) / ((xhi - xlo) || 1);
   const vals = shown.map((r) => r.netDEX ?? 0);
   let minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
   if (minV === maxV) { minV -= 1; maxV += 1; }
@@ -1018,8 +1073,16 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
   const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+    <div
+      ref={containerRef}
+      style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
+      onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
+      onMouseMove={(e) => pan.onDragMove(e.clientX)}
+      onMouseUp={pan.onDragEnd}
+      onMouseLeave={() => { pan.onDragEnd(); hide(); }}
+      onDoubleClick={pan.resetPan}
+    >
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
         {shown.map((r, i) => {
           const v = r.netDEX ?? 0;
@@ -1034,8 +1097,8 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
               height={h}
               fill={v >= 0 ? LIGHT_BLUE : HOME_THEME.red}
               opacity={hover?.idx === i ? 1 : 0.85}
-              style={{ cursor: "crosshair" }}
-              onMouseMove={(e) => show(i, e)}
+              style={{ cursor: "inherit" }}
+              onMouseMove={(e) => { if (!pan.draggingRef.current) show(i, e); }}
             />
           );
         })}
@@ -1047,7 +1110,7 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && (
+      {hover && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
           <div>Net Delta: {glFmt0(shown[hover.idx].netDEX)}</div>
@@ -1064,10 +1127,14 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
 function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
   const W = 720, H = 220, padL = 54, padR = 16, padB = 26, padT = 18;
   const { containerRef, hover, show, hide } = useChartHover();
+  const pan = useChartPan(rows, spot);
   if (!rows.length) return <GlEmpty note="no chain rows" />;
-  const shown = glWindowedRows(rows, spot);
+  const sortedAll = rows.slice().sort((a, b) => a.strike - b.strike);
+  let shown = sortedAll.filter((r) => r.strike >= pan.center - pan.winHalf && r.strike <= pan.center + pan.winHalf);
+  if (shown.length <= 4) shown = sortedAll;
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
+  const pxPerStrike = (W - padL - padR) / ((xhi - xlo) || 1);
   const callVals = shown.map((r) => r.callGEX ?? 0);
   const putVals = shown.map((r) => r.putGEX ?? 0);
   let minV = Math.min(0, ...putVals), maxV = Math.max(0, ...callVals);
@@ -1078,8 +1145,16 @@ function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot:
   const barW = Math.max(1.5, slotW * 0.34);
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+    <div
+      ref={containerRef}
+      style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
+      onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
+      onMouseMove={(e) => pan.onDragMove(e.clientX)}
+      onMouseUp={pan.onDragEnd}
+      onMouseLeave={() => { pan.onDragEnd(); hide(); }}
+      onDoubleClick={pan.resetPan}
+    >
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
         {shown.map((r, i) => {
           const cv = r.callGEX ?? 0, pv = r.putGEX ?? 0;
@@ -1091,8 +1166,8 @@ function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot:
           const px = x(r.strike) + 0.5;
           return (
             <g key={r.strike}>
-              <rect x={cx} y={cTop} width={barW} height={cH} fill={LIGHT_BLUE} opacity={hover?.idx === i ? 1 : 0.85} style={{ cursor: "crosshair" }} onMouseMove={(e) => show(i, e)} />
-              <rect x={px} y={pTop} width={barW} height={pH} fill={HOME_THEME.red} opacity={hover?.idx === i ? 1 : 0.85} style={{ cursor: "crosshair" }} onMouseMove={(e) => show(i, e)} />
+              <rect x={cx} y={cTop} width={barW} height={cH} fill={LIGHT_BLUE} opacity={hover?.idx === i ? 1 : 0.85} style={{ cursor: "inherit" }} onMouseMove={(e) => { if (!pan.draggingRef.current) show(i, e); }} />
+              <rect x={px} y={pTop} width={barW} height={pH} fill={HOME_THEME.red} opacity={hover?.idx === i ? 1 : 0.85} style={{ cursor: "inherit" }} onMouseMove={(e) => { if (!pan.draggingRef.current) show(i, e); }} />
             </g>
           );
         })}
@@ -1104,7 +1179,7 @@ function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot:
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && (
+      {hover && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
           <div>CallGEX: {glFmtBn(shown[hover.idx].callGEX)}</div>
@@ -1569,9 +1644,97 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
   );
 }
 
+// ── Drag-to-reorder for the right-column chart cards ────────────────────────
+// Native HTML5 drag & drop, scoped to a small grip handle in each card's title
+// row (not the whole card) so grabbing the handle reorders cards while
+// grabbing anywhere inside a chart still pans it (useChartPan above) — the
+// two gestures would otherwise fight over the same mousedown+drag. Order
+// persists in localStorage so it survives reloads.
+const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "callPutGamma", "netDelta", "oiDate"] as const;
+type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
+const CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-v1";
+
+function useCardOrder<K extends string>(defaultOrder: readonly K[]) {
+  const [order, setOrder] = useState<K[]>(() => [...defaultOrder]);
+  const [draggingId, setDraggingId] = useState<K | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CARD_ORDER_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as string[];
+      const known = saved.filter((k): k is K => (defaultOrder as readonly string[]).includes(k));
+      const missing = defaultOrder.filter((k) => !known.includes(k));
+      if (known.length) setOrder([...known, ...missing]);
+    } catch {
+      // ignore — falls back to default order
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const persist = useCallback((next: K[]) => {
+    setOrder(next);
+    try { localStorage.setItem(CARD_ORDER_STORAGE_KEY, JSON.stringify(next)); } catch {}
+  }, []);
+
+  const handleDragStart = useCallback((id: K) => (e: DragEvent) => {
+    setDraggingId(id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+  }, []);
+  const handleDragEnd = useCallback(() => setDraggingId(null), []);
+  const cardDragOver = useCallback((id: K) => (e: DragEvent) => {
+    if (draggingId && draggingId !== id) e.preventDefault();
+  }, [draggingId]);
+  const cardDrop = useCallback((id: K) => (e: DragEvent) => {
+    e.preventDefault();
+    setDraggingId((current) => {
+      if (!current || current === id) return null;
+      setOrder((prevOrder) => {
+        const next = prevOrder.slice();
+        const from = next.indexOf(current);
+        const to = next.indexOf(id);
+        if (from === -1 || to === -1) return prevOrder;
+        next.splice(from, 1);
+        next.splice(to, 0, current);
+        persist(next);
+        return next;
+      });
+      return null;
+    });
+  }, [persist]);
+
+  return { order, draggingId, handleDragStart, handleDragEnd, cardDragOver, cardDrop };
+}
+
+function DragHandle({ onDragStart, onDragEnd }: { onDragStart: (e: DragEvent) => void; onDragEnd: () => void }) {
+  return (
+    <span
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onMouseDown={(e) => e.stopPropagation()}
+      title="Drag to reorder"
+      style={{ cursor: "grab", color: HOME_THEME.text, opacity: 0.4, fontSize: 16, lineHeight: 1, padding: "2px 6px", userSelect: "none", flexShrink: 0 }}
+    >
+      ⠿
+    </span>
+  );
+}
+
+function CardTitleRow({ label, onDragStart, onDragEnd }: { label: string; onDragStart: (e: DragEvent) => void; onDragEnd: () => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+      <span style={{ fontSize: 18 }}>{label}</span>
+      <DragHandle onDragStart={onDragStart} onDragEnd={onDragEnd} />
+    </div>
+  );
+}
+
 function GexLevelsTab() {
   const { snap, err, load } = useGexLevels();
   const { trigger, label, style: refreshStyle } = useRefreshButton(load);
+  const cardOrder = useCardOrder(RIGHT_CARD_KEYS);
   const [history, setHistory] = useState<GlHistoryEntry[]>([]);
 
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
@@ -1696,24 +1859,73 @@ function GexLevelsTab() {
           </div>
 
           <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by expiration</span>} subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}>
-              <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
-            </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net gamma exposure by strike</span>} subtitle="Cumulative — crosses zero at the gamma flip (Neutral)">
-              <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
-              <ChartLegend items={[{ label: "Cumulative Gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
-            </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Call/put gamma exposure by strike</span>}>
-              <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
-              <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
-            </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net delta exposure by strike</span>}>
-              <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
-              <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
-            </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by date</span>} subtitle="Total call+put OI, one bar per trading day logged (this browser only)">
-              <OiByDateChart rows={history} />
-            </Card>
+            {(() => {
+              const content: Record<RightCardKey, ReactNode> = {
+                oiExpiry: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Open interest by expiration" onDragStart={cardOrder.handleDragStart("oiExpiry")} onDragEnd={cardOrder.handleDragEnd} />}
+                    subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}
+                  >
+                    <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
+                  </Card>
+                ),
+                netGamma: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={cardOrder.handleDragStart("netGamma")} onDragEnd={cardOrder.handleDragEnd} />}
+                    subtitle="Cumulative — crosses zero at the gamma flip (Neutral) · click-drag to pan, double-click to reset"
+                  >
+                    <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
+                    <ChartLegend items={[{ label: "Cumulative Gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
+                  </Card>
+                ),
+                callPutGamma: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={cardOrder.handleDragStart("callPutGamma")} onDragEnd={cardOrder.handleDragEnd} />}
+                    subtitle="Click-drag to pan, double-click to reset"
+                  >
+                    <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
+                    <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
+                  </Card>
+                ),
+                netDelta: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Net delta exposure by strike" onDragStart={cardOrder.handleDragStart("netDelta")} onDragEnd={cardOrder.handleDragEnd} />}
+                    subtitle="Click-drag to pan, double-click to reset"
+                  >
+                    <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
+                    <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
+                  </Card>
+                ),
+                oiDate: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Open interest by date" onDragStart={cardOrder.handleDragStart("oiDate")} onDragEnd={cardOrder.handleDragEnd} />}
+                    subtitle="Total call+put OI, one bar per trading day logged (this browser only)"
+                  >
+                    <OiByDateChart rows={history} />
+                  </Card>
+                ),
+              };
+              return cardOrder.order.map((key) => (
+                <div
+                  key={key}
+                  onDragOver={cardOrder.cardDragOver(key)}
+                  onDrop={cardOrder.cardDrop(key)}
+                  style={{ opacity: cardOrder.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
+                >
+                  {content[key]}
+                </div>
+              ));
+            })()}
           </div>
         </div>
       )}
