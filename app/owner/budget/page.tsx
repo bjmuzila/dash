@@ -442,41 +442,7 @@ export default function BudgetPage() {
           </div>
         </div>
 
-        {/* Stat cards */}
-        {tab !== "yearly" && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
-          {[
-            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? SOFT_RED : HOME_THEME.text, icon: "📊" },
-            { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },
-            { label: "Total Outflows", value: Math.abs(computed.payments), color: SOFT_RED, icon: "📉" },
-            { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green, icon: "💵" },
-          ].map((t) => (
-            <div key={t.label} style={{ ...dissolveCard(), padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 18 }}>{t.icon}</span>
-                <span style={labelCap()}>{t.label}</span>
-              </div>
-              <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
-            </div>
-          ))}
-        </div>
-        )}
-
-        {/* Projection chart (full width) + cashflow calendar */}
-        {tab !== "yearly" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ ...dissolveCard(), padding: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
-            <ProjectionChart series={computed.series} currency={currency} />
-          </div>
-          <div style={{ ...dissolveCard(), padding: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
-            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
-          </div>
-        </div>
-        )}
-
-        {/* Tabs */}
+        {/* Tabs (top-level nav) */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
@@ -498,6 +464,40 @@ export default function BudgetPage() {
             onDelete={deleteRecurringRule}
             onClose={() => setShowRecurring(false)}
           />
+        )}
+
+        {/* Stat cards (Overview only) */}
+        {tab === "overview" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
+          {[
+            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? SOFT_RED : HOME_THEME.text, icon: "📊" },
+            { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },
+            { label: "Total Outflows", value: Math.abs(computed.payments), color: SOFT_RED, icon: "📉" },
+            { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green, icon: "💵" },
+          ].map((t) => (
+            <div key={t.label} style={{ ...dissolveCard(), padding: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 18 }}>{t.icon}</span>
+                <span style={labelCap()}>{t.label}</span>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
+            </div>
+          ))}
+        </div>
+        )}
+
+        {/* Projection chart + cashflow calendar (Overview only, equal width) */}
+        {tab === "overview" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
+          <div style={{ ...dissolveCard(), padding: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
+            <ProjectionChart series={computed.series} currency={currency} />
+          </div>
+          <div style={{ ...dissolveCard(), padding: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
+            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
+          </div>
+        </div>
         )}
 
         {/* Content */}
