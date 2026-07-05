@@ -27,7 +27,10 @@
  * bar — treated as a loss, conservative); UNRESOLVED if neither hits within the
  * window.
  *
- * Run on VPS:  docker exec -i dashboard-dashboard-1 node - < scripts/backtest-signals.mjs
+ * Run on VPS:  docker exec -i dashboard-dashboard-1 node scripts/backtest-signals.mjs
+ *              (run BY PATH, not piped via stdin like the other backtest-*.mjs
+ *              scripts — this one has relative imports to ../server-v2/*, and
+ *              `node -` has no real file path so those imports can't resolve.)
  * Env knobs:   DAYS (default 30), LOOKMIN (default 60), WIN (default 5), STOP (default 3)
  */
 import pg from "pg";
@@ -107,6 +110,14 @@ for (const b of bars) {
   barsByDate.get(d).push(b);
 }
 
+// computeContextLevels only ever needs the last ~2-3 sessions (prior-day RTH +
+// overnight window + today's bars for POC) — map once up front, then hand it a
+// bounded rolling slice per bar. Re-slicing+remapping the WHOLE prefix on every
+// iteration (bars.slice(0, i+1).map(...)) is what OOM'd the container: O(n²)
+// allocation over a multi-thousand-bar history.
+const ctxBars = bars.map((c) => ({ timestamp: Number(c.ts), high: Number(c.high), low: Number(c.low), volume: Number(c.volume) }));
+const CTX_WINDOW = 800; // ~2-3 trading sessions of 5m bars — plenty for PDH/PDL/POC
+
 // ── walk the candles in order, forward-filling the latest known GEX/CB
 //    snapshot at each bar (two-pointer, both timelines already sorted) ──────
 const mem = { prev: null, levels: {}, cooldowns: new Map() };
@@ -129,7 +140,7 @@ for (let i = 0; i < bars.length; i++) {
     flipSpx: gs.gexFlip,
     cbSpx: cs.cb,
     cbSize: cs.cbSize,
-    ctx: computeContextLevels(bars.slice(0, i + 1).map((c) => ({ timestamp: Number(c.ts), high: Number(c.high), low: Number(c.low), volume: Number(c.volume) })), ts),
+    ctx: computeContextLevels(ctxBars.slice(Math.max(0, i - CTX_WINDOW + 1), i + 1), ts),
   };
 
   for (const sig of evaluateFrame(frame, mem)) {

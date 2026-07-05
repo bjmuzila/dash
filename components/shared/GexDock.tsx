@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { HOME_THEME } from "./homeTheme";
 import { useGexPanel } from "./GexPanelContext";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 /**
  * GexDock — right-side pop-out (2/5 of the page) launched from the GlobalToolbar
@@ -30,6 +33,12 @@ const GROUPS: GexGroup[] = [
   { id: "scanner",           emoji: "🔍", title: "Scanner",      embed: "/scanner?embed=1" },
 ];
 
+// Groups that still work in "delayed" mode for unpaid signed-in users (mirrors
+// middleware.ts PAID_EXEMPT + NavMenu's FREE_IN_DELAYED_MODE). Everything else
+// would just bounce back to /home inside the iframe (middleware redirect), so
+// unpaid viewers get an upgrade panel instead of a confusing broken embed.
+const FREE_GROUP_IDS = new Set(["home", "mult-greek"]);
+
 const PANEL_WIDTH = "40vw";
 // Embedded pages render at >= this logical width (above the 899px phone
 // breakpoint) and the iframe is scaled down to fit the narrow dock, so every
@@ -40,8 +49,27 @@ const DESKTOP_MIN = 920;
 export default function GexDock() {
   const { open, closePanel } = useGexPanel();
   const onClose = closePanel;
+  const pathname = usePathname();
+  const { user, isPaid, isOwnerClaim } = useAuth();
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = ownerId ? user?.id === ownerId : false;
+  const hasFullAccess = isOwner || isOwnerClaim || isPaid;
+
   const [selectedId, setSelectedId] = useState<string>("es-candles");
   const selected = GROUPS.find((g) => g.id === selectedId) ?? null;
+  const selectedLocked = !!selected && !hasFullAccess && !FREE_GROUP_IDS.has(selected.id);
+
+  // Cross-link the two pages that work in delayed mode: opening the drawer
+  // from /home defaults it to Multi Greek, and vice versa, so an unpaid viewer
+  // can flip between the two static views without the (mostly locked) nav
+  // menu. Only fires on the closed→open transition so manually picking a
+  // different tile afterward isn't fought while the drawer stays open.
+  useEffect(() => {
+    if (!open) return;
+    if (pathname?.startsWith("/home")) setSelectedId("mult-greek");
+    else if (pathname?.startsWith("/mult-greek")) setSelectedId("home");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Measure the content viewport so the embedded iframe can be sized + scaled.
   const contentRef = useRef<HTMLDivElement>(null);
@@ -127,11 +155,12 @@ export default function GexDock() {
         >
           {GROUPS.map((g) => {
             const active = g.id === selectedId;
+            const locked = !hasFullAccess && !FREE_GROUP_IDS.has(g.id);
             return (
               <button
                 key={g.id}
                 onClick={() => setSelectedId(g.id)}
-                title={g.title}
+                title={locked ? `${g.title} — requires a subscription` : g.title}
                 style={{
                   display: "flex",
                   flexDirection: "column",
@@ -146,8 +175,9 @@ export default function GexDock() {
                   cursor: "pointer",
                   minWidth: 0,
                   minHeight: 62,
+                  opacity: locked ? 0.4 : 1,
                   boxShadow: active ? `0 8px 22px -6px ${cyanA(0.5)}` : "none",
-                  transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
+                  transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s, opacity 0.14s",
                 }}
                 onMouseEnter={(e) => {
                   if (active) return;
@@ -162,7 +192,7 @@ export default function GexDock() {
                   e.currentTarget.style.transform = "none";
                 }}
               >
-                <span aria-hidden style={{ fontSize: 18, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{g.emoji}</span>
+                <span aria-hidden style={{ fontSize: 18, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{locked ? "🔒" : g.emoji}</span>
                 <span style={{ fontSize: 9, fontWeight: 700, color: CYAN, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{g.title}</span>
               </button>
             );
@@ -182,7 +212,32 @@ export default function GexDock() {
             position: "relative",
           }}
         >
-          {open && selected?.embed ? (
+          {open && selectedLocked ? (
+            <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: 24, textAlign: "center" }}>
+              <span aria-hidden style={{ fontSize: 30 }}>🔒</span>
+              <div style={{ color: HOME_THEME.text, fontSize: 14, fontWeight: 700 }}>{selected?.title} requires a subscription</div>
+              <div style={{ color: HOME_THEME.muted, fontSize: 12.5, maxWidth: 260, lineHeight: 1.5 }}>
+                Delayed mode only covers Home and Multi Greek. Upgrade for the full live platform.
+              </div>
+              <Link
+                href="/pricing"
+                style={{
+                  marginTop: 4,
+                  padding: "9px 20px",
+                  borderRadius: 10,
+                  border: "none",
+                  background: `linear-gradient(180deg, ${CYAN}, #00b8c4)`,
+                  color: "#04121a",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  textDecoration: "none",
+                  boxShadow: "0 0 22px 4px rgba(255,255,255,0.45)",
+                }}
+              >
+                See plans →
+              </Link>
+            </div>
+          ) : open && selected?.embed ? (
             <iframe
               key={selected.id}
               src={selected.embed}

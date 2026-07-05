@@ -69,13 +69,13 @@ function RowCountsToday() {
           {loading ? "loading…" : `${TABLES.length} tables tracked`}
         </span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(120px, 1fr))", gap: 10 }}>
         {TABLES.map(({ id, label }) => (
           <div key={id} style={{ ...homePanelStyle, minHeight: 0, padding: "10px 14px", overflow: "hidden" }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, opacity: 0.9, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.muted, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {label}
             </div>
-            <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {counts[id] != null ? counts[id].toLocaleString() : "—"}
             </div>
             <div style={{ fontSize: 11, color: HOME_THEME.muted, whiteSpace: "nowrap" }}>rows today</div>

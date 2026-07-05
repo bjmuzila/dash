@@ -27,11 +27,31 @@ type AuthState = {
   userId: string | null;
   isLoaded: boolean;
   isSignedIn: boolean;
+  /** `is_paid` claim from the custom_access_token_hook (mirrors middleware's
+   *  server-side check) — lets client components gate UI without a round trip. */
+  isPaid: boolean;
+  /** `is_owner` claim, same source. */
+  isOwnerClaim: boolean;
   displayName: string;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
+
+/** Decode a JWT payload and read a boolean claim. No verification here — this
+ *  is a client-side UI convenience only; every gated route/action is still
+ *  enforced server-side (middleware.ts / ws-auth.js) regardless of this claim. */
+function readClaim(accessToken: string | null | undefined, key: string): boolean {
+  if (!accessToken) return false;
+  try {
+    const payload = accessToken.split(".")[1];
+    if (!payload) return false;
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(json)?.[key] === true;
+  } catch {
+    return false;
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = getSupabaseBrowser();
@@ -75,6 +95,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       userId: user?.id ?? null,
       isLoaded,
       isSignedIn: !!user,
+      isPaid: readClaim(session?.access_token, "is_paid"),
+      isOwnerClaim: readClaim(session?.access_token, "is_owner"),
       displayName: nameFromMeta || emailLocal || "Trader",
       signOut,
     };
@@ -94,6 +116,8 @@ export function useAuth(): AuthState {
       userId: null,
       isLoaded: false,
       isSignedIn: false,
+      isPaid: false,
+      isOwnerClaim: false,
       displayName: "Trader",
       signOut: async () => {},
     };

@@ -18,6 +18,7 @@ const Svg = ({ size = 20, children }: IconProps & { children: React.ReactNode })
 );
 const HomeIcon = (p: IconProps) => <Svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></Svg>;
 const ShieldIcon = (p: IconProps) => <Svg {...p}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V5z" /></Svg>;
+const LockIcon = (p: IconProps) => <Svg {...p}><rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></Svg>;
 
 // glossy frosted dock language — centralized in homeTheme.ts (DOCK_THEME)
 const CYAN_TOP = DOCK_THEME.cyanTop;
@@ -54,6 +55,13 @@ const GEX_ITEMS: NavItem[] = [
 
 // Routes that exist in the nav but are not yet live — rendered as disabled labels
 const COMING_SOON = new Set(["/trading", "/order-flow"]);
+
+// Routes that still work in "delayed" mode for unpaid signed-in users (see
+// middleware.ts PAID_EXEMPT + app/home + app/mult-greek's static branches).
+// Everything else in the nav renders locked ("Upgrade for access") instead of
+// a working link when the viewer isn't paid — clicking it goes live→/pricing
+// rather than a link that would just get redirected away.
+const FREE_IN_DELAYED_MODE = new Set(["/home", "/mult-greek"]);
 
 // Monochrome Unicode glyphs per route — flat black/white across all platforms
 // (no color-emoji fallback). Routes without an entry fall back to "•".
@@ -101,12 +109,16 @@ function NavGlyph({ href }: { href: string }) {
 // hamburger button's bounding rect (so the panel lines up under it).
 export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   const pathname = usePathname();
-  const { isSignedIn, user } = useAuth();
+  const { isSignedIn, user, isPaid, isOwnerClaim } = useAuth();
   // Owner Hub link is owner-only. Baked at build via NEXT_PUBLIC_OWNER_USER_ID
   // (same value the WS lifecycle uses). If unset, fall back to any signed-in user
   // so the owner isn't locked out — middleware still hard-blocks /owner/*.
   const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
   const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
+  // Full (live) access = owner (either signal) or an active subscription.
+  // Signed-out visitors don't see this menu item list gated at all here — the
+  // page-level middleware redirect handles them before they'd get this far.
+  const hasFullAccess = isOwner || isOwnerClaim || isPaid;
   const { menuOpen, closeMenu } = useMobileNav();
 
   const [mounted, setMounted] = useState(false);
@@ -214,6 +226,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
       {GEX_ITEMS.filter((i) => i.href !== "/home").map((item) => {
         const active = isActive(item.href);
         const comingSoon = COMING_SOON.has(item.href);
+        const locked = !hasFullAccess && !FREE_IN_DELAYED_MODE.has(item.href);
         if (comingSoon) {
           return (
             <div
@@ -236,6 +249,41 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
               <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", opacity: 0.7, flexShrink: 0 }}>Soon</span>
             </div>
+          );
+        }
+        // Unpaid signed-in viewer + a page that only works live: still a link
+        // (to /pricing, not the page itself — the page would just bounce them
+        // back via middleware), but dimmed with an "Upgrade" tag instead of a
+        // working nav row.
+        if (locked) {
+          return (
+            <Link
+              key={item.href}
+              href="/pricing"
+              prefetch={false}
+              onClick={closeMenu}
+              title={`${item.label} requires a subscription`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "9px 12px",
+                borderRadius: 10,
+                textDecoration: "none",
+                fontSize: 15,
+                fontWeight: 500,
+                color: HOME_THEME.muted,
+                opacity: 0.45,
+                border: "1px solid transparent",
+              }}
+            >
+              <NavGlyph href={item.href} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+              <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.cyan, opacity: 1, flexShrink: 0 }}>
+                <LockIcon size={11} />
+                Upgrade
+              </span>
+            </Link>
           );
         }
         return (

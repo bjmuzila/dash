@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,6 +487,35 @@ function AmTbrPanel() {
   );
 }
 
+function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
+  return (
+    <div style={{ ...statTileStyle, padding: "16px 18px" }}>
+      <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
+    </div>
+  );
+}
+
+// Illustrative numbers only — not computed from data, just filling out the mockup.
+function AmTbrStatsCards() {
+  return (
+    <Card variant="classic" accent={TBR_GOLD} title="AM TBR — Sample Stats" subtitle="Placeholder figures for layout only">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
+        <AmTbrStat label="8am Hour Reversion Rate" value="71%" accent={HOME_THEME.green} />
+        <AmTbrStat label="Total Reversion Rate" value="86%" accent={HOME_THEME.cyan} />
+        <AmTbrStat label="Non-Reverted MAE (Median)" value="0.41" accent={HOME_THEME.red} />
+        <AmTbrStat label="Reverted MAE (Median)" value="0.18" accent={HOME_THEME.green} />
+        <AmTbrStat label="Reverted MFE (Median)" value="0.63" accent={TBR_GOLD} />
+        <AmTbrStat label="Avg Time to Trigger" value="42m" accent={HOME_THEME.orange} />
+        <AmTbrStat label="Rolling Window" value="20d" accent={HOME_THEME.purple} />
+        <AmTbrStat label="Sample Size" value="2,510" accent={HOME_THEME.cyan} />
+      </div>
+    </Card>
+  );
+}
+
 function TestTabBar({ active, onChange }: { active: "flow" | "amtbr"; onChange: (tab: "flow" | "amtbr") => void }) {
   const tabs: { key: "flow" | "amtbr"; label: string }[] = [
     { key: "flow", label: "Flow Inventory" },
@@ -540,7 +569,10 @@ export default function TestPage() {
           </div>
         </>
       ) : (
-        <AmTbrPanel />
+        <>
+          <AmTbrPanel />
+          <AmTbrStatsCards />
+        </>
       )}
     </PageShell>
   );

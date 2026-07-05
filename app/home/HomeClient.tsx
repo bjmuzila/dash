@@ -985,16 +985,16 @@ export function HomeClient({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: 10,
+            gap: 16,
             flexWrap: "wrap",
-            padding: "10px 16px",
+            padding: "18px 24px",
             background: "rgba(33,158,188,0.10)",
             borderBottom: `1px solid ${C.cyan}55`,
-            fontSize: 13,
+            fontSize: 16,
             textAlign: "center",
           }}
         >
-          <span style={{ fontWeight: 800, color: C.cyan, letterSpacing: "0.04em" }}>DELAYED PREVIEW</span>
+          <span style={{ fontWeight: 800, color: C.cyan, letterSpacing: "0.04em", fontSize: 17 }}>DELAYED PREVIEW</span>
           <span style={{ opacity: 0.75 }}>
             {lastSnapshotTs
               ? `Snapshot from ${Math.max(0, Math.round((Date.now() - lastSnapshotTs) / 60000))} min ago — refreshes ~every 30 min`
@@ -1006,14 +1006,15 @@ export function HomeClient({
           <Link href="/pricing" style={{ textDecoration: "none" }}>
             <button
               style={{
-                padding: "6px 16px",
-                borderRadius: 8,
+                padding: "12px 26px",
+                borderRadius: 10,
                 border: "none",
                 background: `linear-gradient(180deg, ${C.cyan}, #00b8c4)`,
                 color: "#04121a",
-                fontSize: 13,
+                fontSize: 16,
                 fontWeight: 800,
                 cursor: "pointer",
+                boxShadow: "0 0 28px 6px rgba(255,255,255,0.55)",
               }}
             >
               See plans →
