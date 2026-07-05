@@ -104,6 +104,24 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
+// Heatmap rank badge ("#1", "#2"...), rasterized as an inline SVG data URI
+// rather than live DOM text. html2canvas is unreliable rasterizing text this
+// small (9px) inside a flex layout — captures were showing a blank/garbled
+// swatch instead of the number. An <img> bitmap is composited directly, so it
+// always captures correctly.
+const rankBadgeCache = new Map<string, string>();
+function rankBadgeDataUri(rank: number, bg: string): string {
+  const fg = bg === "#FB8501" ? "#000000" : "#ffffff";
+  const key = `${rank}|${bg}`;
+  const cached = rankBadgeCache.get(key);
+  if (cached) return cached;
+  const w = 20, h = 13;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="3" fill="${bg}"/><text x="${w / 2}" y="${h / 2 + 3}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="9" font-weight="700" fill="${fg}">#${rank}</text></svg>`;
+  const uri = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  rankBadgeCache.set(key, uri);
+  return uri;
+}
+
 // Net GEX header value is already denominated in BILLIONS of dollars.
 function fmtMoneyB(vB: number) {
   if (!isFinite(vB)) return "--";
@@ -1186,13 +1204,13 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { boxShadow: "inset 0 0 0 3px #ffffff", zIndex: 2 } : {}) }}>
+                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                               {heatmapView === "table" ? (
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
                                   <span style={{ flexShrink: 0, minWidth: 28 }}>
-                                    {row.rank && <span style={{ background: row.rankColor, color: row.rankColor === "#FB8501" ? "#000" : "#fff", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>#{row.rank}</span>}
+                                    {row.rank && <img src={rankBadgeDataUri(row.rank, row.rankColor ?? "#8B94A7")} width={20} height={13} style={{ display: "block" }} alt={`#${row.rank}`} />}
                                   </span>
                                   <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.strikeNum === mvcStrikeHeatmap && (

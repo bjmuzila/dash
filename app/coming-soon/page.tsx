@@ -3,6 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 
+// Local rgba helper (mirrors the private one in homeTheme.ts) so every glow/
+// shadow on this page derives from HOME_THEME tokens instead of raw triplets.
+function themeRgba(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+const WHITE = "#FFFFFF";
+
 // Beta signups open Wed Jul 1 2026, 9:30 AM ET (EDT = UTC-4 → 13:30 UTC).
 const TARGET = Date.parse("2026-07-01T13:30:00Z");
 const pad = (n: number) => String(Math.max(0, n)).padStart(2, "0");
@@ -83,7 +94,7 @@ const Unit = ({ v, label }: { v: string; label: string }) => (
     <span style={{
       fontSize: "clamp(30px,6vw,58px)", fontWeight: 900, color: HOME_THEME.text, lineHeight: 1,
       fontVariantNumeric: "tabular-nums",
-      textShadow: `0 0 16px rgba(255,255,255,.85), 0 0 40px rgba(33,158,188,.55)`,
+      textShadow: `0 0 16px ${themeRgba(WHITE, 0.85)}, 0 0 40px ${themeRgba(HOME_THEME.cyan, 0.55)}`,
     }}>{v}</span>
     <span style={{ fontSize: "clamp(9px,1.4vw,13px)", letterSpacing: ".3em", color: C, marginTop: 8, fontWeight: 700 }}>{label}</span>
   </div>
@@ -113,34 +124,34 @@ export default function ComingSoonPage() {
         <div style={{
           fontSize: "clamp(60px,13vw,150px)", fontWeight: 900, letterSpacing: ".06em",
           color: HOME_THEME.text, lineHeight: 1,
-          textShadow: `0 0 18px rgba(33,158,188,.85), 0 0 46px rgba(33,158,188,.55), 0 0 90px rgba(33,158,188,.35)`,
+          textShadow: `0 0 18px ${themeRgba(HOME_THEME.cyan, 0.85)}, 0 0 46px ${themeRgba(HOME_THEME.cyan, 0.55)}, 0 0 90px ${themeRgba(HOME_THEME.cyan, 0.35)}`,
           animation: "cbLogoPulse 3.2s ease-in-out infinite",
         }}>CB EDGE</div>
 
-        <div style={{ fontSize: "clamp(14px,2.6vw,26px)", letterSpacing: ".55em", color: C, fontWeight: 700, textShadow: `0 0 14px rgba(33,158,188,.6)` }}>
+        <div style={{ fontSize: "clamp(14px,2.6vw,26px)", letterSpacing: ".55em", color: C, fontWeight: 700, textShadow: `0 0 14px ${themeRgba(HOME_THEME.cyan, 0.6)}` }}>
           C O M I N G&nbsp;&nbsp;S O O N . . .
         </div>
 
         <div style={{ position: "relative", display: "inline-block" }}>
           <div style={{
             content: "", position: "absolute", inset: -14, borderRadius: 60, zIndex: -1,
-            background: "radial-gradient(ellipse at center, rgba(255,255,255,.45), rgba(255,255,255,.12) 55%, transparent 75%)",
+            background: `radial-gradient(ellipse at center, ${themeRgba(WHITE, 0.45)}, ${themeRgba(WHITE, 0.12)} 55%, transparent 75%)`,
             filter: "blur(14px)", animation: "cbBoxGlow 2.6s ease-in-out infinite",
           }} />
           <div style={{
             display: "flex", alignItems: "center", gap: 14,
-            background: HOME_THEME.panelBgStrong, border: `1px solid rgba(255,255,255,.22)`,
+            background: HOME_THEME.panelBgStrong, border: `1px solid ${themeRgba(WHITE, 0.22)}`,
             borderRadius: 54, padding: "18px 34px", backdropFilter: "blur(4px)",
-            boxShadow: "0 0 30px rgba(255,255,255,.25)",
+            boxShadow: `0 0 30px ${themeRgba(WHITE, 0.25)}`,
           }}>
             <span style={{
               display: "inline-block", width: 34, height: 34, borderRadius: "50%", flex: "none",
-              background: `radial-gradient(circle at 35% 30%, #fff, ${C})`,
+              background: `radial-gradient(circle at 35% 30%, ${WHITE}, ${C})`,
               boxShadow: `0 0 16px ${C}`, animation: "cbSpin 4s linear infinite",
             }} />
             <span style={{
               fontSize: "clamp(15px,2.4vw,24px)", fontWeight: 900, letterSpacing: ".04em",
-              color: HOME_THEME.text, textShadow: "0 0 10px rgba(255,255,255,.7)", whiteSpace: "nowrap",
+              color: HOME_THEME.text, textShadow: `0 0 10px ${themeRgba(WHITE, 0.7)}`, whiteSpace: "nowrap",
             }}>BETA SIGNUPS&nbsp;&nbsp;WEDNESDAY JULY 1&nbsp;&nbsp;9:30 AM ET</span>
           </div>
         </div>
@@ -155,10 +166,10 @@ export default function ComingSoonPage() {
         <div style={{
           fontSize: "clamp(16px,3vw,34px)", fontWeight: 900, letterSpacing: ".08em",
           color: HOME_THEME.text, marginTop: 6,
-          textShadow: `0 0 18px rgba(18,103,131,.8), 0 0 42px rgba(239,68,68,.5)`,
+          textShadow: `0 0 18px ${themeRgba(HOME_THEME.purple, 0.8)}, 0 0 42px ${themeRgba(HOME_THEME.red, 0.5)}`,
           animation: "cbLaunch 2.4s ease-in-out infinite",
         }}>
-          🎆 FULL LAUNCH <span style={{ color: HOME_THEME.purple, textShadow: `0 0 18px rgba(18,103,131,.9)` }}>JULY 4TH WEEKEND</span> 🎆
+          🎆 FULL LAUNCH <span style={{ color: HOME_THEME.purple, textShadow: `0 0 18px ${themeRgba(HOME_THEME.purple, 0.9)}` }}>JULY 4TH WEEKEND</span> 🎆
         </div>
       </div>
     </div>

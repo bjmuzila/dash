@@ -53,7 +53,7 @@ const GEX_ITEMS: NavItem[] = [
 ];
 
 // Routes that exist in the nav but are not yet live — rendered as disabled labels
-const COMING_SOON = new Set(["/ict", "/trading", "/order-flow"]);
+const COMING_SOON = new Set(["/trading", "/order-flow"]);
 
 // Monochrome Unicode glyphs per route — flat black/white across all platforms
 // (no color-emoji fallback). Routes without an entry fall back to "•".

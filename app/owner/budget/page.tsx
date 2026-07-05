@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ThemedMonthPicker } from "@/components/shared/ThemedMonthPicker";
@@ -111,7 +112,10 @@ export default function BudgetPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon">("overview");
+  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "yearly">("overview");
+  const [year, setYear] = useState<number>(() => new Date().getFullYear());
+  const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
+  const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -154,6 +158,25 @@ export default function BudgetPage() {
   useEffect(() => {
     setSelectedDate(null);
   }, [month]);
+
+  // Load a whole year of register rows when the Yearly tab is open.
+  useEffect(() => {
+    if (tab !== "yearly") return;
+    let cancelled = false;
+    (async () => {
+      setYearLoading(true);
+      try {
+        const res = await fetch(`/api/budget/year?year=${year}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!cancelled) setYearRows(data.rows || []);
+      } finally {
+        if (!cancelled) setYearLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, year]);
 
   const post = async (payload: Record<string, unknown>) => {
     await fetch("/api/budget", {
@@ -273,18 +296,24 @@ export default function BudgetPage() {
     return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
   }, [amazonRows]);
 
-  // Spend per category (this month's expense rows) + the "unsorted" bucket.
+  // Spend per category (this month's expense rows) + the "unsorted" bucket +
+  // the actual rows grouped by category (for the per-category detail popup).
   const categoryStats = useMemo(() => {
     const spent: Record<number, number> = {};
     const unsorted: RegisterRow[] = [];
+    const byCategory: Record<number, RegisterRow[]> = {};
     for (const r of register) {
       if (r.is_beginning || r.amount >= 0) continue;
       if (r.category_id == null) unsorted.push(r);
-      else spent[r.category_id] = (spent[r.category_id] || 0) + Math.abs(r.amount);
+      else {
+        spent[r.category_id] = (spent[r.category_id] || 0) + Math.abs(r.amount);
+        (byCategory[r.category_id] ||= []).push(r);
+      }
     }
     unsorted.sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
+    for (const k of Object.keys(byCategory)) byCategory[Number(k)].sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
     const unsortedTotal = unsorted.reduce((s, r) => s + Math.abs(r.amount), 0);
-    return { spent, unsorted, unsortedTotal };
+    return { spent, unsorted, unsortedTotal, byCategory };
   }, [register]);
 
   // Upcoming recurring payments in the next ~10 days not yet logged (materialized).
@@ -307,6 +336,52 @@ export default function BudgetPage() {
     out.sort((a, b) => (a.date < b.date ? -1 : 1));
     return out;
   }, [recurring, register, month]);
+
+  // Per-month rollup for the Yearly tab: real rows + non-materialized recurring
+  // occurrences, chaining start→end and honoring any month that sets its own
+  // beginning balance (which resets the running start for that month).
+  const yearMonths = useMemo(() => {
+    const byMonth: Record<string, RegisterRow[]> = {};
+    for (const r of yearRows) {
+      const ym = r.entry_date.slice(0, 7);
+      (byMonth[ym] ||= []).push(r);
+    }
+    let carry = 0;
+    const months: { ym: string; m: number; start: number; income: number; expenses: number; end: number; leftover: number; active: boolean }[] = [];
+    for (let m = 1; m <= 12; m++) {
+      const ym = `${year}-${String(m).padStart(2, "0")}`;
+      const rows = byMonth[ym] || [];
+      const beginRows = rows.filter((r) => r.is_beginning);
+      const real = rows.filter((r) => !r.is_beginning);
+      const materialized = new Set(real.filter((r) => !!r.recurring_tag && r.recurring_tag.startsWith("__recur__:")).map((r) => r.recurring_tag as string));
+      let income = 0;
+      let expenses = 0;
+      for (const r of real) {
+        if (r.amount > 0) income += r.amount;
+        else expenses += Math.abs(r.amount);
+      }
+      for (const rule of recurring) {
+        if (!rule.active) continue;
+        for (const date of occurrencesInMonth(rule, ym)) {
+          const tag = `__recur__:${rule.id}:${date}`;
+          if (materialized.has(tag)) continue;
+          if (rule.amount > 0) income += rule.amount;
+          else expenses += Math.abs(rule.amount);
+        }
+      }
+      const hasBegin = beginRows.length > 0;
+      const start = hasBegin ? beginRows.reduce((s, r) => s + r.amount, 0) : carry;
+      const leftover = income - expenses;
+      const end = start + leftover;
+      carry = end;
+      months.push({ ym, m, start, income, expenses, end, leftover, active: rows.length > 0 || income !== 0 || expenses !== 0 });
+    }
+    const totals = months.reduce(
+      (a, x) => ({ income: a.income + x.income, expenses: a.expenses + x.expenses, leftover: a.leftover + x.leftover }),
+      { income: 0, expenses: 0, leftover: 0 }
+    );
+    return { months, totals, start: months[0]?.start ?? 0, end: months[11]?.end ?? 0 };
+  }, [yearRows, recurring, year]);
 
   const monthLabel = (() => {
     const [y, m] = month.split("-").map(Number);
@@ -356,17 +431,14 @@ export default function BudgetPage() {
     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
       <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
-        <div style={{ ...cardAccent(4), padding: 0, overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
-          <div style={{ textAlign: "center", padding: "14px 18px 6px" }}>
+        <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
+          <div style={{ marginBottom: 12 }}>
+            <div style={labelCap()}>Month</div>
+            <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
+          </div>
+          <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
             <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
-            <div>
-              <div style={labelCap()}>Month</div>
-              <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
-            </div>
-            <BeginningEditor beginningByBank={computed.beginningByBank} totals={computed.totals} onSave={saveBeginning} currency={currency} />
           </div>
         </div>
 
@@ -402,7 +474,7 @@ export default function BudgetPage() {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"]] as const).map(([k, l]) => (
+          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
@@ -457,16 +529,21 @@ export default function BudgetPage() {
             spent={categoryStats.spent}
             unsorted={categoryStats.unsorted}
             unsortedTotal={categoryStats.unsortedTotal}
+            byCategory={categoryStats.byCategory}
             currency={currency}
             onAdd={addCategory}
             onDelete={deleteCategory}
             onAssign={assignCategory}
+            onDeleteRow={deleteRow}
           />
         )}
         {tab === "amazon" && (
           <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
           </div>
+        )}
+        {tab === "yearly" && (
+          <YearlyPanel data={yearMonths} year={year} onYear={setYear} currency={currency} loading={yearLoading} />
         )}
 
         {/* Composer */}
@@ -1055,23 +1132,28 @@ function CategoriesPanel({
   spent,
   unsorted,
   unsortedTotal,
+  byCategory,
   currency,
   onAdd,
   onDelete,
   onAssign,
+  onDeleteRow,
 }: {
   categories: Category[];
   spent: Record<number, number>;
   unsorted: RegisterRow[];
   unsortedTotal: number;
+  byCategory: Record<number, RegisterRow[]>;
   currency: string;
   onAdd: (name: string, amount: number, color: string) => void;
   onDelete: (id: number) => void;
   onAssign: (rowId: number, categoryId: number | null) => void;
+  onDeleteRow: (id: number) => void;
 }) {
   const [name, setName] = useState("");
   const [budget, setBudget] = useState("");
   const [color, setColor] = useState(CATEGORY_COLORS[0]);
+  const [openCat, setOpenCat] = useState<Category | null>(null);
 
   const add = () => {
     if (!name.trim()) return;
@@ -1123,16 +1205,18 @@ function CategoriesPanel({
           const pct = budgetAmt > 0 ? Math.min(100, (s / budgetAmt) * 100) : 0;
           const over = budgetAmt > 0 && s > budgetAmt;
           const dot = c.color || HOME_THEME.cyan;
+          const count = (byCategory[c.id] || []).length;
           return (
-            <div key={c.id} style={{ ...card(), padding: 12 }}>
+            <div key={c.id} onClick={() => setOpenCat(c)} title="View transactions in this category" style={{ ...card(), padding: 12, cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 800, minWidth: 0 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: dot, flex: "none" }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                  {count > 0 && <span style={{ fontSize: 12, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
                   <span style={{ fontSize: 15, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
-                  <DeleteButton onClick={() => onDelete(c.id)} />
+                  <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}><DeleteButton onClick={() => onDelete(c.id)} /></span>
                 </span>
               </div>
               {budgetAmt > 0 ? (
@@ -1160,6 +1244,39 @@ function CategoriesPanel({
         </div>
         <button onClick={add} style={primary()}>Add category</button>
       </div>
+
+      {openCat && createPortal(
+        <div
+          onClick={() => setOpenCat(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ ...card(), width: 520, maxWidth: "100%", maxHeight: "80vh", overflow: "auto", padding: 0, background: HOME_THEME.panel }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: openCat.color || HOME_THEME.cyan, flex: "none" }} />
+                <span style={{ fontSize: 16, fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{openCat.name}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>{fmtMoney(spent[openCat.id] || 0, currency)} spent</span>
+              </div>
+              <button onClick={() => setOpenCat(null)} style={{ ...ghost(), padding: "6px 12px" }}>Close</button>
+            </div>
+            <div style={{ padding: 12 }}>
+              {(byCategory[openCat.id] || []).length === 0 ? (
+                <div style={{ padding: "24px 12px", textAlign: "center", color: HOME_THEME.muted, fontSize: 14 }}>No transactions in this category yet.</div>
+              ) : (
+                (byCategory[openCat.id] || []).map((r) => (
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto", gap: 10, alignItems: "center", padding: "8px 6px", borderBottom: `1px solid rgba(255,255,255,0.05)` }}>
+                    <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
+                    <span style={{ fontSize: 15, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED, textAlign: "right", minWidth: 90 }}>{fmtMoney(r.amount, currency)}</span>
+                    <DeleteButton onClick={() => onDeleteRow(r.id)} />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
@@ -1341,6 +1458,72 @@ function ImportPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Year overview: per-month start / income / expenses / end / left over + totals.
+function YearlyPanel({
+  data,
+  year,
+  onYear,
+  currency,
+  loading,
+}: {
+  data: { months: { ym: string; m: number; start: number; income: number; expenses: number; end: number; leftover: number; active: boolean }[]; totals: { income: number; expenses: number; leftover: number }; start: number; end: number };
+  year: number;
+  onYear: (y: number) => void;
+  currency: string;
+  loading: boolean;
+}) {
+  const monthName = (m: number) => new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
+  return (
+    <div style={{ ...dissolveCard(), padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 19, fontWeight: 900 }}>Year overview</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => onYear(year - 1)} style={{ ...ghost(), padding: "6px 12px" }}>◀</button>
+          <span style={{ fontSize: 16, fontWeight: 900, minWidth: 56, textAlign: "center" }}>{year}</span>
+          <button onClick={() => onYear(year + 1)} style={{ ...ghost(), padding: "6px 12px" }}>▶</button>
+        </div>
+      </div>
+      {loading && <div style={{ fontSize: 14, color: HOME_THEME.muted }}>Loading…</div>}
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <thead>
+            <tr>
+              <th style={th("left")}>Month</th>
+              <th style={th("right")}>Start balance</th>
+              <th style={th("right")}>Income</th>
+              <th style={th("right")}>Expenses</th>
+              <th style={th("right")}>End of month</th>
+              <th style={th("right")}>Left over</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.months.map((mo) => (
+              <tr key={mo.ym} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, opacity: mo.active ? 1 : 0.4 }}>
+                <td style={{ padding: "10px 12px", fontWeight: 800 }}>{monthName(mo.m)}</td>
+                <td style={{ padding: "10px 12px", textAlign: "right", color: mo.start < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(mo.start, currency)}</td>
+                <td style={{ padding: "10px 12px", textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(mo.income, currency)}</td>
+                <td style={{ padding: "10px 12px", textAlign: "right", color: SOFT_RED }}>{fmtMoney(mo.expenses, currency)}</td>
+                <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 800, color: mo.end < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(mo.end, currency)}</td>
+                <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 800, color: mo.leftover < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(mo.leftover, currency)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: `2px solid ${HOME_THEME.border}` }}>
+              <td style={{ padding: 12, fontWeight: 900, textTransform: "uppercase", fontSize: 13, letterSpacing: "0.1em", color: HOME_THEME.muted }}>Total</td>
+              <td style={{ padding: 12, textAlign: "right", color: HOME_THEME.muted }}>{fmtMoney(data.start, currency)}</td>
+              <td style={{ padding: 12, textAlign: "right", fontWeight: 900, color: HOME_THEME.green }}>{fmtMoney(data.totals.income, currency)}</td>
+              <td style={{ padding: 12, textAlign: "right", fontWeight: 900, color: SOFT_RED }}>{fmtMoney(data.totals.expenses, currency)}</td>
+              <td style={{ padding: 12, textAlign: "right", fontWeight: 900, color: data.end < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(data.end, currency)}</td>
+              <td style={{ padding: 12, textAlign: "right", fontWeight: 900, color: data.totals.leftover < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(data.totals.leftover, currency)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   );
 }
