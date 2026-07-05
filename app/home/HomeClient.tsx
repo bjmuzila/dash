@@ -842,6 +842,23 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
     return best;
   }, [chartRows]);
 
+  // Max pain — expiry price that minimises total intrinsic payout to option
+  // holders (ported from the gex2 page calc; OI-weighted).
+  const maxPainStrike = useMemo(() => {
+    const rows = chartRows.filter((r) => Number.isFinite(r.strike));
+    if (!rows.length) return null;
+    let maxPain: number | null = null, best = Infinity;
+    for (const k of rows) {
+      let pain = 0;
+      for (const r of rows) {
+        if (r.strike < k.strike) pain += (r.callOI ?? 0) * (k.strike - r.strike);
+        else if (r.strike > k.strike) pain += (r.putOI ?? 0) * (r.strike - k.strike);
+      }
+      if (pain < best) { best = pain; maxPain = k.strike; }
+    }
+    return maxPain;
+  }, [chartRows]);
+
   // Call/Put walls on the SAME basis as the heatmap (OI+Vol, or Vol-only when the
   // toggle is set). The server-provided p.callWall/p.putWall are OI-only and so
   // disagreed with the OI+Vol NET GEX column (e.g. server said 7410 while the
@@ -995,8 +1012,13 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                   </div>
                   <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CB</span>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CB</span>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
+                  </div>
+                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MAX PAIN</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.cyan }}>{maxPainStrike ? formatStrikeValue(maxPainStrike) : "—"}</span>
                   </div>
               </div>
              </div>

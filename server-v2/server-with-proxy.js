@@ -125,7 +125,7 @@ function sendJson(res, code, obj, req) {
  * Handle a /proxy/* request. Returns true if handled.
  * @returns {boolean}
  */
-function handleProxyRest(req, res) {
+async function handleProxyRest(req, res) {
   const { pathname } = new URL(req.url || '/', 'http://localhost');
   if (!pathname || !pathname.startsWith('/proxy/')) return false;
 
@@ -173,7 +173,18 @@ function handleProxyRest(req, res) {
         });
         return true;
       }
-      sendJson(res, 200, { expiry: state.expiry, expirations: state.expirations });
+      {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const ticker = url.searchParams.get('ticker') || url.searchParams.get('root') || url.searchParams.get('symbol') || 'SPXW';
+        try {
+          const { items } = await fetchExpirations(ticker);
+          const expirations = items.map((it) => it['expiration-date']);
+          sendJson(res, 200, { expiry: state.expiry, expirations });
+        } catch (e) {
+          // Fall back to the frozen boot-time snapshot if the live REST fetch fails.
+          sendJson(res, 200, { expiry: state.expiry, expirations: state.expirations, warning: String(e?.message || e) });
+        }
+      }
       return true;
     case '/proxy/status':
       sendJson(res, 200, {
@@ -1427,7 +1438,7 @@ async function main() {
         }
       }
 
-      if (handleProxyRest(req, res)) return;
+      if (await handleProxyRest(req, res)) return;
     } catch (err) {
       captureError(err, { route: req.url, method: req.method });
       sendJson(res, 500, { error: String(err?.message || err) });

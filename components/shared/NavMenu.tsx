@@ -39,7 +39,6 @@ type NavItem = { label: string; href: string };
 // owner hub (/owner/*) and are owner-gated there, so they're no longer listed here.
 const GEX_ITEMS: NavItem[] = [
   { label: "Home", href: "/home" },
-  { label: "Probability + Gamma", href: "/gex2" },
   { label: "Multi Greek", href: "/mult-greek" },
   { label: "Traders Dashboard", href: "/traders-dashboard" },
   { label: "Options Chain", href: "/options-chain" },
@@ -60,7 +59,6 @@ const COMING_SOON = new Set(["/ict", "/trading", "/order-flow"]);
 // (no color-emoji fallback). Routes without an entry fall back to "•".
 const ROUTE_SYMBOL: Record<string, string> = {
   "/home": "⌂",
-  "/gex2": "∿",
   "/es-candles": "⑊",
   "/ict": "⌖",
   "/traders-dashboard": "⊞",

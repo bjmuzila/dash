@@ -24,11 +24,11 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Hub", href: "/owner", glyph: "⌂" },
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿" },
+      { label: "Sales", href: "/owner/dev/sales", glyph: "$" },
       { label: "Watch", href: "/owner/watch", glyph: "◉" },
       // Control Panel sections promoted to top-level entries (no longer nested).
       { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞" },
       { label: "Infra", href: "/owner/dev/owner?tab=infra", glyph: "◈" },
-      { label: "Database", href: "/owner/dev/owner?tab=database", glyph: "⛁" },
       { label: "Activity", href: "/owner/dev/owner?tab=activity", glyph: "📡" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤" },
@@ -63,7 +63,6 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
 export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "infra",    label: "Infra" },
-  { id: "database", label: "Database" },
   { id: "activity", label: "Activity" },
 ];
 

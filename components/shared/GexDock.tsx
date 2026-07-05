@@ -21,7 +21,6 @@ function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 export type GexGroup = { id: string; emoji: string; title: string; embed?: string };
 const GROUPS: GexGroup[] = [
   { id: "home",              emoji: "🏠", title: "Home",         embed: "/home?embed=1" },
-  { id: "gex2",              emoji: "🎲", title: "Prob + Gamma", embed: "/gex2?embed=1" },
   { id: "mult-greek",        emoji: "∇",  title: "Multi Greek",  embed: "/mult-greek?embed=1" },
   { id: "traders-dashboard", emoji: "🗓️", title: "Traders Dash", embed: "/traders-dashboard?embed=1" },
   { id: "em",                emoji: "↔️", title: "Est. Moves",   embed: "/em?embed=1" },

@@ -409,6 +409,20 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_email_unsub_created ON email_unsubscribes(created_at DESC);
 
+    -- Business expenses shown/netted on the owner Sales page (/owner/dev/sales).
+    -- amount_cents is always the per-cadence charge (e.g. 5000 = $50/mo if
+    -- cadence='monthly'); the page converts to a monthly-equivalent for the
+    -- Net KPI the same way subscription MRR does (yearly / 12).
+    CREATE TABLE IF NOT EXISTS sales_expenses (
+      id            SERIAL PRIMARY KEY,
+      name          TEXT NOT NULL,
+      category      TEXT NOT NULL DEFAULT 'other',
+      amount_cents  INTEGER NOT NULL,
+      cadence       TEXT NOT NULL DEFAULT 'monthly', -- 'monthly' | 'yearly' | 'once'
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sales_expenses_created ON sales_expenses(created_at DESC);
+
     -- Per-ticker weekly Estimated Move tracking. One row per (ticker, week).
     -- week_label is the human label that matches the EstimatedMoves columns
     -- (e.g. "10/3"); week_start is the Monday ISO date for ordering. em is the
@@ -1405,6 +1419,46 @@ export async function listUnsubscribes(limit = 5000): Promise<UnsubscribeRecord[
     "SELECT email, source, created_at FROM email_unsubscribes ORDER BY created_at DESC LIMIT ?",
     [limit]
   );
+}
+
+// ── Sales expenses (owner Sales page) ───────────────────────────────────────
+
+export interface SalesExpenseRecord {
+  id: number;
+  name: string;
+  category: string;
+  amount_cents: number;
+  cadence: "monthly" | "yearly" | "once";
+  created_at: string;
+}
+
+export async function listSalesExpenses(limit = 500): Promise<SalesExpenseRecord[]> {
+  return queryAll<SalesExpenseRecord>(
+    "SELECT id, name, category, amount_cents, cadence, created_at FROM sales_expenses ORDER BY created_at DESC LIMIT ?",
+    [limit]
+  );
+}
+
+export async function addSalesExpense(
+  name: string,
+  category: string,
+  amountCents: number,
+  cadence: "monthly" | "yearly" | "once"
+): Promise<SalesExpenseRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO sales_expenses (name, category, amount_cents, cadence)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, category, amount_cents, cadence, created_at`,
+    [name, category, amountCents, cadence]
+  );
+  return result.rows[0];
+}
+
+export async function removeSalesExpense(id: number): Promise<{ removed: boolean }> {
+  const pool = await getDb();
+  const result = await pool.query(`DELETE FROM sales_expenses WHERE id = $1`, [id]);
+  return { removed: (result.rowCount ?? 0) > 0 };
 }
 
 /** All suppressed emails as a lowercase Set — used to filter every broadcast. */

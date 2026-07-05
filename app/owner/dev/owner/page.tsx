@@ -942,7 +942,7 @@ function OverviewSection({ metrics }: {
   const pc = (i: number) => PALETTE[i % PALETTE.length];
   const TRACK = "rgba(255,255,255,0.06)";
   const cardStyle: React.CSSProperties = { ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 };
-  const titleStyle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: HOME_THEME.text, marginBottom: 11 };
+  const titleStyle: React.CSSProperties = { fontSize: 15, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 };
 
   // Traffic line path (12 days).
   const traffic = daily.counts.length ? daily.counts : [0];
@@ -2359,17 +2359,17 @@ export default function OwnerDashboard() {
           open={openSet.has("status")}
           onToggle={toggleSection}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
             {STATUS_ROWS.map((row) => (
               <span key={row.label} title={row.sub ? `${row.label}: ${row.sub}` : row.label}
-                style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, color: HOME_THEME.text }}>
+                style={{ display: "inline-flex", alignItems: "center", gap: 10, fontSize: 17, fontWeight: 600, color: HOME_THEME.text }}>
                 <span style={{
-                  width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+                  width: 15, height: 15, borderRadius: "50%", flexShrink: 0,
                   background: row.ok ? HOME_THEME.green : HOME_THEME.red,
-                  boxShadow: row.ok ? `0 0 6px ${HOME_THEME.green}88` : `0 0 6px ${HOME_THEME.red}88`,
+                  boxShadow: row.ok ? `0 0 8px ${HOME_THEME.green}aa` : `0 0 8px ${HOME_THEME.red}aa`,
                 }} />
                 {row.label}
-                {row.sub && <span style={{ opacity: 1, fontFamily: "var(--font-mono)", fontSize: 13 }}>{row.sub}</span>}
+                {row.sub && <span style={{ opacity: 1, fontFamily: "var(--font-mono)", fontSize: 16 }}>{row.sub}</span>}
               </span>
             ))}
           </div>
