@@ -51,7 +51,17 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = await getSupabaseServer();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  // Forward the same token to Supabase's OWN captcha gate. If Supabase's
+  // project-level "Enable Captcha protection" is on, signInWithPassword
+  // rejects with "captcha protection: request disallowed (no captcha_token
+  // found)" unless a token rides along here — verifyTurnstile() above only
+  // checks OUR Cloudflare-side verification and never forwarded the token,
+  // so the two gates were out of sync.
+  const { error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+    options: turnstileToken ? { captchaToken: turnstileToken } : undefined,
+  });
   if (error) {
     // Generic message — never reveal whether the email exists (no enumeration).
     return NextResponse.json({ error: "Invalid login credentials." }, { status: 401 });

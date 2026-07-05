@@ -4,6 +4,7 @@ import { getAccess } from "@/lib/subscription";
 import { getSubscription } from "@/lib/db";
 import PricingActions from "@/components/pricing/PricingActions";
 import BetaGate from "@/components/pricing/BetaGate";
+import UserMenu from "@/components/shared/UserMenu";
 import { HOME_THEME as T, homeGlossPanelStyle, homeHeaderStyle } from "@/components/shared/homeTheme";
 import { EXPLORE } from "@/components/explore/exploreContent";
 
@@ -61,6 +62,7 @@ export default async function PricingPage({
             Sign in
           </Link>
         )}
+        {userId && <UserMenu />}
       </header>
 
       <main

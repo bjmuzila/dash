@@ -51,10 +51,16 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = await getSupabaseServer();
+  // Forward the same token to Supabase's OWN captcha gate (separate from our
+  // Cloudflare-side verifyTurnstile() check above) — see login/route.ts for
+  // why this was missing and what error it produced.
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: emailRedirectTo ? { emailRedirectTo } : undefined,
+    options: {
+      ...(emailRedirectTo ? { emailRedirectTo } : {}),
+      ...(turnstileToken ? { captchaToken: turnstileToken } : {}),
+    },
   });
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
