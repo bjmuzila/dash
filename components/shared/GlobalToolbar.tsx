@@ -93,6 +93,7 @@ const QUICK_META: Record<string, { label: string; emoji: string }> = {
   "/social-media": { label: "Social Media", emoji: "💬" },
   "/es-candles": { label: "ES Candles", emoji: "🕯️" },
   "/ict": { label: "ICT", emoji: "🎯" },
+  "/test": { label: "Test Lab", emoji: "⚗️" },
   "/economic-calendar": { label: "Economic Calendar", emoji: "📅" },
   "/em": { label: "Estimated Moves", emoji: "↔️" },
   "/estimated-move": { label: "Estimated Move", emoji: "🔀" },

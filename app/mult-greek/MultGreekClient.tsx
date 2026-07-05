@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
+import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
 // expirations always fetched fresh — no cache import needed
 
@@ -371,7 +372,14 @@ function TickerPanel({
   }, []);
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HT.panelBg}`, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 16, overflow: "hidden" }}>
+    // "budget" variant = classicCardAccentStyle, the exact radial-glow-over-
+    // panelBg background this panel already used inline — sourced from the
+    // shared Card primitive instead of a hand-rolled duplicate now.
+    <Card
+      variant="budget"
+      padding={0}
+      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden", borderRadius: 16 }}
+    >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
       {/* Panel header */}
@@ -380,7 +388,7 @@ function TickerPanel({
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
           {spot > 0 && (
             <>
-              <span style={{ color: "#219EBC", fontWeight: 700 }}>{spot.toFixed(2)}</span>
+              <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
             </>
           )}
           {spot === 0 && <span style={{ color: "#475569" }}>--</span>}
@@ -514,7 +522,7 @@ function TickerPanel({
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }
 

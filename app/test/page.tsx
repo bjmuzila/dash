@@ -7,8 +7,6 @@ import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
-import { useEsCandles } from "@/hooks/useEsCandles";
-import type { EsCandleRecord } from "@/lib/snapdb";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
@@ -178,7 +176,10 @@ function useFlowInventory() {
     const settled = await Promise.allSettled(
       FLOW_TICKERS.map(async ({ ticker, subtitle }) => {
         const res = await fetch(`/proxy/flow-history?underlying=${ticker}&limit=20000`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null);
+          throw new Error(detail?.detail ? `HTTP ${res.status}: ${detail.detail}` : `HTTP ${res.status}`);
+        }
         const json = await res.json();
         const tape: FlowOrder[] = Array.isArray(json?.tape) ? json.tape : [];
         return aggregateFlow(ticker, subtitle, tape);
@@ -397,259 +398,9 @@ function SymbolPanel({ data }: { data: SymbolData }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AM TBR tab: 8am-12pm Time-Based-Range distribution mockup (nqstats.com/am_tbr).
-// Procedural chart data — layout/design test only, not wired to a live feed.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Gold/amber has no equivalent HOME_THEME token (palette has no yellow) — this
-// is the one intentional exception, scoped to this chart's TBR Open + MFE band.
-const TBR_GOLD = "#eab308";
-// Faded reference-chart candles sit behind the distribution bands, so they use
-// translucent white rather than a theme accent color (not semantic here).
-const CANDLE_UP = "rgba(255,255,255,0.55)";
-const CANDLE_DOWN = "rgba(255,255,255,0.22)";
-
-type Candle = { o: number; h: number; l: number; c: number };
-
-function buildAmTbrCandles(): Candle[] {
-  // (candleIndex, priceY) keyframes — priceY is an SVG y-coordinate (smaller = higher price).
-  const anchors: [number, number][] = [
-    [0, 460], [5, 455], [10, 452], [15, 432], [19, 380], [22, 300], [25, 265],
-    [27, 292], [30, 340], [33, 420], [36, 460], [38, 430], [41, 342], [43, 302],
-    [45, 340], [47, 420], [49, 470], [52, 560], [55, 650], [58, 760], [60, 790],
-    [62, 742], [64, 682], [66, 632], [68, 602], [69, 592],
-  ];
-  const xs = anchors.map((a) => a[0]);
-  const ys = anchors.map((a) => a[1]);
-  const interp = (t: number) => {
-    for (let i = 0; i < xs.length - 1; i++) {
-      if (t >= xs[i] && t <= xs[i + 1]) {
-        const f = (t - xs[i]) / (xs[i + 1] - xs[i]);
-        return ys[i] + (ys[i + 1] - ys[i]) * f;
-      }
-    }
-    return ys[ys.length - 1];
-  };
-  const N = 70;
-  const candles: Candle[] = [];
-  let prevClose = interp(0);
-  for (let i = 0; i < N; i++) {
-    const base = interp(i);
-    const noise = Math.sin(i * 1.7) * 7 + Math.sin(i * 0.55) * 5;
-    const close = base + noise;
-    const open = prevClose;
-    const wick = 9 + Math.abs(Math.sin(i * 2.3)) * 12;
-    const h = Math.min(open, close) - wick * 0.6 - Math.abs(Math.sin(i)) * 4;
-    const l = Math.max(open, close) + wick * 0.6 + Math.abs(Math.cos(i)) * 4;
-    candles.push({ o: open, h, l, c: close });
-    prevClose = close;
-  }
-  return candles;
-}
-
-const AMTBR_VB_W = 1650;
-const AMTBR_VB_H = 860;
-const AMTBR_CHART_LEFT = 10;
-const AMTBR_CHART_RIGHT = 1530;
-const AMTBR_BAND_LEFT = 560;
-
-// Band y-coordinates (SVG units, smaller = higher on screen / higher price).
-const NR_TOP = 20, NR_75 = 95, NR_MEDIAN = 190; // Non-Reverted MAE (red)
-const RM_90 = 230, RM_75 = 300, RM_MEDIAN = 340; // Reverted MAE (green)
-const PLUS_025 = 380, TBR_OPEN_Y = 430, MINUS_025 = 480; // trigger lines
-const MFE_MEDIAN = 540, MFE_75 = 650, MFE_90 = 780; // Reverted MFE (gold)
-
-const AMTBR_TIME_LABELS = [
-  "05:30", "06:00", "06:30", "07:00", "07:30", "08:00", "08:30", "09:00",
-  "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30",
-];
-
-function amTbrX(i: number, n: number): number {
-  return AMTBR_CHART_LEFT + (i / (n - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT);
-}
-
-// Maps real ES 5m bars (real price units) into the same chart-space y-range
-// the procedural mock uses, so the toggle swaps candle series without moving
-// the (still illustrative) percentile bands/trigger lines.
-const ES_CHART_Y_TOP = 40;
-const ES_CHART_Y_BOTTOM = 820;
-function normalizeEsCandles(rows: EsCandleRecord[]): Candle[] {
-  const inWindow = rows.filter((r) => {
-    const t = r.time || (r.slotKey ?? "").slice(11, 16);
-    return t >= "05:30" && t <= "12:30";
-  });
-  if (!inWindow.length) return [];
-  const priceMin = Math.min(...inWindow.map((r) => r.low));
-  const priceMax = Math.max(...inWindow.map((r) => r.high));
-  const span = Math.max(priceMax - priceMin, 0.01);
-  const toY = (price: number) => ES_CHART_Y_BOTTOM - ((price - priceMin) / span) * (ES_CHART_Y_BOTTOM - ES_CHART_Y_TOP);
-  return inWindow.map((r) => ({ o: toY(r.open), h: toY(r.high), l: toY(r.low), c: toY(r.close) }));
-}
-
-function AmTbrChart({ candles, showMarkers }: { candles: Candle[]; showMarkers: boolean }) {
-  const n = candles.length;
-  const candleW = n > 1 ? ((AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT) / n) * 0.62 : 8;
-
-  return (
-    <svg viewBox={`0 0 ${AMTBR_VB_W} ${AMTBR_VB_H}`} style={{ width: "100%", height: "auto", display: "block" }}>
-      {/* Non-Reverted MAE — red */}
-      <rect x={AMTBR_BAND_LEFT} y={NR_TOP} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={NR_MEDIAN - NR_TOP} fill={`${HOME_THEME.red}22`} stroke={HOME_THEME.red} strokeWidth={1.5} />
-      <line x1={AMTBR_BAND_LEFT} y1={NR_75} x2={AMTBR_CHART_RIGHT} y2={NR_75} stroke={HOME_THEME.red} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_TOP + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
-      <text x={30} y={(NR_TOP + NR_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Non-Reverted MAE</text>
-
-      {/* Reverted MAE — green */}
-      <rect x={AMTBR_BAND_LEFT} y={RM_90} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={RM_MEDIAN - RM_90} fill={`${HOME_THEME.green}22`} stroke={HOME_THEME.green} strokeWidth={1.5} />
-      <line x1={AMTBR_BAND_LEFT} y1={RM_75} x2={AMTBR_CHART_RIGHT} y2={RM_75} stroke={HOME_THEME.green} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
-      <text x={30} y={(RM_90 + RM_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MAE</text>
-
-      {/* Trigger / reference lines */}
-      <line x1={AMTBR_CHART_LEFT} y1={PLUS_025} x2={AMTBR_CHART_RIGHT} y2={PLUS_025} stroke={HOME_THEME.green} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={PLUS_025 + 5} fontSize={17} fill={HOME_THEME.green}>+0.25</text>
-      <line x1={AMTBR_CHART_LEFT} y1={TBR_OPEN_Y} x2={AMTBR_CHART_RIGHT} y2={TBR_OPEN_Y} stroke={TBR_GOLD} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={TBR_OPEN_Y + 5} fontSize={17} fill={TBR_GOLD}>TBR Open</text>
-      <line x1={AMTBR_CHART_LEFT} y1={MINUS_025} x2={AMTBR_CHART_RIGHT} y2={MINUS_025} stroke={HOME_THEME.red} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={MINUS_025 + 5} fontSize={17} fill={HOME_THEME.red}>-0.25</text>
-
-      {/* Reverted MFE — gold */}
-      <rect x={AMTBR_BAND_LEFT} y={MFE_MEDIAN} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={MFE_90 - MFE_MEDIAN} fill={`${TBR_GOLD}1f`} stroke={TBR_GOLD} strokeWidth={1.5} />
-      <line x1={AMTBR_BAND_LEFT} y1={MFE_75} x2={AMTBR_CHART_RIGHT} y2={MFE_75} stroke={TBR_GOLD} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={30} y={(MFE_MEDIAN + MFE_90) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MFE</text>
-
-      {/* Candles */}
-      {n > 1 && candles.map((cd, i) => {
-        const x = amTbrX(i, n);
-        const up = cd.c <= cd.o; // smaller y = higher price = "up" candle
-        const color = up ? CANDLE_UP : CANDLE_DOWN;
-        const bodyTop = Math.min(cd.o, cd.c);
-        const bodyH = Math.max(2, Math.abs(cd.c - cd.o));
-        return (
-          <g key={i}>
-            <line x1={x} y1={cd.h} x2={x} y2={cd.l} stroke={color} strokeWidth={1.5} />
-            <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} />
-          </g>
-        );
-      })}
-
-      {/* Trigger markers — tuned to the procedural mock's narrative, so only
-          shown in mock mode (real ES bars won't line up with these indices). */}
-      {showMarkers && n > 38 && (
-        <>
-          <circle cx={amTbrX(19, n)} cy={PLUS_025} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
-          <polygon
-            points={`${amTbrX(19, n) - 7},${PLUS_025 - 7} ${amTbrX(19, n) + 7},${PLUS_025 - 7} ${amTbrX(19, n)},${PLUS_025 + 7}`}
-            fill={HOME_THEME.green}
-          />
-          <circle cx={amTbrX(38, n)} cy={TBR_OPEN_Y} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
-          <polygon
-            points={`${amTbrX(38, n)},${TBR_OPEN_Y - 9} ${amTbrX(38, n) + 9},${TBR_OPEN_Y} ${amTbrX(38, n)},${TBR_OPEN_Y + 9} ${amTbrX(38, n) - 9},${TBR_OPEN_Y}`}
-            fill={TBR_GOLD}
-          />
-        </>
-      )}
-
-      {/* Time axis */}
-      {AMTBR_TIME_LABELS.map((t, i) => (
-        <text
-          key={t}
-          x={AMTBR_CHART_LEFT + (i / (AMTBR_TIME_LABELS.length - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT)}
-          y={AMTBR_VB_H - 8}
-          fontSize={13}
-          fill={HOME_THEME.text}
-          opacity={0.7}
-          textAnchor="middle"
-        >
-          {t}
-        </text>
-      ))}
-    </svg>
-  );
-}
-
-function EsToggleSwitch({ on, onChange, connected }: { on: boolean; onChange: (v: boolean) => void; connected: boolean }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <div style={{ display: "flex", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden" }}>
-        {(["Mock", "Live ES"] as const).map((label, i) => {
-          const isOn = i === 1;
-          const active = on === isOn;
-          return (
-            <button
-              key={label}
-              onClick={() => onChange(isOn)}
-              style={{
-                padding: "8px 16px",
-                border: "none",
-                background: active
-                  ? `linear-gradient(180deg, ${TBR_GOLD}33, ${TBR_GOLD}0D)`
-                  : "rgba(255,255,255,0.04)",
-                color: active ? TBR_GOLD : HOME_THEME.text,
-                fontSize: 13,
-                fontWeight: 800,
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-                cursor: "pointer",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      {on && (
-        <span style={{ fontSize: 13, color: connected ? HOME_THEME.green : HOME_THEME.text, opacity: connected ? 1 : 0.6 }}>
-          {connected ? "● live" : "connecting…"}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function AmTbrPanel() {
-  const [useRealEs, setUseRealEs] = useState(false);
-  const { candles: esCandles, connected } = useEsCandles(useRealEs, 1);
-  const realCandles = useRealEs ? normalizeEsCandles(esCandles) : [];
-  const showingReal = useRealEs && realCandles.length > 1;
-  const candles = showingReal ? realCandles : buildAmTbrCandles();
-
-  return (
-    <Card
-      variant="dissolve"
-      accent={TBR_GOLD}
-      title={<span style={{ fontSize: 18 }}>AM TBR — Time-Based Range</span>}
-      subtitle="Rolling 20-day 8am–12pm distribution · reversion to TBR Open"
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
-          {showingReal
-            ? "Real ES 5m candles, 05:30–12:30 ET — bands/lines are still illustrative placeholders."
-            : useRealEs
-            ? "No ES bars yet for today's 05:30–12:30 window — showing mock candles."
-            : "Mock candles — flip to Live ES to overlay real ES 5m bars."}
-        </div>
-        <EsToggleSwitch on={useRealEs} onChange={setUseRealEs} connected={connected} />
-      </div>
-      <AmTbrChart candles={candles} showMarkers={!showingReal} />
-      <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, marginTop: 12, opacity: 0.85 }}>
-        Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
-        sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
-        (8am open). MAE is shown for reverted vs. non-reverted events; MFE beyond TBR Open is shown for
-        reverted events. Reversions within the first hour (8am hour) have the highest hit rate. Source
-        concept: nqstats.com/am_tbr.html — 10 years of data.
-      </div>
-    </Card>
-  );
-}
-
+// AmTbrStat — small stat tile, still used by GexLevelsTab below. (AM TBR itself
+// moved to /es-candles as an on/off "AM TBR" toggle strip, per Brandon's ask —
+// see app/es-candles/page.tsx for buildAmTbrCandles/AmTbrChart/AmTbrPanel/etc.)
 function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{ ...statTileStyle, padding: "16px 18px" }}>
@@ -661,34 +412,253 @@ function AmTbrStat({ label, value, accent }: { label: string; value: string; acc
   );
 }
 
-// Illustrative numbers only — not computed from data, just filling out the mockup.
-function AmTbrStatsCards() {
+// ─────────────────────────────────────────────────────────────────────────────
+// Options Positioning tab: SPX / NDX / SPY / QQQ Call Wall / Put Wall / Magnet
+// Strike (gamma flip) / Gamma Zone, live from the multi-ticker GEX scanner
+// (server-v2 scanner-recorder.js → scanner_snapshots → /proxy/scanner). Reuses
+// the exact walls/flip the scanner already computes via gex-calculator.js —
+// no new math on the server, just a new read + card layout. Moved back here
+// from /es-candles per Brandon's ask — belongs on /test, not the chart page.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"] as const;
+
+type PositioningRow = {
+  symbol: string;
+  spot: number;
+  expiry: string | null;
+  totalNetGex: number;
+  callWall: number | null;
+  putWall: number | null;
+  gexFlip: number | null;
+  ts: number;
+};
+
+function usePositioning() {
+  const [rows, setRows] = useState<Record<string, PositioningRow> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/proxy/scanner?limit=200`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
+      const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
+      const bySymbol: Record<string, PositioningRow> = {};
+      for (const r of list) {
+        const symbol = String(r.symbol ?? "");
+        if (!(POSITIONING_TICKERS as readonly string[]).includes(symbol)) continue;
+        bySymbol[symbol] = {
+          symbol,
+          spot: Number(r.spot) || 0,
+          expiry: (r.expiry as string) ?? null,
+          totalNetGex: Number(r.total_net_gex) || 0,
+          callWall: r.call_wall != null ? Number(r.call_wall) : null,
+          putWall: r.put_wall != null ? Number(r.put_wall) : null,
+          gexFlip: r.gex_flip != null ? Number(r.gex_flip) : null,
+          ts: Number(r.ts) || 0,
+        };
+      }
+      setRows(bySymbol);
+      setError(null);
+      setLoadedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  return { rows, error, loadedAt, reload: load };
+}
+
+function fmtPrice(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return `$${n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 })}`;
+}
+
+function pctFrom(spot: number, level: number | null): number | null {
+  if (level == null || !(spot > 0)) return null;
+  return ((level - spot) / spot) * 100;
+}
+
+function fmtPct(p: number | null): string {
+  if (p == null) return "—";
+  const sign = p >= 0 ? "+" : "";
+  return `${sign}${p.toFixed(1)}%`;
+}
+
+function LayersIcon({ color }: { color: string }) {
   return (
-    <Card
-      variant="classic"
-      accent={TBR_GOLD}
-      title={<span style={{ fontSize: 18 }}>AM TBR — Sample Stats</span>}
-      subtitle="Placeholder figures for layout only"
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </svg>
+  );
+}
+
+function LevelRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "10px 14px",
+        borderRadius: 8,
+        background: "rgba(255,255,255,0.03)",
+      }}
     >
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-        <AmTbrStat label="8am Hour Reversion Rate" value="71%" accent={HOME_THEME.green} />
-        <AmTbrStat label="Total Reversion Rate" value="86%" accent={HOME_THEME.cyan} />
-        <AmTbrStat label="Non-Reverted MAE (Median)" value="0.41" accent={HOME_THEME.red} />
-        <AmTbrStat label="Reverted MAE (Median)" value="0.18" accent={HOME_THEME.green} />
-        <AmTbrStat label="Reverted MFE (Median)" value="0.63" accent={TBR_GOLD} />
-        <AmTbrStat label="Avg Time to Trigger" value="42m" accent={HOME_THEME.orange} />
-        <AmTbrStat label="Rolling Window" value="20d" accent={HOME_THEME.purple} />
-        <AmTbrStat label="Sample Size" value="2,510" accent={HOME_THEME.cyan} />
+      <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: 16, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+    </div>
+  );
+}
+
+function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number | null; color: string; maxAbs: number }) {
+  const p = pct ?? 0;
+  const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
+  const isPositive = p >= 0;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "78px 1fr 60px", alignItems: "center", gap: 10 }}>
+      <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, textAlign: "right" }}>{label}</div>
+      <div style={{ position: "relative", height: 20, borderRadius: 10, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
+        {halfWidthPct > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: 2,
+              bottom: 2,
+              left: isPositive ? "50%" : `${50 - halfWidthPct}%`,
+              width: `${halfWidthPct}%`,
+              borderRadius: 10,
+              background: color,
+            }}
+          />
+        )}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
+    </div>
+  );
+}
+
+// Gamma Zone = the range between spot and Call Wall when net GEX is positive
+// ("supportive" — dealers long gamma, upside capped/pinned toward the wall);
+// Put Wall → spot when net GEX is negative ("volatile" — dealers short gamma,
+// downside amplified). Magnet Strike = the gamma flip (zero-gamma) level,
+// the price the chain's dealer hedging gravitates toward.
+function PositioningCard({ row }: { row: PositioningRow }) {
+  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex } = row;
+  const supportive = totalNetGex >= 0;
+  const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
+  const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
+
+  const gammaLo = supportive ? spot : putWall ?? spot;
+  const gammaHi = supportive ? callWall ?? spot : spot;
+
+  const callPct = pctFrom(spot, callWall);
+  const putPct = pctFrom(spot, putWall);
+  const magnetPct = pctFrom(spot, gexFlip);
+  const gammaHiPct = pctFrom(spot, gammaHi);
+  const gammaLoPct = pctFrom(spot, gammaLo);
+
+  const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
+
+  return (
+    <Card variant="classic" padding={24}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <LayersIcon color={HOME_THEME.cyan} />
+        <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.85 }}>
+          Options Positioning
+        </div>
+        <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: HOME_THEME.cyan }}>{symbol}</div>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: regimeColor, marginBottom: 16 }}>{regimeLabel}</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+        <LevelRow label="Call Wall" value={fmtPrice(callWall)} color={HOME_THEME.green} />
+        <LevelRow label="Put Wall" value={fmtPrice(putWall)} color={SOFT_RED} />
+        <LevelRow label="Magnet Strike" value={fmtPrice(gexFlip)} color={HOME_THEME.orange} />
+        <LevelRow label="Gamma Zone" value={`${fmtPrice(gammaLo)} → ${fmtPrice(gammaHi)}`} color={HOME_THEME.cyan} />
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "78px 1fr 60px",
+          fontSize: 11,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: HOME_THEME.text,
+          opacity: 0.5,
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ textAlign: "right" }}>Below</div>
+        <div style={{ textAlign: "center" }}>Current {fmtPrice(spot)}</div>
+        <div style={{ textAlign: "right" }}>Above</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <PositionBar label="Call Wall" pct={callPct} color={HOME_THEME.green} maxAbs={maxAbs} />
+        <PositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Hi" pct={gammaHiPct} color={HOME_THEME.cyan} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Lo" pct={gammaLoPct} color={HOME_THEME.cyan} maxAbs={maxAbs} />
+        <PositionBar label="Put Wall" pct={putPct} color={SOFT_RED} maxAbs={maxAbs} />
       </div>
     </Card>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// (Options Positioning tab moved to /es-candles as a "Positioning" toggle strip
-// — Brandon wanted it living alongside the ES chart, not as a standalone /test
-// tab. See app/es-candles/page.tsx.)
-// ─────────────────────────────────────────────────────────────────────────────
+function OptionsPositioningTab() {
+  const { rows, error, loadedAt, reload } = usePositioning();
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+          {loadedAt
+            ? `Live GEX scanner · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
+            : "Loading positioning data…"}
+        </div>
+        <button onClick={reload} style={homeButtonStyle}>Refresh</button>
+      </div>
+      {error && <div style={{ fontSize: 17, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 24 }}>
+        {POSITIONING_TICKERS.map((sym) => {
+          const row = rows?.[sym];
+          if (!row) {
+            return (
+              <Card key={sym} variant="classic" padding={24}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <LayersIcon color={HOME_THEME.cyan} />
+                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.85 }}>
+                    Options Positioning
+                  </div>
+                  <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: HOME_THEME.cyan }}>{sym}</div>
+                </div>
+                <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.5 }}>
+                  {rows ? "No snapshot yet today — scanner sweep pending." : "Loading…"}
+                </div>
+              </Card>
+            );
+          }
+          return <PositioningCard key={sym} row={row} />;
+        })}
+      </div>
+      <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.5, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+        Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots).
+        Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile.
+      </div>
+    </>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Levels tab — SqueezeMetrics-style GEX dashboard (Stock Filter / Resistance
@@ -1095,13 +1065,18 @@ function StrikeLevelTable({
   );
 }
 
-// ── session-only "History of key level changes" log ────────────────────────
-// Persisted to localStorage keyed by today's ET date so it survives a reload
-// but never mixes days together. Appends a row only when a level actually
-// moves — not on every 15s poll.
+// ── daily "History of key level changes" log ────────────────────────────────
+// One row PER TRADING DAY (matches the reference mock's Date-indexed table),
+// persisted under a single localStorage key so it accumulates across days in
+// this browser instead of resetting every morning. Today's row updates in
+// place on every real change; once the date rolls over, that row is frozen
+// forever and a new one starts. Still no backend for these fields (see
+// gex-levels-tab-test memory), so this is real but browser-local history —
+// not a server-side, cross-device table.
 
 type GlHistoryEntry = {
-  t: number;
+  date: string; // YYYY-MM-DD, America/New_York
+  t: number; // last-updated timestamp (ms) — for debugging/ordering only
   spot: number;
   resistance: number | null;
   support: number | null;
@@ -1113,14 +1088,23 @@ type GlHistoryEntry = {
   openInt: number;
 };
 
-function glHistoryKey(): string {
-  const d = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-  return `gexlevels-history-v1:${d}`;
+function todayEtDate(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 }
+
+function glFmtDate(ymd: string): string {
+  const [y, m, day] = ymd.split("-").map(Number);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (!y || !m || !day) return ymd;
+  return `${months[m - 1] ?? ""} ${day}, ${y}`;
+}
+
+const GL_HISTORY_KEY = "gexlevels-daily-history-v1";
+const GL_HISTORY_MAX_DAYS = 60;
 
 function loadGlHistory(): GlHistoryEntry[] {
   try {
-    const raw = localStorage.getItem(glHistoryKey());
+    const raw = localStorage.getItem(GL_HISTORY_KEY);
     return raw ? (JSON.parse(raw) as GlHistoryEntry[]) : [];
   } catch {
     return [];
@@ -1129,7 +1113,7 @@ function loadGlHistory(): GlHistoryEntry[] {
 
 function saveGlHistory(entries: GlHistoryEntry[]) {
   try {
-    localStorage.setItem(glHistoryKey(), JSON.stringify(entries.slice(0, 50)));
+    localStorage.setItem(GL_HISTORY_KEY, JSON.stringify(entries.slice(0, GL_HISTORY_MAX_DAYS)));
   } catch {
     // localStorage unavailable (private mode, quota) — history just won't persist.
   }
@@ -1138,14 +1122,13 @@ function saveGlHistory(entries: GlHistoryEntry[]) {
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
   const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
   const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
-  const timeFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
   return (
     <div style={{ maxHeight: 320, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...th, textAlign: "left" }}>Time (ET)</th>
+            <th style={{ ...th, textAlign: "left" }}>Date</th>
             <th style={th}>Price</th>
             <th style={th}>Resistance</th>
             <th style={th}>Support</th>
@@ -1159,8 +1142,8 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.t}>
-              <td style={{ ...td, textAlign: "left" }}>{timeFmt.format(new Date(r.t))}</td>
+            <tr key={r.date}>
+              <td style={{ ...td, textAlign: "left" }}>{glFmtDate(r.date)}</td>
               <td style={td}>{glFmt2(r.spot)}</td>
               <td style={td}>{r.resistance != null ? glFmt0(r.resistance) : "—"}</td>
               <td style={td}>{r.support != null ? glFmt0(r.support) : "—"}</td>
@@ -1193,22 +1176,32 @@ function GexLevelsTab() {
 
   useEffect(() => {
     if (!d) return;
+    const today = todayEtDate();
     setHistory((prev) => {
-      const last = prev[0];
-      const changed =
-        !last ||
-        last.resistance !== d.resistance ||
-        last.support !== d.support ||
-        last.neutral !== d.neutral ||
-        Math.round(last.dollarGamma / 1e6) !== Math.round(d.dollarGamma / 1e6) ||
-        Math.abs(last.cpgRatio - d.cpgRatio) > 0.02;
-      if (!changed) return prev;
+      const idx = prev.findIndex((e) => e.date === today);
       const entry: GlHistoryEntry = {
-        t: Date.now(), spot: d.spot, resistance: d.resistance, support: d.support, neutral: d.neutral,
+        date: today, t: Date.now(), spot: d.spot, resistance: d.resistance, support: d.support, neutral: d.neutral,
         dollarGamma: d.dollarGamma, cpgRatio: d.cpgRatio, r2: d.r2, s2: d.s2,
         openInt: d.totalCallOI + d.totalPutOI,
       };
-      const next = [entry, ...prev].slice(0, 50);
+      let next: GlHistoryEntry[];
+      if (idx === -1) {
+        // First read of a new trading day — add a fresh row up top. Prior
+        // days' rows are never touched again once their date has passed.
+        next = [entry, ...prev];
+      } else {
+        const existing = prev[idx];
+        const changed =
+          existing.resistance !== entry.resistance ||
+          existing.support !== entry.support ||
+          existing.neutral !== entry.neutral ||
+          Math.round(existing.dollarGamma / 1e6) !== Math.round(entry.dollarGamma / 1e6) ||
+          Math.abs(existing.cpgRatio - entry.cpgRatio) > 0.02;
+        if (!changed) return prev;
+        next = prev.slice();
+        next[idx] = entry;
+      }
+      next = next.slice(0, GL_HISTORY_MAX_DAYS);
       saveGlHistory(next);
       return next;
     });
@@ -1288,7 +1281,7 @@ function GexLevelsTab() {
         <>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
             <div style={{ flex: "2 1 520px", minWidth: 340 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="Rebuilt daily — logs today's level changes only, resets each ET trading day">
+              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
                 {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
               </Card>
             </div>
@@ -1323,11 +1316,159 @@ function GexLevelsTab() {
   );
 }
 
-function TestTabBar({ active, onChange }: { active: "flow" | "amtbr" | "gexlevels"; onChange: (tab: "flow" | "amtbr" | "gexlevels") => void }) {
-  const tabs: { key: "flow" | "amtbr" | "gexlevels"; label: string }[] = [
+// ─────────────────────────────────────────────────────────────────────────────
+// Overview tab — landing view for the Test Lab. One card per tab explaining
+// what it does + a "these are early builds, please leave feedback" banner.
+// Purely descriptive/navigational — no live data of its own.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function FlaskIcon({ color, size = 22 }: { color: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3h6" />
+      <path d="M10 3v6.2L4.5 18a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9.2V3" />
+      <path d="M7 15h10" />
+    </svg>
+  );
+}
+
+type OverviewCardDef = {
+  key: TestTab;
+  label: string;
+  accent: string;
+  blurb: string;
+  points: string[];
+};
+
+const OVERVIEW_CARDS: OverviewCardDef[] = [
+  {
+    key: "gexlevels",
+    label: "GEX Levels",
+    accent: LIGHT_BLUE,
+    blurb: "SqueezeMetrics-style GEX dashboard for the live 0DTE symbol.",
+    points: [
+      "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
+      "Strike-level net gamma, net delta, and call/put OI table",
+      "Net gamma and call/put gamma-by-strike charts",
+      "Browser-local daily history of level changes + OI by strike",
+    ],
+  },
+  {
+    key: "flow",
+    label: "Flow Inventory",
+    accent: HOME_THEME.orange,
+    blurb: "Live SPX / SPY / QQQ options-flow tape, aggregated by side and moneyness.",
+    points: [
+      "OTM puts/calls bought vs. sold, plus ITM calls sold",
+      "Bullish / bearish sentiment split from signed premium",
+      "Final-30-minutes-of-RTH prints and ATM bets breakout",
+      "Per-ticker isolation — one root's feed hiccup won't blank the others",
+    ],
+  },
+  {
+    key: "positioning",
+    label: "Options Positioning",
+    accent: HOME_THEME.purple,
+    blurb: "Dealer positioning across SPX, NDX, SPY, and QQQ from the multi-ticker GEX scanner.",
+    points: [
+      "Call Wall / Put Wall / Magnet Strike (gamma flip) per ticker",
+      "Gamma Zone (supportive vs. volatile regime) relative to spot",
+      "Live distance-from-spot bars for every level",
+    ],
+  },
+];
+
+function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: TestTab) => void }) {
+  return (
+    <Card variant="classic" accent={def.accent} padding={24}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <FlaskIcon color={def.accent} />
+        <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
+      </div>
+      <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
+        {def.blurb}
+      </div>
+      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+        {def.points.map((p) => (
+          <li key={p} style={{ display: "flex", gap: 8, fontSize: 13, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
+            <span style={{ color: def.accent, flexShrink: 0 }}>›</span>
+            <span>{p}</span>
+          </li>
+        ))}
+      </ul>
+      <button
+        onClick={() => onOpen(def.key)}
+        style={{
+          width: "100%",
+          padding: "10px 0",
+          borderRadius: 8,
+          border: `1px solid ${def.accent}`,
+          background: `${def.accent}1a`,
+          color: def.accent,
+          fontSize: 13,
+          fontWeight: 800,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          cursor: "pointer",
+        }}
+      >
+        Open {def.label} →
+      </button>
+    </Card>
+  );
+}
+
+function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
+  return (
+    <>
+      <Card variant="budget" accent={HOME_THEME.orange} padding={20}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <FlaskIcon color={HOME_THEME.orange} size={26} />
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>Welcome to the Test Lab</div>
+            <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
+              These are the beginning stages of test pages — features being tried out before they graduate to the
+              main dashboard. Expect rough edges. Please leave feedback so we know what to fix or build out next.
+            </div>
+          </div>
+          <a
+            href="/feedback"
+            style={{
+              flexShrink: 0,
+              padding: "10px 18px",
+              borderRadius: 8,
+              border: `1px solid ${HOME_THEME.orange}`,
+              background: `${HOME_THEME.orange}1a`,
+              color: HOME_THEME.orange,
+              fontSize: 13,
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              textDecoration: "none",
+            }}
+          >
+            Leave Feedback
+          </a>
+        </div>
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+        {OVERVIEW_CARDS.map((def) => (
+          <OverviewCard key={def.key} def={def} onOpen={onOpen} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+type TestTab = "overview" | "flow" | "positioning" | "gexlevels";
+
+function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
+  const tabs: { key: TestTab; label: string }[] = [
+    { key: "overview", label: "Overview" },
     { key: "gexlevels", label: "GEX Levels" },
     { key: "flow", label: "Flow Inventory" },
-    { key: "amtbr", label: "AM TBR" },
+    { key: "positioning", label: "Options Positioning" },
   ];
   return (
     <div style={{ display: "flex", gap: 10 }}>
@@ -1400,19 +1541,18 @@ function FlowInventoryTab() {
 }
 
 export default function TestPage() {
-  const [tab, setTab] = useState<"flow" | "amtbr" | "gexlevels">("gexlevels");
+  const [tab, setTab] = useState<TestTab>("overview");
   return (
     <PageShell>
       <TestTabBar active={tab} onChange={setTab} />
-      {tab === "gexlevels" ? (
+      {tab === "overview" ? (
+        <OverviewTab onOpen={setTab} />
+      ) : tab === "gexlevels" ? (
         <GexLevelsTab />
       ) : tab === "flow" ? (
         <FlowInventoryTab />
       ) : (
-        <>
-          <AmTbrPanel />
-          <AmTbrStatsCards />
-        </>
+        <OptionsPositioningTab />
       )}
     </PageShell>
   );

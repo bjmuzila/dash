@@ -49,6 +49,7 @@ const GEX_ITEMS: NavItem[] = [
   { label: "ES Candles", href: "/es-candles" },
   { label: "Scanner", href: "/scanner" },
   { label: "ICT", href: "/ict" },
+  { label: "Test Lab", href: "/test" },
   { label: "Journal", href: "/trading" },
   { label: "Order Flow", href: "/order-flow" },
 ];
@@ -77,6 +78,7 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/analytics": "▦",
   "/flow": "≈",
   "/scanner": "🔍︎",
+  "/test": "⚗",
   "/trading": "✎",
   "/order-flow": "⇅",
   "/owner": "✪",

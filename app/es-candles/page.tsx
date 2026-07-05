@@ -11,9 +11,11 @@ import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
-import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle, statTileStyle } from "@/components/shared/homeTheme";
+import { Card } from "@/components/shared/PageCard";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 import { getMomentumBiasIndex } from "@/lib/momentumBias";
+import type { EsCandleRecord } from "@/lib/snapdb";
 
 
 // Card/accent styling now sourced from the shared theme (see BUDGET_UI_STYLE.md).
@@ -173,189 +175,297 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Options Positioning strip — SPX / NDX / SPY / QQQ Call Wall / Put Wall / Magnet
-// Strike (gamma flip) / Gamma Zone, live from the multi-ticker GEX scanner
-// (server-v2 scanner-recorder.js → scanner_snapshots → /proxy/scanner). Reuses
-// the exact walls/flip the scanner already computes via gex-calculator.js — no
-// new math, just a read + the "Positioning" toggle. Moved here from /test (was
-// a standalone tab there) per Brandon's ask to have it live on the ES Candles
-// page instead, as an on/off strip alongside Heatmap/Profile/Bias/Signals.
+// (Options Positioning strip moved back to /test as a tab — Brandon wants it
+// there, not on the chart page. See app/test/page.tsx OptionsPositioningTab.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"] as const;
+// ─────────────────────────────────────────────────────────────────────────────
+// AM TBR strip: 8am-12pm Time-Based-Range distribution mockup (nqstats.com/am_tbr).
+// Procedural chart data — layout/design test only, not wired to a live feed
+// (the candle series itself can toggle to real ES 5m bars via the Mock/Live ES
+// switch below). Moved here from /test as an on/off "AM TBR" toggle strip per
+// Brandon's ask to have it live with the ES chart instead of a separate tab.
+// ─────────────────────────────────────────────────────────────────────────────
 
-type PositioningRow = {
-  symbol: string;
-  spot: number;
-  expiry: string | null;
-  totalNetGex: number;
-  callWall: number | null;
-  putWall: number | null;
-  gexFlip: number | null;
-  ts: number;
-  date: string | null;
-  stale: boolean;
-};
+// Gold/amber has no equivalent HOME_THEME token (palette has no yellow) — this
+// is the one intentional exception, scoped to this chart's TBR Open + MFE band.
+const TBR_GOLD = "#eab308";
+// Faded reference-chart candles sit behind the distribution bands, so they use
+// translucent white rather than a theme accent color (not semantic here).
+const CANDLE_UP = "rgba(255,255,255,0.55)";
+const CANDLE_DOWN = "rgba(255,255,255,0.22)";
 
-function usePositioning(enabled: boolean) {
-  const [rows, setRows] = useState<Record<string, PositioningRow> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+type AmTbrCandle = { o: number; h: number; l: number; c: number };
 
-  const load = useCallback(async () => {
-    try {
-      // any=1: fall back to each symbol's most recent snapshot (any date) when
-      // there's no row for today — e.g. weekend/market-closed — instead of an
-      // empty strip. Server marks any non-today row `stale` so the UI can flag it.
-      const res = await fetch(`/proxy/scanner?limit=200&any=1`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
-      const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
-      const bySymbol: Record<string, PositioningRow> = {};
-      for (const r of list) {
-        const symbol = String(r.symbol ?? "");
-        if (!(POSITIONING_TICKERS as readonly string[]).includes(symbol)) continue;
-        bySymbol[symbol] = {
-          symbol,
-          spot: Number(r.spot) || 0,
-          expiry: (r.expiry as string) ?? null,
-          totalNetGex: Number(r.total_net_gex) || 0,
-          callWall: r.call_wall != null ? Number(r.call_wall) : null,
-          putWall: r.put_wall != null ? Number(r.put_wall) : null,
-          gexFlip: r.gex_flip != null ? Number(r.gex_flip) : null,
-          ts: Number(r.ts) || 0,
-          date: (r.date as string) ?? null,
-          stale: Boolean(r.stale),
-        };
+function buildAmTbrCandles(): AmTbrCandle[] {
+  // (candleIndex, priceY) keyframes — priceY is an SVG y-coordinate (smaller = higher price).
+  const anchors: [number, number][] = [
+    [0, 460], [5, 455], [10, 452], [15, 432], [19, 380], [22, 300], [25, 265],
+    [27, 292], [30, 340], [33, 420], [36, 460], [38, 430], [41, 342], [43, 302],
+    [45, 340], [47, 420], [49, 470], [52, 560], [55, 650], [58, 760], [60, 790],
+    [62, 742], [64, 682], [66, 632], [68, 602], [69, 592],
+  ];
+  const xs = anchors.map((a) => a[0]);
+  const ys = anchors.map((a) => a[1]);
+  const interp = (t: number) => {
+    for (let i = 0; i < xs.length - 1; i++) {
+      if (t >= xs[i] && t <= xs[i + 1]) {
+        const f = (t - xs[i]) / (xs[i + 1] - xs[i]);
+        return ys[i] + (ys[i + 1] - ys[i]) * f;
       }
-      setRows(bySymbol);
-      setError(null);
-      setLoadedAt(Date.now());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
-
-  // Only polls while the strip is toggled on — no point hitting the scanner
-  // proxy every 30s for a panel nobody has opened.
-  useEffect(() => {
-    if (!enabled) return;
-    load();
-    const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
-  }, [enabled, load]);
-
-  return { rows, error, loadedAt, reload: load };
+    return ys[ys.length - 1];
+  };
+  const N = 70;
+  const candles: AmTbrCandle[] = [];
+  let prevClose = interp(0);
+  for (let i = 0; i < N; i++) {
+    const base = interp(i);
+    const noise = Math.sin(i * 1.7) * 7 + Math.sin(i * 0.55) * 5;
+    const close = base + noise;
+    const open = prevClose;
+    const wick = 9 + Math.abs(Math.sin(i * 2.3)) * 12;
+    const h = Math.min(open, close) - wick * 0.6 - Math.abs(Math.sin(i)) * 4;
+    const l = Math.max(open, close) + wick * 0.6 + Math.abs(Math.cos(i)) * 4;
+    candles.push({ o: open, h, l, c: close });
+    prevClose = close;
+  }
+  return candles;
 }
 
-function posFmtPrice(n: number | null): string {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return `$${n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 })}`;
+const AMTBR_VB_W = 1650;
+const AMTBR_VB_H = 860;
+const AMTBR_CHART_LEFT = 10;
+const AMTBR_CHART_RIGHT = 1530;
+const AMTBR_BAND_LEFT = 560;
+
+// Band y-coordinates (SVG units, smaller = higher on screen / higher price).
+const NR_TOP = 20, NR_75 = 95, NR_MEDIAN = 190; // Non-Reverted MAE (red)
+const RM_90 = 230, RM_75 = 300, RM_MEDIAN = 340; // Reverted MAE (green)
+const PLUS_025 = 380, TBR_OPEN_Y = 430, MINUS_025 = 480; // trigger lines
+const MFE_MEDIAN = 540, MFE_75 = 650, MFE_90 = 780; // Reverted MFE (gold)
+
+const AMTBR_TIME_LABELS = [
+  "05:30", "06:00", "06:30", "07:00", "07:30", "08:00", "08:30", "09:00",
+  "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30",
+];
+
+function amTbrX(i: number, n: number): number {
+  return AMTBR_CHART_LEFT + (i / (n - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT);
 }
 
-function posPctFrom(spot: number, level: number | null): number | null {
-  if (level == null || !(spot > 0)) return null;
-  return ((level - spot) / spot) * 100;
+// Maps real ES 5m bars (real price units) into the same chart-space y-range
+// the procedural mock uses, so the toggle swaps candle series without moving
+// the (still illustrative) percentile bands/trigger lines.
+const AMTBR_ES_Y_TOP = 40;
+const AMTBR_ES_Y_BOTTOM = 820;
+function normalizeAmTbrEsCandles(rows: EsCandleRecord[]): AmTbrCandle[] {
+  const inWindow = rows.filter((r) => {
+    const t = r.time || (r.slotKey ?? "").slice(11, 16);
+    return t >= "05:30" && t <= "12:30";
+  });
+  if (!inWindow.length) return [];
+  const priceMin = Math.min(...inWindow.map((r) => r.low));
+  const priceMax = Math.max(...inWindow.map((r) => r.high));
+  const span = Math.max(priceMax - priceMin, 0.01);
+  const toY = (price: number) => AMTBR_ES_Y_BOTTOM - ((price - priceMin) / span) * (AMTBR_ES_Y_BOTTOM - AMTBR_ES_Y_TOP);
+  return inWindow.map((r) => ({ o: toY(r.open), h: toY(r.high), l: toY(r.low), c: toY(r.close) }));
 }
 
-function posFmtPct(p: number | null): string {
-  if (p == null) return "—";
-  const sign = p >= 0 ? "+" : "";
-  return `${sign}${p.toFixed(1)}%`;
-}
+function AmTbrChart({ candles, showMarkers }: { candles: AmTbrCandle[]; showMarkers: boolean }) {
+  const n = candles.length;
+  const candleW = n > 1 ? ((AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT) / n) * 0.62 : 8;
 
-function PosLayersIcon({ color }: { color: string }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="12 2 2 7 12 12 22 7 12 2" />
-      <polyline points="2 17 12 22 22 17" />
-      <polyline points="2 12 12 17 22 12" />
+    <svg viewBox={`0 0 ${AMTBR_VB_W} ${AMTBR_VB_H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {/* Non-Reverted MAE — red */}
+      <rect x={AMTBR_BAND_LEFT} y={NR_TOP} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={NR_MEDIAN - NR_TOP} fill={`${HOME_THEME.red}22`} stroke={HOME_THEME.red} strokeWidth={1.5} />
+      <line x1={AMTBR_BAND_LEFT} y1={NR_75} x2={AMTBR_CHART_RIGHT} y2={NR_75} stroke={HOME_THEME.red} strokeWidth={1} />
+      <text x={AMTBR_BAND_LEFT - 12} y={NR_TOP + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={NR_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={NR_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
+      <text x={30} y={(NR_TOP + NR_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Non-Reverted MAE</text>
+
+      {/* Reverted MAE — green */}
+      <rect x={AMTBR_BAND_LEFT} y={RM_90} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={RM_MEDIAN - RM_90} fill={`${HOME_THEME.green}22`} stroke={HOME_THEME.green} strokeWidth={1.5} />
+      <line x1={AMTBR_BAND_LEFT} y1={RM_75} x2={AMTBR_CHART_RIGHT} y2={RM_75} stroke={HOME_THEME.green} strokeWidth={1} />
+      <text x={AMTBR_BAND_LEFT - 12} y={RM_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={RM_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={RM_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
+      <text x={30} y={(RM_90 + RM_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MAE</text>
+
+      {/* Trigger / reference lines */}
+      <line x1={AMTBR_CHART_LEFT} y1={PLUS_025} x2={AMTBR_CHART_RIGHT} y2={PLUS_025} stroke={HOME_THEME.green} strokeWidth={1.5} strokeDasharray="6 5" />
+      <text x={AMTBR_CHART_RIGHT + 10} y={PLUS_025 + 5} fontSize={17} fill={HOME_THEME.green}>+0.25</text>
+      <line x1={AMTBR_CHART_LEFT} y1={TBR_OPEN_Y} x2={AMTBR_CHART_RIGHT} y2={TBR_OPEN_Y} stroke={TBR_GOLD} strokeWidth={1.5} strokeDasharray="6 5" />
+      <text x={AMTBR_CHART_RIGHT + 10} y={TBR_OPEN_Y + 5} fontSize={17} fill={TBR_GOLD}>TBR Open</text>
+      <line x1={AMTBR_CHART_LEFT} y1={MINUS_025} x2={AMTBR_CHART_RIGHT} y2={MINUS_025} stroke={HOME_THEME.red} strokeWidth={1.5} strokeDasharray="6 5" />
+      <text x={AMTBR_CHART_RIGHT + 10} y={MINUS_025 + 5} fontSize={17} fill={HOME_THEME.red}>-0.25</text>
+
+      {/* Reverted MFE — gold */}
+      <rect x={AMTBR_BAND_LEFT} y={MFE_MEDIAN} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={MFE_90 - MFE_MEDIAN} fill={`${TBR_GOLD}1f`} stroke={TBR_GOLD} strokeWidth={1.5} />
+      <line x1={AMTBR_BAND_LEFT} y1={MFE_75} x2={AMTBR_CHART_RIGHT} y2={MFE_75} stroke={TBR_GOLD} strokeWidth={1} />
+      <text x={AMTBR_BAND_LEFT - 12} y={MFE_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={MFE_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={MFE_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
+      <text x={30} y={(MFE_MEDIAN + MFE_90) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MFE</text>
+
+      {/* Candles */}
+      {n > 1 && candles.map((cd, i) => {
+        const x = amTbrX(i, n);
+        const up = cd.c <= cd.o; // smaller y = higher price = "up" candle
+        const color = up ? CANDLE_UP : CANDLE_DOWN;
+        const bodyTop = Math.min(cd.o, cd.c);
+        const bodyH = Math.max(2, Math.abs(cd.c - cd.o));
+        return (
+          <g key={i}>
+            <line x1={x} y1={cd.h} x2={x} y2={cd.l} stroke={color} strokeWidth={1.5} />
+            <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} />
+          </g>
+        );
+      })}
+
+      {/* Trigger markers — tuned to the procedural mock's narrative, so only
+          shown in mock mode (real ES bars won't line up with these indices). */}
+      {showMarkers && n > 38 && (
+        <>
+          <circle cx={amTbrX(19, n)} cy={PLUS_025} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
+          <polygon
+            points={`${amTbrX(19, n) - 7},${PLUS_025 - 7} ${amTbrX(19, n) + 7},${PLUS_025 - 7} ${amTbrX(19, n)},${PLUS_025 + 7}`}
+            fill={HOME_THEME.green}
+          />
+          <circle cx={amTbrX(38, n)} cy={TBR_OPEN_Y} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
+          <polygon
+            points={`${amTbrX(38, n)},${TBR_OPEN_Y - 9} ${amTbrX(38, n) + 9},${TBR_OPEN_Y} ${amTbrX(38, n)},${TBR_OPEN_Y + 9} ${amTbrX(38, n) - 9},${TBR_OPEN_Y}`}
+            fill={TBR_GOLD}
+          />
+        </>
+      )}
+
+      {/* Time axis */}
+      {AMTBR_TIME_LABELS.map((t, i) => (
+        <text
+          key={t}
+          x={AMTBR_CHART_LEFT + (i / (AMTBR_TIME_LABELS.length - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT)}
+          y={AMTBR_VB_H - 8}
+          fontSize={13}
+          fill={HOME_THEME.text}
+          opacity={0.7}
+          textAnchor="middle"
+        >
+          {t}
+        </text>
+      ))}
     </svg>
   );
 }
 
-function PosLevelRow({ label, value, color }: { label: string; value: string; color: string }) {
+function AmTbrEsToggleSwitch({ on, onChange, connected }: { on: boolean; onChange: (v: boolean) => void; connected: boolean }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)" }}>
-      <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
-    </div>
-  );
-}
-
-function PosPositionBar({ label, pct, color, maxAbs }: { label: string; pct: number | null; color: string; maxAbs: number }) {
-  const p = pct ?? 0;
-  const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
-  const isPositive = p >= 0;
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "56px 1fr 46px", alignItems: "center", gap: 6 }}>
-      <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.7, textAlign: "right" }}>{label}</div>
-      <div style={{ position: "relative", height: 14, borderRadius: 8, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
-        <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
-        {halfWidthPct > 0 && (
-          <div style={{ position: "absolute", top: 1, bottom: 1, left: isPositive ? "50%" : `${50 - halfWidthPct}%`, width: `${halfWidthPct}%`, borderRadius: 8, background: color }} />
-        )}
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden" }}>
+        {(["Mock", "Live ES"] as const).map((label, i) => {
+          const isOn = i === 1;
+          const active = on === isOn;
+          return (
+            <button
+              key={label}
+              onClick={() => onChange(isOn)}
+              style={{
+                padding: "8px 16px",
+                border: "none",
+                background: active
+                  ? `linear-gradient(180deg, ${TBR_GOLD}33, ${TBR_GOLD}0D)`
+                  : "rgba(255,255,255,0.04)",
+                color: active ? TBR_GOLD : HOME_THEME.text,
+                fontSize: 13,
+                fontWeight: 800,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
-      <div style={{ fontSize: 10, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{posFmtPct(pct)}</div>
-    </div>
-  );
-}
-
-// Gamma Zone = the range between spot and Call Wall when net GEX is positive
-// ("supportive" — dealers long gamma, upside capped/pinned toward the wall);
-// Put Wall → spot when net GEX is negative ("volatile" — dealers short gamma,
-// downside amplified). Magnet Strike = the gamma flip (zero-gamma) level.
-function PositioningCard({ row }: { row: PositioningRow }) {
-  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex, stale, date } = row;
-  const supportive = totalNetGex >= 0;
-  const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
-  const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
-
-  const gammaLo = supportive ? spot : putWall ?? spot;
-  const gammaHi = supportive ? callWall ?? spot : spot;
-
-  const callPct = posPctFrom(spot, callWall);
-  const putPct = posPctFrom(spot, putWall);
-  const magnetPct = posPctFrom(spot, gexFlip);
-  const gammaHiPct = posPctFrom(spot, gammaHi);
-  const gammaLoPct = posPctFrom(spot, gammaLo);
-
-  const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
-
-  return (
-    <div style={{ ...dissolveCard, padding: "12px 14px", flex: "1 1 260px", minWidth: 230, opacity: stale ? 0.72 : 1 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <PosLayersIcon color={LIGHT_BLUE} />
-        <div style={{ fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
-        <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
-      </div>
-      {stale && (
-        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange, marginBottom: 6 }}>
-          Stale — last close{date ? ` ${date}` : ""}, market closed
-        </div>
+      {on && (
+        <span style={{ fontSize: 13, color: connected ? HOME_THEME.green : HOME_THEME.text, opacity: connected ? 1 : 0.6 }}>
+          {connected ? "● live" : "connecting…"}
+        </span>
       )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
-        <PosLevelRow label="Call Wall" value={posFmtPrice(callWall)} color={HOME_THEME.green} />
-        <PosLevelRow label="Put Wall" value={posFmtPrice(putWall)} color={SOFT_RED} />
-        <PosLevelRow label="Magnet" value={posFmtPrice(gexFlip)} color={HOME_THEME.orange} />
-        <PosLevelRow label="Gamma Zone" value={`${posFmtPrice(gammaLo)} → ${posFmtPrice(gammaHi)}`} color={LIGHT_BLUE} />
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "56px 1fr 46px", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.04em", color: HOME_THEME.muted, opacity: 0.5, marginBottom: 4 }}>
-        <div style={{ textAlign: "right" }}>Below</div>
-        <div style={{ textAlign: "center" }}>Now {posFmtPrice(spot)}</div>
-        <div style={{ textAlign: "right" }}>Above</div>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <PosPositionBar label="Call Wall" pct={callPct} color={HOME_THEME.green} maxAbs={maxAbs} />
-        <PosPositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
-        <PosPositionBar label="Gamma Hi" pct={gammaHiPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PosPositionBar label="Gamma Lo" pct={gammaLoPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PosPositionBar label="Put Wall" pct={putPct} color={SOFT_RED} maxAbs={maxAbs} />
-      </div>
     </div>
+  );
+}
+
+function AmTbrPanel() {
+  const [useRealEs, setUseRealEs] = useState(false);
+  const { candles: esCandles, connected } = useEsCandles(useRealEs, 1);
+  const realCandles = useRealEs ? normalizeAmTbrEsCandles(esCandles) : [];
+  const showingReal = useRealEs && realCandles.length > 1;
+  const candles = showingReal ? realCandles : buildAmTbrCandles();
+
+  return (
+    <Card
+      variant="dissolve"
+      accent={TBR_GOLD}
+      title={<span style={{ fontSize: 18 }}>AM TBR — Time-Based Range</span>}
+      subtitle="Rolling 20-day 8am–12pm distribution · reversion to TBR Open"
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+          {showingReal
+            ? "Real ES 5m candles, 05:30–12:30 ET — bands/lines are still illustrative placeholders."
+            : useRealEs
+            ? "No ES bars yet for today's 05:30–12:30 window — showing mock candles."
+            : "Mock candles — flip to Live ES to overlay real ES 5m bars."}
+        </div>
+        <AmTbrEsToggleSwitch on={useRealEs} onChange={setUseRealEs} connected={connected} />
+      </div>
+      <AmTbrChart candles={candles} showMarkers={!showingReal} />
+      <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, marginTop: 12, opacity: 0.85 }}>
+        Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
+        sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
+        (8am open). MAE is shown for reverted vs. non-reverted events; MFE beyond TBR Open is shown for
+        reverted events. Reversions within the first hour (8am hour) have the highest hit rate. Source
+        concept: nqstats.com/am_tbr.html — 10 years of data.
+      </div>
+    </Card>
+  );
+}
+
+function AmTbrStatTile({ label, value, accent }: { label: string; value: string; accent: string }) {
+  return (
+    <div style={{ ...statTileStyle, padding: "16px 18px" }}>
+      <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
+    </div>
+  );
+}
+
+// Illustrative numbers only — not computed from data, just filling out the mockup.
+function AmTbrStatsCards() {
+  return (
+    <Card
+      variant="classic"
+      accent={TBR_GOLD}
+      title={<span style={{ fontSize: 18 }}>AM TBR — Sample Stats</span>}
+      subtitle="Placeholder figures for layout only"
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
+        <AmTbrStatTile label="8am Hour Reversion Rate" value="71%" accent={HOME_THEME.green} />
+        <AmTbrStatTile label="Total Reversion Rate" value="86%" accent={HOME_THEME.cyan} />
+        <AmTbrStatTile label="Non-Reverted MAE (Median)" value="0.41" accent={HOME_THEME.red} />
+        <AmTbrStatTile label="Reverted MAE (Median)" value="0.18" accent={HOME_THEME.green} />
+        <AmTbrStatTile label="Reverted MFE (Median)" value="0.63" accent={TBR_GOLD} />
+        <AmTbrStatTile label="Avg Time to Trigger" value="42m" accent={HOME_THEME.orange} />
+        <AmTbrStatTile label="Rolling Window" value="20d" accent={HOME_THEME.purple} />
+        <AmTbrStatTile label="Sample Size" value="2,510" accent={HOME_THEME.cyan} />
+      </div>
+    </Card>
   );
 }
 
@@ -513,8 +623,7 @@ export default function EsCandlesPage() {
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
   const [showSignals, setShowSignals] = useState(false); // bottom actionable-signals strip
-  const [showPositioning, setShowPositioning] = useState(false); // bottom multi-ticker GEX positioning strip
-  const { rows: positioningRows, error: positioningError, loadedAt: positioningLoadedAt, reload: reloadPositioning } = usePositioning(showPositioning);
+  const [showAmTbr, setShowAmTbr] = useState(false); // bottom AM TBR (time-based-range) strip
   // Recent signals from the engine (/proxy/signals), polled every 15s while the
   // tab is visible. Newest first; the engine dedupes + scores server-side.
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -1627,7 +1736,7 @@ export default function EsCandlesPage() {
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
           <ToggleTile label="Bias"     on={showBias}     onClick={() => setShowBias((v) => !v)}     accent={LIGHT_BLUE} />
           <ToggleTile label="Signals"  on={showSignals}  onClick={() => setShowSignals((v) => !v)} accent={LIGHT_BLUE} />
-          <ToggleTile label="Positioning" on={showPositioning} onClick={() => setShowPositioning((v) => !v)} accent={LIGHT_BLUE} />
+          <ToggleTile label="AM TBR" on={showAmTbr} onClick={() => setShowAmTbr((v) => !v)} accent={LIGHT_BLUE} />
 
           <DockGap />
 
@@ -1811,53 +1920,14 @@ export default function EsCandlesPage() {
         </div>
       ) : null}
 
-      {/* ── Options Positioning strip ──────────────────────────────────────────
-          SPX/NDX/SPY/QQQ Call Wall / Put Wall / Magnet Strike / Gamma Zone,
-          live from the multi-ticker GEX scanner (/proxy/scanner). Moved here
-          from /test — an on/off strip like Signals, not a separate page. */}
-      {showPositioning ? (
-        <div className="px-4 pb-4" style={{ flexShrink: 0 }}>
-          <div style={{ ...dissolveCard, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>Positioning</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>
-                  {positioningLoadedAt
-                    ? `updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(positioningLoadedAt))} ET`
-                    : "loading…"}
-                </span>
-                <button
-                  onClick={reloadPositioning}
-                  style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: LIGHT_BLUE, background: "transparent", border: `1px solid ${LIGHT_BLUE}55`, borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
-                >
-                  Refresh
-                </button>
-              </span>
-            </div>
-            {positioningError && <div style={{ fontSize: 11, color: SOFT_RED }}>Positioning data error: {positioningError}</div>}
-            <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 2 }}>
-              {POSITIONING_TICKERS.map((sym) => {
-                const row = positioningRows?.[sym];
-                if (!row) {
-                  return (
-                    <div key={sym} style={{ ...dissolveCard, padding: "12px 14px", flex: "1 1 260px", minWidth: 230 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <PosLayersIcon color={LIGHT_BLUE} />
-                        <div style={{ fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
-                      </div>
-                      <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5 }}>
-                        {positioningRows ? "No snapshot yet today — scanner sweep pending." : "Loading…"}
-                      </div>
-                    </div>
-                  );
-                }
-                return <PositioningCard key={sym} row={row} />;
-              })}
-            </div>
-            <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.5, lineHeight: 1.5 }}>
-              Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots). Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile.
-            </div>
-          </div>
+      {/* ── AM TBR strip ────────────────────────────────────────────────────────
+          8am–12pm Time-Based-Range distribution mock (nqstats.com/am_tbr),
+          moved here from /test as an on/off strip like Signals — Brandon
+          wanted it living with the ES chart instead of a separate tab. */}
+      {showAmTbr ? (
+        <div className="px-4 pb-4" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+          <AmTbrPanel />
+          <AmTbrStatsCards />
         </div>
       ) : null}
       </div>
