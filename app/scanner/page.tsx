@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
@@ -1108,7 +1108,7 @@ function WatchThisScanner() {
           {adding ? "Adding…" : "+ Add"}
         </button>
         {addStatus && (
-          <span style={{ fontSize: 12, color: addStatus.kind === "ok" ? LIGHT_BLUE : SOFT_RED }}>
+          <span style={{ fontSize: 12, color: addStatus.kind === "ok" ? LIGHT_BLUE : HOME_THEME.red }}>
             {addStatus.msg}
           </span>
         )}
@@ -1151,7 +1151,7 @@ function WatchThisScanner() {
                 farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: up ? HOME_THEME.green : SOFT_RED }}>{fmtB(r.gex_value)}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>{fmtB(r.gex_value)}</span>
                 <a href={chainHref} style={{ fontSize: 12, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
                   View chain →
                 </a>
