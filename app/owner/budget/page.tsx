@@ -380,7 +380,15 @@ export default function BudgetPage() {
       (a, x) => ({ income: a.income + x.income, expenses: a.expenses + x.expenses, leftover: a.leftover + x.leftover }),
       { income: 0, expenses: 0, leftover: 0 }
     );
-    return { months, totals, start: months[0]?.start ?? 0, end: months[11]?.end ?? 0 };
+    // Spend by category across the whole year (assigned real expense rows).
+    const catSpend: Record<number, number> = {};
+    let uncategorized = 0;
+    for (const r of yearRows) {
+      if (r.is_beginning || r.amount >= 0) continue;
+      if (r.category_id == null) uncategorized += Math.abs(r.amount);
+      else catSpend[r.category_id] = (catSpend[r.category_id] || 0) + Math.abs(r.amount);
+    }
+    return { months, totals, start: months[0]?.start ?? 0, end: months[11]?.end ?? 0, catSpend, uncategorized };
   }, [yearRows, recurring, year]);
 
   const monthLabel = (() => {
@@ -547,7 +555,7 @@ export default function BudgetPage() {
           </div>
         )}
         {tab === "yearly" && (
-          <YearlyPanel data={yearMonths} year={year} onYear={setYear} currency={currency} loading={yearLoading} />
+          <YearlyPanel data={yearMonths} categories={categories} year={year} onYear={setYear} currency={currency} loading={yearLoading} />
         )}
 
         {/* Composer */}
@@ -1472,33 +1480,177 @@ function ImportPanel({
   );
 }
 
-// Year overview: per-month start / income / expenses / end / left over + totals.
+// Year dashboard (ZenMoney-style): summary cards, monthly cash-flow bars,
+// spending-by-category donut, budget-overview bars, and the month table.
 function YearlyPanel({
   data,
+  categories,
   year,
   onYear,
   currency,
   loading,
 }: {
-  data: { months: { ym: string; m: number; start: number; income: number; expenses: number; end: number; leftover: number; active: boolean }[]; totals: { income: number; expenses: number; leftover: number }; start: number; end: number };
+  data: {
+    months: { ym: string; m: number; start: number; income: number; expenses: number; end: number; leftover: number; active: boolean }[];
+    totals: { income: number; expenses: number; leftover: number };
+    start: number;
+    end: number;
+    catSpend: Record<number, number>;
+    uncategorized: number;
+  };
+  categories: Category[];
   year: number;
   onYear: (y: number) => void;
   currency: string;
   loading: boolean;
 }) {
   const monthName = (m: number) => new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
+  const monthShort = (m: number) => new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "narrow" });
+
+  const cards = [
+    { label: "Year-end balance", value: data.end, color: data.end < 0 ? SOFT_RED : HOME_THEME.cyan, icon: "🏦" },
+    { label: "Total income", value: data.totals.income, color: HOME_THEME.green, icon: "📈" },
+    { label: "Total expenses", value: data.totals.expenses, color: SOFT_RED, icon: "📉" },
+    { label: "Net / left over", value: data.totals.leftover, color: data.totals.leftover < 0 ? SOFT_RED : HOME_THEME.green, icon: "💵" },
+  ];
+
+  // Cash-flow bars.
+  const CW = 720, CH = 200, padB = 22, padT = 8, padX = 8;
+  const maxVal = Math.max(1, ...data.months.map((mo) => Math.max(mo.income, mo.expenses)));
+  const bandW = (CW - padX * 2) / 12;
+  const plotH = CH - padT - padB;
+
+  // Spending donut slices.
+  const slices = [
+    ...categories.map((c) => ({ label: c.name, amount: data.catSpend[c.id] || 0, color: c.color || HOME_THEME.cyan })),
+    { label: "Unsorted", amount: data.uncategorized, color: "rgba(255,255,255,0.28)" },
+  ].filter((s) => s.amount > 0).sort((a, b) => b.amount - a.amount);
+  const donutTotal = slices.reduce((s, x) => s + x.amount, 0);
+  const R = 54, C = 2 * Math.PI * R;
+  let acc = 0;
+
+  const budgeted = categories.filter((c) => (c.amount || 0) > 0);
+
   return (
-    <div style={{ ...dissolveCard(), padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 19, fontWeight: 900 }}>Year overview</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ ...dissolveCard(), padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 22, fontWeight: 900 }}>{year} — Year dashboard</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => onYear(year - 1)} style={{ ...ghost(), padding: "6px 12px" }}>◀</button>
           <span style={{ fontSize: 16, fontWeight: 900, minWidth: 56, textAlign: "center" }}>{year}</span>
           <button onClick={() => onYear(year + 1)} style={{ ...ghost(), padding: "6px 12px" }}>▶</button>
+          {loading && <span style={{ fontSize: 14, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
       </div>
-      {loading && <div style={{ fontSize: 14, color: HOME_THEME.muted }}>Loading…</div>}
-      <div style={{ overflowX: "auto" }}>
+
+      {/* Summary cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+        {cards.map((c) => (
+          <div key={c.label} style={{ ...dissolveCard(), padding: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18 }}>{c.icon}</span>
+              <span style={labelCap()}>{c.label}</span>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color: c.color }}>{fmtMoney(c.value, currency)}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Cash flow bar chart */}
+      <div style={{ ...dissolveCard(), padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted }}>CASH FLOW</div>
+          <div style={{ display: "flex", gap: 14, fontSize: 13, color: HOME_THEME.muted }}>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: HOME_THEME.green, marginRight: 5 }} />Income</span>
+            <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: SOFT_RED, marginRight: 5 }} />Expenses</span>
+          </div>
+        </div>
+        <svg viewBox={`0 0 ${CW} ${CH}`} width="100%" style={{ display: "block" }}>
+          {data.months.map((mo, i) => {
+            const x0 = padX + i * bandW;
+            const barW = bandW * 0.26;
+            const gap = bandW * 0.08;
+            const incH = (mo.income / maxVal) * plotH;
+            const expH = (mo.expenses / maxVal) * plotH;
+            const baseY = CH - padB;
+            return (
+              <g key={mo.ym}>
+                <rect x={x0 + bandW / 2 - barW - gap / 2} y={baseY - incH} width={barW} height={incH} rx={2} fill={HOME_THEME.green} />
+                <rect x={x0 + bandW / 2 + gap / 2} y={baseY - expH} width={barW} height={expH} rx={2} fill={SOFT_RED} />
+                <text x={x0 + bandW / 2} y={CH - 6} fill={HOME_THEME.muted} fontSize={12} textAnchor="middle">{monthShort(mo.m)}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      {/* Spending donut + budget overview */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
+        <div style={{ ...dissolveCard(), padding: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>SPENDING BREAKDOWN</div>
+          {donutTotal <= 0 ? (
+            <div style={{ padding: "24px 0", color: HOME_THEME.muted, fontSize: 14 }}>No categorized spending this year yet.</div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+              <svg viewBox="0 0 140 140" width="140" height="140" style={{ flex: "none" }}>
+                {slices.map((s, i) => {
+                  const dash = (s.amount / donutTotal) * C;
+                  const el = <circle key={i} cx={70} cy={70} r={R} fill="none" stroke={s.color} strokeWidth={16} strokeDasharray={`${dash} ${C - dash}`} strokeDashoffset={-acc} transform="rotate(-90 70 70)" />;
+                  acc += dash;
+                  return el;
+                })}
+                <text x={70} y={66} textAnchor="middle" fill={HOME_THEME.text} fontSize={16} fontWeight={900}>{fmtMoney(donutTotal, currency)}</text>
+                <text x={70} y={82} textAnchor="middle" fill={HOME_THEME.muted} fontSize={11}>spent</text>
+              </svg>
+              <div style={{ flex: 1, minWidth: 140, display: "flex", flexDirection: "column", gap: 6 }}>
+                {slices.map((s, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color, flex: "none" }} />
+                      <span style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
+                    </span>
+                    <span style={{ fontSize: 13, color: HOME_THEME.muted, flex: "none" }}>{Math.round((s.amount / donutTotal) * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ ...dissolveCard(), padding: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BUDGET OVERVIEW</div>
+          {budgeted.length === 0 ? (
+            <div style={{ padding: "24px 0", color: HOME_THEME.muted, fontSize: 14 }}>No category budgets set.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {budgeted.map((c) => {
+                const annual = (c.amount || 0) * 12;
+                const spent = data.catSpend[c.id] || 0;
+                const pct = annual > 0 ? Math.min(100, (spent / annual) * 100) : 0;
+                const over = spent > annual;
+                const dot = c.color || HOME_THEME.cyan;
+                return (
+                  <div key={c.id}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 800 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 3, background: dot }} />{c.name}
+                      </span>
+                      <span style={{ fontSize: 13, color: HOME_THEME.muted }}>{fmtMoney(spent, currency)} <span style={{ opacity: 0.6 }}>/ {fmtMoney(annual, currency)}</span></span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 99, background: "rgba(255,255,255,0.06)" }}>
+                      <div style={{ height: 6, borderRadius: 99, background: over ? SOFT_RED : dot, width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Month table */}
+      <div style={{ ...dissolveCard(), padding: 16, overflowX: "auto" }}>
+        <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>YEAR OVERVIEW</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
             <tr>

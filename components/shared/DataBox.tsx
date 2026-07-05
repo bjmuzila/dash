@@ -64,10 +64,19 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
   // push it down below the band like everything else — otherwise the band
   // covers the chart's own top-of-canvas annotations (spot label, CB tag).
   const captureH = contentH + 48;
+  // Pin width explicitly too. html2canvas renders the CLONE in an isolated
+  // offscreen context that loses the live element's real flex/grid siblings,
+  // so a flex-basis width (e.g. "flex: 1.6 1 0" in a row of siblings) can
+  // resolve to something wider than the live element — the composited canvas
+  // (sized to the live element's actual rect) then lands in one corner of
+  // that oversized frame instead of filling/centering in it.
+  const contentW = el.scrollWidth || el.getBoundingClientRect().width;
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
     allowTaint: true,
+    width: contentW,
+    windowWidth: contentW,
     scale: window.devicePixelRatio || 1,
     height: captureH,
     windowHeight: captureH,
@@ -86,6 +95,8 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       // Expand to the measured content height (explicit px — never auto/0) and
       // reserve room for the title band so no rows hide behind it.
       clone.style.height = `${captureH}px`;
+      clone.style.width = `${contentW}px`;
+      clone.style.flex = "none";
       clone.style.maxHeight = "none";
       clone.style.overflow = "visible";
       clone.style.paddingTop = "44px";
