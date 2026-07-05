@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -566,7 +566,7 @@ function PositioningCard({ row }: { row: PositioningRow }) {
   const { symbol, spot, callWall, putWall, gexFlip, totalNetGex, stale, date } = row;
   const supportive = totalNetGex >= 0;
   const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
-  const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
+  const regimeColor = supportive ? HOME_THEME.green : HOME_THEME.red;
 
   const gammaLo = supportive ? spot : putWall ?? spot;
   const gammaHi = supportive ? callWall ?? spot : spot;
@@ -599,7 +599,7 @@ function PositioningCard({ row }: { row: PositioningRow }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
         <LevelRow label="Call Wall" value={fmtPrice(callWall)} color={HOME_THEME.green} />
-        <LevelRow label="Put Wall" value={fmtPrice(putWall)} color={SOFT_RED} />
+        <LevelRow label="Put Wall" value={fmtPrice(putWall)} color={HOME_THEME.red} />
         <LevelRow label="Magnet Strike" value={fmtPrice(gexFlip)} color={HOME_THEME.orange} />
         <LevelRow label="Gamma Zone" value={`${fmtPrice(gammaLo)} → ${fmtPrice(gammaHi)}`} color={LIGHT_BLUE} />
       </div>
@@ -624,7 +624,7 @@ function PositioningCard({ row }: { row: PositioningRow }) {
         <PositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
         <PositionBar label="Gamma Hi" pct={gammaHiPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
         <PositionBar label="Gamma Lo" pct={gammaLoPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PositionBar label="Put Wall" pct={putPct} color={SOFT_RED} maxAbs={maxAbs} />
+        <PositionBar label="Put Wall" pct={putPct} color={HOME_THEME.red} maxAbs={maxAbs} />
       </div>
     </Card>
   );
@@ -847,15 +847,15 @@ function ToggleSwitch({ label, on, onChange }: { label: string; on: boolean; onC
         gap: 8,
         padding: "8px 12px",
         borderRadius: 8,
-        border: `1px solid ${on ? SOFT_RED : HOME_THEME.border}`,
-        background: on ? `${SOFT_RED}1a` : "rgba(255,255,255,0.04)",
+        border: `1px solid ${on ? HOME_THEME.red : HOME_THEME.border}`,
+        background: on ? `${HOME_THEME.red}1a` : "rgba(255,255,255,0.04)",
         cursor: "pointer",
       }}
     >
-      <span style={{ position: "relative", width: 34, height: 18, borderRadius: 999, background: on ? SOFT_RED : "rgba(255,255,255,0.15)", flexShrink: 0, transition: "background .15s" }}>
+      <span style={{ position: "relative", width: 34, height: 18, borderRadius: 999, background: on ? HOME_THEME.red : "rgba(255,255,255,0.15)", flexShrink: 0, transition: "background .15s" }}>
         <span style={{ position: "absolute", top: 2, left: on ? 18 : 2, width: 14, height: 14, borderRadius: "50%", background: HOME_THEME.text, transition: "left .15s" }} />
       </span>
-      <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: on ? SOFT_RED : HOME_THEME.text }}>{label}</span>
+      <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: on ? HOME_THEME.red : HOME_THEME.text }}>{label}</span>
     </button>
   );
 }
@@ -904,8 +904,52 @@ function glWindowedRows(rows: GexLevelsRow[], spot: number): GexLevelsRow[] {
   return (win.length > 4 ? win : rows).slice();
 }
 
+// Shared hover state for the strike/date charts below: tracks which data
+// index is under the cursor + the cursor's position relative to the chart's
+// wrapping <div> (position:relative), so a floating HTML tooltip can follow it.
+function useChartHover() {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
+  const show = useCallback((idx: number, e: { clientX: number; clientY: number }) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setHover({ idx, x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }, []);
+  const hide = useCallback(() => setHover(null), []);
+  return { containerRef, hover, show, hide };
+}
+
+function ChartTooltip({ x, y, children }: { x: number; y: number; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: x,
+        top: y,
+        transform: "translate(-50%, -100%) translateY(-10px)",
+        background: HOME_THEME.panel,
+        border: `1px solid ${HOME_THEME.border}`,
+        borderRadius: 8,
+        padding: "8px 12px",
+        fontSize: 13,
+        lineHeight: 1.5,
+        color: HOME_THEME.text,
+        pointerEvents: "none",
+        whiteSpace: "nowrap",
+        boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
+        zIndex: 50,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Net Gamma by strike — bar chart (blue = positive/supportive, red =
+// negative/volatile), hover shows the exact strike + $ value.
 function NetGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
   const W = 720, H = 220, padL = 50, padR = 16, padB = 26, padT = 18;
+  const { containerRef, hover, show, hide } = useChartHover();
   if (!rows.length) return <GlEmpty note="no chain rows" />;
   const shown = glWindowedRows(rows, spot);
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
@@ -915,100 +959,226 @@ function NetGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
   if (minV === maxV) { minV -= 1; maxV += 1; }
   const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
   const y0 = y(0);
-  const linePts = shown.map((r) => `${x(r.strike).toFixed(1)},${y(glOiVolNet(r)).toFixed(1)}`).join(" L ");
-  const areaPath = `M ${x(xlo).toFixed(1)} ${y0.toFixed(1)} L ${linePts} L ${x(xhi).toFixed(1)} ${y0.toFixed(1)} Z`;
+  const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
-      <defs>
-        <linearGradient id="glNetGammaFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={`${SOFT_RED}59`} />
-          <stop offset="100%" stopColor={`${SOFT_RED}05`} />
-        </linearGradient>
-      </defs>
-      <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
-      <path d={areaPath} fill="url(#glNetGammaFill)" />
-      <path d={`M ${linePts}`} fill="none" stroke={SOFT_RED} strokeWidth={2} />
-      <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
-      {[minV, 0, maxV].map((v, i) => (
-        <text key={i} x={padL - 8} y={y(v) + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(v)}</text>
-      ))}
-      {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
-        <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
-      ))}
-    </svg>
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+        <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+        {shown.map((r, i) => {
+          const v = glOiVolNet(r);
+          const top = v >= 0 ? y(v) : y0;
+          const h = Math.max(1, Math.abs(y(v) - y0));
+          return (
+            <rect
+              key={r.strike}
+              x={x(r.strike) - barW / 2}
+              y={top}
+              width={barW}
+              height={h}
+              fill={v >= 0 ? LIGHT_BLUE : HOME_THEME.red}
+              opacity={hover?.idx === i ? 1 : 0.85}
+              style={{ cursor: "crosshair" }}
+              onMouseMove={(e) => show(i, e)}
+            />
+          );
+        })}
+        <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+        {[minV, 0, maxV].map((v, i) => (
+          <text key={i} x={padL - 8} y={y(v) + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(v)}</text>
+        ))}
+        {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
+          <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
+        ))}
+      </svg>
+      {hover && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
+          <div>Net Gamma: {glFmtBn(glOiVolNet(shown[hover.idx]))}</div>
+        </ChartTooltip>
+      )}
+    </div>
   );
 }
 
-function CallPutGammaByStrikeChart({
-  rows, spot, resistance, support,
-}: { rows: GexLevelsRow[]; spot: number; resistance: number | null; support: number | null }) {
+// Net Delta by strike — same bar treatment as Net Gamma, using r.netDEX.
+function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
   const W = 720, H = 220, padL = 50, padR = 16, padB = 26, padT = 18;
+  const { containerRef, hover, show, hide } = useChartHover();
   if (!rows.length) return <GlEmpty note="no chain rows" />;
   const shown = glWindowedRows(rows, spot);
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
-  const maxAbs = Math.max(1, ...shown.map((r) => Math.max(Math.abs(r.callGEX ?? 0), Math.abs(r.putGEX ?? 0))));
-  const halfH = (H - padT - padB) / 2;
-  const y0 = padT + halfH;
-  const barH = (v: number) => (Math.abs(v) / maxAbs) * halfH;
-  const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.5);
-
-  const wallLine = (k: number | null, color: string, lab: string) =>
-    k != null && k > xlo && k < xhi ? (
-      <g key={lab}>
-        <line x1={x(k)} x2={x(k)} y1={padT} y2={H - padB} stroke={color} strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
-        <text x={x(k)} y={padT + 10} fill={color} fontSize={9} fontWeight={800} textAnchor="middle">{lab}</text>
-      </g>
-    ) : null;
+  const vals = shown.map((r) => r.netDEX ?? 0);
+  let minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
+  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
+  const y0 = y(0);
+  const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
-      <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
-      {shown.map((r) => {
-        const cx = x(r.strike);
-        return (
-          <g key={r.strike}>
-            <rect x={cx - barW / 2} y={y0 - barH(r.callGEX ?? 0)} width={barW} height={barH(r.callGEX ?? 0)} fill={`${LIGHT_BLUE}c0`} />
-            <rect x={cx - barW / 2} y={y0} width={barW} height={barH(r.putGEX ?? 0)} fill={`${SOFT_RED}c0`} />
-          </g>
-        );
-      })}
-      <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1.25} strokeDasharray="2 3" opacity={0.7} />
-      {wallLine(support, SOFT_RED, `Put wall ${glFmt0(support)}`)}
-      {wallLine(resistance, LIGHT_BLUE, `Call wall ${glFmt0(resistance)}`)}
-      {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
-        <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
-      ))}
-    </svg>
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+        <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+        {shown.map((r, i) => {
+          const v = r.netDEX ?? 0;
+          const top = v >= 0 ? y(v) : y0;
+          const h = Math.max(1, Math.abs(y(v) - y0));
+          return (
+            <rect
+              key={r.strike}
+              x={x(r.strike) - barW / 2}
+              y={top}
+              width={barW}
+              height={h}
+              fill={v >= 0 ? LIGHT_BLUE : HOME_THEME.red}
+              opacity={hover?.idx === i ? 1 : 0.85}
+              style={{ cursor: "crosshair" }}
+              onMouseMove={(e) => show(i, e)}
+            />
+          );
+        })}
+        <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
+        {[minV, 0, maxV].map((v, i) => (
+          <text key={i} x={padL - 8} y={y(v) + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(v)}</text>
+        ))}
+        {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
+          <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
+        ))}
+      </svg>
+      {hover && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
+          <div>Net Delta: {glFmt0(shown[hover.idx].netDEX)}</div>
+        </ChartTooltip>
+      )}
+    </div>
   );
 }
 
-function OiByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
-  const W = 720, H = 180, padL = 46, padR = 16, padB = 24, padT = 16;
-  if (!rows.length) return <GlEmpty note="no chain rows" />;
-  const shown = glWindowedRows(rows, spot);
-  const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
-  const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
-  const maxOi = Math.max(1, ...shown.map((r) => Math.max(r.callOI ?? 0, r.putOI ?? 0)));
-  const barH = (v: number) => (v / maxOi) * (H - padT - padB);
-  const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.5);
+// Open interest by date — total (call+put) OI from the browser-local daily
+// history log (GlHistoryEntry.openInt), one bar per trading day recorded so far.
+function OiByDateChart({ rows }: { rows: GlHistoryEntry[] }) {
+  const W = 720, H = 220, padL = 60, padR = 16, padB = 30, padT = 18;
+  const { containerRef, hover, show, hide } = useChartHover();
+  if (!rows.length) return <GlEmpty note="Logging starts as soon as a level moves." />;
+  const shown = rows.slice().sort((a, b) => a.date.localeCompare(b.date));
+  const n = shown.length;
+  const x = (i: number) => (n > 1 ? padL + (i / (n - 1)) * (W - padL - padR) : (padL + W - padR) / 2);
+  const maxOi = Math.max(1, ...shown.map((r) => r.openInt));
   const y0 = H - padB;
+  const barH = (v: number) => (v / maxOi) * (y0 - padT);
+  const barW = Math.max(4, ((W - padL - padR) / Math.max(n, 1)) * 0.5);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 200 }}>
-      <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
-      {shown.map((r) => (
-        <g key={r.strike}>
-          <rect x={x(r.strike) - barW} y={y0 - barH(r.putOI ?? 0)} width={barW} height={barH(r.putOI ?? 0)} fill={`${SOFT_RED}90`} />
-          <rect x={x(r.strike)} y={y0 - barH(r.callOI ?? 0)} width={barW} height={barH(r.callOI ?? 0)} fill={`${LIGHT_BLUE}90`} />
-        </g>
-      ))}
-      <line x1={x(spot)} x2={x(spot)} y1={padT} y2={y0} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.6} />
-      {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
-        <text key={i} x={x(k)} y={y0 + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
-      ))}
-    </svg>
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }} onMouseLeave={hide}>
+        <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+        {shown.map((r, i) => (
+          <rect
+            key={r.date}
+            x={x(i) - barW / 2}
+            y={y0 - barH(r.openInt)}
+            width={barW}
+            height={Math.max(1, barH(r.openInt))}
+            fill={LIGHT_BLUE}
+            opacity={hover?.idx === i ? 1 : 0.8}
+            style={{ cursor: "crosshair" }}
+            onMouseMove={(e) => show(i, e)}
+          />
+        ))}
+        {shown.map((r, i) => (
+          (n <= 8 || i === 0 || i === n - 1 || i === Math.floor(n / 2)) && (
+            <text key={r.date} x={x(i)} y={y0 + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>
+              {glFmtDate(r.date).replace(/, \d+$/, "")}
+            </text>
+          )
+        ))}
+        <text x={padL - 8} y={padT + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(maxOi)}</text>
+        <text x={padL - 8} y={y0 + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>0</text>
+      </svg>
+      {hover && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(shown[hover.idx].date)}</div>
+          <div>Total OI: {glFmt0(shown[hover.idx].openInt)}</div>
+        </ChartTooltip>
+      )}
+    </div>
+  );
+}
+
+// Call OI / Call Vol / Put OI / Put Vol — 4-row heatmap by strike. Each row is
+// normalized independently (its own min/max) since OI and volume run on very
+// different scales; cell alpha encodes intensity, calls in blue / puts in red.
+const OI_HEATMAP_ROWS: { key: keyof GexLevelsRow; label: string; base: string }[] = [
+  { key: "callOI", label: "Call OI", base: LIGHT_BLUE },
+  { key: "callVolume", label: "Call Vol", base: LIGHT_BLUE },
+  { key: "putOI", label: "Put OI", base: HOME_THEME.red },
+  { key: "putVolume", label: "Put Vol", base: HOME_THEME.red },
+];
+
+function OiVolHeatmap({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [hover, setHover] = useState<{ row: number; col: number; x: number; y: number } | null>(null);
+  if (!rows.length) return <GlEmpty note="no chain rows" />;
+  const shown = glWindowedRows(rows, spot);
+  const strikeStep = shown.length > 1 ? Math.abs(shown[1].strike - shown[0].strike) : 1;
+
+  const showCell = (row: number, col: number, e: { clientX: number; clientY: number }) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setHover({ row, col, x: e.clientX - rect.left, y: e.clientY - rect.top });
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {OI_HEATMAP_ROWS.map((rowDef, ri) => {
+          const values = shown.map((r) => r[rowDef.key]);
+          const maxV = Math.max(1, ...values);
+          return (
+            <div key={rowDef.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 64, flexShrink: 0, fontSize: 11, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.65, textAlign: "right" }}>
+                {rowDef.label}
+              </div>
+              <div style={{ display: "flex", flex: 1, gap: 1, height: 26 }}>
+                {shown.map((r, ci) => {
+                  const v = r[rowDef.key];
+                  const alphaPct = maxV > 0 ? Math.round((v / maxV) * 90) + 8 : 8;
+                  const alphaHex = Math.round((alphaPct / 100) * 255).toString(16).padStart(2, "0");
+                  const isSpotCol = Math.abs(r.strike - spot) < strikeStep;
+                  return (
+                    <div
+                      key={r.strike}
+                      onMouseMove={(e) => showCell(ri, ci, e)}
+                      onMouseLeave={() => setHover(null)}
+                      style={{
+                        flex: 1,
+                        height: "100%",
+                        background: `${rowDef.base}${alphaHex}`,
+                        outline: isSpotCol ? `1px solid ${HOME_THEME.text}` : "none",
+                        cursor: "crosshair",
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginLeft: 72, marginTop: 4, fontSize: 10, color: HOME_THEME.text, opacity: 0.55 }}>
+        <span>{glFmt0(shown[0].strike)}</span>
+        <span>{glFmt0(shown[Math.floor(shown.length / 2)].strike)}</span>
+        <span>{glFmt0(shown[shown.length - 1].strike)}</span>
+      </div>
+      {hover && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.col].strike)}</div>
+          <div>{OI_HEATMAP_ROWS[hover.row].label}: {glFmt0(shown[hover.col][OI_HEATMAP_ROWS[hover.row].key])}</div>
+        </ChartTooltip>
+      )}
+    </div>
   );
 }
 
@@ -1053,11 +1223,11 @@ function StrikeLevelTable({
             return (
               <tr key={r.strike} style={{ background: Math.abs(r.strike - spot) < 0.5 ? `${LIGHT_BLUE}14` : "transparent" }}>
                 <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{glFmt2(r.strike)}</td>
-                <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : SOFT_RED }}>{glFmt0(netG)}</td>
+                <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>{glFmt0(netG)}</td>
                 <td style={td}>{glFmt0(r.netDEX)}</td>
-                <td style={{ ...td, color: callItm ? SOFT_RED : HOME_THEME.text, fontWeight: callItm ? 800 : 400 }}>{glFmt0(r.callOI)}</td>
+                <td style={{ ...td, color: callItm ? HOME_THEME.red : HOME_THEME.text, fontWeight: callItm ? 800 : 400 }}>{glFmt0(r.callOI)}</td>
                 <td style={td}>{glFmt0(r.callVolume)}</td>
-                <td style={{ ...td, color: putItm ? SOFT_RED : HOME_THEME.text, fontWeight: putItm ? 800 : 400 }}>{glFmt0(r.putOI)}</td>
+                <td style={{ ...td, color: putItm ? HOME_THEME.red : HOME_THEME.text, fontWeight: putItm ? 800 : 400 }}>{glFmt0(r.putOI)}</td>
                 <td style={td}>{glFmt0(r.putVolume)}</td>
               </tr>
             );
@@ -1234,7 +1404,7 @@ function GexLevelsTab() {
         title={<span style={{ fontSize: 18 }}>{snap?.symbol ?? "SPX"} · GEX Levels</span>}
         subtitle={d ? `${snap?.expiry ?? "0DTE"} expiry · spot ${glFmt2(d.spot)} · as of ${asOf} ET` : "loading live /proxy/gex snapshot…"}
       >
-        {err && <div style={{ fontSize: 17, color: SOFT_RED, marginBottom: 10 }}>Feed error: {err}</div>}
+        {err && <div style={{ fontSize: 17, color: HOME_THEME.red, marginBottom: 10 }}>Feed error: {err}</div>}
         {!d && !err && <GlEmpty note="waiting on /proxy/gex…" />}
         {d && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
@@ -1244,7 +1414,7 @@ function GexLevelsTab() {
             </div>
             <AmTbrStat label="Stock Price" value={glFmt2(d.spot)} accent={HOME_THEME.text} />
             <AmTbrStat label="Resistance" value={d.resistance != null ? glFmt0(d.resistance) : "—"} accent={LIGHT_BLUE} />
-            <AmTbrStat label="Support" value={d.support != null ? glFmt0(d.support) : "—"} accent={SOFT_RED} />
+            <AmTbrStat label="Support" value={d.support != null ? glFmt0(d.support) : "—"} accent={HOME_THEME.red} />
             <AmTbrStat label="Neutral" value={d.neutral != null ? glFmt0(d.neutral) : "—"} accent={HOME_THEME.text} />
             <SemiGauge
               label="$Gamma"
@@ -1253,7 +1423,7 @@ function GexLevelsTab() {
               max={gammaSpan}
               valueLabel={glFmtBn(d.dollarGamma)}
               bands={[
-                { from: -gammaSpan, to: 0, color: SOFT_RED },
+                { from: -gammaSpan, to: 0, color: HOME_THEME.red },
                 { from: 0, to: gammaSpan, color: LIGHT_BLUE },
               ]}
             />
@@ -1264,9 +1434,9 @@ function GexLevelsTab() {
               max={2}
               valueLabel={glFmt2(d.cpgRatio)}
               bands={[
-                { from: 0, to: 0.7, color: SOFT_RED },
+                { from: 0, to: 0.7, color: HOME_THEME.red },
                 { from: 0.7, to: 1.3, color: LIGHT_BLUE },
-                { from: 1.3, to: 2, color: SOFT_RED },
+                { from: 1.3, to: 2, color: HOME_THEME.red },
               ]}
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1292,39 +1462,36 @@ function GexLevelsTab() {
       </Card>
 
       {d && (
-        <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
-            <div style={{ flex: "2 1 520px", minWidth: 340 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
-                {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
-              </Card>
-            </div>
-            <div style={{ flex: "1 1 320px", minWidth: 300 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by strike</span>} subtitle={`${snap?.expiry ?? ""} · current 0DTE chain only`}>
-                <OiByStrikeChart rows={d.rows} spot={d.spot} />
-                <ChartLegend items={[{ label: "Call OI", color: LIGHT_BLUE }, { label: "Put OI", color: SOFT_RED }]} />
-              </Card>
-            </div>
+        // Left half: history of key level changes + strike-level table.
+        // Right half: the 3 charts (Net Gamma, Net Delta, OI by Date) + the
+        // Call/Put OI+Vol heatmap. Both columns stack on narrow viewports.
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
+          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
+              {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
+            </Card>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
+              <StrikeLevelTable rows={d.rows} spot={d.spot} callsItmRed={callsItmRed} putsItmRed={putsItmRed} />
+            </Card>
           </div>
 
-          <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
-            <StrikeLevelTable rows={d.rows} spot={d.spot} callsItmRed={callsItmRed} putsItmRed={putsItmRed} />
-          </Card>
-
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
-            <div style={{ flex: "1 1 380px", minWidth: 320 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net gamma exposure by strike</span>}>
-                <NetGammaByStrikeChart rows={d.rows} spot={d.spot} />
-              </Card>
-            </div>
-            <div style={{ flex: "1 1 380px", minWidth: 320 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Call / put gamma exposure by strike</span>}>
-                <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} resistance={d.resistance} support={d.support} />
-                <ChartLegend items={[{ label: "Call GEX", color: LIGHT_BLUE }, { label: "Put GEX", color: SOFT_RED }]} />
-              </Card>
-            </div>
+          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net gamma exposure by strike</span>}>
+              <NetGammaByStrikeChart rows={d.rows} spot={d.spot} />
+              <ChartLegend items={[{ label: "Positive (supportive)", color: LIGHT_BLUE }, { label: "Negative (volatile)", color: HOME_THEME.red }]} />
+            </Card>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net delta exposure by strike</span>}>
+              <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
+              <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
+            </Card>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by date</span>} subtitle="Total call+put OI, one bar per trading day logged (this browser only)">
+              <OiByDateChart rows={history} />
+            </Card>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Call / put OI &amp; volume by strike</span>} subtitle={`${snap?.expiry ?? ""} · current 0DTE chain only`}>
+              <OiVolHeatmap rows={d.rows} spot={d.spot} />
+            </Card>
           </div>
-        </>
+        </div>
       )}
     </>
   );
@@ -1363,8 +1530,9 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     points: [
       "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
       "Strike-level net gamma, net delta, and call/put OI table",
-      "Net gamma and call/put gamma-by-strike charts",
-      "Browser-local daily history of level changes + OI by strike",
+      "Interactive net gamma, net delta, and open-interest-by-date charts",
+      "Call/put OI + volume heatmap by strike",
+      "Browser-local daily history of level changes",
     ],
   },
   {
@@ -1539,7 +1707,7 @@ function FlowInventoryTab() {
           if (d) return <SymbolPanel key={ticker} data={d} />;
           return (
             <Card key={ticker} variant="budget" accent={LIGHT_BLUE} title={ticker}>
-              <div style={{ fontSize: 17, color: errors[ticker] ? SOFT_RED : HOME_THEME.text, opacity: errors[ticker] ? 1 : 0.6 }}>
+              <div style={{ fontSize: 17, color: errors[ticker] ? HOME_THEME.red : HOME_THEME.text, opacity: errors[ticker] ? 1 : 0.6 }}>
                 {errors[ticker] ? `Error: ${errors[ticker]}` : "Loading…"}
               </div>
             </Card>

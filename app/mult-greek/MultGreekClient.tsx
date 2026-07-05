@@ -941,7 +941,12 @@ export function MultGreekClient({
           .mg-panels.mg-embed > div { flex: 1 1 0 !important; width: auto !important; min-height: 0 !important; }
         `}</style>
       )}
-      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
+      {/* alignItems defaults to "stretch" in a flex row, which forces every
+          panel to match whichever one is tallest. During capture each Card is
+          sized to hug its own (trimmed) content — without flex-start here,
+          the row would stretch the shorter panels back out to match the
+          tallest one, reintroducing the blank void this was meant to fix. */}
+      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}

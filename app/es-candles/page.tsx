@@ -180,251 +180,91 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AM TBR strip: 8am-12pm Time-Based-Range distribution mockup (nqstats.com/am_tbr).
-// Procedural chart data — layout/design test only, not wired to a live feed
-// (the candle series itself can toggle to real ES 5m bars via the Mock/Live ES
-// switch below). Moved here from /test as an on/off "AM TBR" toggle strip per
-// Brandon's ask to have it live with the ES chart instead of a separate tab.
+// AM TBR strip: 8am-12pm Time-Based-Range overlay (nqstats.com/am_tbr concept).
+// Previously a separate mock/rescaled SVG mini-chart with its own candle
+// series and its own useEsCandles() fetch. Per Brandon's ask, this now draws
+// straight onto the REAL ES candle chart's canvas overlay (see section 4 in
+// the draw() effect below) — no duplicate candles, no second data fetch.
+// Percentile band widths are still placeholder magnitudes (see
+// AmTbrStatsCards), just anchored to today's real 8am ES open instead of an
+// arbitrary SVG pixel grid.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Gold/amber has no equivalent HOME_THEME token (palette has no yellow) — this
 // is the one intentional exception, scoped to this chart's TBR Open + MFE band.
 const TBR_GOLD = "#eab308";
-// Faded reference-chart candles sit behind the distribution bands, so they use
-// translucent white rather than a theme accent color (not semantic here).
-const CANDLE_UP = "rgba(255,255,255,0.55)";
-const CANDLE_DOWN = "rgba(255,255,255,0.22)";
 
-type AmTbrCandle = { o: number; h: number; l: number; c: number };
+// ES-point offsets from TBR Open, derived from the original mockup's pixel
+// proportions (50px == the real 0.25 trigger distance) so the band shapes
+// look the same, just expressed in real price units now.
+const AMTBR_TRIGGER = 0.25;
+const AMTBR_NR_MAE = { med: 1.20, p75: 1.675, p90: 2.05 };  // Non-Reverted MAE — above Open
+const AMTBR_RM_MAE = { med: 0.45, p75: 0.65, p90: 1.00 };   // Reverted MAE — above Open, inside NR band
+const AMTBR_RM_MFE = { med: 0.55, p75: 1.10, p90: 1.75 };   // Reverted MFE — below Open
 
-function buildAmTbrCandles(): AmTbrCandle[] {
-  // (candleIndex, priceY) keyframes — priceY is an SVG y-coordinate (smaller = higher price).
-  const anchors: [number, number][] = [
-    [0, 460], [5, 455], [10, 452], [15, 432], [19, 380], [22, 300], [25, 265],
-    [27, 292], [30, 340], [33, 420], [36, 460], [38, 430], [41, 342], [43, 302],
-    [45, 340], [47, 420], [49, 470], [52, 560], [55, 650], [58, 760], [60, 790],
-    [62, 742], [64, 682], [66, 632], [68, 602], [69, 592],
-  ];
-  const xs = anchors.map((a) => a[0]);
-  const ys = anchors.map((a) => a[1]);
-  const interp = (t: number) => {
-    for (let i = 0; i < xs.length - 1; i++) {
-      if (t >= xs[i] && t <= xs[i + 1]) {
-        const f = (t - xs[i]) / (xs[i + 1] - xs[i]);
-        return ys[i] + (ys[i + 1] - ys[i]) * f;
-      }
-    }
-    return ys[ys.length - 1];
-  };
-  const N = 70;
-  const candles: AmTbrCandle[] = [];
-  let prevClose = interp(0);
-  for (let i = 0; i < N; i++) {
-    const base = interp(i);
-    const noise = Math.sin(i * 1.7) * 7 + Math.sin(i * 0.55) * 5;
-    const close = base + noise;
-    const open = prevClose;
-    const wick = 9 + Math.abs(Math.sin(i * 2.3)) * 12;
-    const h = Math.min(open, close) - wick * 0.6 - Math.abs(Math.sin(i)) * 4;
-    const l = Math.max(open, close) + wick * 0.6 + Math.abs(Math.cos(i)) * 4;
-    candles.push({ o: open, h, l, c: close });
-    prevClose = close;
+type AmTbrInfo = {
+  openRow: EsCandleRecord;
+  windowRows: EsCandleRecord[]; // today, 08:00–12:00 ET inclusive
+  triggered: "up" | "down" | null;
+  triggerRow: EsCandleRecord | null;
+};
+
+// Derives today's real TBR Open (8am ES bar) + whether the +/-0.25 trigger has
+// been touched yet, straight from the same merged `rows` the main chart
+// renders — so the overlay and this status card never disagree with what's
+// on screen.
+function computeAmTbrInfo(rows: EsCandleRecord[]): AmTbrInfo | null {
+  if (!rows.length) return null;
+  const timeOf = (r: EsCandleRecord) => r.time || (r.slotKey ?? "").slice(11, 16);
+  const today = rows[rows.length - 1].date;
+  const todayRows = rows.filter((r) => r.date === today);
+  const openRow = todayRows.find((r) => timeOf(r) === "08:00")
+    ?? todayRows.find((r) => timeOf(r) >= "08:00")
+    ?? null;
+  if (!openRow) return null;
+  const windowRows = todayRows.filter((r) => timeOf(r) >= "08:00" && timeOf(r) <= "12:00");
+  let triggered: "up" | "down" | null = null;
+  let triggerRow: EsCandleRecord | null = null;
+  for (const r of windowRows) {
+    if (r.high >= openRow.open + AMTBR_TRIGGER) { triggered = "up"; triggerRow = r; break; }
+    if (r.low <= openRow.open - AMTBR_TRIGGER) { triggered = "down"; triggerRow = r; break; }
   }
-  return candles;
+  return { openRow, windowRows, triggered, triggerRow };
 }
 
-const AMTBR_VB_W = 1650;
-const AMTBR_VB_H = 860;
-const AMTBR_CHART_LEFT = 10;
-const AMTBR_CHART_RIGHT = 1530;
-const AMTBR_BAND_LEFT = 560;
+function AmTbrPanel({ info }: { info: AmTbrInfo | null }) {
+  const statusText = !info
+    ? "No 8am ES bar yet today — bands appear on the chart once the TBR Open prints."
+    : info.triggered === "up"
+    ? `Triggered UP through +${AMTBR_TRIGGER} — watching for reversion back to TBR Open ${info.openRow.open.toFixed(2)}.`
+    : info.triggered === "down"
+    ? `Triggered DOWN through -${AMTBR_TRIGGER} — watching for reversion back to TBR Open ${info.openRow.open.toFixed(2)}.`
+    : `TBR Open ${info.openRow.open.toFixed(2)} — no ±${AMTBR_TRIGGER} trigger yet.`;
 
-// Band y-coordinates (SVG units, smaller = higher on screen / higher price).
-const NR_TOP = 20, NR_75 = 95, NR_MEDIAN = 190; // Non-Reverted MAE (red)
-const RM_90 = 230, RM_75 = 300, RM_MEDIAN = 340; // Reverted MAE (green)
-const PLUS_025 = 380, TBR_OPEN_Y = 430, MINUS_025 = 480; // trigger lines
-const MFE_MEDIAN = 540, MFE_75 = 650, MFE_90 = 780; // Reverted MFE (gold)
-
-const AMTBR_TIME_LABELS = [
-  "05:30", "06:00", "06:30", "07:00", "07:30", "08:00", "08:30", "09:00",
-  "09:30", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30",
-];
-
-function amTbrX(i: number, n: number): number {
-  return AMTBR_CHART_LEFT + (i / (n - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT);
-}
-
-// Maps real ES 5m bars (real price units) into the same chart-space y-range
-// the procedural mock uses, so the toggle swaps candle series without moving
-// the (still illustrative) percentile bands/trigger lines.
-const AMTBR_ES_Y_TOP = 40;
-const AMTBR_ES_Y_BOTTOM = 820;
-function normalizeAmTbrEsCandles(rows: EsCandleRecord[]): AmTbrCandle[] {
-  const inWindow = rows.filter((r) => {
-    const t = r.time || (r.slotKey ?? "").slice(11, 16);
-    return t >= "05:30" && t <= "12:30";
-  });
-  if (!inWindow.length) return [];
-  const priceMin = Math.min(...inWindow.map((r) => r.low));
-  const priceMax = Math.max(...inWindow.map((r) => r.high));
-  const span = Math.max(priceMax - priceMin, 0.01);
-  const toY = (price: number) => AMTBR_ES_Y_BOTTOM - ((price - priceMin) / span) * (AMTBR_ES_Y_BOTTOM - AMTBR_ES_Y_TOP);
-  return inWindow.map((r) => ({ o: toY(r.open), h: toY(r.high), l: toY(r.low), c: toY(r.close) }));
-}
-
-function AmTbrChart({ candles, showMarkers }: { candles: AmTbrCandle[]; showMarkers: boolean }) {
-  const n = candles.length;
-  const candleW = n > 1 ? ((AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT) / n) * 0.62 : 8;
-
-  return (
-    <svg viewBox={`0 0 ${AMTBR_VB_W} ${AMTBR_VB_H}`} style={{ width: "100%", height: "auto", display: "block" }}>
-      {/* Non-Reverted MAE — red */}
-      <rect x={AMTBR_BAND_LEFT} y={NR_TOP} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={NR_MEDIAN - NR_TOP} fill={`${HOME_THEME.red}22`} stroke={HOME_THEME.red} strokeWidth={1.5} />
-      <line x1={AMTBR_BAND_LEFT} y1={NR_75} x2={AMTBR_CHART_RIGHT} y2={NR_75} stroke={HOME_THEME.red} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_TOP + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
-      <text x={30} y={(NR_TOP + NR_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Non-Reverted MAE</text>
-
-      {/* Reverted MAE — green */}
-      <rect x={AMTBR_BAND_LEFT} y={RM_90} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={RM_MEDIAN - RM_90} fill={`${HOME_THEME.green}22`} stroke={HOME_THEME.green} strokeWidth={1.5} />
-      <line x1={AMTBR_BAND_LEFT} y1={RM_75} x2={AMTBR_CHART_RIGHT} y2={RM_75} stroke={HOME_THEME.green} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
-      <text x={30} y={(RM_90 + RM_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MAE</text>
-
-      {/* Trigger / reference lines */}
-      <line x1={AMTBR_CHART_LEFT} y1={PLUS_025} x2={AMTBR_CHART_RIGHT} y2={PLUS_025} stroke={HOME_THEME.green} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={PLUS_025 + 5} fontSize={17} fill={HOME_THEME.green}>+0.25</text>
-      <line x1={AMTBR_CHART_LEFT} y1={TBR_OPEN_Y} x2={AMTBR_CHART_RIGHT} y2={TBR_OPEN_Y} stroke={TBR_GOLD} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={TBR_OPEN_Y + 5} fontSize={17} fill={TBR_GOLD}>TBR Open</text>
-      <line x1={AMTBR_CHART_LEFT} y1={MINUS_025} x2={AMTBR_CHART_RIGHT} y2={MINUS_025} stroke={HOME_THEME.red} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={MINUS_025 + 5} fontSize={17} fill={HOME_THEME.red}>-0.25</text>
-
-      {/* Reverted MFE — gold */}
-      <rect x={AMTBR_BAND_LEFT} y={MFE_MEDIAN} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={MFE_90 - MFE_MEDIAN} fill={`${TBR_GOLD}1f`} stroke={TBR_GOLD} strokeWidth={1.5} />
-      <line x1={AMTBR_BAND_LEFT} y1={MFE_75} x2={AMTBR_CHART_RIGHT} y2={MFE_75} stroke={TBR_GOLD} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={30} y={(MFE_MEDIAN + MFE_90) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MFE</text>
-
-      {/* Candles */}
-      {n > 1 && candles.map((cd, i) => {
-        const x = amTbrX(i, n);
-        const up = cd.c <= cd.o; // smaller y = higher price = "up" candle
-        const color = up ? CANDLE_UP : CANDLE_DOWN;
-        const bodyTop = Math.min(cd.o, cd.c);
-        const bodyH = Math.max(2, Math.abs(cd.c - cd.o));
-        return (
-          <g key={i}>
-            <line x1={x} y1={cd.h} x2={x} y2={cd.l} stroke={color} strokeWidth={1.5} />
-            <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} />
-          </g>
-        );
-      })}
-
-      {/* Trigger markers — tuned to the procedural mock's narrative, so only
-          shown in mock mode (real ES bars won't line up with these indices). */}
-      {showMarkers && n > 38 && (
-        <>
-          <circle cx={amTbrX(19, n)} cy={PLUS_025} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
-          <polygon
-            points={`${amTbrX(19, n) - 7},${PLUS_025 - 7} ${amTbrX(19, n) + 7},${PLUS_025 - 7} ${amTbrX(19, n)},${PLUS_025 + 7}`}
-            fill={HOME_THEME.green}
-          />
-          <circle cx={amTbrX(38, n)} cy={TBR_OPEN_Y} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
-          <polygon
-            points={`${amTbrX(38, n)},${TBR_OPEN_Y - 9} ${amTbrX(38, n) + 9},${TBR_OPEN_Y} ${amTbrX(38, n)},${TBR_OPEN_Y + 9} ${amTbrX(38, n) - 9},${TBR_OPEN_Y}`}
-            fill={TBR_GOLD}
-          />
-        </>
-      )}
-
-      {/* Time axis */}
-      {AMTBR_TIME_LABELS.map((t, i) => (
-        <text
-          key={t}
-          x={AMTBR_CHART_LEFT + (i / (AMTBR_TIME_LABELS.length - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT)}
-          y={AMTBR_VB_H - 8}
-          fontSize={13}
-          fill={HOME_THEME.text}
-          opacity={0.7}
-          textAnchor="middle"
-        >
-          {t}
-        </text>
-      ))}
-    </svg>
-  );
-}
-
-function AmTbrEsToggleSwitch({ on, onChange, connected }: { on: boolean; onChange: (v: boolean) => void; connected: boolean }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <div style={{ display: "flex", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden" }}>
-        {(["Mock", "Live ES"] as const).map((label, i) => {
-          const isOn = i === 1;
-          const active = on === isOn;
-          return (
-            <button
-              key={label}
-              onClick={() => onChange(isOn)}
-              style={{
-                padding: "8px 16px",
-                border: "none",
-                background: active
-                  ? `linear-gradient(180deg, ${TBR_GOLD}33, ${TBR_GOLD}0D)`
-                  : "rgba(255,255,255,0.04)",
-                color: active ? TBR_GOLD : HOME_THEME.text,
-                fontSize: 13,
-                fontWeight: 800,
-                letterSpacing: "0.06em",
-                textTransform: "uppercase",
-                cursor: "pointer",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      {on && (
-        <span style={{ fontSize: 13, color: connected ? HOME_THEME.green : HOME_THEME.text, opacity: connected ? 1 : 0.6 }}>
-          {connected ? "● live" : "connecting…"}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function AmTbrPanel() {
-  const [useRealEs, setUseRealEs] = useState(false);
-  const { candles: esCandles, connected } = useEsCandles(useRealEs, 1);
-  const realCandles = useRealEs ? normalizeAmTbrEsCandles(esCandles) : [];
-  const showingReal = useRealEs && realCandles.length > 1;
-  const candles = showingReal ? realCandles : buildAmTbrCandles();
+  const legend: { label: string; color: string }[] = [
+    { label: "Non-Reverted MAE", color: HOME_THEME.red },
+    { label: "Reverted MAE", color: HOME_THEME.green },
+    { label: "Reverted MFE", color: TBR_GOLD },
+    { label: "TBR Open / ±0.25", color: TBR_GOLD },
+  ];
 
   return (
     <Card
       variant="dissolve"
       accent={TBR_GOLD}
       title={<span style={{ fontSize: 18 }}>AM TBR — Time-Based Range</span>}
-      subtitle="Rolling 20-day 8am–12pm distribution · reversion to TBR Open"
+      subtitle="Bands drawn on the ES chart above · reversion to TBR Open"
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
-          {showingReal
-            ? "Real ES 5m candles, 05:30–12:30 ET — bands/lines are still illustrative placeholders."
-            : useRealEs
-            ? "No ES bars yet for today's 05:30–12:30 window — showing mock candles."
-            : "Mock candles — flip to Live ES to overlay real ES 5m bars."}
-        </div>
-        <AmTbrEsToggleSwitch on={useRealEs} onChange={setUseRealEs} connected={connected} />
+      <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.85, marginBottom: 12 }}>{statusText}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginBottom: 12 }}>
+        {legend.map((l) => (
+          <span key={l.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: HOME_THEME.text, opacity: 0.8 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 3, background: l.color, display: "inline-block" }} />
+            {l.label}
+          </span>
+        ))}
       </div>
-      <AmTbrChart candles={candles} showMarkers={!showingReal} />
-      <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, marginTop: 12, opacity: 0.85 }}>
+      <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, opacity: 0.85 }}>
         Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
         sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
         (8am open). MAE is shown for reverted vs. non-reverted events; MFE beyond TBR Open is shown for
@@ -495,6 +335,11 @@ export default function EsCandlesPage() {
     () => getMomentumBiasIndex(rows.map((r) => ({ high: r.high, low: r.low, close: r.close }))),
     [rows]
   );
+  // AM TBR: today's real 8am ES open + trigger status, derived from the same
+  // merged `rows` the candles are built from (see computeAmTbrInfo above).
+  // Feeds both the canvas overlay (section 4, drawn on the real chart) and
+  // the AmTbrPanel status card — no separate candle series, no second fetch.
+  const amTbrInfo = useMemo(() => computeAmTbrInfo(rows), [rows]);
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
   const chartRef = useRef<HTMLDivElement>(null);
@@ -1595,6 +1440,111 @@ export default function EsCandlesPage() {
         ctx.restore();
       }
 
+      // ── 4) AM TBR bands (8am–12pm time-based-range) ──
+      // Painted directly onto this real candle series — no separate mini-chart,
+      // no second data fetch. Anchored to today's real 8am ES open (amTbrInfo);
+      // percentile widths are still placeholder magnitudes (see
+      // AmTbrStatsCards), converted from the original mockup's pixel
+      // proportions into real ES points.
+      if (showAmTbr && amTbrInfo) {
+        const { openRow, windowRows, triggered, triggerRow } = amTbrInfo;
+        const xLeft = ts.timeToCoordinate((openRow.timestamp / 1000) as UTCTimestamp);
+        if (xLeft != null) {
+          const lastWin = windowRows.length ? windowRows[windowRows.length - 1] : openRow;
+          const lastWinTime = lastWin.time || (lastWin.slotKey ?? "").slice(11, 16);
+          const xEndRaw = ts.timeToCoordinate((lastWin.timestamp / 1000) as UTCTimestamp);
+          let scaleW = 0;
+          try { scaleW = chart.priceScale("right").width(); } catch {}
+          const plotRight = Math.max(0, w - scaleW - 2);
+          // Window still live (hasn't reached 12:00 yet) → stretch to the right
+          // axis, same convention the heatmap uses for its latest column.
+          const xRight = lastWinTime >= "12:00" && xEndRaw != null ? xEndRaw : plotRight;
+
+          if (xRight > xLeft) {
+            const openPrice = openRow.open;
+            const yOf = (price: number) => series.priceToCoordinate(price);
+            const yOpen = yOf(openPrice);
+            const yPlus = yOf(openPrice + AMTBR_TRIGGER);
+            const yMinus = yOf(openPrice - AMTBR_TRIGGER);
+            const yNrMed = yOf(openPrice + AMTBR_NR_MAE.med);
+            const yNr75 = yOf(openPrice + AMTBR_NR_MAE.p75);
+            const yNr90 = yOf(openPrice + AMTBR_NR_MAE.p90);
+            const yRmMed = yOf(openPrice + AMTBR_RM_MAE.med);
+            const yRm75 = yOf(openPrice + AMTBR_RM_MAE.p75);
+            const yRm90 = yOf(openPrice + AMTBR_RM_MAE.p90);
+            const yMfeMed = yOf(openPrice - AMTBR_RM_MFE.med);
+            const yMfe75 = yOf(openPrice - AMTBR_RM_MFE.p75);
+            const yMfe90 = yOf(openPrice - AMTBR_RM_MFE.p90);
+
+            ctx.save();
+            const band = (yTop: number | null, yBot: number | null, fill: string, stroke: string) => {
+              if (yTop == null || yBot == null) return;
+              const top = Math.min(yTop, yBot);
+              const hgt = Math.max(1, Math.abs(yBot - yTop));
+              ctx.fillStyle = fill;
+              ctx.fillRect(xLeft, top, xRight - xLeft, hgt);
+              ctx.strokeStyle = stroke;
+              ctx.lineWidth = 1.5;
+              ctx.setLineDash([]);
+              ctx.strokeRect(xLeft, top, xRight - xLeft, hgt);
+            };
+            band(yNr90, yNrMed, `${HOME_THEME.red}22`, HOME_THEME.red);     // Non-Reverted MAE
+            band(yRm90, yRmMed, `${HOME_THEME.green}22`, HOME_THEME.green); // Reverted MAE
+            band(yMfeMed, yMfe90, `${TBR_GOLD}1f`, TBR_GOLD);               // Reverted MFE
+
+            const hline = (y: number | null, color: string, dash: number[]) => {
+              if (y == null) return;
+              ctx.strokeStyle = color;
+              ctx.lineWidth = dash.length ? 1.5 : 1;
+              ctx.setLineDash(dash);
+              ctx.beginPath(); ctx.moveTo(xLeft, y); ctx.lineTo(xRight, y); ctx.stroke();
+              ctx.setLineDash([]);
+            };
+            hline(yNr75, HOME_THEME.red, []);
+            hline(yRm75, HOME_THEME.green, []);
+            hline(yMfe75, TBR_GOLD, []);
+            hline(yPlus, HOME_THEME.green, [6, 5]);
+            hline(yOpen, TBR_GOLD, [6, 5]);
+            hline(yMinus, HOME_THEME.red, [6, 5]);
+
+            ctx.font = "10px Inter, system-ui, sans-serif";
+            const label = (y: number | null, text: string, color: string) => {
+              if (y == null) return;
+              ctx.fillStyle = color;
+              ctx.fillText(text, xLeft + 4, y - 3);
+            };
+            label(yNrMed, "Non-Reverted MAE", HOME_THEME.red);
+            label(yRmMed, "Reverted MAE", HOME_THEME.green);
+            label(yMfeMed, "Reverted MFE", TBR_GOLD);
+            label(yPlus, "+0.25", HOME_THEME.green);
+            label(yOpen, "TBR Open", TBR_GOLD);
+            label(yMinus, "-0.25", HOME_THEME.red);
+
+            // Left edge guide at the TBR Open time.
+            ctx.strokeStyle = `${TBR_GOLD}55`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath(); ctx.moveTo(xLeft, 0); ctx.lineTo(xLeft, h); ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Real trigger-touch marker — placed at the actual candle/price
+            // that crossed +/-0.25 today, not a scripted index like the old mock.
+            if (triggered && triggerRow) {
+              const tx = ts.timeToCoordinate((triggerRow.timestamp / 1000) as UTCTimestamp);
+              const ty = yOf(triggered === "up" ? openPrice + AMTBR_TRIGGER : openPrice - AMTBR_TRIGGER);
+              if (tx != null && ty != null) {
+                ctx.beginPath();
+                ctx.arc(tx, ty, 7, 0, Math.PI * 2);
+                ctx.strokeStyle = HOME_THEME.orange;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              }
+            }
+            ctx.restore();
+          }
+        }
+      }
+
       // (Greek-flow is now rendered as an HTML mini-chart, top-left of the chart
 
     };
@@ -1626,7 +1576,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showLevels, mvcHistory]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showLevels, mvcHistory, showAmTbr, amTbrInfo]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1926,7 +1876,7 @@ export default function EsCandlesPage() {
           wanted it living with the ES chart instead of a separate tab. */}
       {showAmTbr ? (
         <div className="px-4 pb-4" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 16 }}>
-          <AmTbrPanel />
+          <AmTbrPanel info={amTbrInfo} />
           <AmTbrStatsCards />
         </div>
       ) : null}
