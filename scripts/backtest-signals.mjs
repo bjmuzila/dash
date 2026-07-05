@@ -31,7 +31,11 @@
  *              (run BY PATH, not piped via stdin like the other backtest-*.mjs
  *              scripts — this one has relative imports to ../server-v2/*, and
  *              `node -` has no real file path so those imports can't resolve.)
- * Env knobs:   DAYS (default 30), LOOKMIN (default 60), WIN (default 5), STOP (default 3)
+ *              If it still OOMs at the default DAYS, raise the container's
+ *              heap instead of assuming there's another leak:
+ *                docker exec -i -e NODE_OPTIONS=--max-old-space-size=4096 \
+ *                  dashboard-dashboard-1 node scripts/backtest-signals.mjs
+ * Env knobs:   DAYS (default 7), LOOKMIN (default 60), WIN (default 5), STOP (default 3)
  */
 import pg from "pg";
 import signalsEngine from "../server-v2/signals-engine.js";
@@ -40,7 +44,11 @@ import gexCalc from "../server-v2/computation/gex-calculator.js";
 const { evaluateFrame, computeContextLevels } = signalsEngine;
 const { findCallWall, findPutWall, findGexFlip } = gexCalc;
 
-const DAYS    = Number(process.env.DAYS ?? 30);
+// DAYS defaults small (7) on purpose — option_strike_gex_history is a
+// per-STRIKE, per-MINUTE table (100+ strikes × every minute), so 30 days can
+// be tens of millions of rows pulled into one Node process. Raise it once you
+// know how much history actually exists / how much memory it costs.
+const DAYS    = Number(process.env.DAYS ?? 7);
 const LOOKMIN = Number(process.env.LOOKMIN ?? 60);
 const WIN     = Number(process.env.WIN ?? 5);
 const STOP    = Number(process.env.STOP ?? 3);
@@ -60,47 +68,68 @@ const { rows: bars } = await pool.query(`
   WHERE symbol = '/ES' AND "intervalMinutes" = 5 AND date >= ${sinceExpr}
   ORDER BY timestamp ASC
 `);
-
-const { rows: gexRowsRaw } = await pool.query(`
-  SELECT date, timestamp AS ts, spot, strike, net_gex AS "netGEX", net_vol_gex AS "netVolGEX"
-  FROM option_strike_gex_history
-  WHERE spot > 0 AND date >= ${sinceExpr}
-  ORDER BY timestamp ASC
-`);
-
-const { rows: cbRowsRaw } = await pool.query(`
-  SELECT date, timestamp AS ts, "strikeOIVol" AS cb, "mvcValueOIVol" AS cb_size_raw
-  FROM mvc_snapshots
-  WHERE "strikeOIVol" > 0 AND date >= ${sinceExpr}
-  ORDER BY timestamp ASC
-`);
-
-await pool.end();
+console.log(`es_candles: ${bars.length} bars`);
 
 if (!bars.length) { console.log(`No es_candles rows in the last ${DAYS} days. Nothing to backtest.`); process.exit(0); }
 
 // ── build a per-snapshot GEX timeline: {ts, spot, callWall, putWall, gexFlip} ──
 // reusing the SAME wall/flip functions the live pipeline uses, on the SAME
 // {strike, netGEX, netVolGEX} row shape computeGexRows() produces live.
-const gexByTs = new Map();
-for (const r of gexRowsRaw) {
-  const key = Number(r.ts);
-  if (!gexByTs.has(key)) gexByTs.set(key, { ts: key, spot: Number(r.spot), rows: [] });
-  gexByTs.get(key).rows.push({ strike: Number(r.strike), netGEX: Number(r.netGEX) || 0, netVolGEX: Number(r.netVolGEX) || 0 });
+//
+// option_strike_gex_history is written every ~60s (per-strike), which is 5x
+// finer than the 5m es_candles we're actually walking — pull only the LATEST
+// snapshot per 5-minute bucket (DISTINCT ON) instead of every minute, so we're
+// not hauling 5x more strike-level rows into memory than the replay can use.
+async function buildGexTimeline() {
+  const { rows } = await pool.query(`
+    WITH picked AS (
+      SELECT DISTINCT ON (date, (timestamp / 300000))
+        date, timestamp AS ts
+      FROM option_strike_gex_history
+      WHERE spot > 0 AND date >= ${sinceExpr}
+      ORDER BY date, (timestamp / 300000), timestamp DESC
+    )
+    SELECT h.timestamp AS ts, h.spot, h.strike, h.net_gex AS "netGEX", h.net_vol_gex AS "netVolGEX"
+    FROM option_strike_gex_history h
+    JOIN picked p ON p.date = h.date AND p.ts = h.timestamp
+    ORDER BY h.timestamp ASC
+  `);
+  console.log(`option_strike_gex_history: ${rows.length} rows (5m-bucketed)`);
+  const byTs = new Map();
+  for (const r of rows) {
+    const key = Number(r.ts);
+    if (!byTs.has(key)) byTs.set(key, { ts: key, spot: Number(r.spot), rows: [] });
+    byTs.get(key).rows.push({ strike: Number(r.strike), netGEX: Number(r.netGEX) || 0, netVolGEX: Number(r.netVolGEX) || 0 });
+  }
+  // `rows` and the per-ts `byTs` groups fall out of scope on return and become
+  // GC-eligible immediately — nothing raw is retained at module scope.
+  return [...byTs.values()].sort((a, b) => a.ts - b.ts).map((g) => ({
+    ts: g.ts, spot: g.spot,
+    callWall: findCallWall(g.rows, g.spot),
+    putWall: findPutWall(g.rows, g.spot),
+    gexFlip: findGexFlip(g.rows, g.spot),
+  }));
 }
-const gexTimeline = [...gexByTs.values()].sort((a, b) => a.ts - b.ts).map((g) => ({
-  ts: g.ts, spot: g.spot,
-  callWall: findCallWall(g.rows, g.spot),
-  putWall: findPutWall(g.rows, g.spot),
-  gexFlip: findGexFlip(g.rows, g.spot),
-}));
+const gexTimeline = await buildGexTimeline();
 
 // ── CB (MVC) timeline, size normalised to $B (mixed-units bug — see memory) ──
-const toB = (v) => (Number.isFinite(v) && Math.abs(v) > 1e5 ? v / 1e9 : v);
-const cbTimeline = cbRowsRaw
-  .map((r) => ({ ts: Number(r.ts), cb: Number(r.cb), cbSize: toB(Number(r.cb_size_raw)) }))
-  .filter((r) => r.cb > 0)
-  .sort((a, b) => a.ts - b.ts);
+async function buildCbTimeline() {
+  const { rows } = await pool.query(`
+    SELECT timestamp AS ts, "strikeOIVol" AS cb, "mvcValueOIVol" AS cb_size_raw
+    FROM mvc_snapshots
+    WHERE "strikeOIVol" > 0 AND date >= ${sinceExpr}
+    ORDER BY timestamp ASC
+  `);
+  const toB = (v) => (Number.isFinite(v) && Math.abs(v) > 1e5 ? v / 1e9 : v);
+  return rows
+    .map((r) => ({ ts: Number(r.ts), cb: Number(r.cb), cbSize: toB(Number(r.cb_size_raw)) }))
+    .filter((r) => r.cb > 0)
+    .sort((a, b) => a.ts - b.ts);
+}
+const cbTimeline = await buildCbTimeline();
+console.log(`mvc_snapshots: ${cbTimeline.length} usable rows`);
+
+await pool.end();
 
 // ── group candle bars by session date, for same-day forward grading ────────
 const barsByDate = new Map();
