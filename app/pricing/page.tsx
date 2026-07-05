@@ -54,7 +54,7 @@ export default async function PricingPage({
       }}
     >
       <header style={{ ...homeHeaderStyle, padding: "16px clamp(16px,4vw,40px)" }}>
-        <Link href="/" style={{ color: T.muted, textDecoration: "none", fontSize: 13, fontWeight: 700 }}>
+        <Link href="/" style={{ color: T.muted, textDecoration: "none", fontSize: 14, fontWeight: 700 }}>
           ← Back
         </Link>
         {!userId && (
@@ -76,14 +76,14 @@ export default async function PricingPage({
           <div style={badge}>Continuing from · {fromEntry.title}</div>
         )}
 
-        <h1 style={{ fontSize: "clamp(28px,5vw,42px)", fontWeight: 800, margin: "14px 0 10px", lineHeight: 1.1 }}>
+        <h1 style={{ fontSize: "clamp(29px,5vw,43px)", fontWeight: 800, margin: "14px 0 10px", lineHeight: 1.1 }}>
           {access.ok ? (
             "You're subscribed"
           ) : (
             <>Get full access to <span style={{ color: T.cyan }}>CB Edge</span></>
           )}
         </h1>
-        <p style={{ color: DIM, fontSize: 17, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
+        <p style={{ color: DIM, fontSize: 18, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
           {access.ok
             ? "Your subscription is active — you have full access to the dashboard."
             : "One subscription unlocks the entire platform. Live dealer positioning, scored levels, and estimated moves — the moment they move."}
@@ -91,7 +91,7 @@ export default async function PricingPage({
 
         {userId && !access.ok && (
           <p style={{ margin: "0 0 36px" }}>
-            <Link href="/home" style={{ color: T.cyan, fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
+            <Link href="/home" style={{ color: T.cyan, fontSize: 15, fontWeight: 700, textDecoration: "none" }}>
               Not ready yet? Check out the dashboard with delayed data →
             </Link>
           </p>
@@ -106,24 +106,24 @@ export default async function PricingPage({
           }}
         >
           {/* Platform recap */}
-          <section style={{ ...homeGlossPanelStyle(T.green), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
-            <div style={{ ...sectionLabel, color: T.green }}>{"What's included"}</div>
+          <section style={{ ...homeGlossPanelStyle(T.cyan), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
+            <div style={{ ...sectionLabel, color: T.cyan }}>{"What's included"}</div>
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
               {PLATFORM_RECAP.map((item) => (
-                <li key={item} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 15, color: "rgba(255,255,255,0.86)" }}>
-                  <span style={{ color: T.green, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
+                <li key={item} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 16, color: "rgba(255,255,255,0.86)" }}>
+                  <span style={{ color: T.cyan, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
                   <span>{item}</span>
                 </li>
               ))}
               {PLATFORM_UPCOMING.map((item) => (
-                <li key={item.text} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 15, color: "rgba(255,255,255,0.6)" }}>
+                <li key={item.text} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 16, color: "rgba(255,255,255,0.6)" }}>
                   <span style={{ color: T.orange, fontWeight: 800, lineHeight: 1.5 }}>◷</span>
                   <span>
                     {item.text}{" "}
                     <span
                       style={{
                         display: "inline-block",
-                        fontSize: 10.5,
+                        fontSize: 11.5,
                         fontWeight: 800,
                         letterSpacing: "0.06em",
                         textTransform: "uppercase",
@@ -148,9 +148,9 @@ export default async function PricingPage({
           <section style={{ ...homeGlossPanelStyle(T.cyan), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
             <div style={{ ...sectionLabel, color: T.cyan }}>Membership</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 4px" }}>
-              <span style={{ fontSize: 38, fontWeight: 800, color: T.cyan }}>Full access</span>
+              <span style={{ fontSize: 39, fontWeight: 800, color: T.cyan }}>Full access</span>
             </div>
-            <p style={{ color: DIM, fontSize: 13.5, margin: "0 0 22px", lineHeight: 1.5 }}>
+            <p style={{ color: DIM, fontSize: 14.5, margin: "0 0 22px", lineHeight: 1.5 }}>
               Everything on the platform. Cancel anytime from your billing portal.
             </p>
 
@@ -162,7 +162,7 @@ export default async function PricingPage({
           </section>
         </div>
 
-        <div style={{ marginTop: 40, fontSize: 12, color: DIM, lineHeight: 1.6 }}>
+        <div style={{ marginTop: 40, fontSize: 13, color: DIM, lineHeight: 1.6 }}>
           By joining you agree to our{" "}
           <Link href="/terms" style={inlineLink}>Terms</Link>,{" "}
           <Link href="/risk-disclosure" style={inlineLink}>Risk Disclosure</Link> and{" "}
@@ -181,7 +181,7 @@ export default async function PricingPage({
 const DIM = "rgba(255,255,255,0.62)";
 
 const sectionLabel: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 13,
   fontWeight: 700,
   letterSpacing: "0.1em",
   textTransform: "uppercase",
@@ -191,7 +191,7 @@ const sectionLabel: React.CSSProperties = {
 
 const badge: React.CSSProperties = {
   display: "inline-block",
-  fontSize: 11,
+  fontSize: 12,
   fontWeight: 700,
   letterSpacing: "0.1em",
   textTransform: "uppercase",
@@ -208,7 +208,7 @@ const topBtn: React.CSSProperties = {
   border: `1px solid ${T.border}`,
   background: "rgba(13,17,25,0.7)",
   color: T.text,
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 700,
   cursor: "pointer",
 };

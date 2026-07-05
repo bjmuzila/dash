@@ -216,7 +216,7 @@ export default function LandingClient() {
           {/* Waitlist form */}
           <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
             <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
-              Beta signups open July 1, 9:30 AM ET · official launch July 3. Sign up for the newsletter and get notified.
+              Beta signups open July 1, 9:30 AM ET · official launch 6/7. Sign up for the newsletter and get notified.
             </label>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <input
@@ -284,12 +284,12 @@ export default function LandingClient() {
           </div>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <Link href="/sign-in" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.4" }}>
+            <Link href="/sign-in" style={{ ...primaryBtn, textDecoration: "none" }}>
               Sign in to dashboard
             </Link>
-            <Link href="/pricing?from=landing" style={{ ...primaryBtn, textAlign: "center", textDecoration: "none", lineHeight: "1.2" }}>
-              <span style={{ display: "block" }}>Join the Beta</span>
-              <span style={{ display: "block", fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Code: CB-Beta</span>
+            <Link href="/pricing?from=landing" style={{ ...primaryBtn, textDecoration: "none" }}>
+              <span>Join the Beta</span>
+              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Code: CB-Beta</span>
             </Link>
           </div>
         </div>
@@ -442,12 +442,19 @@ const primaryBtn: React.CSSProperties = {
   minWidth: 180,
   padding: "12px 18px",
   borderRadius: 10,
-  border: "none",
-  background: `linear-gradient(180deg, ${T.cyan}, #00b8c4)`,
-  color: "#04121a",
+  border: `1px solid rgba(33,158,188,0.5)`,
+  background: "rgba(33,158,188,0.25)",
+  color: T.text,
   fontSize: 14,
   fontWeight: 800,
   cursor: "pointer",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 2,
+  textAlign: "center",
+  lineHeight: 1.3,
 };
 
 const xFollow: React.CSSProperties = {

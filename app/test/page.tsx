@@ -126,7 +126,7 @@ const SPX: SymbolData = {
   totalPremium: "$69,662,408",
 };
 
-function Donut({ slices, size = 150 }: { slices: Slice[]; size?: number }) {
+function Donut({ slices, size = 190 }: { slices: Slice[]; size?: number }) {
   let acc = 0;
   const stops = slices
     .map((s) => {

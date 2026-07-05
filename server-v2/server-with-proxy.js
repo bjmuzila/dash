@@ -1322,6 +1322,17 @@ async function main() {
         })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Fire a single /mult-greek static snapshot now (ignores the RTH gate on
+      // force). POST /proxy/mult-greek-snapshot?force=1
+      if (pathname === '/proxy/mult-greek-snapshot' && req.method === 'POST') {
+        const { collectOnce } = require('./mult-greek-snapshot-recorder');
+        const force = /[?&]force=1\b/.test(req.url || '');
+        const base = `http://localhost:${PORT}`;
+        collectOnce(base, { force })
+          .then((r) => sendJson(res, 200, r ?? { ok: false, error: 'no result' }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Generate the pre-market AI summary now (ignores the 8am schedule).
       // POST /proxy/premarket-summary-run
       if (pathname === '/proxy/premarket-summary-run' && req.method === 'POST') {
@@ -1653,6 +1664,10 @@ async function main() {
     // payload → home_static_snapshots, so unpaid /home renders the same chart
     // component as paid users, just frozen.
     require('./home-snapshot-recorder').startHomeSnapshotRecorder(PORT);
+    // Delayed feed for /mult-greek in "delayed" mode (unpaid signed-in users):
+    // every 30m during RTH, snapshots the SPX/SPY/QQQ chain at one shared
+    // near-dated expiry → mult_greek_static_snapshots.
+    require('./mult-greek-snapshot-recorder').startMultGreekSnapshotRecorder(PORT);
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.

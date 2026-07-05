@@ -515,6 +515,21 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_home_static_snapshots_ts ON home_static_snapshots(ts DESC);
 
+    -- Full-chain static snapshot for /mult-greek in "delayed" mode (unpaid
+    -- signed-in users). Written every ~30m by
+    -- server-v2/mult-greek-snapshot-recorder.js, which stores the SPX/SPY/QQQ
+    -- chain (raw TT items + underlyingPrice) at one shared expiry — the exact
+    -- inputs MultGreekClient's existing buildStrikes()/computeRows() already
+    -- know how to parse, so the frozen render reuses all the same code as live.
+    CREATE TABLE IF NOT EXISTS mult_greek_static_snapshots (
+      id      SERIAL PRIMARY KEY,
+      ts      BIGINT NOT NULL,
+      date    TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_mult_greek_static_snapshots_ts ON mult_greek_static_snapshots(ts DESC);
+
     -- Overnight ES gap tracker: one row per trading day, keyed on date.
     -- The gap is two EXACT 5-minute ES candle prints (never substituted):
     --   prior_close = close of YESTERDAY's 15:55 bar  (the 16:00:00 ET print)
@@ -3423,6 +3438,31 @@ export async function getLatestHomeStaticSnapshot(): Promise<{ ts: number; paylo
   await getDb();
   const row = await queryOne<{ ts: number; payload: unknown }>(
     "SELECT ts, payload FROM home_static_snapshots ORDER BY ts DESC LIMIT 1"
+  );
+  if (!row) return undefined;
+  const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
+  return { ts: Number(row.ts), payload };
+}
+
+// ── Full-chain static snapshot (/mult-greek in delayed mode) ────────────────
+
+export async function insertMultGreekStaticSnapshot(payload: unknown, ts: number = Date.now()): Promise<void> {
+  const pool = await getDb();
+  const now = new Date(ts);
+  const date = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now).filter((p) => p.type !== "literal")
+    .reduce((a, p) => ({ ...a, [p.type]: p.value }), {} as Record<string, string>);
+  await pool.query(
+    `INSERT INTO mult_greek_static_snapshots (ts, date, payload) VALUES ($1, $2, $3::jsonb)`,
+    [ts, `${date.year}-${date.month}-${date.day}`, JSON.stringify(payload)]
+  );
+}
+
+export async function getLatestMultGreekStaticSnapshot(): Promise<{ ts: number; payload: unknown } | undefined> {
+  await getDb();
+  const row = await queryOne<{ ts: number; payload: unknown }>(
+    "SELECT ts, payload FROM mult_greek_static_snapshots ORDER BY ts DESC LIMIT 1"
   );
   if (!row) return undefined;
   const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
