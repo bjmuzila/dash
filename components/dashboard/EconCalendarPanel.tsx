@@ -91,9 +91,10 @@ function fullDayLabel(dateStr: string, today: string): string {
   return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
 }
 
-type FilterKey = "high-usd" | "high" | "medium-usd" | "medium" | "low-usd" | "low" | "trump" | "all";
+type FilterKey = "all-usd" | "high-usd" | "high" | "medium-usd" | "medium" | "low-usd" | "low" | "trump" | "all";
 
 const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
+  { value: "all-usd",    label: "All·USD",    color: "#219EBC" },
   { value: "high-usd",   label: "High·USD",   color: "#ef4444" },
   { value: "high",       label: "High",       color: "#ef4444" },
   { value: "medium-usd", label: "Medium·USD", color: "#f59e0b" },
@@ -107,6 +108,7 @@ const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
 function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   if (active.has("all")) return true;
   if (active.has("trump")   && ev.impact === "President") return true;
+  if (active.has("all-usd")    && ev.country === "USD") return true;
   if (active.has("high-usd")   && ev.impact === "High"   && ev.country === "USD") return true;
   if (active.has("high")       && ev.impact === "High") return true;
   if (active.has("medium-usd") && ev.impact === "Medium" && ev.country === "USD") return true;
@@ -122,7 +124,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
   const [error,         setError]         = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["high-usd", "medium-usd", "trump"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all-usd", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
   const [maxChips,      setMaxChips]      = useState(8);

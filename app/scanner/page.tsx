@@ -1086,7 +1086,7 @@ function WatchThisScanner() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+        <span style={{ fontSize: 11, color: HOME_THEME.text }}>
           Refreshes every 2m · recorder sweeps every 30m during RTH
         </span>
       </div>
@@ -1123,7 +1123,7 @@ function WatchThisScanner() {
       )}
 
       {!rows.length && !loading && !err && (
-        <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+        <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text }}>
           Nothing flagged right now — no watchlist ticker has an unusually far-OTM dominant CB level.
         </div>
       )}
@@ -1144,9 +1144,9 @@ function WatchThisScanner() {
                 <span style={{ fontSize: 11, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
               </div>
               <div style={{ fontSize: 13, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
-                ${r.strike} <span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}>· {r.expiry} · {r.dte_days}d</span>
+                ${r.strike} <span style={{ color: HOME_THEME.text, fontWeight: 400 }}>· {r.expiry} · {r.dte_days}d</span>
               </div>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.5, marginBottom: 8 }}>
                 Highest GEX level for {r.symbol} is the ${r.strike} strike ({r.expiry}), {r.otm_pct.toFixed(0)}% away from spot (${r.spot.toFixed(2)}) —
                 farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
               </div>
@@ -1161,7 +1161,7 @@ function WatchThisScanner() {
         })}
       </div>
 
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: HOME_THEME.text }}>
         <span>Basis: OI+Vol net GEX (canonical) · single highest |GEX| strike per ticker across expiries ≤30 DTE</span>
         <span>Flagged when that strike is &gt;{threshold ?? 15}% away from spot</span>
       </div>
@@ -1177,7 +1177,7 @@ function WatchThisScanner() {
               </button>
             ))}
           </div>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+          <span style={{ fontSize: 11, color: HOME_THEME.text }}>
             Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike
           </span>
         </div>
@@ -1201,8 +1201,8 @@ function WatchThisScanner() {
                   style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
                   <td style={{ ...td, fontWeight: 700 }}>${o.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{o.expiry}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 12 }}>{o.first_flagged}</td>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 12 }}>{o.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 12 }}>{o.first_flagged}</td>
                   <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
                   <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
                     {o.closest_pct != null ? `${o.closest_pct.toFixed(1)}%` : "—"}
@@ -1210,7 +1210,7 @@ function WatchThisScanner() {
                   <td style={{ ...td, textAlign: "left" }}>
                     <span style={{
                       fontSize: 11, fontWeight: 800, letterSpacing: "0.05em",
-                      color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? "rgba(255,255,255,0.4)" : HOME_THEME.green,
+                      color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? HOME_THEME.text : HOME_THEME.green,
                     }}>
                       {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
                     </span>
@@ -1218,7 +1218,7 @@ function WatchThisScanner() {
                 </tr>
               ))}
               {!outcomes.length && (
-                <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
                 </td></tr>
               )}

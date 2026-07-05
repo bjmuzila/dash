@@ -14,12 +14,21 @@
  * uses) so this stays comparable to that engine's own touch/reject logic.
  *
  * Run on VPS:  docker exec -i dashboard-dashboard-1 node - < scripts/backtest-eod-cb-reach.mjs
- * Env knobs:   DAYS (default 30), TOL (default 1.5)
+ * Env knobs:   DAYS (default 30), TOL (default 1.5), MIN_STREAK (default 2)
+ *
+ * CB level is DEBOUNCED, not just "last raw snapshot before 2pm": raw
+ * mvc_snapshots rows flip-flop between two competing strikes within minutes
+ * (confirmed firsthand via backtest-cb-eod-dynamics.mjs — e.g. 7480→7450→
+ * 7525→7550 inside 10 minutes on 2026-07-02, reverting right back). A level
+ * only counts as the "known" CB once it repeats in MIN_STREAK consecutive
+ * raw snapshots, so a single-snapshot blip that immediately reverts never
+ * gets treated as the real level.
  */
 import pg from "pg";
 
 const DAYS = Number(process.env.DAYS ?? 30);
 const TOL  = Number(process.env.TOL ?? 1.5);
+const MIN_STREAK = Number(process.env.MIN_STREAK ?? 2);
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 const sinceExpr = `(CURRENT_DATE - INTERVAL '${DAYS} days')::date::text`;
@@ -41,14 +50,33 @@ const { rows: cbRowsRaw } = await pool.query(`
   ORDER BY date, timestamp ASC
 `);
 const toB = (v) => (Number.isFinite(v) && Math.abs(v) > 1e5 ? v / 1e9 : v);
-const cbByDate = new Map();
+
+const cbRawByDate = new Map();
 for (const r of cbRowsRaw) {
-  const ts = Number(r.ts);
-  if (etMinutes(ts) > 14 * 60) continue; // only snapshots AT OR BEFORE 2:00pm ET
   const d = String(r.date);
-  const prev = cbByDate.get(d);
-  if (!prev || ts > prev.ts) cbByDate.set(d, { ts, cb: Number(r.cb), cbSize: toB(Number(r.cb_size_raw)) });
+  if (!cbRawByDate.has(d)) cbRawByDate.set(d, []);
+  cbRawByDate.get(d).push({ ts: Number(r.ts), cb: Number(r.cb), cbSize: toB(Number(r.cb_size_raw)) });
 }
+
+// Debounced pick (what the bot would actually trust as of 2pm) vs the naive
+// "last raw snapshot before 2pm" pick — printed so you can see how often the
+// naive version would've been reacting to a blip that hadn't confirmed yet.
+const cbByDate = new Map();
+let naiveDiffers = 0;
+for (const [d, snapsRaw] of cbRawByDate) {
+  const snaps = snapsRaw.slice().sort((a, b) => a.ts - b.ts).filter((s) => etMinutes(s.ts) <= 14 * 60);
+  if (!snaps.length) continue;
+  let confirmed = null, candidateValue = null, streak = 0;
+  for (const s of snaps) {
+    if (s.cb === candidateValue) streak++; else { candidateValue = s.cb; streak = 1; }
+    if (streak >= MIN_STREAK) confirmed = s;
+  }
+  if (confirmed) {
+    cbByDate.set(d, confirmed);
+    if (confirmed.cb !== snaps[snaps.length - 1].cb) naiveDiffers++;
+  }
+}
+if (naiveDiffers) console.log(`Debounced CB differs from the naive last-raw-snapshot pick on ${naiveDiffers}/${cbByDate.size} days.`);
 
 // ── SPX spot through the 2-4pm ET window, time-filtered IN SQL (learned the
 //    hard way on backtest-signals.mjs: option_strike_gex_history is per-
@@ -112,7 +140,7 @@ days.sort((a, b) => a.date.localeCompare(b.date));
 if (dropped) console.log(`Dropped ${dropped} day(s) with a >${RANGE_CAP}pt 2-4pm range as bad spot data.`);
 if (!days.length) { console.log("No days with both a known 2pm CB level and 2-4pm price data. Nothing to report."); process.exit(0); }
 
-console.log(`\n=== Per-day: SPX vs CB (frozen as of 2pm ET), tolerance ±${TOL}pt ===`);
+console.log(`\n=== Per-day: SPX vs CB (debounced, ≥${MIN_STREAK}-snapshot streak, as of 2pm ET), tolerance ±${TOL}pt ===`);
 console.table(days);
 
 // ── aggregate: touch rate overall, by side, by 2pm distance bucket ─────────
