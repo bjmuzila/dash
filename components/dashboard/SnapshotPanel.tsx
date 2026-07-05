@@ -257,7 +257,7 @@ function Sparkline({ data, color }: { data: HistPoint[]; color: string }) {
           fontVariantNumeric: "tabular-nums", zIndex: 5, boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
         }}>
           <div style={{ color: "#8aa4be" }}>{fmtClock(hover.pt.ts)} ET</div>
-          <div style={{ color: hover.pt.value >= 0 ? "#00e676" : "#ff4757", fontWeight: 700 }}>{fmtPrem(hover.pt.value)}</div>
+          <div style={{ color: hover.pt.value >= 0 ? "#00e676" : "#EF4444", fontWeight: 700 }}>{fmtPrem(hover.pt.value)}</div>
         </div>
       )}
     </div>
@@ -684,16 +684,16 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
 
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5, flexShrink: 0 }}>
-          <MetricCard label="P/C Vol Ratio" value={pcr > 0 ? pcr.toFixed(2) : "0.00"} detail={`Put ${fmtVol(flow.cumulativePutVol)} / Call ${fmtVol(flow.cumulativeCallVol)}`} color={pcr >= 1 ? "#ff4757" : "#00e676"} />
-          <MetricCard label="B/B Ratio" value={bbr > 0 ? bbr.toFixed(2) : "0.00"} detail={`Buy ${fmtVol(flow.cumulativeBuyVol)} / Sell ${fmtVol(flow.cumulativeSellVol)}`} color={bbr >= 1 ? "#00e676" : "#ff4757"} />
+          <MetricCard label="P/C Vol Ratio" value={pcr > 0 ? pcr.toFixed(2) : "0.00"} detail={`Put ${fmtVol(flow.cumulativePutVol)} / Call ${fmtVol(flow.cumulativeCallVol)}`} color={pcr >= 1 ? "#EF4444" : "#00e676"} />
+          <MetricCard label="B/B Ratio" value={bbr > 0 ? bbr.toFixed(2) : "0.00"} detail={`Buy ${fmtVol(flow.cumulativeBuyVol)} / Sell ${fmtVol(flow.cumulativeSellVol)}`} color={bbr >= 1 ? "#00e676" : "#EF4444"} />
           <MetricCard label="Bull Vol" value={fmtVol(bullVol)} detail={bullDetail} color="#00e676" />
-          <MetricCard label="Bear Vol" value={fmtVol(bearVol)} detail={bearDetail} color="#ff4757" />
+          <MetricCard label="Bear Vol" value={fmtVol(bearVol)} detail={bearDetail} color="#EF4444" />
         </div>
 
         <div style={{ flex: "1 1 90px", minHeight: 90, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "5px 7px", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
             <div style={{ fontSize: 9, color: "#fff", fontWeight: 700, textTransform: "uppercase" }}>Net Premium</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: netPrem >= 0 ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{fmtPrem(netPrem)}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: netPrem >= 0 ? "#00e676" : "#EF4444", fontVariantNumeric: "tabular-nums" }}>{fmtPrem(netPrem)}</div>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
             <Sparkline data={premHistory} color="#ff9f40" />
@@ -707,19 +707,19 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
         <div style={{ flexShrink: 0, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#00e676" }}>{fmtVol(tops.bullTotal)} Net Bullish</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#ff4757", textAlign: "right" }}>{fmtVol(tops.bearTotal)} Net Bearish</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#EF4444", textAlign: "right" }}>{fmtVol(tops.bearTotal)} Net Bearish</div>
           </div>
           <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
             <div style={{ position: "absolute", left: 0, top: 0, height: "100%", background: "linear-gradient(90deg,#00e67655 0%,#00e676cc 60%,#00e676 100%)", width: `${tops.bullPct}%`, transition: "width .4s ease", borderRadius: "3px 0 0 3px" }} />
-            <div style={{ position: "absolute", right: 0, top: 0, height: "100%", background: "linear-gradient(270deg,#ff475755 0%,#ff4757cc 60%,#ff4757 100%)", width: `${tops.bearPct}%`, transition: "width .4s ease", borderRadius: "0 3px 3px 0" }} />
+            <div style={{ position: "absolute", right: 0, top: 0, height: "100%", background: "linear-gradient(270deg,#EF444455 0%,#EF4444cc 60%,#EF4444 100%)", width: `${tops.bearPct}%`, transition: "width .4s ease", borderRadius: "0 3px 3px 0" }} />
           </div>
         </div>
 
         <div style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 5 }}>
           <TopFlowList label="Buy Call Vol" items={tops.buyCalls} barColor="#00e676" />
-          <TopFlowList label="Sell Call Vol" items={tops.sellCalls} barColor="#ff4757" />
+          <TopFlowList label="Sell Call Vol" items={tops.sellCalls} barColor="#EF4444" />
           <TopFlowList label="Buy Put Vol" items={tops.buyPuts} barColor="#00e676" />
-          <TopFlowList label="Sell Put Vol" items={tops.sellPuts} barColor="#ff4757" />
+          <TopFlowList label="Sell Put Vol" items={tops.sellPuts} barColor="#EF4444" />
         </div>
       </div>
     </div>

@@ -166,7 +166,7 @@ export default function QuotesPanel() {
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {sorted.map(({ sym, label, pct }) => {
           const up = pct !== null ? pct >= 0 : null;
-          const color = up === null ? "#3a5570" : up ? "#00e676" : "#ff4757";
+          const color = up === null ? "#3a5570" : up ? "#00e676" : "#EF4444";
           const arrow = up === null ? "" : up ? "▲" : "▼";
           const pctText = pct !== null ? `${arrow} ${Math.abs(pct).toFixed(2)}%` : "—";
           const sp = sparks[sym];

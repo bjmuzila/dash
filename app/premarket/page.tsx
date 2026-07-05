@@ -110,7 +110,7 @@ function fmtPct(v: number | null): string {
 
 function chgColor(v: number | null): string {
   if (v == null) return "#ffffff";
-  return v >= 0 ? "#00e676" : "#ff4757";
+  return v >= 0 ? "#00e676" : "#EF4444";
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -262,7 +262,7 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div>
             <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>EXPECTED OVERNIGHT ACTION</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#ff4757" : "#e8edf5" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#EF4444" : "#e8edf5" }}>
               {esPct == null ? "—" : esPct > 0 ? `Gap Up ~${esPct.toFixed(2)}%` : esPct < 0 ? `Gap Down ~${(esPct).toFixed(2)}%` : "Flat Open"}
             </div>
           </div>
@@ -289,7 +289,7 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
             <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT SENTIMENT</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#ff4757" : "#e8edf5" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#EF4444" : "#e8edf5" }}>
               {sentiment}
             </div>
           </div>
@@ -399,7 +399,7 @@ export default function PremarketPage() {
               padding: "3px 8px",
               borderRadius: 3,
               background: wsLive ? "#0c2a1e" : "#1a0a0a",
-              color: wsLive ? "#00e676" : "#ff4757",
+              color: wsLive ? "#00e676" : "#EF4444",
               letterSpacing: ".08em",
             }}
           >

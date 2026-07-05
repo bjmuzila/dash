@@ -166,7 +166,7 @@ export default function FlowDiagram() {
         applyZoom();
       })
       .catch((e: unknown) => {
-        if (ref.current) ref.current.innerHTML = `<pre style="color:#f87171">${String(e)}</pre>`;
+        if (ref.current) ref.current.innerHTML = `<pre style="color:#EF4444">${String(e)}</pre>`;
       });
   }, [ready, mode]);
 

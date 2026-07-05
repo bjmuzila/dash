@@ -280,9 +280,9 @@ export default function EmCustomer() {
               {(confidenceScore != null || winRate != null) && (
                 <div style={{ display: "grid", gridTemplateColumns: winRate != null && confidenceScore != null ? "1fr 1fr" : "1fr", gap: 10, marginTop: 10 }}>
                   {confidenceScore != null && (
-                    <div style={{ ...S.avgStat, border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.3)" : confidenceScore >= 45 ? "rgba(255,193,7,.3)" : "rgba(255,71,87,.3)"}` }}>
+                    <div style={{ ...S.avgStat, border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.3)" : confidenceScore >= 45 ? "rgba(255,193,7,.3)" : "rgba(239,68,68,.3)"}` }}>
                       <div style={S.statLabel}>CB Confidence</div>
-                      <div style={{ ...S.statValue, fontSize: 20, color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#ff4757" }}>
+                      <div style={{ ...S.statValue, fontSize: 20, color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#EF4444" }}>
                         {confidenceScore}%
                       </div>
                     </div>
@@ -294,7 +294,7 @@ export default function EmCustomer() {
                     return (
                       <div style={{ ...S.avgStat, border: "1px solid rgba(255,255,255,.1)", padding: "12px 12px 10px" }}>
                         <div style={S.statLabel}>EM Hit Rate</div>
-                        <div style={{ fontSize: 20, fontWeight: 700, color: winPct >= 65 ? "#00e676" : winPct >= 50 ? "#ffc107" : "#ff4757", marginBottom: 8 }}>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: winPct >= 65 ? "#00e676" : winPct >= 50 ? "#ffc107" : "#EF4444", marginBottom: 8 }}>
                           {winPct}% Hit
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: HOME_THEME.text, marginBottom: 4 }}>
@@ -303,7 +303,7 @@ export default function EmCustomer() {
                           <span>Hit ({winRate.hits})</span>
                         </div>
                         <div style={{ height: 4, background: "rgba(255,255,255,.1)", borderRadius: 999, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${winPct}%`, background: "linear-gradient(90deg,#ff4757,#ff4757,#00e676)", transition: "width .4s" }} />
+                          <div style={{ height: "100%", width: `${winPct}%`, background: "linear-gradient(90deg,#EF4444,#EF4444,#00e676)", transition: "width .4s" }} />
                         </div>
                       </div>
                     );

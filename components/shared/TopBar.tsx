@@ -424,7 +424,7 @@ export default function TopBar() {
           <span style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8c060", fontVariantNumeric: "tabular-nums" }}>
             {vix.price > 0 ? fmt(vix.price) : "—"}
           </span>
-          {vixChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, color: vixChg.up ? "#00e676" : "#ff4757" }}>{vixChg.text}</span>}
+          {vixChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, color: vixChg.up ? "#00e676" : "#EF4444" }}>{vixChg.text}</span>}
         </div>
 
         {/* ES | SPX */}
@@ -434,7 +434,7 @@ export default function TopBar() {
             <span style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
               {es.price > 0 ? fmtEsQuarter(es.price) : "—"}
             </span>
-            {esChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, fontWeight: 600, color: esChg.up ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{esChg.text}</span>}
+            {esChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, fontWeight: 600, color: esChg.up ? "#00e676" : "#EF4444", fontVariantNumeric: "tabular-nums" }}>{esChg.text}</span>}
           </div>
           <span style={{ color: "#1e3050" }}>|</span>
           <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
@@ -442,7 +442,7 @@ export default function TopBar() {
             <span style={{ fontSize: TOPBAR_VALUE_SIZE, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
               {spx.price > 0 ? fmt(spx.price) : "—"}
             </span>
-            {spxChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, fontWeight: 600, color: spxChg.up ? "#00e676" : "#ff4757", fontVariantNumeric: "tabular-nums" }}>{spxChg.text}</span>}
+            {spxChg && <span style={{ fontSize: TOPBAR_CHANGE_SIZE, fontWeight: 600, color: spxChg.up ? "#00e676" : "#EF4444", fontVariantNumeric: "tabular-nums" }}>{spxChg.text}</span>}
           </div>
         </div>
 

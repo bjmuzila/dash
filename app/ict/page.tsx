@@ -55,6 +55,128 @@ const WIN_COLOR: Record<TimeWindow["kind"], string> = {
   macro:    "rgba(167,139,250,0.12)",
 };
 
+// ── Concept Leaderboard (popout) ────────────────────────────────────────────
+// Same per-kind summary rows /dev/results reads from /api/ict-setups, ranked
+// by win rate. Toolbar button next to the ES/NQU switcher opens it in a modal.
+type LbSummaryRow = {
+  kind: string;
+  wins: number; losses: number; chop: number; pending: number;
+  graded: number; total: number;
+  win_rate: number | null; avg_r: number | null; avg_mfe: number | null;
+};
+const LB_KIND_LABEL: Record<string, string> = {
+  fvg: "Fair Value Gap", ifvg: "Inverse FVG", ob: "Order Block", ote: "OTE Entry",
+  mss: "Market Structure Shift", bos: "Break of Structure", choch: "Change of Character",
+  liquidity: "Liquidity Sweep", eqhl: "Equal H/L Sweep", inducement: "Inducement",
+  turtleSoup: "Turtle Soup", judas: "Judas Swing", breaker: "Breaker Block",
+  cisd: "CISD", model2022: "2022 Model", displacement: "Displacement",
+};
+const lbKindLabel = (k: string) => LB_KIND_LABEL[k] ?? k;
+
+function ConceptLeaderboardModal({ onClose }: { onClose: () => void }) {
+  const [rows, setRows] = useState<LbSummaryRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/ict-setups?all=1", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((j) => { if (alive) setRows(Array.isArray(j.summary) ? j.summary : []); })
+      .catch((e) => { if (alive) setErr(String(e)); })
+      .finally(() => { if (alive) setLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const sorted = useMemo(
+    () => [...rows]
+      .filter((r) => r.graded >= 3)
+      .sort((a, b) => (b.win_rate ?? -1) - (a.win_rate ?? -1)),
+    [rows]
+  );
+
+  const wrColor = (wr: number | null) => wr == null ? "#9fb3c8" : wr >= 0.6 ? "#22e08a" : wr >= 0.45 ? "#ffb300" : "#ff6b6b";
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(3,7,12,0.72)", backdropFilter: "blur(3px)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: "#0b121c", border: "1px solid rgba(255,255,255,0.10)", borderTop: "3px solid #219EBC", borderRadius: 14, width: "min(880px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
+      >
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: "#219EBC", textTransform: "uppercase", letterSpacing: "0.1em" }}>Concept Leaderboard</span>
+          <span style={{ fontSize: 12, color: "#c9d8e8" }}>ES futures · all-time · ranked by win rate (avg R = avg reward/risk on winners)</span>
+          <button
+            onClick={onClose}
+            style={{ marginLeft: "auto", fontSize: 12, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer", border: "1px solid rgba(255,255,255,0.10)", background: "transparent", color: "#c9d8e8", fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.06em" }}
+          >Close ✕</button>
+        </div>
+
+        <div style={{ overflow: "auto", padding: "4px 0" }}>
+          {err ? (
+            <div style={{ padding: "22px 24px", color: "#ff6b6b", fontSize: 13 }}>Couldn&apos;t load leaderboard: {err}</div>
+          ) : !loaded ? (
+            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 13 }}>Loading…</div>
+          ) : sorted.length === 0 ? (
+            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 13 }}>No graded setups yet (need ≥3 per concept).</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.10)", position: "sticky", top: 0, background: "#0b121c" }}>
+                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>#</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Concept</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Record</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Win Rate</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "right" }}>Avg R</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((r, i) => {
+                  const pct = r.win_rate != null ? Math.round(r.win_rate * 100) : null;
+                  const ac = wrColor(r.win_rate);
+                  return (
+                    <tr key={r.kind} style={{ borderTop: i ? "1px solid rgba(255,255,255,0.06)" : undefined }}>
+                      <td style={{ padding: "10px 16px", fontSize: 13, fontFamily: "var(--font-mono)", color: "#c9d8e8" }}>{i + 1}</td>
+                      <td style={{ padding: "10px 16px", fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{lbKindLabel(r.kind)}</td>
+                      <td style={{ padding: "10px 16px", fontSize: 12.5, fontFamily: "var(--font-mono)" }}>
+                        <span style={{ color: "#22e08a" }}>{r.wins}W</span>
+                        <span style={{ color: "#c9d8e8" }}> · </span>
+                        <span style={{ color: "#ff6b6b" }}>{r.losses}L</span>
+                      </td>
+                      <td style={{ padding: "10px 16px", minWidth: 160 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ flex: 1, height: 6, borderRadius: 3, background: "#0b1320", overflow: "hidden" }}>
+                            <div style={{ width: `${pct ?? 0}%`, height: "100%", background: ac }} />
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", minWidth: 34, textAlign: "right" }}>
+                            {pct != null ? `${pct}%` : "—"}
+                          </span>
+                        </div>
+                      </td>
+                      <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right", color: r.avg_r == null ? "#9fb3c8" : r.avg_r >= 1 ? "#22e08a" : "#ffb300" }}>
+                        {r.avg_r != null ? `${r.avg_r > 0 ? "+" : ""}${r.avg_r.toFixed(1)}R` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function IctPage() {
   // Instrument tab: ES (default) or NQU. Only the active feed connects — the
   // idle hook opens no socket + loads nothing, so switching tabs swaps feeds
@@ -135,6 +257,7 @@ export default function IctPage() {
   const [hiddenCards, setHiddenCards] = useState<Set<string>>(new Set());
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -616,6 +739,16 @@ export default function IctPage() {
             </button>
           ))}
         </div>
+        <button onClick={() => setLeaderboardOpen(true)}
+          className="rounded-md px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] transition"
+          style={{
+            color: "#22e08a",
+            background: "linear-gradient(180deg, rgba(34,224,138,.16), rgba(34,224,138,.05))",
+            border: "1px solid rgba(34,224,138,.35)",
+          }}>
+          🏆 Leaderboard
+        </button>
+        {leaderboardOpen && <ConceptLeaderboardModal onClose={() => setLeaderboardOpen(false)} />}
         <span className="text-[11px] uppercase tracking-[0.18em] text-white">Inner Circle Trader · live {instLabel} detection</span>
         <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${connected ? "text-emerald-300" : "text-white"}`}
           style={{ border: `1px solid ${connected ? "rgba(0,230,118,.4)" : "rgba(255,255,255,.18)"}`, background: connected ? "rgba(0,230,118,.08)" : "transparent" }}>

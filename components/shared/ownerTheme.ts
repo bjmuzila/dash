@@ -10,13 +10,13 @@ import type { CSSProperties } from "react";
  * The look (matching /owner/budget):
  *   • Frosted translucent cards (blur) with ONE faint light-blue interior
  *     highlight — no rotating accents, no colored top-accent strips.
- *   • Soft, desaturated red for spend / negative / error values (#f4948e).
+ *   • Standard theme red (#EF4444) for spend / negative / error values.
  *   • Opaque surfaces for sticky headers (panelBgStrong) so rows never bleed.
  *   • Brand hues (cyan/green/orange) kept consistent with the rest of the app.
  */
 
 export const OWNER_LIGHT_BLUE = "#7dd3fc";
-export const OWNER_SOFT_RED = "#f4948e";
+export const OWNER_SOFT_RED = "#EF4444";
 
 const SHELL_GLOW =
   "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.04) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.05) 0%, transparent 50%)";
@@ -37,7 +37,7 @@ export const OWNER_THEME = {
   purple: "#126783",
   orange: "#FB8501",
   green: "#8ECAE6",
-  red: OWNER_SOFT_RED,          // softened — never #EF4444
+  red: OWNER_SOFT_RED,          // standardized to #EF4444
   lightBlue: OWNER_LIGHT_BLUE,
   // Drop-in aliases so OWNER_THEME can stand in for HOME_THEME.
   muted: "#FFFFFF",

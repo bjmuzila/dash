@@ -10,9 +10,9 @@ import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // Budget UI language (see BUDGET_UI_STYLE.md): one accent only — light blue —
-// no rotating card colors, no top bars, soft red instead of the harsh #EF4444.
+// no rotating card colors, no top bars. Red standardized to theme's #EF4444.
 const LIGHT_BLUE = "#7dd3fc";
-const SOFT_RED = "#f4948e";
+const SOFT_RED = HOME_THEME.red;
 
 type FieldType = "number" | "select" | "checkbox";
 type Field = { key: string; label: string; type: FieldType; def: string | number | boolean; options?: string[] };

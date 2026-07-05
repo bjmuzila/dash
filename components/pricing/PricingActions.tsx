@@ -118,7 +118,7 @@ export default function PricingActions({
         </button>
       )}
 
-      {error && <p style={{ color: "#F87171", fontSize: 13, margin: 0 }}>{error}</p>}
+      {error && <p style={{ color: "#EF4444", fontSize: 13, margin: 0 }}>{error}</p>}
     </div>
   );
 }

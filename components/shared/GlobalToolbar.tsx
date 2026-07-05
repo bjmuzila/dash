@@ -432,7 +432,7 @@ function MaintenanceAlert() {
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 18 }}>🔴</span>
-              <span style={{ fontWeight: 700, color: "#f87171", fontSize: 14 }}>Heads up</span>
+              <span style={{ fontWeight: 700, color: "#EF4444", fontSize: 14 }}>Heads up</span>
             </div>
             <p style={{ margin: 0, color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
               Lots of UI upgrades today — bare with us.

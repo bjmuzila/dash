@@ -1045,7 +1045,7 @@ export default function EstimatedMoves() {
       setLastSync(new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } catch (e) {
       console.error("Refresh failed:", e);
-      setStatus({ text: "Error", color: "#ff4757" });
+      setStatus({ text: "Error", color: "#EF4444" });
     } finally {
       busyRef.current = false;
       setLoading(false);
@@ -1068,7 +1068,7 @@ export default function EstimatedMoves() {
       setStatus({ text: "Live (not saved)", color: "#e8c060" });
     } catch (e) {
       console.error("Compute live failed:", e);
-      setStatus({ text: "Error", color: "#ff4757" });
+      setStatus({ text: "Error", color: "#EF4444" });
     } finally {
       busyRef.current = false;
       setLoading(false);
@@ -1086,7 +1086,7 @@ export default function EstimatedMoves() {
 
   const saveSnapshot = useCallback(async () => {
     if (!hasCurrentData) {
-      setStatus({ text: "No data to save", color: "#ff4757" });
+      setStatus({ text: "No data to save", color: "#EF4444" });
       return;
     }
 
@@ -1113,7 +1113,7 @@ export default function EstimatedMoves() {
       }
     } catch (e) {
       console.error(e);
-      setStatus({ text: "Snapshot failed", color: "#ff4757" });
+      setStatus({ text: "Snapshot failed", color: "#EF4444" });
     }
   }, [activeView, drawerOpen, hasCurrentData, knownExpirations, rows, targetDateLabel, zoneLevels]);
 
@@ -1122,7 +1122,7 @@ export default function EstimatedMoves() {
     const all = await dbGetAll().catch(() => [] as Snapshot[]);
     const filtered = all.filter((snap) => (snap.view ?? "estimated") === activeView);
     if (!filtered.length) {
-      setStatus({ text: "No snapshots", color: "#ff4757" });
+      setStatus({ text: "No snapshots", color: "#EF4444" });
       return;
     }
 
@@ -1229,7 +1229,7 @@ export default function EstimatedMoves() {
       }, "image/png");
     } catch (e) {
       console.error(e);
-      setStatus({ text: "Copy failed", color: "#ff4757" });
+      setStatus({ text: "Copy failed", color: "#EF4444" });
     }
   }, [activeView, hasCurrentData]);
 
@@ -1384,9 +1384,9 @@ export default function EstimatedMoves() {
                       letterSpacing: ".1em",
                       padding: "3px 10px",
                       borderRadius: 4,
-                      border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.4)" : confidenceScore >= 45 ? "rgba(255,193,7,.4)" : "rgba(255,71,87,.4)"}`,
-                      background: confidenceScore >= 70 ? "rgba(0,230,118,.1)" : confidenceScore >= 45 ? "rgba(255,193,7,.1)" : "rgba(255,71,87,.1)",
-                      color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#ff4757",
+                      border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.4)" : confidenceScore >= 45 ? "rgba(255,193,7,.4)" : "rgba(239,68,68,.4)"}`,
+                      background: confidenceScore >= 70 ? "rgba(0,230,118,.1)" : confidenceScore >= 45 ? "rgba(255,193,7,.1)" : "rgba(239,68,68,.1)",
+                      color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#EF4444",
                     }}>
                       CB CONF {confidenceScore}%
                     </span>
@@ -1415,7 +1415,7 @@ export default function EstimatedMoves() {
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{row.expiration ? labelForDate(row.expiration) : ""}</td>
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#e8c060" }}>{fmtEm(row.em)}</td>
                           <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#00e676" }}>{fmtPrice(row.ticker, row.up)}</td>
-                          <td style={{ padding: 8, color: "#ff4757" }}>{fmtPrice(row.ticker, row.down)}</td>
+                          <td style={{ padding: 8, color: "#EF4444" }}>{fmtPrice(row.ticker, row.down)}</td>
                         </tr>
                       );
                     })}
@@ -1462,7 +1462,7 @@ export default function EstimatedMoves() {
                             <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtFuture(row.close)}</td>
                             <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtFuture(row.pivot)}</td>
                             <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#eef7ff" }}>{fmtFuture(row.range)}</td>
-                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#ff4757" }}>
+                            <td style={{ padding: 8, borderRight: `1px solid ${HT.border}`, color: "#EF4444" }}>
                               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                                 <span>{fmtFuture(row.noLongNear)}</span>
                                 <span style={{ opacity: 0.65 }}>{fmtFuture(row.noLongFar)}</span>
@@ -1505,7 +1505,7 @@ export default function EstimatedMoves() {
               <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
                 <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
-                <div style={{ padding: "9px 0", textAlign: "center", color: "#ff4757", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", color: "#EF4444", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
             ))}
 
@@ -1517,7 +1517,7 @@ export default function EstimatedMoves() {
               <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
                 <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
                 <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
-                <div style={{ padding: "9px 0", textAlign: "center", color: "#ff4757", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", color: "#EF4444", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
             ))}
           </>
@@ -1540,7 +1540,7 @@ export default function EstimatedMoves() {
                 <div key={sym} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
                   <div style={{ padding: "8px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 14 }}>{DISPLAY_LABEL[sym] ?? sym}</div>
                   <div style={{ padding: "8px 0", textAlign: "center", color: "#00e676", fontSize: 14 }}>{fmtFuture(row.noShortNear)}</div>
-                  <div style={{ padding: "8px 0", textAlign: "center", color: "#ff4757", fontSize: 14 }}>{fmtFuture(row.noLongNear)}</div>
+                  <div style={{ padding: "8px 0", textAlign: "center", color: "#EF4444", fontSize: 14 }}>{fmtFuture(row.noLongNear)}</div>
                 </div>
               );
             })}

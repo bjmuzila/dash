@@ -7,7 +7,7 @@ export const HOME_THEME = {
   purple: "#126783",
   orange: "#FB8501",
   green: "#8ECAE6",
-  red: "#FF0000",
+  red: "#EF4444",
   muted: "#FFFFFF",
   text: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",

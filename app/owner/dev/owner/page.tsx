@@ -2713,7 +2713,7 @@ export default function OwnerDashboard() {
             {ctlMsg && (
               <div style={{
                 fontSize: 12, fontFamily: "var(--font-mono)", padding: "8px 10px", borderRadius: 8,
-                background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(244,148,142,0.10)",
+                background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.10)",
                 border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
                 color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
               }}>

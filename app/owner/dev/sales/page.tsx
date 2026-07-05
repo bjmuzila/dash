@@ -167,68 +167,94 @@ function SetupBanner() {
   );
 }
 
-type Granularity = "daily" | "weekly" | "monthly";
+type Granularity = "weekly" | "monthly" | "yearly";
 
-// Build signup buckets from real subscription created timestamps, at the chosen
-// granularity: last 30 days / last 12 weeks / last 12 months.
-function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; expensesMonthly: number }) {
-  // Fixed to daily (tab switcher removed) — the new-subs view always shows the last 30 days.
-  const gran: Granularity = "daily";
+function GranTabs({ value, onChange }: { value: Granularity; onChange: (g: Granularity) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: 3 }}>
+      {(["weekly", "monthly", "yearly"] as const).map(g => (
+        <button
+          key={g}
+          onClick={() => onChange(g)}
+          style={{
+            padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+            fontSize: 11, fontWeight: 700, textTransform: "capitalize",
+            background: value === g ? T.cyan : "transparent",
+            color: value === g ? "#04141a" : T.textSecondary,
+          }}
+        >
+          {g}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Build period buckets from real subscription created timestamps, at the
+// chosen granularity. Weekly/monthly show a recent rolling window; yearly
+// shows the full lifetime of the business grouped by calendar year (there's
+// only ever been a handful of years of subs, so "yearly" == lifetime).
+function buildPeriods(gran: Granularity, subs: StripeSubscription[]) {
   const now = new Date();
 
-  // Bucket key + label for a given signup date, at the active granularity.
-  function keyFor(d: Date): { key: string; label: string } {
-    return { key: `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`, label: `${d.getMonth() + 1}/${d.getDate()}` };
+  if (gran === "yearly") {
+    const years = subs.length
+      ? Array.from(new Set(subs.map(s => new Date(s.created * 1000).getFullYear()))).sort((a, b) => a - b)
+      : [now.getFullYear()];
+    const firstYear = Math.min(years[0], now.getFullYear());
+    const list = [];
+    for (let y = firstYear; y <= now.getFullYear(); y++) {
+      const start = new Date(y, 0, 1);
+      const end = new Date(y, 11, 31, 23, 59, 59);
+      list.push({ label: String(y), start, end });
+    }
+    return list;
   }
 
-  // Empty buckets (oldest → newest) covering the visible window.
-  const spanCount = 30;
-  const buckets = Array.from({ length: spanCount }, (_, i) => {
-    const d = new Date(now);
-    d.setDate(now.getDate() - (spanCount - 1 - i));
-    const { key, label } = keyFor(d);
-    return { key, label, mrr: 0, count: 0 };
-  });
-
-  const byKey = new Map(buckets.map((b) => [b.key, b]));
-  for (const sub of subs) {
-    const d = new Date(sub.created * 1000);
-    const bucket = byKey.get(keyFor(d).key);
-    if (!bucket) continue;
-    const monthlyAmount = sub.interval === "year" ? Math.round(sub.amount / 12) : sub.amount;
-    bucket.mrr += monthlyAmount;
-    bucket.count += 1;
+  if (gran === "monthly") {
+    const count = 12;
+    return Array.from({ length: count }, (_, i) => {
+      const start = new Date(now.getFullYear(), now.getMonth() - (count - 1 - i), 1);
+      const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
+      return { label: start.toLocaleDateString("en-US", { month: "short" }), start, end };
+    });
   }
 
-  const maxMrr = Math.max(...buckets.map(b => b.mrr), 1);
-
-  // Weekly grouped view for the Sale Summary panel: subscriptions revenue
-  // added that week vs. the flat weekly-equivalent expense run-rate vs. the
-  // combined (net) figure. 6 weeks keeps the narrower column readable.
-  const weeklyExpense = expensesMonthly / 4.345; // avg weeks/month
-  const weekCount = 6;
-  const weeks = Array.from({ length: weekCount }, (_, i) => {
+  // weekly
+  const count = 8;
+  return Array.from({ length: count }, (_, i) => {
     const start = new Date(now);
-    start.setDate(now.getDate() - (weekCount - 1 - i) * 7 - 6);
+    start.setDate(now.getDate() - (count - 1 - i) * 7 - 6);
     start.setHours(0, 0, 0, 0);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
-    const label = `${start.getMonth() + 1}/${start.getDate()}`;
-    return { label, start, end, subsMrr: 0 };
+    end.setHours(23, 59, 59, 999);
+    return { label: `${start.getMonth() + 1}/${start.getDate()}`, start, end };
   });
-  for (const sub of subs) {
-    const d = new Date(sub.created * 1000);
-    const wk = weeks.find(w => d >= w.start && d <= w.end);
-    if (!wk) continue;
-    wk.subsMrr += sub.interval === "year" ? Math.round(sub.amount / 12) : sub.amount;
-  }
-  const saleRows = weeks.map(w => ({
-    label: w.label,
-    subs: w.subsMrr,
-    expenses: Math.round(weeklyExpense),
-    combined: w.subsMrr - Math.round(weeklyExpense),
-  }));
-  const maxSale = Math.max(...saleRows.flatMap(r => [r.subs, r.expenses, Math.abs(r.combined)]), 1);
+}
+
+function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; expensesMonthly: number }) {
+  const [gran, setGran] = useState<Granularity>("weekly");
+
+  const periods = buildPeriods(gran, subs);
+  const periodsPerYear = gran === "yearly" ? 1 : gran === "monthly" ? 12 : 52;
+  const expensePerPeriod = expensesMonthly * (12 / periodsPerYear);
+
+  const rows = periods.map(p => {
+    let mrrAdded = 0, count = 0;
+    for (const sub of subs) {
+      const d = new Date(sub.created * 1000);
+      if (d < p.start || d > p.end) continue;
+      mrrAdded += sub.interval === "year" ? Math.round(sub.amount / 12) : sub.amount;
+      count += 1;
+    }
+    const expenses = Math.round(expensePerPeriod);
+    return { label: p.label, mrr: mrrAdded, count, expenses, combined: mrrAdded - expenses };
+  });
+
+  const maxMrr = Math.max(...rows.map(r => r.mrr), 1);
+  const maxSale = Math.max(...rows.flatMap(r => [r.mrr, r.expenses, Math.abs(r.combined)]), 1);
+  const periodWord = gran === "weekly" ? "week" : gran === "monthly" ? "month" : "year";
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
@@ -237,18 +263,19 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan, marginBottom: 3 }}>Revenue Summary</div>
-            <div style={{ fontSize: 12, color: T.muted }}>New subscriptions by signup date · last 30 days</div>
+            <div style={{ fontSize: 12, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
           </div>
+          <GranTabs value={gran} onChange={setGran} />
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 150, marginTop: 14 }}>
-          {buckets.map((b, i) => {
+        <div style={{ display: "flex", alignItems: "flex-end", gap: gran === "weekly" ? 8 : 4, height: 150, marginTop: 14 }}>
+          {rows.map((b, i) => {
             const barH = Math.max(4, (b.mrr / maxMrr) * 128);
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                 {b.count > 0 && (
                   <span style={{ fontSize: 10, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
                 )}
-                <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR`} style={{
+                <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR added`} style={{
                   width: "100%",
                   height: barH,
                   background: b.mrr > 0 ? `linear-gradient(180deg, ${T.cyan}cc, ${T.cyan}44)` : "rgba(255,255,255,0.06)",
@@ -256,7 +283,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
                   cursor: "default",
                 }} />
                 <span style={{ fontSize: 9, color: T.muted, whiteSpace: "nowrap" }}>
-                  {i % 5 === 0 ? b.label : ""}
+                  {gran !== "weekly" || i % 2 === 0 ? b.label : ""}
                 </span>
               </div>
             );
@@ -264,25 +291,27 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
         </div>
       </div>
 
-      {/* Sale Summary — grouped bars: Subscriptions vs Expenses vs Combined, per week */}
+      {/* Sale Summary — grouped bars: Subscriptions vs Expenses vs Combined, same granularity */}
       <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column" }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan, marginBottom: 3 }}>Sale Summary</div>
-        <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · last 6 weeks</div>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan }}>Sale Summary</div>
+        </div>
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
 
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 150, flex: 1 }}>
-          {saleRows.map((r, i) => (
+          {rows.map((r, i) => (
             <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
               <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 128, width: "100%", justifyContent: "center" }}>
                 <div
-                  title={`Week of ${r.label}: Subscriptions ${fmtMoney(r.subs)}/mo added`}
-                  style={{ width: 6, height: Math.max(2, (r.subs / maxSale) * 128), background: T.cyan, borderRadius: "2px 2px 0 0" }}
+                  title={`${r.label}: Subscriptions ${fmtMoney(r.mrr)}/mo added`}
+                  style={{ width: 6, height: Math.max(2, (r.mrr / maxSale) * 128), background: T.cyan, borderRadius: "2px 2px 0 0" }}
                 />
                 <div
-                  title={`Week of ${r.label}: Expenses ${fmtMoney(r.expenses)}/mo run-rate`}
+                  title={`${r.label}: Expenses ${fmtMoney(r.expenses)}/mo run-rate`}
                   style={{ width: 6, height: Math.max(2, (r.expenses / maxSale) * 128), background: T.red, borderRadius: "2px 2px 0 0" }}
                 />
                 <div
-                  title={`Week of ${r.label}: Combined (net) ${fmtMoney(r.combined)}/mo`}
+                  title={`${r.label}: Combined (net) ${fmtMoney(r.combined)}/mo`}
                   style={{ width: 6, height: Math.max(2, (Math.abs(r.combined) / maxSale) * 128), background: r.combined >= 0 ? T.green : T.orange, borderRadius: "2px 2px 0 0" }}
                 />
               </div>
@@ -292,8 +321,8 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
         </div>
 
         <div style={{ display: "flex", gap: 12, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.muted, flexWrap: "wrap" }}>
-          <span title="New subscription revenue added that week"><span style={{ color: T.cyan }}>■</span> Subscriptions</span>
-          <span title="Weekly-equivalent of the current expense run-rate"><span style={{ color: T.red }}>■</span> Expenses</span>
+          <span title={`New subscription revenue added that ${periodWord}`}><span style={{ color: T.cyan }}>■</span> Subscriptions</span>
+          <span title={`${periodWord}ly-equivalent of the current expense run-rate`}><span style={{ color: T.red }}>■</span> Expenses</span>
           <span title="Subscriptions minus expenses"><span style={{ color: T.green }}>■</span> Combined</span>
         </div>
       </div>
@@ -700,6 +729,12 @@ export default function SalesDashboard() {
                 spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr - expensesMonthly }))}
                 sparkColor={T.cyan}
                 tooltip={`MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate`}
+              />
+              <KpiCard
+                label="Yearly Expectation"
+                value={fmtMoney((data.summary.mrr - expensesMonthly) * 12)}
+                sub="net run-rate × 12"
+                tooltip={`(MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo) × 12 months`}
               />
             </div>
 

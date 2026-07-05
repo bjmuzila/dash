@@ -28,12 +28,11 @@ type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 
-// Desaturated red for the dashboard — the theme's #EF4444 reads harsh on the
-// dark table, so amounts, deficits and delete accents use this (per BUDGET_UI_STYLE).
-const SOFT_RED = "#f4948e";
+// Red standardized to theme's #EF4444 — amounts, deficits and delete accents.
+const SOFT_RED = HOME_THEME.red;
 
 // Swatch palette for category dots.
-const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", "#EF4444"];
+const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
 
 const BANKS: Bank[] = ["coastal", "truist", "secu"];
 const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST", secu: "SECU" };
@@ -715,7 +714,7 @@ function CalendarGrid({
         const net = g?.dailyNet ?? 0;
         const isSel = selected === iso(d);
         const pos = net > 0, neg = net < 0;
-        const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+        const tint = neg ? "rgba(239,68,68,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
         return (
           <button
             key={d}
@@ -841,8 +840,8 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         width: 26,
         height: 26,
         borderRadius: 8,
-        border: `1px solid ${hover ? SOFT_RED : "rgba(244,148,142,0.30)"}`,
-        background: hover ? "rgba(244,148,142,0.16)" : "rgba(244,148,142,0.07)",
+        border: `1px solid ${hover ? SOFT_RED : "rgba(239,68,68,0.30)"}`,
+        background: hover ? "rgba(239,68,68,0.16)" : "rgba(239,68,68,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
         fontSize: 20,

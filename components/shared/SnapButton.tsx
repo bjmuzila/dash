@@ -187,12 +187,12 @@ export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
 
   const color =
     state === "ok" ? "#00e676" :
-    state === "err" ? "#ff4757" :
+    state === "err" ? "#EF4444" :
     (isSave ? "#219EBC" : "#ffb300");
 
   const borderColor =
     state === "ok" ? "rgba(0,230,118,.35)" :
-    state === "err" ? "rgba(255,71,87,.35)" :
+    state === "err" ? "rgba(239,68,68,.35)" :
     (isSave ? "rgba(33,158,188,.25)" : "rgba(255,179,0,.28)");
 
   const background = isSave
