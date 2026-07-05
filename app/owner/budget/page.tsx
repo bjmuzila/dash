@@ -892,6 +892,9 @@ function MonthlyRegister({
               </div>
               {g.rows.map((r) => {
                 const isIncome = r.amount > 0;
+                // Paid = a real logged row; recurring occurrences are still owed,
+                // or past due once their date has passed without being logged.
+                const status: "paid" | "owed" | "pastdue" | null = r.amount < 0 ? (r.recurring ? (r.entry_date < todayIso() ? "pastdue" : "owed") : "paid") : null;
                 return (
                   <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 12, alignItems: "center", padding: "8px 12px", borderTop: `1px solid rgba(255,255,255,0.04)` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -903,6 +906,7 @@ function MonthlyRegister({
                           <EditableText value={r.label} onCommit={(v) => onEdit(r.id, { label: v.toUpperCase() })} style={{ fontWeight: 700 }} />
                         </>
                       )}
+                      {status && <StatusPill status={status} />}
                     </div>
                     <span style={{ fontWeight: 800, textAlign: "right", minWidth: 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
@@ -921,6 +925,21 @@ function MonthlyRegister({
         })}
       </div>
     </div>
+  );
+}
+
+// Payment status chip: real logged rows are Paid; recurring occurrences are
+// Owed (upcoming) or Past due (their date has passed and they're still unlogged).
+function StatusPill({ status }: { status: "paid" | "owed" | "pastdue" }) {
+  const map = {
+    paid: { label: "Paid", color: HOME_THEME.green, bg: "rgba(142,202,230,0.12)", border: "rgba(142,202,230,0.35)" },
+    owed: { label: "Owed", color: HOME_THEME.cyan, bg: "rgba(126,211,252,0.10)", border: "rgba(126,211,252,0.35)" },
+    pastdue: { label: "Past due", color: SOFT_RED, bg: "rgba(244,148,142,0.14)", border: "rgba(244,148,142,0.4)" },
+  }[status];
+  return (
+    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 }}>
+      {map.label}
+    </span>
   );
 }
 

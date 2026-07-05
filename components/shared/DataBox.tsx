@@ -24,7 +24,6 @@ function useIsOwner(): boolean {
 //  • onclone strips external <link>/<style> so html2canvas never refetches a
 //    (sometimes 404'ing) stylesheet that can abort the render.
 async function captureElement(el: HTMLElement, title?: string): Promise<string> {
-  const { default: html2canvas } = await import("html2canvas");
   const titleText = title && title.trim() ? title : "SPX GEX";
   // Measure the true content height of the scrollable body so the capture wraps
   // the data tightly (no empty space) without collapsing rows to zero.
@@ -42,11 +41,40 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
   // so we must NOT add height for the title band — that leaves blank space at the
   // bottom. Instead the band overlays the top of the chart at its true height.
   const isCanvas = !inner && !isLtChart && !!el.querySelector("canvas");
+
+  // Plain <canvas> charts (e.g. GexChart): bypass html2canvas entirely. Its
+  // only content is the canvas itself (plus an optional hover tooltip that's
+  // irrelevant to a static capture) — after four rounds of chasing html2canvas's
+  // clone/reflow/width-vs-windowWidth quirks (crops, double-scaling, off-center
+  // frames), the robust fix is to skip the DOM-clone pipeline altogether and
+  // build the PNG straight from the canvas's own pixel buffer plus a manually
+  // drawn title band. No clone, no reflow, no bounding-rect alignment to get wrong.
+  if (isCanvas) {
+    const plainCanvas = el.querySelector("canvas") as HTMLCanvasElement;
+    const scale = window.devicePixelRatio || 1;
+    const bandH = Math.round(44 * scale);
+    const out = document.createElement("canvas");
+    out.width = plainCanvas.width;
+    out.height = plainCanvas.height + bandH;
+    const octx = out.getContext("2d")!;
+    octx.fillStyle = "#05080d";
+    octx.fillRect(0, 0, out.width, out.height);
+    octx.drawImage(plainCanvas, 0, bandH);
+    octx.textBaseline = "alphabetic";
+    octx.textAlign = "left";
+    octx.fillStyle = "#ffffff";
+    octx.font = `700 ${Math.round(15 * scale)}px Inter, Arial, sans-serif`;
+    octx.fillText(titleText, 12 * scale, 20 * scale);
+    octx.fillStyle = "rgba(255,255,255,0.7)";
+    octx.font = `700 ${Math.round(11 * scale)}px Inter, Arial, sans-serif`;
+    octx.fillText("Data provided by CBEdge.net", 12 * scale, 36 * scale);
+    return out.toDataURL("image/png");
+  }
+
+  const { default: html2canvas } = await import("html2canvas");
   let contentH: number;
   if (inner) {
     contentH = inner.scrollHeight;
-  } else if (isCanvas) {
-    contentH = el.scrollHeight;
   } else {
     // Sum the height of every direct child up to (and including) the scroll body,
     // measuring the scroll body by its scrollHeight not its clamped client height.
@@ -64,19 +92,19 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
   // push it down below the band like everything else — otherwise the band
   // covers the chart's own top-of-canvas annotations (spot label, CB tag).
   const captureH = contentH + 48;
-  // Pin width explicitly too. html2canvas renders the CLONE in an isolated
-  // offscreen context that loses the live element's real flex/grid siblings,
-  // so a flex-basis width (e.g. "flex: 1.6 1 0" in a row of siblings) can
-  // resolve to something wider than the live element — the composited canvas
-  // (sized to the live element's actual rect) then lands in one corner of
-  // that oversized frame instead of filling/centering in it.
+  // Output crop width, matching the live element. Note: this must NOT be paired
+  // with a `windowWidth` override — windowWidth reflows the ENTIRE cloned page
+  // at that viewport width (it's meant for responsive/media-query accuracy),
+  // and since this chart sits in a two-column flex row, narrowing the virtual
+  // window down to just the chart's own width reflows every ancestor flex
+  // container and changes the chart's actual size/position in the clone. Only
+  // `width` (a pure output-crop size, no reflow) is safe here.
   const contentW = el.scrollWidth || el.getBoundingClientRect().width;
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
     allowTaint: true,
     width: contentW,
-    windowWidth: contentW,
     scale: window.devicePixelRatio || 1,
     height: captureH,
     windowHeight: captureH,
@@ -95,15 +123,13 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       // Expand to the measured content height (explicit px — never auto/0) and
       // reserve room for the title band so no rows hide behind it.
       clone.style.height = `${captureH}px`;
-      clone.style.width = `${contentW}px`;
-      clone.style.flex = "none";
       clone.style.maxHeight = "none";
       clone.style.overflow = "visible";
       clone.style.paddingTop = "44px";
       const tbl = clone.querySelector("table") as HTMLElement | null;
       if (tbl) {
         tbl.style.height = `${contentH}px`;
-      } else if (!isCanvas) {
+      } else {
         // Grid/card layout (e.g. options chain): un-clamp the flex scroll body so
         // every row renders and the clone collapses to its real content height
         // — no blank space below the data box.
@@ -122,25 +148,6 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
           ch.style.overflow = "visible";
         });
       }
-      // Plain <canvas> charts (e.g. GexChart) are backed at devicePixelRatio
-      // for crispness. html2canvas special-cases <canvas> elements: instead of
-      // rasterizing the (blank) cloned canvas, it fetches the LIVE canvas's
-      // pixel buffer and draws it through its own scale transform — applying
-      // the dpr scale a second time on top of the already-dpr-sized buffer.
-      // That double-scales the chart, so only a zoomed-in top-left quarter
-      // fits in frame (fewer/bigger bars, put side clipped off the bottom).
-      // Fix: remove the canvas from the clone entirely (a placeholder div
-      // keeps the layout box) so html2canvas has nothing to draw there, then
-      // composite the real canvas bitmap ourselves, once, at the correct scale.
-      if (isCanvas && !isLtChart) {
-        const clonedCanvas = clone.querySelector("canvas");
-        if (clonedCanvas) {
-          const placeholder = doc.createElement("div");
-          placeholder.style.cssText = clonedCanvas.style.cssText;
-          clonedCanvas.replaceWith(placeholder);
-        }
-      }
-
       const inter = "var(--font-inter), Inter, Arial, sans-serif";
       // Solid title band across the top so it never collides with table headers
       // or chart legends behind it.

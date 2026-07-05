@@ -6,6 +6,16 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-05 — Delayed-preview tier for unpaid signed-in users (/preview, /home, /mult-greek) + nav/drawer gating
+
+Built a "delayed" free tier: `app/preview/page.tsx` (new), plus `app/home/page.tsx`+`HomeClient.tsx` and `app/mult-greek/page.tsx`+`MultGreekClient.tsx` (split into server/client) branch on `getAccess()` to render frozen snapshots — new `preview_snapshots`, `home_static_snapshots`, `mult_greek_static_snapshots` tables/helpers in `lib/db.ts` — instead of live WS/chain data, fed every 30m by `server-v2/{preview,home,mult-greek}-snapshot-recorder.js` (+ `/proxy/*-snapshot?force=1` manual triggers) and gated in `middleware.ts` (PAID_EXEMPT now redirects unpaid users to `/home` instead of `/pricing`), with a CB-BETA 50%-off promo banner on all three. Added `isPaid`/`isOwnerClaim` JWT-claim fields to `components/auth/AuthProvider.tsx` so `components/shared/NavMenu.tsx` and `GexDock.tsx` can lock every page except Home/Multi Greek behind an "Upgrade" prompt for unpaid viewers, and GexDock's default tile now auto-swaps Home↔Multi Greek depending which one you opened it from.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-04 — EM grader Theta cutover fixed (Estimated Moves scoring restored, 379 scored)
 
 Fixed Theta-based EM grading (was scoring 0 for the whole roster → now 379 evaluated, 279 hit / 100 miss) with two edits to `server-v2/proxy-thetadata.js`: `ymdCompact` now formats a JS `Date` → `YYYYMMDD` (it was passing a raw `Date.toString()` and 500-ing `/v3/stock/history/eod` with "Cannot parse date string"), and `_mapDailyOhlc` now derives each bar's date from the `created`/`last_trade` column since the v3 stock/index EOD JSON has no `date` field (every row was being dropped → "No finalized weekly candle"). Supporting edits: per-ticker skip-logging in `server-v2/levels-engine.js` `evaluateCompletedWeek` (this is what surfaced both bugs), `seedUpcomingWeek` now runs on retries in `server-v2/levels-auto-publish.js`, and the evaluate-route base port aligned `3000`→`3001` in `app/api/em-tracker/evaluate/route.ts`; shipped as direct VPS edits + `docker compose build --no-cache` (routine `--build` kept caching the `COPY . .` layer) — still needs a git reconcile so the next deploy doesn't revert.

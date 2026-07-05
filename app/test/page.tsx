@@ -393,33 +393,33 @@ function AmTbrChart() {
       {/* Non-Reverted MAE — red */}
       <rect x={AMTBR_BAND_LEFT} y={NR_TOP} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={NR_MEDIAN - NR_TOP} fill={`${HOME_THEME.red}22`} stroke={HOME_THEME.red} strokeWidth={1.5} />
       <line x1={AMTBR_BAND_LEFT} y1={NR_75} x2={AMTBR_CHART_RIGHT} y2={NR_75} stroke={HOME_THEME.red} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_TOP + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_75 + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={NR_MEDIAN + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>Median</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={NR_TOP + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={NR_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={NR_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
       <text x={30} y={(NR_TOP + NR_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Non-Reverted MAE</text>
 
       {/* Reverted MAE — green */}
       <rect x={AMTBR_BAND_LEFT} y={RM_90} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={RM_MEDIAN - RM_90} fill={`${HOME_THEME.green}22`} stroke={HOME_THEME.green} strokeWidth={1.5} />
       <line x1={AMTBR_BAND_LEFT} y1={RM_75} x2={AMTBR_CHART_RIGHT} y2={RM_75} stroke={HOME_THEME.green} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_90 + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>90th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_75 + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={RM_MEDIAN + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>Median</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={RM_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={RM_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={RM_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
       <text x={30} y={(RM_90 + RM_MEDIAN) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MAE</text>
 
       {/* Trigger / reference lines */}
       <line x1={AMTBR_CHART_LEFT} y1={PLUS_025} x2={AMTBR_CHART_RIGHT} y2={PLUS_025} stroke={HOME_THEME.green} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={PLUS_025 + 5} fontSize={14} fill={HOME_THEME.green}>+0.25</text>
+      <text x={AMTBR_CHART_RIGHT + 10} y={PLUS_025 + 5} fontSize={17} fill={HOME_THEME.green}>+0.25</text>
       <line x1={AMTBR_CHART_LEFT} y1={TBR_OPEN_Y} x2={AMTBR_CHART_RIGHT} y2={TBR_OPEN_Y} stroke={TBR_GOLD} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={TBR_OPEN_Y + 5} fontSize={14} fill={TBR_GOLD}>TBR Open</text>
+      <text x={AMTBR_CHART_RIGHT + 10} y={TBR_OPEN_Y + 5} fontSize={17} fill={TBR_GOLD}>TBR Open</text>
       <line x1={AMTBR_CHART_LEFT} y1={MINUS_025} x2={AMTBR_CHART_RIGHT} y2={MINUS_025} stroke={HOME_THEME.red} strokeWidth={1.5} strokeDasharray="6 5" />
-      <text x={AMTBR_CHART_RIGHT + 10} y={MINUS_025 + 5} fontSize={14} fill={HOME_THEME.red}>-0.25</text>
+      <text x={AMTBR_CHART_RIGHT + 10} y={MINUS_025 + 5} fontSize={17} fill={HOME_THEME.red}>-0.25</text>
 
       {/* Reverted MFE — gold */}
       <rect x={AMTBR_BAND_LEFT} y={MFE_MEDIAN} width={AMTBR_CHART_RIGHT - AMTBR_BAND_LEFT} height={MFE_90 - MFE_MEDIAN} fill={`${TBR_GOLD}1f`} stroke={TBR_GOLD} strokeWidth={1.5} />
       <line x1={AMTBR_BAND_LEFT} y1={MFE_75} x2={AMTBR_CHART_RIGHT} y2={MFE_75} stroke={TBR_GOLD} strokeWidth={1} />
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_MEDIAN + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>Median</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_75 + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>75th Percentile</text>
-      <text x={AMTBR_BAND_LEFT - 12} y={MFE_90 + 5} textAnchor="end" fontSize={15} fill={HOME_THEME.text}>90th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={MFE_MEDIAN + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>Median</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={MFE_75 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>75th Percentile</text>
+      <text x={AMTBR_BAND_LEFT - 12} y={MFE_90 + 5} textAnchor="end" fontSize={17} fill={HOME_THEME.text}>90th Percentile</text>
       <text x={30} y={(MFE_MEDIAN + MFE_90) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MFE</text>
 
       {/* Candles */}
@@ -472,11 +472,11 @@ function AmTbrPanel() {
     <Card
       variant="dissolve"
       accent={TBR_GOLD}
-      title="AM TBR — Time-Based Range"
+      title={<span style={{ fontSize: 18 }}>AM TBR — Time-Based Range</span>}
       subtitle="Rolling 20-day 8am–12pm distribution · reversion to TBR Open · UI mockup, no live data"
     >
       <AmTbrChart />
-      <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.7, marginTop: 12, opacity: 0.85 }}>
+      <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, marginTop: 12, opacity: 0.85 }}>
         Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
         sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
         (8am open). MAE is shown for reverted vs. non-reverted events; MFE beyond TBR Open is shown for
@@ -490,7 +490,7 @@ function AmTbrPanel() {
 function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+      <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
         {label}
       </div>
       <div style={{ fontSize: 30, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
@@ -501,7 +501,12 @@ function AmTbrStat({ label, value, accent }: { label: string; value: string; acc
 // Illustrative numbers only — not computed from data, just filling out the mockup.
 function AmTbrStatsCards() {
   return (
-    <Card variant="classic" accent={TBR_GOLD} title="AM TBR — Sample Stats" subtitle="Placeholder figures for layout only">
+    <Card
+      variant="classic"
+      accent={TBR_GOLD}
+      title={<span style={{ fontSize: 18 }}>AM TBR — Sample Stats</span>}
+      subtitle="Placeholder figures for layout only"
+    >
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
         <AmTbrStat label="8am Hour Reversion Rate" value="71%" accent={HOME_THEME.green} />
         <AmTbrStat label="Total Reversion Rate" value="86%" accent={HOME_THEME.cyan} />

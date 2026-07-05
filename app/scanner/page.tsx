@@ -33,7 +33,7 @@ const th: React.CSSProperties = { padding: "6px 10px", textAlign: "right", fontW
 const td: React.CSSProperties = { padding: "6px 10px", textAlign: "right", color: HOME_THEME.text };
 
 const seg = (active: boolean): React.CSSProperties => ({
-  padding: "6px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 700,
+  padding: "6px 14px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
   border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
   background: active ? "rgba(33,158,188,0.15)" : "transparent",
   color: active ? HOME_THEME.text : "rgba(255,255,255,0.7)",
@@ -47,7 +47,106 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch";
+type MainTab = "overview" | "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch";
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  OVERVIEW / LANDING (default tab) — cards explaining each scanner
+// ══════════════════════════════════════════════════════════════════════════════
+
+type ScanMeta = {
+  tab: Exclude<MainTab, "overview">;
+  title: string;
+  accent: string;
+  scope: string;
+  what: string;
+  tells: string;
+};
+
+const SCAN_META: ScanMeta[] = [
+  {
+    tab: "gex",
+    title: "GEX Change Scanner",
+    accent: HOME_THEME.cyan,
+    scope: "Stocks · cross-ticker",
+    what: "Ranks strikes across the whole ticker universe by how much their GEX has moved in the last 5–60 minutes, either by raw size or by z-score vs their own recent history.",
+    tells: "Where dealer hedging pressure is building fastest right now — the strikes seeing unusually large, non-routine gamma shifts.",
+  },
+  {
+    tab: "greeks",
+    title: "Greeks Sensitivity Scanner",
+    accent: HOME_THEME.purple,
+    scope: "SPX · per-strike",
+    what: "Tracks Charm (delta decay), Vanna (vol-driven delta), Gamma acceleration, and a combined Theta-Gamma imbalance score, per strike.",
+    tells: "Which strikes are heating up fastest on delta decay or vol sensitivity — used to spot 0DTE pin risk or zones primed for an explosive move.",
+  },
+  {
+    tab: "volpin",
+    title: "Vol Pin Scanner",
+    accent: HOME_THEME.orange,
+    scope: "Stocks · IV/RV + range",
+    what: "Watches IV-RV spread contraction and intraday price-range tightening together, versus each ticker's highest-OI strike.",
+    tells: "Classic pre-pin signatures — vol crush plus range compression near a magnet strike — flagging PINNING / SQUEEZING / WATCHING candidates into expiry.",
+  },
+  {
+    tab: "strike",
+    title: "Strike Query Scanner",
+    accent: HOME_THEME.green,
+    scope: "Any ticker · drill-down",
+    what: "Ad-hoc lookup of GEX-now and 15/30/60m change per strike, for one ticker or the whole watchlist, sortable by any column.",
+    tells: "A quick manual drill-down into exactly which strikes are gaining or losing GEX right now — the tool for \"what's happening at this specific strike.\"",
+  },
+  {
+    tab: "oi",
+    title: "OI Change Scanner",
+    accent: HOME_THEME.red,
+    scope: "EM watchlist (~380 names)",
+    what: "Compares today's posted open interest to the prior session's, OTM-only, across the full EM watchlist.",
+    tells: "Where new positioning built or unwound overnight — an early read on fresh dealer/positioning changes before the day's price action confirms it.",
+  },
+  {
+    tab: "watch",
+    title: "Watch This — Far CB",
+    accent: LIGHT_BLUE,
+    scope: "EM watchlist · 30d expiries",
+    what: "Flags the single highest-GEX strike per ticker (≤30 DTE) when it sits unusually far OTM vs spot, then tracks whether spot ever reaches it.",
+    tells: "A structurally dominant level that's currently far from price — worth watching, with a running record of whether it ever gets touched.",
+  },
+];
+
+function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+      {SCAN_META.map((s) => (
+        <div
+          key={s.tab}
+          onClick={() => onSelect(s.tab)}
+          className="card-hover"
+          style={{
+            cursor: "pointer",
+            borderRadius: 14,
+            padding: "18px 20px",
+            border: `1px solid ${s.accent}33`,
+            background: `radial-gradient(circle at 50% 0%, ${s.accent}14 0%, transparent 65%), rgba(13,17,25,0.25)`,
+            backdropFilter: "blur(20px)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text }}>{s.title}</span>
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: s.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
+            {s.scope}
+          </div>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>
+            {s.what}
+          </div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
+            <span style={{ color: s.accent, fontWeight: 800 }}>Tells you: </span>{s.tells}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -134,10 +233,10 @@ function GexScanner() {
           <button onClick={() => setSort("otm")} style={seg(sort === "otm")}>OTM-weighted</button>
           <button onClick={() => setSort("pct")} style={seg(sort === "pct")}>% vs open</button>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.green }}>
           min z
           <select value={minZ} onChange={(e) => setMinZ(Number(e.target.value))}
-            style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={0}>any</option>
             <option value={1.5}>1.5+</option>
             <option value={2}>2.0+</option>
@@ -150,9 +249,9 @@ function GexScanner() {
       {err && <div style={{ color: HOME_THEME.red, marginBottom: 12 }}>{err}</div>}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
               <th style={th}>Strike</th>
@@ -169,7 +268,7 @@ function GexScanner() {
                     userSelect: "none",
                     whiteSpace: "nowrap",
                   }}>
-                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 10 }}>{arrow}</span>
+                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 12 }}>{arrow}</span>
                   </th>
                 );
               })}
@@ -188,7 +287,7 @@ function GexScanner() {
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>
                   <td style={td}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{r.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: col, fontWeight: 800 }}>{fmtB(r.latest_chg)}</td>
                   <td style={td}>{fmtB(r.mean_chg)}</td>
                   <td style={{ ...td, color: zColor(r.z), fontWeight: 800 }}>
@@ -319,11 +418,11 @@ function GreeksScanner() {
           <button key={w} onClick={() => setWin(w)} style={seg(win === w)}>{w}m</button>
         ))}
         <button onClick={() => load()} style={{ ...seg(false), marginLeft: 4 }}>↻</button>
-        <span style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginLeft: 8 }}>{meta.subtitle}</span>
+        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", marginLeft: 8 }}>{meta.subtitle}</span>
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
           {err.includes('no DB') || err.includes('503')
             ? "Recorder hasn't started yet — data appears after the first 5-min RTH snapshot."
             : err}
@@ -331,9 +430,9 @@ function GreeksScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={th}>Strike</th>
               <th style={{ ...th, textAlign: "left" }}>Expiry</th>
@@ -367,7 +466,7 @@ function GreeksScanner() {
                     {i + 1}{nearSpot ? " ◆" : ""}
                   </td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 12 }}>{r.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: chgCol, fontWeight: 800 }}>{fmtB(chg)}</td>
                   {!isTg && <td style={td}>{fmtB(r.mean_chg)}</td>}
                   {!isTg && (
@@ -394,7 +493,7 @@ function GreeksScanner() {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
         <span>◆ near spot (&lt;2%)</span>
         {!isTg && <span>z ≥ 2σ = <span style={{ color: HOME_THEME.orange }}>unusual</span></span>}
         {!isTg && <span>z ≥ 3σ = <span style={{ color: HOME_THEME.red }}>extreme</span></span>}
@@ -442,15 +541,15 @@ function PinStatus({ r }: { r: PinRow }) {
   const nearPin = r.pin_dist_pct != null && r.pin_dist_pct < 0.005;
 
   if (spreadContracting && rangeContracting && nearPin) {
-    return <span style={{ color: HOME_THEME.red, fontWeight: 800, fontSize: 11 }}>PINNING</span>;
+    return <span style={{ color: HOME_THEME.red, fontWeight: 800, fontSize: 13 }}>PINNING</span>;
   }
   if (spreadContracting && rangeContracting) {
-    return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 11 }}>SQUEEZING</span>;
+    return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 13 }}>SQUEEZING</span>;
   }
   if (spreadContracting || rangeContracting) {
-    return <span style={{ color: HOME_THEME.cyan, fontWeight: 600, fontSize: 11 }}>WATCHING</span>;
+    return <span style={{ color: HOME_THEME.cyan, fontWeight: 600, fontSize: 13 }}>WATCHING</span>;
   }
-  return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>—</span>;
+  return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>—</span>;
 }
 
 function VolPinScanner() {
@@ -483,10 +582,10 @@ function VolPinScanner() {
       subtitle={`Stocks · IV-RV spread + range contraction → pin candidates${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.green }}>
           min snapshots
           <select value={minSnaps} onChange={(e) => setMinSnaps(Number(e.target.value))}
-            style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={2}>2 (early)</option>
             <option value={3}>3 (15 min)</option>
             <option value={6}>6 (30 min)</option>
@@ -494,13 +593,13 @@ function VolPinScanner() {
           </select>
         </label>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
+        <span style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
           Refreshes every 90s · recorder runs every 5m during RTH
         </span>
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
           {err.includes('503') || err.includes('no DB')
             ? "Recorder not yet active — data appears after first RTH sweep."
             : err}
@@ -508,9 +607,9 @@ function VolPinScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
               <th style={th}>Spot</th>
@@ -582,7 +681,7 @@ function VolPinScanner() {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
         <span><span style={{ color: HOME_THEME.red }}>PINNING</span> = spread ↓ + range ↓ + within 0.5% of pin strike</span>
         <span><span style={{ color: HOME_THEME.orange }}>SQUEEZING</span> = spread ↓ + range ↓</span>
         <span>Pin strike = highest OI within ±10% of spot (front expiry)</span>
@@ -719,7 +818,7 @@ function StrikeQueryScanner() {
   ];
 
   const lbl: React.CSSProperties = {
-    fontSize: 11, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em",
+    fontSize: 13, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em",
   };
 
   return (
@@ -743,15 +842,15 @@ function StrikeQueryScanner() {
             options={[10, 25, 50, 100].map((l) => ({ value: String(l), label: String(l) }))} />
         </div>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
+        <span style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
       </div>
 
-      {err && <div style={{ color: HOME_THEME.red, marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {err && <div style={{ color: HOME_THEME.red, marginBottom: 12, fontSize: 15 }}>{err}</div>}
 
       {topCards.length > 0 && (
         <div style={{ marginBottom: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <span style={{ fontSize: 13, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               Top 10 · {cols.find((c) => c.key === colSort.col)?.label} · SPX/SPY/QQQ 1 slot each
             </span>
             <div style={{ display: "flex", gap: 6 }}>
@@ -771,16 +870,16 @@ function StrikeQueryScanner() {
                   background: i % 2 ? "rgba(255,255,255,0.02)" : "rgba(33,158,188,0.06)",
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                    <span style={{ fontWeight: 800, fontSize: 14, color: HOME_THEME.text }}>{r.symbol}</span>
-                    <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>#{i + 1}</span>
+                    <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>{r.symbol}</span>
+                    <span style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>#{i + 1}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: HOME_THEME.cyan, fontWeight: 700, margin: "2px 0" }}>
+                  <div style={{ fontSize: 14, color: HOME_THEME.cyan, fontWeight: 700, margin: "2px 0" }}>
                     ${r.strike} <span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}>{r.expiry}</span>
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: metricCol }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: metricCol }}>
                     {colSort.col === "strike" ? r.strike : fmtB(v)}
                   </div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>
                     {cols.find((c) => c.key === colSort.col)?.label}
                   </div>
                 </div>
@@ -791,9 +890,9 @@ function StrikeQueryScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               {showSymbol && <th style={{ ...th, textAlign: "left" }}>Symbol</th>}
               {showExpiry && <th style={{ ...th, textAlign: "left" }}>Expiry</th>}
               {cols.map((c) => {
@@ -804,7 +903,7 @@ function StrikeQueryScanner() {
                     ...th, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
                     color: active ? HOME_THEME.cyan : HOME_THEME.green,
                   }}>
-                    {c.label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 10 }}>{arrow}</span>
+                    {c.label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 12 }}>{arrow}</span>
                   </th>
                 );
               })}
@@ -815,7 +914,7 @@ function StrikeQueryScanner() {
               <tr key={`${r.symbol}-${r.expiry}-${r.strike}-${i}`}
                 style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                 {showSymbol && <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>}
-                {showExpiry && <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{r.expiry}</td>}
+                {showExpiry && <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 14 }}>{r.expiry}</td>}
                 <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
                 <td style={td}>{fmtB(r.gex_now)}</td>
                 <td style={{ ...td, color: r.chg15 == null ? HOME_THEME.text : r.chg15 >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{r.chg15 == null ? "—" : fmtB(r.chg15)}</td>
@@ -903,10 +1002,10 @@ function OiChangeScanner() {
           <button onClick={() => setDir("up")} style={seg(dir === "up")}>Builds only</button>
           <button onClick={() => setDir("down")} style={seg(dir === "down")}>Unwinds only</button>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.green }}>
           rows
           <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}
-            style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={25}>25</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
@@ -917,7 +1016,7 @@ function OiChangeScanner() {
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
           {err.includes("no DB") || err.includes("503")
             ? "Recorder hasn't posted today's OI yet — Theta publishes OI ~06:30 ET, retried every 30m."
             : err}
@@ -925,9 +1024,9 @@ function OiChangeScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
               <th style={{ ...th, textAlign: "left" }}>Type</th>
@@ -955,7 +1054,7 @@ function OiChangeScanner() {
                     {isCall ? "CALL" : "PUT"}
                   </td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{r.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: (r.otm_dist_pct ?? 0) <= 3 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>
                     {r.otm_dist_pct == null ? "—" : `${r.otm_dist_pct.toFixed(1)}%`}
                   </td>
@@ -979,7 +1078,7 @@ function OiChangeScanner() {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
         <span>OTM only · calls strike&gt;spot, puts strike&lt;spot</span>
         <span>ΔOI = today&apos;s posted OI − prior session&apos;s OI</span>
         <span>Ranked by |ΔOI| · EM watchlist (~380 names) · ≤45 DTE</span>
@@ -1081,12 +1180,12 @@ function WatchThisScanner() {
   useEffect(() => { loadOutcomes(); }, [loadOutcomes]);
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 18 }}>Watch This — Far CB</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 20 }}>Watch This — Far CB</span>}
       subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · EM watchlist${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 11, color: HOME_THEME.text }}>
+        <span style={{ fontSize: 13, color: HOME_THEME.text }}>
           Refreshes every 2m · recorder sweeps every 30m during RTH
         </span>
       </div>
@@ -1099,7 +1198,7 @@ function WatchThisScanner() {
           placeholder="Add a ticker (e.g. RDDT)"
           maxLength={6}
           style={{
-            fontSize: 12, padding: "7px 10px", borderRadius: 6, width: 160,
+            fontSize: 14, padding: "7px 10px", borderRadius: 6, width: 160,
             background: "rgba(0,0,0,0.30)", color: HOME_THEME.text,
             border: "1px solid rgba(255,255,255,0.15)", colorScheme: "dark",
           }}
@@ -1108,14 +1207,14 @@ function WatchThisScanner() {
           {adding ? "Adding…" : "+ Add"}
         </button>
         {addStatus && (
-          <span style={{ fontSize: 12, color: addStatus.kind === "ok" ? LIGHT_BLUE : HOME_THEME.red }}>
+          <span style={{ fontSize: 14, color: addStatus.kind === "ok" ? LIGHT_BLUE : HOME_THEME.red }}>
             {addStatus.msg}
           </span>
         )}
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
           {err.includes("no DB") || err.includes("503")
             ? "Recorder hasn't run yet — data appears after the first RTH sweep."
             : err}
@@ -1140,19 +1239,19 @@ function WatchThisScanner() {
               backdropFilter: "blur(20px)",
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-                <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>{r.symbol}</span>
-                <span style={{ fontSize: 11, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
+                <span style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text }}>{r.symbol}</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
               </div>
-              <div style={{ fontSize: 13, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
+              <div style={{ fontSize: 15, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
                 ${r.strike} <span style={{ color: HOME_THEME.text, fontWeight: 400 }}>· {r.expiry} · {r.dte_days}d</span>
               </div>
-              <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.5, marginBottom: 8 }}>
+              <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, marginBottom: 8 }}>
                 Highest GEX level for {r.symbol} is the ${r.strike} strike ({r.expiry}), {r.otm_pct.toFixed(0)}% away from spot (${r.spot.toFixed(2)}) —
                 farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>{fmtB(r.gex_value)}</span>
-                <a href={chainHref} style={{ fontSize: 12, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>{fmtB(r.gex_value)}</span>
+                <a href={chainHref} style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
                   View chain →
                 </a>
               </div>
@@ -1161,7 +1260,7 @@ function WatchThisScanner() {
         })}
       </div>
 
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 11, color: HOME_THEME.text }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13, color: HOME_THEME.text }}>
         <span>Basis: OI+Vol net GEX (canonical) · single highest |GEX| strike per ticker across expiries ≤30 DTE</span>
         <span>Flagged when that strike is &gt;{threshold ?? 15}% away from spot</span>
       </div>
@@ -1169,7 +1268,7 @@ function WatchThisScanner() {
       {/* Tracked results — did the flagged strike ever get touched? */}
       <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
+          <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
           <div style={{ display: "flex", gap: 6 }}>
             {(["all", "open", "touched", "expired"] as const).map((s) => (
               <button key={s} onClick={() => setOutcomeStatus(s)} style={seg(outcomeStatus === s)}>
@@ -1177,15 +1276,15 @@ function WatchThisScanner() {
               </button>
             ))}
           </div>
-          <span style={{ fontSize: 11, color: HOME_THEME.text }}>
+          <span style={{ fontSize: 13, color: HOME_THEME.text }}>
             Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike
           </span>
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
             <thead>
-              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
                 <th style={{ ...th, textAlign: "left" }}>Symbol</th>
                 <th style={th}>Strike</th>
                 <th style={{ ...th, textAlign: "left" }}>Expiry</th>
@@ -1201,15 +1300,15 @@ function WatchThisScanner() {
                   style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
                   <td style={{ ...td, fontWeight: 700 }}>${o.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 12 }}>{o.expiry}</td>
-                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 12 }}>{o.first_flagged}</td>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.first_flagged}</td>
                   <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
                   <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
                     {o.closest_pct != null ? `${o.closest_pct.toFixed(1)}%` : "—"}
                   </td>
                   <td style={{ ...td, textAlign: "left" }}>
                     <span style={{
-                      fontSize: 11, fontWeight: 800, letterSpacing: "0.05em",
+                      fontSize: 13, fontWeight: 800, letterSpacing: "0.05em",
                       color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? HOME_THEME.text : HOME_THEME.green,
                     }}>
                       {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
@@ -1235,10 +1334,10 @@ function WatchThisScanner() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function ScannerPage() {
-  const [tab, setTab] = useState<MainTab>("gex");
+  const [tab, setTab] = useState<MainTab>("overview");
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding: "8px 20px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 700,
+    padding: "8px 20px", borderRadius: 8, fontSize: 15, cursor: "pointer", fontWeight: 700,
     border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
     background: active ? "rgba(33,158,188,0.15)" : "transparent",
     color: active ? HOME_THEME.text : "rgba(255,255,255,0.55)",
@@ -1248,7 +1347,8 @@ export default function ScannerPage() {
   return (
     <PageShell>
       {/* Top-level tabs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 4 }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+        <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
         <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
         <button onClick={() => setTab("greeks")} style={tabStyle(tab === "greeks")}>Greeks Sensitivity</button>
         <button onClick={() => setTab("volpin")} style={{
@@ -1269,6 +1369,7 @@ export default function ScannerPage() {
         }}>Watch This</button>
       </div>
 
+      {tab === "overview" && <ScannerOverview onSelect={setTab} />}
       {tab === "gex"    && <GexScanner />}
       {tab === "greeks" && <GreeksScanner />}
       {tab === "volpin" && <VolPinScanner />}

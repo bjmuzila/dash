@@ -99,7 +99,7 @@ function HistoryChart({ history, metric }: { history: Snapshot[]; metric: Metric
     .map((s) => ({ ts: s.ts, v: s[metric] as number | null }))
     .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
   if (pts.length < 2) {
-    return <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.muted, fontSize: 12 }}>
+    return <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.muted, fontSize: 17 }}>
       Not enough history yet — snapshots accrue every refresh.
     </div>;
   }
@@ -267,17 +267,17 @@ export default function WatchPage() {
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const label: React.CSSProperties = {
-    fontSize: 12, fontWeight: 700, color: HOME_THEME.muted,
+    fontSize: 17, fontWeight: 700, color: HOME_THEME.muted,
     textTransform: "uppercase", letterSpacing: ".1em",
   };
-  const input: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 15, colorScheme: "dark" };
+  const input: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 17, colorScheme: "dark" };
   // OWNER_THEME.muted is white (same as .text), so titles and numbers were
   // indistinguishable — dim the label explicitly instead.
   const statLabel: React.CSSProperties = {
-    fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)",
+    fontSize: 17, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)",
   };
   const statValue: React.CSSProperties = {
-    fontSize: 16, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono)",
+    fontSize: 17, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono)",
   };
 
   return (
@@ -290,10 +290,10 @@ export default function WatchPage() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 15, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>
+          <span style={{ fontSize: 18, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>
             Owner · Watch
           </span>
-          <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
             {rows.length} contract{rows.length === 1 ? "" : "s"} · greeks · price · flow
           </span>
         </div>
@@ -335,7 +335,7 @@ export default function WatchPage() {
         </form>
 
         {err && (
-          <div style={{ ...homePanelStyle, padding: "10px 14px", color: HOME_THEME.red, fontSize: 12, borderLeft: `2px solid ${HOME_THEME.red}` }}>
+          <div style={{ ...homePanelStyle, padding: "10px 14px", color: HOME_THEME.red, fontSize: 17, borderLeft: `2px solid ${HOME_THEME.red}` }}>
             {err}
           </div>
         )}
@@ -366,7 +366,7 @@ export default function WatchPage() {
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 18, fontWeight: 800, color: HOME_THEME.text }}>{r.ticker}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, padding: "2px 7px", borderRadius: 4, color: sideCol, background: rgba(sideCol, 0.12), border: `1px solid ${rgba(sideCol, 0.3)}` }}>
+                      <span style={{ fontSize: 17, fontWeight: 700, padding: "2px 7px", borderRadius: 4, color: sideCol, background: rgba(sideCol, 0.12), border: `1px solid ${rgba(sideCol, 0.3)}` }}>
                         {fmt(r.strike, r.strike % 1 ? 1 : 0)}{r.side}
                       </span>
                     </div>
@@ -375,20 +375,20 @@ export default function WatchPage() {
                       cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 2px",
                     }}>×</button>
                   </div>
-                  <div style={{ fontSize: 13, color: HOME_THEME.muted, marginTop: 4 }}>
+                  <div style={{ fontSize: 17, color: HOME_THEME.muted, marginTop: 4 }}>
                     {r.expiration}{r.note && <span style={{ fontStyle: "italic" }}> · {r.note}</span>}
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 14 }}>
                     <span style={{ fontSize: 26, fontWeight: 800, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>
                       {fmt(s?.mark)}
                     </span>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: chgCol, fontFamily: "var(--font-mono)" }}>
+                    <span style={{ fontSize: 17, fontWeight: 700, color: chgCol, fontFamily: "var(--font-mono)" }}>
                       {chg == null ? "—" : `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
-                    <span style={{ fontSize: 12, color: HOME_THEME.muted }}>Updated {timeAgo(s?.ts)}</span>
-                    <span style={{ color: HOME_THEME.muted, fontSize: 12, transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
+                    <span style={{ fontSize: 17, color: HOME_THEME.muted }}>Updated {timeAgo(s?.ts)}</span>
+                    <span style={{ color: HOME_THEME.muted, fontSize: 17, transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", display: "inline-block" }}>▶</span>
                   </div>
 
                   {/* Expanded */}
@@ -415,7 +415,7 @@ export default function WatchPage() {
                             const on = range === r.key;
                             return (
                               <button key={r.key} onClick={() => changeRange(r.key)} style={{
-                                fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                                fontSize: 17, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
                                 color: on ? HOME_THEME.text : "rgba(255,255,255,0.45)",
                                 background: on ? "rgba(255,255,255,0.10)" : "transparent",
                                 border: `1px solid ${on ? HOME_THEME.borderStrong : HOME_THEME.border}`,
@@ -431,7 +431,7 @@ export default function WatchPage() {
                             const on = metric === m.key;
                             return (
                               <button key={m.key} onClick={() => setMetric(m.key)} style={{
-                                fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                                fontSize: 17, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
                                 color: on ? HOME_THEME.cyan : HOME_THEME.muted,
                                 background: on ? rgba(HOME_THEME.cyan, 0.12) : "transparent",
                                 border: `1px solid ${on ? rgba(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
@@ -439,12 +439,12 @@ export default function WatchPage() {
                             );
                           })}
                         </div>
-                        <span style={{ fontSize: 11, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
+                        <span style={{ fontSize: 17, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
                           {hist.length} snapshot{hist.length === 1 ? "" : "s"} · since {hist.length ? new Date(hist[0].ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
                         </span>
                       </div>
                       {historyLoading && !hist.length
-                        ? <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.muted, fontSize: 12 }}>Loading history…</div>
+                        ? <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.muted, fontSize: 17 }}>Loading history…</div>
                         : <HistoryChart history={hist} metric={metric} />}
                     </div>
                   )}
@@ -454,7 +454,7 @@ export default function WatchPage() {
           </div>
         )}
 
-        <div style={{ fontSize: 13, color: HOME_THEME.muted, padding: "0 2px" }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.muted, padding: "0 2px" }}>
           Day-chg % = mark vs. prior session close. Net Prem = mark × volume × 100 (a directional flow proxy from today&apos;s traded volume). Greeks/OI from Theta, quote from Tastytrade. Auto-refreshes every {REFRESH_MS / 1000}s.
         </div>
       </div>

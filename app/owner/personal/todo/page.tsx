@@ -120,16 +120,16 @@ function loadLS<T>(key: string, fallback: T): T {
 // ── Shared styles (HOME_THEME-based) ───────────────────────────────────────────
 
 const formLabel: React.CSSProperties = {
-  fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".1em",
+  fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".1em",
 };
 const formInput: React.CSSProperties = {
-  ...homeInputStyle, width: "100%", fontSize: 13, colorScheme: "dark",
+  ...homeInputStyle, width: "100%", fontSize: 17, colorScheme: "dark",
 };
 const formGroup: React.CSSProperties = { marginBottom: 14, display: "flex", flexDirection: "column", gap: 6 };
 
 function SectionTitle({ text, accent }: { text: string; accent: string }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 18, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
       <span style={{ width: 14, height: 2, borderRadius: 2, background: accent, boxShadow: `0 0 6px ${rgba(accent, 0.6)}` }} />
       {text}
     </span>
@@ -316,7 +316,7 @@ export default function TodoPage() {
           }}>
             <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
-              <span style={{ fontSize: 11, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
+              <span style={{ fontSize: 18, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
               <span style={{ fontSize: 10, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, padding: "1px 8px", borderRadius: 4, fontWeight: 700, color: HOME_THEME.text }}>{cols.length}</span>
             </div>
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
@@ -329,7 +329,7 @@ export default function TodoPage() {
                     <span style={{ fontSize: 10, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: ".05em", fontFamily: "var(--font-mono)" }}>{t.id}</span>
                     <PBadge p={t.priority} />
                   </div>
-                  <div style={{ fontSize: 13, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "6px 0 10px" }}>{t.subject}</div>
+                  <div style={{ fontSize: 17, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "6px 0 10px" }}>{t.subject}</div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8 }}>
                     <span style={{ fontSize: 10, color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140 }}>{t.email}</span>
                     <span style={{ fontSize: 10, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
@@ -345,7 +345,7 @@ export default function TodoPage() {
 
   const vtab = (id: string, label: string) => (
     <button key={id} onClick={() => setView(id)} style={{
-      padding: "4px 12px", fontSize: 10, fontWeight: 700,
+      padding: "4px 12px", fontSize: 17, fontWeight: 700,
       letterSpacing: ".08em", textTransform: "uppercase", cursor: "pointer",
       borderRadius: 6,
       color: view === id ? HOME_THEME.cyan : HOME_THEME.text,
@@ -362,9 +362,9 @@ export default function TodoPage() {
         ...homePanelStyle, padding: "14px 18px",
         background: budgetRadial,
       }}>
-        <div style={{ fontSize: 10, color: HOME_THEME.muted, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div>
+        <div style={{ fontSize: 17, color: HOME_THEME.muted, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div>
         <div style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1, textShadow: `0 0 16px ${rgba(color, 0.3)}` }}>{value}</div>
-        <div style={{ fontSize: 10, color: HOME_THEME.muted, marginTop: 6 }}>{sub}</div>
+        <div style={{ fontSize: 17, color: HOME_THEME.muted, marginTop: 6 }}>{sub}</div>
       </div>
     );
   }
@@ -388,8 +388,8 @@ export default function TodoPage() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
-          <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 18, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
+          <span style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
             {checked}/{total} habits · {pct}%
           </span>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -418,7 +418,7 @@ export default function TodoPage() {
               <MetricCard label="Completed" value={done} sub="Shipped" color={HOME_THEME.red} />
               <MetricCard
                 label="Daily Progress"
-                value={<>{pct}<span style={{ fontSize: 14, color: HOME_THEME.muted }}>%</span></>}
+                value={<>{pct}<span style={{ fontSize: 17, color: HOME_THEME.muted }}>%</span></>}
                 sub={<span style={{ color: HOME_THEME.green }}>{checked} / {total} habits</span>}
                 color="#8ECAE6"
               />
@@ -434,7 +434,7 @@ export default function TodoPage() {
                       ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
                       background: budgetRadial,
                     }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />
                         <span
                           contentEditable suppressContentEditableWarning
@@ -449,7 +449,7 @@ export default function TodoPage() {
                         {items.length ? items.map((item) => (
                           <li key={item.id} style={{
                             display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8,
-                            fontSize: 12, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
+                            fontSize: 17, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
                           }}>
                             <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexGrow: 1 }}>
                               <input type="checkbox" checked={item.checked}
@@ -474,7 +474,7 @@ export default function TodoPage() {
                             }}>×</button>
                           </li>
                         )) : (
-                          <li style={{ color: HOME_THEME.muted, fontStyle: "italic", fontSize: 11 }}>No items yet</li>
+                          <li style={{ color: HOME_THEME.muted, fontStyle: "italic", fontSize: 17 }}>No items yet</li>
                         )}
                       </ul>
                       <div style={{ display: "flex", gap: 6, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 10, marginTop: "auto" }}>
@@ -482,7 +482,7 @@ export default function TodoPage() {
                           ref={(el) => { inlineRefs.current[box.key] = el; }}
                           type="text" placeholder="Add item..."
                           onKeyDown={(e) => { if (e.key === "Enter") inlineAdd(box.key); }}
-                          style={{ ...homeInputStyle, flex: 1, fontSize: 11, padding: "5px 8px" }}
+                          style={{ ...homeInputStyle, flex: 1, fontSize: 17, padding: "5px 8px" }}
                         />
                       </div>
                     </div>
@@ -504,12 +504,12 @@ export default function TodoPage() {
         {/* LIST */}
         {view === "list" && (
           <div style={{ ...homePanelStyle, padding: 16, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 17 }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${HOME_THEME.border}` }}>
                   {["Task / Idea", "Category", "Priority", "Status", "Actions"].map((h, i) => (
                     <th key={h} style={{
-                      padding: "8px 12px", textAlign: i === 4 ? "right" : "left", fontSize: 10,
+                      padding: "8px 12px", textAlign: i === 4 ? "right" : "left", fontSize: 14,
                       letterSpacing: ".12em", textTransform: "uppercase", color: HOME_THEME.muted, fontWeight: 700, whiteSpace: "nowrap",
                     }}>{h}</th>
                   ))}
@@ -526,7 +526,7 @@ export default function TodoPage() {
                     <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[t.status] }} />
-                        <span style={{ color: HOME_THEME.text, fontSize: 12 }}>{t.status}</span>
+                        <span style={{ color: HOME_THEME.text, fontSize: 17 }}>{t.status}</span>
                       </div>
                     </td>
                     <td style={{ padding: "8px 12px", textAlign: "right", whiteSpace: "nowrap" }}>
@@ -554,7 +554,7 @@ export default function TodoPage() {
         <div style={modalOverlay} onClick={() => setEditId(null)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, paddingBottom: 12, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-              <h2 style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Edit Task</h2>
+              <h2 style={{ fontSize: 18, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Edit Task</h2>
               <button onClick={() => setEditId(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
             </div>
             <form onSubmit={saveEdit}>
@@ -585,7 +585,7 @@ export default function TodoPage() {
         <div style={modalOverlay} onClick={() => setShowCreate(false)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, paddingBottom: 12, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-              <h2 style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Add New Item</h2>
+              <h2 style={{ fontSize: 18, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Add New Item</h2>
               <button onClick={() => setShowCreate(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
             </div>
             <form onSubmit={createItem}>
