@@ -432,6 +432,8 @@ type PositioningRow = {
   putWall: number | null;
   gexFlip: number | null;
   ts: number;
+  date: string | null;
+  stale: boolean;
 };
 
 function usePositioning() {
@@ -441,7 +443,10 @@ function usePositioning() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/proxy/scanner?limit=200`);
+      // any=1: fall back to each symbol's most recent snapshot (any date) when
+      // there's no row for today — market closed / weekend — instead of an
+      // empty card. Server tags each row `stale` when its date isn't today.
+      const res = await fetch(`/proxy/scanner?limit=200&any=1`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
@@ -459,6 +464,8 @@ function usePositioning() {
           putWall: r.put_wall != null ? Number(r.put_wall) : null,
           gexFlip: r.gex_flip != null ? Number(r.gex_flip) : null,
           ts: Number(r.ts) || 0,
+          date: (r.date as string) ?? null,
+          stale: Boolean(r.stale),
         };
       }
       setRows(bySymbol);
@@ -496,7 +503,7 @@ function fmtPct(p: number | null): string {
 
 function LayersIcon({ color }: { color: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       <polygon points="12 2 2 7 12 12 22 7 12 2" />
       <polyline points="2 17 12 22 22 17" />
       <polyline points="2 12 12 17 22 12" />
@@ -516,8 +523,8 @@ function LevelRow({ label, value, color }: { label: string; value: string; color
         background: "rgba(255,255,255,0.03)",
       }}
     >
-      <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
-      <span style={{ fontSize: 16, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+      <span style={{ fontSize: 17, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: 17, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
     </div>
   );
 }
@@ -527,9 +534,9 @@ function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number
   const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
   const isPositive = p >= 0;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "78px 1fr 60px", alignItems: "center", gap: 10 }}>
-      <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, textAlign: "right" }}>{label}</div>
-      <div style={{ position: "relative", height: 20, borderRadius: 10, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 76px", alignItems: "center", gap: 10 }}>
+      <div style={{ fontSize: 17, color: HOME_THEME.text, textAlign: "right" }}>{label}</div>
+      <div style={{ position: "relative", height: 22, borderRadius: 11, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
         <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
         {halfWidthPct > 0 && (
           <div
@@ -539,13 +546,13 @@ function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number
               bottom: 2,
               left: isPositive ? "50%" : `${50 - halfWidthPct}%`,
               width: `${halfWidthPct}%`,
-              borderRadius: 10,
+              borderRadius: 11,
               background: color,
             }}
           />
         )}
       </div>
-      <div style={{ fontSize: 13, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
+      <div style={{ fontSize: 17, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
     </div>
   );
 }
@@ -556,7 +563,7 @@ function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number
 // downside amplified). Magnet Strike = the gamma flip (zero-gamma) level,
 // the price the chain's dealer hedging gravitates toward.
 function PositioningCard({ row }: { row: PositioningRow }) {
-  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex } = row;
+  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex, stale, date } = row;
   const supportive = totalNetGex >= 0;
   const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
   const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
@@ -573,32 +580,38 @@ function PositioningCard({ row }: { row: PositioningRow }) {
   const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
 
   return (
-    <Card variant="classic" padding={24}>
+    <Card variant="budget" accent={LIGHT_BLUE} padding={24} style={{ opacity: stale ? 0.75 : 1 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <LayersIcon color={HOME_THEME.cyan} />
-        <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.85 }}>
+        <LayersIcon color={LIGHT_BLUE} />
+        <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
           Options Positioning
         </div>
-        <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: HOME_THEME.cyan }}>{symbol}</div>
+        <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 800, color: regimeColor, marginBottom: 16 }}>{regimeLabel}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
+        {stale && (
+          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>
+            Stale — last close{date ? ` ${date}` : ""}, market closed
+          </div>
+        )}
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
         <LevelRow label="Call Wall" value={fmtPrice(callWall)} color={HOME_THEME.green} />
         <LevelRow label="Put Wall" value={fmtPrice(putWall)} color={SOFT_RED} />
         <LevelRow label="Magnet Strike" value={fmtPrice(gexFlip)} color={HOME_THEME.orange} />
-        <LevelRow label="Gamma Zone" value={`${fmtPrice(gammaLo)} → ${fmtPrice(gammaHi)}`} color={HOME_THEME.cyan} />
+        <LevelRow label="Gamma Zone" value={`${fmtPrice(gammaLo)} → ${fmtPrice(gammaHi)}`} color={LIGHT_BLUE} />
       </div>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "78px 1fr 60px",
-          fontSize: 11,
+          gridTemplateColumns: "100px 1fr 76px",
+          fontSize: 17,
           textTransform: "uppercase",
-          letterSpacing: "0.06em",
+          letterSpacing: "0.04em",
           color: HOME_THEME.text,
-          opacity: 0.5,
           marginBottom: 8,
         }}
       >
@@ -609,8 +622,8 @@ function PositioningCard({ row }: { row: PositioningRow }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <PositionBar label="Call Wall" pct={callPct} color={HOME_THEME.green} maxAbs={maxAbs} />
         <PositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
-        <PositionBar label="Gamma Hi" pct={gammaHiPct} color={HOME_THEME.cyan} maxAbs={maxAbs} />
-        <PositionBar label="Gamma Lo" pct={gammaLoPct} color={HOME_THEME.cyan} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Hi" pct={gammaHiPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Lo" pct={gammaLoPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
         <PositionBar label="Put Wall" pct={putPct} color={SOFT_RED} maxAbs={maxAbs} />
       </div>
     </Card>
@@ -622,7 +635,7 @@ function OptionsPositioningTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text }}>
           {loadedAt
             ? `Live GEX scanner · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
             : "Loading positioning data…"}
@@ -635,16 +648,16 @@ function OptionsPositioningTab() {
           const row = rows?.[sym];
           if (!row) {
             return (
-              <Card key={sym} variant="classic" padding={24}>
+              <Card key={sym} variant="budget" accent={LIGHT_BLUE} padding={24}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                  <LayersIcon color={HOME_THEME.cyan} />
-                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.85 }}>
+                  <LayersIcon color={LIGHT_BLUE} />
+                  <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
                     Options Positioning
                   </div>
-                  <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: HOME_THEME.cyan }}>{sym}</div>
+                  <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
                 </div>
-                <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.5 }}>
-                  {rows ? "No snapshot yet today — scanner sweep pending." : "Loading…"}
+                <div style={{ fontSize: 17, color: HOME_THEME.text }}>
+                  {rows ? "No data yet for this ticker — needs a scanner sweep after deploy." : "Loading…"}
                 </div>
               </Card>
             );
@@ -652,9 +665,10 @@ function OptionsPositioningTab() {
           return <PositioningCard key={sym} row={row} />;
         })}
       </div>
-      <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.5, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 17, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
         Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots).
-        Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile.
+        Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile. Dimmed &ldquo;Stale&rdquo;
+        cards are showing the last available close (market closed) instead of an empty panel.
       </div>
     </>
   );

@@ -371,6 +371,12 @@ function TickerPanel({
     return () => { body.removeEventListener("wheel", mark); body.removeEventListener("touchstart", mark); };
   }, []);
 
+  // During capture (rows trimmed to a compact window), collapse to hug the
+  // trimmed content's actual height instead of staying pinned to fill the
+  // full column height — otherwise the capture is a small table sitting atop
+  // a tall blank void. See the isCapturing note in MultGreekClient above.
+  const isCapturing = captureWindow != null;
+
   return (
     // "budget" variant = classicCardAccentStyle, the exact radial-glow-over-
     // panelBg background this panel already used inline — sourced from the
@@ -378,7 +384,7 @@ function TickerPanel({
     <Card
       variant="budget"
       padding={0}
-      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden", borderRadius: 16 }}
+      style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: isCapturing ? "visible" : "hidden", borderRadius: 16 }}
     >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
@@ -423,7 +429,7 @@ function TickerPanel({
       </div>
 
       {/* Body */}
-      <div ref={bodyRef} style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+      <div ref={bodyRef} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
         {!computed ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", }}>
             Select an expiry and click GO
@@ -826,8 +832,18 @@ export function MultGreekClient({
   }, []);
   const endCapture = useCallback(() => setCaptureWindow(null), []);
 
+  // While a capture is in flight (captureWindow set), the panel rows are
+  // trimmed to a compact window — but the surrounding containers (this shell,
+  // the panels row, each Card, each scroll body) were still pinned to
+  // flex:1/height:100% to fill the viewport. That left a big blank void below
+  // the trimmed rows both live (a jarring shrink-then-blank flash) and in the
+  // exported PNG (html2canvas measures the forced full-viewport height, not
+  // the actual compact content). Collapse everything to hug its content
+  // height only during capture.
+  const isCapturing = captureWindow != null;
+
   return (
-    <div ref={pageRef} style={{ ...homeShellStyle, height: "100%", overflow: "hidden" }}>
+    <div ref={pageRef} style={{ ...homeShellStyle, height: isCapturing ? "auto" : "100%", overflow: isCapturing ? "visible" : "hidden" }}>
 
       {isStatic && (
         <div
@@ -925,7 +941,7 @@ export function MultGreekClient({
           .mg-panels.mg-embed > div { flex: 1 1 0 !important; width: auto !important; min-height: 0 !important; }
         `}</style>
       )}
-      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: 1, display: "flex", gap: 8, padding: 8, overflow: "hidden", minHeight: 0 }}>
+      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}

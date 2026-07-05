@@ -14,7 +14,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { computeValueArea } from "@/lib/valueArea";
-import { classifyDay, backtestQuadrants, sessionDates, rthBarsForDate, type Quadrant } from "@/lib/balanceImbalance";
+import { classifyDay, backtestQuadrants, sessionDates, rthBarsForDate, CONFIRM_BARS, type Quadrant } from "@/lib/balanceImbalance";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -1839,9 +1839,21 @@ function BalanceImbalanceScanner() {
         </>
       )}
 
-      <div style={{ marginTop: 18, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
-        <span>VA = 70% volume, POC-centered, built from the prior RTH session&apos;s 5m bars (bar volume spread across its H–L range — no tick data)</span>
-        <span>Imbalance confirms after 2 bars sustained beyond VA · Re-balance = leg range contracts vs its own recent bars</span>
+      <div style={{
+        marginTop: 18, padding: "10px 14px", borderRadius: 10,
+        border: `1px solid ${HOME_THEME.orange}30`, background: `${HOME_THEME.orange}0A`,
+        fontSize: 13, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+      }}>
+        <b style={{ color: HOME_THEME.orange }}>Approximate volume profile: </b>
+        the feed only gives us one total volume number per 5m bar, not volume-by-price — we don&apos;t actually know
+        where inside the bar&apos;s high-low range that volume traded. The VA/POC above spread each bar&apos;s volume
+        evenly across its H-L range as an estimate, not real per-tick volume-at-price. Once ThetaData adds futures
+        tick data, this switches to a true tick-built profile.
+      </div>
+
+      <div style={{ marginTop: 12, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
+        <span>VA = 70% volume, POC-centered, built from the prior RTH session&apos;s 5m bars</span>
+        <span>Imbalance confirms after {CONFIRM_BARS} bars sustained beyond VA · Re-balance = leg range contracts vs its own recent bars</span>
         <span>Heuristic first pass — thresholds tunable in lib/balanceImbalance.ts</span>
       </div>
     </Card>

@@ -49,7 +49,7 @@ export interface BacktestSummary {
   imbalanceToRevertRate: number;
 }
 
-const CONFIRM_BARS = 2;        // bars sustained beyond VA to confirm Imbalance
+export const CONFIRM_BARS = 2; // bars sustained beyond VA to confirm Imbalance
 const SETTLE_BARS = 2;         // trailing bars used to detect range contraction
 const CONTRACTION_RATIO = 0.6; // recent-leg-range / prior-leg-range below this = Re-balance
 
