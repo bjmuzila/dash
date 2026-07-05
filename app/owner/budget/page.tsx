@@ -361,7 +361,7 @@ export default function BudgetPage() {
             <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
             <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
           </div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 20, flexWrap: "wrap", padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "12px 18px 16px", borderTop: `1px solid ${HOME_THEME.border}` }}>
             <div>
               <div style={labelCap()}>Month</div>
               <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
@@ -373,7 +373,7 @@ export default function BudgetPage() {
         {/* Stat cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
           {[
-            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? SOFT_RED : HOME_THEME.purple, icon: "📊" },
+            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? SOFT_RED : HOME_THEME.text, icon: "📊" },
             { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },
             { label: "Total Outflows", value: Math.abs(computed.payments), color: SOFT_RED, icon: "📉" },
             { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green, icon: "💵" },
@@ -515,10 +515,10 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
 
   return (
     <div>
-      <div style={{ ...labelCap(), color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
+      <div style={{ ...labelCap(), color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-start", marginBottom: 8 }}>
         <span style={{ fontSize: 18 }}>🏦</span> Account balances
       </div>
-      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", gap: 20, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-start" }}>
         {BANKS.map((b) => (
           <div key={b} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
@@ -535,7 +535,7 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
               placeholder="set balance…"
               type="number"
               title="Set this account's balance"
-              style={{ ...field(), width: 104, padding: "6px 10px", fontSize: 15 }}
+              style={{ ...field(), width: 140, padding: "8px 12px", fontSize: 15 }}
             />
           </div>
         ))}
@@ -1031,8 +1031,8 @@ function OverviewPanel({
             {billsDue.map((b) => (
               <div key={b.tag} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0" }}>
                 <div>
-                  <div style={{ fontSize: 15, color: HOME_THEME.text }}>{b.label}</div>
-                  <div style={{ fontSize: 14, color: HOME_THEME.muted }}>{b.days <= 0 ? "Due today" : `Due in ${b.days} day${b.days === 1 ? "" : "s"}`}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.cyan }}>{b.label}</div>
+                  <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.7 }}>{b.days <= 0 ? "Due today" : `Due in ${b.days} day${b.days === 1 ? "" : "s"}`}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>

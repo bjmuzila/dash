@@ -409,6 +409,11 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
   const popupStyle: PopupStyle = "card";
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const gexChartRef = useRef<HTMLDivElement>(null);
+  // Host node for the econ-calendar filter dropdown + refresh button, portaled
+  // out of EconCalendarPanel into this tab row. State (not a plain ref) so the
+  // portal re-renders once the node actually mounts.
+  const [econControlsSlotEl, setEconControlsSlotEl] = useState<HTMLDivElement | null>(null);
+  const econControlsSlotRef = useCallback((node: HTMLDivElement | null) => setEconControlsSlotEl(node), []);
   const heatmapContainerRef = useRef<HTMLDivElement>(null);
   const heatmapBodyRef = useRef<HTMLDivElement>(null);
   const [expiryOptions, setExpiryOptions] = useState<ExpiryOption[]>(
@@ -969,6 +974,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                   </button>
                 ))}
                 <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 4 }}>
+                  <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6 }} />
                   <EconCalendarTemplateCopyBtn />
                   <EconCalendarDiscordBtn />
                 </div>
@@ -979,7 +985,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
               <div style={{ flex: 1, overflowY: "auto", padding: 24, display: econCollapsed ? "none" : "block" }}>
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <EconCalendarPanel />
+                    <EconCalendarPanel controlsPortalEl={econControlsSlotEl} />
                   </div>
                 )}
               </div>
@@ -1180,7 +1186,7 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}) }}>
+                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { boxShadow: "inset 0 0 0 3px #ffffff", zIndex: 2 } : {}) }}>
                               {heatmapView === "table" ? (
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (

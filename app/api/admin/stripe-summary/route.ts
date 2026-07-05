@@ -23,9 +23,16 @@ export async function GET() {
       stripe.customers.list({ limit: 20 }),
     ]);
 
+    // Real launch cutoff — excludes stale/test Stripe subscriptions created
+    // before go-live. Applied everywhere below (MRR, active count, the
+    // subscriptions table, total customers) so every Sales page number is
+    // consistent with "active subs from 2026-07-01 forward".
+    const launchCutoff = Math.floor(new Date("2026-07-01T00:00:00Z").getTime() / 1000);
+    const realSubs = subList.data.filter((sub) => sub.created >= launchCutoff);
+
     // MRR: sum of monthly-normalized amounts
     let mrr = 0;
-    for (const sub of subList.data) {
+    for (const sub of realSubs) {
       for (const item of sub.items.data) {
         const price = item.price;
         if (!price.unit_amount) continue;
@@ -35,13 +42,9 @@ export async function GET() {
       }
     }
 
-    // Real paying customers only, counted from launch (2026-07-01 forward) —
-    // excludes stale/test Stripe subscriptions created before that date.
-    const launchCutoff = Math.floor(new Date("2026-07-01T00:00:00Z").getTime() / 1000);
+    // Real paying customers — unique customers among the filtered subs above.
     const payingCustomerIds = new Set(
-      subList.data
-        .filter((sub) => sub.created >= launchCutoff)
-        .map((sub) => (typeof sub.customer === "string" ? sub.customer : sub.customer.id))
+      realSubs.map((sub) => (typeof sub.customer === "string" ? sub.customer : sub.customer.id))
     );
 
     // Churned this month
@@ -55,7 +58,7 @@ export async function GET() {
     });
 
     // Shape subscription rows
-    const subscriptions = subList.data.map((sub) => {
+    const subscriptions = realSubs.map((sub) => {
       const customer = sub.customer as import("stripe").Stripe.Customer;
       const item = sub.items.data[0];
       const price = item?.price;
@@ -94,7 +97,7 @@ export async function GET() {
       configured: true,
       summary: {
         mrr,
-        activeSubscriptions: subList.data.length,
+        activeSubscriptions: realSubs.length,
         totalCustomers: payingCustomerIds.size,
         churnedThisMonth: canceledThisMonth.data.length,
       },

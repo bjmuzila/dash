@@ -68,7 +68,11 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     windowHeight: captureH,
     logging: false,
     onclone: (doc, clone) => {
-      doc.querySelectorAll('link[rel="stylesheet"], style').forEach((n) => n.remove());
+      // Only strip external <link> stylesheets (they can 404 and abort the
+      // render). Inline <style> tags must stay — Next.js injects CSS custom
+      // properties (e.g. --font-mono) via inline <style>, and removing them
+      // breaks font-family resolution during capture, garbling small text.
+      doc.querySelectorAll('link[rel="stylesheet"]').forEach((n) => n.remove());
       // Inject overlay text as real DOM so html2canvas renders it natively
       // (drawing text onto the returned canvas no-ops in this browser).
       clone.style.position = "relative";
@@ -147,6 +151,28 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     const dh = tRect.height * scale;
     const ctx = base.getContext("2d");
     if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
+  }
+
+  // Plain <canvas> charts (e.g. GexChart) back their canvas at devicePixelRatio
+  // (canvas.width/height = css size * dpr) for crispness. html2canvas copies a
+  // <canvas> by its raw backing-store pixels without accounting for that dpr
+  // scale, so only the top-left crop gets captured (fewer bars, missing the
+  // put/bottom half). Bypass html2canvas's broken canvas handling entirely by
+  // compositing the real canvas bitmap over the base image ourselves — same
+  // technique as the lightweight-charts path above.
+  if (!lt && isCanvas) {
+    const plainCanvas = el.querySelector("canvas") as HTMLCanvasElement | null;
+    if (plainCanvas) {
+      const scale = window.devicePixelRatio || 1;
+      const elRect = el.getBoundingClientRect();
+      const cRect = plainCanvas.getBoundingClientRect();
+      const dx = (cRect.left - elRect.left) * scale;
+      const dy = (cRect.top - elRect.top) * scale;
+      const dw = cRect.width * scale;
+      const dh = cRect.height * scale;
+      const ctx = base.getContext("2d");
+      if (ctx) ctx.drawImage(plainCanvas, dx, dy, dw, dh);
+    }
   }
 
   return base.toDataURL("image/png");
