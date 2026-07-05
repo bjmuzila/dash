@@ -57,8 +57,13 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     });
     contentH = h || el.scrollHeight;
   }
-  // Canvas: band overlays, no extra height. Otherwise reserve the title band.
-  const captureH = isCanvas ? contentH : contentH + 48;
+  // Reserve room for the title band for every path. Canvas charts used to skip
+  // this (band overlaid the top of the bitmap instead), back when html2canvas
+  // rendered the canvas natively filling the whole box with no room to shift
+  // it down. Now that the canvas is composited in ourselves (see below), we can
+  // push it down below the band like everything else — otherwise the band
+  // covers the chart's own top-of-canvas annotations (spot label, CB tag).
+  const captureH = contentH + 48;
   const base = await html2canvas(el, {
     backgroundColor: "#05080d",
     useCORS: true,
@@ -83,8 +88,7 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       clone.style.height = `${captureH}px`;
       clone.style.maxHeight = "none";
       clone.style.overflow = "visible";
-      // Canvas charts: band overlays, so no top padding (would create blank space).
-      clone.style.paddingTop = isCanvas ? "0" : "44px";
+      clone.style.paddingTop = "44px";
       const tbl = clone.querySelector("table") as HTMLElement | null;
       if (tbl) {
         tbl.style.height = `${contentH}px`;
@@ -184,7 +188,7 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       const elRect = el.getBoundingClientRect();
       const cRect = plainCanvas.getBoundingClientRect();
       const dx = (cRect.left - elRect.left) * scale;
-      const dy = (cRect.top - elRect.top) * scale;
+      const dy = (cRect.top - elRect.top + 44) * scale;
       const dw = cRect.width * scale;
       const dh = cRect.height * scale;
       const ctx = base.getContext("2d");

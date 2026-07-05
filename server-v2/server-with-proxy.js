@@ -339,6 +339,12 @@ function flowRootsFor(t) {
   return FLOW_TICKER_ROOTS[up] || [up];
 }
 
+// Same idea as _netPremCache: several /flow tabs (or a quick back-and-forth
+// ticker switch) polling the same date|underlying|limit collapse to one query
+// per TTL instead of one per request.
+const _flowHistoryCache = new Map(); // key -> { at: ms, payload }
+const FLOW_HISTORY_TTL_MS = 4000;
+
 async function handleFlowHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const date = searchParams.get('date') || todayYmdET();
@@ -352,6 +358,10 @@ async function handleFlowHistory(req, res) {
   let minPremium = Number(searchParams.get('minPremium') || 0);
   if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
 
+  const cacheKey = `${date}|${underlying.toUpperCase()}|${limit}|${minPremium}`;
+  const hit = _flowHistoryCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < FLOW_HISTORY_TTL_MS) return sendJson(res, 200, hit.payload);
+
   const pool = getHistPool();
   if (!pool) return sendJson(res, 200, { date, tape: [] });
 
@@ -362,7 +372,10 @@ async function handleFlowHistory(req, res) {
   let where = 'date = $1';
   if (underlying) {
     params.push(flowRootsFor(underlying));
-    where += ` AND upper(underlying) = ANY($${params.length})`;
+    // underlying_norm is a plain indexed column (date, underlying_norm, ts);
+    // upper(underlying) = ANY(...) can't use a btree index and forces a
+    // per-row scan of the whole date partition.
+    where += ` AND underlying_norm = ANY($${params.length})`;
   }
   if (minPremium > 0) {
     params.push(minPremium);
@@ -400,7 +413,9 @@ async function handleFlowHistory(req, res) {
     isOtm: r.is_otm === true,
   }));
 
-  sendJson(res, 200, { date, tape });
+  const payload = { date, tape };
+  _flowHistoryCache.set(cacheKey, { at: Date.now(), payload });
+  sendJson(res, 200, payload);
 }
 
 // ── /proxy/flow-netprem ────────────────────────────────────────────────────
@@ -432,7 +447,7 @@ async function handleFlowNetPrem(req, res) {
   let where = 'date = $1';
   if (underlying) {
     params.push(flowRootsFor(underlying));
-    where += ` AND upper(underlying) = ANY($${params.length})`;
+    where += ` AND underlying_norm = ANY($${params.length})`;
   }
   params.push(binMs);
   const binIdx = params.length;

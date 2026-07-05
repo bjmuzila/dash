@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, type CSSProperties, type Reac
 import Link from "next/link";
 import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
-import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance, type AmtResult } from "@/lib/failLevels";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
@@ -235,7 +235,7 @@ function MultiGreekCard() {
   const hasAny = peaks ? order.some((k) => peaks[k] != null) : false;
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>peak strike</span>
@@ -316,7 +316,7 @@ function EstimatedMoveCard() {
   const crossed = near < 0;
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, overflow: "hidden" }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -440,7 +440,7 @@ function PremarketCard() {
   const up = (gapPts ?? 0) > 0;
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
@@ -474,7 +474,7 @@ function PremarketCard() {
 // stale-event fading, filter dropdown, and the earnings logo strip at the bottom.
 function EconCalendarCard() {
   return (
-    <Card variant="budget" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 420 }}>
+    <Card variant="budget" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 480 }}>
       <EconCalendarPanel todayOnly hideToolbar />
     </Card>
   );
@@ -624,7 +624,7 @@ function ConfidenceCard() {
   const showChange = changedAt != null;
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Confidence Score
@@ -792,7 +792,7 @@ function GreeksCard() {
   ];
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
         <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
@@ -895,7 +895,7 @@ function IbCard() {
   const rangePts = ib ? ib.high - ib.low : null;
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
@@ -1044,7 +1044,7 @@ function LevelsCard() {
   })();
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
@@ -1120,181 +1120,223 @@ function LevelsCard() {
 }
 
 // ── 9. CONTRACT LOOKUP ────────────────────────────────────────────────────────
-// Uses /proxy/probe-rest — the SAME path the /dev page uses: chain → resolve
-// strike → market-data, returning per-strike COMPUTED greek exposures
-// (gex=γ·OI·S², dex=δ·OI·100·S, vex=vega·OI·100·S, charm/vanna), plus the
-// raw feeds (Quote / Trade / Summary / Greeks).
-type Probe = Record<string, unknown>;
-interface ProbeResult {
-  feeds?: Record<string, Probe>;
-  exposures?: Probe;
+// Same model as Owner · Watch: save a contract (ticker/expiry/strike/side),
+// it becomes a card, click it to see its live stats. Reuses /api/watch — the
+// exact backend the Watch page runs on (probe-rest snapshot + polling).
+interface WatchSnapshot {
+  ts: number;
+  spot: number | null; bid: number | null; ask: number | null;
+  mark: number | null; last: number | null;
+  iv: number | null; delta: number | null; gamma: number | null;
+  theta: number | null; vega: number | null;
+  open_interest: number | null; volume: number | null; net_prem: number | null;
+  prev_close: number | null;
+}
+interface WatchRow {
+  id: number; ticker: string; expiration: string; strike: number;
+  side: string; note: string | null; snapshot: WatchSnapshot | null;
 }
 
-function pnum(o: Probe | undefined, ...keys: string[]): number | null {
-  if (!o) return null;
-  for (const k of keys) {
-    const v = o[k];
-    const n = Number(v);
-    if (v != null && v !== "" && isFinite(n)) return n;
-  }
-  return null;
-}
-
-// Compact signed exposure formatter (B/M/K) — mirrors /dev's fmtExp.
-function fmtExpVal(v: number | null): string {
+const wFmt = (v: number | null | undefined, d = 2) => (v == null || !isFinite(v) ? "—" : v.toFixed(d));
+const wFmtInt = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : Math.round(v).toLocaleString());
+const wFmtMoney = (v: number | null | undefined) => {
   if (v == null || !isFinite(v)) return "—";
-  const a = Math.abs(v), s = v < 0 ? "-" : "";
-  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${s}${(a / 1e6).toFixed(2)}M`;
-  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(1)}K`;
-  return `${s}${a.toFixed(2)}`;
-}
+  const a = Math.abs(v);
+  if (a >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
+};
+const wDayChgPct = (mark?: number | null, prev?: number | null) =>
+  mark == null || prev == null || !isFinite(mark) || !isFinite(prev) || prev === 0 ? null : ((mark - prev) / prev) * 100;
+const wTimeAgo = (ts?: number | null) => {
+  if (!ts) return "—";
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+};
+
+const WATCH_REFRESH_MS = 15_000;
 
 function ContractLookupCard() {
-  const [ticker, setTicker] = useState("SPX");
-  const [exps, setExps] = useState<string[]>([]);
-  const [exp, setExp] = useState("");
-  const [strike, setStrike] = useState("6050");
+  const [rows, setRows] = useState<WatchRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  const [ticker, setTicker] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [strike, setStrike] = useState("");
   const [side, setSide] = useState<"C" | "P">("C");
+  const [note, setNote] = useState("");
+  const [adding, setAdding] = useState(false);
 
-  const [result, setResult] = useState<ProbeResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
-  const [expOpen, setExpOpen] = useState(false);
-
-  // Real listed expirations for the active ticker.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
-        const j = await r.json();
-        const items: Array<Record<string, unknown>> = j?.data?.items ?? [];
-        const seen = new Set<string>();
-        const list = items
-          .map((it) => String(it["expiration-date"] ?? ""))
-          .filter((d) => d && !seen.has(d) && (seen.add(d), true))
-          .sort();
-        if (cancelled) return;
-        setExps(list);
-        if (list.length && !list.includes(exp)) setExp(list[0]);
-      } catch { /* keep prior */ }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ticker]);
-
-  const lookup = useCallback(async () => {
-    const k = parseFloat(strike);
-    if (!ticker || !exp || !isFinite(k)) return;
-    setLoading(true);
-    setError(null);
+  const load = useCallback(async () => {
     try {
-      // Same call /dev makes (one side at a time).
-      const url = `/proxy/probe-rest?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(exp)}&type=${side}&strike=${encodeURIComponent(strike)}`;
-      const r = await fetch(url, { cache: "no-store" });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
-      if (!d?.found) {
-        throw new Error(
-          d?.status === "no-strike" ? `No ${strike} strike for ${ticker} ${exp}`
-          : d?.status === "no-expiry" ? `No expiry ${exp} for ${ticker}`
-          : d?.error || `No data (${d?.status ?? "?"})`
-        );
-      }
-      setResult(d.result as ProbeResult);
-      setLoaded(`${ticker} ${exp} ${strike}${side}`);
-      setLastUpdated(Date.now());
+      const res = await fetch("/api/watch", { cache: "no-store" });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      setRows(j.rows || []);
+      setErr(null);
     } catch (e) {
-      setError(String(e));
-      setResult(null);
+      setErr(String(e));
     } finally {
       setLoading(false);
     }
-  }, [ticker, exp, strike, side]);
+  }, []);
 
-  const feeds = result?.feeds ?? {};
-  const ex = result?.exposures ?? {};
-  const quote = feeds.Quote, trade = feeds.Trade, summary = feeds.Summary, greeks = feeds.Greeks;
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/watch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refresh" }),
+      });
+      const j = await res.json();
+      if (j.rows) setRows(j.rows);
+    } catch { /* keep prior */ }
+  }, []);
 
-  const bid = pnum(quote, "bidPrice", "bid", "bid-price");
-  const ask = pnum(quote, "askPrice", "ask", "ask-price");
-  const mark = pnum(quote, "markPrice", "mark", "mark-price") ?? pnum(trade, "price", "last", "last-price");
-  const oi = pnum(summary, "openInterest", "open-interest");
-  const vol = pnum(trade, "volume") ?? pnum(summary, "volume");
-  const iv = pnum(greeks, "iv", "volatility", "impliedVolatility");
-  const fmtUsd = (n: number | null) => (n == null ? "—" : `$${n.toFixed(2)}`);
+  useEffect(() => {
+    load().then(refresh);
+    const id = setInterval(refresh, WATCH_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [load, refresh]);
 
-  // Strike-computed exposures (signed), as on /dev.
-  const exposureRows: Array<{ label: string; key: string }> = [
-    { label: "GEX (γ·OI·S²)", key: "gex" },
-    { label: "DEX (δ·OI·100·S)", key: "dex" },
-    { label: "VEX (vega·OI·100·S)", key: "vex" },
-    { label: "Theta exp", key: "thetaExp" },
-    { label: "Charm exp", key: "charmExp" },
-    { label: "Vanna exp", key: "vannaExp" },
-  ];
+  const add = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ticker.trim() || !expiry || !strike) return;
+    setAdding(true);
+    try {
+      const res = await fetch("/api/watch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add", ticker, expiry, strike: Number(strike), side, note }),
+      });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      setTicker(""); setStrike(""); setNote("");
+      await load();
+    } catch (e2) {
+      setErr(String(e2));
+    } finally {
+      setAdding(false);
+    }
+  }, [ticker, expiry, strike, side, note, load]);
+
+  const remove = useCallback(async (id: number, ev: React.MouseEvent) => {
+    ev.stopPropagation();
+    setRows((r) => r.filter((x) => x.id !== id));
+    await fetch("/api/watch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "remove", id }),
+    });
+  }, []);
 
   return (
-    <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12, position: "relative", zIndex: expOpen ? 80 : "auto" }}>
+    <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
-        {loaded && <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{loaded}</span>}
+        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
+          {rows.length} saved · click a card for stats
+        </span>
       </Row>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+
+      <form onSubmit={add} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Ticker</Label>
-          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} />
+          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="SPX" required />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Expiration</Label>
-          <ThemedSelect
-            width={150}
-            value={exp}
-            placeholder="—"
-            options={exps.map((d) => ({ value: d, label: d }))}
-            onChange={setExp}
-            onOpenChange={setExpOpen}
-          />
+          <ThemedDatePicker value={expiry} onChange={setExpiry} width={150} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Strike</Label>
-          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} value={strike} onChange={(e) => setStrike(e.target.value.replace(/[^\d.]/g, ""))} />
+          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} type="number" step="any" value={strike} onChange={(e) => setStrike(e.target.value)} placeholder="6050" required />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <Label>Side</Label>
           <PillSelect value={side} options={["C", "P"] as const} onChange={setSide} />
         </div>
-        <button onClick={lookup} disabled={loading} style={{ ...homeButtonStyle, padding: "8px 16px" }}>
-          {loading ? "…" : "Look up"}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <Label>Note</Label>
+          <input style={{ ...homeInputStyle, width: 140 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" />
+        </div>
+        <button type="submit" disabled={adding} style={{ ...homeButtonStyle, padding: "8px 16px", opacity: adding ? 0.6 : 1 }}>
+          {adding ? "Saving…" : "+ Save"}
         </button>
-      </div>
+      </form>
+
       <div style={divider} />
-      {error ? (
-        <CardState loading={false} error={error} />
-      ) : !result ? (
-        <CardState loading={false} error={null} empty="Choose a contract and press Look up." />
-      ) : (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 12 }}>
-            <Stat label="Mark" value={fmtUsd(mark)} color={T.cyan} />
-            <Stat label="Bid / Ask" value={bid != null && ask != null ? `${bid.toFixed(2)} / ${ask.toFixed(2)}` : "—"} />
-            <Stat label="Volume" value={vol != null ? vol.toLocaleString() : "—"} />
-            <Stat label="Open Interest" value={oi != null ? oi.toLocaleString() : "—"} />
-            <Stat label="IV" value={iv != null ? `${(iv * (iv <= 1 ? 100 : 1)).toFixed(1)}%` : "—"} color={T.orange} />
-          </div>
-          <Label>Greeks · strike-computed exposures</Label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 12 }}>
-            {exposureRows.map(({ label, key }) => {
-              const v = pnum(ex, key);
-              return <Stat key={key} label={label} value={fmtExpVal(v)} color={v == null ? T.muted : signColor(v)} />;
-            })}
-          </div>
-        </>
+
+      {err && (
+        <Placeholder minHeight={40}><span style={{ color: T.red }}>{err}</span></Placeholder>
       )}
-      <UpdatedStamp at={lastUpdated} />
+
+      {loading ? (
+        <Placeholder>Loading…</Placeholder>
+      ) : rows.length === 0 ? (
+        <Placeholder>No contracts saved yet — add one above.</Placeholder>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+          {rows.map((r) => {
+            const s = r.snapshot;
+            const isOpen = expandedId === r.id;
+            const chg = wDayChgPct(s?.mark, s?.prev_close);
+            const chgColor = chg == null ? T.muted : chg >= 0 ? POS_GREEN : T.red;
+            const npColor = s?.net_prem == null ? T.text : s.net_prem >= 0 ? POS_GREEN : T.red;
+            return (
+              <div
+                key={r.id}
+                onClick={() => setExpandedId((cur) => (cur === r.id ? null : r.id))}
+                style={{
+                  border: `1px solid ${isOpen ? T.cyan : T.border}`, borderRadius: 10, padding: 12, cursor: "pointer",
+                  gridColumn: isOpen ? "1 / -1" : undefined,
+                }}
+              >
+                <Row>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{r.ticker}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: r.side === "C" ? POS_GREEN : T.orange }}>
+                      {r.strike}{r.side}
+                    </span>
+                  </span>
+                  <button onClick={(e) => remove(r.id, e)} title="Remove" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+                </Row>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+                  {r.expiration}{r.note && <span style={{ fontStyle: "italic" }}> · {r.note}</span>}
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
+                  <Value color={T.cyan} size={22}>{wFmt(s?.mark)}</Value>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: chgColor, fontFamily: "var(--font-mono)" }}>
+                    {chg == null ? "—" : `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`}
+                  </span>
+                </div>
+                <span style={{ fontSize: 11, color: T.muted }}>Updated {wTimeAgo(s?.ts)}</span>
+
+                {isOpen && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 10, cursor: "default" }}
+                  >
+                    <Stat label="Spot" value={wFmt(s?.spot)} />
+                    <Stat label="Bid" value={wFmt(s?.bid)} />
+                    <Stat label="Ask" value={wFmt(s?.ask)} />
+                    <Stat label="Delta" value={wFmt(s?.delta, 3)} color={signColor(s?.delta ?? 0)} />
+                    <Stat label="Gamma" value={wFmt(s?.gamma, 4)} color={signColor(s?.gamma ?? 0)} />
+                    <Stat label="Theta" value={wFmt(s?.theta, 3)} color={signColor(s?.theta ?? 0)} />
+                    <Stat label="Vega" value={wFmt(s?.vega, 3)} color={signColor(s?.vega ?? 0)} />
+                    <Stat label="IV" value={s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`} color={T.orange} />
+                    <Stat label="OI" value={wFmtInt(s?.open_interest)} />
+                    <Stat label="Volume" value={wFmtInt(s?.volume)} />
+                    <Stat label="Net Prem" value={wFmtMoney(s?.net_prem)} color={npColor} />
+                    <Stat label="Prev Close" value={wFmt(s?.prev_close)} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Card>
   );
 }

@@ -67,6 +67,15 @@ async function ensureTable(p) {
     )
   `);
   await p.query('CREATE INDEX IF NOT EXISTS flow_prints_date_ts_idx ON flow_prints (date, ts)');
+
+  // underlying_norm: uppercased `underlying`, written at insert time so
+  // /proxy/flow-history and /proxy/flow-netprem can filter on a plain indexed
+  // column instead of `upper(underlying) = ANY(...)`, which can't use a plain
+  // btree index and forces a per-row scan of the whole date partition.
+  await p.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
+  await p.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
+  // One-time backfill for rows written before this column existed.
+  await p.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
   tableEnsured = true;
 }
 
@@ -108,7 +117,7 @@ async function writeFlowTape(tape) {
     if (!fresh.length) return;
 
     const date = todayYmdET();
-    const cols = 14;
+    const cols = 15;
     const values = [];
     const params = [];
     let i = 0;
@@ -135,13 +144,14 @@ async function writeFlowTape(tape) {
         Number.isFinite(Number(o.size)) ? Math.round(Number(o.size)) : null,
         Number.isFinite(Number(o.premium)) ? Number(o.premium) : null,
         typeof o.isOtm === 'boolean' ? o.isOtm : null,
+        o.underlying != null ? String(o.underlying).toUpperCase() : null,
       );
     }
     if (!values.length) return;
 
     await p.query(
       `INSERT INTO flow_prints
-         (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm)
+         (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm, underlying_norm)
        VALUES ${values.join(', ')}
        ON CONFLICT (ts, symbol, side) DO UPDATE SET
          size = EXCLUDED.size,
@@ -149,7 +159,8 @@ async function writeFlowTape(tape) {
          premium = EXCLUDED.premium,
          action = EXCLUDED.action,
          bucket = EXCLUDED.bucket,
-         is_otm = EXCLUDED.is_otm`,
+         is_otm = EXCLUDED.is_otm,
+         underlying_norm = EXCLUDED.underlying_norm`,
       params
     );
     lastFlushedTs = maxTs;

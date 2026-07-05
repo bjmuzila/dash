@@ -22,6 +22,7 @@ import { ColorType, HistogramSeries, LineSeries, createChart } from "lightweight
 import type { IChartApi, ISeriesApi, UTCTimestamp, LineData, WhitespaceData, HistogramData } from "lightweight-charts";
 import { HOME_THEME, homeInputStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
+import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 
@@ -151,14 +152,23 @@ export default function FlowPage() {
   // Polled every 5s: advances the "now" edge, and self-heals a transient DB blip
   // (an empty response just gets replaced by the next poll).
   const [netBins, setNetBins] = useState<NetBin[]>([]);
+  // True while a ticker/date switch's first fetch is in flight. The chart keeps
+  // showing the PREVIOUS ticker's line (dimmed) during this window instead of
+  // snapping to zero — the reset-to-blank was reading as a slow reload even
+  // when the underlying fetch was fast. Poll ticks never flip this back on.
+  const [netSwitching, setNetSwitching] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    setNetSwitching(true);
     const load = () =>
       fetch(`/proxy/flow-netprem?underlying=${encodeURIComponent(active)}&bin=${BIN_SEC}&date=${date}`)
         .then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (!cancelled && j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]); })
-        .catch(() => {});
-    setNetBins([]);
+        .then((j) => {
+          if (cancelled) return;
+          if (j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]);
+          setNetSwitching(false);
+        })
+        .catch(() => { if (!cancelled) setNetSwitching(false); });
     load();
     // Past sessions are static — only poll the live edge for today.
     const id = isToday ? setInterval(load, 5000) : null;
@@ -167,17 +177,22 @@ export default function FlowPage() {
 
   // ── Backfill the ACTIVE ticker's full session whenever it changes. ──
   // Per-ticker so the whole day is returned (an unfiltered newest-N cap drops a
-  // ticker's early prints once the full roster is recording).
+  // ticker's early prints once the full roster is recording). Doesn't clear
+  // `history` up front — the previous ticker's rows just get filtered out of
+  // `filtered` by the active-ticker check until the new tape lands, same net
+  // effect as a reset without the blank-flash in between.
+  const [historySwitching, setHistorySwitching] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    setHistory([]);
+    setHistorySwitching(true);
     fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (cancelled || !j || !Array.isArray(j.tape)) return;
-        setHistory(j.tape as FlowOrder[]);
+        if (cancelled) return;
+        if (j && Array.isArray(j.tape)) setHistory(j.tape as FlowOrder[]);
+        setHistorySwitching(false);
       })
-      .catch(() => {});
+      .catch(() => { if (!cancelled) setHistorySwitching(false); });
     return () => { cancelled = true; };
   }, [active, date]);
 
@@ -630,12 +645,10 @@ export default function FlowPage() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
-          <input
-            type="date"
+          <ThemedDatePicker
             value={date}
-            max={todayYmdET()}
-            onChange={(e) => setDate(e.target.value || todayYmdET())}
-            style={{ ...homeInputStyle, width: 150, colorScheme: "dark" }}
+            onChange={(v) => setDate(v || todayYmdET())}
+            width={170}
           />
           {!isToday && (
             <button
@@ -779,10 +792,11 @@ export default function FlowPage() {
       {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
            Combined view so the once-created lightweight-chart keeps its ref. ── */}
       <div style={{ display: view === "ticker" ? "contents" : "none" }}>
-        <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
+        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
           <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
               Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
+              {netSwitching && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted }}>· loading…</span>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
@@ -816,6 +830,7 @@ export default function FlowPage() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>
+            {view === "ticker" && historySwitching && <span style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>loading…</span>}
             <span style={{ fontSize: 12, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
             <span style={{ fontSize: 12, color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtPremium(totals.prem)}</strong></span>
             <span style={{ fontSize: 12, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
