@@ -196,7 +196,7 @@ export function classifyDay(
  * into Imbalance, and does Imbalance really find new value vs. round-trip
  * back into the old range?
  */
-export function backtestQuadrants(candles: EsCandle[]): BacktestSummary {
+export function backtestQuadrants(candles: EsCandle[], binSize = 1): BacktestSummary {
   // Single grouping pass instead of re-filtering + re-sorting the full,
   // multi-day candle array once per session in the loop below (that O(days ×
   // total bars) blow-up — on top of the uncached Intl formatter — is what
@@ -208,7 +208,7 @@ export function backtestQuadrants(candles: EsCandle[]): BacktestSummary {
   for (let i = 1; i < dates.length; i++) {
     const prevBars = grouped.get(dates[i - 1]) ?? [];
     if (prevBars.length < 5) continue;
-    const va = computeValueArea(prevBars);
+    const va = computeValueArea(prevBars, binSize);
     if (!va) continue;
     const todayBars = grouped.get(dates[i]) ?? [];
     const result = classifyDay(candles, dates[i], va, todayBars);

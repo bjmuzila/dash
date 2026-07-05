@@ -836,12 +836,12 @@ function deriveGexLevels(s: GexLevelsSnapshot | null): GexLevelsDerived | null {
 }
 
 function GlEmpty({ note }: { note: string }) {
-  return <div style={{ padding: 32, textAlign: "center", fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>{note}</div>;
+  return <div style={{ padding: 32, textAlign: "center", fontSize: 17, color: HOME_THEME.text, opacity: 0.5 }}>{note}</div>;
 }
 
 function ChartLegend({ items }: { items: { label: string; color: string }[] }) {
   return (
-    <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: HOME_THEME.text, opacity: 0.75 }}>
+    <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 17, color: HOME_THEME.text, opacity: 0.75 }}>
       {items.map((it) => (
         <span key={it.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: it.color, display: "inline-block" }} />
@@ -863,15 +863,15 @@ function ToggleSwitch({ label, on, onChange }: { label: string; on: boolean; onC
         gap: 8,
         padding: "8px 12px",
         borderRadius: 8,
-        border: `1px solid ${on ? HOME_THEME.red : HOME_THEME.border}`,
-        background: on ? `${HOME_THEME.red}1a` : "rgba(255,255,255,0.04)",
+        border: `1px solid ${on ? SOFT_RED : HOME_THEME.border}`,
+        background: on ? `${SOFT_RED}1a` : "rgba(255,255,255,0.04)",
         cursor: "pointer",
       }}
     >
-      <span style={{ position: "relative", width: 34, height: 18, borderRadius: 999, background: on ? HOME_THEME.red : "rgba(255,255,255,0.15)", flexShrink: 0, transition: "background .15s" }}>
+      <span style={{ position: "relative", width: 34, height: 18, borderRadius: 999, background: on ? SOFT_RED : "rgba(255,255,255,0.15)", flexShrink: 0, transition: "background .15s" }}>
         <span style={{ position: "absolute", top: 2, left: on ? 18 : 2, width: 14, height: 14, borderRadius: "50%", background: HOME_THEME.text, transition: "left .15s" }} />
       </span>
-      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: on ? HOME_THEME.red : HOME_THEME.text }}>{label}</span>
+      <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: on ? SOFT_RED : HOME_THEME.text }}>{label}</span>
     </button>
   );
 }
@@ -908,7 +908,7 @@ function SemiGauge({
         <circle cx={cx} cy={cy} r={4.5} fill={HOME_THEME.text} />
         <text x={cx} y={cy - 18} textAnchor="middle" fontSize={17} fontWeight={800} fill={HOME_THEME.text}>{valueLabel}</text>
       </svg>
-      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6 }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
     </div>
   );
 }
@@ -1044,8 +1044,8 @@ function StrikeLevelTable({
     { netGEX: 0, netDEX: 0, callOI: 0, callVolume: 0, putOI: 0, putVolume: 0 }
   );
 
-  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel };
-  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 13, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
+  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, whiteSpace: "nowrap" };
+  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
 
   return (
     <div style={{ maxHeight: 460, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
@@ -1136,8 +1136,8 @@ function saveGlHistory(entries: GlHistoryEntry[]) {
 }
 
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
-  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}` };
-  const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
+  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+  const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
   const timeFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
   return (
@@ -1224,16 +1224,16 @@ function GexLevelsTab() {
       <Card
         variant="budget"
         accent={LIGHT_BLUE}
-        title={`${snap?.symbol ?? "SPX"} · GEX Levels`}
+        title={<span style={{ fontSize: 18 }}>{snap?.symbol ?? "SPX"} · GEX Levels</span>}
         subtitle={d ? `${snap?.expiry ?? "0DTE"} expiry · spot ${glFmt2(d.spot)} · as of ${asOf} ET` : "loading live /proxy/gex snapshot…"}
       >
-        {err && <div style={{ fontSize: 12, color: SOFT_RED, marginBottom: 10 }}>Feed error: {err}</div>}
+        {err && <div style={{ fontSize: 17, color: SOFT_RED, marginBottom: 10 }}>Feed error: {err}</div>}
         {!d && !err && <GlEmpty note="waiting on /proxy/gex…" />}
         {d && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
-              <div style={{ ...homeInputStyle, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
+              <div style={{ ...homeInputStyle, fontSize: 17, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
             </div>
             <AmTbrStat label="Stock Price" value={glFmt2(d.spot)} accent={HOME_THEME.text} />
             <AmTbrStat label="Resistance" value={d.resistance != null ? glFmt0(d.resistance) : "—"} accent={LIGHT_BLUE} />
@@ -1246,9 +1246,8 @@ function GexLevelsTab() {
               max={gammaSpan}
               valueLabel={glFmtBn(d.dollarGamma)}
               bands={[
-                { from: -gammaSpan, to: -gammaSpan * 0.33, color: SOFT_RED },
-                { from: -gammaSpan * 0.33, to: gammaSpan * 0.33, color: HOME_THEME.green },
-                { from: gammaSpan * 0.33, to: gammaSpan, color: LIGHT_BLUE },
+                { from: -gammaSpan, to: 0, color: SOFT_RED },
+                { from: 0, to: gammaSpan, color: LIGHT_BLUE },
               ]}
             />
             <SemiGauge
@@ -1258,8 +1257,8 @@ function GexLevelsTab() {
               max={2}
               valueLabel={glFmt2(d.cpgRatio)}
               bands={[
-                { from: 0, to: 0.7, color: LIGHT_BLUE },
-                { from: 0.7, to: 1.3, color: HOME_THEME.green },
+                { from: 0, to: 0.7, color: SOFT_RED },
+                { from: 0.7, to: 1.3, color: LIGHT_BLUE },
                 { from: 1.3, to: 2, color: SOFT_RED },
               ]}
             />
@@ -1268,7 +1267,7 @@ function GexLevelsTab() {
               <ToggleSwitch label="Puts ITM = Red" on={putsItmRed} onChange={setPutsItmRed} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 170 }}>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
               <ThemedSelect
                 value={snap?.expiry ?? ""}
                 options={(snap?.expirations?.length ? snap.expirations : [snap?.expiry ?? ""]).filter(Boolean).map((e) => ({ value: e as string, label: e as string }))}
@@ -1280,7 +1279,7 @@ function GexLevelsTab() {
             <button style={refreshStyle} onClick={trigger}>{label}</button>
           </div>
         )}
-        <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.45, marginTop: 12 }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.45, marginTop: 12 }}>
           Single shared 0DTE feed — Stock/Expiry filters are read-only displays so this tab can&apos;t move the live feed everyone else is on.
         </div>
       </Card>
@@ -1289,30 +1288,30 @@ function GexLevelsTab() {
         <>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
             <div style={{ flex: "2 1 520px", minWidth: 340 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title="History of key level changes" subtitle="This browser session, today only — no multi-day backend for these fields yet">
+              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="Rebuilt daily — logs today's level changes only, resets each ET trading day">
                 {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
               </Card>
             </div>
             <div style={{ flex: "1 1 320px", minWidth: 300 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title="Open interest by strike" subtitle={`${snap?.expiry ?? ""} · current 0DTE chain only`}>
+              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Open interest by strike</span>} subtitle={`${snap?.expiry ?? ""} · current 0DTE chain only`}>
                 <OiByStrikeChart rows={d.rows} spot={d.spot} />
                 <ChartLegend items={[{ label: "Call OI", color: LIGHT_BLUE }, { label: "Put OI", color: SOFT_RED }]} />
               </Card>
             </div>
           </div>
 
-          <Card variant="budget" accent={LIGHT_BLUE} title="Strike level net gamma & call/put OI positioning">
+          <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
             <StrikeLevelTable rows={d.rows} spot={d.spot} callsItmRed={callsItmRed} putsItmRed={putsItmRed} />
           </Card>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
             <div style={{ flex: "1 1 380px", minWidth: 320 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title="Net gamma exposure by strike">
+              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Net gamma exposure by strike</span>}>
                 <NetGammaByStrikeChart rows={d.rows} spot={d.spot} />
               </Card>
             </div>
             <div style={{ flex: "1 1 380px", minWidth: 320 }}>
-              <Card variant="budget" accent={LIGHT_BLUE} title="Call / put gamma exposure by strike">
+              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Call / put gamma exposure by strike</span>}>
                 <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} resistance={d.resistance} support={d.support} />
                 <ChartLegend items={[{ label: "Call GEX", color: LIGHT_BLUE }, { label: "Put GEX", color: SOFT_RED }]} />
               </Card>

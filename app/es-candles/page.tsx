@@ -193,6 +193,8 @@ type PositioningRow = {
   putWall: number | null;
   gexFlip: number | null;
   ts: number;
+  date: string | null;
+  stale: boolean;
 };
 
 function usePositioning(enabled: boolean) {
@@ -202,7 +204,10 @@ function usePositioning(enabled: boolean) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/proxy/scanner?limit=200`);
+      // any=1: fall back to each symbol's most recent snapshot (any date) when
+      // there's no row for today — e.g. weekend/market-closed — instead of an
+      // empty strip. Server marks any non-today row `stale` so the UI can flag it.
+      const res = await fetch(`/proxy/scanner?limit=200&any=1`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
@@ -220,6 +225,8 @@ function usePositioning(enabled: boolean) {
           putWall: r.put_wall != null ? Number(r.put_wall) : null,
           gexFlip: r.gex_flip != null ? Number(r.gex_flip) : null,
           ts: Number(r.ts) || 0,
+          date: (r.date as string) ?? null,
+          stale: Boolean(r.stale),
         };
       }
       setRows(bySymbol);
@@ -300,7 +307,7 @@ function PosPositionBar({ label, pct, color, maxAbs }: { label: string; pct: num
 // Put Wall → spot when net GEX is negative ("volatile" — dealers short gamma,
 // downside amplified). Magnet Strike = the gamma flip (zero-gamma) level.
 function PositioningCard({ row }: { row: PositioningRow }) {
-  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex } = row;
+  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex, stale, date } = row;
   const supportive = totalNetGex >= 0;
   const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
   const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
@@ -317,12 +324,17 @@ function PositioningCard({ row }: { row: PositioningRow }) {
   const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
 
   return (
-    <div style={{ ...dissolveCard, padding: "12px 14px", flex: "1 1 260px", minWidth: 230 }}>
+    <div style={{ ...dissolveCard, padding: "12px 14px", flex: "1 1 260px", minWidth: 230, opacity: stale ? 0.72 : 1 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <PosLayersIcon color={LIGHT_BLUE} />
         <div style={{ fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
         <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
       </div>
+      {stale && (
+        <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange, marginBottom: 6 }}>
+          Stale — last close{date ? ` ${date}` : ""}, market closed
+        </div>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
         <PosLevelRow label="Call Wall" value={posFmtPrice(callWall)} color={HOME_THEME.green} />

@@ -13,6 +13,22 @@ import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiry
 const TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = typeof TICKERS[number];
 
+// EM/2xEM row badge, rasterized as an inline SVG data URI rather than live DOM
+// text. html2canvas is unreliable rasterizing text this small (7px) — it was
+// rendering fine live but vanishing from every screenshot/Discord capture
+// (same failure mode already fixed for the home page's heatmap rank badges).
+// An <img> bitmap is composited directly, so it always captures correctly.
+const emBadgeCache = new Map<string, string>();
+function emBadgeDataUri(label: "EM" | "2× EM"): string {
+  const cached = emBadgeCache.get(label);
+  if (cached) return cached;
+  const w = label === "EM" ? 16 : 30, h = 10;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="2" fill="rgba(255,255,255,0.92)"/><text x="${w / 2}" y="${h / 2 + 2.8}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="7" font-weight="800" fill="#0b0f1a">${label}</text></svg>`;
+  const uri = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  emBadgeCache.set(label, uri);
+  return uri;
+}
+
 // Softer than pure #ffffff — the bright white value text was harsh on the dark
 // metric-tinted cells. Used for neutral numeric values / signs.
 const SOFT_WHITE = "#c3ccda";
@@ -433,18 +449,11 @@ function TickerPanel({
               style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
             >
               {(is1x || is2x) && (
-                // Kept fully INSIDE the row's own box (top:2, not a negative
-                // offset straddling the row above). html2canvas is unreliable
-                // compositing an absolutely-positioned child that escapes its
-                // parent's box into a sibling's paint area — the label was
-                // rendering fine live but vanishing from every capture.
-                <span style={{
-                  position: "absolute", top: 2, left: 3, zIndex: 3,
-                  fontSize: 7, fontWeight: 800, letterSpacing: "0.04em",
-                  color: "#0b0f1a", background: "rgba(255,255,255,.92)",
-                  padding: "0 3px", borderRadius: 2, pointerEvents: "none",
-                  fontFamily: "sans-serif",
-                }}>{is1x ? "EM" : "2× EM"}</span>
+                <img
+                  src={emBadgeDataUri(is1x ? "EM" : "2× EM")}
+                  alt={is1x ? "EM" : "2× EM"}
+                  style={{ position: "absolute", top: 2, left: 3, zIndex: 3, display: "block", pointerEvents: "none" }}
+                />
               )}
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",

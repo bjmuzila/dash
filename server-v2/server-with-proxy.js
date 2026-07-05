@@ -288,6 +288,46 @@ function todayYmdET() {
   }).format(new Date());
 }
 
+// `flow_prints.underlying_norm` is normally added lazily by the WRITE side
+// (state/flow-history-writer.js ensureTable(), run on the first flushed print
+// of the day). On a day with zero live flow traffic (market closed, or the
+// writer hasn't ticked yet) that column never gets created — but the READ
+// path (below) filters on it unconditionally, so every ticker-scoped request
+// 500s identically with "column underlying_norm does not exist", which looks
+// like a per-ticker bug but isn't. Mirror the same idempotent migration here
+// so reads don't depend on writes having happened first.
+let _flowSchemaEnsured = false;
+async function ensureFlowPrintsSchema(pool) {
+  if (_flowSchemaEnsured) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flow_prints (
+        ts          BIGINT       NOT NULL,
+        date        TEXT         NOT NULL,
+        symbol      TEXT         NOT NULL,
+        underlying  TEXT,
+        expiration  TEXT,
+        strike      REAL,
+        type        TEXT,
+        side        TEXT         NOT NULL,
+        action      TEXT,
+        bucket      TEXT,
+        price       REAL,
+        size        INTEGER,
+        premium     REAL,
+        is_otm      BOOLEAN,
+        PRIMARY KEY (ts, symbol, side)
+      )
+    `);
+    await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
+    await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
+    await pool.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
+    _flowSchemaEnsured = true;
+  } catch (e) {
+    console.warn('[flow-history-read] schema ensure failed (will retry next request):', e.message);
+  }
+}
+
 async function handleGexHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const expiry = searchParams.get('expiry') || '';
@@ -364,6 +404,7 @@ async function handleFlowHistory(req, res) {
 
   const pool = getHistPool();
   if (!pool) return sendJson(res, 200, { date, tape: [] });
+  await ensureFlowPrintsSchema(pool);
 
   // Optional per-ticker filter. With the full roster recording, an unfiltered
   // newest-N cap drops a single ticker's early-session prints — so when the
@@ -442,6 +483,7 @@ async function handleFlowNetPrem(req, res) {
 
   const pool = getHistPool();
   if (!pool) return sendJson(res, 200, { date, binSec, bins: [] });
+  await ensureFlowPrintsSchema(pool);
 
   const params = [date];
   let where = 'date = $1';

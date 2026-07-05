@@ -5,7 +5,6 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 ## Sunday 7/5/2026
 
 * New: haven't subscribed yet? You can now check out the Home page and Multi Greek page for free with your account — data refreshes about every 30 minutes instead of live.
-* Added a "50% off with code CB-BETA" banner on the free preview pages to make the current beta discount easy to spot.
 * The quick-access side panel and menu now clearly show Home and Multi Greek as available on the free plan, with everything else marked "Upgrade" until you subscribe.
 
 ## Saturday 7/4/2026

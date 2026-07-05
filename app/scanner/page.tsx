@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
@@ -135,20 +135,13 @@ const SCAN_META: ScanMeta[] = [
 
 function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
       {SCAN_META.map((s) => (
         <div
           key={s.tab}
           onClick={() => onSelect(s.tab)}
           className="card-hover"
-          style={{
-            cursor: "pointer",
-            borderRadius: 14,
-            padding: "18px 20px",
-            border: `1px solid ${s.accent}33`,
-            background: `radial-gradient(circle at 50% 0%, ${s.accent}14 0%, transparent 65%), rgba(13,17,25,0.25)`,
-            backdropFilter: "blur(20px)",
-          }}
+          style={{ ...classicCardAccentStyle, cursor: "pointer", padding: "18px 20px" }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <span style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text }}>{s.title}</span>
@@ -156,10 +149,10 @@ function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
           <div style={{ fontSize: 12, fontWeight: 700, color: s.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
             {s.scope}
           </div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>
+          <div style={{ fontSize: 17, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>
             {s.what}
           </div>
-          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
+          <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
             <span style={{ color: s.accent, fontWeight: 800 }}>Tells you: </span>{s.tells}
           </div>
         </div>
@@ -1707,9 +1700,9 @@ function BalanceImbalanceScanner() {
     return filtered.length ? filtered : allCandles;
   }, [allCandles, instr]);
 
-  // Coarse cache key so the quadrant scan (walks every bar of every loaded
-  // session) doesn't re-run on every 2s WS tick — only on a genuinely new bar
-  // or a meaningful move in the current one.
+  // Fine-grained key (reacts to every price tick, not just new bars) — only
+  // used for TODAY's live quadrant read, which should update the instant
+  // price crosses VAH/VAL rather than waiting for the bar to close.
   const candlesKey = useMemo(() => {
     const n = candles.length;
     const last = candles[n - 1];
@@ -1717,17 +1710,29 @@ function BalanceImbalanceScanner() {
     return `${n}:${last?.slotKey ?? ""}:${lc}`;
   }, [candles]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const dates = useMemo(() => sessionDates(candles), [candlesKey]);
+  // Coarse key — only changes when a bar is ADDED (new 5m bar, or more
+  // history loads), not on every intrabar price tick. The prior-day Value
+  // Area and the multi-day backtest are both static/slow-changing; recomputing
+  // them on every WS tick (the original bug) re-ran a full multi-day scan with
+  // a brand-new Intl.DateTimeFormat per bar comparison, which is what froze
+  // the tab (and, since it's synchronous on the main thread, the whole
+  // dashboard) on click.
+  const barCountKey = useMemo(() => {
+    const last = candles[candles.length - 1];
+    return `${candles.length}:${last?.date ?? ""}`;
+  }, [candles]);
+
+  const dates = useMemo(() => sessionDates(candles), [barCountKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const today = dates[dates.length - 1] ?? null;
   const prevDate = dates.length >= 2 ? dates[dates.length - 2] : null;
+  const binSize = instr === "NQU" ? 5 : 1;
 
   const va = useMemo(() => {
     if (!prevDate) return null;
     const prevBars = rthBarsForDate(candles, prevDate);
-    return prevBars.length >= 5 ? computeValueArea(prevBars) : null;
+    return prevBars.length >= 5 ? computeValueArea(prevBars, binSize) : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candlesKey, prevDate]);
+  }, [barCountKey, prevDate, binSize]);
 
   const day = useMemo(() => {
     if (!today || !va) return null;
@@ -1736,7 +1741,7 @@ function BalanceImbalanceScanner() {
   }, [candlesKey, today, va]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const backtest = useMemo(() => backtestQuadrants(candles), [candlesKey]);
+  const backtest = useMemo(() => backtestQuadrants(candles, binSize), [barCountKey, binSize]);
 
   const current = day?.current ?? null;
   const lastClose = candles[candles.length - 1]?.close ?? null;
