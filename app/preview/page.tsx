@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { HOME_THEME, homeButtonStyle, statTileStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, statTileStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
 type PreviewRow = {
@@ -54,28 +54,45 @@ export default function PreviewPage() {
   }, []);
 
   return (
-    <PageShell maxWidth={640} align="center">
+    <PageShell maxWidth={720} align="center">
+      {/* Promo callout — same "CB-BETA / 50% off" offer as the landing page,
+          surfaced here too since this is where on-the-fence signups land. */}
+      <div
+        style={{
+          padding: "14px 20px",
+          borderRadius: 12,
+          background: "rgba(33,158,188,0.10)",
+          border: `1px solid ${HOME_THEME.cyan}55`,
+          textAlign: "center",
+        }}
+      >
+        <span style={{ fontSize: 17, color: HOME_THEME.text, fontWeight: 700 }}>Use code </span>
+        <span style={{ fontSize: 19, fontWeight: 900, color: HOME_THEME.cyan, letterSpacing: "0.06em" }}>CB-BETA</span>
+        <span style={{ fontSize: 17, color: HOME_THEME.text, fontWeight: 700 }}> for </span>
+        <span style={{ fontSize: 19, fontWeight: 900, color: HOME_THEME.green }}>50% off</span>
+      </div>
+
       <Card
         accent="cyan"
         title="SPX Snapshot — Delayed Preview"
         subtitle={row ? `Updated ${minutesAgo(row.ts)} · ${row.date} ${row.time ?? ""} ET` : undefined}
       >
-        <p style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.75, lineHeight: 1.6, marginBottom: 20 }}>
+        <p style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.6, marginBottom: 24 }}>
           A ~30-minute-delayed look at the same gamma-exposure levels the live
           dashboard tracks in real time. Refreshes automatically as new
           snapshots land.
         </p>
 
         {loading && !row ? (
-          <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>Loading…</div>
+          <div style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.6 }}>Loading…</div>
         ) : error ? (
-          <div style={{ fontSize: 13, color: HOME_THEME.red }}>{error}</div>
+          <div style={{ fontSize: 16, color: HOME_THEME.red }}>{error}</div>
         ) : !row ? (
-          <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
+          <div style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.6 }}>
             No snapshot yet — check back once the market's open.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <Stat label="SPX (delayed)" value={fmtNum(row.spx_price)} accent={HOME_THEME.cyan} />
             <Stat label="Gamma Flip" value={fmtNum(row.gex_flip, 0)} accent={HOME_THEME.green} />
             <Stat label="Call Wall" value={fmtNum(row.call_wall, 0)} accent={HOME_THEME.green} />
@@ -85,26 +102,41 @@ export default function PreviewPage() {
       </Card>
 
       <Card accent="orange" title="Want it live?" subtitle="Real-time levels, Confidence Score, options flow & more.">
-        <p style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.75, lineHeight: 1.6, marginBottom: 16 }}>
+        <p style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.6, marginBottom: 22 }}>
           Members see every level update the moment it happens — no 30-minute
           lag — plus the full dashboard: Confidence Score, live options flow,
-          Estimated Moves, and the ES Candles GEX heatmap.
+          Estimated Moves, and the ES Candles GEX heatmap. Beta pricing is
+          locked in at <strong style={{ color: HOME_THEME.green }}>50% off with code CB-BETA</strong>.
         </p>
-        <Link href="/pricing" style={{ textDecoration: "none" }}>
-          <button style={{ ...homeButtonStyle, padding: "10px 20px" }}>See plans →</button>
+        <Link href="/pricing" style={{ textDecoration: "none", display: "block" }}>
+          <button style={bigCtaButton}>See plans →</button>
         </Link>
       </Card>
     </PageShell>
   );
 }
 
+const bigCtaButton: CSSProperties = {
+  width: "100%",
+  padding: "22px 24px",
+  borderRadius: 14,
+  border: "none",
+  background: `linear-gradient(180deg, ${HOME_THEME.cyan}, #00b8c4)`,
+  color: "#04121a",
+  fontSize: 24,
+  fontWeight: 900,
+  letterSpacing: "0.01em",
+  cursor: "pointer",
+  boxShadow: `0 8px 30px ${HOME_THEME.cyan}40`,
+};
+
 function Stat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
-    <div style={{ ...statTileStyle, padding: "12px 14px" }}>
-      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.55 }}>
+    <div style={{ ...statTileStyle, padding: "16px 18px" }}>
+      <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: accent, marginTop: 4 }}>{value}</div>
+      <div style={{ fontSize: 32, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
     </div>
   );
 }

@@ -1272,6 +1272,32 @@ async function main() {
         })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Fire a single /preview delayed-snapshot now (ignores the RTH gate on
+      // force — e.g. seeding the weekend page from Friday's last-known chain).
+      // POST /proxy/preview-snapshot?force=1
+      if (pathname === '/proxy/preview-snapshot' && req.method === 'POST') {
+        const { collectOnce } = require('./preview-snapshot-recorder');
+        const force = /[?&]force=1\b/.test(req.url || '');
+        const base = `http://localhost:${PORT}`;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        (async () => {
+          let r = await collectOnce(base, { force });
+          // On force, an empty chain usually means the feed isn't subscribed
+          // (outside RTH/weekend). Reconnect to rebuild it, wait, retry once.
+          if (force && r && r.ok === false && r.error === 'empty chain'
+              && proxy && typeof proxy.reconnect === 'function') {
+            console.log('[preview-snapshot] empty chain on force — reconnecting feed and retrying');
+            try { await proxy.reconnect(); } catch (e) { console.log('[preview-snapshot] reconnect failed:', e?.message || e); }
+            for (let i = 0; i < 8; i++) {
+              await sleep(2000);
+              r = await collectOnce(base, { force });
+              if (!r || r.ok !== false || r.error !== 'empty chain') break;
+            }
+          }
+          sendJson(res, 200, r ?? { ok: false, error: 'no result' });
+        })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Generate the pre-market AI summary now (ignores the 8am schedule).
       // POST /proxy/premarket-summary-run
       if (pathname === '/proxy/premarket-summary-run' && req.method === 'POST') {

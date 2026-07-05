@@ -53,21 +53,23 @@ function highestRow(chain, field) {
     chain[0]);
 }
 
-async function collectOnce(base) {
-  if (!isRTH()) { console.log('[preview-snapshot] skip — outside RTH'); return; }
+async function collectOnce(base, opts = {}) {
+  const force = !!opts.force;
+  if (!isRTH() && !force) { console.log('[preview-snapshot] skip — outside RTH'); return; }
+  if (force && !isRTH()) console.log('[preview-snapshot] FORCE — snapshot outside RTH (owner override)');
 
   let data;
   try {
     const res = await fetch(`${base}/api/gex`, { cache: 'no-store', headers: internalHeaders() });
-    if (!res.ok) { console.log(`[preview-snapshot] /api/gex ${res.status} — skip`); return; }
+    if (!res.ok) { console.log(`[preview-snapshot] /api/gex ${res.status} — skip`); return { ok: false, error: `/api/gex ${res.status}` }; }
     data = await res.json();
   } catch (e) {
     console.log(`[preview-snapshot] /api/gex unreachable — skip (${e.message})`);
-    return;
+    return { ok: false, error: e.message };
   }
 
   const chain = data.chain ?? [];
-  if (!chain.length) { console.log('[preview-snapshot] empty chain — skip'); return; }
+  if (!chain.length) { console.log('[preview-snapshot] empty chain — skip'); return { ok: false, error: 'empty chain' }; }
 
   // Basic call/put wall on the OI+Vol basis (same combined field the paid
   // dashboard uses): highest positive netGEX = call wall, most negative = put wall.
@@ -101,10 +103,13 @@ async function collectOnce(base) {
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
-    if (!res.ok) { console.log(`[preview-snapshot] POST ${res.status}`); return; }
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { console.log(`[preview-snapshot] POST ${res.status}`); return { ok: false, error: `POST ${res.status}` }; }
     console.log(`[preview-snapshot] ${body.date} ${body.time} ET — SPX ${spot} · call ${body.call_wall} · put ${body.put_wall} · flip ${body.gex_flip}`);
+    return { ok: true, spot, callWall: body.call_wall, putWall: body.put_wall, gexFlip: body.gex_flip, json };
   } catch (e) {
     console.log(`[preview-snapshot] POST failed — ${e.message}`);
+    return { ok: false, error: e.message };
   }
 }
 
