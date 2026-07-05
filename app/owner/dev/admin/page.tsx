@@ -207,7 +207,7 @@ function CustomerActivityPanel() {
                   <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
                   {r.paid && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 8, background: `${T.green}18`, border: `1px solid ${T.green}44`, color: T.green, flexShrink: 0 }}>paid</span>}
                 </div>
-                <div style={{ fontSize: 10, color: T.muted }}>{fmtRelative(r.lastSeen)} · {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)" }}>{fmtRelative(r.lastSeen)} · {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}</div>
               </div>
               <span style={{ color: T.text, fontSize: 11 }}>{fmtRelative(r.lastLogin)}</span>
               <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 11 }}>{fmtDuration(r.approxActiveSec)}</span>

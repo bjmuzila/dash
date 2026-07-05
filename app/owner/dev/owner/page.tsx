@@ -471,12 +471,9 @@ function SpotFeedHealth() {
 const SECTION_TAB = {
   system:   "infra",
   hosting:  "infra",
-  database: "database",
   // Controls moved under the Infra tab (its own tab was removed).
   controls: "infra",
-  eodgex:   "database",
-  // Users/auth section removed from the UI — mapped to a dead tab so it never
-  // renders (kept as a key so the JSX referencing authStatus stays valid).
+  // Renders under the "Supabase / Users" nav item (Auth · Supabase key status card).
   auth:     "auth",
   activity: "activity",
 } as const;
@@ -1129,7 +1126,7 @@ function OverviewSection({ metrics }: {
 
 // FE / BE tab + accordion (one section open at a time). The `tab` of each
 // section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "infra" | "database" | "controls" | "auth" | "activity";
+type OwnerTab = "overview" | "infra" | "auth" | "activity";
 
 export default function OwnerDashboard() {
   const isMobile = useIsMobile();
@@ -1983,7 +1980,6 @@ export default function OwnerDashboard() {
   const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
     { id: "overview",  label: "Overview" },
     { id: "infra",     label: "Infra" },
-    { id: "controls",  label: "Controls" },
     { id: "auth",      label: "Supabase / Users", badge: clerk?.stats?.userCount ?? undefined },
     { id: "activity",  label: "Activity" },
   ];
@@ -2350,33 +2346,9 @@ export default function OwnerDashboard() {
         </AccordionCard>
         )}
 
-        {/* ── Live status dots (relocated from the old OpsBar into its own card) ── */}
-        {SECTION_TAB.system === ownerTab && (
-        <AccordionCard
-          accent={HOME_THEME.cyan}
-          id="status"
-          title="Status"
-          open={openSet.has("status")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
-            {STATUS_ROWS.map((row) => (
-              <span key={row.label} title={row.sub ? `${row.label}: ${row.sub}` : row.label}
-                style={{ display: "inline-flex", alignItems: "center", gap: 10, fontSize: 17, fontWeight: 600, color: HOME_THEME.text }}>
-                <span style={{
-                  width: 15, height: 15, borderRadius: "50%", flexShrink: 0,
-                  background: row.ok ? HOME_THEME.green : HOME_THEME.red,
-                  boxShadow: row.ok ? `0 0 8px ${HOME_THEME.green}aa` : `0 0 8px ${HOME_THEME.red}aa`,
-                }} />
-                {row.label}
-                {row.sub && <span style={{ opacity: 1, fontFamily: "var(--font-mono)", fontSize: 17 }}>{row.sub}</span>}
-              </span>
-            ))}
-          </div>
-        </AccordionCard>
-        )}
-
         {/* ── System KPIs ── */}
+        {/* Note: live status dots (server/postgres/theta/feed/etc.) already show
+            in the sidebar (STATUS_ROWS) — no need to duplicate them here. */}
         {SECTION_TAB.system === ownerTab && (
         <AccordionCard
           accent={HOME_THEME.cyan}
@@ -2385,7 +2357,7 @@ export default function OwnerDashboard() {
           open={openSet.has("system")}
           onToggle={toggleSection}
         >
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(10, minmax(0, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(6, minmax(0, 1fr))", gap: 10 }}>
             <StatCard label="Server Uptime" value={displayUptime != null ? fmtUptime(displayUptime) : "—"} accent={HOME_THEME.green} mono />
             <StatCard
               label="Postgres"
@@ -2398,6 +2370,7 @@ export default function OwnerDashboard() {
             <StatCard label="TT Auth" value={server.ttAuthenticated == null ? "—" : ttOk ? "OK" : "FAIL"} accent={ttOk ? HOME_THEME.green : HOME_THEME.red} />
             <StatCard label="Contracts Sub'd" value={server.contractsSubscribed ?? "—"} accent={HOME_THEME.orange} />
             <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
+            <StatCard label="WS Clients" value={wsConnected ? (server.wsClients ?? 0) : "offline"} accent={wsConnected ? HOME_THEME.green : HOME_THEME.red} mono />
             <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.green} mono />
             <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.purple} mono />
             <StatCard label="Version" value={process.env.NEXT_PUBLIC_APP_VERSION || "—"} accent={HOME_THEME.orange} mono />

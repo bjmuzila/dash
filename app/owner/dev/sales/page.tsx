@@ -337,7 +337,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
         <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 17, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
         <span>Amount</span>
         <span>Status</span>
@@ -358,7 +358,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
               gap: 8,
               padding: "9px 16px",
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
-              fontSize: 13,
+              fontSize: 17,
               alignItems: "center",
             }}
           >
@@ -370,7 +370,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 </div>
               )}
             </div>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 13 }}>
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 17 }}>
               {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
             </span>
             <span>
@@ -383,7 +383,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 {s.status}
               </span>
             </span>
-            <span style={{ color: T.text, fontSize: 12 }}>{fmtDateShort(s.current_period_end)}</span>
+            <span style={{ color: T.text, fontSize: 17 }}>{fmtDateShort(s.current_period_end)}</span>
           </div>
         ))}
       </div>
