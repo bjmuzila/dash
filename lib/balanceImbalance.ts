@@ -56,14 +56,21 @@ const CONTRACTION_RATIO = 0.6; // recent-leg-range / prior-leg-range below this 
 const RTH_OPEN = 9 * 60 + 30;
 const RTH_CLOSE = 16 * 60;
 
+// A single Intl.DateTimeFormat, reused across every bar. Constructing a new
+// formatter per call (the original bug here) is measurably slow — over a
+// multi-day candle set (thousands of bars, each hit 2-4x by isRthBar +
+// etSessionDate) that adds up to real main-thread-blocking time and was the
+// cause of the scanner tab freezing the whole dashboard on click.
+const ET_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", hour12: false,
+});
+
 function etParts(ts: number) {
   const d = new Date(Number(ts));
   if (isNaN(d.getTime())) return { date: "", minutes: NaN };
-  const p = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(d);
+  const p = ET_FMT.formatToParts(d);
   const m: Record<string, string> = {};
   p.forEach((x) => { m[x.type] = x.value; });
   const hh = m.hour === "24" ? "00" : m.hour;
@@ -91,12 +98,40 @@ export function sessionDates(candles: EsCandle[]): string[] {
 }
 
 /**
+ * Group every RTH bar by ET session date in a single pass, pre-sorted within
+ * each day. Used by backtestQuadrants so a multi-day scan doesn't re-filter
+ * + re-sort the ENTIRE candle set once per day (that O(days × total bars)
+ * blow-up was the other half of the freeze — with ~20 days of 5m history
+ * that's tens of thousands of redundant comparisons before the formatter fix
+ * even applies).
+ */
+export function groupRthByDate(candles: EsCandle[]): Map<string, EsCandle[]> {
+  const map = new Map<string, EsCandle[]>();
+  for (const c of candles) {
+    if (!isRthBar(c.timestamp)) continue;
+    const d = etSessionDate(c);
+    if (!d) continue;
+    const arr = map.get(d);
+    if (arr) arr.push(c); else map.set(d, [c]);
+  }
+  for (const arr of map.values()) arr.sort((a, b) => a.timestamp - b.timestamp);
+  return map;
+}
+
+/**
  * Classify one session's bars into the Balance/Shift/Imbalance/Re-balance
  * quadrants, using `va` (typically the PRIOR session's Value Area) as the
  * reference range.
  */
-export function classifyDay(candles: EsCandle[], date: string, va: ValueArea): QuadrantDayResult {
-  const today = rthBarsForDate(candles, date);
+export function classifyDay(
+  candles: EsCandle[],
+  date: string,
+  va: ValueArea,
+  precomputedBars?: EsCandle[],
+): QuadrantDayResult {
+  // Callers that already have this day's bars grouped (backtestQuadrants) pass
+  // them directly so we skip re-filtering + re-sorting the whole candle set.
+  const today = precomputedBars ?? rthBarsForDate(candles, date);
   const points: QuadrantPoint[] = [];
 
   let state: Quadrant = "balance";
@@ -162,15 +197,21 @@ export function classifyDay(candles: EsCandle[], date: string, va: ValueArea): Q
  * back into the old range?
  */
 export function backtestQuadrants(candles: EsCandle[]): BacktestSummary {
-  const dates = sessionDates(candles);
+  // Single grouping pass instead of re-filtering + re-sorting the full,
+  // multi-day candle array once per session in the loop below (that O(days ×
+  // total bars) blow-up — on top of the uncached Intl formatter — is what
+  // froze the tab).
+  const grouped = groupRthByDate(candles);
+  const dates = [...grouped.keys()].sort();
   const days: QuadrantDayResult[] = [];
 
   for (let i = 1; i < dates.length; i++) {
-    const prevBars = rthBarsForDate(candles, dates[i - 1]);
+    const prevBars = grouped.get(dates[i - 1]) ?? [];
     if (prevBars.length < 5) continue;
     const va = computeValueArea(prevBars);
     if (!va) continue;
-    const result = classifyDay(candles, dates[i], va);
+    const todayBars = grouped.get(dates[i]) ?? [];
+    const result = classifyDay(candles, dates[i], va, todayBars);
     if (result.points.length) days.push(result);
   }
 

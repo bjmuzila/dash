@@ -987,9 +987,13 @@ async function main() {
       }
 
       // ── Multi-ticker GEX Scanner ──────────────────────────────────────────
-      // GET /proxy/scanner?sort=gex|flip&limit=50
+      // GET /proxy/scanner?sort=gex|flip&limit=50&any=1
       //   Latest row per ticker for today, ranked by |total net GEX| (default)
-      //   or distance of spot from the GEX flip.
+      //   or distance of spot from the GEX flip. any=1 drops the "today only"
+      //   filter and returns each symbol's most recent row regardless of date
+      //   (market closed / weekend — last available snapshot, e.g. Friday's
+      //   close, instead of an empty result). Response marks each row `stale`
+      //   (its `date` !== today) so the client can flag it.
       if (pathname === '/proxy/scanner' && req.method === 'GET') {
         (async () => {
           try {
@@ -998,14 +1002,20 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const sort  = ['gex', 'flip'].includes(u.searchParams.get('sort')) ? u.searchParams.get('sort') : 'gex';
             const limit = Math.min(200, Number(u.searchParams.get('limit') || 50));
+            const any = u.searchParams.get('any') === '1';
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
-            const sql = `
-              SELECT DISTINCT ON (symbol)
-                     symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes
-              FROM scanner_snapshots
-              WHERE date = $1
-              ORDER BY symbol, ts DESC`;
-            const { rows } = await p.query(sql, [today]);
+            const sql = any
+              ? `SELECT DISTINCT ON (symbol)
+                        symbol, date, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes
+                 FROM scanner_snapshots
+                 ORDER BY symbol, ts DESC`
+              : `SELECT DISTINCT ON (symbol)
+                        symbol, date, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes
+                 FROM scanner_snapshots
+                 WHERE date = $1
+                 ORDER BY symbol, ts DESC`;
+            const { rows } = await p.query(sql, any ? [] : [today]);
+            for (const r of rows) r.stale = String(r.date) !== today;
             rows.sort((a, b) => {
               if (sort === 'flip') {
                 const da = a.gex_flip != null ? Math.abs(a.spot - a.gex_flip) : Infinity;

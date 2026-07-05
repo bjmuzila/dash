@@ -360,8 +360,8 @@ function TickerPanel({
 
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 10, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
+        <span style={{ fontSize: 18, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
           {spot > 0 && (
             <>
               <span style={{ color: "#219EBC", fontWeight: 700 }}>{spot.toFixed(2)}</span>
@@ -409,10 +409,15 @@ function TickerPanel({
             No strikes in range
           </div>
         ) : computed.rows.map(r => {
-          const strikeColor = r.isATM ? "#ffb300" : "#94a3b8";
-          const rowBg = r.isATM ? "rgba(255,179,0,.07)" : "transparent";
+          // ATM is marked by the white border alone — no gold tint on the row
+          // or strike text.
+          const strikeColor = "#94a3b8";
+          const rowBg = "transparent";
+          // Plain `border` (not `outline`) — html2canvas does not render CSS
+          // outline at all, so the ATM box vanished from every screenshot/
+          // Discord capture even though it showed fine live.
           const atmOutline = r.isATM
-            ? { outline: "1px solid rgba(255,255,255,.55)", outlineOffset: "-1px", position: "relative" as const, zIndex: 1 }
+            ? { border: "1px solid rgba(255,255,255,.55)", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
           const is1x = emStrikes != null && (r.strike === emStrikes.d1 || r.strike === emStrikes.u1);
           const is2x = emStrikes != null && (r.strike === emStrikes.d2 || r.strike === emStrikes.u2);
@@ -428,8 +433,13 @@ function TickerPanel({
               style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
             >
               {(is1x || is2x) && (
+                // Kept fully INSIDE the row's own box (top:2, not a negative
+                // offset straddling the row above). html2canvas is unreliable
+                // compositing an absolutely-positioned child that escapes its
+                // parent's box into a sibling's paint area — the label was
+                // rendering fine live but vanishing from every capture.
                 <span style={{
-                  position: "absolute", top: -7, left: 3, zIndex: 3,
+                  position: "absolute", top: 2, left: 3, zIndex: 3,
                   fontSize: 7, fontWeight: 800, letterSpacing: "0.04em",
                   color: "#0b0f1a", background: "rgba(255,255,255,.92)",
                   padding: "0 3px", borderRadius: 2, pointerEvents: "none",
@@ -439,7 +449,7 @@ function TickerPanel({
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
-                background: r.isATM ? "rgba(255,179,0,.12)" : "transparent",
+                background: "transparent",
               }}>
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>

@@ -172,6 +172,181 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 }
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Options Positioning strip — SPX / NDX / SPY / QQQ Call Wall / Put Wall / Magnet
+// Strike (gamma flip) / Gamma Zone, live from the multi-ticker GEX scanner
+// (server-v2 scanner-recorder.js → scanner_snapshots → /proxy/scanner). Reuses
+// the exact walls/flip the scanner already computes via gex-calculator.js — no
+// new math, just a read + the "Positioning" toggle. Moved here from /test (was
+// a standalone tab there) per Brandon's ask to have it live on the ES Candles
+// page instead, as an on/off strip alongside Heatmap/Profile/Bias/Signals.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"] as const;
+
+type PositioningRow = {
+  symbol: string;
+  spot: number;
+  expiry: string | null;
+  totalNetGex: number;
+  callWall: number | null;
+  putWall: number | null;
+  gexFlip: number | null;
+  ts: number;
+};
+
+function usePositioning(enabled: boolean) {
+  const [rows, setRows] = useState<Record<string, PositioningRow> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/proxy/scanner?limit=200`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
+      const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
+      const bySymbol: Record<string, PositioningRow> = {};
+      for (const r of list) {
+        const symbol = String(r.symbol ?? "");
+        if (!(POSITIONING_TICKERS as readonly string[]).includes(symbol)) continue;
+        bySymbol[symbol] = {
+          symbol,
+          spot: Number(r.spot) || 0,
+          expiry: (r.expiry as string) ?? null,
+          totalNetGex: Number(r.total_net_gex) || 0,
+          callWall: r.call_wall != null ? Number(r.call_wall) : null,
+          putWall: r.put_wall != null ? Number(r.put_wall) : null,
+          gexFlip: r.gex_flip != null ? Number(r.gex_flip) : null,
+          ts: Number(r.ts) || 0,
+        };
+      }
+      setRows(bySymbol);
+      setError(null);
+      setLoadedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  // Only polls while the strip is toggled on — no point hitting the scanner
+  // proxy every 30s for a panel nobody has opened.
+  useEffect(() => {
+    if (!enabled) return;
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [enabled, load]);
+
+  return { rows, error, loadedAt, reload: load };
+}
+
+function posFmtPrice(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return `$${n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 })}`;
+}
+
+function posPctFrom(spot: number, level: number | null): number | null {
+  if (level == null || !(spot > 0)) return null;
+  return ((level - spot) / spot) * 100;
+}
+
+function posFmtPct(p: number | null): string {
+  if (p == null) return "—";
+  const sign = p >= 0 ? "+" : "";
+  return `${sign}${p.toFixed(1)}%`;
+}
+
+function PosLayersIcon({ color }: { color: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </svg>
+  );
+}
+
+function PosLevelRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.03)" }}>
+      <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+    </div>
+  );
+}
+
+function PosPositionBar({ label, pct, color, maxAbs }: { label: string; pct: number | null; color: string; maxAbs: number }) {
+  const p = pct ?? 0;
+  const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
+  const isPositive = p >= 0;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "56px 1fr 46px", alignItems: "center", gap: 6 }}>
+      <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.7, textAlign: "right" }}>{label}</div>
+      <div style={{ position: "relative", height: 14, borderRadius: 8, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
+        {halfWidthPct > 0 && (
+          <div style={{ position: "absolute", top: 1, bottom: 1, left: isPositive ? "50%" : `${50 - halfWidthPct}%`, width: `${halfWidthPct}%`, borderRadius: 8, background: color }} />
+        )}
+      </div>
+      <div style={{ fontSize: 10, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{posFmtPct(pct)}</div>
+    </div>
+  );
+}
+
+// Gamma Zone = the range between spot and Call Wall when net GEX is positive
+// ("supportive" — dealers long gamma, upside capped/pinned toward the wall);
+// Put Wall → spot when net GEX is negative ("volatile" — dealers short gamma,
+// downside amplified). Magnet Strike = the gamma flip (zero-gamma) level.
+function PositioningCard({ row }: { row: PositioningRow }) {
+  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex } = row;
+  const supportive = totalNetGex >= 0;
+  const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
+  const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
+
+  const gammaLo = supportive ? spot : putWall ?? spot;
+  const gammaHi = supportive ? callWall ?? spot : spot;
+
+  const callPct = posPctFrom(spot, callWall);
+  const putPct = posPctFrom(spot, putWall);
+  const magnetPct = posPctFrom(spot, gexFlip);
+  const gammaHiPct = posPctFrom(spot, gammaHi);
+  const gammaLoPct = posPctFrom(spot, gammaLo);
+
+  const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
+
+  return (
+    <div style={{ ...dissolveCard, padding: "12px 14px", flex: "1 1 260px", minWidth: 230 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <PosLayersIcon color={LIGHT_BLUE} />
+        <div style={{ fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
+        <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+        <PosLevelRow label="Call Wall" value={posFmtPrice(callWall)} color={HOME_THEME.green} />
+        <PosLevelRow label="Put Wall" value={posFmtPrice(putWall)} color={SOFT_RED} />
+        <PosLevelRow label="Magnet" value={posFmtPrice(gexFlip)} color={HOME_THEME.orange} />
+        <PosLevelRow label="Gamma Zone" value={`${posFmtPrice(gammaLo)} → ${posFmtPrice(gammaHi)}`} color={LIGHT_BLUE} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "56px 1fr 46px", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.04em", color: HOME_THEME.muted, opacity: 0.5, marginBottom: 4 }}>
+        <div style={{ textAlign: "right" }}>Below</div>
+        <div style={{ textAlign: "center" }}>Now {posFmtPrice(spot)}</div>
+        <div style={{ textAlign: "right" }}>Above</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <PosPositionBar label="Call Wall" pct={callPct} color={HOME_THEME.green} maxAbs={maxAbs} />
+        <PosPositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
+        <PosPositionBar label="Gamma Hi" pct={gammaHiPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
+        <PosPositionBar label="Gamma Lo" pct={gammaLoPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
+        <PosPositionBar label="Put Wall" pct={putPct} color={SOFT_RED} maxAbs={maxAbs} />
+      </div>
+    </div>
+  );
+}
+
 export default function EsCandlesPage() {
   const esShouldConnect = useWsLifecycle();
   const esShouldConnectRef = useRef(esShouldConnect);
@@ -326,6 +501,8 @@ export default function EsCandlesPage() {
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
   const [showSignals, setShowSignals] = useState(false); // bottom actionable-signals strip
+  const [showPositioning, setShowPositioning] = useState(false); // bottom multi-ticker GEX positioning strip
+  const { rows: positioningRows, error: positioningError, loadedAt: positioningLoadedAt, reload: reloadPositioning } = usePositioning(showPositioning);
   // Recent signals from the engine (/proxy/signals), polled every 15s while the
   // tab is visible. Newest first; the engine dedupes + scores server-side.
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -1438,6 +1615,7 @@ export default function EsCandlesPage() {
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
           <ToggleTile label="Bias"     on={showBias}     onClick={() => setShowBias((v) => !v)}     accent={LIGHT_BLUE} />
           <ToggleTile label="Signals"  on={showSignals}  onClick={() => setShowSignals((v) => !v)} accent={LIGHT_BLUE} />
+          <ToggleTile label="Positioning" on={showPositioning} onClick={() => setShowPositioning((v) => !v)} accent={LIGHT_BLUE} />
 
           <DockGap />
 
@@ -1617,6 +1795,56 @@ export default function EsCandlesPage() {
                 })}
               </div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Options Positioning strip ──────────────────────────────────────────
+          SPX/NDX/SPY/QQQ Call Wall / Put Wall / Magnet Strike / Gamma Zone,
+          live from the multi-ticker GEX scanner (/proxy/scanner). Moved here
+          from /test — an on/off strip like Signals, not a separate page. */}
+      {showPositioning ? (
+        <div className="px-4 pb-4" style={{ flexShrink: 0 }}>
+          <div style={{ ...dissolveCard, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>Positioning</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>
+                  {positioningLoadedAt
+                    ? `updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(positioningLoadedAt))} ET`
+                    : "loading…"}
+                </span>
+                <button
+                  onClick={reloadPositioning}
+                  style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: LIGHT_BLUE, background: "transparent", border: `1px solid ${LIGHT_BLUE}55`, borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
+                >
+                  Refresh
+                </button>
+              </span>
+            </div>
+            {positioningError && <div style={{ fontSize: 11, color: SOFT_RED }}>Positioning data error: {positioningError}</div>}
+            <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 2 }}>
+              {POSITIONING_TICKERS.map((sym) => {
+                const row = positioningRows?.[sym];
+                if (!row) {
+                  return (
+                    <div key={sym} style={{ ...dissolveCard, padding: "12px 14px", flex: "1 1 260px", minWidth: 230 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <PosLayersIcon color={LIGHT_BLUE} />
+                        <div style={{ fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5 }}>
+                        {positioningRows ? "No snapshot yet today — scanner sweep pending." : "Loading…"}
+                      </div>
+                    </div>
+                  );
+                }
+                return <PositioningCard key={sym} row={row} />;
+              })}
+            </div>
+            <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.5, lineHeight: 1.5 }}>
+              Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots). Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile.
+            </div>
           </div>
         </div>
       ) : null}
