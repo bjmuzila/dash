@@ -479,6 +479,26 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_eod_gex_date ON eod_gex(date);
     CREATE INDEX IF NOT EXISTS idx_eod_gex_symbol ON eod_gex(symbol);
 
+    -- Delayed "preview" snapshot for signed-up-but-unpaid users (/preview page).
+    -- Written once per cadence (~30m) by server-v2/preview-snapshot-recorder.js,
+    -- copying the same /api/gex-derived values the live paid dashboard uses. The
+    -- 30m cron cadence IS the delay — free users only ever see the last written
+    -- row, never the live feed. History is kept (not upserted) so a future
+    -- "today so far" strip is possible; the route always serves the latest row.
+    CREATE TABLE IF NOT EXISTS preview_snapshots (
+      id           SERIAL PRIMARY KEY,
+      ts           BIGINT NOT NULL,
+      date         TEXT NOT NULL,
+      time         TEXT,
+      spx_price    DOUBLE PRECISION,
+      gex_flip     DOUBLE PRECISION,
+      call_wall    DOUBLE PRECISION,
+      put_wall     DOUBLE PRECISION,
+      expiration   TEXT,
+      created_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_preview_snapshots_ts ON preview_snapshots(ts DESC);
+
     -- Overnight ES gap tracker: one row per trading day, keyed on date.
     -- The gap is two EXACT 5-minute ES candle prints (never substituted):
     --   prior_close = close of YESTERDAY's 15:55 bar  (the 16:00:00 ET print)
@@ -3333,5 +3353,36 @@ export async function getEodGex(opts: { date?: string; symbol?: string; limit?: 
   return queryAll<EodGexRecord>(
     "SELECT * FROM eod_gex ORDER BY date DESC, symbol ASC LIMIT ?",
     [limit]
+  );
+}
+
+// ── Delayed preview snapshot (/preview page for unpaid signed-in users) ─────
+
+export interface PreviewSnapshotRecord {
+  id?: number;
+  ts: number;
+  date: string;
+  time?: string | null;
+  spx_price?: number | null;
+  gex_flip?: number | null;
+  call_wall?: number | null;
+  put_wall?: number | null;
+  expiration?: string | null;
+}
+
+export async function insertPreviewSnapshot(r: PreviewSnapshotRecord): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO preview_snapshots (ts, date, time, spx_price, gex_flip, call_wall, put_wall, expiration)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [r.ts, r.date, r.time ?? null, r.spx_price ?? null, r.gex_flip ?? null,
+     r.call_wall ?? null, r.put_wall ?? null, r.expiration ?? null]
+  );
+}
+
+export async function getLatestPreviewSnapshot(): Promise<PreviewSnapshotRecord | undefined> {
+  await getDb();
+  return queryOne<PreviewSnapshotRecord>(
+    "SELECT * FROM preview_snapshots ORDER BY ts DESC LIMIT 1"
   );
 }

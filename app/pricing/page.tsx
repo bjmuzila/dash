@@ -81,11 +81,19 @@ export default async function PricingPage({
             <>Get full access to <span style={{ color: T.cyan }}>CB Edge</span></>
           )}
         </h1>
-        <p style={{ color: DIM, fontSize: 17, margin: "0 0 36px", maxWidth: 620, lineHeight: 1.5 }}>
+        <p style={{ color: DIM, fontSize: 17, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
           {access.ok
             ? "Your subscription is active — you have full access to the dashboard."
             : "One subscription unlocks the entire platform. Live dealer positioning, scored levels, and estimated moves — the moment they move."}
         </p>
+
+        {userId && !access.ok && (
+          <p style={{ margin: "0 0 36px" }}>
+            <Link href="/preview" style={{ color: T.cyan, fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
+              Not ready yet? View the free delayed preview →
+            </Link>
+          </p>
+        )}
 
         <div
           style={{

@@ -1594,6 +1594,10 @@ async function main() {
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.
     require('./ref-levels-recorder').startRefLevelsRecorder(PORT);
+    // Delayed preview feed for signed-up-but-unpaid users (/preview page):
+    // every 30m during RTH, snapshots spot + call/put wall + gamma flip from
+    // the same /api/gex the paid dashboard reads → preview_snapshots.
+    require('./preview-snapshot-recorder').startPreviewSnapshotRecorder(PORT);
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.

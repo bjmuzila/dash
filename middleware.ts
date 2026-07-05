@@ -167,12 +167,15 @@ export async function middleware(req: NextRequest) {
   }
 
   // ── Paid-subscription gate (covers EVERY protected route, not just /home) ─────
-  // Owners always pass. Routes needed to actually buy/see pricing stay reachable
-  // for unpaid-but-signed-in users; everything else redirects to /pricing.
-  const PAID_EXEMPT = /^\/(pricing|api\/stripe)(\/.*)?$/;
+  // Owners always pass. Routes needed to actually buy/see pricing, plus the
+  // delayed /preview teaser (+ its data route), stay reachable for
+  // unpaid-but-signed-in users; everything else redirects to /preview so
+  // on-the-fence signups land on something with real (delayed) data instead
+  // of a hard paywall.
+  const PAID_EXEMPT = /^\/(pricing|preview|api\/stripe|api\/preview)(\/.*)?$/;
   if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
     const url = req.nextUrl.clone();
-    url.pathname = "/pricing";
+    url.pathname = "/preview";
     url.search = "";
     return NextResponse.redirect(url);
   }
