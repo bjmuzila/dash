@@ -20,7 +20,7 @@
 
 // Fast/hot lane — swept every HOT_MINS (2m) for near-live data.
 const MAIN = [
-  'SPY', 'QQQ', 'SPX', 'VIX',
+  'SPY', 'QQQ', 'SPX', 'NDX', 'VIX',
   'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'SPCX', 'TSLA',
 ];
 

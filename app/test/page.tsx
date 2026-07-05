@@ -1,13 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
+import type { FlowOrder } from "@/hooks/useSpxFlow";
+import { useEsCandles } from "@/hooks/useEsCandles";
+import type { EsCandleRecord } from "@/lib/snapdb";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test page: SPY / SPX directional options-flow inventory mockup.
-// Static reference data — layout/design test only, not wired to a live feed.
+// Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
+// same flow tape the /flow page reads (server-v2 /proxy/flow-history, which is
+// persisted flow_prints tagged by `underlying` — SPX + FLOW_TICKERS roots).
+// Aggregated client-side into the summary/donut/final-30/ATM-bets shape below.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type Slice = { label: string; pct: number; color: string };
@@ -37,95 +42,157 @@ const CATEGORY_COLOR: Record<string, string> = {
   "ITM Calls Sold": HOME_THEME.red,
 };
 
-const SPY: SymbolData = {
-  symbol: "SPY",
-  subtitle: "SPDR S&P 500 ETF Front Month Options Inventory",
-  date: "Mon Feb 24",
-  slices: [
-    { label: "OTM Puts Bought", pct: 36, color: CATEGORY_COLOR["OTM Puts Bought"] },
-    { label: "OTM Puts Sold", pct: 29, color: CATEGORY_COLOR["OTM Puts Sold"] },
-    { label: "ITM Calls Sold", pct: 14, color: CATEGORY_COLOR["ITM Calls Sold"] },
-    { label: "OTM Calls Sold", pct: 12, color: CATEGORY_COLOR["OTM Calls Sold"] },
-    { label: "OTM Calls Bought", pct: 9, color: CATEGORY_COLOR["OTM Calls Bought"] },
-  ],
-  bullish: 38,
-  bearish: 62,
-  summary: [
-    { label: "OTM Puts Sold", value: "$57,691,307", tone: "sold" },
-    { label: "OTM Calls Bought", value: "$17,797,824", tone: "bought" },
-    { label: "OTM Puts Bought", value: "$70,821,722", tone: "bought" },
-    { label: "OTM Calls Sold", value: "$24,035,150", tone: "sold" },
-    { label: "ITM Calls Sold", value: "$27,815,561", tone: "sold" },
-    { label: "All Puts Bought", value: "$194,341,484", tone: "highlight" },
-    { label: "All Puts Sold", value: "$192,608,205", tone: "highlight" },
-    { label: "All Calls Bought", value: "$55,392,044" },
-    { label: "All Calls Sold", value: "$84,120,282" },
-  ],
-  premium: [
-    { label: "All Puts (Premium)", value: "$47,470,826", tone: "highlight" },
-    { label: "All Calls (Premium)", value: "$22,191,582" },
-  ],
-  final30: [
-    { label: "Puts Bought", value: "$8,852,695" },
-    { label: "Puts Sold", value: "$5,514,147" },
-    { label: "Calls Bought", value: "$4,673,727" },
-    { label: "Calls Sold", value: "$6,522,662" },
-  ],
-  atmBets: [
-    { label: "Puts Bought", value: "$14,259,155" },
-    { label: "Puts Sold", value: "$22,136,421" },
-    { label: "Calls Sold", value: "$15,596,472" },
-    { label: "Calls Bought", value: "$19,787,025" },
-  ],
-  filters: ["Lot Size > 5", "Price > $5.00"],
-  series: "Feb Regulars",
-  totalPremium: "$526,462,015",
-};
+// Order requested: SPX, SPY, QQQ.
+const FLOW_TICKERS: { ticker: string; subtitle: string }[] = [
+  { ticker: "SPX", subtitle: "S&P 500 Index Front Month Options Inventory" },
+  { ticker: "SPY", subtitle: "SPDR S&P 500 ETF Front Month Options Inventory" },
+  { ticker: "QQQ", subtitle: "Invesco QQQ Trust Front Month Options Inventory" },
+];
 
-const SPX: SymbolData = {
-  symbol: "SPX",
-  subtitle: "S&P 500 Index Front Month Options Inventory",
-  date: "Mon Feb 24",
-  slices: [
-    { label: "OTM Puts Sold", pct: 46, color: CATEGORY_COLOR["OTM Puts Sold"] },
-    { label: "OTM Puts Bought", pct: 20, color: CATEGORY_COLOR["OTM Puts Bought"] },
-    { label: "OTM Calls Bought", pct: 16, color: CATEGORY_COLOR["OTM Calls Bought"] },
-    { label: "ITM Calls Sold", pct: 10, color: CATEGORY_COLOR["ITM Calls Sold"] },
-    { label: "OTM Calls Sold", pct: 8, color: CATEGORY_COLOR["OTM Calls Sold"] },
-  ],
-  bullish: 63,
-  bearish: 37,
-  summary: [
-    { label: "OTM Puts Sold", value: "$12,789,030", tone: "sold" },
-    { label: "OTM Calls Bought", value: "$4,549,400", tone: "bought" },
-    { label: "OTM Puts Bought", value: "$5,458,550", tone: "bought" },
-    { label: "OTM Calls Sold", value: "$2,072,240", tone: "sold" },
-    { label: "ITM Calls Sold", value: "$2,726,890", tone: "sold" },
-    { label: "All Puts Bought", value: "$22,411,595", tone: "highlight" },
-    { label: "All Puts Sold", value: "$25,059,231", tone: "highlight" },
-    { label: "All Calls Bought", value: "$10,798,991" },
-    { label: "All Calls Sold", value: "$11,392,591" },
-  ],
-  premium: [
-    { label: "All Puts (Premium)", value: "$47,470,826", tone: "highlight" },
-    { label: "All Calls (Premium)", value: "$22,191,582" },
-  ],
-  final30: [
-    { label: "Puts Bought", value: "$974,830" },
-    { label: "Puts Sold", value: "$1,152,890" },
-    { label: "Calls Bought", value: "$528,151" },
-    { label: "Calls Sold", value: "$76,680" },
-  ],
-  atmBets: [
-    { label: "Puts Bought", value: "$14,259,155" },
-    { label: "Puts Sold", value: "$22,136,421" },
-    { label: "Calls Sold", value: "$2,570,331" },
-    { label: "Calls Bought", value: "$3,085,751" },
-  ],
-  filters: ["Lot Size > 5", "Price > $5.00"],
-  series: "Feb Regulars",
-  totalPremium: "$69,662,408",
-};
+function fmtUsd(n: number): string {
+  const sign = n < 0 ? "-" : "";
+  return `${sign}$${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
+}
+
+function pctOf(n: number, total: number): number {
+  return total > 0 ? Math.round((n / total) * 1000) / 10 : 0;
+}
+
+// Final 30 minutes of RTH (15:30–16:00 ET).
+function isFinal30(ts: number): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date(ts));
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  const mins = h * 60 + m;
+  return mins >= 15 * 60 + 30 && mins <= 16 * 60;
+}
+
+// Aggregates a raw FlowOrder[] tape (from /proxy/flow-history) into the
+// summary/donut/final-30/ATM-bets shape the panels below render.
+function aggregateFlow(ticker: string, subtitle: string, orders: FlowOrder[]): SymbolData {
+  let otmPutsBought = 0, otmPutsSold = 0, otmCallsBought = 0, otmCallsSold = 0, itmCallsSold = 0;
+  let allPutsBought = 0, allPutsSold = 0, allCallsBought = 0, allCallsSold = 0;
+  let bullPrem = 0, bearPrem = 0, totalPremium = 0;
+  let f30PutsBought = 0, f30PutsSold = 0, f30CallsBought = 0, f30CallsSold = 0;
+  let atmPutsBought = 0, atmPutsSold = 0, atmCallsBought = 0, atmCallsSold = 0;
+  const expiryCounts = new Map<string, number>();
+
+  for (const o of orders) {
+    const prem = o.premium || 0;
+    const isPut = o.type === "P";
+    const isBuy = o.side === "buy";
+    totalPremium += prem;
+    if (o.expiration) expiryCounts.set(o.expiration, (expiryCounts.get(o.expiration) ?? 0) + 1);
+
+    if (isPut) { if (isBuy) allPutsBought += prem; else allPutsSold += prem; }
+    else       { if (isBuy) allCallsBought += prem; else allCallsSold += prem; }
+
+    const bullish = (isBuy && !isPut) || (!isBuy && isPut); // buy calls / sell puts
+    if (bullish) bullPrem += prem; else bearPrem += prem;
+
+    if (o.isOtm) {
+      if (isPut) { if (isBuy) otmPutsBought += prem; else otmPutsSold += prem; }
+      else       { if (isBuy) otmCallsBought += prem; else otmCallsSold += prem; }
+    } else {
+      // ITM/ATM bucket — feeds "ATM Bets"; ITM Calls Sold also breaks out
+      // separately into the summary/donut per the reference layout.
+      if (isPut) { if (isBuy) atmPutsBought += prem; else atmPutsSold += prem; }
+      else       { if (isBuy) atmCallsBought += prem; else { atmCallsSold += prem; itmCallsSold += prem; } }
+    }
+
+    if (isFinal30(o.ts)) {
+      if (isPut) { if (isBuy) f30PutsBought += prem; else f30PutsSold += prem; }
+      else       { if (isBuy) f30CallsBought += prem; else f30CallsSold += prem; }
+    }
+  }
+
+  const sliceTotal = otmPutsBought + otmPutsSold + otmCallsBought + otmCallsSold + itmCallsSold;
+  const slices: Slice[] = [
+    { label: "OTM Puts Bought", pct: pctOf(otmPutsBought, sliceTotal), color: CATEGORY_COLOR["OTM Puts Bought"] },
+    { label: "OTM Puts Sold", pct: pctOf(otmPutsSold, sliceTotal), color: CATEGORY_COLOR["OTM Puts Sold"] },
+    { label: "OTM Calls Bought", pct: pctOf(otmCallsBought, sliceTotal), color: CATEGORY_COLOR["OTM Calls Bought"] },
+    { label: "OTM Calls Sold", pct: pctOf(otmCallsSold, sliceTotal), color: CATEGORY_COLOR["OTM Calls Sold"] },
+    { label: "ITM Calls Sold", pct: pctOf(itmCallsSold, sliceTotal), color: CATEGORY_COLOR["ITM Calls Sold"] },
+  ].sort((a, b) => b.pct - a.pct);
+
+  const bullBearTotal = bullPrem + bearPrem;
+  const bullish = bullBearTotal > 0 ? Math.round((bullPrem / bullBearTotal) * 100) : 50;
+  const topExpiry = [...expiryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+
+  return {
+    symbol: ticker,
+    subtitle,
+    date: new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" }).format(new Date()),
+    slices,
+    bullish,
+    bearish: 100 - bullish,
+    summary: [
+      { label: "OTM Puts Sold", value: fmtUsd(otmPutsSold), tone: "sold" },
+      { label: "OTM Calls Bought", value: fmtUsd(otmCallsBought), tone: "bought" },
+      { label: "OTM Puts Bought", value: fmtUsd(otmPutsBought), tone: "bought" },
+      { label: "OTM Calls Sold", value: fmtUsd(otmCallsSold), tone: "sold" },
+      { label: "ITM Calls Sold", value: fmtUsd(itmCallsSold), tone: "sold" },
+      { label: "All Puts Bought", value: fmtUsd(allPutsBought), tone: "highlight" },
+      { label: "All Puts Sold", value: fmtUsd(allPutsSold), tone: "highlight" },
+      { label: "All Calls Bought", value: fmtUsd(allCallsBought) },
+      { label: "All Calls Sold", value: fmtUsd(allCallsSold) },
+    ],
+    premium: [
+      { label: "All Puts (Premium)", value: fmtUsd(allPutsBought + allPutsSold), tone: "highlight" },
+      { label: "All Calls (Premium)", value: fmtUsd(allCallsBought + allCallsSold) },
+    ],
+    final30: [
+      { label: "Puts Bought", value: fmtUsd(f30PutsBought) },
+      { label: "Puts Sold", value: fmtUsd(f30PutsSold) },
+      { label: "Calls Bought", value: fmtUsd(f30CallsBought) },
+      { label: "Calls Sold", value: fmtUsd(f30CallsSold) },
+    ],
+    atmBets: [
+      { label: "Puts Bought", value: fmtUsd(atmPutsBought) },
+      { label: "Puts Sold", value: fmtUsd(atmPutsSold) },
+      { label: "Calls Sold", value: fmtUsd(atmCallsSold) },
+      { label: "Calls Bought", value: fmtUsd(atmCallsBought) },
+    ],
+    filters: ["Live session tape", `${orders.length.toLocaleString()} prints`],
+    series: topExpiry ?? "—",
+    totalPremium: fmtUsd(totalPremium),
+  };
+}
+
+function useFlowInventory() {
+  const [data, setData] = useState<SymbolData[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const results = await Promise.all(
+        FLOW_TICKERS.map(async ({ ticker, subtitle }) => {
+          const res = await fetch(`/proxy/flow-history?underlying=${ticker}&limit=20000`);
+          if (!res.ok) throw new Error(`${ticker}: HTTP ${res.status}`);
+          const json = await res.json();
+          const tape: FlowOrder[] = Array.isArray(json?.tape) ? json.tape : [];
+          return aggregateFlow(ticker, subtitle, tape);
+        })
+      );
+      setData(results);
+      setError(null);
+      setLoadedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  return { data, error, loadedAt, reload: load };
+}
 
 function Donut({ slices, size = 190 }: { slices: Slice[]; size?: number }) {
   let acc = 0;
@@ -383,10 +450,27 @@ function amTbrX(i: number, n: number): number {
   return AMTBR_CHART_LEFT + (i / (n - 1)) * (AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT);
 }
 
-function AmTbrChart() {
-  const candles = buildAmTbrCandles();
+// Maps real ES 5m bars (real price units) into the same chart-space y-range
+// the procedural mock uses, so the toggle swaps candle series without moving
+// the (still illustrative) percentile bands/trigger lines.
+const ES_CHART_Y_TOP = 40;
+const ES_CHART_Y_BOTTOM = 820;
+function normalizeEsCandles(rows: EsCandleRecord[]): Candle[] {
+  const inWindow = rows.filter((r) => {
+    const t = r.time || (r.slotKey ?? "").slice(11, 16);
+    return t >= "05:30" && t <= "12:30";
+  });
+  if (!inWindow.length) return [];
+  const priceMin = Math.min(...inWindow.map((r) => r.low));
+  const priceMax = Math.max(...inWindow.map((r) => r.high));
+  const span = Math.max(priceMax - priceMin, 0.01);
+  const toY = (price: number) => ES_CHART_Y_BOTTOM - ((price - priceMin) / span) * (ES_CHART_Y_BOTTOM - ES_CHART_Y_TOP);
+  return inWindow.map((r) => ({ o: toY(r.open), h: toY(r.high), l: toY(r.low), c: toY(r.close) }));
+}
+
+function AmTbrChart({ candles, showMarkers }: { candles: Candle[]; showMarkers: boolean }) {
   const n = candles.length;
-  const candleW = ((AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT) / n) * 0.62;
+  const candleW = n > 1 ? ((AMTBR_CHART_RIGHT - AMTBR_CHART_LEFT) / n) * 0.62 : 8;
 
   return (
     <svg viewBox={`0 0 ${AMTBR_VB_W} ${AMTBR_VB_H}`} style={{ width: "100%", height: "auto", display: "block" }}>
@@ -423,7 +507,7 @@ function AmTbrChart() {
       <text x={30} y={(MFE_MEDIAN + MFE_90) / 2} fontSize={30} fontWeight={600} fill={HOME_THEME.text} opacity={0.55}>Reverted MFE</text>
 
       {/* Candles */}
-      {candles.map((cd, i) => {
+      {n > 1 && candles.map((cd, i) => {
         const x = amTbrX(i, n);
         const up = cd.c <= cd.o; // smaller y = higher price = "up" candle
         const color = up ? CANDLE_UP : CANDLE_DOWN;
@@ -437,17 +521,22 @@ function AmTbrChart() {
         );
       })}
 
-      {/* Trigger markers */}
-      <circle cx={amTbrX(19, n)} cy={PLUS_025} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
-      <polygon
-        points={`${amTbrX(19, n) - 7},${PLUS_025 - 7} ${amTbrX(19, n) + 7},${PLUS_025 - 7} ${amTbrX(19, n)},${PLUS_025 + 7}`}
-        fill={HOME_THEME.green}
-      />
-      <circle cx={amTbrX(38, n)} cy={TBR_OPEN_Y} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
-      <polygon
-        points={`${amTbrX(38, n)},${TBR_OPEN_Y - 9} ${amTbrX(38, n) + 9},${TBR_OPEN_Y} ${amTbrX(38, n)},${TBR_OPEN_Y + 9} ${amTbrX(38, n) - 9},${TBR_OPEN_Y}`}
-        fill={TBR_GOLD}
-      />
+      {/* Trigger markers — tuned to the procedural mock's narrative, so only
+          shown in mock mode (real ES bars won't line up with these indices). */}
+      {showMarkers && n > 38 && (
+        <>
+          <circle cx={amTbrX(19, n)} cy={PLUS_025} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
+          <polygon
+            points={`${amTbrX(19, n) - 7},${PLUS_025 - 7} ${amTbrX(19, n) + 7},${PLUS_025 - 7} ${amTbrX(19, n)},${PLUS_025 + 7}`}
+            fill={HOME_THEME.green}
+          />
+          <circle cx={amTbrX(38, n)} cy={TBR_OPEN_Y} r={16} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
+          <polygon
+            points={`${amTbrX(38, n)},${TBR_OPEN_Y - 9} ${amTbrX(38, n) + 9},${TBR_OPEN_Y} ${amTbrX(38, n)},${TBR_OPEN_Y + 9} ${amTbrX(38, n) - 9},${TBR_OPEN_Y}`}
+            fill={TBR_GOLD}
+          />
+        </>
+      )}
 
       {/* Time axis */}
       {AMTBR_TIME_LABELS.map((t, i) => (
@@ -467,15 +556,70 @@ function AmTbrChart() {
   );
 }
 
+function EsToggleSwitch({ on, onChange, connected }: { on: boolean; onChange: (v: boolean) => void; connected: boolean }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden" }}>
+        {(["Mock", "Live ES"] as const).map((label, i) => {
+          const isOn = i === 1;
+          const active = on === isOn;
+          return (
+            <button
+              key={label}
+              onClick={() => onChange(isOn)}
+              style={{
+                padding: "8px 16px",
+                border: "none",
+                background: active
+                  ? `linear-gradient(180deg, ${TBR_GOLD}33, ${TBR_GOLD}0D)`
+                  : "rgba(255,255,255,0.04)",
+                color: active ? TBR_GOLD : HOME_THEME.text,
+                fontSize: 13,
+                fontWeight: 800,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {on && (
+        <span style={{ fontSize: 13, color: connected ? HOME_THEME.green : HOME_THEME.text, opacity: connected ? 1 : 0.6 }}>
+          {connected ? "● live" : "connecting…"}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function AmTbrPanel() {
+  const [useRealEs, setUseRealEs] = useState(false);
+  const { candles: esCandles, connected } = useEsCandles(useRealEs, 1);
+  const realCandles = useRealEs ? normalizeEsCandles(esCandles) : [];
+  const showingReal = useRealEs && realCandles.length > 1;
+  const candles = showingReal ? realCandles : buildAmTbrCandles();
+
   return (
     <Card
       variant="dissolve"
       accent={TBR_GOLD}
       title={<span style={{ fontSize: 18 }}>AM TBR — Time-Based Range</span>}
-      subtitle="Rolling 20-day 8am–12pm distribution · reversion to TBR Open · UI mockup, no live data"
+      subtitle="Rolling 20-day 8am–12pm distribution · reversion to TBR Open"
     >
-      <AmTbrChart />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+          {showingReal
+            ? "Real ES 5m candles, 05:30–12:30 ET — bands/lines are still illustrative placeholders."
+            : useRealEs
+            ? "No ES bars yet for today's 05:30–12:30 window — showing mock candles."
+            : "Mock candles — flip to Live ES to overlay real ES 5m bars."}
+        </div>
+        <EsToggleSwitch on={useRealEs} onChange={setUseRealEs} connected={connected} />
+      </div>
+      <AmTbrChart candles={candles} showMarkers={!showingReal} />
       <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, marginTop: 12, opacity: 0.85 }}>
         Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
         sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
@@ -521,10 +665,258 @@ function AmTbrStatsCards() {
   );
 }
 
-function TestTabBar({ active, onChange }: { active: "flow" | "amtbr"; onChange: (tab: "flow" | "amtbr") => void }) {
-  const tabs: { key: "flow" | "amtbr"; label: string }[] = [
+// ─────────────────────────────────────────────────────────────────────────────
+// Options Positioning tab: SPX / NDX / SPY / QQQ Call Wall / Put Wall / Magnet
+// Strike (gamma flip) / Gamma Zone, live from the multi-ticker GEX scanner
+// (server-v2 scanner-recorder.js → scanner_snapshots → /proxy/scanner). Reuses
+// the exact walls/flip the scanner already computes via gex-calculator.js —
+// no new math on the server, just a new read + card layout.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"] as const;
+
+type PositioningRow = {
+  symbol: string;
+  spot: number;
+  expiry: string | null;
+  totalNetGex: number;
+  callWall: number | null;
+  putWall: number | null;
+  gexFlip: number | null;
+  ts: number;
+};
+
+function usePositioning() {
+  const [rows, setRows] = useState<Record<string, PositioningRow> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/proxy/scanner?limit=200`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
+      const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
+      const bySymbol: Record<string, PositioningRow> = {};
+      for (const r of list) {
+        const symbol = String(r.symbol ?? "");
+        if (!(POSITIONING_TICKERS as readonly string[]).includes(symbol)) continue;
+        bySymbol[symbol] = {
+          symbol,
+          spot: Number(r.spot) || 0,
+          expiry: (r.expiry as string) ?? null,
+          totalNetGex: Number(r.total_net_gex) || 0,
+          callWall: r.call_wall != null ? Number(r.call_wall) : null,
+          putWall: r.put_wall != null ? Number(r.put_wall) : null,
+          gexFlip: r.gex_flip != null ? Number(r.gex_flip) : null,
+          ts: Number(r.ts) || 0,
+        };
+      }
+      setRows(bySymbol);
+      setError(null);
+      setLoadedAt(Date.now());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  return { rows, error, loadedAt, reload: load };
+}
+
+function fmtPrice(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return `$${n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 })}`;
+}
+
+function pctFrom(spot: number, level: number | null): number | null {
+  if (level == null || !(spot > 0)) return null;
+  return ((level - spot) / spot) * 100;
+}
+
+function fmtPct(p: number | null): string {
+  if (p == null) return "—";
+  const sign = p >= 0 ? "+" : "";
+  return `${sign}${p.toFixed(1)}%`;
+}
+
+function LayersIcon({ color }: { color: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 2 7 12 12 22 7 12 2" />
+      <polyline points="2 17 12 22 22 17" />
+      <polyline points="2 12 12 17 22 12" />
+    </svg>
+  );
+}
+
+function LevelRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "10px 14px",
+        borderRadius: 8,
+        background: "rgba(255,255,255,0.03)",
+      }}
+    >
+      <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: 16, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+    </div>
+  );
+}
+
+function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number | null; color: string; maxAbs: number }) {
+  const p = pct ?? 0;
+  const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
+  const isPositive = p >= 0;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "78px 1fr 60px", alignItems: "center", gap: 10 }}>
+      <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, textAlign: "right" }}>{label}</div>
+      <div style={{ position: "relative", height: 20, borderRadius: 10, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
+        {halfWidthPct > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: 2,
+              bottom: 2,
+              left: isPositive ? "50%" : `${50 - halfWidthPct}%`,
+              width: `${halfWidthPct}%`,
+              borderRadius: 10,
+              background: color,
+            }}
+          />
+        )}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
+    </div>
+  );
+}
+
+// Gamma Zone = the range between spot and Call Wall when net GEX is positive
+// ("supportive" — dealers long gamma, upside capped/pinned toward the wall);
+// Put Wall → spot when net GEX is negative ("volatile" — dealers short gamma,
+// downside amplified). Magnet Strike = the gamma flip (zero-gamma) level,
+// the price the chain's dealer hedging gravitates toward.
+function PositioningCard({ row }: { row: PositioningRow }) {
+  const { symbol, spot, callWall, putWall, gexFlip, totalNetGex } = row;
+  const supportive = totalNetGex >= 0;
+  const regimeLabel = supportive ? "SUPPORTIVE" : "VOLATILE";
+  const regimeColor = supportive ? HOME_THEME.green : SOFT_RED;
+
+  const gammaLo = supportive ? spot : putWall ?? spot;
+  const gammaHi = supportive ? callWall ?? spot : spot;
+
+  const callPct = pctFrom(spot, callWall);
+  const putPct = pctFrom(spot, putWall);
+  const magnetPct = pctFrom(spot, gexFlip);
+  const gammaHiPct = pctFrom(spot, gammaHi);
+  const gammaLoPct = pctFrom(spot, gammaLo);
+
+  const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
+
+  return (
+    <Card variant="classic" padding={24}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <LayersIcon color={HOME_THEME.cyan} />
+        <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.85 }}>
+          Options Positioning
+        </div>
+        <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: HOME_THEME.cyan }}>{symbol}</div>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: regimeColor, marginBottom: 16 }}>{regimeLabel}</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+        <LevelRow label="Call Wall" value={fmtPrice(callWall)} color={HOME_THEME.green} />
+        <LevelRow label="Put Wall" value={fmtPrice(putWall)} color={SOFT_RED} />
+        <LevelRow label="Magnet Strike" value={fmtPrice(gexFlip)} color={HOME_THEME.orange} />
+        <LevelRow label="Gamma Zone" value={`${fmtPrice(gammaLo)} → ${fmtPrice(gammaHi)}`} color={HOME_THEME.cyan} />
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "78px 1fr 60px",
+          fontSize: 11,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: HOME_THEME.text,
+          opacity: 0.5,
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ textAlign: "right" }}>Below</div>
+        <div style={{ textAlign: "center" }}>Current {fmtPrice(spot)}</div>
+        <div style={{ textAlign: "right" }}>Above</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <PositionBar label="Call Wall" pct={callPct} color={HOME_THEME.green} maxAbs={maxAbs} />
+        <PositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Hi" pct={gammaHiPct} color={HOME_THEME.cyan} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Lo" pct={gammaLoPct} color={HOME_THEME.cyan} maxAbs={maxAbs} />
+        <PositionBar label="Put Wall" pct={putPct} color={SOFT_RED} maxAbs={maxAbs} />
+      </div>
+    </Card>
+  );
+}
+
+function OptionsPositioningTab() {
+  const { rows, error, loadedAt, reload } = usePositioning();
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+          {loadedAt
+            ? `Live GEX scanner · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
+            : "Loading positioning data…"}
+        </div>
+        <button onClick={reload} style={homeButtonStyle}>Refresh</button>
+      </div>
+      {error && <div style={{ fontSize: 17, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 24 }}>
+        {POSITIONING_TICKERS.map((sym) => {
+          const row = rows?.[sym];
+          if (!row) {
+            return (
+              <Card key={sym} variant="classic" padding={24}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <LayersIcon color={HOME_THEME.cyan} />
+                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.85 }}>
+                    Options Positioning
+                  </div>
+                  <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: HOME_THEME.cyan }}>{sym}</div>
+                </div>
+                <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.5 }}>
+                  {rows ? "No snapshot yet today — scanner sweep pending." : "Loading…"}
+                </div>
+              </Card>
+            );
+          }
+          return <PositioningCard key={sym} row={row} />;
+        })}
+      </div>
+      <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.5, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+        Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots).
+        Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile.
+      </div>
+    </>
+  );
+}
+
+function TestTabBar({ active, onChange }: { active: "flow" | "amtbr" | "positioning"; onChange: (tab: "flow" | "amtbr" | "positioning") => void }) {
+  const tabs: { key: "flow" | "amtbr" | "positioning"; label: string }[] = [
     { key: "flow", label: "Flow Inventory" },
     { key: "amtbr", label: "AM TBR" },
+    { key: "positioning", label: "Options Positioning" },
   ];
   return (
     <div style={{ display: "flex", gap: 10 }}>
@@ -557,22 +949,45 @@ function TestTabBar({ active, onChange }: { active: "flow" | "amtbr"; onChange: 
   );
 }
 
+function FlowInventoryTab() {
+  const { data, error, loadedAt, reload } = useFlowInventory();
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+          {loadedAt
+            ? `Live flow tape · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
+            : "Loading live flow tape…"}
+        </div>
+        <button onClick={reload} style={homeButtonStyle}>Refresh</button>
+      </div>
+      {error && <div style={{ fontSize: 17, color: HOME_THEME.red }}>Flow data error: {error}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: 24 }}>
+        {data
+          ? data.map((d) => <SymbolPanel key={d.symbol} data={d} />)
+          : FLOW_TICKERS.map(({ ticker }) => (
+              <Card key={ticker} variant="budget" accent={LIGHT_BLUE} title={ticker}>
+                <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.6 }}>Loading…</div>
+              </Card>
+            ))}
+      </div>
+      <div style={{ fontSize: 17, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+        Methodology (reference): &ldquo;Assessing Option Demand from Signed Volume Order Flow&rdquo; — Garrett DeSimone, Ph.D., Head of Quantitative
+        Research, OptionMetrics
+      </div>
+    </>
+  );
+}
+
 export default function TestPage() {
-  const [tab, setTab] = useState<"flow" | "amtbr">("amtbr");
+  const [tab, setTab] = useState<"flow" | "amtbr" | "positioning">("positioning");
   return (
     <PageShell>
       <TestTabBar active={tab} onChange={setTab} />
       {tab === "flow" ? (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(560px, 1fr))", gap: 24 }}>
-            <SymbolPanel data={SPY} />
-            <SymbolPanel data={SPX} />
-          </div>
-          <div style={{ fontSize: 13, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
-            Methodology (reference): &ldquo;Assessing Option Demand from Signed Volume Order Flow&rdquo; — Garrett DeSimone, Ph.D., Head of Quantitative
-            Research, OptionMetrics
-          </div>
-        </>
+        <FlowInventoryTab />
+      ) : tab === "positioning" ? (
+        <OptionsPositioningTab />
       ) : (
         <>
           <AmTbrPanel />

@@ -294,9 +294,9 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
       {/* Sale Summary — grouped bars: Subscriptions vs Expenses vs Combined, same granularity */}
       <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan }}>Sale Summary</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: T.cyan }}>Sale Summary</div>
         </div>
-        <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
+        <div style={{ fontSize: 17, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
 
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 150, flex: 1 }}>
           {rows.map((r, i) => (
@@ -334,10 +334,10 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
         <span>Amount</span>
         <span>Status</span>
@@ -345,7 +345,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {subs.length === 0 ? (
-          <div style={{ padding: "32px 16px", textAlign: "center", color: T.muted, fontSize: 12 }}>
+          <div style={{ padding: "32px 16px", textAlign: "center", color: T.muted, fontSize: 17 }}>
             No active subscriptions found
           </div>
         ) : subs.map((s) => (
@@ -394,9 +394,9 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
     <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: T.cyan, marginBottom: 12 }}>Recent Customers</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: T.cyan, marginBottom: 12 }}>Recent Customers</div>
       {customers.length === 0 ? (
-        <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 12 }}>No customers yet</div>
+        <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 17 }}>No customers yet</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {customers.filter(c => c.email && c.email !== "—").map((c) => (
@@ -406,8 +406,8 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
               style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
             >
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: T.cyan, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
-                <div style={{ fontSize: 11, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
+                <div style={{ fontSize: 17, fontWeight: 600, color: T.cyan, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                <div style={{ fontSize: 17, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
               </div>
               <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                 {c.subscriptions.length === 0 ? (
@@ -463,14 +463,14 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Expenses</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan }}>Expenses</span>
         <span
           title="Sum of every recurring expense converted to a monthly-equivalent cost (yearly ÷ 12); one-off costs aren't counted in this run-rate."
           style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
         >
           {fmtMoney(totalMonthly)}/mo
         </span>
-        <span style={{ fontSize: 11, color: T.textSecondary }}>recurring + one-off costs, netted against MRR above</span>
+        <span style={{ fontSize: 17, color: T.textSecondary }}>recurring + one-off costs, netted against MRR above</span>
         <button onClick={() => onAdd(name, category, parseFloat(amount), cadence)} style={{ display: "none" }} />
       </div>
 
@@ -482,9 +482,9 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           placeholder="expense name…"
-          style={{ flex: "1 1 160px", padding: "6px 10px", fontSize: 12, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
+          style={{ flex: "1 1 160px", padding: "6px 10px", fontSize: 17, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
         />
-        <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ padding: "6px 8px", fontSize: 12, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
+        <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ padding: "6px 8px", fontSize: 17, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
           {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <input
@@ -493,19 +493,19 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
           onChange={(e) => setAmount(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           placeholder="amount $"
-          style={{ width: 90, padding: "6px 10px", fontSize: 12, fontFamily: "var(--font-mono)", background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
+          style={{ width: 90, padding: "6px 10px", fontSize: 17, fontFamily: "var(--font-mono)", background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
         />
-        <select value={cadence} onChange={(e) => setCadence(e.target.value as "monthly" | "yearly" | "once")} style={{ padding: "6px 8px", fontSize: 12, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
+        <select value={cadence} onChange={(e) => setCadence(e.target.value as "monthly" | "yearly" | "once")} style={{ padding: "6px 8px", fontSize: 17, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
           <option value="monthly">Monthly</option>
           <option value="yearly">Yearly</option>
           <option value="once">One-off</option>
         </select>
-        <button onClick={submit} disabled={busy || !name.trim() || !amount} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 11, opacity: busy || !name.trim() || !amount ? 0.5 : 1 }}>
+        <button onClick={submit} disabled={busy || !name.trim() || !amount} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 17, opacity: busy || !name.trim() || !amount ? 0.5 : 1 }}>
           + Add
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 11, fontWeight: 600, color: T.muted, letterSpacing: "0.01em" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em" }}>
         <span>Item</span>
         <span>Category</span>
         <span>Amount</span>
@@ -515,11 +515,11 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
 
       <div style={{ maxHeight: 280, overflowY: "auto" }}>
         {error ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 17 }}>{error}</div>
         ) : loading && !expenses ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>Loading…</div>
         ) : expenses && expenses.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>No expenses tracked yet</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>No expenses tracked yet</div>
         ) : (
           expenses?.map((e) => (
             <div
@@ -528,11 +528,11 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
               style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 13, alignItems: "center" }}
             >
               <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</span>
-              <span style={{ color: T.textSecondary, fontSize: 12 }}>{e.category}</span>
-              <span style={{ color: T.red, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 13 }}>
+              <span style={{ color: T.textSecondary, fontSize: 17 }}>{e.category}</span>
+              <span style={{ color: T.red, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 17 }}>
                 {fmtMoney(e.amount_cents)}{e.cadence === "monthly" ? "/mo" : e.cadence === "yearly" ? "/yr" : ""}
               </span>
-              <span style={{ color: T.textSecondary, fontSize: 12, textTransform: "capitalize" }}>{e.cadence === "once" ? "One-off" : e.cadence}</span>
+              <span style={{ color: T.textSecondary, fontSize: 17, textTransform: "capitalize" }}>{e.cadence === "once" ? "One-off" : e.cadence}</span>
               <button onClick={() => onRemove(e.id)} disabled={busy} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 10, opacity: busy ? 0.5 : 1 }}>
                 Remove
               </button>
@@ -668,18 +668,18 @@ export default function SalesDashboard() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
+          <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
             Sales · Stripe
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 12, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
+            <span style={{ fontSize: 17, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             onClick={() => { load(); loadExpenses(); }}
             disabled={loading}
-            style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 10, opacity: loading ? 0.5 : 1 }}
+            style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 17, opacity: loading ? 0.5 : 1 }}
           >
             {loading ? "Loading…" : "↻ Refresh"}
           </button>
@@ -690,7 +690,7 @@ export default function SalesDashboard() {
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 20 }}>
 
         {loading && !data && (
-          <div style={{ ...homePanelStyle, padding: 32, textAlign: "center", color: T.muted, fontSize: 13 }}>
+          <div style={{ ...homePanelStyle, padding: 32, textAlign: "center", color: T.muted, fontSize: 17 }}>
             Loading Stripe data…
           </div>
         )}
@@ -761,12 +761,12 @@ export default function SalesDashboard() {
 
             {/* Stripe Dashboard link */}
             <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12, color: T.muted }}>Full billing management, invoices, and payouts</span>
+              <span style={{ fontSize: 17, color: T.muted }}>Full billing management, invoices, and payouts</span>
               <a
                 href="https://dashboard.stripe.com"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ ...homeButtonStyle, fontSize: 11, padding: "6px 16px", textDecoration: "none" }}
+                style={{ ...homeButtonStyle, fontSize: 17, padding: "6px 16px", textDecoration: "none" }}
               >
                 Open Stripe Dashboard ↗
               </a>
@@ -776,8 +776,8 @@ export default function SalesDashboard() {
 
         {data?.error && data.configured && (
           <div style={{ ...homePanelStyle, padding: "16px 18px", border: `1px solid ${T.red}44` }}>
-            <div style={{ fontSize: 12, color: T.red, fontWeight: 600, marginBottom: 4 }}>Stripe API Error</div>
-            <div style={{ fontSize: 11, color: T.muted, fontFamily: "var(--font-mono)" }}>{data.error}</div>
+            <div style={{ fontSize: 17, color: T.red, fontWeight: 600, marginBottom: 4 }}>Stripe API Error</div>
+            <div style={{ fontSize: 17, color: T.muted, fontFamily: "var(--font-mono)" }}>{data.error}</div>
           </div>
         )}
 
