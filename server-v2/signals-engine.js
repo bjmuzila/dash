@@ -242,9 +242,12 @@ function inSession() {
 }
 
 // ── context levels from ES candles (session H/L + volume profile), cached 60s ──
+// `asOf` defaults to Date.now() for the live engine; the backtest replay passes
+// each historical bar's timestamp so PDH/PDL/overnight windows and the 60s
+// cache key are computed relative to simulated time, not wall-clock time.
 let ctxCache = { at: 0, levels: {} };
-function computeContextLevels(esCandles) {
-  const now = Date.now();
+function computeContextLevels(esCandles, asOf = Date.now()) {
+  const now = asOf;
   if (now - ctxCache.at < 60_000) return ctxCache.levels;
   const out = { pdh: null, pdl: null, onh: null, onl: null, poc: null, vah: null, val: null };
   const bars = Array.isArray(esCandles) ? esCandles.filter((c) => c && c.high > 0 && c.low > 0) : [];
