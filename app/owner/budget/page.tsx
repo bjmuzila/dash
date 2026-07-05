@@ -432,17 +432,18 @@ export default function BudgetPage() {
       <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
-          <div style={{ marginBottom: 12 }}>
-            <div style={labelCap()}>Month</div>
-            <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
-          </div>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
             <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
           </div>
+          <div style={{ marginTop: 14 }}>
+            <div style={labelCap()}>Month</div>
+            <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
+          </div>
         </div>
 
         {/* Stat cards */}
+        {tab !== "yearly" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
           {[
             { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? SOFT_RED : HOME_THEME.text, icon: "📊" },
@@ -459,9 +460,11 @@ export default function BudgetPage() {
             </div>
           ))}
         </div>
+        )}
 
-        {/* Projection chart + cashflow calendar */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.35fr", gap: 14 }}>
+        {/* Projection chart (full width) + cashflow calendar */}
+        {tab !== "yearly" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={{ ...dissolveCard(), padding: 16 }}>
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
             <ProjectionChart series={computed.series} currency={currency} />
@@ -471,6 +474,7 @@ export default function BudgetPage() {
             <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
           </div>
         </div>
+        )}
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -712,9 +716,9 @@ type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: numb
 function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
   if (series.length < 2) {
-    return <div style={{ height: 150, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 15 }}>Add entries to see the projection.</div>;
+    return <div style={{ height: 240, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 15 }}>Add entries to see the projection.</div>;
   }
-  const W = 560, H = 150, padL = 4, padR = 4, padT = 8, padB = 18;
+  const W = 560, H = 240, padL = 4, padR = 4, padT = 8, padB = 18;
   const ys = series.map((p) => p.balance);
   const maxY = Math.max(...ys, 0);
   const minY = Math.min(...ys, 0);
@@ -775,6 +779,8 @@ function CalendarGrid({
   const firstWeekday = new Date(y, m - 1, 1).getDay(); // 0 = Sun
   const byDate = new Map(groups.map((g) => [g.date, g]));
   const iso = (d: number) => `${month}-${String(d).padStart(2, "0")}`;
+  const todayStr = todayIso();
+  const todayDay = todayStr.slice(0, 7) === month ? Number(todayStr.slice(8, 10)) : null;
   const WD = ["S", "M", "T", "W", "T", "F", "S"];
   const cells: (number | null)[] = [
     ...Array(firstWeekday).fill(null),
@@ -790,8 +796,9 @@ function CalendarGrid({
         const g = byDate.get(iso(d));
         const net = g?.dailyNet ?? 0;
         const isSel = selected === iso(d);
+        const isToday = d === todayDay;
         const pos = net > 0, neg = net < 0;
-        const tint = neg ? "rgba(239,68,68,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+        const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
         return (
           <button
             key={d}
@@ -800,12 +807,15 @@ function CalendarGrid({
             style={{
               textAlign: "left", minHeight: 56, padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
               background: tint,
-              border: `1px solid ${isSel ? "#7dd3fc" : g ? HOME_THEME.border : "transparent"}`,
-              boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : "none",
+              border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
+              boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",
               color: HOME_THEME.text, transition: "all 0.12s ease",
             }}
           >
-            <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.muted }}>{d}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>{d}</span>
+              {isToday && <span style={{ fontSize: 10, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.08em", textTransform: "uppercase" }}>today</span>}
+            </div>
             {g && <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
         );

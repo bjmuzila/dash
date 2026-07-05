@@ -107,6 +107,25 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
           ch.style.overflow = "visible";
         });
       }
+      // Plain <canvas> charts (e.g. GexChart) are backed at devicePixelRatio
+      // for crispness. html2canvas special-cases <canvas> elements: instead of
+      // rasterizing the (blank) cloned canvas, it fetches the LIVE canvas's
+      // pixel buffer and draws it through its own scale transform — applying
+      // the dpr scale a second time on top of the already-dpr-sized buffer.
+      // That double-scales the chart, so only a zoomed-in top-left quarter
+      // fits in frame (fewer/bigger bars, put side clipped off the bottom).
+      // Fix: remove the canvas from the clone entirely (a placeholder div
+      // keeps the layout box) so html2canvas has nothing to draw there, then
+      // composite the real canvas bitmap ourselves, once, at the correct scale.
+      if (isCanvas && !isLtChart) {
+        const clonedCanvas = clone.querySelector("canvas");
+        if (clonedCanvas) {
+          const placeholder = doc.createElement("div");
+          placeholder.style.cssText = clonedCanvas.style.cssText;
+          clonedCanvas.replaceWith(placeholder);
+        }
+      }
+
       const inter = "var(--font-inter), Inter, Arial, sans-serif";
       // Solid title band across the top so it never collides with table headers
       // or chart legends behind it.
@@ -151,6 +170,26 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     const dh = tRect.height * scale;
     const ctx = base.getContext("2d");
     if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
+  }
+
+  // Plain <canvas> charts: the clone's canvas was stripped out above (leaving
+  // this region blank in `base`), so composite the real, live canvas bitmap in
+  // ourselves at the correct destination rect. Since the live canvas is already
+  // backed at devicePixelRatio, drawImage scales it 1:1 into the dpr-scaled
+  // capture with no double-scaling.
+  if (isCanvas && !isLtChart) {
+    const plainCanvas = el.querySelector("canvas") as HTMLCanvasElement | null;
+    if (plainCanvas) {
+      const scale = window.devicePixelRatio || 1;
+      const elRect = el.getBoundingClientRect();
+      const cRect = plainCanvas.getBoundingClientRect();
+      const dx = (cRect.left - elRect.left) * scale;
+      const dy = (cRect.top - elRect.top) * scale;
+      const dw = cRect.width * scale;
+      const dh = cRect.height * scale;
+      const ctx = base.getContext("2d");
+      if (ctx) ctx.drawImage(plainCanvas, dx, dy, dw, dh);
+    }
   }
 
   return base.toDataURL("image/png");
