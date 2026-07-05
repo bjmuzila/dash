@@ -136,12 +136,12 @@ function KpiCard({
 }) {
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }} title={tooltip}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: T.cyan, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 600, color: T.cyan, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
         <div style={{ fontSize: 32, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
         {spark && spark.length > 1 && <Sparkline points={spark} color={sparkColor ?? T.cyan} />}
       </div>
-      {sub && <div style={{ fontSize: 13, color: T.textSecondary }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 17, color: T.textSecondary }}>{sub}</div>}
     </div>
   );
 }
@@ -150,17 +150,17 @@ function SetupBanner() {
   return (
     <div style={{ ...homePanelStyle, padding: "32px 28px", textAlign: "center", border: `1px solid ${T.cyan}33` }}>
       <div style={{ fontSize: 32, marginBottom: 12 }}>💳</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: T.text, marginBottom: 8 }}>Stripe not configured</div>
-      <div style={{ fontSize: 13, color: T.muted, maxWidth: 480, margin: "0 auto 20px", lineHeight: 1.6 }}>
+      <div style={{ fontSize: 18, fontWeight: 700, color: T.text, marginBottom: 8 }}>Stripe not configured</div>
+      <div style={{ fontSize: 17, color: T.muted, maxWidth: 480, margin: "0 auto 20px", lineHeight: 1.6 }}>
         Add your Stripe secret key to enable real subscription data, MRR tracking, customer management, and live transaction logs.
       </div>
-      <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 8, padding: "14px 18px", fontFamily: "var(--font-mono)", fontSize: 12, color: T.cyan, textAlign: "left", maxWidth: 420, margin: "0 auto 20px", border: `1px solid ${T.border}` }}>
+      <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 8, padding: "14px 18px", fontFamily: "var(--font-mono)", fontSize: 17, color: T.cyan, textAlign: "left", maxWidth: 420, margin: "0 auto 20px", border: `1px solid ${T.border}` }}>
         <div style={{ color: T.muted, marginBottom: 6 }}># Add to .env.local on VPS</div>
         <div>STRIPE_SECRET_KEY=sk_live_...</div>
         <div>STRIPE_WEBHOOK_SECRET=whsec_...</div>
         <div style={{ color: T.muted, marginTop: 6 }}>NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...</div>
       </div>
-      <div style={{ fontSize: 11, color: T.muted }}>
+      <div style={{ fontSize: 17, color: T.muted }}>
         Then rebuild: <code style={{ color: T.cyan, fontFamily: "var(--font-mono)" }}>docker compose up -d --build dashboard</code>
       </div>
     </div>
@@ -178,7 +178,7 @@ function GranTabs({ value, onChange }: { value: Granularity; onChange: (g: Granu
           onClick={() => onChange(g)}
           style={{
             padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
-            fontSize: 11, fontWeight: 700, textTransform: "capitalize",
+            fontSize: 17, fontWeight: 700, textTransform: "capitalize",
             background: value === g ? T.cyan : "transparent",
             color: value === g ? "#04141a" : T.textSecondary,
           }}
@@ -262,8 +262,8 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
       <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
           <div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: T.cyan, marginBottom: 3 }}>Revenue Summary</div>
-            <div style={{ fontSize: 12, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: T.cyan, marginBottom: 3 }}>Revenue Summary</div>
+            <div style={{ fontSize: 17, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
           </div>
           <GranTabs value={gran} onChange={setGran} />
         </div>

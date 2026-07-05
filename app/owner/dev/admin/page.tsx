@@ -48,33 +48,33 @@ function NotPayingPanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Signed Up · Not Paying</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan}}>Signed Up · Not Paying</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
           {emails ? emails.length : "—"}
         </span>
-        <span style={{ fontSize: 11, color: T.textSecondary }}>accounts created without an active subscription</span>
+        <span style={{ fontSize: 17, color: T.textSecondary }}>accounts created without an active subscription</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1 }}>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 17, opacity: loading ? 0.5 : 1 }}>
             {loading ? "…" : "↻"}
           </button>
-          <button onClick={copyAll} disabled={!emails?.length} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: emails?.length ? 1 : 0.5 }}>
+          <button onClick={copyAll} disabled={!emails?.length} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 17, opacity: emails?.length ? 1 : 0.5 }}>
             {copied ? "✓ Copied" : "Copy emails"}
           </button>
-          <Link href="/owner/admin/emails?audience=not_paying" style={{ ...homeButtonStyle, padding: "4px 14px", fontSize: 11, textDecoration: "none" }}>
+          <Link href="/owner/admin/emails?audience=not_paying" style={{ ...homeButtonStyle, padding: "4px 14px", fontSize: 17, textDecoration: "none" }}>
             Email these →
           </Link>
         </div>
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto", padding: "6px 0" }}>
         {error ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 17 }}>{error}</div>
         ) : loading && !emails ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>Loading…</div>
         ) : emails && emails.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Everyone who signed up is paying 🎉</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>Everyone who signed up is paying 🎉</div>
         ) : (
           emails?.map((email) => (
-            <div key={email} style={{ padding: "6px 16px", fontSize: 12, color: T.text, fontFamily: "var(--font-mono)", borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
+            <div key={email} style={{ padding: "6px 16px", fontSize: 17, color: T.text, fontFamily: "var(--font-mono)", borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
               {email}
             </div>
           ))
@@ -158,18 +158,18 @@ function CustomerActivityPanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Customer Activity</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan}}>Customer Activity</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
-        <span style={{ fontSize: 11, color: T.textSecondary }}>last login · time on site (approx) · pages</span>
+        <span style={{ fontSize: 17, color: T.textSecondary }}>last login · time on site (approx) · pages</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
           {(["lastSeen", "time", "pages"] as const).map((s) => (
             <button
               key={s}
               onClick={() => setSort(s)}
               style={{
-                ...homeSecondaryButtonStyle, padding: "4px 10px", fontSize: 10,
+                ...homeSecondaryButtonStyle, padding: "4px 10px", fontSize: 17,
                 borderColor: sort === s ? T.cyan : undefined,
                 color: sort === s ? T.cyan : undefined,
               }}
@@ -177,7 +177,7 @@ function CustomerActivityPanel() {
               {s === "lastSeen" ? "Recent" : s === "time" ? "Time" : "Pages"}
             </button>
           ))}
-          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1 }}>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 17, opacity: loading ? 0.5 : 1 }}>
             {loading ? "…" : "↻"}
           </button>
         </div>
@@ -194,11 +194,11 @@ function CustomerActivityPanel() {
 
       <div style={{ maxHeight: 380, overflowY: "auto" }}>
         {error ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 17 }}>{error}</div>
         ) : loading && !rows ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>Loading…</div>
         ) : sorted.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>No tracked activity yet</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>No tracked activity yet</div>
         ) : (
           sorted.map((r) => (
             <div key={r.userId} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 12, alignItems: "center" }}>
@@ -218,7 +218,7 @@ function CustomerActivityPanel() {
           ))
         )}
       </div>
-      <div style={{ padding: "8px 16px", borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.muted }}>
+      <div style={{ padding: "8px 16px", borderTop: `1px solid ${T.border}`, fontSize: 17, color: T.muted }}>
         Time on site is estimated from page-load timestamps (30-min session gap) and is a lower bound — the last page of each session isn&apos;t counted.
       </div>
     </div>
@@ -261,12 +261,12 @@ function FarCbTickersPanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Far CB Watch — Tickers Added</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan}}>Far CB Watch — Tickers Added</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
-        <span style={{ fontSize: 11, color: T.textSecondary }}>customer additions on top of the curated core list</span>
-        <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1, marginLeft: "auto" }}>
+        <span style={{ fontSize: 17, color: T.textSecondary }}>customer additions on top of the curated core list</span>
+        <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 17, opacity: loading ? 0.5 : 1, marginLeft: "auto" }}>
           {loading ? "…" : "↻"}
         </button>
       </div>
@@ -279,17 +279,17 @@ function FarCbTickersPanel() {
 
       <div style={{ maxHeight: 280, overflowY: "auto" }}>
         {error ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 17 }}>{error}</div>
         ) : loading && !rows ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>Loading…</div>
         ) : !rows || rows.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>No customer-added tickers yet</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>No customer-added tickers yet</div>
         ) : (
           rows.map((r) => (
-            <div key={r.symbol} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 12, alignItems: "center" }}>
+            <div key={r.symbol} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 17, alignItems: "center" }}>
               <span style={{ color: T.text, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{r.symbol}</span>
               <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.added_by_email ?? r.added_by_id ?? "—"}</span>
-              <span style={{ color: T.textSecondary, fontSize: 11 }}>{r.created_at ? new Date(r.created_at).toLocaleString() : "—"}</span>
+              <span style={{ color: T.textSecondary, fontSize: 17 }}>{r.created_at ? new Date(r.created_at).toLocaleString() : "—"}</span>
             </div>
           ))
         )}
@@ -366,13 +366,13 @@ function UnsubscribePanel() {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>Unsubscribes · Do Not Email</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: T.cyan}}>Unsubscribes · Do Not Email</span>
         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
-        <span style={{ fontSize: 11, color: T.textSecondary }}>skipped by every broadcast audience</span>
+        <span style={{ fontSize: 17, color: T.textSecondary }}>skipped by every broadcast audience</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 11, opacity: loading ? 0.5 : 1 }}>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 17, opacity: loading ? 0.5 : 1 }}>
             {loading ? "…" : "↻"}
           </button>
         </div>
@@ -387,31 +387,31 @@ function UnsubscribePanel() {
           onKeyDown={(e) => { if (e.key === "Enter") add(); }}
           placeholder="add email to suppress…"
           style={{
-            flex: 1, padding: "6px 10px", fontSize: 12, fontFamily: "var(--font-mono)",
+            flex: 1, padding: "6px 10px", fontSize: 17, fontFamily: "var(--font-mono)",
             background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none",
           }}
         />
-        <button onClick={add} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 11, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
+        <button onClick={add} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 17, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
           Suppress
         </button>
       </div>
 
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
         {error ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 12 }}>{error}</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 17 }}>{error}</div>
         ) : loading && !rows ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>Loading…</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>Loading…</div>
         ) : rows && rows.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 12 }}>No unsubscribes yet</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>No unsubscribes yet</div>
         ) : (
           rows?.map((r) => (
-            <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 12 }}>
+            <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 17 }}>
               <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
               <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: r.source === "manual" ? `${T.orange}18` : `${T.muted}18`, border: `1px solid ${r.source === "manual" ? T.orange : T.muted}44`, color: r.source === "manual" ? T.orange : T.muted, flexShrink: 0 }}>
                 {r.source}
               </span>
-              <span style={{ fontSize: 10, color: T.muted, flexShrink: 0 }}>{fmtRelative(r.created_at)}</span>
-              <button onClick={() => remove(r.email)} disabled={busy} title="Re-subscribe (remove from list)" style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 10, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+              <span style={{ fontSize: 17, color: T.muted, flexShrink: 0 }}>{fmtRelative(r.created_at)}</span>
+              <button onClick={() => remove(r.email)} disabled={busy} title="Re-subscribe (remove from list)" style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 17, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
                 Re-subscribe
               </button>
             </div>
@@ -434,17 +434,17 @@ export default function AdminDashboard() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
+          <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
             Admin
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 12, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
+            <span style={{ fontSize: 17, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Link
             href="/owner/dev/sales"
-            style={{ ...homeButtonStyle, padding: "5px 14px", fontSize: 11, textDecoration: "none" }}
+            style={{ ...homeButtonStyle, padding: "5px 14px", fontSize: 17, textDecoration: "none" }}
           >
             Sales →
           </Link>

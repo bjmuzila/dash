@@ -180,38 +180,15 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     const scale = window.devicePixelRatio || 1;
     const elRect = el.getBoundingClientRect();
     const tRect = lt.target.getBoundingClientRect();
-    // Offset of the chart layer within the captured element, in canvas px. Add
-    // the title-band reserve so the candle bitmap lands below the band. The clone
-    // reserves 44px of paddingTop (non-canvas path); the bare-canvas path adds
-    // none. Match that exactly so the composited candles aren't pushed off by the
-    // band/padding mismatch.
-    const bandReserve = isCanvas ? 0 : 44;
+    // Offset of the chart layer within the captured element, in canvas px.
+    // The clone reserves 44px of paddingTop for the title band, so shift the
+    // composited candle bitmap down by that same amount.
     const dx = (tRect.left - elRect.left) * scale;
-    const dy = (tRect.top - elRect.top + bandReserve) * scale;
+    const dy = (tRect.top - elRect.top + 44) * scale;
     const dw = tRect.width * scale;
     const dh = tRect.height * scale;
     const ctx = base.getContext("2d");
     if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
-  }
-
-  // Plain <canvas> charts: the clone's canvas was stripped out above (leaving
-  // this region blank in `base`), so composite the real, live canvas bitmap in
-  // ourselves at the correct destination rect. Since the live canvas is already
-  // backed at devicePixelRatio, drawImage scales it 1:1 into the dpr-scaled
-  // capture with no double-scaling.
-  if (isCanvas && !isLtChart) {
-    const plainCanvas = el.querySelector("canvas") as HTMLCanvasElement | null;
-    if (plainCanvas) {
-      const scale = window.devicePixelRatio || 1;
-      const elRect = el.getBoundingClientRect();
-      const cRect = plainCanvas.getBoundingClientRect();
-      const dx = (cRect.left - elRect.left) * scale;
-      const dy = (cRect.top - elRect.top + 44) * scale;
-      const dw = cRect.width * scale;
-      const dh = cRect.height * scale;
-      const ctx = base.getContext("2d");
-      if (ctx) ctx.drawImage(plainCanvas, dx, dy, dw, dh);
-    }
   }
 
   return base.toDataURL("image/png");

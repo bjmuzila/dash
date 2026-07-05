@@ -47,7 +47,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch";
+type MainTab = "overview" | "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch" | "marketquality";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -110,6 +110,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "EM watchlist · 30d expiries",
     what: "Flags the single highest-GEX strike per ticker (≤30 DTE) when it sits unusually far OTM vs spot, then tracks whether spot ever reaches it.",
     tells: "A structurally dominant level that's currently far from price — worth watching, with a running record of whether it ever gets touched.",
+  },
+  {
+    tab: "marketquality",
+    title: "Market Quality Terminal",
+    accent: HOME_THEME.orange,
+    scope: "Broad market · 5 pillars",
+    what: "A single 0–100 Global Market Score blending Volatility, Trend, Breadth, Momentum, and Macro (bonds/dollar) pillars from live index and sector-ETF data.",
+    tells: "Whether the overall tape is a favorable, cautious, or risk-off environment for sizing new trades — a top-down regime check before you drill into any single ticker.",
   },
 ];
 
@@ -1330,6 +1338,315 @@ function WatchThisScanner() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  MARKET QUALITY TERMINAL (new tab) — 5-pillar global market score
+// ══════════════════════════════════════════════════════════════════════════════
+
+type Pillars = {
+  volatility: { score: number; weight: number; weighted: number; vixLevel: number | null; vixTrend: string; ivPercentile: number | null; putCall: number | null };
+  trend: { score: number; weight: number; weighted: number; regime: string; spyVs20: boolean | null; spyVs50: boolean | null; spyVs200: boolean | null; qqqVs50: boolean | null; rsi14: number | null };
+  breadth: { score: number; weight: number; weighted: number; aboveCount: number; total: number; participation: string; sectors: { symbol: string; above: boolean | null }[] };
+  momentum: { score: number; weight: number; weighted: number; positiveCount: number; total: number; spread: number | null; leader: { symbol: string; chg5d: number } | null; laggard: { symbol: string; chg5d: number } | null; rotation: string };
+  macro: { score: number; weight: number; weighted: number; tltLast: number | null; tltTrend: string; uupTrend: string; uup5d: number | null };
+};
+
+type MqData = {
+  asOf: string;
+  globalScore: number;
+  banner: { label: string; tone: "green" | "cyan" | "orange" | "red"; sizing: string };
+  pillars: Pillars;
+  sectorBars: { symbol: string; name: string; chg5d: number | null }[];
+  assessment: string;
+  source: string;
+};
+
+const TONE_COLOR: Record<string, string> = {
+  green: HOME_THEME.green, cyan: HOME_THEME.cyan, orange: HOME_THEME.orange, red: HOME_THEME.red,
+};
+
+const scoreColor = (score: number) =>
+  score >= 75 ? HOME_THEME.green : score >= 60 ? HOME_THEME.cyan : score >= 40 ? HOME_THEME.orange : HOME_THEME.red;
+
+function RingGauge({ score, label, sub }: { score: number; label: string; sub: string }) {
+  const size = 108, stroke = 9, r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  const pct = clamp01(score / 100);
+  const dash = c * pct;
+  const color = scoreColor(score);
+  // End-cap dot position
+  const angle = -90 + pct * 360;
+  const rad = (angle * Math.PI) / 180;
+  const cx = size / 2 + r * Math.cos(rad);
+  const cy = size / 2 + r * Math.sin(rad);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+      <svg width={size} height={size} style={{ overflow: "visible" }}>
+        <defs>
+          <filter id={`glow-${label}`} x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" /><feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} strokeDasharray="2 5" />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={`${dash} ${c - dash}`} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          filter={`url(#glow-${label})`} style={{ transition: "stroke-dasharray 0.6s ease" }}
+        />
+        {pct > 0.02 && <circle cx={cx} cy={cy} r={4} fill="#fff" />}
+        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" fontSize={28} fontWeight={800} fill={HOME_THEME.text}>
+          {Math.round(score)}
+        </text>
+      </svg>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>{label}</div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+
+function MqPanel({ title, accent, children }: { title: string; accent: string; score: number; children: React.ReactNode }) {
+  return (
+    <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px", background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 65%), rgba(13,17,25,0.25)` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.05em", color: accent, textTransform: "uppercase" }}>{title}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{children}</div>
+    </div>
+  );
+}
+
+function MqRow({ label, value, valueColor }: { label: string; value: React.ReactNode; valueColor?: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+      <span style={{ color: "rgba(255,255,255,0.55)" }}>{label}</span>
+      <span style={{ fontWeight: 700, color: valueColor ?? HOME_THEME.text }}>{value}</span>
+    </div>
+  );
+}
+
+function MarketQualityScanner() {
+  const [data, setData] = useState<MqData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const res = await fetch("/api/scanner/market-quality", { cache: "no-store" });
+      const text = await res.text();
+      let j: any;
+      try { j = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status} (non-JSON).`); }
+      if (j.error) throw new Error(j.error);
+      setData(j.data);
+    } catch (e: any) { setErr(String(e?.message || e)); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
+
+  const copyAssessment = () => {
+    if (!data) return;
+    navigator.clipboard?.writeText(data.assessment).then(() => {
+      setCopyStatus("copied");
+      setTimeout(() => setCopyStatus("idle"), 1500);
+    }).catch(() => {});
+  };
+
+  if (err) {
+    return (
+      <Card variant="budget" title="Market Quality Terminal" subtitle="Global market regime score">
+        <div style={{ color: HOME_THEME.red, fontSize: 14 }}>{err}</div>
+      </Card>
+    );
+  }
+  if (!data) {
+    return (
+      <Card variant="budget" title="Market Quality Terminal" subtitle="Loading…">
+        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 14, padding: 24, textAlign: "center" }}>Fetching live index / sector data…</div>
+      </Card>
+    );
+  }
+
+  const { globalScore, banner, pillars, sectorBars, assessment } = data;
+  const bannerColor = TONE_COLOR[banner.tone];
+  const asOfLocal = new Date(data.asOf).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+
+  const maxAbsBar = Math.max(1, ...sectorBars.map((b) => Math.abs(b.chg5d ?? 0)));
+
+  return (
+    <Card variant="budget" title="Market Quality Terminal"
+      subtitle={`Global market regime score · ${asOfLocal}${loading ? " · refreshing…" : ""}`}>
+
+      {/* Banner + global score + 5 rings */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center", marginBottom: 22 }}>
+        <div style={{
+          borderRadius: 12, padding: "14px 20px", minWidth: 150,
+          border: `1px solid ${bannerColor}55`, background: `${bannerColor}15`,
+        }}>
+          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", color: bannerColor }}>{banner.label}</div>
+          <div style={{ fontSize: 34, fontWeight: 800, color: HOME_THEME.text, lineHeight: 1.1 }}>{globalScore}<span style={{ fontSize: 16, color: "rgba(255,255,255,0.4)" }}>/100</span></div>
+          <div style={{ fontSize: 12, color: bannerColor, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>{banner.sizing}</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+          <RingGauge score={pillars.volatility.score} label="Volatility" sub="25%" />
+          <RingGauge score={pillars.trend.score} label="Trend" sub="20%" />
+          <RingGauge score={pillars.breadth.score} label="Breadth" sub="20%" />
+          <RingGauge score={pillars.momentum.score} label="Momentum" sub="25%" />
+          <RingGauge score={pillars.macro.score} label="Macro" sub="10%" />
+        </div>
+      </div>
+
+      {pillars.volatility.putCall == null && (
+        <div style={{
+          borderRadius: 8, padding: "8px 14px", marginBottom: 18, fontSize: 12, fontWeight: 700,
+          color: HOME_THEME.orange, background: `${HOME_THEME.orange}15`, border: `1px solid ${HOME_THEME.orange}40`,
+        }}>
+          ⚠ PUT/CALL RATIO UNAVAILABLE — USING NEUTRAL SCORE
+        </div>
+      )}
+
+      {/* 5 detail panels */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 24 }}>
+        <MqPanel title="Volatility" accent={HOME_THEME.orange} score={pillars.volatility.score}>
+          <MqRow label="VIX Level" value={pillars.volatility.vixLevel ?? "—"} />
+          <MqRow label="VIX Trend" value={pillars.volatility.vixTrend} valueColor={pillars.volatility.vixTrend === "Rising" ? HOME_THEME.red : pillars.volatility.vixTrend === "Falling" ? HOME_THEME.green : HOME_THEME.text} />
+          <MqRow label="VIX IV %ile" value={pillars.volatility.ivPercentile != null ? `${pillars.volatility.ivPercentile}%` : "—"} />
+          <MqRow label="Put/Call" value="N/A" valueColor="rgba(255,255,255,0.35)" />
+        </MqPanel>
+
+        <MqPanel title="Trend" accent={HOME_THEME.cyan} score={pillars.trend.score}>
+          <MqRow label="Regime" value={pillars.trend.regime} valueColor={pillars.trend.regime === "Bullish" ? HOME_THEME.green : pillars.trend.regime === "Bearish" ? HOME_THEME.red : HOME_THEME.orange} />
+          <MqRow label="SPY vs 20D" value={pillars.trend.spyVs20 == null ? "—" : pillars.trend.spyVs20 ? "▲" : "▼"} valueColor={pillars.trend.spyVs20 ? HOME_THEME.green : HOME_THEME.red} />
+          <MqRow label="SPY vs 50D" value={pillars.trend.spyVs50 == null ? "—" : pillars.trend.spyVs50 ? "▲" : "▼"} valueColor={pillars.trend.spyVs50 ? HOME_THEME.green : HOME_THEME.red} />
+          <MqRow label="SPY vs 200D" value={pillars.trend.spyVs200 == null ? "—" : pillars.trend.spyVs200 ? "▲" : "▼"} valueColor={pillars.trend.spyVs200 ? HOME_THEME.green : HOME_THEME.red} />
+          <MqRow label="QQQ vs 50D" value={pillars.trend.qqqVs50 == null ? "—" : pillars.trend.qqqVs50 ? "▲" : "▼"} valueColor={pillars.trend.qqqVs50 ? HOME_THEME.green : HOME_THEME.red} />
+          <MqRow label="RSI-14" value={pillars.trend.rsi14 ?? "—"} />
+        </MqPanel>
+
+        <MqPanel title="Breadth" accent={HOME_THEME.red} score={pillars.breadth.score}>
+          <MqRow label="Sectors > 50D" value={`${pillars.breadth.aboveCount}/${pillars.breadth.total}`} />
+          <MqRow label="Participation" value={pillars.breadth.participation} valueColor={pillars.breadth.participation === "Broad" ? HOME_THEME.green : pillars.breadth.participation === "Narrow" ? HOME_THEME.red : HOME_THEME.orange} />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+            {pillars.breadth.sectors.map((s) => (
+              <span key={s.symbol} style={{
+                fontSize: 11, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+                color: s.above == null ? "rgba(255,255,255,0.35)" : s.above ? HOME_THEME.green : HOME_THEME.red,
+                background: s.above == null ? "transparent" : s.above ? `${HOME_THEME.green}18` : `${HOME_THEME.red}18`,
+              }}>
+                {s.symbol} {s.above == null ? "—" : s.above ? "↑" : "↓"}
+              </span>
+            ))}
+          </div>
+        </MqPanel>
+
+        <MqPanel title="Momentum" accent={HOME_THEME.green} score={pillars.momentum.score}>
+          <MqRow label="Positive (5D)" value={`${pillars.momentum.positiveCount}/${pillars.momentum.total}`} />
+          <MqRow label="Spread" value={pillars.momentum.spread != null ? `${pillars.momentum.spread}%` : "—"} />
+          <MqRow label="Leader" value={pillars.momentum.leader ? `${pillars.momentum.leader.symbol} +${pillars.momentum.leader.chg5d}%` : "—"} valueColor={HOME_THEME.green} />
+          <MqRow label="Laggard" value={pillars.momentum.laggard ? `${pillars.momentum.laggard.symbol} ${pillars.momentum.laggard.chg5d}%` : "—"} valueColor={HOME_THEME.red} />
+          <MqRow label="Rotation" value={pillars.momentum.rotation} />
+        </MqPanel>
+
+        <MqPanel title="Macro" accent={LIGHT_BLUE} score={pillars.macro.score}>
+          <MqRow label="TLT (Bonds)" value={pillars.macro.tltLast != null ? `$${pillars.macro.tltLast}` : "—"} />
+          <MqRow label="Bond 20D" value={pillars.macro.tltTrend} valueColor={pillars.macro.tltTrend === "Rising" ? HOME_THEME.green : pillars.macro.tltTrend === "Falling" ? HOME_THEME.red : HOME_THEME.text} />
+          <MqRow label="Dollar 20D" value={pillars.macro.uupTrend} valueColor={pillars.macro.uupTrend === "Strengthening" ? HOME_THEME.red : pillars.macro.uupTrend === "Weakening" ? HOME_THEME.green : HOME_THEME.text} />
+          <MqRow label="UUP Chg (5D)" value={pillars.macro.uup5d != null ? `${pillars.macro.uup5d >= 0 ? "+" : ""}${pillars.macro.uup5d}%` : "—"} />
+        </MqPanel>
+      </div>
+
+      {/* Sector performance + scoring weights */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1.3fr) minmax(220px, 1fr)", gap: 16 }}>
+        <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+            Sector Performance (5-Day)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {sectorBars.map((b) => {
+              const v = b.chg5d ?? 0;
+              const pos = v >= 0;
+              const widthPct = (Math.abs(v) / maxAbsBar) * 100;
+              return (
+                <div key={b.symbol} style={{ display: "grid", gridTemplateColumns: "48px 1fr 60px", alignItems: "center", gap: 8, fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, color: HOME_THEME.text }}>{b.symbol}</span>
+                  <div style={{ position: "relative", height: 14, background: "rgba(255,255,255,0.05)", borderRadius: 4 }}>
+                    <div style={{
+                      position: "absolute", top: 0, bottom: 0, left: pos ? "0%" : undefined, right: pos ? undefined : "0%",
+                      width: `${widthPct}%`, background: pos ? HOME_THEME.green : HOME_THEME.red, borderRadius: 4, opacity: 0.85,
+                    }} />
+                  </div>
+                  <span style={{ textAlign: "right", fontWeight: 700, color: pos ? HOME_THEME.green : HOME_THEME.red }}>
+                    {pos ? "+" : ""}{v.toFixed(2)}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+            Scoring Weights
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, textTransform: "uppercase" }}>
+                <th style={{ textAlign: "left", padding: "4px 0" }}>Pillar</th>
+                <th style={{ textAlign: "right", padding: "4px 0" }}>Score</th>
+                <th style={{ textAlign: "right", padding: "4px 0" }}>Weight</th>
+                <th style={{ textAlign: "right", padding: "4px 0" }}>Wtd</th>
+              </tr>
+            </thead>
+            <tbody>
+              {([
+                ["Volatility", pillars.volatility.score, pillars.volatility.weight, pillars.volatility.weighted],
+                ["Trend", pillars.trend.score, pillars.trend.weight, pillars.trend.weighted],
+                ["Breadth", pillars.breadth.score, pillars.breadth.weight, pillars.breadth.weighted],
+                ["Momentum", pillars.momentum.score, pillars.momentum.weight, pillars.momentum.weighted],
+                ["Macro", pillars.macro.score, pillars.macro.weight, pillars.macro.weighted],
+              ] as [string, number, number, number][]).map(([name, score, weight, wtd]) => (
+                <tr key={name} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <td style={{ padding: "5px 0", color: HOME_THEME.text }}>{name}</td>
+                  <td style={{ textAlign: "right", color: scoreColor(score), fontWeight: 700 }}>{score}</td>
+                  <td style={{ textAlign: "right", color: "rgba(255,255,255,0.6)" }}>{Math.round(weight * 100)}%</td>
+                  <td style={{ textAlign: "right", color: HOME_THEME.text, fontWeight: 700 }}>{wtd}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: `1px solid ${HOME_THEME.cyan}55` }}>
+                <td style={{ padding: "6px 0", color: HOME_THEME.cyan, fontWeight: 800 }}>Total</td>
+                <td style={{ textAlign: "right", color: "rgba(255,255,255,0.3)" }}>—</td>
+                <td style={{ textAlign: "right", color: "rgba(255,255,255,0.6)" }}>100%</td>
+                <td style={{ textAlign: "right", color: HOME_THEME.cyan, fontWeight: 800 }}>{globalScore}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* AI-generated assessment */}
+      <div style={{ marginTop: 20, borderRadius: 12, border: `1px solid ${HOME_THEME.cyan}30`, padding: "14px 16px", background: `${HOME_THEME.cyan}0A` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.cyan, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            ⚡ AI-Generated Market Assessment
+          </span>
+          <button onClick={copyAssessment} style={{ ...seg(false), fontSize: 11, padding: "4px 10px" }}>
+            {copyStatus === "copied" ? "Copied ✓" : "Copy Shot"}
+          </button>
+        </div>
+        <div style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", lineHeight: 1.6 }}>{assessment}</div>
+      </div>
+    </Card>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  PAGE SHELL — tab switcher
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1367,6 +1684,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "watch" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
           background: tab === "watch" ? `${LIGHT_BLUE}22` : "transparent",
         }}>Watch This</button>
+        <button onClick={() => setTab("marketquality")} style={{
+          ...tabStyle(tab === "marketquality"),
+          border: `1px solid ${tab === "marketquality" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
+          background: tab === "marketquality" ? `${HOME_THEME.orange}22` : "transparent",
+        }}>Market Quality</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -1376,6 +1698,7 @@ export default function ScannerPage() {
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "oi"     && <OiChangeScanner />}
       {tab === "watch"  && <WatchThisScanner />}
+      {tab === "marketquality" && <MarketQualityScanner />}
     </PageShell>
   );
 }

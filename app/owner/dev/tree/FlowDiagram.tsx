@@ -197,7 +197,7 @@ export default function FlowDiagram() {
     <button
       onClick={() => setMode(m)}
       style={{
-        padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer",
+        padding: "7px 16px", borderRadius: 8, fontSize: 17, fontWeight: 600, cursor: "pointer",
         border: `1px solid ${mode === m ? "#22d3ee" : "rgba(255,255,255,0.12)"}`,
         background: mode === m ? "rgba(34,211,238,0.12)" : "transparent",
         color: mode === m ? "#22d3ee" : "rgba(255,255,255,0.55)",
