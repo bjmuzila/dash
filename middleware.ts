@@ -168,13 +168,14 @@ export async function middleware(req: NextRequest) {
 
   // ── Paid-subscription gate (covers EVERY protected route) ────────────────────
   // Owners always pass. Routes needed to actually buy/see pricing stay
-  // reachable, plus /home itself and /preview (its lighter predecessor, still
-  // linked from /pricing) for unpaid-but-signed-in users. /home renders in
-  // "delayed" mode for them (see app/home/page.tsx — reads the frozen
-  // home_static_snapshots row instead of the live feed, no live WS), so
-  // on-the-fence signups land on the real dashboard with real (delayed) data
-  // instead of a hard paywall. Everything else still redirects to /home.
-  const PAID_EXEMPT = /^\/(pricing|preview|home|api\/stripe|api\/preview|api\/home-snapshot)(\/.*)?$/;
+  // reachable, plus /home, /mult-greek, and /preview (the lighter predecessor,
+  // still linked from /pricing) for unpaid-but-signed-in users. /home and
+  // /mult-greek both render in "delayed" mode for them (see their page.tsx —
+  // reads a frozen *_static_snapshots row instead of the live feed, no live
+  // WS/chain loop), so on-the-fence signups land on the real dashboard with
+  // real (delayed) data instead of a hard paywall. Everything else still
+  // redirects to /home.
+  const PAID_EXEMPT = /^\/(pricing|preview|home|mult-greek|api\/stripe|api\/preview|api\/home-snapshot|api\/mult-greek-snapshot)(\/.*)?$/;
   if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
     const url = req.nextUrl.clone();
     url.pathname = "/home";

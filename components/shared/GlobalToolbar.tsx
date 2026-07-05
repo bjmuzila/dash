@@ -435,7 +435,14 @@ function MaintenanceAlert() {
               <span style={{ fontWeight: 700, color: "#EF4444", fontSize: 14 }}>Heads up</span>
             </div>
             <p style={{ margin: 0, color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
-              Lots of UI upgrades today — bare with us.
+              Check out{" "}
+              <Link href="/whats-new" prefetch={false} style={{ color: CYAN, fontWeight: 700, textDecoration: "underline" }}>
+                What&apos;s New
+              </Link>{" "}
+              for the latest updates.
+            </p>
+            <p style={{ margin: "8px 0 0", color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
+              Seeing a bad gateway error? That&apos;s just an update deploying — give it 1–2 minutes and refresh!
             </p>
           </div>
         </>

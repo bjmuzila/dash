@@ -70,7 +70,7 @@ export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
 // Root-level backend routes that live outside /owner but should still show the
 // owner rail (they were "losing" the left toolbar because the rail was mounted
 // only by app/owner/layout.tsx).
-const OWNER_CHROME_EXTRA = ["/database", "/estimated-move", "/changelog", "/social-media"];
+const OWNER_CHROME_EXTRA = ["/database", "/estimated-move", "/changelog", "/social-media", "/greeks"];
 
 /** True for any route that should render the owner left rail (owner + backend). */
 export function isOwnerChromePath(pathname: string): boolean {

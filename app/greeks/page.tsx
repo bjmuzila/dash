@@ -993,7 +993,7 @@ export default function GreeksPage() {
   const [lastPoll, setLastPoll] = useState("--"); // last auto-poll attempt (alive-check, independent of data)
   const [stale, setStale] = useState(false);
   const [mode, setMode] = useState<GraphMode>("line");
-  const [dataOn, setDataOn] = useState(true); // live poll gate — flip off to stop the feed
+  const [dataOn, setDataOn] = useState(false); // live poll gate — defaults OFF; also auto-off after 5min idle
   const [gexBasis, setGexBasis] = useState<GexBasis>("oivol");
   const [vol, setVol] = useState<VolData | null>(null);
   const [feed, setFeed] = useState<(GammaSignal & { time: string; key: number })[]>([]);
@@ -1008,6 +1008,23 @@ export default function GreeksPage() {
   // the manual button (which ignores mountedRef) worked. Restoring true on mount
   // keeps the auto-refresh alive.
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // Auto-off after 5min of no user activity, so a forgotten open tab doesn't
+  // keep the WS feed + VIX poll running all day. Any interaction resets the
+  // timer; only fires while dataOn is actually true.
+  useEffect(() => {
+    if (!dataOn) return;
+    const IDLE_MS = 5 * 60_000;
+    let t: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { if (mountedRef.current) setDataOn(false); }, IDLE_MS);
+    };
+    const events: (keyof WindowEventMap)[] = ["mousemove", "keydown", "click", "scroll", "touchstart"];
+    events.forEach(ev => window.addEventListener(ev, reset, { passive: true }));
+    reset();
+    return () => { clearTimeout(t); events.forEach(ev => window.removeEventListener(ev, reset)); };
+  }, [dataOn]);
 
   // Seed from persisted snapshots so graphs aren't blank on first paint.
   useEffect(() => {
