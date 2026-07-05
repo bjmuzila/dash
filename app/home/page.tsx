@@ -13,6 +13,8 @@
  */
 import { HomeClient, type HomeInitial } from "./HomeClient";
 import type { ChainRow } from "@/lib/calculations/calculations";
+import { getAccess } from "@/lib/subscription";
+import { getLatestHomeStaticSnapshot } from "@/lib/db";
 
 // Always render fresh from the hot feed; never serve a cached snapshot.
 export const dynamic = "force-dynamic";
@@ -49,7 +51,48 @@ async function readInitial(): Promise<HomeInitial> {
   }
 }
 
+/**
+ * Unpaid signed-in users: reconstruct the SAME HomeInitial shape from the last
+ * frozen full-chain snapshot (server-v2/home-snapshot-recorder.js, ~30m
+ * cadence) instead of the hot feed. HomeClient renders it through the exact
+ * same GexChart/toolbar — the only difference is `isStatic`, which keeps it
+ * from opening the live /ws/gex connection (paid-gated anyway; see ws-auth.js).
+ */
+async function readStaticInitial(): Promise<{ initial: HomeInitial; snapshotTs: number | null }> {
+  try {
+    const row = await getLatestHomeStaticSnapshot();
+    if (!row) return { initial: null, snapshotTs: null };
+    const p = row.payload as Record<string, unknown> | null;
+    const rows = Array.isArray(p?.gexRows) ? (p!.gexRows as ChainRow[]) : [];
+    if (!rows.length) return { initial: null, snapshotTs: null };
+    const spot = Number(p?.spot ?? 0);
+    return {
+      initial: {
+        gexRows: rows,
+        spot,
+        spotDisplay: Number(p?.spotDisplay ?? spot ?? 0),
+        prevClose: Number(p?.prevClose ?? 0),
+        expiry: String(p?.expiry ?? ""),
+        expirations: Array.isArray(p?.expirations) ? (p!.expirations as string[]) : [],
+        callWall: (p?.callWall as number | null) ?? null,
+        putWall: (p?.putWall as number | null) ?? null,
+        chartReady: true,
+      },
+      snapshotTs: row.ts,
+    };
+  } catch {
+    return { initial: null, snapshotTs: null };
+  }
+}
+
 export default async function HomePage() {
+  const access = await getAccess();
+
+  if (!access.ok) {
+    const { initial, snapshotTs } = await readStaticInitial();
+    return <HomeClient initial={initial} isStatic snapshotTs={snapshotTs} />;
+  }
+
   const initial = await readInitial();
   return <HomeClient initial={initial} />;
 }

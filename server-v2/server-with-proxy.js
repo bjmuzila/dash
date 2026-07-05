@@ -1298,6 +1298,30 @@ async function main() {
         })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Fire a single /home full-chain static snapshot now (ignores the RTH
+      // gate on force — e.g. seeding the weekend /home from Friday's close).
+      // POST /proxy/home-snapshot?force=1
+      if (pathname === '/proxy/home-snapshot' && req.method === 'POST') {
+        const { collectOnce } = require('./home-snapshot-recorder');
+        const force = /[?&]force=1\b/.test(req.url || '');
+        const base = `http://localhost:${PORT}`;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        (async () => {
+          let r = await collectOnce(base, { force });
+          if (force && r && r.ok === false && r.error === 'empty chain'
+              && proxy && typeof proxy.reconnect === 'function') {
+            console.log('[home-snapshot] empty chain on force — reconnecting feed and retrying');
+            try { await proxy.reconnect(); } catch (e) { console.log('[home-snapshot] reconnect failed:', e?.message || e); }
+            for (let i = 0; i < 8; i++) {
+              await sleep(2000);
+              r = await collectOnce(base, { force });
+              if (!r || r.ok !== false || r.error !== 'empty chain') break;
+            }
+          }
+          sendJson(res, 200, r ?? { ok: false, error: 'no result' });
+        })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Generate the pre-market AI summary now (ignores the 8am schedule).
       // POST /proxy/premarket-summary-run
       if (pathname === '/proxy/premarket-summary-run' && req.method === 'POST') {
@@ -1624,6 +1648,11 @@ async function main() {
     // every 30m during RTH, snapshots spot + call/put wall + gamma flip from
     // the same /api/gex the paid dashboard reads → preview_snapshots.
     require('./preview-snapshot-recorder').startPreviewSnapshotRecorder(PORT);
+    // Delayed FULL-chain feed for /home in "delayed" mode (unpaid signed-in
+    // users): every 30m during RTH, snapshots the entire hot /proxy/gex
+    // payload → home_static_snapshots, so unpaid /home renders the same chart
+    // component as paid users, just frozen.
+    require('./home-snapshot-recorder').startHomeSnapshotRecorder(PORT);
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.

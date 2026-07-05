@@ -89,8 +89,8 @@ export default async function PricingPage({
 
         {userId && !access.ok && (
           <p style={{ margin: "0 0 36px" }}>
-            <Link href="/preview" style={{ color: T.cyan, fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
-              Not ready yet? View the free delayed preview →
+            <Link href="/home" style={{ color: T.cyan, fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
+              Not ready yet? Check out the dashboard with delayed data →
             </Link>
           </p>
         )}

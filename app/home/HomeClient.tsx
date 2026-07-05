@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
@@ -345,10 +346,23 @@ const SettingsIcon = () => (
   </svg>
 );
 
-export function HomeClient({ initial }: { initial: HomeInitial }) {
+export function HomeClient({
+  initial,
+  isStatic = false,
+  snapshotTs = null,
+}: {
+  initial: HomeInitial;
+  /** Unpaid signed-in viewer: render from a frozen snapshot, never open the
+   *  live /ws/gex socket (which is paid-gated server-side anyway — see
+   *  ws-auth.js). A lightweight poll picks up the recorder's next ~30m tick. */
+  isStatic?: boolean;
+  /** epoch ms the current snapshot was captured, for the "delayed" banner. */
+  snapshotTs?: number | null;
+}) {
   // Bandwidth gate: socket stays open only while the tab is visible AND the user
   // is active (15-min idle timeout; owner exempt). Drives connect/disconnect.
-  const shouldConnect = useWsLifecycle();
+  // Static (unpaid/delayed) viewers never connect at all — isStatic hard-gates it.
+  const shouldConnect = useWsLifecycle() && !isStatic;
   const shouldConnectRef = useRef(shouldConnect);
   shouldConnectRef.current = shouldConnect;
 
@@ -697,6 +711,52 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldConnect]);
 
+  // ── Static (delayed) mode: no WS, just apply the frozen snapshot and poll for
+  // the recorder's next ~30m tick. Mirrors applyGex above but reads the flat
+  // /api/home-snapshot shape instead of a WS message envelope. ──
+  const [lastSnapshotTs, setLastSnapshotTs] = useState<number | null>(snapshotTs);
+  useEffect(() => {
+    if (!isStatic) return;
+
+    const applyStatic = (p: Record<string, unknown> | null | undefined) => {
+      if (!p) return;
+      if (Array.isArray(p.gexRows)) setGexChainRows(p.gexRows as ChainRow[]);
+      const s = Number(p.spot ?? 0);
+      if (s > 0) { setGexSpot(s); setSpot(s); }
+      const disp = Number(p.spotDisplay ?? 0) > 0 ? Number(p.spotDisplay) : s;
+      if (disp > 0) {
+        setSpotDisplay(disp);
+        const pc = Number(p.prevClose ?? 0);
+        if (pc > 0) { setSpxChange(disp - pc); setSpxChangePct(((disp - pc) / pc) * 100); }
+      }
+      if (p.callWall != null) setCallWall(Number(p.callWall) || null);
+      if (p.putWall != null) setPutWall(Number(p.putWall) || null);
+      // Only the single expiry the snapshot was captured for is meaningful here
+      // (there's no live socket to request a different one from).
+      const exp = String(p.expiry ?? "");
+      if (exp) { setExpiryOptions(buildExpiryOptions([exp])); setSelectedExpiry(exp); }
+      setChartReady(true);
+      setStatus("DELAYED");
+    };
+
+    // Seed immediately from the server-rendered initial snapshot (fills in
+    // spxChange/spxChangePct, which the useState initializers above don't).
+    applyStatic(initial);
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/home-snapshot", { cache: "no-store" });
+        const json = await res.json();
+        if (cancelled) return;
+        if (json.snapshot) { applyStatic(json.snapshot); setLastSnapshotTs(Number(json.ts) || null); }
+      } catch { /* keep showing the last-known frozen snapshot */ }
+    };
+    const id = setInterval(poll, 60_000); // cheap — recorder only updates every ~30m anyway
+    return () => { cancelled = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStatic]);
+
   // Load chain symbols for heatmap WS subscription (separate from GEX chart data)
   const loadChain = useCallback(async (expiry: string) => {
     if (!expiry) return;
@@ -918,6 +978,49 @@ export function HomeClient({ initial }: { initial: HomeInitial }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.03) 0%, transparent 50%)", fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
+      {isStatic && (
+        <div
+          style={{
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            padding: "10px 16px",
+            background: "rgba(33,158,188,0.10)",
+            borderBottom: `1px solid ${C.cyan}55`,
+            fontSize: 13,
+            textAlign: "center",
+          }}
+        >
+          <span style={{ fontWeight: 800, color: C.cyan, letterSpacing: "0.04em" }}>DELAYED PREVIEW</span>
+          <span style={{ opacity: 0.75 }}>
+            {lastSnapshotTs
+              ? `Snapshot from ${Math.max(0, Math.round((Date.now() - lastSnapshotTs) / 60000))} min ago — refreshes ~every 30 min`
+              : "Waiting on the next scheduled snapshot"}
+          </span>
+          <span style={{ opacity: 0.9 }}>
+            Go live with <strong style={{ color: C.green }}>50% off</strong> — code <strong style={{ color: C.cyan }}>CB-BETA</strong>
+          </span>
+          <Link href="/pricing" style={{ textDecoration: "none" }}>
+            <button
+              style={{
+                padding: "6px 16px",
+                borderRadius: 8,
+                border: "none",
+                background: `linear-gradient(180deg, ${C.cyan}, #00b8c4)`,
+                color: "#04121a",
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              See plans →
+            </button>
+          </Link>
+        </div>
+      )}
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>

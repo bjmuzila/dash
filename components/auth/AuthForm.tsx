@@ -44,6 +44,8 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaFailed, setCaptchaFailed] = useState(false);
+  const [captchaAttempt, setCaptchaAttempt] = useState(0);
 
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const widgetId = useRef<string | null>(null);
@@ -52,40 +54,76 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
   const captchaRequired = !!TURNSTILE_SITE_KEY;
 
   // Load the Turnstile script once and render the widget into our container.
+  // If Cloudflare's script fails to load (network block, 503, outage) or never
+  // calls back within TIMEOUT_MS, surface an error + retry instead of leaving
+  // the submit button silently disabled forever.
   useEffect(() => {
     if (!captchaRequired) return;
 
+    let timedOut = false;
+    const TIMEOUT_MS = 8000;
+    const timeout = setTimeout(() => {
+      if (!widgetId.current) {
+        timedOut = true;
+        setCaptchaFailed(true);
+      }
+    }, TIMEOUT_MS);
+
     function renderWidget() {
       if (!widgetRef.current || !window.turnstile || widgetId.current) return;
+      clearTimeout(timeout);
+      setCaptchaFailed(false);
       widgetId.current = window.turnstile.render(widgetRef.current, {
         sitekey: TURNSTILE_SITE_KEY,
         callback: (token: string) => setCaptchaToken(token),
         "expired-callback": () => setCaptchaToken(null),
-        "error-callback": () => setCaptchaToken(null),
+        "error-callback": () => setCaptchaFailed(true),
         theme: "dark",
       });
     }
 
     if (window.turnstile) {
       renderWidget();
-      return;
+      return () => clearTimeout(timeout);
     }
     window.onTurnstileLoad = renderWidget;
-    const existing = document.getElementById("cf-turnstile-script");
-    if (!existing) {
+    const existing = document.getElementById("cf-turnstile-script") as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("error", () => setCaptchaFailed(true));
+    } else {
       const s = document.createElement("script");
       s.id = "cf-turnstile-script";
       s.src =
         "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
       s.async = true;
       s.defer = true;
+      s.onerror = () => {
+        clearTimeout(timeout);
+        setCaptchaFailed(true);
+      };
       document.head.appendChild(s);
     }
-  }, [captchaRequired]);
+
+    return () => {
+      clearTimeout(timeout);
+      void timedOut;
+    };
+  }, [captchaRequired, captchaAttempt]);
 
   function resetCaptcha() {
     setCaptchaToken(null);
     if (window.turnstile && widgetId.current) window.turnstile.reset(widgetId.current);
+  }
+
+  function retryCaptcha() {
+    // Drop the stale script tag/global so the effect does a clean reload.
+    const existing = document.getElementById("cf-turnstile-script");
+    if (existing) existing.remove();
+    window.onTurnstileLoad = undefined;
+    widgetId.current = null;
+    setCaptchaToken(null);
+    setCaptchaFailed(false);
+    setCaptchaAttempt((n) => n + 1);
   }
 
   async function withGoogle() {
@@ -234,7 +272,43 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
           style={inputStyle}
         />
 
-        {captchaRequired && <div ref={widgetRef} style={{ minHeight: 65 }} />}
+        {captchaRequired && !captchaFailed && <div ref={widgetRef} style={{ minHeight: 65 }} />}
+
+        {captchaRequired && captchaFailed && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: `1px solid ${T.red}`,
+              background: "rgba(255,0,0,0.06)",
+              fontSize: 12,
+              color: T.text,
+            }}
+          >
+            <span>Captcha failed to load. Cloudflare may be down.</span>
+            <button
+              type="button"
+              onClick={retryCaptcha}
+              style={{
+                background: "transparent",
+                border: `1px solid ${T.border}`,
+                borderRadius: 6,
+                color: T.cyan,
+                fontSize: 12,
+                fontWeight: 700,
+                padding: "4px 10px",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         <button
           type="submit"
