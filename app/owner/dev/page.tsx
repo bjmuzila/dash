@@ -525,7 +525,7 @@ export default function DevPage() {
 
       {/* Row 1 — CALL cards */}
       <RowLabel text="Calls" color={CALLS} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
         {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} accent={CALLS} />)}
         <ExposurePanel data={callResult?.exposures} accent={CALLS} />
         <OiComparePanel data={callResult?.oiCompare} accent={CALLS} />
@@ -533,7 +533,7 @@ export default function DevPage() {
 
       {/* Row 2 — PUT cards */}
       <RowLabel text="Puts" color={PUTS} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
         {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} accent={PUTS} />)}
         <ExposurePanel data={putResult?.exposures} accent={PUTS} />
         <OiComparePanel data={putResult?.oiCompare} accent={PUTS} />

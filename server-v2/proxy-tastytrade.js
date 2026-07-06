@@ -387,6 +387,18 @@ function isRthEt(ts = Date.now()) {
   return m >= 9 * 60 + 30 && m < 16 * 60; // 570 .. 960
 }
 
+/** True during the INDEX OPTIONS session, 9:30–16:15 ET (Mon–Fri). SPX/SPXW
+ *  trade 15min past the 16:00 equity cash close (matches the afterClose 0DTE
+ *  roll check in _recompute) — use this, not isRthEt(), to gate anything about
+ *  the OPTIONS chain (volume/greeks polling, recompute cadence). isRthEt()
+ *  stays 16:00-only for the underlying SPX cash-quote validity window. */
+function isOptionsRthEt(ts = Date.now()) {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date(ts));
+  if (wd === 'Sat' || wd === 'Sun') return false;
+  const m = etMinutesNow(ts);
+  return m >= 9 * 60 + 30 && m < 16 * 60 + 15; // 570 .. 975
+}
+
 /**
  * Resolve the front (nearest-expiry, active) /ES future's dxLink streamer symbol.
  * Uses the futures list for the ES product and picks the soonest non-expired
@@ -1715,7 +1727,7 @@ class TastytradeProxy {
       // 5s RTH / 60s off-hours (THETA_GREEKS_MS[_OFFHOURS]).
       clearTimeout(this.greeksTimer);
       const scheduleGreeks = () => {
-        const ms = isRthEt() ? THETA_GREEKS_MS : THETA_GREEKS_MS_OFFHOURS;
+        const ms = isOptionsRthEt() ? THETA_GREEKS_MS : THETA_GREEKS_MS_OFFHOURS;
         this.greeksTimer = setTimeout(async () => {
           if (!this.idle && useTheta()) await this._refreshGreeksTheta().catch(() => {});
           scheduleGreeks();
@@ -1781,7 +1793,7 @@ class TastytradeProxy {
     // Self-rescheduling recompute: 2s during RTH, 15s off-hours.
     // A fixed setInterval at 2s burned ~80% CPU overnight on a 1-vCPU host.
     const scheduleRecompute = () => {
-      const ms = isRthEt() ? RECOMPUTE_MS : RECOMPUTE_MS_OFFHOURS;
+      const ms = isOptionsRthEt() ? RECOMPUTE_MS : RECOMPUTE_MS_OFFHOURS;
       this.recomputeTimer = setTimeout(() => {
         if (!this.idle) this._recompute();
         scheduleRecompute();
@@ -2002,7 +2014,7 @@ class TastytradeProxy {
     if (gMap.size === 0) {
       // Theta has no live greeks snapshot outside the cash session — expected,
       // not an error. Stay quiet outside RTH; only log if empty DURING RTH.
-      if (isRthEt()) console.log('[GREEKS][theta] empty snapshot');
+      if (isOptionsRthEt()) console.log('[GREEKS][theta] empty snapshot');
       return;
     }
     let filled = 0;
@@ -2120,11 +2132,13 @@ class TastytradeProxy {
     if (updated) console.log(`[VOL][theta] refreshed volume for ${updated}/${active.length} strikes`);
   }
 
-  /** Self-rescheduling volume refresh. Runs during RTH only; pauses when idle. */
+  /** Self-rescheduling volume refresh. Runs during the options session only
+   *  (9:30-16:15 ET — SPX/SPXW trade 15min past isRthEt()'s 16:00 equity cash
+   *  close, so using isRthEt() here was cutting volume off early); pauses when idle. */
   _scheduleVolRefresh() {
     if (this.volTimer) { clearTimeout(this.volTimer); this.volTimer = null; }
     this.volTimer = setTimeout(async () => {
-      if (!this.idle && isRthEt()) {
+      if (!this.idle && isOptionsRthEt()) {
         try { await this._refreshVolume(); } catch {}
       }
       this._scheduleVolRefresh();
