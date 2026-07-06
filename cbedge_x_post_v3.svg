@@ -1,0 +1,139 @@
+<svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>CB Edge feature graphic in native dashboard theme</title>
+<desc>Graphic matching the CB Edge dashboard's own visual language: near-black background, frosted cyan-glow cards, light-blue accent, listing eight core features.</desc>
+<defs>
+  <radialGradient id="shellGlowL" cx="15%" cy="50%" r="60%">
+    <stop offset="0%" stop-color="#219EBC" stop-opacity="0.10"/>
+    <stop offset="100%" stop-color="#219EBC" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="shellGlowR" cx="85%" cy="30%" r="60%">
+    <stop offset="0%" stop-color="#126783" stop-opacity="0.12"/>
+    <stop offset="100%" stop-color="#126783" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="cardGlow" cx="50%" cy="0%" r="80%">
+    <stop offset="0%" stop-color="#219EBC" stop-opacity="0.16"/>
+    <stop offset="60%" stop-color="#0D1119" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="ctaBtn" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#7dd3fc"/>
+    <stop offset="100%" stop-color="#219EBC"/>
+  </linearGradient>
+  <radialGradient id="promoPanel" cx="50%" cy="0%" r="90%">
+    <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.14"/>
+    <stop offset="60%" stop-color="#0D1119" stop-opacity="0.9"/>
+  </radialGradient>
+  <filter id="whiteGlow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="10"/>
+  </filter>
+  <style>
+    .title { font-family: 'Inter', Arial, sans-serif; font-weight: 800; fill: #ffffff; }
+    .tag { font-family: 'Inter', Arial, sans-serif; font-weight: 500; fill: #7dd3fc; }
+    .h { font-family: 'Inter', Arial, sans-serif; font-weight: 700; fill: #ffffff; }
+    .b { font-family: 'Inter', Arial, sans-serif; font-weight: 400; fill: #aab3c2; }
+    .num { font-family: 'Inter', Arial, sans-serif; font-weight: 800; fill: #219EBC; }
+    .cta { font-family: 'Inter', Arial, sans-serif; font-weight: 800; fill: #05060A; }
+    .promoHead { font-family: 'Inter', Arial, sans-serif; font-weight: 800; fill: #ffffff; }
+    .promoCode { font-family: 'Inter', Arial, sans-serif; font-weight: 700; fill: #7dd3fc; }
+  </style>
+</defs>
+
+<rect width="1200" height="675" fill="#05060A"/>
+<rect width="1200" height="675" fill="url(#shellGlowL)"/>
+<rect width="1200" height="675" fill="url(#shellGlowR)"/>
+
+<!-- Header -->
+<text x="60" y="66" class="title" font-size="38">CB Edge</text>
+<text x="60" y="96" class="tag" font-size="18">Live SPX / ES gamma exposure, key levels &amp; options flow</text>
+<rect x="60" y="112" width="120" height="3" rx="1.5" fill="#219EBC"/>
+
+<!-- Promo badge: white glow sits behind, card box drawn on top -->
+<rect x="822" y="2" width="336" height="104" rx="26" fill="#ffffff" filter="url(#whiteGlow)" opacity="0.65"/>
+<rect x="840" y="18" width="300" height="72" rx="18" fill="url(#cardGlow)"/>
+<rect x="840" y="18" width="300" height="72" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+<text x="990" y="50" class="promoHead" font-size="22" text-anchor="middle">50% OFF</text>
+<text x="990" y="74" class="promoCode" font-size="15" text-anchor="middle" letter-spacing="0.5">CODE: CB-BETA</text>
+
+<!-- Row 1 -->
+<g>
+  <rect x="60" y="164" width="260" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="60" y="164" width="260" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="84" y="208" class="num" font-size="24">01</text>
+  <text x="84" y="240" class="h" font-size="20">GEX Dashboard</text>
+  <text x="84" y="268" class="b" font-size="14">Live net gamma, call/put</text>
+  <text x="84" y="288" class="b" font-size="14">walls &amp; flip levels</text>
+</g>
+
+<g>
+  <rect x="340" y="164" width="260" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="340" y="164" width="260" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="364" y="208" class="num" font-size="24">02</text>
+  <text x="364" y="240" class="h" font-size="20">CB Key Levels</text>
+  <text x="364" y="268" class="b" font-size="14">Scored magnetic levels,</text>
+  <text x="364" y="288" class="b" font-size="14">ranked by size &amp; conviction</text>
+</g>
+
+<g>
+  <rect x="620" y="164" width="260" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="620" y="164" width="260" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="644" y="208" class="num" font-size="24">03</text>
+  <text x="644" y="240" class="h" font-size="20">ES Candles</text>
+  <text x="644" y="268" class="b" font-size="14">GEX heatmap, TPO profile</text>
+  <text x="644" y="288" class="b" font-size="14">&amp; momentum bias overlay</text>
+</g>
+
+<g>
+  <rect x="900" y="164" width="240" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="900" y="164" width="240" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="924" y="208" class="num" font-size="24" fill="#FB8501">04</text>
+  <text x="924" y="240" class="h" font-size="20">Signals</text>
+  <text x="924" y="268" class="b" font-size="14">Auto long/short alerts</text>
+  <text x="924" y="288" class="b" font-size="14">from GEX/CB confluence</text>
+</g>
+
+<!-- Row 2 -->
+<g>
+  <rect x="60" y="376" width="260" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="60" y="376" width="260" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="84" y="420" class="num" font-size="24">05</text>
+  <text x="84" y="452" class="h" font-size="20">Options Flow</text>
+  <text x="84" y="480" class="b" font-size="14">Real-time premium flow &amp;</text>
+  <text x="84" y="500" class="b" font-size="14">sweep / block detection</text>
+</g>
+
+<g>
+  <rect x="340" y="376" width="260" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="340" y="376" width="260" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="364" y="420" class="num" font-size="24">06</text>
+  <text x="364" y="452" class="h" font-size="20">EM Tracker</text>
+  <text x="364" y="480" class="b" font-size="14">Weekly estimated moves,</text>
+  <text x="364" y="500" class="b" font-size="14">graded win/loss history</text>
+</g>
+
+<g>
+  <rect x="620" y="376" width="260" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="620" y="376" width="260" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="644" y="420" class="num" font-size="24">07</text>
+  <text x="644" y="452" class="h" font-size="20">Greeks</text>
+  <text x="644" y="480" class="b" font-size="14">Live GEX / DEX / CHEX /</text>
+  <text x="644" y="500" class="b" font-size="14">VEX for the 0DTE expiry</text>
+</g>
+
+<g>
+  <rect x="900" y="376" width="240" height="192" rx="18" fill="url(#cardGlow)"/>
+  <rect x="900" y="376" width="240" height="192" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
+  <text x="924" y="420" class="num" font-size="24">08</text>
+  <text x="924" y="452" class="h" font-size="20">Scanner</text>
+  <text x="924" y="480" class="b" font-size="14">Balance/imbalance &amp;</text>
+  <text x="924" y="500" class="b" font-size="14">multi-ticker gamma scans</text>
+</g>
+
+<!-- Footer -->
+<text x="60" y="612" class="b" font-size="17">One dashboard. Every edge you need to trade the open.</text>
+<text x="60" y="636" class="tag" font-size="15">Use code CB-BETA at checkout for 50% off.</text>
+
+<!-- CTA button: pill shape, glow shadow, uppercase — reads as an actual button -->
+<rect x="962" y="584" width="196" height="58" rx="29" fill="#219EBC" filter="url(#whiteGlow)" opacity="0.35"/>
+<rect x="970" y="592" width="180" height="46" rx="23" fill="url(#ctaBtn)" stroke="#ffffff" stroke-opacity="0.25"/>
+<text x="1060" y="621" class="cta" font-size="17" text-anchor="middle" letter-spacing="0.5">CBEDGE.NET</text>
+
+</svg>

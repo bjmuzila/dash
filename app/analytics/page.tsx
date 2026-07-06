@@ -1134,7 +1134,7 @@ interface WatchSnapshot {
 }
 interface WatchRow {
   id: number; ticker: string; expiration: string; strike: number;
-  side: string; note: string | null; snapshot: WatchSnapshot | null;
+  side: string; note: string | null; added_price: number | null; snapshot: WatchSnapshot | null;
 }
 
 const wFmt = (v: number | null | undefined, d = 2) => (v == null || !isFinite(v) ? "—" : v.toFixed(d));
@@ -1310,6 +1310,11 @@ function ContractLookupCard() {
                   <span style={{ fontSize: 13, fontWeight: 700, color: chgColor, fontFamily: "var(--font-mono)" }}>
                     {chg == null ? "—" : `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`}
                   </span>
+                  {r.added_price != null && (
+                    <span style={{ fontSize: 11, color: T.muted, fontFamily: "var(--font-mono)" }}>
+                      added @ {wFmt(r.added_price)}
+                    </span>
+                  )}
                 </div>
                 <span style={{ fontSize: 11, color: T.muted }}>Updated {wTimeAgo(s?.ts)}</span>
 

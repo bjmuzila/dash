@@ -639,9 +639,14 @@ async function probeRest({ ticker, expiry, type, strike }) {
   // backs out IV from the live quote.
   const T = yearsToExpiry(best.expiration);
   const ivForBs = g.iv > 0 ? g.iv : impliedVol({ price: mark, S: spot, K: best.strike, T, r: RISK_FREE, type });
-  const bs = (spot > 0 && T > 0 && ivForBs > 0)
+  const bsRaw = (spot > 0 && T > 0 && ivForBs > 0)
     ? bsGreeks({ S: spot, K: best.strike, T, sigma: ivForBs, r: RISK_FREE, type })
     : null;
+  // Normalize to conventional reporting units, same as the GEX greeks pass:
+  //   theta: per-year -> per-day (÷365); vega: per 1.00 vol -> per 1% vol (÷100).
+  // bsGreeks() returns raw annualized/unit-vol values, so leaving these unscaled
+  // makes theta/vega read ~100x-365x too large (e.g. theta -78 instead of -0.21).
+  const bs = bsRaw ? { ...bsRaw, theta: bsRaw.theta / 365, vega: bsRaw.vega / 100 } : null;
 
   const feeds = {
     Quote: {

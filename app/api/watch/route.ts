@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { proxyBase } from "@/lib/proxyForward";
 import {
-  getWatchOptions, insertWatchOption, deleteWatchOption,
+  getWatchOptions, insertWatchOption, deleteWatchOption, setWatchAddedPrice,
   insertWatchSnapshot, getLatestWatchSnapshots, getWatchHistory, getWatchHistorySince,
   type WatchOption, type WatchSnapshot,
 } from "@/lib/db";
@@ -140,9 +140,16 @@ export async function POST(req: NextRequest) {
       }
       const created = await insertWatchOption({ ticker, expiration, strike, side, note });
       // Best-effort immediate snapshot so the row isn't blank until the next poll.
+      // Its mark also becomes the permanent "added @" price for this contract.
       if (created) {
         const snap = await probe(created);
-        if (snap) await insertWatchSnapshot(snap);
+        if (snap) {
+          await insertWatchSnapshot(snap);
+          if (snap.mark != null) {
+            await setWatchAddedPrice(created.id, snap.mark);
+            created.added_price = snap.mark;
+          }
+        }
       }
       return NextResponse.json({ ok: true, created });
     }

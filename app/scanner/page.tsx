@@ -552,21 +552,58 @@ function fmtPct(v: number | null, decimals = 1) {
   return `${(v * 100).toFixed(decimals)}%`;
 }
 
-function PinStatus({ r }: { r: PinRow }) {
+// 0 = PINNING, 1 = SQUEEZING, 2 = WATCHING, 3 = none. Lower = higher priority.
+function pinStatusRank(r: PinRow): number {
   const spreadContracting = (r.spread_delta ?? 0) < -0.005;
   const rangeContracting  = (r.range_delta ?? 0) < -0.001;
   const nearPin = r.pin_dist_pct != null && r.pin_dist_pct < 0.005;
+  if (spreadContracting && rangeContracting && nearPin) return 0;
+  if (spreadContracting && rangeContracting) return 1;
+  if (spreadContracting || rangeContracting) return 2;
+  return 3;
+}
 
-  if (spreadContracting && rangeContracting && nearPin) {
-    return <span style={{ color: HOME_THEME.red, fontWeight: 800, fontSize: 13 }}>PINNING</span>;
-  }
-  if (spreadContracting && rangeContracting) {
-    return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 13 }}>SQUEEZING</span>;
-  }
-  if (spreadContracting || rangeContracting) {
-    return <span style={{ color: HOME_THEME.cyan, fontWeight: 600, fontSize: 13 }}>WATCHING</span>;
-  }
+function SortTh({ label, col, sortKey, sortDir, onSort, align = "right" }: {
+  label: string; col: PinSortKey; sortKey: PinSortKey; sortDir: "asc" | "desc";
+  onSort: (col: PinSortKey) => void; align?: "left" | "right" | "center";
+}) {
+  const active = sortKey === col;
+  return (
+    <th
+      style={{ ...th, textAlign: align, cursor: "pointer", userSelect: "none", color: active ? HOME_THEME.text : th.color }}
+      onClick={() => onSort(col)}
+      title="Click to sort"
+    >
+      {label}{active ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+    </th>
+  );
+}
+
+function PinStatus({ r }: { r: PinRow }) {
+  const rank = pinStatusRank(r);
+  if (rank === 0) return <span style={{ color: HOME_THEME.red, fontWeight: 800, fontSize: 13 }}>PINNING</span>;
+  if (rank === 1) return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 13 }}>SQUEEZING</span>;
+  if (rank === 2) return <span style={{ color: HOME_THEME.cyan, fontWeight: 600, fontSize: 13 }}>WATCHING</span>;
   return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>—</span>;
+}
+
+type PinSortKey = "symbol" | "spot" | "dist" | "pinOi" | "atmIv" | "rv" | "ivRv"
+  | "spreadTrend" | "range" | "rangeTrend" | "status";
+
+function pinSortValue(r: PinRow, key: PinSortKey): number | string {
+  switch (key) {
+    case "symbol":      return r.symbol;
+    case "spot":        return r.spot;
+    case "dist":        return r.pin_dist_pct ?? Infinity;
+    case "pinOi":       return r.pin_strike_oi ?? -Infinity;
+    case "atmIv":       return r.atm_iv ?? -Infinity;
+    case "rv":          return r.rv_ann ?? -Infinity;
+    case "ivRv":        return r.iv_rv_spread ?? -Infinity;
+    case "spreadTrend": return r.spread_delta ?? Infinity; // most negative (most contracting) sorts first asc
+    case "range":       return r.range_pct ?? -Infinity;
+    case "rangeTrend":  return r.range_delta ?? Infinity;
+    case "status":      return pinStatusRank(r);
+  }
 }
 
 function VolPinScanner() {
@@ -574,6 +611,26 @@ function VolPinScanner() {
   const [loading, setLoading] = useState(true);
   const [err, setErr]         = useState<string | null>(null);
   const [minSnaps, setMinSnaps] = useState(3);
+  const [sortKey, setSortKey] = useState<PinSortKey>("status");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const handleSort = useCallback((key: PinSortKey) => {
+    setSortKey(prevKey => {
+      if (prevKey === key) { setSortDir(d => (d === "asc" ? "desc" : "asc")); return key; }
+      setSortDir("asc");
+      return key;
+    });
+  }, []);
+
+  const sortedRows = useMemo(() => {
+    const arr = rows.slice();
+    arr.sort((a, b) => {
+      const av = pinSortValue(a, sortKey), bv = pinSortValue(b, sortKey);
+      const cmp = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [rows, sortKey, sortDir]);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -628,22 +685,22 @@ function VolPinScanner() {
           <thead>
             <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
-              <th style={{ ...th, textAlign: "left" }}>Symbol</th>
-              <th style={th}>Spot</th>
+              <SortTh label="Symbol" col="symbol" align="left" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Spot" col="spot" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               <th style={th}>Pin Strike</th>
-              <th style={th}>Dist</th>
-              <th style={th}>Pin OI</th>
-              <th style={th}>ATM IV</th>
-              <th style={th}>RV</th>
-              <th style={th}>IV−RV%</th>
-              <th style={th}>Spread Trend</th>
-              <th style={th}>Range</th>
-              <th style={th}>Range Trend</th>
-              <th style={{ ...th, textAlign: "center" }}>Status</th>
+              <SortTh label="Dist" col="dist" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Pin OI" col="pinOi" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="ATM IV" col="atmIv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="RV" col="rv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="IV−RV%" col="ivRv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Spread Trend" col="spreadTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Range" col="range" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Range Trend" col="rangeTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Status" col="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => {
+            {sortedRows.map((r, i) => {
               const spreadContracting = (r.spread_delta ?? 0) < 0;
               const rangeContracting  = (r.range_delta ?? 0) < 0;
               const isPin = spreadContracting && rangeContracting && r.pin_dist_pct != null && r.pin_dist_pct < 0.005;

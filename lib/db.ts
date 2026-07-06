@@ -742,9 +742,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       strike        REAL NOT NULL,
       side          TEXT NOT NULL,          -- 'C' | 'P'
       note          TEXT,
+      added_price   REAL,                   -- mark at the moment the contract was saved
       created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (ticker, expiration, strike, side)
     );
+    ALTER TABLE watch_options ADD COLUMN IF NOT EXISTS added_price REAL;
 
     -- Time series of live values for each watched contract (greeks, quote, flow).
     CREATE TABLE IF NOT EXISTS watch_snapshots (
@@ -841,6 +843,7 @@ export interface WatchOption {
   strike: number;
   side: string;            // 'C' | 'P'
   note?: string | null;
+  added_price?: number | null; // mark at the moment the contract was saved
   created_at?: string;
 }
 
@@ -890,6 +893,15 @@ export async function insertWatchOption(r: {
 export async function deleteWatchOption(id: number): Promise<void> {
   await getDb();
   await queryAll(`DELETE FROM watch_options WHERE id = ?`, [id]);
+}
+
+/** Records the price at add-time, once. No-op if already set (idempotent on retry). */
+export async function setWatchAddedPrice(id: number, price: number): Promise<void> {
+  await getDb();
+  await queryAll(
+    `UPDATE watch_options SET added_price = ? WHERE id = ? AND added_price IS NULL`,
+    [price, id]
+  );
 }
 
 export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {

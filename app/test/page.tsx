@@ -539,23 +539,6 @@ function usePositioningPrefs() {
   return { tickers, loaded, saving, saveError, save };
 }
 
-/** Ticker universe the scanner actually sweeps — options for the picker. */
-function useScannerUniverse() {
-  const [universe, setUniverse] = useState<string[]>([]);
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/proxy/scanner-tickers");
-        const json = await res.json();
-        if (Array.isArray(json?.tickers)) setUniverse(json.tickers.map((x: unknown) => String(x)));
-      } catch {
-        // leave empty — picker falls back to free text via the default row
-      }
-    })();
-  }, []);
-  return universe;
-}
-
 function fmtPrice(n: number | null): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return `$${n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : 2 })}`;
@@ -732,7 +715,6 @@ function PositioningCardGrid({ tickers, rows }: { tickers: readonly string[]; ro
 function OptionsPositioningTab() {
   const { rows, error, loadedAt, reload } = useScannerRows();
   const { tickers: customTickers, saving, saveError, save } = usePositioningPrefs();
-  const universe = useScannerUniverse();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>(customTickers);
 
@@ -741,11 +723,6 @@ function OptionsPositioningTab() {
   useEffect(() => {
     if (!editing) setDraft(customTickers);
   }, [customTickers, editing]);
-
-  const pickerOptions = useMemo(() => {
-    const merged = [...new Set([...universe, ...FIXED_POSITIONING_TICKERS, ...customTickers])];
-    return merged.map((t) => ({ value: t, label: t }));
-  }, [universe, customTickers]);
 
   const duplicate = new Set(draft).size !== draft.length;
 
@@ -779,7 +756,7 @@ function OptionsPositioningTab() {
       {editing && (
         <Card variant="budget" accent={LIGHT_BLUE} padding={20}>
           <div style={{ fontSize: 15, color: HOME_THEME.text, marginBottom: 14 }}>
-            Pick the 4 tickers shown below. Options come from the live GEX scanner&rsquo;s ticker universe.
+            Type the 4 ticker symbols to show below (must be one the GEX scanner tracks).
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 14 }}>
             {draft.map((sym, i) => (
@@ -787,11 +764,15 @@ function OptionsPositioningTab() {
                 <div style={{ fontSize: 12, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
                   Card {i + 1}
                 </div>
-                <ThemedSelect
+                <input
                   value={sym}
-                  options={pickerOptions}
-                  onChange={(v) => setDraft((prev) => prev.map((p, j) => (j === i ? v : p)))}
-                  ariaLabel={`Positioning card ${i + 1} ticker`}
+                  onChange={(e) => {
+                    const v = e.target.value.toUpperCase().slice(0, 12);
+                    setDraft((prev) => prev.map((p, j) => (j === i ? v : p)));
+                  }}
+                  placeholder="e.g. AAPL"
+                  aria-label={`Positioning card ${i + 1} ticker`}
+                  style={homeInputStyle}
                 />
               </div>
             ))}

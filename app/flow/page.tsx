@@ -175,7 +175,13 @@ export default function FlowPage() {
   useEffect(() => {
     let cancelled = false;
     setHistorySwitching(true);
-    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}`)
+    // Push the premium floor to the server so the 20k cap keeps the biggest
+    // prints across the WHOLE session — same fix as the combined view below.
+    // Without this, a busy single ticker (SPX 0DTE) fills the cap with tiny
+    // fills by mid-morning and the newest-20k window silently drops the whole
+    // early session (looks like "history starts at 11am" with no error).
+    const premParam = minPremium > 0 ? `&minPremium=${minPremium}` : "";
+    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}${premParam}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (cancelled) return;
@@ -184,7 +190,7 @@ export default function FlowPage() {
       })
       .catch(() => { if (!cancelled) setHistorySwitching(false); });
     return () => { cancelled = true; };
-  }, [active, date]);
+  }, [active, date, minPremium]);
 
   // ── Combined view backfill: the whole day's tape (ALL tickers), fetched once
   // when the Combined tab is opened. Live prints still arrive via the WS `orders`

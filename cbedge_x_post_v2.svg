@@ -1,0 +1,123 @@
+<svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>CB Edge hype graphic for X post</title>
+<desc>High-energy neon glitch-style graphic listing CB Edge's eight core trading features on a black background with green and pink accents.</desc>
+<defs>
+  <style>
+    .h1 { font-family: 'Arial Black', Arial, sans-serif; font-weight: 900; fill: #39ff14; }
+    .h1s { font-family: 'Arial Black', Arial, sans-serif; font-weight: 900; fill: #ff2fb0; }
+    .tag { font-family: Arial, sans-serif; font-weight: 900; fill: #ffffff; }
+    .num { font-family: 'Courier New', monospace; font-weight: 900; }
+    .h { font-family: Arial, sans-serif; font-weight: 900; fill: #ffffff; }
+    .b { font-family: Arial, sans-serif; fill: #b8ffcf; }
+    .cta { font-family: 'Arial Black', Arial, sans-serif; font-weight: 900; fill: #000000; }
+  </style>
+  <filter id="glowG" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="4" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="glowP" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="5" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+<rect width="1200" height="675" fill="#050505"/>
+
+<!-- diagonal energy stripes -->
+<g opacity="0.5">
+  <rect x="-200" y="0" width="60" height="900" fill="#39ff14" opacity="0.06" transform="rotate(18 0 0)"/>
+  <rect x="200" y="0" width="40" height="900" fill="#ff2fb0" opacity="0.06" transform="rotate(18 0 0)"/>
+  <rect x="700" y="0" width="60" height="900" fill="#39ff14" opacity="0.05" transform="rotate(18 0 0)"/>
+  <rect x="1000" y="0" width="35" height="900" fill="#ff2fb0" opacity="0.06" transform="rotate(18 0 0)"/>
+</g>
+
+<!-- scanlines -->
+<g stroke="#39ff14" stroke-width="1" opacity="0.05">
+  <line x1="0" y1="40" x2="1200" y2="40"/><line x1="0" y1="80" x2="1200" y2="80"/>
+  <line x1="0" y1="120" x2="1200" y2="120"/><line x1="0" y1="560" x2="1200" y2="560"/>
+  <line x1="0" y1="600" x2="1200" y2="600"/><line x1="0" y1="640" x2="1200" y2="640"/>
+</g>
+
+<!-- glitch title -->
+<g transform="skewX(-6)">
+  <text x="66" y="76" class="h1s" font-size="58" opacity="0.85">CB EDGE</text>
+  <text x="60" y="70" class="h1" font-size="58" filter="url(#glowG)">CB EDGE</text>
+</g>
+<text x="62" y="108" class="tag" font-size="21" letter-spacing="1" filter="url(#glowP)" fill="#ff2fb0">⚡ GAMMA. LEVELS. FLOW. SIGNALS. ALL LIVE. ⚡</text>
+
+<rect x="60" y="122" width="1080" height="3" fill="#39ff14" filter="url(#glowG)"/>
+
+<!-- Row 1 -->
+<g transform="rotate(-2 190 265)">
+  <rect x="60" y="168" width="260" height="192" rx="4" fill="#0d0d0d" stroke="#39ff14" stroke-width="2" filter="url(#glowG)"/>
+  <text x="80" y="215" class="num" font-size="30" fill="#ff2fb0">01</text>
+  <text x="80" y="248" class="h" font-size="21">GEX DASHBOARD</text>
+  <text x="80" y="276" class="b" font-size="14">Live net gamma + call/put</text>
+  <text x="80" y="296" class="b" font-size="14">walls, no refresh delay 🔥</text>
+</g>
+
+<g transform="rotate(2 470 265)">
+  <rect x="340" y="172" width="260" height="188" rx="4" fill="#0d0d0d" stroke="#ff2fb0" stroke-width="2" filter="url(#glowP)"/>
+  <text x="360" y="219" class="num" font-size="30" fill="#39ff14">02</text>
+  <text x="360" y="252" class="h" font-size="21">CB KEY LEVELS</text>
+  <text x="360" y="280" class="b" font-size="14">Magnetic price levels,</text>
+  <text x="360" y="300" class="b" font-size="14">scored by size &amp; conviction</text>
+</g>
+
+<g transform="rotate(-2 750 265)">
+  <rect x="620" y="168" width="260" height="192" rx="4" fill="#0d0d0d" stroke="#39ff14" stroke-width="2" filter="url(#glowG)"/>
+  <text x="640" y="215" class="num" font-size="30" fill="#ff2fb0">03</text>
+  <text x="640" y="248" class="h" font-size="21">ES CANDLES</text>
+  <text x="640" y="276" class="b" font-size="14">GEX heatmap + TPO profile</text>
+  <text x="640" y="296" class="b" font-size="14">+ momentum bias, stacked</text>
+</g>
+
+<g transform="rotate(2 1020 265)">
+  <rect x="900" y="172" width="240" height="188" rx="4" fill="#0d0d0d" stroke="#ff2fb0" stroke-width="2" filter="url(#glowP)"/>
+  <text x="920" y="219" class="num" font-size="30" fill="#39ff14">04</text>
+  <text x="920" y="252" class="h" font-size="21">SIGNALS</text>
+  <text x="920" y="280" class="b" font-size="14">Auto long/short alerts —</text>
+  <text x="920" y="300" class="b" font-size="14">GEX + CB confluence 🚨</text>
+</g>
+
+<!-- Row 2 -->
+<g transform="rotate(2 190 470)">
+  <rect x="60" y="378" width="260" height="188" rx="4" fill="#0d0d0d" stroke="#ff2fb0" stroke-width="2" filter="url(#glowP)"/>
+  <text x="80" y="425" class="num" font-size="30" fill="#39ff14">05</text>
+  <text x="80" y="458" class="h" font-size="21">OPTIONS FLOW</text>
+  <text x="80" y="486" class="b" font-size="14">Real-time premium flow +</text>
+  <text x="80" y="506" class="b" font-size="14">sweep/block detection</text>
+</g>
+
+<g transform="rotate(-2 470 470)">
+  <rect x="340" y="374" width="260" height="192" rx="4" fill="#0d0d0d" stroke="#39ff14" stroke-width="2" filter="url(#glowG)"/>
+  <text x="360" y="421" class="num" font-size="30" fill="#ff2fb0">06</text>
+  <text x="360" y="454" class="h" font-size="21">EM TRACKER</text>
+  <text x="360" y="482" class="b" font-size="14">Weekly estimated moves,</text>
+  <text x="360" y="502" class="b" font-size="14">graded win/loss — receipts</text>
+</g>
+
+<g transform="rotate(2 750 470)">
+  <rect x="620" y="378" width="260" height="188" rx="4" fill="#0d0d0d" stroke="#ff2fb0" stroke-width="2" filter="url(#glowP)"/>
+  <text x="640" y="425" class="num" font-size="30" fill="#39ff14">07</text>
+  <text x="640" y="458" class="h" font-size="21">GREEKS</text>
+  <text x="640" y="486" class="b" font-size="14">Live GEX/DEX/CHEX/VEX</text>
+  <text x="640" y="506" class="b" font-size="14">on the active 0DTE expiry</text>
+</g>
+
+<g transform="rotate(-2 1020 470)">
+  <rect x="900" y="374" width="240" height="192" rx="4" fill="#0d0d0d" stroke="#39ff14" stroke-width="2" filter="url(#glowG)"/>
+  <text x="920" y="421" class="num" font-size="30" fill="#ff2fb0">08</text>
+  <text x="920" y="454" class="h" font-size="21">SCANNER</text>
+  <text x="920" y="482" class="b" font-size="14">Balance/imbalance + multi-</text>
+  <text x="920" y="502" class="b" font-size="14">ticker gamma scans</text>
+</g>
+
+<!-- Footer hype banner -->
+<g transform="skewX(-6)">
+  <text x="66" y="628" class="h1" font-size="26" filter="url(#glowG)">STOP TRADING BLIND.</text>
+</g>
+<rect x="980" y="595" width="160" height="50" rx="6" fill="#39ff14" transform="rotate(-3 1060 620)" filter="url(#glowG)"/>
+<text x="1060" y="626" class="cta" font-size="19" text-anchor="middle" transform="rotate(-3 1060 620)">cbedge.net</text>
+
+</svg>

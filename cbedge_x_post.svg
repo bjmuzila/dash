@@ -1,0 +1,104 @@
+<svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>CB Edge feature overview graphic for X post</title>
+<desc>Dark trading-dashboard style graphic listing CB Edge's eight core features: GEX Dashboard, CB Key Levels, ES Candles, Signals Engine, Options Flow, EM Tracker, Greeks, and Scanner.</desc>
+<defs>
+<style>
+  .bg { fill: #0a0f1a; }
+  .card { fill: #121a2b; stroke: #1f2b42; stroke-width: 1.5; }
+  .title { font-family: Arial, Helvetica, sans-serif; font-weight: 700; fill: #e8edf5; }
+  .tag { font-family: Arial, Helvetica, sans-serif; fill: #7dd3fc; }
+  .h { font-family: Arial, Helvetica, sans-serif; font-weight: 700; fill: #f1f5f9; }
+  .b { font-family: Arial, Helvetica, sans-serif; fill: #9aa8bd; }
+  .num { font-family: Arial, Helvetica, sans-serif; font-weight: 700; fill: #38bdf8; }
+  .cta { font-family: Arial, Helvetica, sans-serif; font-weight: 700; fill: #0a0f1a; }
+</style>
+</defs>
+
+<rect class="bg" width="1200" height="675"/>
+
+<!-- subtle grid lines -->
+<g stroke="#141d30" stroke-width="1">
+  <line x1="0" y1="150" x2="1200" y2="150"/>
+  <line x1="0" y1="600" x2="1200" y2="600"/>
+</g>
+
+<!-- Header -->
+<text x="60" y="70" class="title" font-size="40">CB Edge</text>
+<text x="60" y="102" class="tag" font-size="20">Live SPX / ES gamma exposure, key levels &amp; options flow</text>
+
+<!-- green accent bar -->
+<rect x="60" y="118" width="140" height="4" fill="#4ade80"/>
+
+<!-- 4x2 grid of feature cards -->
+<!-- Row 1 -->
+<g>
+  <rect class="card" x="60" y="170" width="260" height="190" rx="10"/>
+  <text x="86" y="212" class="num" font-size="26">01</text>
+  <text x="86" y="244" class="h" font-size="21">GEX Dashboard</text>
+  <text x="86" y="272" class="b" font-size="15">Live net gamma, call/put walls &amp;</text>
+  <text x="86" y="292" class="b" font-size="15">flip levels, updated in real time</text>
+</g>
+
+<g>
+  <rect class="card" x="340" y="170" width="260" height="190" rx="10"/>
+  <text x="366" y="212" class="num" font-size="26">02</text>
+  <text x="366" y="244" class="h" font-size="21">CB Key Levels</text>
+  <text x="366" y="272" class="b" font-size="15">Scored magnetic price levels</text>
+  <text x="366" y="292" class="b" font-size="15">ranked by size &amp; conviction</text>
+</g>
+
+<g>
+  <rect class="card" x="620" y="170" width="260" height="190" rx="10"/>
+  <text x="646" y="212" class="num" font-size="26">03</text>
+  <text x="646" y="244" class="h" font-size="21">ES Candles</text>
+  <text x="646" y="272" class="b" font-size="15">5m chart w/ GEX heatmap,</text>
+  <text x="646" y="292" class="b" font-size="15">TPO profile &amp; momentum bias</text>
+</g>
+
+<g>
+  <rect class="card" x="900" y="170" width="240" height="190" rx="10"/>
+  <text x="926" y="212" class="num" font-size="26">04</text>
+  <text x="926" y="244" class="h" font-size="21">Signals</text>
+  <text x="926" y="272" class="b" font-size="15">Auto long/short alerts from</text>
+  <text x="926" y="292" class="b" font-size="15">GEX/CB confluence</text>
+</g>
+
+<!-- Row 2 -->
+<g>
+  <rect class="card" x="60" y="380" width="260" height="190" rx="10"/>
+  <text x="86" y="422" class="num" font-size="26">05</text>
+  <text x="86" y="454" class="h" font-size="21">Options Flow</text>
+  <text x="86" y="482" class="b" font-size="15">Real-time premium flow &amp;</text>
+  <text x="86" y="502" class="b" font-size="15">sweep / block detection</text>
+</g>
+
+<g>
+  <rect class="card" x="340" y="380" width="260" height="190" rx="10"/>
+  <text x="366" y="422" class="num" font-size="26">06</text>
+  <text x="366" y="454" class="h" font-size="21">EM Tracker</text>
+  <text x="366" y="482" class="b" font-size="15">Weekly estimated moves with</text>
+  <text x="366" y="502" class="b" font-size="15">graded win/loss history</text>
+</g>
+
+<g>
+  <rect class="card" x="620" y="380" width="260" height="190" rx="10"/>
+  <text x="646" y="422" class="num" font-size="26">07</text>
+  <text x="646" y="454" class="h" font-size="21">Greeks</text>
+  <text x="646" y="482" class="b" font-size="15">Live GEX / DEX / CHEX / VEX</text>
+  <text x="646" y="502" class="b" font-size="15">for the active 0DTE expiry</text>
+</g>
+
+<g>
+  <rect class="card" x="900" y="380" width="240" height="190" rx="10"/>
+  <text x="926" y="422" class="num" font-size="26">08</text>
+  <text x="926" y="454" class="h" font-size="21">Scanner</text>
+  <text x="926" y="482" class="b" font-size="15">Balance/imbalance &amp; multi-</text>
+  <text x="926" y="502" class="b" font-size="15">ticker gamma scans</text>
+</g>
+
+<!-- Footer CTA -->
+<text x="60" y="640" class="b" font-size="18">One dashboard. Every edge you need to trade the open.</text>
+<rect x="990" y="608" width="150" height="42" rx="8" fill="#38bdf8"/>
+<text x="1065" y="635" class="cta" font-size="18" text-anchor="middle">cbedge.net</text>
+
+</svg>
