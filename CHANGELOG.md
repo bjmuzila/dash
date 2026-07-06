@@ -6,6 +6,10 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-06 — Full custom auth + billing migration off Supabase Auth (`lib/db.ts`, `lib/auth/*`, `lib/supabase/server.ts`+`middleware.ts`, `middleware.ts`, `app/api/auth/*`, `app/auth/callback`, Stripe routes, `server-v2/ws-auth.js`, `scripts/migrate-users-from-supabase.mjs`)
+
+Replaced Supabase Auth entirely with a custom `users`/`sessions`/`password_resets` schema in the existing Render Postgres (scrypt hashing w/ legacy-bcrypt verify + auto-upgrade, opaque session cookies, custom Google OAuth via `lib/auth/google.ts`), keeping all ~40 existing `getServerUserId`/`getServerIsOwner` call sites untouched by preserving their signatures; simplified Stripe webhook/checkout (dropped the cross-DB Supabase claim mirror), rewrote the WS auth gate, admin email/activity routes, and kept Supabase alive only for `/chat` Realtime via a minted JWT (`app/api/auth/chat-token`). Migration script run live (29/29 Supabase users migrated, owner verified); fixed a template-literal syntax bug + a dev-only CSP `unsafe-eval` issue found during local testing, and added a branded reset-password email (`lib/emails/reset-password.ts`); pushed via `push.ps1` — NOT yet confirmed live on prod post-push.
+
 ## 2026-07-06 — "Words from Bzila" owner note card (`app/traders-dashboard/page.tsx`)
 
 Added a collapsible "Words from Bzila" card near the top of `/traders-dashboard`, backed by a new singleton `bzila_note` table (`lib/db.ts`) and `app/api/bzila-note/route.ts` (GET public, POST/DELETE gated by `getServerIsOwner()`); the page shows Edit/Save/Delete controls only when `useAuth().isOwnerClaim` is true. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable this session.

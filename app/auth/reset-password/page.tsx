@@ -1,13 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 // Landing page for the link sent by /api/auth/forgot-password. Replaces the
 // old Supabase-hosted reset-password confirmation (Supabase used to handle the
 // token exchange itself via the auth/callback route).
+// useSearchParams() forces this into a Suspense boundary, or the production
+// build's static export of this route fails (missing-suspense-with-csr-bailout).
 export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResetPasswordForm />
+    </Suspense>
+  );
+}
+
+function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";

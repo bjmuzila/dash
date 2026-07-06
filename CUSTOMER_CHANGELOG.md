@@ -8,6 +8,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Fixed the Options Positioning cards (SPX, NDX, SPY, QQQ) that were stuck showing "no data" — they now update live from the scanner.
 * Added a new "Your Watchlist" row under Options Positioning — type in any 4 tickers you want to track, and your picks are saved to your account.
 * Added a new "Words from Bzila" card to the top of the Traders Dashboard — click to expand and read the latest note.
+* The sign-in and sign-up page is now wider and easier to use.
+* Password reset emails now match our branded look instead of a plain, generic message.
 
 ## Sunday 7/5/2026
 

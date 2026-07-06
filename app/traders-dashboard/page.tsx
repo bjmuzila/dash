@@ -89,7 +89,15 @@ const isTradingDay = (d: Date) => {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function TradersDashboardPage() {
-  const { isOwnerClaim } = useAuth();
+  const { userId, isOwnerClaim } = useAuth();
+  // Cosmetic owner gate — mirrors the pattern used by the Discord share button
+  // (DataBox.tsx) and NavMenu's hasFullAccess: prefer the JWT is_owner claim,
+  // but also accept the NEXT_PUBLIC_OWNER_USER_ID env match since the claim
+  // isn't reliably populated on every session yet. Real enforcement is
+  // server-side in /api/bzila-note (getServerIsOwner) regardless.
+  const isOwner = isOwnerClaim || (process.env.NEXT_PUBLIC_OWNER_USER_ID
+    ? userId === process.env.NEXT_PUBLIC_OWNER_USER_ID
+    : false);
   const [now, setNow] = useState<Date | null>(null);
   const [schedule, setSchedule] = useState<ScheduleItem[]>(DEFAULT_SCHEDULE);
   const [tasks, setTasks] = useState<TaskItem[]>(DEFAULT_TASKS);
