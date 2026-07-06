@@ -23,8 +23,14 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 
 async function main() {
+  // Skip pre-migration Clerk-format ids (orphaned by design, see
+  // MIGRATION-SUPABASE-AUTH.md) and rows with no status yet (checkout started,
+  // subscription never completed — linkStripeCustomer creates these before the
+  // webhook sets status).
   const { rows } = await pool.query(
-    `SELECT clerk_user_id AS user_id, status FROM subscriptions WHERE clerk_user_id IS NOT NULL`
+    `SELECT clerk_user_id AS user_id, status FROM subscriptions
+      WHERE clerk_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        AND status IS NOT NULL`
   );
   console.log(`Found ${rows.length} subscription rows to mirror.`);
 
