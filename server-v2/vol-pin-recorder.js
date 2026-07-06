@@ -202,15 +202,15 @@ async function snapshotTicker(symbol, date, p) {
     const [, strikeStr, type] = key.split('|');
     const strike = Number(strikeStr);
     const dist = Math.abs(strike - spot);
-    if (type === 'call' && dist < bestDelta) {
+    if (type === 'C' && dist < bestDelta) {
       bestDelta = dist; atm_strike = strike;
       atm_call_iv = Number(g.iv ?? 0);
     }
-    if (type === 'put' && strike === atm_strike) atm_put_iv = Number(g.iv ?? 0);
+    if (type === 'P' && strike === atm_strike) atm_put_iv = Number(g.iv ?? 0);
   }
   // If put wasn't found in first pass, pick it up now.
   if (!(atm_put_iv > 0) && atm_strike > 0) {
-    const pk = `${expiry}|${atm_strike}|put`;
+    const pk = `${expiry}|${atm_strike}|P`;
     const pg = greekMap.get(pk);
     if (pg) atm_put_iv = Number(pg.iv ?? 0);
   }
@@ -227,10 +227,15 @@ async function snapshotTicker(symbol, date, p) {
   });
   let pin_strike = 0, pin_strike_oi = 0;
   const lo = spot * (1 - PIN_SEARCH_PCT), hi = spot * (1 + PIN_SEARCH_PCT);
+  // fetchOpenInterestTheta keys are `exp|strike|type` (C and P separate rows,
+  // each { oi }) — sum both sides per strike before ranking.
+  const strikeOi = new Map();
   for (const [key, oi] of oiMap) {
     const [, strikeStr] = key.split('|');
     const strike = Number(strikeStr);
-    const totalOi = Number(oi?.callOI ?? 0) + Number(oi?.putOI ?? 0);
+    strikeOi.set(strike, (strikeOi.get(strike) || 0) + (Number(oi?.oi) || 0));
+  }
+  for (const [strike, totalOi] of strikeOi) {
     if (strike >= lo && strike <= hi && totalOi > pin_strike_oi) {
       pin_strike = strike; pin_strike_oi = totalOi;
     }
