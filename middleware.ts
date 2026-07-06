@@ -175,7 +175,7 @@ export async function middleware(req: NextRequest) {
   // WS/chain loop), so on-the-fence signups land on the real dashboard with
   // real (delayed) data instead of a hard paywall. Everything else still
   // redirects to /home.
-  const PAID_EXEMPT = /^\/(pricing|preview|home|mult-greek|api\/stripe|api\/preview|api\/home-snapshot|api\/mult-greek-snapshot)(\/.*)?$/;
+  const PAID_EXEMPT = /^\/(pricing|preview|home|mult-greek|api\/stripe|api\/preview|api\/home-snapshot|api\/mult-greek-snapshot|api\/debug)(\/.*)?$/;
   if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
     const url = req.nextUrl.clone();
     url.pathname = "/home";
