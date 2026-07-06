@@ -723,6 +723,15 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Per-user customized Options Positioning row (/test Positioning tab).
+    -- tickers is an ordered JSON array of exactly 4 uppercase root symbols.
+    -- Missing row = use the built-in default (SPX, NDX, SPY, QQQ).
+    CREATE TABLE IF NOT EXISTS positioning_ticker_prefs (
+      clerk_user_id TEXT PRIMARY KEY,
+      tickers       JSONB NOT NULL DEFAULT '["SPX","NDX","SPY","QQQ"]'::jsonb,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Owner options watchlist (the /owner/watch tracker). One row per watched
     -- contract; live greeks/price/flow are captured into watch_snapshots.
     CREATE TABLE IF NOT EXISTS watch_options (
@@ -788,6 +797,37 @@ export async function upsertQuoteSymbols(clerkUserId: string, symbols: QuoteSymP
      ON CONFLICT (clerk_user_id) DO UPDATE SET
        symbols = EXCLUDED.symbols, updated_at = CURRENT_TIMESTAMP`,
     [clerkUserId, JSON.stringify(symbols)]
+  );
+}
+
+// ── Positioning ticker prefs (per-user 4-card /test Positioning row) ────────
+
+const DEFAULT_POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"];
+
+/** Returns the user's saved 4-ticker row, or the built-in default if unset. */
+export async function getPositioningTickers(clerkUserId: string): Promise<string[]> {
+  await getDb();
+  const row = await queryOne<{ tickers: unknown }>(
+    `SELECT tickers FROM positioning_ticker_prefs WHERE clerk_user_id = ?`, [clerkUserId]
+  );
+  if (!row) return [...DEFAULT_POSITIONING_TICKERS];
+  const t = row.tickers;
+  const arr = typeof t === "string" ? JSON.parse(t) : t;
+  const out = Array.isArray(arr) ? arr.map((x) => String(x).toUpperCase()).slice(0, 4) : [];
+  while (out.length < 4) out.push(DEFAULT_POSITIONING_TICKERS[out.length]);
+  return out;
+}
+
+export async function upsertPositioningTickers(clerkUserId: string, tickers: string[]): Promise<void> {
+  await getDb();
+  const clean = tickers.map((x) => String(x).trim().toUpperCase()).filter(Boolean).slice(0, 4);
+  while (clean.length < 4) clean.push(DEFAULT_POSITIONING_TICKERS[clean.length]);
+  await queryAll(
+    `INSERT INTO positioning_ticker_prefs (clerk_user_id, tickers, updated_at)
+     VALUES (?, ?::jsonb, CURRENT_TIMESTAMP)
+     ON CONFLICT (clerk_user_id) DO UPDATE SET
+       tickers = EXCLUDED.tickers, updated_at = CURRENT_TIMESTAMP`,
+    [clerkUserId, JSON.stringify(clean)]
   );
 }
 

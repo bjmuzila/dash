@@ -267,6 +267,7 @@ function GexScanner() {
             <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
+              <th style={th}>Spot</th>
               <th style={th}>Strike</th>
               <th style={{ ...th, textAlign: "left" }}>Expiry</th>
               {(["latest_chg", "mean_chg", "z"] as const).map((col, idx) => {
@@ -299,6 +300,7 @@ function GexScanner() {
                   style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>
+                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot > 0 ? r.spot.toFixed(2) : "—"}</td>
                   <td style={td}>{r.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: col, fontWeight: 800 }}>{fmtB(r.latest_chg)}</td>
@@ -316,7 +318,7 @@ function GexScanner() {
               );
             })}
             {!rows.length && !loading && (
-              <tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+              <tr><td colSpan={10} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                 No qualifying moves yet. Needs ≥3 snapshots spanning the window — give the recorder ~{win + 10} min of history.
               </td></tr>
             )}
@@ -447,6 +449,7 @@ function GreeksScanner() {
           <thead>
             <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 13, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
+              <th style={th}>Spot</th>
               <th style={th}>Strike</th>
               <th style={{ ...th, textAlign: "left" }}>Expiry</th>
               <th style={th}>{meta.colLabel}</th>
@@ -478,6 +481,7 @@ function GreeksScanner() {
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>
                     {i + 1}{nearSpot ? " ◆" : ""}
                   </td>
+                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot_now > 0 ? r.spot_now.toFixed(2) : "—"}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: chgCol, fontWeight: 800 }}>{fmtB(chg)}</td>
@@ -497,7 +501,7 @@ function GreeksScanner() {
               );
             })}
             {!rows.length && !loading && !err && (
-              <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+              <tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                 No data yet. The recorder runs every 5 min during RTH — needs ≥2 snapshots spanning {win}m.
               </td></tr>
             )}

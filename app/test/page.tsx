@@ -290,7 +290,7 @@ function DataRow({ label, value, tone }: Row) {
         alignItems: "center",
         padding: "8px 12px",
         borderRadius: 4,
-        fontSize: 14,
+        fontSize: 15,
         background: tone === "highlight" ? `${HOME_THEME.purple}55` : "transparent",
       }}
     >
@@ -305,7 +305,7 @@ function DataRow({ label, value, tone }: Row) {
 function SideBox({ title, rows }: { title: string; rows: { label: string; value: string }[] }) {
   return (
     <div style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.orange, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+      <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.orange, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
         {title}
       </div>
       {rows.map((r) => (
@@ -325,11 +325,11 @@ function Footer({ data }: { data: SymbolData }) {
         borderTop: `1px solid ${HOME_THEME.border}`,
         paddingTop: 14,
         marginTop: 18,
-        fontSize: 13,
+        fontSize: 15,
       }}
     >
       <div>
-        <div style={{ color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Filters</div>
+        <div style={{ fontSize: 16, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Filters</div>
         {data.filters.map((f) => (
           <div key={f} style={{ color: HOME_THEME.text }}>
             {f}
@@ -337,11 +337,11 @@ function Footer({ data }: { data: SymbolData }) {
         ))}
       </div>
       <div>
-        <div style={{ color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Series</div>
+        <div style={{ fontSize: 16, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Series</div>
         <div style={{ color: HOME_THEME.text }}>{data.series}</div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        <div style={{ fontSize: 16, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           Total Premium
         </div>
         <div style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, fontSize: 15 }}>{data.totalPremium}</div>
@@ -365,7 +365,7 @@ function SymbolPanel({ data }: { data: SymbolData }) {
         <div>
           <div
             style={{
-              fontSize: 13,
+              fontSize: 16,
               fontWeight: 800,
               color: HOME_THEME.orange,
               textTransform: "uppercase",
@@ -404,10 +404,10 @@ function SymbolPanel({ data }: { data: SymbolData }) {
 function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 15, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+      <div style={{ fontSize: 16, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
         {label}
       </div>
-      <div style={{ fontSize: 30, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
+      <div style={{ fontSize: 15, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
     </div>
   );
 }
@@ -420,8 +420,6 @@ function AmTbrStat({ label, value, accent }: { label: string; value: string; acc
 // no new math on the server, just a new read + card layout. Moved back here
 // from /es-candles per Brandon's ask — belongs on /test, not the chart page.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"] as const;
 
 type PositioningRow = {
   symbol: string;
@@ -436,10 +434,14 @@ type PositioningRow = {
   stale: boolean;
 };
 
-function usePositioning() {
+function usePositioning(tickers: readonly string[]) {
   const [rows, setRows] = useState<Record<string, PositioningRow> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  // Keep the current wanted set in a ref so `load` doesn't need `tickers` as a
+  // dependency (its identity changes every render as a plain array literal).
+  const tickersRef = useRef(tickers);
+  tickersRef.current = tickers;
 
   const load = useCallback(async () => {
     try {
@@ -451,10 +453,11 @@ function usePositioning() {
       const json = await res.json();
       if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
       const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
+      const wanted = tickersRef.current;
       const bySymbol: Record<string, PositioningRow> = {};
       for (const r of list) {
         const symbol = String(r.symbol ?? "");
-        if (!(POSITIONING_TICKERS as readonly string[]).includes(symbol)) continue;
+        if (!wanted.includes(symbol)) continue;
         bySymbol[symbol] = {
           symbol,
           spot: Number(r.spot) || 0,
@@ -482,7 +485,81 @@ function usePositioning() {
     return () => clearInterval(id);
   }, [load]);
 
+  // Ticker selection changed (user saved a new row) — refetch immediately.
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tickers.join(",")]);
+
   return { rows, error, loadedAt, reload: load };
+}
+
+const DEFAULT_POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"];
+
+/** Per-user customized 4-ticker Positioning row, persisted in Postgres. */
+function usePositioningPrefs() {
+  const [tickers, setTickers] = useState<string[]>(DEFAULT_POSITIONING_TICKERS);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/positioning-tickers");
+        if (!res.ok) return; // not signed in, etc. — keep the default row
+        const json = await res.json();
+        const t = Array.isArray(json?.tickers) ? json.tickers.map((x: unknown) => String(x)) : null;
+        if (!cancelled && t && t.length === 4) setTickers(t);
+      } catch {
+        // keep default
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = useCallback(async (next: string[]) => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch("/api/positioning-tickers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tickers: next }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      setTickers(Array.isArray(json?.tickers) ? json.tickers : next);
+      return true;
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  return { tickers, loaded, saving, saveError, save };
+}
+
+/** Ticker universe the scanner actually sweeps — options for the picker. */
+function useScannerUniverse() {
+  const [universe, setUniverse] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/proxy/scanner-tickers");
+        const json = await res.json();
+        if (Array.isArray(json?.tickers)) setUniverse(json.tickers.map((x: unknown) => String(x)));
+      } catch {
+        // leave empty — picker falls back to free text via the default row
+      }
+    })();
+  }, []);
+  return universe;
 }
 
 function fmtPrice(n: number | null): string {
@@ -586,12 +663,12 @@ function PositioningCard({ row }: { row: PositioningRow }) {
         <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
           Options Positioning
         </div>
-        <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
+        <div style={{ marginLeft: "auto", fontSize: 16, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <div style={{ fontSize: 15, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
         {stale && (
-          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>
+          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>
             Stale — last close{date ? ` ${date}` : ""}, market closed
           </div>
         )}
@@ -631,7 +708,25 @@ function PositioningCard({ row }: { row: PositioningRow }) {
 }
 
 function OptionsPositioningTab() {
-  const { rows, error, loadedAt, reload } = usePositioning();
+  const { tickers, saving, saveError, save } = usePositioningPrefs();
+  const { rows, error, loadedAt, reload } = usePositioning(tickers);
+  const universe = useScannerUniverse();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string[]>(tickers);
+
+  // Keep the draft synced to the saved row whenever it changes and we're not
+  // mid-edit (e.g. the initial load resolving after this component mounts).
+  useEffect(() => {
+    if (!editing) setDraft(tickers);
+  }, [tickers, editing]);
+
+  const pickerOptions = useMemo(() => {
+    const merged = [...new Set([...universe, ...tickers])];
+    return merged.map((t) => ({ value: t, label: t }));
+  }, [universe, tickers]);
+
+  const duplicate = new Set(draft).size !== draft.length;
+
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
@@ -641,10 +736,58 @@ function OptionsPositioningTab() {
             : "Loading positioning data…"}
         </div>
         <button onClick={reload} style={homeButtonStyle}>Refresh</button>
+        <button
+          onClick={() => { setDraft(tickers); setEditing((v) => !v); }}
+          style={{ ...homeButtonStyle, marginLeft: "auto" }}
+        >
+          {editing ? "Cancel" : "Customize tickers"}
+        </button>
       </div>
+
+      {editing && (
+        <Card variant="budget" accent={LIGHT_BLUE} padding={20}>
+          <div style={{ fontSize: 15, color: HOME_THEME.text, marginBottom: 14 }}>
+            Pick the 4 tickers shown below. Options come from the live GEX scanner&rsquo;s ticker universe.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 14 }}>
+            {draft.map((sym, i) => (
+              <div key={i}>
+                <div style={{ fontSize: 12, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+                  Card {i + 1}
+                </div>
+                <ThemedSelect
+                  value={sym}
+                  options={pickerOptions}
+                  onChange={(v) => setDraft((prev) => prev.map((p, j) => (j === i ? v : p)))}
+                  ariaLabel={`Positioning card ${i + 1} ticker`}
+                />
+              </div>
+            ))}
+          </div>
+          {duplicate && (
+            <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 10 }}>Pick 4 different tickers.</div>
+          )}
+          {saveError && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 10 }}>{saveError}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              onClick={async () => {
+                if (duplicate) return;
+                const ok = await save(draft);
+                if (ok) setEditing(false);
+              }}
+              disabled={saving || duplicate}
+              style={{ ...homeButtonStyle, opacity: saving || duplicate ? 0.6 : 1 }}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button onClick={() => setEditing(false)} style={homeButtonStyle}>Cancel</button>
+          </div>
+        </Card>
+      )}
+
       {error && <div style={{ fontSize: 15, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 24 }}>
-        {POSITIONING_TICKERS.map((sym) => {
+        {tickers.map((sym) => {
           const row = rows?.[sym];
           if (!row) {
             return (
@@ -654,7 +797,7 @@ function OptionsPositioningTab() {
                   <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
                     Options Positioning
                   </div>
-                  <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
+                  <div style={{ marginLeft: "auto", fontSize: 16, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
                 </div>
                 <div style={{ fontSize: 15, color: HOME_THEME.text }}>
                   {rows ? "No data yet for this ticker — needs a scanner sweep after deploy." : "Loading…"}
@@ -668,7 +811,8 @@ function OptionsPositioningTab() {
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
         Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots).
         Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile. Dimmed &ldquo;Stale&rdquo;
-        cards are showing the last available close (market closed) instead of an empty panel.
+        cards are showing the last available close (market closed) instead of an empty panel. Use &ldquo;Customize
+        tickers&rdquo; to swap in any of the scanner&rsquo;s tracked tickers — your picks are saved to your account.
       </div>
     </>
   );
@@ -868,7 +1012,7 @@ function SemiGauge({
         <circle cx={cx} cy={cy} r={4.5} fill={HOME_THEME.text} />
         <text x={cx} y={cy - 18} textAnchor="middle" fontSize={15} fontWeight={800} fill={HOME_THEME.text}>{valueLabel}</text>
       </svg>
-      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
     </div>
   );
 }
@@ -978,7 +1122,7 @@ function ChartTooltip({ x, y, children }: { x: number; y: number; children: Reac
         border: `1px solid ${HOME_THEME.border}`,
         borderRadius: 8,
         padding: "8px 12px",
-        fontSize: 13,
+        fontSize: 15,
         lineHeight: 1.5,
         color: HOME_THEME.text,
         pointerEvents: "none",
@@ -1436,12 +1580,12 @@ function OiByExpirationPanel({ symbol, expirations }: { symbol: string; expirati
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
           {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · once/day (OPRA OI)` : "—"}
         </div>
-        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 12, marginLeft: "auto" }}>Refresh</button>
+        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 15, marginLeft: "auto" }}>Refresh</button>
       </div>
-      {err && <div style={{ fontSize: 13, color: HOME_THEME.red, marginBottom: 8 }}>OI-by-expiration error: {err}</div>}
+      {err && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 8 }}>OI-by-expiration error: {err}</div>}
       {!rows.length && !err ? (
         <GlEmpty note={loading ? "loading expirations…" : "no data yet"} />
       ) : (
@@ -1519,7 +1663,7 @@ function StrikeLevelTable({
     { netGEX: 0, netDEX: 0, callOI: 0, callVolume: 0, putOI: 0, putVolume: 0 }
   );
 
-  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, whiteSpace: "nowrap" };
+  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 16, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, whiteSpace: "nowrap" };
   const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, position: "relative", overflow: "hidden" };
   const cellText: CSSProperties = { position: "relative", zIndex: 1 };
 
@@ -1532,9 +1676,24 @@ function StrikeLevelTable({
   const maxPutOI = Math.max(1, ...rows.map((r) => r.putOI ?? 0));
   const maxPutVol = Math.max(1, ...rows.map((r) => r.putVolume ?? 0));
 
+  // Column widths shared between the fixed header table and the scrollable
+  // body table below it, so the two line up regardless of cell content.
+  const colWidths = ["13%", "19%", "17%", "12%", "13%", "12%", "14%"];
+  const Cols = () => (
+    <colgroup>
+      {colWidths.map((w, i) => (
+        <col key={i} style={{ width: w }} />
+      ))}
+    </colgroup>
+  );
+
   return (
-    <div ref={scrollRef} style={{ maxHeight: 460, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <div style={{ borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden" }}>
+      {/* Header lives in its own non-scrolling table above the body — avoids
+          the sticky-thead ghosting/ overlap glitch from rows showing through
+          a sticky header while scrolling. */}
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <Cols />
         <thead>
           <tr>
             <th style={{ ...th, textAlign: "left" }}>Strike</th>
@@ -1546,52 +1705,57 @@ function StrikeLevelTable({
             <th style={th}>Put Vol</th>
           </tr>
         </thead>
-        <tbody>
-          {sorted.map((r) => {
-            const netG = glOiVolNet(r);
-            return (
-              <tr key={r.strike} ref={r.strike === atmStrike ? atmRef : undefined} style={{ background: r.strike === atmStrike ? `${LIGHT_BLUE}14` : "transparent" }}>
-                <td style={{ ...td, textAlign: "left", fontWeight: 700 }}><span style={cellText}>{glFmt2(r.strike)}</span></td>
-                <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>
-                  {slBarEl(netG, maxNetGEX, LIGHT_BLUE, HOME_THEME.red)}
-                  <span style={cellText}>{glFmt0(netG)}</span>
-                </td>
-                <td style={td}>
-                  {slBarEl(r.netDEX, maxNetDEX, LIGHT_BLUE, HOME_THEME.red)}
-                  <span style={cellText}>{glFmt0(r.netDEX)}</span>
-                </td>
-                <td style={td}>
-                  {slBarEl(r.callOI, maxCallOI, LIGHT_BLUE)}
-                  <span style={cellText}>{glFmt0(r.callOI)}</span>
-                </td>
-                <td style={td}>
-                  {slBarEl(r.callVolume, maxCallVol, LIGHT_BLUE)}
-                  <span style={cellText}>{glFmt0(r.callVolume)}</span>
-                </td>
-                <td style={td}>
-                  {slBarEl(r.putOI, maxPutOI, HOME_THEME.red)}
-                  <span style={cellText}>{glFmt0(r.putOI)}</span>
-                </td>
-                <td style={td}>
-                  {slBarEl(r.putVolume, maxPutVol, HOME_THEME.red)}
-                  <span style={cellText}>{glFmt0(r.putVolume)}</span>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>Total</td>
-            <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.netGEX)}</td>
-            <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.netDEX)}</td>
-            <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.callOI)}</td>
-            <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.callVolume)}</td>
-            <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.putOI)}</td>
-            <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.putVolume)}</td>
-          </tr>
-        </tfoot>
       </table>
+      <div ref={scrollRef} style={{ maxHeight: 900, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <Cols />
+          <tbody>
+            {sorted.map((r) => {
+              const netG = glOiVolNet(r);
+              return (
+                <tr key={r.strike} ref={r.strike === atmStrike ? atmRef : undefined} style={{ background: r.strike === atmStrike ? `${LIGHT_BLUE}14` : "transparent" }}>
+                  <td style={{ ...td, textAlign: "left", fontWeight: 700 }}><span style={cellText}>{glFmt2(r.strike)}</span></td>
+                  <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>
+                    {slBarEl(netG, maxNetGEX, LIGHT_BLUE, HOME_THEME.red)}
+                    <span style={cellText}>{glFmt0(netG)}</span>
+                  </td>
+                  <td style={td}>
+                    {slBarEl(r.netDEX, maxNetDEX, LIGHT_BLUE, HOME_THEME.red)}
+                    <span style={cellText}>{glFmt0(r.netDEX)}</span>
+                  </td>
+                  <td style={td}>
+                    {slBarEl(r.callOI, maxCallOI, LIGHT_BLUE)}
+                    <span style={cellText}>{glFmt0(r.callOI)}</span>
+                  </td>
+                  <td style={td}>
+                    {slBarEl(r.callVolume, maxCallVol, LIGHT_BLUE)}
+                    <span style={cellText}>{glFmt0(r.callVolume)}</span>
+                  </td>
+                  <td style={td}>
+                    {slBarEl(r.putOI, maxPutOI, HOME_THEME.red)}
+                    <span style={cellText}>{glFmt0(r.putOI)}</span>
+                  </td>
+                  <td style={td}>
+                    {slBarEl(r.putVolume, maxPutVol, HOME_THEME.red)}
+                    <span style={cellText}>{glFmt0(r.putVolume)}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>Total</td>
+              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.netGEX)}</td>
+              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.netDEX)}</td>
+              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.callOI)}</td>
+              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.callVolume)}</td>
+              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.putOI)}</td>
+              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.putVolume)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1651,7 +1815,7 @@ function saveGlHistory(entries: GlHistoryEntry[]) {
 }
 
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
-  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 16, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
   const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
 
   return (
@@ -1842,7 +2006,7 @@ function GexLevelsTab() {
         {d && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
+              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
               <div style={{ ...homeInputStyle, fontSize: 15, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
             </div>
             <AmTbrStat label="Stock Price" value={glFmt2(d.spot)} accent={HOME_THEME.text} />
@@ -1873,7 +2037,7 @@ function GexLevelsTab() {
               ]}
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 170 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
+              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
               <ThemedSelect
                 value={snap?.expiry ?? ""}
                 options={(snap?.expirations?.length ? snap.expirations : [snap?.expiry ?? ""]).filter(Boolean).map((e) => ({ value: e as string, label: e as string }))}
@@ -2048,14 +2212,14 @@ function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: Tes
     <Card variant="classic" accent={def.accent} padding={24}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <FlaskIcon color={def.accent} />
-        <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
       </div>
-      <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
         {def.blurb}
       </div>
       <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
         {def.points.map((p) => (
-          <li key={p} style={{ display: "flex", gap: 8, fontSize: 13, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
+          <li key={p} style={{ display: "flex", gap: 8, fontSize: 15, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
             <span style={{ color: def.accent, flexShrink: 0 }}>›</span>
             <span>{p}</span>
           </li>
@@ -2070,7 +2234,7 @@ function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: Tes
           border: `1px solid ${def.accent}`,
           background: `${def.accent}1a`,
           color: def.accent,
-          fontSize: 13,
+          fontSize: 15,
           fontWeight: 800,
           letterSpacing: "0.06em",
           textTransform: "uppercase",
@@ -2090,8 +2254,8 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <FlaskIcon color={HOME_THEME.orange} size={26} />
           <div style={{ flex: 1, minWidth: 240 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>Welcome to the Test Lab</div>
-            <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>Welcome to the Test Lab</div>
+            <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
               These are the beginning stages of test pages — features being tried out before they graduate to the
               main dashboard. Expect rough edges. Please leave feedback so we know what to fix or build out next.
             </div>
@@ -2105,7 +2269,7 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
               border: `1px solid ${HOME_THEME.orange}`,
               background: `${HOME_THEME.orange}1a`,
               color: HOME_THEME.orange,
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: 800,
               letterSpacing: "0.06em",
               textTransform: "uppercase",
@@ -2151,7 +2315,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
                 ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
                 : "rgba(255,255,255,0.04)",
               color: isActive ? HOME_THEME.cyan : HOME_THEME.text,
-              fontSize: 14,
+              fontSize: 15,
               fontWeight: 800,
               letterSpacing: "0.06em",
               textTransform: "uppercase",

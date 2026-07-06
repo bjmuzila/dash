@@ -149,6 +149,12 @@ function applicableRules(ib: IbState): AppliedRule[] {
 
   const tag = ib.done ? "" : " (provisional — IB still forming)";
 
+  // Pre-break forecasts (Above/Below-Mid, Formed-First, Tuesday bias, Vol
+  // Compression) are all "which side breaks first" predictions. Once either
+  // side has actually broken, the prediction is resolved — stop showing them
+  // and let Timing Curve / Single-Break / Double-Breach take over below.
+  const preBreak = !ib.brokeHigh && !ib.brokeLow;
+
   // Lead notice while forming so it's clear these are developing reads.
   if (!ib.done) {
     out.push({ title: "IB Forming · Provisional Reads", color: "#ffb300",
@@ -158,23 +164,23 @@ function applicableRules(ib: IbState): AppliedRule[] {
       detail: "IB window complete. Only 0.6% of days stay fully inside the IB — plan for at least one breakout." });
   }
 
-  if (ib.aboveMid === true) {
+  if (preBreak && ib.aboveMid === true) {
     out.push({ title: "Above-Mid Dominance (ES)", color: "#00e676",
       detail: `Price is above the IB midpoint → 83.5% historical probability of an eventual IB High breakout${tag}.` });
-  } else if (ib.aboveMid === false) {
+  } else if (preBreak && ib.aboveMid === false) {
     out.push({ title: "Below-Mid Dominance (ES)", color: "#ff5252",
       detail: `Price is below the IB midpoint → 94.9% historical probability of an eventual IB Low breakdown. Fading carries ~5% survival${tag}.` });
   }
 
-  if (ib.lowFirst === true) {
+  if (preBreak && ib.lowFirst === true) {
     out.push({ title: "Low Formed First", color: "#7cff6b",
       detail: `Session low printed before the high → upward path skew: 78.79% break IB High later, only 19.7% reverse to IB Low${tag}.` });
-  } else if (ib.lowFirst === false) {
+  } else if (preBreak && ib.lowFirst === false) {
     out.push({ title: "High Formed First", color: "#ffb300",
       detail: `Session high printed before the low → watch for downside rotation / double-cross risk${tag}.` });
   }
 
-  if (etDayOfWeek() === 2) {
+  if (preBreak && etDayOfWeek() === 2) {
     if (ib.lowFirst === false) {
       out.push({ title: "Tuesday · High First", color: "#ff5ec4",
         detail: `Tuesday + IB High first → first break skews to IB Low first (58.33%)${tag}.` });
@@ -184,7 +190,7 @@ function applicableRules(ib: IbState): AppliedRule[] {
     }
   }
 
-  if (ib.rangePct > 0 && ib.rangePct <= 1) {
+  if (preBreak && ib.rangePct > 0 && ib.rangePct <= 1) {
     out.push({ title: "Volatility Compression", color: "#ffb300",
       detail: `IB range is compressed (${ib.rangePct.toFixed(2)}% ≤ 1%). A 5m close below IB Low = 98.01% continued-downside trigger; fading carries ~0% edge${tag}.` });
   }
