@@ -309,7 +309,14 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
             last,
             prev,
             pct,
-            spark: Array.isArray(it.spark) ? (it.spark as number[]).filter((v) => Number.isFinite(v)) : [],
+            // API returns sparkPre/sparkRth (two legs), never a combined `spark`
+            // field — reading `it.spark` was always undefined, so the pill's
+            // sparkline silently rendered empty. Stitch the two legs together
+            // chronologically (pre-market first, then RTH-to-now).
+            spark: [
+              ...(Array.isArray(it.sparkPre) ? (it.sparkPre as number[]) : []),
+              ...(Array.isArray(it.sparkRth) ? (it.sparkRth as number[]) : []),
+            ].filter((v) => Number.isFinite(v)),
             session: it.session === "EXT" ? "EXT" : "REG",
           };
         });

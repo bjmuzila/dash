@@ -192,6 +192,40 @@ export default function FlowPage() {
     return () => { cancelled = true; };
   }, [active, date, minPremium]);
 
+  // ── Net-drift bins for the ACTIVE ticker, aggregated in SQL over the WHOLE
+  // session (not the tape's 20k raw-row cap) so the chart always spans the
+  // full 9:30–4:00 RTH regardless of how much a busy ticker prints. Server
+  // applies the same filters as the tape, so the chart moves with the filter
+  // panel too. Polled every 5s to advance the "now" edge on today's session. ──
+  const [netBins, setNetBins] = useState<NetBin[]>([]);
+  const [netSwitching, setNetSwitching] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setNetSwitching(true);
+    const qp = new URLSearchParams({ underlying: active, bin: String(BIN_SEC), date });
+    if (side !== "all") qp.set("side", side);
+    if (optType !== "all") qp.set("type", optType);
+    if (minPremium > 0) qp.set("minPremium", String(minPremium));
+    if (minSize > 0) qp.set("minSize", String(minSize));
+    if (expiry !== "all") qp.set("expiry", expiry);
+    if (dteMin > 0) qp.set("dteMin", String(dteMin));
+    if (dteMax != null) qp.set("dteMax", String(dteMax));
+    if (otmOnly) qp.set("otmOnly", "1");
+    const load = () =>
+      fetch(`/proxy/flow-netprem?${qp.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (cancelled) return;
+          if (j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]);
+          setNetSwitching(false);
+        })
+        .catch(() => { if (!cancelled) setNetSwitching(false); });
+    load();
+    // Past sessions are static — only poll the live edge for today.
+    const id = isToday ? setInterval(load, 5000) : null;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [active, date, isToday, side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly]);
+
   // ── Combined view backfill: the whole day's tape (ALL tickers), fetched once
   // when the Combined tab is opened. Live prints still arrive via the WS `orders`
   // (already multi-ticker). Polled every 15s to advance the "now" edge. ──
@@ -355,24 +389,17 @@ export default function FlowPage() {
   // ── Net Premium (Net Drift) series for the active ticker. ──
   // Cumulative signed premium: buy = +, sell = −. One point per minute (last
   // cumulative value in that bin) to satisfy lightweight-charts' unique/
-  // ascending time requirement. Binned client-side from `filteredAsc`, so ALL
-  // active filters (side/type/premium/size/expiry/dte/otm) move this chart
-  // exactly like they move the tape below it — no separate server query to
-  // drift out of sync with the filter state.
+  // ascending time requirement. Bins come from the server's SQL GROUP BY
+  // (`netBins`, /proxy/flow-netprem), which aggregates the WHOLE session —
+  // unlike the tape's `history` backfill, it isn't capped at 20k raw rows, so
+  // a busy ticker (SPX 0DTE) still shows the full 9:30–4:00 RTH on the chart.
+  // The server applies the same filters as the tape, so the chart still moves
+  // with the filter panel.
   const netSeries = useMemo(() => {
     const { openSec, closeSec } = isToday ? rthBoundsToday() : rthBoundsForYmd(date);
-
-    // Bucket the filtered rows into fixed BIN_SEC slots.
     const byBin = new Map<number, NetBin>();
-    for (const o of filteredAsc) {
-      const sec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC;
-      let b = byBin.get(sec);
-      if (!b) { b = { sec, callNet: 0, putNet: 0, callVol: 0, putVol: 0 }; byBin.set(sec, b); }
-      const signed = o.side === "buy" ? o.premium : -o.premium;
-      if (o.type === "C") { b.callNet += signed; b.callVol += o.size; }
-      else { b.putNet += signed; b.putVol += o.size; }
-    }
-    const hasData = filteredAsc.length > 0;
+    for (const b of netBins) byBin.set(b.sec, b);
+    const hasData = netBins.length > 0;
 
     // Fixed 1-min bins across the whole RTH session → proportional, hardcoded
     // 9:30–4:00 axis. Walk the aggregate into cumulative net-drift lines; bins up
@@ -398,7 +425,7 @@ export default function FlowPage() {
       }
     }
     return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData, byBin };
-  }, [filteredAsc, isToday, date]);
+  }, [netBins, isToday, date]);
 
   // ── lightweight-charts setup ──
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -802,11 +829,11 @@ export default function FlowPage() {
       {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
            Combined view so the once-created lightweight-chart keeps its ref. ── */}
       <div style={{ display: view === "ticker" ? "contents" : "none" }}>
-        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: historySwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
+        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
           <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
               Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
-              {historySwitching && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted }}>· loading…</span>}
+              {netSwitching && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted }}>· loading…</span>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>

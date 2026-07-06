@@ -463,11 +463,16 @@ async function handleFlowHistory(req, res) {
 
 // ── /proxy/flow-netprem ────────────────────────────────────────────────────
 // Per-bin (default 60s) net premium + contract volume for one ticker, computed
-// in SQL. Net = buy premium − sell premium, split call/put. The client walks
-// these bins into cumulative net-drift lines on a fixed 9:30–4:00 grid, so the
-// browser never pulls raw prints (SPX alone is hundreds of thousands/day).
-// Tiny in-memory cache so N concurrent /flow pages polling the same ticker every
-// 5s collapse to one GROUP BY per key per TTL. Keyed by date|underlying|bin.
+// in SQL over the FULL session — not subject to the /proxy/flow-history 20k
+// raw-row cap, so a busy ticker (SPX 0DTE) still gets the whole 9:30–4:00
+// session on the chart even when the tape-backfill cap would truncate the
+// early morning. The client walks these bins into cumulative net-drift lines
+// on a fixed 9:30–4:00 grid, so the browser never pulls raw prints for the
+// chart itself.
+// Accepts the same filters as the tape (side/type/premium/size/expiry/dte/otm)
+// so the chart moves with the filter panel exactly like the tape does.
+// Tiny in-memory cache so N concurrent /flow pages polling the same
+// ticker+filters every 5s collapse to one GROUP BY per key per TTL.
 const _netPremCache = new Map(); // key -> { at: ms, payload }
 const NETPREM_TTL_MS = 4000;
 
@@ -479,7 +484,20 @@ async function handleFlowNetPrem(req, res) {
   if (!Number.isFinite(binSec) || binSec <= 0) binSec = 60;
   const binMs = Math.round(binSec) * 1000;
 
-  const cacheKey = `${date}|${underlying.toUpperCase()}|${binMs}`;
+  const side = (searchParams.get('side') || 'all').toLowerCase();
+  const type = (searchParams.get('type') || 'all').toUpperCase();
+  let minPremium = Number(searchParams.get('minPremium') || 0);
+  if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
+  let minSize = Number(searchParams.get('minSize') || 0);
+  if (!Number.isFinite(minSize) || minSize < 0) minSize = 0;
+  const expiry = searchParams.get('expiry') || 'all';
+  let dteMin = Number(searchParams.get('dteMin') || 0);
+  if (!Number.isFinite(dteMin) || dteMin < 0) dteMin = 0;
+  const dteMaxRaw = searchParams.get('dteMax');
+  const dteMax = dteMaxRaw != null && dteMaxRaw !== '' ? Number(dteMaxRaw) : null;
+  const otmOnly = searchParams.get('otmOnly') === '1';
+
+  const cacheKey = [date, underlying.toUpperCase(), binMs, side, type, minPremium, minSize, expiry, dteMin, dteMax, otmOnly ? 1 : 0].join('|');
   const hit = _netPremCache.get(cacheKey);
   if (hit && Date.now() - hit.at < NETPREM_TTL_MS) return sendJson(res, 200, hit.payload);
 
@@ -492,6 +510,37 @@ async function handleFlowNetPrem(req, res) {
   if (underlying) {
     params.push(flowRootsFor(underlying));
     where += ` AND underlying_norm = ANY($${params.length})`;
+  }
+  if (side === 'buy' || side === 'sell') {
+    params.push(side);
+    where += ` AND side = $${params.length}`;
+  }
+  if (type === 'C' || type === 'P') {
+    params.push(type);
+    where += ` AND type = $${params.length}`;
+  }
+  if (minPremium > 0) {
+    params.push(minPremium);
+    where += ` AND premium >= $${params.length}`;
+  }
+  if (minSize > 0) {
+    params.push(minSize);
+    where += ` AND size >= $${params.length}`;
+  }
+  if (expiry !== 'all') {
+    params.push(expiry);
+    where += ` AND expiration = $${params.length}`;
+  }
+  if (dteMin > 0) {
+    params.push(dteMin);
+    where += ` AND (expiration::date - CURRENT_DATE) >= $${params.length}`;
+  }
+  if (dteMax != null) {
+    params.push(dteMax);
+    where += ` AND (expiration::date - CURRENT_DATE) <= $${params.length}`;
+  }
+  if (otmOnly) {
+    where += ' AND is_otm = true';
   }
   params.push(binMs);
   const binIdx = params.length;

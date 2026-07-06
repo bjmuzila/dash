@@ -6,6 +6,24 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-06 — Vol Pin Scanner status ranking + sortable columns (`app/scanner/page.tsx`)
+
+Refactored `PinStatus` into a shared `pinStatusRank()` (0=PINNING/1=SQUEEZING/2=WATCHING/3=none) so the label and row ordering use one source of truth, and added a `PinSortKey`/`pinSortValue()` + `SortTh` header component giving every column (Symbol, Spot, Dist, Pin OI, ATM IV, RV, IV-RV%, Spread Trend, Range, Range Trend, Status) click-to-sort with asc/desc toggle and a ▲/▼ indicator, defaulting to Status ascending. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable this session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-06 — Options Positioning: per-user customizable watchlist row + scanner sweep fix
+
+Diagnosed the Positioning tab's stuck "needs a scanner sweep" state to a literal `SCANNER_TICKERS=A,AAL,AAPL,...` value in the VPS `.env.local` (a doc-example string saved verbatim, never actually SPX/NDX/SPY/QQQ) — fixed via `SCANNER_TICKERS=SCANNER` + `docker compose up -d --force-recreate`, confirmed with a forced `POST /proxy/scanner-run`. Split `OptionsPositioningTab` in `app/test/page.tsx` into a fixed SPX/NDX/SPY/QQQ row (`useScannerRows` + `PositioningCardGrid`) plus a second "Your Watchlist" row backed by a new `positioning_ticker_prefs` Postgres table (`lib/db.ts`) and `app/api/positioning-tickers/route.ts`, editable via 4 plain-text ticker inputs (also added `GET /proxy/scanner-tickers` in `server-v2/server-with-proxy.js`, not currently used by the client). NOT build-verified — sandbox unavailable all session (HYPERVISOR_VIRT_DISABLED).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-05 — TPO box profile, GEX rail thickness fix, What's New owner-edit
 
 Added a `showTpo` overlay to `app/es-candles/page.tsx` (`buildTpoProfile()` + canvas draw block) rendering a rolling ETH(6pm-9:30am)/RTH(9:30am-4pm)/ETH/RTH box-profile strip — VAH/VAL/POC/Mid only, half-width gray boxes, each anchored to its own fixed session window via `ts.timeToCoordinate` — and uncapped `components/dashboard/EsGexRail.tsx`'s bar-thickness formula plus added wheel/pointermove listeners so rail bars track live Y-axis zoom instead of a 5s-lagged 9px-capped size. Also removed 3 stale bullets from `CUSTOMER_CHANGELOG.md` and added an owner-only delete button on `/whats-new` (`WhatsNewClient.tsx` + new `app/api/whats-new/route.ts` DELETE, Supabase `getServerUserId()`-gated) so entries can be struck from the page without hand-editing the file. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) was unavailable the entire session.

@@ -678,6 +678,16 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Traders Dashboard "Words from Bzila" owner note. Single global row (id=1),
+    -- shown to every visitor of the Traders Dashboard page; only the owner can
+    -- write/clear it (enforced server-side via getServerIsOwner in the API route).
+    CREATE TABLE IF NOT EXISTS bzila_note (
+      id         INTEGER PRIMARY KEY DEFAULT 1,
+      content    TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT bzila_note_singleton CHECK (id = 1)
+    );
+
     -- Traders Dashboard overnight AI overview. One row per ET date, written once
     -- by the 7am cron (overview-generator.js). summary is the narrative; drivers
     -- is a JSON array of {when,title,body} econ/news items.
@@ -1003,6 +1013,24 @@ export async function upsertTdPrefs(
        zip = EXCLUDED.zip, schedule = EXCLUDED.schedule, tasks = EXCLUDED.tasks,
        links = EXCLUDED.links, updated_at = CURRENT_TIMESTAMP`,
     [clerkUserId, zip, JSON.stringify(schedule), JSON.stringify(tasks), JSON.stringify(links)]
+  );
+}
+
+// ── Traders Dashboard: "Words from Bzila" owner note ────────────────────────
+
+export interface BzilaNote { content: string; updated_at: string | null; }
+
+export async function getBzilaNote(): Promise<BzilaNote | undefined> {
+  await getDb();
+  return queryOne<BzilaNote>(`SELECT content, updated_at FROM bzila_note WHERE id = 1`);
+}
+
+export async function upsertBzilaNote(content: string): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO bzila_note (id, content, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = CURRENT_TIMESTAMP`,
+    [content]
   );
 }
 

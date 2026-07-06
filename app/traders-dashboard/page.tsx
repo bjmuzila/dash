@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -88,6 +89,7 @@ const isTradingDay = (d: Date) => {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function TradersDashboardPage() {
+  const { isOwnerClaim } = useAuth();
   const [now, setNow] = useState<Date | null>(null);
   const [schedule, setSchedule] = useState<ScheduleItem[]>(DEFAULT_SCHEDULE);
   const [tasks, setTasks] = useState<TaskItem[]>(DEFAULT_TASKS);
@@ -103,6 +105,14 @@ export default function TradersDashboardPage() {
   const [editTasks, setEditTasks] = useState(false);
   const [editLinks, setEditLinks] = useState(false);
   const [loaded, setLoaded] = useState(false);
+
+  // ── Words from Bzila (owner note) ──
+  const [bzilaNote, setBzilaNote] = useState("");
+  const [bzilaUpdatedAt, setBzilaUpdatedAt] = useState<string | null>(null);
+  const [bzilaExpanded, setBzilaExpanded] = useState(false);
+  const [bzilaEditing, setBzilaEditing] = useState(false);
+  const [bzilaDraft, setBzilaDraft] = useState("");
+  const [bzilaSaving, setBzilaSaving] = useState(false);
 
   // ── Clock ──
   useEffect(() => {
@@ -135,6 +145,39 @@ export default function TradersDashboardPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }).catch(() => {});
+  }, []);
+
+  // ── Words from Bzila ──
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/bzila-note", { cache: "no-store" });
+        if (r.ok) { const j = await r.json(); setBzilaNote(j.content || ""); setBzilaUpdatedAt(j.updated_at ?? null); }
+      } catch { /* ignore */ }
+    })();
+  }, []);
+
+  const saveBzilaNote = useCallback(async () => {
+    setBzilaSaving(true);
+    try {
+      const r = await fetch("/api/bzila-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: bzilaDraft }),
+      });
+      if (r.ok) { setBzilaNote(bzilaDraft); setBzilaUpdatedAt(new Date().toISOString()); setBzilaEditing(false); }
+    } catch { /* ignore */ }
+    setBzilaSaving(false);
+  }, [bzilaDraft]);
+
+  const deleteBzilaNote = useCallback(async () => {
+    if (!window.confirm("Delete this note?")) return;
+    setBzilaSaving(true);
+    try {
+      const r = await fetch("/api/bzila-note", { method: "DELETE" });
+      if (r.ok) { setBzilaNote(""); setBzilaDraft(""); setBzilaEditing(false); setBzilaUpdatedAt(null); }
+    } catch { /* ignore */ }
+    setBzilaSaving(false);
   }, []);
 
   // ── Live futures (Yahoo poll, 60s) ──
@@ -303,6 +346,66 @@ export default function TradersDashboardPage() {
               <button onClick={() => { setWeather(null); setZip(""); setZipInput(""); savePrefs({ zip: null }); }} style={{ ...miniBtn, marginTop: 4 }}>Change ZIP</button>
             )}
           </div>
+        </Card>
+
+        {/* Words from Bzila */}
+        <Card accent="purple" padding={20}>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setBzilaExpanded((v) => !v)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setBzilaExpanded((v) => !v); } }}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+          >
+            <div style={{ fontSize: 17, fontWeight: 700, color: HT.purple }}>💬 Words from Bzila</div>
+            <span style={{ color: HT.muted, fontSize: 11, fontWeight: 700 }}>{bzilaExpanded ? "▲ COLLAPSE" : "▼ EXPAND"}</span>
+          </div>
+
+          {!bzilaExpanded && bzilaNote && (
+            <div style={{ marginTop: 8, color: HT.muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {bzilaNote}
+            </div>
+          )}
+
+          {bzilaExpanded && (
+            <div style={{ marginTop: 16 }}>
+              {isOwnerClaim && bzilaEditing ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <textarea
+                    value={bzilaDraft}
+                    onChange={(e) => setBzilaDraft(e.target.value)}
+                    rows={6}
+                    autoFocus
+                    style={{ ...inputStyle, width: "100%", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+                    placeholder="Write a note for the team…"
+                  />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={saveBzilaNote} disabled={bzilaSaving} style={miniBtn}>{bzilaSaving ? "Saving…" : "Save"}</button>
+                    <button onClick={() => { setBzilaEditing(false); setBzilaDraft(bzilaNote); }} style={miniBtn}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {bzilaNote ? (
+                    <div style={{ whiteSpace: "pre-wrap", color: rgba(HT.text, 0.85), fontSize: 14, lineHeight: 1.5 }}>{bzilaNote}</div>
+                  ) : (
+                    <div style={{ color: HT.muted, fontSize: 13 }}>Nothing posted yet.</div>
+                  )}
+                  {bzilaUpdatedAt && (
+                    <div style={{ fontSize: 10, color: HT.muted, marginTop: 10 }}>
+                      Updated {new Date(bzilaUpdatedAt).toLocaleString("en-US", { timeZone: "America/New_York" })} ET
+                    </div>
+                  )}
+                  {isOwnerClaim && (
+                    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                      <button onClick={() => { setBzilaDraft(bzilaNote); setBzilaEditing(true); }} style={miniBtn}>Edit</button>
+                      {bzilaNote && <button onClick={deleteBzilaNote} disabled={bzilaSaving} style={{ ...miniBtn, color: HT.red }}>Delete</button>}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </Card>
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)", gap: 20 }}>

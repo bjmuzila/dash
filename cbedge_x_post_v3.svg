@@ -46,8 +46,9 @@
 <text x="60" y="96" class="tag" font-size="18">Live SPX / ES gamma exposure, key levels &amp; options flow</text>
 <rect x="60" y="112" width="120" height="3" rx="1.5" fill="#219EBC"/>
 
-<!-- Promo badge: white glow sits behind, card box drawn on top -->
-<rect x="822" y="2" width="336" height="104" rx="26" fill="#ffffff" filter="url(#whiteGlow)" opacity="0.65"/>
+<!-- Promo badge: soft white halo behind an OPAQUE card box (so the glow doesn't wash out the panel) -->
+<rect x="828" y="8" width="324" height="88" rx="22" fill="#ffffff" filter="url(#whiteGlow)" opacity="0.28"/>
+<rect x="840" y="18" width="300" height="72" rx="18" fill="#0D1119"/>
 <rect x="840" y="18" width="300" height="72" rx="18" fill="url(#cardGlow)"/>
 <rect x="840" y="18" width="300" height="72" rx="18" fill="none" stroke="rgba(255,255,255,0.10)"/>
 <text x="990" y="50" class="promoHead" font-size="22" text-anchor="middle">50% OFF</text>
