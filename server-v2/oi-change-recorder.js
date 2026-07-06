@@ -189,8 +189,8 @@ async function snapshotTicker(symbol, date, prevDate) {
   if (!(spot > 0)) throw new Error(`spot 0 for ${symbol}`);
 
   const [todayMap, prevMap] = await Promise.all([
-    fetchOiHistoryTheta(symbol, date, { strikeRange: STRIKE_RANGE }),
-    fetchOiHistoryTheta(symbol, prevDate, { strikeRange: STRIKE_RANGE }),
+    fetchOiHistoryTheta(symbol, date, { strikeRange: STRIKE_RANGE, maxDte: MAX_DTE_DAYS }),
+    fetchOiHistoryTheta(symbol, prevDate, { strikeRange: STRIKE_RANGE, maxDte: MAX_DTE_DAYS }),
   ]);
   if (!todayMap.size) return []; // not posted yet — caller retries next tick
 

@@ -303,17 +303,61 @@ async function fetchEodHistoryTheta(underlying, date, { strikeRange = 40, maxDte
   })).filter((r) => r.strike > 0);
 }
 
-async function fetchOiHistoryTheta(underlying, date, { strikeRange = 40 } = {}) {
+async function fetchOiHistoryTheta(underlying, date, { strikeRange = 40, maxDte } = {}) {
   const root = thetaRoot(underlying);
   const d = ymdCompact(date);
-  const json = await thetaGet(
-    `/v3/option/history/open_interest?symbol=${encodeURIComponent(root)}&expiration=*&start_date=${d}&end_date=${d}&strike_range=${strikeRange}`,
-  );
+  let json;
+  try {
+    json = await thetaGet(
+      `/v3/option/history/open_interest?symbol=${encodeURIComponent(root)}&expiration=*&start_date=${d}&end_date=${d}&strike_range=${strikeRange}`,
+    );
+  } catch (e) {
+    // Theta v3 rejects expiration=* when start_date/end_date == today ("Cannot
+    // fetch current-day data without specifying an expiration") — historical
+    // (past) dates are unaffected. Fall back to one call per expiration,
+    // capped to maxDte if given so this doesn't blow up on LEAPS-heavy roots.
+    if (!/current-day/i.test(e.message)) throw e;
+    return fetchOiHistoryThetaByExpiration(root, d, { strikeRange, maxDte });
+  }
   const out = new Map(); // `exp|strike|type` -> oi
   for (const r of flatSnapshotRows(json)) {
     const strike = Number(r.strike);
     if (!(strike > 0)) continue;
     out.set(`${r.expiration}|${strike}|${rightToType(r.right)}`, Number(r.open_interest) || 0);
+  }
+  return out;
+}
+
+// Fallback for fetchOiHistoryTheta when Theta refuses expiration=* (current
+// day). `root` is already Theta-mapped, `d` is YYYYMMDD compact.
+async function fetchOiHistoryThetaByExpiration(root, d, { strikeRange = 40, maxDte } = {}) {
+  const expJson = await thetaGet(`/v3/option/list/expirations?symbol=${encodeURIComponent(root)}`);
+  const expRows = rowsFromV3(expJson);
+  const today = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  let expirations = [...new Set(expRows.map((r) => r.expiration))].filter((e) => e && e >= today);
+  if (maxDte != null) {
+    const cutoff = new Date(`${today}T12:00:00Z`);
+    cutoff.setUTCDate(cutoff.getUTCDate() + maxDte);
+    const cutoffIso = cutoff.toISOString().slice(0, 10);
+    expirations = expirations.filter((e) => e <= cutoffIso);
+  }
+
+  const out = new Map();
+  for (const expiration of expirations) {
+    const expCompact = expiration.replace(/-/g, '');
+    let json;
+    try {
+      json = await thetaGet(
+        `/v3/option/history/open_interest?symbol=${encodeURIComponent(root)}&expiration=${expCompact}&start_date=${d}&end_date=${d}&strike_range=${strikeRange}`,
+      );
+    } catch (e) {
+      continue; // skip a bad expiration rather than fail the whole ticker
+    }
+    for (const r of flatSnapshotRows(json)) {
+      const strike = Number(r.strike);
+      if (!(strike > 0)) continue;
+      out.set(`${r.expiration}|${strike}|${rightToType(r.right)}`, Number(r.open_interest) || 0);
+    }
   }
   return out;
 }
