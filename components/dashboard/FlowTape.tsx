@@ -46,6 +46,20 @@ function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function fmtSpot(spot: number | undefined): string {
+  if (!spot) return "—";
+  return spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Cost to buy ONE contract (option price × 100 shares), vs. Premium which is the
+// full order's total (price × size × 100).
+function fmtContractCost(price: number): string {
+  const cost = price * 100;
+  if (cost >= 1_000_000) return `$${(cost / 1_000_000).toFixed(2)}M`;
+  if (cost >= 1_000) return `$${(cost / 1_000).toFixed(1)}K`;
+  return `$${cost.toFixed(2)}`;
+}
+
 export default function FlowTape({ orders, connected }: FlowTapeProps) {
   const [minPremium, setMinPremium] = useState<(typeof FILTER_OPTIONS)[number]>(100000);
   const [moneyness, setMoneyness] = useState<(typeof MONEYNESS_OPTIONS)[number]>("otm");
@@ -144,7 +158,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
       <div
         className="grid text-xs px-3 py-1 border-b flex-shrink-0"
         style={{
-          gridTemplateColumns: "55px 48px 1fr 60px 70px 65px",
+          gridTemplateColumns: "55px 48px 1fr 58px 58px 60px 65px 65px",
           borderColor: "var(--border)",
           color: "var(--muted)",
         }}
@@ -153,7 +167,9 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
         <span>Side</span>
         <span>Action</span>
         <span className="text-right">Strike</span>
+        <span className="text-right">Spot</span>
         <span className="text-right">Size</span>
+        <span className="text-right" title="Cost of one contract (price × 100)">Cost/Ctr</span>
         <span className="text-right">Premium</span>
       </div>
 
@@ -168,7 +184,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
               key={i}
               className="grid text-xs px-3 py-1 font-mono border-b hover:bg-[var(--border)] transition-colors"
               style={{
-                gridTemplateColumns: "55px 48px 1fr 60px 70px 65px",
+                gridTemplateColumns: "55px 48px 1fr 58px 58px 60px 65px 65px",
                 borderColor: "var(--border)",
               }}
             >
@@ -181,7 +197,9 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
               </span>
               <span style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>{fmtAction(o.action)}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.strike.toLocaleString()}</span>
+              <span className="text-right" style={{ color: "var(--muted)" }}>{fmtSpot(o.spot)}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.size.toLocaleString()}</span>
+              <span className="text-right" style={{ color: "var(--text)" }}>{fmtContractCost(o.price)}</span>
               <span className="text-right" style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>
                 {fmtPremium(o.premium)}
               </span>

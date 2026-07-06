@@ -66,6 +66,9 @@ async function ensureTable(p) {
       PRIMARY KEY (ts, symbol, side)
     )
   `);
+  // spot: underlying spot at print time, added after the table already existed
+  // in prod — lazy ALTER so old rows just read back NULL instead of failing.
+  await p.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS spot REAL');
   await p.query('CREATE INDEX IF NOT EXISTS flow_prints_date_ts_idx ON flow_prints (date, ts)');
 
   // underlying_norm: uppercased `underlying`, written at insert time so
@@ -117,7 +120,7 @@ async function writeFlowTape(tape) {
     if (!fresh.length) return;
 
     const date = todayYmdET();
-    const cols = 15;
+    const cols = 16;
     const values = [];
     const params = [];
     let i = 0;
@@ -145,13 +148,14 @@ async function writeFlowTape(tape) {
         Number.isFinite(Number(o.premium)) ? Number(o.premium) : null,
         typeof o.isOtm === 'boolean' ? o.isOtm : null,
         o.underlying != null ? String(o.underlying).toUpperCase() : null,
+        Number.isFinite(Number(o.spot)) && Number(o.spot) > 0 ? Number(o.spot) : null,
       );
     }
     if (!values.length) return;
 
     await p.query(
       `INSERT INTO flow_prints
-         (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm, underlying_norm)
+         (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm, underlying_norm, spot)
        VALUES ${values.join(', ')}
        ON CONFLICT (ts, symbol, side) DO UPDATE SET
          size = EXCLUDED.size,
@@ -160,7 +164,8 @@ async function writeFlowTape(tape) {
          action = EXCLUDED.action,
          bucket = EXCLUDED.bucket,
          is_otm = EXCLUDED.is_otm,
-         underlying_norm = EXCLUDED.underlying_norm`,
+         underlying_norm = EXCLUDED.underlying_norm,
+         spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
       params
     );
     lastFlushedTs = maxTs;

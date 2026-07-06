@@ -13,6 +13,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeStats, type FailEvent } from "@/lib/failLevels";
+import { PageShell } from "@/components/shared/PageCard";
+import { HOME_THEME, classicCardAccentStyle } from "@/components/shared/homeTheme";
 
 // Today's ET date as "YYYY-MM-DD" (mirrors the helper on /fails).
 function todayETStr(): string {
@@ -23,8 +25,18 @@ function todayETStr(): string {
   return `${g("year")}-${g("month")}-${g("day")}`;
 }
 
-const C = { cyan: "#219EBC", border: "rgba(255,255,255,0.10)", card: "rgba(13,17,25,0.55)", label: "#c9d8e8", purple: "#a78bfa" };
-const GREEN = "#22e08a", RED = "#ff6b6b", AMBER = "#ffb300", MUTED = "#9fb3c8";
+// Theme sourced from the shared dashboard palette (components/shared/homeTheme.ts) —
+// single source of truth so this page matches every other page. `label`/`MUTED`
+// map to HOME_THEME.text/.muted, which are both pure white in this theme (no gray text).
+const C = { cyan: HOME_THEME.cyan, border: HOME_THEME.border, card: HOME_THEME.panelBg, label: HOME_THEME.text, purple: HOME_THEME.purple };
+const GREEN = HOME_THEME.green, RED = HOME_THEME.red, AMBER = HOME_THEME.orange, MUTED = HOME_THEME.muted;
+// Frosted card surface (matches /confidence-score and the site-wide Budget-card look).
+const CARD = classicCardAccentStyle;
+function rgba(hex: string, a: number) {
+  const h = hex.replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 
 type SummaryRow = {
   kind: string;
@@ -78,7 +90,7 @@ function SplitBar({ w, l, c }: { w: number; l: number; c: number }) {
   const seg = (n: number, color: string) =>
     n > 0 ? <div style={{ width: `${(n / tot) * 100}%`, background: color }} /> : null;
   return (
-    <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "#0b1320" }}>
+    <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
       {seg(w, GREEN)}{seg(l, RED)}{seg(c, MUTED)}
     </div>
   );
@@ -91,10 +103,11 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
     <div
       onClick={onClick}
       title="Click to view the logged plays for this setup"
-      style={{ background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${C.card}`, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
+      className="card-hover"
+      style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span style={{ fontSize: 16, fontWeight: 800, color: "#fff", letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>
+        <span style={{ fontSize: 16, fontWeight: 800, color: C.label, letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>
         <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em" }}>{r.total} logged</span>
       </div>
 
@@ -118,7 +131,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
           return (
             <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                 {rate != null ? `${Math.round(rate * 100)}%` : "—"}
               </div>
               <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>{r.resolved > 0 ? `${hits}/${r.resolved}` : ""}</div>
@@ -134,7 +147,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
         <Metric label="Live" value={String(r.pending)} color={AMBER} />
         <Metric label="Avg max R" value={r.avg_r != null ? `${r.avg_r > 0 ? "+" : ""}${r.avg_r.toFixed(2)}R` : "—"}
           color={r.avg_r == null ? MUTED : r.avg_r >= 1 ? GREEN : r.avg_r >= 0.5 ? AMBER : RED} />
-        <Metric label="Avg MFE" value={r.avg_mfe != null ? `${r.avg_mfe.toFixed(1)} pt` : "—"} color="#cfe" />
+        <Metric label="Avg MFE" value={r.avg_mfe != null ? `${r.avg_mfe.toFixed(1)} pt` : "—"} color={HOME_THEME.cyan} />
       </div>
     </div>
   );
@@ -202,7 +215,7 @@ export default function ResultsPage() {
   const rangeBtn = (r: typeof RANGES[number]): React.CSSProperties => ({
     fontSize: 15, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${range === r.key ? C.cyan : C.border}`,
-    background: range === r.key ? "#0c2535" : "transparent",
+    background: range === r.key ? rgba(C.cyan, 0.18) : "transparent",
     color: range === r.key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase",
     fontFamily: "inherit",
   });
@@ -210,13 +223,13 @@ export default function ResultsPage() {
   const tabBtn = (key: TabKey, label: string): React.CSSProperties => ({
     fontSize: 15, fontWeight: 800, padding: "7px 18px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${tab === key ? C.cyan : C.border}`,
-    background: tab === key ? "#0c2535" : "transparent",
+    background: tab === key ? rgba(C.cyan, 0.18) : "transparent",
     color: tab === key ? C.cyan : C.label, letterSpacing: "0.08em", textTransform: "uppercase",
     fontFamily: "inherit",
   });
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 24, color: "#fff", fontFamily: "var(--font-inter), 'Inter', sans-serif" }}>
+    <PageShell>
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
         <button onClick={() => setTab("ict")} style={tabBtn("ict", "ICT Results")}>ICT Results</button>
@@ -251,7 +264,7 @@ export default function ResultsPage() {
       {!loaded ? (
         <div style={{ color: C.label, fontSize: 15 }}>Loading results…</div>
       ) : sorted.length === 0 ? (
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", color: C.label, fontSize: 15 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 15 }}>
           No setups recorded for this range yet. The ICT tracker logs and grades them every 5 min throughout
           the futures session (Sun 6pm → Fri 4pm ET) — results will populate here as setups fire and resolve.
         </div>
@@ -281,7 +294,7 @@ export default function ResultsPage() {
         />
       )}
       </>)}
-    </div>
+    </PageShell>
   );
 }
 
@@ -303,14 +316,14 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
   return (
     <div
       onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(3,7,12,0.72)", backdropFilter: "blur(3px)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+      style={{ position: "fixed", inset: 0, background: rgba(HOME_THEME.bg, 0.85), backdropFilter: "blur(3px)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: "#0b121c", border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}`, borderRadius: 14, width: "min(960px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
+        style={{ background: HOME_THEME.panel, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}`, borderRadius: 14, width: "min(960px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{kindLabel(kind)}</span>
+          <span style={{ fontSize: 16, fontWeight: 800, color: C.label }}>{kindLabel(kind)}</span>
           <span style={{ fontSize: 15, color: C.label }}>{rows.length} logged {rows.length === 1 ? "play" : "plays"}</span>
           <button
             onClick={onClose}
@@ -324,7 +337,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: "#0b121c" }}>
+                <tr style={{ borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: HOME_THEME.panel }}>
                   <th style={th}>Date</th><th style={th}>Time</th><th style={th}>Dir</th>
                   <th style={{ ...th, textAlign: "right" }}>Entry</th>
                   <th style={{ ...th, textAlign: "right" }}>Target</th>
@@ -339,14 +352,14 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
                 {rows.map((e, i) => {
                   const rc = oc(e.outcome);
                   return (
-                    <tr key={e.setup_key} style={{ borderTop: i ? `1px solid ${C.border}` : undefined, background: e.outcome === "win" ? "rgba(34,224,138,0.05)" : "transparent" }}>
+                    <tr key={e.setup_key} style={{ borderTop: i ? `1px solid ${C.border}` : undefined, background: e.outcome === "win" ? rgba(GREEN, 0.05) : "transparent" }}>
                       <td style={{ ...td, color: C.label }}>{etDate(e.trigger_ts)}</td>
                       <td style={{ ...td, color: C.label }}>{etClock(e.trigger_ts)}</td>
                       <td style={{ ...td, color: dirColor(e.dir), fontWeight: 700 }}>{e.dir ?? "—"}</td>
-                      <td style={{ ...td, textAlign: "right", color: "#fff" }}>{e.price != null ? e.price.toFixed(2) : "—"}</td>
+                      <td style={{ ...td, textAlign: "right", color: C.label }}>{e.price != null ? e.price.toFixed(2) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: C.label }}>{e.target != null ? e.target.toFixed(2) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: C.label }}>{e.invalidation != null ? e.invalidation.toFixed(2) : "—"}</td>
-                      <td style={{ ...td, textAlign: "right", color: "#cfe" }}>{e.mfe != null ? e.mfe.toFixed(1) : "—"}</td>
+                      <td style={{ ...td, textAlign: "right", color: HOME_THEME.cyan }}>{e.mfe != null ? e.mfe.toFixed(1) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: e.r_multiple == null ? C.label : e.r_multiple >= 1 ? GREEN : e.r_multiple < 0 ? RED : AMBER }}>{e.r_multiple == null ? "—" : `${e.r_multiple > 0 ? "+" : ""}${e.r_multiple.toFixed(2)}R`}</td>
                       <td style={{ ...td, textAlign: "center" }}>
                         <span style={{ fontSize: 15, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59`, textTransform: "uppercase" }}>{e.outcome}</span>
@@ -407,7 +420,7 @@ function FailsView() {
       </div>
 
       {stats.length === 0 ? (
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", color: C.label, fontSize: 15 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 15 }}>
           {connected ? "Building history…" : "Loading candles…"}
         </div>
       ) : (
@@ -416,9 +429,9 @@ function FailsView() {
             const p = Math.round(st.failRate * 100);
             const accent = st.kind.endsWith("High") ? GREEN : RED;
             return (
-              <div key={st.kind} style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+              <div key={st.kind} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{st.label}</span>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.label }}>{st.label}</span>
                   <span style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
                 </div>
                 <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
@@ -495,7 +508,7 @@ function CheckpointsView() {
   const rangeBtn = (key: typeof range, label: string): React.CSSProperties => ({
     fontSize: 15, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${range === key ? C.cyan : C.border}`,
-    background: range === key ? "#0c2535" : "transparent",
+    background: range === key ? rgba(C.cyan, 0.18) : "transparent",
     color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
   });
 
@@ -526,9 +539,9 @@ function CheckpointsView() {
         {summary.map((s) => {
           const accent = wrColor(s.hitRate);
           return (
-            <div key={s.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{s.label}</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: C.label }}>{s.label}</span>
                 <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -550,7 +563,7 @@ function CheckpointsView() {
                   return (
                     <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
                       <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                         {rate != null ? `${Math.round(rate * 100)}%` : "—"}
                       </div>
                       <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
@@ -568,11 +581,11 @@ function CheckpointsView() {
       {!loaded ? (
         <div style={{ color: C.label, fontSize: 15 }}>Loading checkpoints…</div>
       ) : days.length === 0 ? (
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 22px", color: C.label, fontSize: 15 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 15 }}>
           No MVC snapshots in this range yet.
         </div>
       ) : (
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -601,7 +614,7 @@ function CheckpointsView() {
                     <td style={{ ...td, color: C.label }}>{d.date}</td>
                     {d.checkpoints.map((c) => (
                       <React.Fragment key={c.key}>
-                        <td style={{ ...td, textAlign: "right", color: "#fff", borderLeft: `1px solid ${C.border}` }}>
+                        <td style={{ ...td, textAlign: "right", color: C.label, borderLeft: `1px solid ${C.border}` }}>
                           {c.strike != null ? c.strike.toFixed(0) : "—"}
                           {c.changed && (
                             <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 15, color: AMBER, fontWeight: 700 }}>↻</span>
@@ -649,7 +662,7 @@ function FailLogTable({ rows }: { rows: FailEvent[] }) {
   const th: React.CSSProperties = { padding: "8px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "8px 12px", fontSize: 15, whiteSpace: "nowrap" };
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+    <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -670,12 +683,12 @@ function FailLogTable({ rows }: { rows: FailEvent[] }) {
               const open = !win && !lost;
               const rc = win ? GREEN : lost ? RED : AMBER;
               return (
-                <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: i ? `1px solid ${C.border}` : undefined, background: win ? "rgba(34,224,138,0.05)" : "transparent" }}>
+                <tr key={`${e.kind}-${e.failTs}-${i}`} style={{ borderTop: i ? `1px solid ${C.border}` : undefined, background: win ? rgba(GREEN, 0.05) : "transparent" }}>
                   <td style={{ ...td, color: C.label }}>{etDate(e.failTs)}</td>
                   <td style={{ ...td, color: C.label }}>{etClock(e.failTs)}</td>
-                  <td style={{ ...td, color: "#fff", fontWeight: 700 }}>{e.short}</td>
+                  <td style={{ ...td, color: C.label, fontWeight: 700 }}>{e.short}</td>
                   <td style={{ ...td, color: tradeColor, fontWeight: 700 }}>{trade}</td>
-                  <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: "#fff" }}>{e.level.toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: C.label }}>{e.level.toFixed(2)}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: AMBER }}>{e.riskPts.toFixed(2)}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: maxR == null ? C.label : maxR >= 2 ? GREEN : maxR >= 1 ? AMBER : RED }}>{maxR == null ? "—" : `${maxR.toFixed(2)}R`}</td>
                   <td style={{ ...td, textAlign: "right" }}>

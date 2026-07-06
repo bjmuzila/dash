@@ -54,6 +54,20 @@ function fmtTime(ts: number): string {
   });
 }
 
+function fmtSpot(spot: number | undefined): string {
+  if (!spot) return "—";
+  return spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Cost to buy ONE contract (option price × 100 shares) — distinct from the
+// order's total Premium (price × size × 100).
+function fmtContractCost(price: number): string {
+  const cost = price * 100;
+  if (cost >= 1_000_000) return `$${(cost / 1_000_000).toFixed(2)}M`;
+  if (cost >= 1_000) return `$${(cost / 1_000).toFixed(1)}K`;
+  return `$${cost.toFixed(2)}`;
+}
+
 // Streamer roots carry suffixes chips don't (SPX streams as "SPXW", etc.).
 const ROOT_TO_TICKER: Record<string, string> = { SPXW: "SPX", NDXP: "NDX", RUTW: "RUT", XSPW: "XSP" };
 
@@ -111,7 +125,9 @@ const PREMIUM_MAX = 1_000_000;
 // give a proportional, hardcoded 9:30–4:00 x-axis and a smooth line.
 const BIN_SEC = 60;
 
-// Per-bin aggregate from /proxy/flow-netprem (server-side GROUP BY).
+// Per-bin aggregate, computed client-side from the filtered tape so the chart
+// reacts to every filter (side/type/premium/size/expiry/dte/otm), not just
+// ticker + date.
 type NetBin = { sec: number; callNet: number; putNet: number; callVol: number; putVol: number };
 
 const DEFAULT_TICKERS = [
@@ -148,32 +164,6 @@ export default function FlowPage() {
   const [otmOnly, setOtmOnly] = useState(false);
 
   const [history, setHistory] = useState<FlowOrder[]>([]);
-  // Aggregated per-bin net premium for the ACTIVE ticker — the chart's source.
-  // Polled every 5s: advances the "now" edge, and self-heals a transient DB blip
-  // (an empty response just gets replaced by the next poll).
-  const [netBins, setNetBins] = useState<NetBin[]>([]);
-  // True while a ticker/date switch's first fetch is in flight. The chart keeps
-  // showing the PREVIOUS ticker's line (dimmed) during this window instead of
-  // snapping to zero — the reset-to-blank was reading as a slow reload even
-  // when the underlying fetch was fast. Poll ticks never flip this back on.
-  const [netSwitching, setNetSwitching] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    setNetSwitching(true);
-    const load = () =>
-      fetch(`/proxy/flow-netprem?underlying=${encodeURIComponent(active)}&bin=${BIN_SEC}&date=${date}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => {
-          if (cancelled) return;
-          if (j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]);
-          setNetSwitching(false);
-        })
-        .catch(() => { if (!cancelled) setNetSwitching(false); });
-    load();
-    // Past sessions are static — only poll the live edge for today.
-    const id = isToday ? setInterval(load, 5000) : null;
-    return () => { cancelled = true; if (id) clearInterval(id); };
-  }, [active, date, isToday]);
 
   // ── Backfill the ACTIVE ticker's full session whenever it changes. ──
   // Per-ticker so the whole day is returned (an unfiltered newest-N cap drops a
@@ -286,9 +276,11 @@ export default function FlowPage() {
     return [...set].sort();
   }, [merged, active]);
 
-  // ── Rows for the ACTIVE ticker only, with all filters (newest-first). ──
-  const filtered = useMemo(() => {
-    const rows = merged.filter((o) => {
+  // ── Rows for the ACTIVE ticker only, with all filters (oldest-first). Feeds
+  // both the tape (reversed below) AND the net-drift chart, so the chart moves
+  // in lockstep with whatever filters are applied. ──
+  const filteredAsc = useMemo(() => {
+    return merged.filter((o) => {
       if (normTicker(o.underlying) !== active) return false;
       if (side !== "all" && o.side !== side) return false;
       if (optType !== "all" && o.type !== optType) return false;
@@ -304,8 +296,10 @@ export default function FlowPage() {
       }
       return true;
     });
-    return rows.reverse();
   }, [merged, active, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax]);
+
+  // Tape display order (newest-first).
+  const filtered = useMemo(() => [...filteredAsc].reverse(), [filteredAsc]);
 
   // ── Combined tape: ALL tickers (or all − indices), same filters, no ticker
   // gate. Merges the all-tickers day backfill with the live multi-ticker WS tape
@@ -353,16 +347,26 @@ export default function FlowPage() {
   const visibleRows = tapeRows.slice(0, MAX_TAPE_ROWS);
 
   // ── Net Premium (Net Drift) series for the active ticker. ──
-  // Cumulative signed premium: buy = +, sell = −. One point per second (last
-  // cumulative value in that second) to satisfy lightweight-charts' unique/
-  // ascending time requirement. Filters (side/type excluded so the chart always
-  // shows both sides) — but premium/size/expiry/dte/otm DO apply for consistency
-  // with the tape's "what am I looking at" framing.
+  // Cumulative signed premium: buy = +, sell = −. One point per minute (last
+  // cumulative value in that bin) to satisfy lightweight-charts' unique/
+  // ascending time requirement. Binned client-side from `filteredAsc`, so ALL
+  // active filters (side/type/premium/size/expiry/dte/otm) move this chart
+  // exactly like they move the tape below it — no separate server query to
+  // drift out of sync with the filter state.
   const netSeries = useMemo(() => {
     const { openSec, closeSec } = isToday ? rthBoundsToday() : rthBoundsForYmd(date);
+
+    // Bucket the filtered rows into fixed BIN_SEC slots.
     const byBin = new Map<number, NetBin>();
-    for (const b of netBins) byBin.set(b.sec, b);
-    const hasData = netBins.length > 0;
+    for (const o of filteredAsc) {
+      const sec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC;
+      let b = byBin.get(sec);
+      if (!b) { b = { sec, callNet: 0, putNet: 0, callVol: 0, putVol: 0 }; byBin.set(sec, b); }
+      const signed = o.side === "buy" ? o.premium : -o.premium;
+      if (o.type === "C") { b.callNet += signed; b.callVol += o.size; }
+      else { b.putNet += signed; b.putVol += o.size; }
+    }
+    const hasData = filteredAsc.length > 0;
 
     // Fixed 1-min bins across the whole RTH session → proportional, hardcoded
     // 9:30–4:00 axis. Walk the aggregate into cumulative net-drift lines; bins up
@@ -388,7 +392,7 @@ export default function FlowPage() {
       }
     }
     return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData, byBin };
-  }, [netBins, isToday, date]);
+  }, [filteredAsc, isToday, date]);
 
   // ── lightweight-charts setup ──
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -586,9 +590,9 @@ export default function FlowPage() {
     };
   }
 
-  const GRID = "78px 56px 90px 80px 90px 100px 90px 74px";
+  const GRID = "78px 56px 90px 74px 80px 90px 80px 100px 90px 74px";
   // Combined tape adds a leading Ticker column.
-  const GRID_COMBINED = "64px 78px 56px 90px 80px 90px 100px 90px 74px";
+  const GRID_COMBINED = "64px 78px 56px 90px 74px 80px 90px 80px 100px 90px 74px";
 
   // Premium split — four cards: buy/sell × call/put, colored & heat-barred by
   // directional bias (buy calls / sell puts = bullish). Shared by both views.
@@ -792,11 +796,11 @@ export default function FlowPage() {
       {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
            Combined view so the once-created lightweight-chart keeps its ref. ── */}
       <div style={{ display: view === "ticker" ? "contents" : "none" }}>
-        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
+        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: historySwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
           <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
               Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
-              {netSwitching && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted }}>· loading…</span>}
+              {historySwitching && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted }}>· loading…</span>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
@@ -846,8 +850,10 @@ export default function FlowPage() {
           <span>Time</span>
           <span>Side</span>
           <span style={{ textAlign: "right" }}>Strike</span>
+          <span style={{ textAlign: "right" }}>Spot</span>
           <span style={{ textAlign: "center" }}>Type</span>
           <span style={{ textAlign: "right" }}>Size</span>
+          <span style={{ textAlign: "right" }} title="Cost of one contract (price × 100)">Cost/Ctr</span>
           <span style={{ textAlign: "right" }}>Premium</span>
           <span style={{ textAlign: "right" }}>Expiry</span>
           <span style={{ textAlign: "center" }}>Bias</span>
@@ -869,11 +875,13 @@ export default function FlowPage() {
                   <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
                   <span style={{ color: sideColor, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
+                  <span style={{ textAlign: "right", color: C.muted }}>{fmtSpot(o.spot)}</span>
                   <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
                   <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
                     {o.size.toLocaleString()}
                     {o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 11 }}> ×{o.fills}</span> : null}
                   </span>
+                  <span style={{ textAlign: "right", color: C.text }}>{fmtContractCost(o.price)}</span>
                   <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
                   <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
                   <span style={{ textAlign: "center", fontWeight: 800, fontSize: 11, color: biasColor }}>

@@ -178,6 +178,7 @@ class FlowProcessor {
       last.size = newSize;
       last.premium += premium;
       last.fills = (last.fills || 1) + 1; // how many prints rolled into this order
+      if (spot > 0) last.spot = spot; // keep the freshest underlying spot as fills accumulate
       // ts tracks the order's start; anchorTs stays the first fill so the rolling
       // window measures from order open (a steady stream won't extend forever).
     } else {
@@ -200,6 +201,7 @@ class FlowProcessor {
         size,
         premium,
         isOtm,
+        spot: spot > 0 ? spot : undefined, // underlying spot at print time, for the tape's Spot column
       });
       // Evict by counting only above-floor blocks, so a burst of sub-floor
       // 500ms slots can't push real ≥floor blocks out of the cap before the

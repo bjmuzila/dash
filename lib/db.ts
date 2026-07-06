@@ -723,12 +723,13 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Per-user customized Options Positioning row (/test Positioning tab).
-    -- tickers is an ordered JSON array of exactly 4 uppercase root symbols.
-    -- Missing row = use the built-in default (SPX, NDX, SPY, QQQ).
+    -- Per-user customized Options Positioning row (/test Positioning tab's
+    -- second, user-editable row — the fixed SPX/NDX/SPY/QQQ row above it is
+    -- never stored here). tickers is an ordered JSON array of exactly 4
+    -- uppercase root symbols. Missing row = use the built-in default below.
     CREATE TABLE IF NOT EXISTS positioning_ticker_prefs (
       clerk_user_id TEXT PRIMARY KEY,
-      tickers       JSONB NOT NULL DEFAULT '["SPX","NDX","SPY","QQQ"]'::jsonb,
+      tickers       JSONB NOT NULL DEFAULT '["AAPL","NVDA","TSLA","AMD"]'::jsonb,
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -802,7 +803,7 @@ export async function upsertQuoteSymbols(clerkUserId: string, symbols: QuoteSymP
 
 // ── Positioning ticker prefs (per-user 4-card /test Positioning row) ────────
 
-const DEFAULT_POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"];
+const DEFAULT_POSITIONING_TICKERS = ["AAPL", "NVDA", "TSLA", "AMD"];
 
 /** Returns the user's saved 4-ticker row, or the built-in default if unset. */
 export async function getPositioningTickers(clerkUserId: string): Promise<string[]> {

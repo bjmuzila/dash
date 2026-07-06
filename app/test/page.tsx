@@ -434,14 +434,13 @@ type PositioningRow = {
   stale: boolean;
 };
 
-function usePositioning(tickers: readonly string[]) {
+// Every ticker the scanner has a row for, keyed by symbol — unfiltered. Both
+// the fixed row and the customizable row read out of this same map, so we
+// only poll /proxy/scanner once regardless of how many cards are on screen.
+function useScannerRows() {
   const [rows, setRows] = useState<Record<string, PositioningRow> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
-  // Keep the current wanted set in a ref so `load` doesn't need `tickers` as a
-  // dependency (its identity changes every render as a plain array literal).
-  const tickersRef = useRef(tickers);
-  tickersRef.current = tickers;
 
   const load = useCallback(async () => {
     try {
@@ -453,11 +452,10 @@ function usePositioning(tickers: readonly string[]) {
       const json = await res.json();
       if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
       const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
-      const wanted = tickersRef.current;
       const bySymbol: Record<string, PositioningRow> = {};
       for (const r of list) {
         const symbol = String(r.symbol ?? "");
-        if (!wanted.includes(symbol)) continue;
+        if (!symbol) continue;
         bySymbol[symbol] = {
           symbol,
           spot: Number(r.spot) || 0,
@@ -485,16 +483,12 @@ function usePositioning(tickers: readonly string[]) {
     return () => clearInterval(id);
   }, [load]);
 
-  // Ticker selection changed (user saved a new row) — refetch immediately.
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tickers.join(",")]);
-
   return { rows, error, loadedAt, reload: load };
 }
 
-const DEFAULT_POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"];
+// Top row — always these 4, never user-editable.
+const FIXED_POSITIONING_TICKERS = ["SPX", "NDX", "SPY", "QQQ"] as const;
+const DEFAULT_POSITIONING_TICKERS = ["AAPL", "NVDA", "TSLA", "AMD"];
 
 /** Per-user customized 4-ticker Positioning row, persisted in Postgres. */
 function usePositioningPrefs() {
@@ -707,23 +701,51 @@ function PositioningCard({ row }: { row: PositioningRow }) {
   );
 }
 
+/** One 4-card grid, reading out of the shared scanner rows map. */
+function PositioningCardGrid({ tickers, rows }: { tickers: readonly string[]; rows: Record<string, PositioningRow> | null }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 24 }}>
+      {tickers.map((sym) => {
+        const row = rows?.[sym];
+        if (!row) {
+          return (
+            <Card key={sym} variant="budget" accent={LIGHT_BLUE} padding={24}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                <LayersIcon color={LIGHT_BLUE} />
+                <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
+                  Options Positioning
+                </div>
+                <div style={{ marginLeft: "auto", fontSize: 16, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
+              </div>
+              <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+                {rows ? "No data yet for this ticker — needs a scanner sweep after deploy." : "Loading…"}
+              </div>
+            </Card>
+          );
+        }
+        return <PositioningCard key={sym} row={row} />;
+      })}
+    </div>
+  );
+}
+
 function OptionsPositioningTab() {
-  const { tickers, saving, saveError, save } = usePositioningPrefs();
-  const { rows, error, loadedAt, reload } = usePositioning(tickers);
+  const { rows, error, loadedAt, reload } = useScannerRows();
+  const { tickers: customTickers, saving, saveError, save } = usePositioningPrefs();
   const universe = useScannerUniverse();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<string[]>(tickers);
+  const [draft, setDraft] = useState<string[]>(customTickers);
 
   // Keep the draft synced to the saved row whenever it changes and we're not
   // mid-edit (e.g. the initial load resolving after this component mounts).
   useEffect(() => {
-    if (!editing) setDraft(tickers);
-  }, [tickers, editing]);
+    if (!editing) setDraft(customTickers);
+  }, [customTickers, editing]);
 
   const pickerOptions = useMemo(() => {
-    const merged = [...new Set([...universe, ...tickers])];
+    const merged = [...new Set([...universe, ...FIXED_POSITIONING_TICKERS, ...customTickers])];
     return merged.map((t) => ({ value: t, label: t }));
-  }, [universe, tickers]);
+  }, [universe, customTickers]);
 
   const duplicate = new Set(draft).size !== draft.length;
 
@@ -736,8 +758,18 @@ function OptionsPositioningTab() {
             : "Loading positioning data…"}
         </div>
         <button onClick={reload} style={homeButtonStyle}>Refresh</button>
+      </div>
+
+      {error && <div style={{ fontSize: 15, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
+
+      <PositioningCardGrid tickers={FIXED_POSITIONING_TICKERS} rows={rows} />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text }}>
+          Your Watchlist
+        </div>
         <button
-          onClick={() => { setDraft(tickers); setEditing((v) => !v); }}
+          onClick={() => { setDraft(customTickers); setEditing((v) => !v); }}
           style={{ ...homeButtonStyle, marginLeft: "auto" }}
         >
           {editing ? "Cancel" : "Customize tickers"}
@@ -785,34 +817,14 @@ function OptionsPositioningTab() {
         </Card>
       )}
 
-      {error && <div style={{ fontSize: 15, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 24 }}>
-        {tickers.map((sym) => {
-          const row = rows?.[sym];
-          if (!row) {
-            return (
-              <Card key={sym} variant="budget" accent={LIGHT_BLUE} padding={24}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                  <LayersIcon color={LIGHT_BLUE} />
-                  <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
-                    Options Positioning
-                  </div>
-                  <div style={{ marginLeft: "auto", fontSize: 16, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
-                </div>
-                <div style={{ fontSize: 15, color: HOME_THEME.text }}>
-                  {rows ? "No data yet for this ticker — needs a scanner sweep after deploy." : "Loading…"}
-                </div>
-              </Card>
-            );
-          }
-          return <PositioningCard key={sym} row={row} />;
-        })}
-      </div>
+      <PositioningCardGrid tickers={customTickers} rows={rows} />
+
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
         Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots).
         Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile. Dimmed &ldquo;Stale&rdquo;
         cards are showing the last available close (market closed) instead of an empty panel. Use &ldquo;Customize
-        tickers&rdquo; to swap in any of the scanner&rsquo;s tracked tickers — your picks are saved to your account.
+        tickers&rdquo; on Your Watchlist to swap in any of the scanner&rsquo;s tracked tickers — your picks are saved
+        to your account.
       </div>
     </>
   );

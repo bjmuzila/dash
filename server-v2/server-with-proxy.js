@@ -320,6 +320,7 @@ async function ensureFlowPrintsSchema(pool) {
       )
     `);
     await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
+    await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS spot REAL');
     await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
     await pool.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
     _flowSchemaEnsured = true;
@@ -429,7 +430,7 @@ async function handleFlowHistory(req, res) {
   const { rows } = await pool.query(
     `SELECT * FROM (
        SELECT ts, symbol, underlying, expiration, strike, type, side, action,
-              bucket, price, size, premium, is_otm
+              bucket, price, size, premium, is_otm, spot
          FROM flow_prints
         WHERE ${where}
         ORDER BY ts DESC
@@ -452,6 +453,7 @@ async function handleFlowHistory(req, res) {
     size: Number(r.size),
     premium: Number(r.premium),
     isOtm: r.is_otm === true,
+    spot: r.spot != null ? Number(r.spot) : undefined,
   }));
 
   const payload = { date, tape };
