@@ -106,8 +106,13 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
     allowTaint: true,
     width: contentW,
     scale: window.devicePixelRatio || 1,
+    // `height` alone is a pure output-crop size — no reflow. `windowHeight`
+    // (deliberately omitted) reflows the ENTIRE cloned document as if the
+    // browser viewport were that short, same footgun as `windowWidth` above.
+    // For a page whose captureH is much shorter than the real viewport (e.g.
+    // a trimmed table), that broke a vh-based ancestor layout (the app's
+    // global toolbar shell) and leaked it into the crop.
     height: captureH,
-    windowHeight: captureH,
     logging: false,
     onclone: (doc, clone) => {
       // Only strip external <link> stylesheets (they can 404 and abort the

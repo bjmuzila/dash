@@ -189,23 +189,28 @@ function isThetaMarketOpen() {
 async function fetchVolumeTheta(underlying = SYMBOL, expiration) {
   // Only fetch intraday volume during the options session (local ET check —
   // see isThetaMarketOpen above). Outside it, return empty so caller preserves prior.
-  if (!isThetaMarketOpen()) return new Map();
+  const open = isThetaMarketOpen();
+  console.log(`[VOL_DEBUG] isThetaMarketOpen=${open} exp=${expiration}`);
+  if (!open) return new Map();
 
   const root = thetaRoot(underlying);
   const out = new Map();
   const json = await thetaGet(
     `/v3/option/snapshot/ohlc?symbol=${encodeURIComponent(root)}&expiration=${expiration}`,
   );
+  const flat = flatSnapshotRows(json);
+  console.log(`[VOL_DEBUG] root=${root} rawRows=${flat.length} sample=${JSON.stringify(flat[0] || null).slice(0, 300)}`);
   // When the market is confirmed open today, all volume from the OHLC snapshot
   // is current-session volume — no stale-bar filtering needed.
   // The snapshot's `timestamp` field is YYYY-MM-DDTHH:mm:ss.SSS (ET, no Z).
-  for (const row of flatSnapshotRows(json)) {
+  for (const row of flat) {
     const type = rightToType(row.right);
     const strike = Number(row.strike);
     if (!(strike > 0)) continue;
     const vol = Number(row.volume ?? row.day_volume) || 0;
     out.set(keyOf(row.expiration || expiration, strike, type), vol);
   }
+  console.log(`[VOL_DEBUG] out.size=${out.size}`);
   return out; // may be empty pre-open — caller treats empty as "no update"
 }
 
