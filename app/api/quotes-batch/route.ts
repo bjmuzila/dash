@@ -148,7 +148,17 @@ async function fetchOne(yahooSym: string, withSpark = false): Promise<YahooQuote
     const lastClose = validCloses.length ? validCloses[validCloses.length - 1] : null;
     const seriesPrevClose = validCloses.length >= 2 ? validCloses[validCloses.length - 2] : null;
 
-    const price = meta.regularMarketPrice ?? lastClose ?? null;
+    // Prefer the live extended-hours print over regularMarketPrice, which
+    // freezes at the prior regular close until the next RTH session opens.
+    // Without this, PRE (~4am–9:30am, when options/equities resume quoting)
+    // showed yesterday's frozen close/price paired with an older prevClose —
+    // i.e. yesterday's whole-day % change — instead of today's premarket move.
+    const price =
+      (meta.marketState === "PRE" && typeof meta.preMarketPrice === "number" ? meta.preMarketPrice : null) ??
+      ((meta.marketState === "POST" || meta.marketState === "POSTPOST") && typeof meta.postMarketPrice === "number" ? meta.postMarketPrice : null) ??
+      meta.regularMarketPrice ??
+      lastClose ??
+      null;
     // IMPORTANT: meta.chartPreviousClose is the close BEFORE the chart's range
     // window (≈a week ago for range=5d) — NOT yesterday. Using it inflates the
     // day %. Prefer Yahoo's actual prior-session close, then the second-to-last

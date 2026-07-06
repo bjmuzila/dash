@@ -759,14 +759,14 @@ export function MultGreekClient({
 
   // Auto-refresh: TT REST per-strike volume accumulates through the session and
   // resets stale at the open, so the one-shot load lands volume=0 for SPY/QQQ
-  // (SPX is the only live-streamed underlying). Re-pull (cache-busted) every 60s
+  // (SPX is the only live-streamed underlying). Re-pull (cache-busted) every 15s
   // while the market is open so volume fills in for all three tickers.
   useEffect(() => {
     if (isStatic) return;
     const id = setInterval(() => {
       const exp = activeExpiryRef.current;
       if (exp && isMarketOpen()) loadAll(exp, true);
-    }, 60000);
+    }, 15000);
     return () => clearInterval(id);
   }, [isStatic, loadAll]);
 

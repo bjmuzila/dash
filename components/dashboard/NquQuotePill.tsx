@@ -69,6 +69,27 @@ function currentEtSession(): "REG" | "EXT" {
   return mins >= 9 * 60 + 30 && mins < 16 * 60 ? "REG" : "EXT";
 }
 
+// PRE = 00:00–09:30 ET, REG = 09:30–16:00 ET, POST = 16:00–24:00 ET.
+// Distinguishing PRE from POST matters for the day-change baseline: during
+// PRE (which is when options/equities start quoting again, ~4am) today's
+// regular close hasn't happened yet, so the baseline must always be
+// `prevClose` (yesterday's official close) — never `close`, which only
+// becomes valid once RTH ends for the day. The old binary REG/EXT split
+// wrongly applied the POST-market rule (prefer `close`) to PRE-market too,
+// which froze the displayed change at the previous day's full-day move
+// instead of today's premarket move.
+function etPhase(): "PRE" | "REG" | "POST" {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  const mins = h * 60 + m;
+  if (mins < 9 * 60 + 30) return "PRE";
+  if (mins < 16 * 60) return "REG";
+  return "POST";
+}
+
 function num(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -218,7 +239,7 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
         // Always include the pill symbol even if removed from the dropdown list.
         const symSet = new Set<string>([PILL_SYMBOL, ...quoteList.map((q) => q.sym)]);
         const symbols = Array.from(symSet).join(",");
-        const ext = currentEtSession() === "EXT";
+        const phase = etPhase();
         // Yahoo = sparkline (+ fallback price). Broker (Tastytrade) = live price
         // & baseline that update in extended hours.
         const [yRes, bRes] = await Promise.all([
@@ -257,8 +278,9 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
           const feedPct = num(it["percent-change"]);
           let pct = pctOf(last, prev, feedPct);
 
-          // Prefer broker: live mark/last + AH-correct baseline (4pm close in
-          // EXT, prior close in REG). Falls through to Yahoo when broker is dark.
+          // Prefer broker: live mark/last + AH-correct baseline (today's 4pm
+          // close once POST starts; prior day's close through PRE + REG).
+          // Falls through to Yahoo when broker is dark.
           const b = broker.get(sym);
           if (b) {
             // Futures: prefer LAST trade (matches TradingView's NQU/ESU print);
@@ -268,7 +290,12 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
             const price = isFut
               ? (b.last > 0 ? b.last : b.mark) || last || 0
               : (b.mark > 0 ? b.mark : b.last) || last || 0;
-            const baseline = ext ? (b.close > 0 ? b.close : b.prevClose) : (b.prevClose > 0 ? b.prevClose : b.close);
+            // PRE (incl. the ~4am options/equities open) and REG both anchor to
+            // prevClose — today's `close` cannot be valid yet. Only POST prefers
+            // `close`, and only after today's regular session has actually ended.
+            const baseline = phase === "POST"
+              ? (b.close > 0 ? b.close : b.prevClose)
+              : (b.prevClose > 0 ? b.prevClose : b.close);
             if (price > 0) {
               last = price;
               if (baseline > 0) { prev = baseline; pct = ((price - baseline) / baseline) * 100; }

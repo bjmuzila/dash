@@ -21,8 +21,10 @@ function useIsOwner(): boolean {
 //  • Never set the clone height to "auto" on a flex/percentage-height table — it
 //    collapses to 0 and crashes html2canvas ("createPattern ... height of 0").
 //    Measure the table's scrollHeight and set an explicit px height instead.
-//  • onclone strips external <link>/<style> so html2canvas never refetches a
-//    (sometimes 404'ing) stylesheet that can abort the render.
+//  • onclone must NOT strip external <link rel="stylesheet"> tags — that also
+//    deletes the compiled Tailwind stylesheet, breaking any className-styled
+//    (not inline-style) element's layout during capture (confirmed on ES
+//    Candles' CALL WALL/PUT WALL/FLIP/CB row).
 async function captureElement(el: HTMLElement, title?: string, fitContent = false): Promise<string> {
   const titleText = title && title.trim() ? title : "SPX GEX";
   // Measure the true content height of the scrollable body so the capture wraps
@@ -72,6 +74,29 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
   }
 
   const { default: html2canvas } = await import("html2canvas");
+
+  // lightweight-charts (ES candles) renders candles into internal canvases that
+  // html2canvas copies blank. If the target exposes __ltScreenshot, its own
+  // screenshot is composited over the chart layer's position afterward (below).
+  // Looked up early (not just after html2canvas runs) so `lt.target` can also
+  // be used to scope the "other plain canvas" handling right below.
+  const ltProvider = (el as unknown as {
+    __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
+  }).__ltScreenshot;
+  const lt = ltProvider?.();
+
+  // A page can contain OTHER plain <canvas> elements beside the lightweight
+  // chart — e.g. ES Candles' EsGexRail (GEX-by-strike bars), a devicePixelRatio-
+  // backed canvas of its own. Those aren't covered by the isCanvas bypass above
+  // (isCanvas requires the WHOLE captured element to be nothing but a canvas),
+  // so they'd otherwise fall through to html2canvas's native <canvas> handling —
+  // the same double-scale bug the bypass exists to avoid, so they vanish/crop
+  // to nothing in the capture. Strip each one from the clone (a placeholder div
+  // keeps the layout box) and composite the real bitmap in ourselves afterward.
+  const otherLiveCanvases = Array.from(el.querySelectorAll("canvas")).filter(
+    (c) => !(lt && lt.target.contains(c))
+  ) as HTMLCanvasElement[];
+
   let contentH: number;
   if (inner) {
     contentH = inner.scrollHeight;
@@ -124,11 +149,33 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     height: captureH,
     logging: false,
     onclone: (doc, clone) => {
-      // Only strip external <link> stylesheets (they can 404 and abort the
-      // render). Inline <style> tags must stay — Next.js injects CSS custom
-      // properties (e.g. --font-mono) via inline <style>, and removing them
-      // breaks font-family resolution during capture, garbling small text.
-      doc.querySelectorAll('link[rel="stylesheet"]').forEach((n) => n.remove());
+      // Do NOT strip <link rel="stylesheet"> tags. This used to remove them
+      // ("can 404 and abort the render"), but that also deletes Next.js's
+      // compiled Tailwind stylesheet — any element styled via className
+      // utilities (not inline style) silently loses its layout during capture.
+      // Confirmed cause of the ES Candles CALL WALL/PUT WALL/FLIP/CB row
+      // collapsing (its wrapper is `className="flex flex-wrap ..."`; each
+      // StatBox kept its own inline space-between, so losing the wrapper's
+      // flex context stretched every box full-width — label far left, value
+      // shoved to the far right edge). html2canvas's useCORS/allowTaint
+      // options already handle a missing/CORS-blocked stylesheet resource
+      // without aborting, so the original 404 concern doesn't need this.
+      // Strip each "other plain canvas" (see otherLiveCanvases above) from the
+      // clone by matching DOM order — querySelectorAll order is identical
+      // between the live tree and its deep clone, so index-matching is exact.
+      if (otherLiveCanvases.length) {
+        const cloneCanvases = Array.from(clone.querySelectorAll("canvas"));
+        const liveAll = Array.from(el.querySelectorAll("canvas"));
+        otherLiveCanvases.forEach((liveCanvas) => {
+          const idx = liveAll.indexOf(liveCanvas);
+          const cloned = idx >= 0 ? cloneCanvases[idx] : undefined;
+          if (cloned) {
+            const placeholder = doc.createElement("div");
+            placeholder.style.cssText = cloned.style.cssText;
+            cloned.replaceWith(placeholder);
+          }
+        });
+      }
       // Inject overlay text as real DOM so html2canvas renders it natively
       // (drawing text onto the returned canvas no-ops in this browser).
       clone.style.position = "relative";
@@ -183,13 +230,9 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     },
   });
 
-  // lightweight-charts (ES candles) renders candles into internal canvases that
-  // html2canvas copies blank. If the target exposes __ltScreenshot, composite the
-  // library's own screenshot over the chart layer's position so candles appear.
-  const ltProvider = (el as unknown as {
-    __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
-  }).__ltScreenshot;
-  const lt = ltProvider?.();
+  // lt (looked up above) composited over the chart layer's position so the
+  // candles appear — html2canvas copies lightweight-charts' internal canvases
+  // blank.
   if (lt) {
     const scale = window.devicePixelRatio || 1;
     const elRect = el.getBoundingClientRect();
@@ -203,6 +246,25 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     const dh = tRect.height * scale;
     const ctx = base.getContext("2d");
     if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
+  }
+
+  // Composite each "other plain canvas" (see otherLiveCanvases above) — e.g.
+  // EsGexRail — using its own live bounding rect, same technique as the lt
+  // chart composite just above.
+  if (otherLiveCanvases.length) {
+    const scale = window.devicePixelRatio || 1;
+    const elRect = el.getBoundingClientRect();
+    const ctx = base.getContext("2d");
+    if (ctx) {
+      for (const liveCanvas of otherLiveCanvases) {
+        const cRect = liveCanvas.getBoundingClientRect();
+        const dx = (cRect.left - elRect.left) * scale;
+        const dy = (cRect.top - elRect.top + 44) * scale;
+        const dw = cRect.width * scale;
+        const dh = cRect.height * scale;
+        ctx.drawImage(liveCanvas, dx, dy, dw, dh);
+      }
+    }
   }
 
   // fitContent: DOM-based height estimates keep overshooting (some ancestor
