@@ -708,9 +708,25 @@ export default function EsCandlesPage() {
     // to enter. Before 16:00 close, that's today (RTH forming or upcoming);
     // after 16:00 close, the next RTH is tomorrow (ETH now building toward it).
     const sessionDayMid = nowMin >= 960 ? todayMid + 86_400_000 : todayMid;
-    // Two session-days — yesterday's and today's (current/most-recent) — each
-    // contributing an ETH then an RTH profile, oldest to newest.
-    const dayMids = [sessionDayMid - 86_400_000, sessionDayMid];
+
+    // Previous session-day = the last ACTUAL trading day present in the data,
+    // not just "yesterday" — a plain calendar-day subtraction lands on a
+    // weekend/holiday with zero candles (e.g. Sunday's "yesterday" is
+    // Saturday), which silently dropped the whole ETH+RTH pair and made TPO
+    // look like it only had the current session. Same `days.filter(d < today)
+    // .pop()` pattern already used for PDH/PDL above.
+    const dayOf = (r: EsCandleRecord) =>
+      r.date || new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(r.timestamp));
+    const sessionDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(sessionDayMid + 12 * 60 * 60_000));
+    const days = [...new Set(rows.map(dayOf))].sort();
+    const prevDay = days.filter((d) => d < sessionDay).pop() ?? null;
+    const prevDayRow = prevDay ? rows.find((r) => dayOf(r) === prevDay) : undefined;
+    const prevDayMid = prevDayRow ? etMidnight(prevDayRow.timestamp) : null;
+
+    // Session-days to render, oldest to newest — each contributes an ETH then
+    // an RTH profile. Skips the previous slot entirely if no trading day was
+    // found (e.g. not enough history loaded yet).
+    const dayMids = [prevDayMid, sessionDayMid].filter((d): d is number => d != null);
 
     const sessions: TpoProfile[] = [];
     for (const dMid of dayMids) {

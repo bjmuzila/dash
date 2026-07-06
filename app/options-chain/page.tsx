@@ -1174,13 +1174,10 @@ export default function OptionsChainPage() {
           // Shared strike axis: ONE strike column on the left, then one
           // value-only column per expiration. Row N = same strike everywhere.
           const STRIKE_COL = 64;
-          const VALUE_COL = 82; // fixed width — never lets rows compress into 2 lines
           return (
           <div style={{
             display: "grid",
-            gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, ${VALUE_COL}px)`,
-            width: `max-content`,
-            minWidth: "100%",
+            gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
             borderRadius: 12,
             overflow: "hidden",
             border: `1px solid ${HT.border}`,
