@@ -63,7 +63,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ fontSize: 15, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{children}</div>
+      <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{children}</div>
     </div>
   );
 }
@@ -213,7 +213,7 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
           <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Net Greeks · Call + Put</span>
-          <span style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
+          <span style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
         </div>
         <ShareActions targetRef={cardRef} caption={caption} />
       </div>
@@ -476,7 +476,7 @@ export default function DevPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
         <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Dev · Symbol probe</span>
         <span style={{ fontSize: 15, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
-        <span style={{ fontSize: 11, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
+        <span style={{ fontSize: 15, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
       </div>
 
       {/* Controls */}
@@ -551,7 +551,7 @@ export default function DevPage() {
       {/* Raw market-data items — every field, nothing dropped */}
       <details style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", marginTop: 12 }}>
         <summary style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", cursor: "pointer" }}>Raw response (call + put)</summary>
-        <pre style={{ margin: "10px 0 0", fontSize: 13, fontFamily: "var(--font-mono)", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <pre style={{ margin: "10px 0 0", fontSize: 15, fontFamily: "var(--font-mono)", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {(callResult || putResult) ? JSON.stringify({ call: callResult, put: putResult }, null, 2) : "—"}
         </pre>
       </details>
@@ -562,7 +562,7 @@ export default function DevPage() {
           <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Log</div>
           <button onClick={() => setLogs([])} style={{ ...inputStyle, padding: "4px 12px", fontSize: 15, cursor: "pointer" }}>Clear</button>
         </div>
-        <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 12.5, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
+        <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 15, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
           {!logs.length && <span style={{ color: C.label }}>—</span>}
           {logs.map((l, i) => {
             const color = l.level === "ok" ? POS : l.level === "warn" ? WARN : l.level === "err" ? HOME_THEME.red : HOME_THEME.text;

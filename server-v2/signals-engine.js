@@ -85,7 +85,7 @@ const CB_MIN_SIZE    = Number(process.env.SIGNALS_CB_MIN_SIZE    || 2.0);    // 
 const CONFLUENCE_DIST= Number(process.env.SIGNALS_CONFLUENCE_DIST|| 2.0);    // stack window
 const TOUCH_WINDOW_MS= Number(process.env.SIGNALS_TOUCH_WINDOW_MS|| 5 * 60_000); // touch validity
 const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000);
-const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || '';
+const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || ''; // NOTE: no longer falls back to DISCORD_WEBHOOK_URL — that's shared w/ calendar/GEX buttons
 const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
 const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
 

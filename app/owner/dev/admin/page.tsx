@@ -49,7 +49,7 @@ function NotPayingPanel() {
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan}}>Signed Up · Not Paying</span>
-        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
+        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
           {emails ? emails.length : "—"}
         </span>
         <span style={{ fontSize: 15, color: T.textSecondary }}>accounts created without an active subscription</span>
@@ -159,7 +159,7 @@ function CustomerActivityPanel() {
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan}}>Customer Activity</span>
-        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
+        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
         <span style={{ fontSize: 15, color: T.textSecondary }}>last login · time on site (approx) · pages</span>
@@ -207,13 +207,13 @@ function CustomerActivityPanel() {
                   <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
                   {r.paid && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 8, background: `${T.green}18`, border: `1px solid ${T.green}44`, color: T.green, flexShrink: 0 }}>paid</span>}
                 </div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)" }}>{fmtRelative(r.lastSeen)} · {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}</div>
+                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.45)" }}>{fmtRelative(r.lastSeen)} · {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}</div>
               </div>
               <span style={{ color: T.text, fontSize: 15 }}>{fmtRelative(r.lastLogin)}</span>
               <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>{fmtDuration(r.approxActiveSec)}</span>
               <span style={{ color: T.text, fontFamily: "var(--font-mono)", fontSize: 15 }}>{r.totalLoads}</span>
               <span style={{ color: T.text, fontFamily: "var(--font-mono)", fontSize: 15 }}>{r.distinctPages}</span>
-              <span style={{ color: T.textSecondary, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.topPath ?? "—"}</span>
+              <span style={{ color: T.textSecondary, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.topPath ?? "—"}</span>
             </div>
           ))
         )}
@@ -262,7 +262,7 @@ function FarCbTickersPanel() {
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan}}>Far CB Watch — Tickers Added</span>
-        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
+        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
         <span style={{ fontSize: 15, color: T.textSecondary }}>customer additions on top of the curated core list</span>
@@ -367,7 +367,7 @@ function UnsubscribePanel() {
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan}}>Unsubscribes · Do Not Email</span>
-        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}>
+        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
         <span style={{ fontSize: 15, color: T.textSecondary }}>skipped by every broadcast audience</span>

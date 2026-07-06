@@ -20,7 +20,7 @@ export interface BetaCouponExpiryOpts {
   email?: string | null;
 }
 
-export const BETA_COUPON_EXPIRY_SUBJECT = "Last chance: 50% off ends midnight Monday";
+export const BETA_COUPON_EXPIRY_SUBJECT = "⏰ Less than 24 hours: 50% off ends midnight Monday";
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -36,13 +36,13 @@ export function betaCouponExpiryText(opts: BetaCouponExpiryOpts = {}): string {
   return [
     hi,
     "",
-    "This is your last call on the beta launch price.",
+    "This is your last call on the beta launch price — LESS THAN 24 HOURS LEFT. You have to act now!",
     "",
     "The 50% off code CB-BETA expires MIDNIGHT this Monday, July 6.",
     "",
     "And there's even more reason to jump in now: the fully automatic ICT chart, tracker & alerts are now LIVE inside CB Edge.",
     "",
-    "After that it's gone for good — 50% off will never be offered again. A 15% off launch sale runs next, and that will be the best deal available going forward.",
+    "After that it's gone for good — 50% off will never be offered again. A 20% off launch sale runs next, and that will be the best deal available going forward.",
     "",
     "Heads up: with CB Edge v2 landing in August, prices will most likely increase. Locking in now at 50% is the lowest this will ever be.",
     "",
@@ -73,7 +73,7 @@ export function betaCouponExpiryEmail(opts: BetaCouponExpiryOpts = {}): string {
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
   <!-- preheader (hidden) -->
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Code CB-BETA (50% off) expires midnight Monday, July 6. It won't come back.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Less than 24 hours left — code CB-BETA (50% off) expires midnight Monday, July 6.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -92,7 +92,7 @@ export function betaCouponExpiryEmail(opts: BetaCouponExpiryOpts = {}): string {
           <tr>
             <td align="center" style="padding:0 32px 4px 32px;">
               <div style="font:800 23px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Last chance — 50% off</div>
-              <div style="font:600 13px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;margin-top:6px;">Ends midnight Monday, July 6.</div>
+              <div style="font:600 13px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;margin-top:6px;">Less than 24 hours left — act now.</div>
             </td>
           </tr>
 
@@ -101,7 +101,7 @@ export function betaCouponExpiryEmail(opts: BetaCouponExpiryOpts = {}): string {
             <td style="padding:20px 32px 4px 32px;">
               <p style="margin:0 0 14px 0;font:600 15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">${hi}</p>
               <p style="margin:0 0 14px 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
-                This is your last call on the <strong style="color:#219EBC;">beta launch price</strong>. The 50% off code <strong style="color:#8ECAE6;">CB-BETA</strong> expires <strong style="color:#ffffff;">midnight this Monday, July 6</strong>.
+                This is your last call on the <strong style="color:#219EBC;">beta launch price</strong> — <strong style="color:#ffffff;">less than 24 hours left. You have to act now!</strong> The 50% off code <strong style="color:#8ECAE6;">CB-BETA</strong> expires <strong style="color:#ffffff;">midnight this Monday, July 6</strong>.
               </p>
               <p style="margin:0 0 14px 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
                 And there's even more reason to jump in now: the <strong style="color:#8ECAE6;">fully automatic ICT chart, tracker &amp; alerts</strong> are now <strong style="color:#ffffff;">LIVE</strong> inside CB Edge.
@@ -131,7 +131,7 @@ export function betaCouponExpiryEmail(opts: BetaCouponExpiryOpts = {}): string {
             <td style="padding:14px 32px 4px 32px;">
               <p style="margin:0 0 6px 0;font:400 14px/1.8 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#aeb9c4;">
                 <span style="color:#8ECAE6;">›</span> After Monday, <strong style="color:#ffffff;">50% off will never be offered again.</strong><br>
-                <span style="color:#8ECAE6;">›</span> A <strong style="color:#ffffff;">15% off launch sale</strong> runs next — the best deal from then on.<br>
+                <span style="color:#8ECAE6;">›</span> A <strong style="color:#ffffff;">20% off launch sale</strong> runs next — the best deal from then on.<br>
                 <span style="color:#8ECAE6;">›</span> With <strong style="color:#ffffff;">CB Edge v2</strong> arriving in August, prices will most likely increase.
               </p>
               <p style="margin:14px 0 0 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">

@@ -138,7 +138,7 @@ function KpiCard({
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }} title={tooltip}>
       <div style={{ fontSize: 15, fontWeight: 600, color: T.cyan, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ fontSize: 32, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
+        <div style={{ fontSize: 15, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
         {spark && spark.length > 1 && <Sparkline points={spark} color={sparkColor ?? T.cyan} />}
       </div>
       {sub && <div style={{ fontSize: 15, color: T.textSecondary }}>{sub}</div>}
@@ -149,7 +149,7 @@ function KpiCard({
 function SetupBanner() {
   return (
     <div style={{ ...homePanelStyle, padding: "32px 28px", textAlign: "center", border: `1px solid ${T.cyan}33` }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>💳</div>
+      <div style={{ fontSize: 15, marginBottom: 12 }}>💳</div>
       <div style={{ fontSize: 16, fontWeight: 700, color: T.text, marginBottom: 8 }}>Stripe not configured</div>
       <div style={{ fontSize: 15, color: T.muted, maxWidth: 480, margin: "0 auto 20px", lineHeight: 1.6 }}>
         Add your Stripe secret key to enable real subscription data, MRR tracking, customer management, and live transaction logs.
@@ -273,7 +273,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                 {b.count > 0 && (
-                  <span style={{ fontSize: 10, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
                 )}
                 <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR added`} style={{
                   width: "100%",
@@ -320,7 +320,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
           ))}
         </div>
 
-        <div style={{ display: "flex", gap: 12, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.muted, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 15, color: T.muted, flexWrap: "wrap" }}>
           <span title={`New subscription revenue added that ${periodWord}`}><span style={{ color: T.cyan }}>■</span> Subscriptions</span>
           <span title={`${periodWord}ly-equivalent of the current expense run-rate`}><span style={{ color: T.red }}>■</span> Expenses</span>
           <span title="Subscriptions minus expenses"><span style={{ color: T.green }}>■</span> Combined</span>
@@ -335,7 +335,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
-        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
+        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
@@ -365,7 +365,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
             <div style={{ minWidth: 0 }}>
               <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</div>
               {s.plan_name && s.plan_name !== "—" && (
-                <div style={{ fontSize: 11, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
+                <div style={{ fontSize: 15, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
                   {s.plan_name.startsWith("price_") ? s.plan_name.slice(0, 18) + "…" : s.plan_name}
                 </div>
               )}
@@ -375,7 +375,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
             </span>
             <span>
               <span style={{
-                fontSize: 11, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
+                fontSize: 15, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
                 background: `${STATUS_COLORS[s.status] || T.muted}18`,
                 border: `1px solid ${STATUS_COLORS[s.status] || T.muted}44`,
                 color: STATUS_COLORS[s.status] || T.muted,
@@ -466,7 +466,7 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
         <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan }}>Expenses</span>
         <span
           title="Sum of every recurring expense converted to a monthly-equivalent cost (yearly ÷ 12); one-off costs aren't counted in this run-rate."
-          style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
+          style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
         >
           {fmtMoney(totalMonthly)}/mo
         </span>
@@ -533,7 +533,7 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
                 {fmtMoney(e.amount_cents)}{e.cadence === "monthly" ? "/mo" : e.cadence === "yearly" ? "/yr" : ""}
               </span>
               <span style={{ color: T.textSecondary, fontSize: 15, textTransform: "capitalize" }}>{e.cadence === "once" ? "One-off" : e.cadence}</span>
-              <button onClick={() => onRemove(e.id)} disabled={busy} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 10, opacity: busy ? 0.5 : 1 }}>
+              <button onClick={() => onRemove(e.id)} disabled={busy} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 15, opacity: busy ? 0.5 : 1 }}>
                 Remove
               </button>
             </div>

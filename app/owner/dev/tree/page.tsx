@@ -27,7 +27,7 @@ export default function TreePage() {
         <div
           style={{
             width: 44, height: 44, borderRadius: 12, display: "grid", placeItems: "center",
-            background: "linear-gradient(135deg,#6366f1,#a855f7)", fontSize: 22,
+            background: "linear-gradient(135deg,#6366f1,#a855f7)", fontSize: 15,
           }}
         >
           🌳
@@ -61,7 +61,7 @@ export default function TreePage() {
             }}
           >
             <div style={{ color: C.dim, fontSize: 15, marginBottom: 6 }}>{s.label}</div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: C.accent }}>{s.value}</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.accent }}>{s.value}</div>
           </div>
         ))}
       </div>
@@ -98,7 +98,7 @@ export default function TreePage() {
                   <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10, display: "flex", gap: 8 }}>
                     <span>{card.icon}</span>
                     <span style={{ color: C.accent }}>{card.title}</span>
-                    <span style={{ marginLeft: "auto", color: C.dim, fontWeight: 400, fontSize: 12 }}>
+                    <span style={{ marginLeft: "auto", color: C.dim, fontWeight: 400, fontSize: 15 }}>
                       {card.files.length}
                     </span>
                   </div>
@@ -110,7 +110,7 @@ export default function TreePage() {
                         <span
                           key={f.name}
                           style={{
-                            fontSize: 11.5, padding: "3px 8px", borderRadius: 6,
+                            fontSize: 15, padding: "3px 8px", borderRadius: 6,
                             background: "rgba(255,255,255,0.05)", color: "#bcd",
                             fontFamily: "ui-monospace, monospace",
                           }}
@@ -122,13 +122,13 @@ export default function TreePage() {
                   ) : (
                     <div style={{ display: "grid", gap: 5 }}>
                       {card.files.map((f) => (
-                        <div key={f.name} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
+                        <div key={f.name} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 15 }}>
                           <span style={{ color: "#9fe7d6", fontFamily: "ui-monospace, monospace" }}>{f.name}</span>
-                          {f.desc && <span style={{ color: C.dim, fontSize: 11.5 }}>· {f.desc}</span>}
+                          {f.desc && <span style={{ color: C.dim, fontSize: 15 }}>· {f.desc}</span>}
                         </div>
                       ))}
                       {card.files.length === 0 && (
-                        <span style={{ color: C.dim, fontSize: 12 }}>—</span>
+                        <span style={{ color: C.dim, fontSize: 15 }}>—</span>
                       )}
                     </div>
                   )}

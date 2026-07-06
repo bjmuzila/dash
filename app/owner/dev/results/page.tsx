@@ -95,11 +95,11 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
         <span style={{ fontSize: 16, fontWeight: 800, color: "#fff", letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>
-        <span style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em" }}>{r.total} logged</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em" }}>{r.total} logged</span>
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 30, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+        <span style={{ fontSize: 15, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
           {wr != null ? `${Math.round(wr * 100)}%` : "—"}
         </span>
         <span style={{ fontSize: 15, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -117,11 +117,11 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
           const ac = wrColor(rate);
           return (
             <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
               <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                 {rate != null ? `${Math.round(rate * 100)}%` : "—"}
               </div>
-              <div style={{ fontSize: 10, color: C.label, fontFamily: "var(--font-mono)" }}>{r.resolved > 0 ? `${hits}/${r.resolved}` : ""}</div>
+              <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>{r.resolved > 0 ? `${hits}/${r.resolved}` : ""}</div>
             </div>
           );
         })}
@@ -238,7 +238,7 @@ export default function ResultsPage() {
       {/* Overall roll-up */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 16, margin: "14px 0 20px", flexWrap: "wrap", fontFamily: "var(--font-mono)" }}>
         <span style={{ fontSize: 15, color: C.label }}>Overall</span>
-        <span style={{ fontSize: 22, fontWeight: 800, color: wrColor(totals.wr) }}>
+        <span style={{ fontSize: 15, fontWeight: 800, color: wrColor(totals.wr) }}>
           {totals.wr != null ? `${Math.round(totals.wr * 100)}%` : "—"}
         </span>
         <span style={{ fontSize: 15, color: C.label }}>
@@ -293,7 +293,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "8px 12px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   const oc = (o: SetupRow["outcome"]) =>
@@ -349,7 +349,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
                       <td style={{ ...td, textAlign: "right", color: "#cfe" }}>{e.mfe != null ? e.mfe.toFixed(1) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: e.r_multiple == null ? C.label : e.r_multiple >= 1 ? GREEN : e.r_multiple < 0 ? RED : AMBER }}>{e.r_multiple == null ? "—" : `${e.r_multiple > 0 ? "+" : ""}${e.r_multiple.toFixed(2)}R`}</td>
                       <td style={{ ...td, textAlign: "center" }}>
-                        <span style={{ fontSize: 12, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59`, textTransform: "uppercase" }}>{e.outcome}</span>
+                        <span style={{ fontSize: 15, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59`, textTransform: "uppercase" }}>{e.outcome}</span>
                       </td>
                       <td style={{ ...td, color: C.label, fontFamily: "inherit", whiteSpace: "normal", maxWidth: 260 }}>{e.note ?? ""}</td>
                     </tr>
@@ -419,7 +419,7 @@ function FailsView() {
               <div key={st.kind} style={{ background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>{st.label}</span>
-                  <span style={{ fontSize: 20, fontWeight: 800, fontFamily: "var(--font-mono)", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
                 </div>
                 <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
                   <div style={{ width: `${p}%`, height: "100%", background: accent }} />
@@ -506,7 +506,7 @@ function CheckpointsView() {
     return RED;
   };
 
-  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "10px 14px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   return (
@@ -532,7 +532,7 @@ function CheckpointsView() {
                 <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 34, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                <span style={{ fontSize: 15, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
                   {s.hitRate != null ? `${Math.round(s.hitRate * 100)}%` : "—"}
                 </span>
                 <span style={{ fontSize: 15, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
@@ -549,11 +549,11 @@ function CheckpointsView() {
                   const ac = wrColor(rate);
                   return (
                     <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
                       <div style={{ fontSize: 16, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                         {rate != null ? `${Math.round(rate * 100)}%` : "—"}
                       </div>
-                      <div style={{ fontSize: 10, color: C.label, fontFamily: "var(--font-mono)" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
+                      <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
                     </div>
                   );
                 })}
@@ -604,7 +604,7 @@ function CheckpointsView() {
                         <td style={{ ...td, textAlign: "right", color: "#fff", borderLeft: `1px solid ${C.border}` }}>
                           {c.strike != null ? c.strike.toFixed(0) : "—"}
                           {c.changed && (
-                            <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 11, color: AMBER, fontWeight: 700 }}>↻</span>
+                            <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 15, color: AMBER, fontWeight: 700 }}>↻</span>
                           )}
                         </td>
                         <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
@@ -646,7 +646,7 @@ function etDate(ts: number) {
 }
 
 function FailLogTable({ rows }: { rows: FailEvent[] }) {
-  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "8px 12px", fontSize: 15, whiteSpace: "nowrap" };
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
@@ -679,7 +679,7 @@ function FailLogTable({ rows }: { rows: FailEvent[] }) {
                   <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: AMBER }}>{e.riskPts.toFixed(2)}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: maxR == null ? C.label : maxR >= 2 ? GREEN : maxR >= 1 ? AMBER : RED }}>{maxR == null ? "—" : `${maxR.toFixed(2)}R`}</td>
                   <td style={{ ...td, textAlign: "right" }}>
-                    <span style={{ fontSize: 12, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59` }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59` }}>
                       {win ? "WIN" : open ? "OPEN" : "LOSS"}
                     </span>
                   </td>

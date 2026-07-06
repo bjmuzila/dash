@@ -444,7 +444,7 @@ export default function BudgetPage() {
         <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
-            <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
+            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
           </div>
           <div style={{ marginTop: 14 }}>
             <div style={labelCap()}>Month</div>
@@ -490,7 +490,7 @@ export default function BudgetPage() {
                 <span style={{ fontSize: 16 }}>{t.icon}</span>
                 <span style={labelCap()}>{t.label}</span>
               </div>
-              <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
+              <div style={{ marginTop: 8, fontSize: 15, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
             </div>
           ))}
         </div>
@@ -613,11 +613,11 @@ function BeginningEditor({ beginningByBank, totals, onSave, currency }: { beginn
       <div style={{ display: "flex", gap: 20, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-start" }}>
         {BANKS.map((b) => (
           <div key={b} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em" }}>{BANK_LABEL[b]}</span>
             {(() => {
               const shown = beginningByBank[b] ?? 0;
               return (
-                <span style={{ fontSize: 22, fontWeight: 900, color: shown < 0 ? SOFT_RED : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
+                <span style={{ fontSize: 15, fontWeight: 900, color: shown < 0 ? SOFT_RED : HOME_THEME.text, lineHeight: 1.1 }}>{fmtMoney(shown, currency)}</span>
               );
             })()}
             <input
@@ -761,7 +761,7 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
       </svg>
       {hp && (
         <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(10,13,20,0.96)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
           <div style={{ fontSize: 16, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
         </div>
       )}
@@ -825,7 +825,7 @@ function CalendarGrid({
           >
             <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span>{d}</span>
-              {isToday && <span style={{ fontSize: 10, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.08em", textTransform: "uppercase" }}>today</span>}
+              {isToday && <span style={{ fontSize: 15, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.08em", textTransform: "uppercase" }}>today</span>}
             </div>
             {g && <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
@@ -937,7 +937,7 @@ function StatusPill({ status }: { status: "paid" | "owed" | "pastdue" }) {
     pastdue: { label: "Past due", color: SOFT_RED, bg: "rgba(244,148,142,0.14)", border: "rgba(244,148,142,0.4)" },
   }[status];
   return (
-    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 }}>
+    <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 }}>
       {map.label}
     </span>
   );
@@ -961,7 +961,7 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         background: hover ? "rgba(239,68,68,0.16)" : "rgba(239,68,68,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
-        fontSize: 20,
+        fontSize: 15,
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
@@ -1085,7 +1085,7 @@ function DailyOpeningBalanceCard({
         <div style={labelCap()}>Daily opening balance</div>
         {value && <span style={{ fontSize: 15, color: isToday ? HOME_THEME.green : HOME_THEME.muted }}>{isToday ? "updated today" : `as of ${shortDate(value.day)}`}</span>}
       </div>
-      <div style={{ fontSize: 30, fontWeight: 900, color: sum < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(sum, currency)}</div>
+      <div style={{ fontSize: 15, fontWeight: 900, color: sum < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(sum, currency)}</div>
       {diff !== null && prevValue && (
         <div style={{ fontSize: 15, fontWeight: 700, color: diff < 0 ? SOFT_RED : diff > 0 ? HOME_THEME.green : HOME_THEME.muted, marginTop: 2 }}>
           {diff === 0 ? "No change" : `${diff > 0 ? "+" : ""}${fmtMoney(diff, currency)}`} vs {shortDate(prevValue.day)}
@@ -1095,7 +1095,7 @@ function DailyOpeningBalanceCard({
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 12 }}>
         {([["COASTAL", c, setC], ["TRUIST", t, setT], ["SECU", s, setS]] as const).map(([lab, val, setter]) => (
           <div key={lab}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em", marginBottom: 4 }}>{lab}</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.muted, letterSpacing: "0.1em", marginBottom: 4 }}>{lab}</div>
             <input value={val} onChange={(e) => setter(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} type="number" placeholder="0" style={{ ...field(), padding: "8px 10px" }} />
           </div>
         ))}
@@ -1268,7 +1268,7 @@ function CategoriesPanel({
                 <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 800, minWidth: 0 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: dot, flex: "none" }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
-                  {count > 0 && <span style={{ fontSize: 12, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
+                  {count > 0 && <span style={{ fontSize: 15, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
                   <span style={{ fontSize: 15, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
@@ -1467,7 +1467,7 @@ function ImportPanel({
         {image ? (
           <img src={image} alt="pasted screenshot" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 8, border: `1px solid ${HOME_THEME.border}` }} />
         ) : (
-          <span style={{ width: 44, height: 44, borderRadius: 9, background: bRgba("#7dd3fc", 0.12), display: "inline-flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.cyan, fontSize: 25 }}>🖼️</span>
+          <span style={{ width: 44, height: 44, borderRadius: 9, background: bRgba("#7dd3fc", 0.12), display: "inline-flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.cyan, fontSize: 15 }}>🖼️</span>
         )}
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>
@@ -1589,7 +1589,7 @@ function YearlyPanel({
               <span style={{ fontSize: 16 }}>{c.icon}</span>
               <span style={labelCap()}>{c.label}</span>
             </div>
-            <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color: c.color }}>{fmtMoney(c.value, currency)}</div>
+            <div style={{ marginTop: 8, fontSize: 15, fontWeight: 900, color: c.color }}>{fmtMoney(c.value, currency)}</div>
           </div>
         ))}
       </div>
@@ -1819,7 +1819,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
 }
 
 function th(align: "left" | "right" | "center"): React.CSSProperties {
-  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
+  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
 }
 function card(): React.CSSProperties {
   return { background: HOME_THEME.panelBg, backdropFilter: "blur(16px)", borderRadius: 18, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 18px 40px rgba(0,0,0,0.22)" };

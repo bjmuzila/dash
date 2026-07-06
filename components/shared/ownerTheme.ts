@@ -152,9 +152,25 @@ export function ownerPanel(): CSSProperties {
   return { ...homePanelStyle };
 }
 
+/** Body text — 15px default. */
+export const ownerBodyText: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 400,
+  color: OWNER_THEME.text,
+  letterSpacing: "0.01em",
+};
+
+/** Title text — 16px for all headings. */
+export const ownerTitleText: CSSProperties = {
+  fontSize: 16,
+  fontWeight: 700,
+  color: OWNER_THEME.text,
+  letterSpacing: "0.01em",
+};
+
 /** Quiet section/card header text. */
 export const ownerHeaderText: CSSProperties = {
-  fontSize: 15,
+  fontSize: 16,
   fontWeight: 700,
   color: OWNER_THEME.text,
   letterSpacing: "0.01em",

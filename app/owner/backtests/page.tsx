@@ -19,7 +19,7 @@ type Field = { key: string; label: string; type: FieldType; def: string | number
 
 // Column titles are a neutral muted white so they read distinctly from the
 // blue (positive) / red (negative) value cells below them.
-const th: CSSProperties = { textAlign: "left", padding: "7px 10px", fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.55, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+const th: CSSProperties = { textAlign: "left", padding: "7px 10px", fontSize: 15, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.55, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 const td: CSSProperties = { padding: "7px 10px", fontSize: 15, color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
@@ -77,7 +77,7 @@ function Panel({ title, subtitle, test, fields }: { title: string; subtitle: str
     <Card variant="budget" accent={LIGHT_BLUE} title={title} subtitle={subtitle}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
         {fields.map((f) => (
-          <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+          <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
             {f.label}
             {f.type === "select" ? (
               <ThemedSelect

@@ -404,7 +404,7 @@ function SymbolPanel({ data }: { data: SymbolData }) {
 function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+      <div style={{ fontSize: 15, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
         {label}
       </div>
       <div style={{ fontSize: 30, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
@@ -523,8 +523,8 @@ function LevelRow({ label, value, color }: { label: string; value: string; color
         background: "rgba(255,255,255,0.03)",
       }}
     >
-      <span style={{ fontSize: 17, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
-      <span style={{ fontSize: 17, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+      <span style={{ fontSize: 15, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, color, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
     </div>
   );
 }
@@ -535,7 +535,7 @@ function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number
   const isPositive = p >= 0;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 76px", alignItems: "center", gap: 10 }}>
-      <div style={{ fontSize: 17, color: HOME_THEME.text, textAlign: "right" }}>{label}</div>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "right" }}>{label}</div>
       <div style={{ position: "relative", height: 22, borderRadius: 11, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
         <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
         {halfWidthPct > 0 && (
@@ -552,7 +552,7 @@ function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number
           />
         )}
       </div>
-      <div style={{ fontSize: 17, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
     </div>
   );
 }
@@ -583,13 +583,13 @@ function PositioningCard({ row }: { row: PositioningRow }) {
     <Card variant="budget" accent={LIGHT_BLUE} padding={24} style={{ opacity: stale ? 0.75 : 1 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <LayersIcon color={LIGHT_BLUE} />
-        <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
+        <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
           Options Positioning
         </div>
         <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{symbol}</div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 17, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: regimeColor }}>{regimeLabel}</div>
         {stale && (
           <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>
             Stale — last close{date ? ` ${date}` : ""}, market closed
@@ -608,7 +608,7 @@ function PositioningCard({ row }: { row: PositioningRow }) {
         style={{
           display: "grid",
           gridTemplateColumns: "100px 1fr 76px",
-          fontSize: 17,
+          fontSize: 15,
           textTransform: "uppercase",
           letterSpacing: "0.04em",
           color: HOME_THEME.text,
@@ -635,14 +635,14 @@ function OptionsPositioningTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 17, color: HOME_THEME.text }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text }}>
           {loadedAt
             ? `Live GEX scanner · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
             : "Loading positioning data…"}
         </div>
         <button onClick={reload} style={homeButtonStyle}>Refresh</button>
       </div>
-      {error && <div style={{ fontSize: 17, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
+      {error && <div style={{ fontSize: 15, color: HOME_THEME.red }}>Positioning data error: {error}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 24 }}>
         {POSITIONING_TICKERS.map((sym) => {
           const row = rows?.[sym];
@@ -651,12 +651,12 @@ function OptionsPositioningTab() {
               <Card key={sym} variant="budget" accent={LIGHT_BLUE} padding={24}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <LayersIcon color={LIGHT_BLUE} />
-                  <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
                     Options Positioning
                   </div>
                   <div style={{ marginLeft: "auto", fontSize: 20, fontWeight: 900, color: LIGHT_BLUE }}>{sym}</div>
                 </div>
-                <div style={{ fontSize: 17, color: HOME_THEME.text }}>
+                <div style={{ fontSize: 15, color: HOME_THEME.text }}>
                   {rows ? "No data yet for this ticker — needs a scanner sweep after deploy." : "Loading…"}
                 </div>
               </Card>
@@ -665,7 +665,7 @@ function OptionsPositioningTab() {
           return <PositioningCard key={sym} row={row} />;
         })}
       </div>
-      <div style={{ fontSize: 17, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
         Call/Put Wall + Magnet Strike (gamma flip) read live from the multi-ticker GEX scanner (scanner_snapshots).
         Gamma Zone = spot → Call Wall when net GEX is supportive, Put Wall → spot when volatile. Dimmed &ldquo;Stale&rdquo;
         cards are showing the last available close (market closed) instead of an empty panel.
@@ -820,12 +820,12 @@ function deriveGexLevels(s: GexLevelsSnapshot | null): GexLevelsDerived | null {
 }
 
 function GlEmpty({ note }: { note: string }) {
-  return <div style={{ padding: 32, textAlign: "center", fontSize: 17, color: HOME_THEME.text, opacity: 0.5 }}>{note}</div>;
+  return <div style={{ padding: 32, textAlign: "center", fontSize: 15, color: HOME_THEME.text, opacity: 0.5 }}>{note}</div>;
 }
 
 function ChartLegend({ items }: { items: { label: string; color: string }[] }) {
   return (
-    <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 17, color: HOME_THEME.text, opacity: 0.75 }}>
+    <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 15, color: HOME_THEME.text, opacity: 0.75 }}>
       {items.map((it) => (
         <span key={it.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: it.color, display: "inline-block" }} />
@@ -866,9 +866,9 @@ function SemiGauge({
         ))}
         <line x1={cx} y1={cy} x2={needleX} y2={needleY} stroke={HOME_THEME.text} strokeWidth={2.5} strokeLinecap="round" />
         <circle cx={cx} cy={cy} r={4.5} fill={HOME_THEME.text} />
-        <text x={cx} y={cy - 18} textAnchor="middle" fontSize={17} fontWeight={800} fill={HOME_THEME.text}>{valueLabel}</text>
+        <text x={cx} y={cy - 18} textAnchor="middle" fontSize={15} fontWeight={800} fill={HOME_THEME.text}>{valueLabel}</text>
       </svg>
-      <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
     </div>
   );
 }
@@ -896,14 +896,43 @@ function useChartHover() {
 // the per-point hover handlers below can synchronously skip the tooltip
 // mid-drag — state updates are one tick too slow for that check. Double-click
 // recenters back on spot.
+// Merge multiple refs (ref objects and/or callback refs) onto one DOM node.
+type AnyRef<T> = { current: T | null } | ((n: T | null) => void) | null | undefined;
+function mergeRefs<T>(...refs: AnyRef<T>[]) {
+  return (node: T | null) => {
+    for (const r of refs) {
+      if (!r) continue;
+      if (typeof r === "function") r(node);
+      else (r as { current: T | null }).current = node;
+    }
+  };
+}
+
 function useChartPan(rows: GexLevelsRow[], spot: number, windowFrac = 0.06) {
   const sorted = useMemo(() => rows.slice().sort((a, b) => a.strike - b.strike), [rows]);
   const minStrike = sorted[0]?.strike ?? spot;
   const maxStrike = sorted[sorted.length - 1]?.strike ?? spot;
-  const winHalf = Math.max(spot * windowFrac, 1);
+  const [zoom, setZoom] = useState(1);
+  // Zoom narrows/widens the visible strike window: higher zoom = smaller half-window.
+  const winHalf = Math.max((spot * windowFrac) / zoom, 1);
   const [panOffset, setPanOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const draggingRef = useRef<{ startX: number; startPan: number; pxPerStrike: number } | null>(null);
+
+  // Scroll-wheel zoom. React's onWheel is passive (can't preventDefault the page
+  // scroll), so attach a native non-passive listener to the chart container via
+  // mergeRefs(wheelRef).
+  const wheelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = wheelRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((z) => Math.min(8, Math.max(0.25, e.deltaY < 0 ? z * 1.15 : z / 1.15)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const clampPan = useCallback((raw: number) => {
     const lo = minStrike + winHalf, hi = maxStrike - winHalf;
@@ -930,11 +959,11 @@ function useChartPan(rows: GexLevelsRow[], spot: number, windowFrac = 0.06) {
     setIsDragging(false);
   }, []);
 
-  const resetPan = useCallback(() => setPanOffset(0), []);
+  const resetPan = useCallback(() => { setPanOffset(0); setZoom(1); }, []);
   const canPan = maxStrike - minStrike > winHalf * 2;
   const center = spot + panOffset;
 
-  return { center, winHalf, isDragging, draggingRef, onDragStart, onDragMove, onDragEnd, resetPan, canPan };
+  return { center, winHalf, zoom, isDragging, draggingRef, wheelRef, onDragStart, onDragMove, onDragEnd, resetPan, canPan };
 }
 
 function ChartTooltip({ x, y, children }: { x: number; y: number; children: ReactNode }) {
@@ -1009,7 +1038,7 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
 
   return (
     <div
-      ref={containerRef}
+      ref={mergeRefs(containerRef, pan.wheelRef)}
       style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
       onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
       onMouseMove={(e) => pan.onDragMove(e.clientX)}
@@ -1074,7 +1103,7 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
 
   return (
     <div
-      ref={containerRef}
+      ref={mergeRefs(containerRef, pan.wheelRef)}
       style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
       onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
       onMouseMove={(e) => pan.onDragMove(e.clientX)}
@@ -1146,7 +1175,7 @@ function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot:
 
   return (
     <div
-      ref={containerRef}
+      ref={mergeRefs(containerRef, pan.wheelRef)}
       style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
       onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
       onMouseMove={(e) => pan.onDragMove(e.clientX)}
@@ -1458,7 +1487,26 @@ function slBarEl(value: number | null | undefined, max: number, positiveColor: s
 function StrikeLevelTable({
   rows, spot,
 }: { rows: GexLevelsRow[]; spot: number }) {
-  const sorted = rows.slice().sort((a, b) => b.strike - a.strike);
+  const sorted = useMemo(() => rows.slice().sort((a, b) => b.strike - a.strike), [rows]);
+  // Nearest listed strike to spot = the ATM row we highlight + auto-center on.
+  const atmStrike = useMemo(() => {
+    if (!sorted.length) return null;
+    let best = sorted[0].strike, bestD = Math.abs(best - spot);
+    for (const r of sorted) { const dd = Math.abs(r.strike - spot); if (dd < bestD) { bestD = dd; best = r.strike; } }
+    return best;
+  }, [sorted, spot]);
+  // Center the ATM strike in the scroll viewport on first load (default view).
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const atmRef = useRef<HTMLTableRowElement | null>(null);
+  const centeredRef = useRef(false);
+  useEffect(() => {
+    if (centeredRef.current || atmStrike == null) return;
+    const cont = scrollRef.current, row = atmRef.current;
+    if (!cont || !row) return;
+    const cRect = cont.getBoundingClientRect(), rRect = row.getBoundingClientRect();
+    cont.scrollTop += (rRect.top - cRect.top) - cont.clientHeight / 2 + rRect.height / 2;
+    centeredRef.current = true;
+  }, [atmStrike]);
   const totals = rows.reduce(
     (acc, r) => ({
       netGEX: acc.netGEX + glOiVolNet(r),
@@ -1471,8 +1519,8 @@ function StrikeLevelTable({
     { netGEX: 0, netDEX: 0, callOI: 0, callVolume: 0, putOI: 0, putVolume: 0 }
   );
 
-  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, whiteSpace: "nowrap" };
-  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, position: "relative", overflow: "hidden" };
+  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, whiteSpace: "nowrap" };
+  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, position: "relative", overflow: "hidden" };
   const cellText: CSSProperties = { position: "relative", zIndex: 1 };
 
   // Column maxes for the bar underlays — magnitude-scaled against the whole
@@ -1485,7 +1533,7 @@ function StrikeLevelTable({
   const maxPutVol = Math.max(1, ...rows.map((r) => r.putVolume ?? 0));
 
   return (
-    <div style={{ maxHeight: 460, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
+    <div ref={scrollRef} style={{ maxHeight: 460, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
@@ -1502,7 +1550,7 @@ function StrikeLevelTable({
           {sorted.map((r) => {
             const netG = glOiVolNet(r);
             return (
-              <tr key={r.strike} style={{ background: Math.abs(r.strike - spot) < 0.5 ? `${LIGHT_BLUE}14` : "transparent" }}>
+              <tr key={r.strike} ref={r.strike === atmStrike ? atmRef : undefined} style={{ background: r.strike === atmStrike ? `${LIGHT_BLUE}14` : "transparent" }}>
                 <td style={{ ...td, textAlign: "left", fontWeight: 700 }}><span style={cellText}>{glFmt2(r.strike)}</span></td>
                 <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>
                   {slBarEl(netG, maxNetGEX, LIGHT_BLUE, HOME_THEME.red)}
@@ -1603,8 +1651,8 @@ function saveGlHistory(entries: GlHistoryEntry[]) {
 }
 
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
-  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
-  const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
+  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+  const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
 
   return (
     <div style={{ maxHeight: 320, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
@@ -1725,7 +1773,7 @@ function DragHandle({ onDragStart, onDragEnd }: { onDragStart: (e: DragEvent) =>
 function CardTitleRow({ label, onDragStart, onDragEnd }: { label: string; onDragStart: (e: DragEvent) => void; onDragEnd: () => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-      <span style={{ fontSize: 18 }}>{label}</span>
+      <span style={{ fontSize: 16 }}>{label}</span>
       <DragHandle onDragStart={onDragStart} onDragEnd={onDragEnd} />
     </div>
   );
@@ -1786,16 +1834,16 @@ function GexLevelsTab() {
       <Card
         variant="budget"
         accent={LIGHT_BLUE}
-        title={<span style={{ fontSize: 18 }}>{snap?.symbol ?? "SPX"} · GEX Levels</span>}
+        title={<span style={{ fontSize: 16 }}>{snap?.symbol ?? "SPX"} · GEX Levels</span>}
         subtitle={d ? `${snap?.expiry ?? "0DTE"} expiry · spot ${glFmt2(d.spot)} · as of ${asOf} ET` : "loading live /proxy/gex snapshot…"}
       >
-        {err && <div style={{ fontSize: 17, color: HOME_THEME.red, marginBottom: 10 }}>Feed error: {err}</div>}
+        {err && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 10 }}>Feed error: {err}</div>}
         {!d && !err && <GlEmpty note="waiting on /proxy/gex…" />}
         {d && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
-              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
-              <div style={{ ...homeInputStyle, fontSize: 17, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
+              <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
+              <div style={{ ...homeInputStyle, fontSize: 15, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
             </div>
             <AmTbrStat label="Stock Price" value={glFmt2(d.spot)} accent={HOME_THEME.text} />
             <AmTbrStat label="Resistance" value={d.resistance != null ? glFmt0(d.resistance) : "—"} accent={LIGHT_BLUE} />
@@ -1825,7 +1873,7 @@ function GexLevelsTab() {
               ]}
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 170 }}>
-              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
+              <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
               <ThemedSelect
                 value={snap?.expiry ?? ""}
                 options={(snap?.expirations?.length ? snap.expirations : [snap?.expiry ?? ""]).filter(Boolean).map((e) => ({ value: e as string, label: e as string }))}
@@ -1837,7 +1885,7 @@ function GexLevelsTab() {
             <button style={refreshStyle} onClick={trigger}>{label}</button>
           </div>
         )}
-        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.45, marginTop: 12 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.45, marginTop: 12 }}>
           Single shared 0DTE feed — Stock/Expiry filters are read-only displays so this tab can&apos;t move the live feed everyone else is on.
         </div>
       </Card>
@@ -1850,10 +1898,10 @@ function GexLevelsTab() {
         // already-working panels kept below the 3-panel reference layout).
         <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
           <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 16 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
               {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
             </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 16 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
               <StrikeLevelTable rows={d.rows} spot={d.spot} />
             </Card>
           </div>
@@ -2000,7 +2048,7 @@ function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: Tes
     <Card variant="classic" accent={def.accent} padding={24}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <FlaskIcon color={def.accent} />
-        <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
       </div>
       <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
         {def.blurb}
@@ -2124,7 +2172,7 @@ function FlowInventoryTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.7 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
           {loadedAt
             ? `Live flow tape · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
             : "Loading live flow tape…"}
@@ -2142,14 +2190,14 @@ function FlowInventoryTab() {
           if (d) return <SymbolPanel key={ticker} data={d} />;
           return (
             <Card key={ticker} variant="budget" accent={LIGHT_BLUE} title={ticker}>
-              <div style={{ fontSize: 17, color: errors[ticker] ? HOME_THEME.red : HOME_THEME.text, opacity: errors[ticker] ? 1 : 0.6 }}>
+              <div style={{ fontSize: 15, color: errors[ticker] ? HOME_THEME.red : HOME_THEME.text, opacity: errors[ticker] ? 1 : 0.6 }}>
                 {errors[ticker] ? `Error: ${errors[ticker]}` : "Loading…"}
               </div>
             </Card>
           );
         })}
       </div>
-      <div style={{ fontSize: 17, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
         Methodology (reference): &ldquo;Assessing Option Demand from Signed Volume Order Flow&rdquo; — Garrett DeSimone, Ph.D., Head of Quantitative
         Research, OptionMetrics
       </div>

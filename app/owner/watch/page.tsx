@@ -379,7 +379,7 @@ export default function WatchPage() {
                     {r.expiration}{r.note && <span style={{ fontStyle: "italic" }}> · {r.note}</span>}
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 14 }}>
-                    <span style={{ fontSize: 26, fontWeight: 800, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>
                       {fmt(s?.mark)}
                     </span>
                     <span style={{ fontSize: 15, fontWeight: 700, color: chgCol, fontFamily: "var(--font-mono)" }}>
