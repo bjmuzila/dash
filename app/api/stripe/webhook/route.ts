@@ -1,9 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
 import { getStripe } from "@/lib/stripe";
 import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, PAID_STATUSES } from "@/lib/db";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
+
+// Mirrors paid status into Supabase's own Postgres (subscription_status table,
+// see supabase/migrations/0004) so custom_access_token_hook can read it — the
+// primary `subscriptions` table below lives on Render, which the hook can't see.
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+
+async function mirrorPaidStatus(userId: string, status: string): Promise<void> {
+  if (!SUPABASE_URL || !SERVICE_KEY) {
+    console.warn("[stripe/webhook] missing Supabase service key, skipping paid mirror");
+    return;
+  }
+  const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { error } = await admin
+    .from("subscription_status")
+    .upsert({ user_id: userId, status, updated_at: new Date().toISOString() });
+  if (error) console.error("[stripe/webhook] subscription_status upsert failed:", error.message);
+}
 
 // Stripe needs the raw, unparsed body to verify the signature, so this route must
 // not run through any body parsing. App-router routes already hand us the raw
@@ -47,6 +68,7 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     current_period_end: item?.current_period_end ?? null,
     cancel_at_period_end: sub.cancel_at_period_end,
   });
+  await mirrorPaidStatus(clerkUserId, sub.status);
 
   // Fire the one-time founder thank-you the first time this user becomes paid.
   // Non-blocking: any failure is logged but never fails the webhook (Stripe
