@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { getServerUserId } from "@/lib/supabase/server";
-import { getSubscription, PAID_STATUSES, listWaitlist, addEmailSend, listEmailSends, getUnsubscribedSet } from "@/lib/db";
+import { listAllUsersForBroadcast, listWaitlist, addEmailSend, listEmailSends, getUnsubscribedSet } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 import { loadLegacyEmails } from "@/lib/emails/legacyEmails";
 
@@ -24,44 +23,6 @@ async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }
   if (!userId) return { ok: false, status: 401 };
   if (!OWNER_USER_ID || userId !== OWNER_USER_ID) return { ok: false, status: 403 };
   return { ok: true };
-}
-
-const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-
-interface Recipient { userId: string; email: string; paid: boolean }
-
-// Page through every Supabase Auth user and resolve {email, paid} for each. paid
-// is derived from the subscriptions table (active/trialing). Uses the service-
-// role key (server-only) for the admin user list. Capped to avoid a runaway loop.
-async function listRecipients(): Promise<Recipient[]> {
-  if (!SUPABASE_URL || !SERVICE_KEY) {
-    throw new Error("Supabase admin not configured (SUPABASE_SERVICE_ROLE_KEY)");
-  }
-  const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const out: Recipient[] = [];
-  const PER_PAGE = 200;
-  for (let page = 1; page <= 25; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: PER_PAGE });
-    if (error) throw new Error(error.message);
-    const batch = data?.users ?? [];
-    if (batch.length === 0) break;
-    for (const u of batch) {
-      const email = u.email ?? null;
-      if (!email) continue;
-      const id = u.id;
-      let paid = false;
-      try {
-        const sub = id ? await getSubscription(id) : undefined;
-        paid = !!sub?.status && PAID_STATUSES.has(sub.status);
-      } catch { /* treat lookup failure as unpaid */ }
-      out.push({ userId: id, email, paid });
-    }
-    if (batch.length < PER_PAGE) break;
-  }
-  return out;
 }
 
 // Landing-page waitlist emails (the /api/waitlist signups), excluding anyone who
@@ -87,10 +48,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, history });
     }
 
-    const recipients = await listRecipients();
+    const recipients = await listAllUsersForBroadcast();
     const all = recipients.map((r) => r.email);
     const subscribers = recipients.filter((r) => r.paid).map((r) => r.email);
-    // Signed up (has a Supabase account) but never converted to a paid plan.
+    // Signed up (has an account) but never converted to a paid plan.
     const notPaying = recipients.filter((r) => !r.paid).map((r) => r.email);
     let waitlist: string[] = [];
     try { waitlist = await listWaitlistEmails(); } catch { /* table optional */ }
@@ -138,7 +99,7 @@ export async function POST(req: NextRequest) {
     // Resolve recipients.
     let to: string[] = [];
     if (audience === "all" || audience === "subscribers" || audience === "not_paying") {
-      const recipients = await listRecipients();
+      const recipients = await listAllUsersForBroadcast();
       const picked =
         audience === "subscribers" ? recipients.filter((r) => r.paid)
         : audience === "not_paying" ? recipients.filter((r) => !r.paid)

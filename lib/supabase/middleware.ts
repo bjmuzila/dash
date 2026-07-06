@@ -1,17 +1,18 @@
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-
-type CookieToSet = { name: string; value: string; options?: CookieOptions };
+import { SESSION_COOKIE, validateSessionToken } from "@/lib/auth/session";
 
 /**
- * Builds a Supabase client bound to the middleware request/response cookie pair
- * and returns both the (possibly refreshed) response and the current user.
+ * Middleware session resolver for the custom auth system.
  *
- * IMPORTANT (per Supabase SSR guidance): always create the response first, let
- * Supabase write refreshed-session cookies onto it, and return THAT response
- * object from middleware so the refreshed session reaches the browser. Call
- * getUser() (not getSession()) — getUser() revalidates the token with the auth
- * server; getSession() trusts the cookie and can be spoofed.
+ * Kept the same file path, export name, and return shape as the old
+ * Supabase-backed version so middleware.ts (and anything else importing this)
+ * didn't need to change. Unlike Supabase's getUser(), which round-trips to
+ * Supabase's auth server on every call, this hits our own Postgres directly
+ * (through validateSessionToken's short in-memory cache) -- no cookie
+ * rewriting needed either, since our session token doesn't rotate per request.
+ *
+ * Requires the Node.js middleware runtime (pg needs a real TCP socket) -- see
+ * `export const runtime = "nodejs"` in middleware.ts.
  */
 export async function getUserFromMiddleware(req: NextRequest): Promise<{
   res: NextResponse;
@@ -19,61 +20,13 @@ export async function getUserFromMiddleware(req: NextRequest): Promise<{
   isOwner: boolean;
   isPaid: boolean;
 }> {
-  let res = NextResponse.next({ request: req });
-
-  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-  const anon = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
-
-  const supabase = createServerClient(url, anon, {
-    cookies: {
-      getAll() {
-        return req.cookies.getAll();
-      },
-      setAll(cookiesToSet: CookieToSet[]) {
-        cookiesToSet.forEach(({ name, value }) => req.cookies.set(name, value));
-        res = NextResponse.next({ request: req });
-        cookiesToSet.forEach(({ name, value, options }) =>
-          res.cookies.set(name, value, options),
-        );
-      },
-    },
-  });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  // The `is_owner` claim is injected by the custom_access_token_hook and lives
-  // in the signed JWT, not on the user object. getUser() above already
-  // revalidated the token against the auth server, so trusting the claim here
-  // is sound — we read it from the (local) session access token rather than
-  // making another round-trip. Falls back to false when the hook isn't enabled.
-  let isOwner = false;
-  let isPaid = false;
-  if (user) {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    isOwner = readClaim(session?.access_token, "is_owner");
-    isPaid = readClaim(session?.access_token, "is_paid");
-  }
-
-  return { res, userId: user?.id ?? null, isOwner, isPaid };
-}
-
-/** Decode a JWT payload and read a boolean claim. No verification needed here —
- *  the caller has already revalidated the token via getUser(). */
-function readClaim(accessToken: string | null | undefined, key: string): boolean {
-  if (!accessToken) return false;
-  try {
-    const payload = accessToken.split(".")[1];
-    if (!payload) return false;
-    const json = Buffer.from(
-      payload.replace(/-/g, "+").replace(/_/g, "/"),
-      "base64",
-    ).toString("utf8");
-    return JSON.parse(json)?.[key] === true;
-  } catch {
-    return false;
-  }
+  const res = NextResponse.next({ request: req });
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  const session = await validateSessionToken(token);
+  return {
+    res,
+    userId: session?.userId ?? null,
+    isOwner: !!session?.isOwner,
+    isPaid: !!session?.isPaid,
+  };
 }

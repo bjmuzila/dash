@@ -780,6 +780,50 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_watch_snapshots_wid_ts ON watch_snapshots(watch_id, ts);
     ALTER TABLE watch_snapshots ADD COLUMN IF NOT EXISTS prev_close REAL;
+
+    -- ── Custom auth (replaces Supabase Auth) ──────────────────────────────────
+    -- One row per account. id is a plain TEXT uuid generated app-side
+    -- (crypto.randomUUID()) rather than a DB default, so the migration script can
+    -- preserve the EXACT id values every other table already keys on via the
+    -- legacy 'clerk_user_id' TEXT columns (subscriptions, td_user_prefs, etc.) --
+    -- no cross-table backfill needed. password_hash is NULL for Google-only
+    -- accounts. Legacy imported hashes start as bcrypt ($2a$/$2b$...) and are
+    -- transparently upgraded to scrypt (scrypt$...) on next successful login.
+    CREATE TABLE IF NOT EXISTS users (
+      id                TEXT PRIMARY KEY,
+      email             TEXT NOT NULL UNIQUE,
+      password_hash     TEXT,
+      google_sub        TEXT UNIQUE,
+      is_owner          BOOLEAN NOT NULL DEFAULT FALSE,
+      email_verified_at TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+
+    -- Opaque session tokens. The raw token is never stored -- only sha256(token)
+    -- -- so a DB read (backup leak, etc.) can't be replayed as a live session.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMPTZ NOT NULL,
+      user_agent TEXT,
+      ip         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+    -- Password-reset / set-initial-password tokens (email flow). Single-use:
+    -- used_at is stamped the moment it's consumed and the token is rejected after.
+    CREATE TABLE IF NOT EXISTS password_resets (
+      token_hash TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at    TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
   `);
 }
 
@@ -1231,6 +1275,199 @@ export async function claimWelcomeEmail(clerkUserId: string): Promise<boolean> {
     console.error("[db] claimWelcomeEmail failed:", err);
     return false;
   }
+}
+
+// ── Custom auth: users ───────────────────────────────────────────────────────
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  password_hash: string | null;
+  google_sub: string | null;
+  is_owner: boolean;
+  email_verified_at: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function getUserByEmail(email: string): Promise<UserRecord | undefined> {
+  return queryOne<UserRecord>(`SELECT * FROM users WHERE lower(email) = lower(?)`, [email]);
+}
+
+export async function getUserById(id: string): Promise<UserRecord | undefined> {
+  return queryOne<UserRecord>(`SELECT * FROM users WHERE id = ?`, [id]);
+}
+
+export async function getUserByGoogleSub(googleSub: string): Promise<UserRecord | undefined> {
+  return queryOne<UserRecord>(`SELECT * FROM users WHERE google_sub = ?`, [googleSub]);
+}
+
+/** Creates a new account. Caller supplies id (crypto.randomUUID()) so callers
+ *  that also need the id before the row exists (e.g. to stamp a Stripe customer)
+ *  never have to round-trip. Throws on duplicate email (unique constraint). */
+export async function createUser(r: {
+  id: string;
+  email: string;
+  password_hash?: string | null;
+  google_sub?: string | null;
+  is_owner?: boolean;
+}): Promise<UserRecord> {
+  const rows = await queryAll<UserRecord>(
+    `INSERT INTO users (id, email, password_hash, google_sub, is_owner)
+     VALUES (?, ?, ?, ?, ?)
+     RETURNING *`,
+    [r.id, r.email.trim().toLowerCase(), r.password_hash ?? null, r.google_sub ?? null, !!r.is_owner]
+  );
+  return rows[0];
+}
+
+/** Transparent bcrypt->scrypt upgrade after a successful legacy-hash login. */
+export async function updateUserPasswordHash(id: string, passwordHash: string): Promise<void> {
+  await pgQuery(`UPDATE users SET password_hash = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [id, passwordHash]);
+}
+
+/** Links a Google account to an existing (email/password) user on first Google sign-in. */
+export async function setUserGoogleSub(id: string, googleSub: string): Promise<void> {
+  await pgQuery(`UPDATE users SET google_sub = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [id, googleSub]);
+}
+
+export async function markUserEmailVerified(id: string): Promise<void> {
+  await pgQuery(`UPDATE users SET email_verified_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND email_verified_at IS NULL`, [id]);
+}
+
+/** Owner-dashboard stats: total accounts + most recently created ones. */
+export async function countUsers(): Promise<number> {
+  const row = await queryOne<{ count: string }>(`SELECT COUNT(*)::text AS count FROM users`);
+  return Number(row?.count ?? 0);
+}
+
+export async function listRecentUsers(limit = 5): Promise<Pick<UserRecord, "id" | "email" | "created_at">[]> {
+  return queryAll(`SELECT id, email, created_at FROM users ORDER BY created_at DESC LIMIT ?`, [limit]);
+}
+
+export interface UserWithLastLogin {
+  id: string;
+  email: string;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+/** Every user + their most recent session's created_at as a "last login"
+ *  proxy (a session row is only ever created at login — see
+ *  lib/auth/session.ts's createSession). Replaces the old
+ *  Supabase-Auth-derived last_sign_in_at for the customer-activity admin page. */
+export async function listUsersWithLastLogin(): Promise<UserWithLastLogin[]> {
+  return queryAll<UserWithLastLogin>(`
+    SELECT u.id, u.email, u.created_at, s.last_login_at
+      FROM users u
+      LEFT JOIN (
+        SELECT user_id, MAX(created_at) AS last_login_at
+          FROM sessions
+         GROUP BY user_id
+      ) s ON s.user_id = u.id
+  `);
+}
+
+export async function countActiveSessions(): Promise<number> {
+  const row = await queryOne<{ count: string }>(`SELECT COUNT(*)::text AS count FROM sessions WHERE expires_at > NOW()`);
+  return Number(row?.count ?? 0);
+}
+
+/** Every account + whether they're currently paid — powers the /admin email
+ *  broadcast recipient lists. Was previously paginated through Supabase's
+ *  admin.auth.admin.listUsers(); now a single indexed join against our own
+ *  tables (fine at current scale — cap is generous headroom, not a real limit). */
+export interface BroadcastRecipient { userId: string; email: string; paid: boolean }
+
+export async function listAllUsersForBroadcast(): Promise<BroadcastRecipient[]> {
+  const rows = await queryAll<{ id: string; email: string; status: string | null }>(
+    `SELECT u.id, u.email, sub.status
+       FROM users u
+       LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+      ORDER BY u.created_at ASC
+      LIMIT 50000`
+  );
+  return rows.map((r) => ({ userId: r.id, email: r.email, paid: !!r.status && PAID_STATUSES.has(r.status) }));
+}
+
+// ── Custom auth: sessions ────────────────────────────────────────────────────
+
+export interface SessionRecord {
+  token_hash: string;
+  user_id: string;
+  expires_at: string;
+}
+
+export async function insertSession(r: {
+  token_hash: string;
+  user_id: string;
+  expires_at: Date;
+  user_agent?: string | null;
+  ip?: string | null;
+}): Promise<void> {
+  await pgQuery(
+    `INSERT INTO sessions (token_hash, user_id, expires_at, user_agent, ip) VALUES ($1,$2,$3,$4,$5)`,
+    [r.token_hash, r.user_id, r.expires_at.toISOString(), r.user_agent ?? null, r.ip ?? null]
+  );
+}
+
+/** Session + owning user's live gate flags (is_owner, is_paid) in one round trip
+ *  -- this is what runs on every gated request, so it's a single indexed join
+ *  rather than two queries. */
+export interface SessionWithUser {
+  user_id: string;
+  email: string;
+  is_owner: boolean;
+  is_paid: boolean;
+  expires_at: string;
+}
+
+export async function getSessionWithUser(tokenHash: string): Promise<SessionWithUser | undefined> {
+  return queryOne<SessionWithUser>(
+    `SELECT s.user_id, u.email, u.is_owner, s.expires_at,
+            COALESCE(sub.status IN ('active','trialing'), FALSE) AS is_paid
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+      WHERE s.token_hash = ? AND s.expires_at > NOW()`,
+    [tokenHash]
+  );
+}
+
+export async function deleteSession(tokenHash: string): Promise<void> {
+  await pgQuery(`DELETE FROM sessions WHERE token_hash = $1`, [tokenHash]);
+}
+
+/** Signs out every device — used after a password reset/change so a leaked
+ *  old password can't keep an attacker's existing session alive. */
+export async function deleteAllSessionsForUser(userId: string): Promise<void> {
+  await pgQuery(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
+}
+
+/** Housekeeping: drop expired rows. Cheap and idempotent -- fine to call on a
+ *  timer or opportunistically (e.g. a fraction of login attempts). */
+export async function deleteExpiredSessions(): Promise<number> {
+  const res = await pgQuery(`DELETE FROM sessions WHERE expires_at <= NOW()`);
+  return res.rowCount ?? 0;
+}
+
+// ── Custom auth: password resets ─────────────────────────────────────────────
+
+export async function insertPasswordReset(r: { token_hash: string; user_id: string; expires_at: Date }): Promise<void> {
+  await pgQuery(
+    `INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1,$2,$3)`,
+    [r.token_hash, r.user_id, r.expires_at.toISOString()]
+  );
+}
+
+export async function consumePasswordReset(tokenHash: string): Promise<{ user_id: string } | undefined> {
+  const rows = await queryAll<{ user_id: string }>(
+    `UPDATE password_resets SET used_at = CURRENT_TIMESTAMP
+      WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()
+      RETURNING user_id`,
+    [tokenHash]
+  );
+  return rows[0];
 }
 
 // ── EM Tracker (per-ticker weekly Estimated Move hit/miss record) ───────────

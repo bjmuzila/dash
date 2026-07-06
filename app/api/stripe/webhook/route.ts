@@ -1,30 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
 import { getStripe } from "@/lib/stripe";
 import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, PAID_STATUSES } from "@/lib/db";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 
-// Mirrors paid status into Supabase's own Postgres (subscription_status table,
-// see supabase/migrations/0004) so custom_access_token_hook can read it — the
-// primary `subscriptions` table below lives on Render, which the hook can't see.
-const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-
-async function mirrorPaidStatus(userId: string, status: string): Promise<void> {
-  if (!SUPABASE_URL || !SERVICE_KEY) {
-    console.warn("[stripe/webhook] missing Supabase service key, skipping paid mirror");
-    return;
-  }
-  const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const { error } = await admin
-    .from("subscription_status")
-    .upsert({ user_id: userId, status, updated_at: new Date().toISOString() });
-  if (error) console.error("[stripe/webhook] subscription_status upsert failed:", error.message);
-}
+// NOTE: this used to also mirror paid status into a separate Supabase Postgres
+// (subscription_status table) so Supabase's custom_access_token_hook could
+// read it into a JWT claim. Now that users/sessions/subscriptions all live in
+// the SAME Postgres (see lib/db.ts), is_paid is read live via a direct join
+// (getSessionWithUser) on every request — no mirroring, no claim, no second
+// database. upsertSubscription() below is the only write this handler needs.
 
 // Stripe needs the raw, unparsed body to verify the signature, so this route must
 // not run through any body parsing. App-router routes already hand us the raw
@@ -32,8 +18,9 @@ async function mirrorPaidStatus(userId: string, status: string): Promise<void> {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Resolve the Clerk user id for a subscription: prefer the metadata we stamped at
+// Resolve our user id for a subscription: prefer the metadata we stamped at
 // checkout, fall back to the customer→user row we wrote when the customer was made.
+// (Metadata key kept as `clerk_user_id` for continuity — see lib/db.ts subscriptions.)
 async function resolveClerkUserId(
   sub: Stripe.Subscription,
   customerId: string
@@ -68,7 +55,6 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     current_period_end: item?.current_period_end ?? null,
     cancel_at_period_end: sub.cancel_at_period_end,
   });
-  await mirrorPaidStatus(clerkUserId, sub.status);
 
   // Fire the one-time founder thank-you the first time this user becomes paid.
   // Non-blocking: any failure is logged but never fails the webhook (Stripe

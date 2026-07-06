@@ -6,6 +6,16 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-06 — "Words from Bzila" owner note card (`app/traders-dashboard/page.tsx`)
+
+Added a collapsible "Words from Bzila" card near the top of `/traders-dashboard`, backed by a new singleton `bzila_note` table (`lib/db.ts`) and `app/api/bzila-note/route.ts` (GET public, POST/DELETE gated by `getServerIsOwner()`); the page shows Edit/Save/Delete controls only when `useAuth().isOwnerClaim` is true. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable this session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-06 — Vol Pin Scanner status ranking + sortable columns (`app/scanner/page.tsx`)
 
 Refactored `PinStatus` into a shared `pinStatusRank()` (0=PINNING/1=SQUEEZING/2=WATCHING/3=none) so the label and row ordering use one source of truth, and added a `PinSortKey`/`pinSortValue()` + `SortTh` header component giving every column (Symbol, Spot, Dist, Pin OI, ATM IV, RV, IV-RV%, Spread Trend, Range, Range Trend, Status) click-to-sort with asc/desc toggle and a ▲/▼ indicator, defaulting to Status ascending. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable this session.

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseServer, getServerUserId } from "@/lib/supabase/server";
+import { getServerUser, getServerUserId } from "@/lib/supabase/server";
 import { addFeedback, listFeedback, setFeedbackStatus } from "@/lib/db";
 
 // Customer feedback. Any signed-in user may POST a note. Reading the feed and
@@ -17,8 +17,7 @@ async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }
 // Submit feedback — any signed-in user.
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await getSupabaseServer();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getServerUser();
     const userId = user?.id ?? null;
     if (!userId) return NextResponse.json({ error: "Sign in to send feedback" }, { status: 401 });
 

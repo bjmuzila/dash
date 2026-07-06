@@ -5,13 +5,11 @@
 // one-off transactional sends fired from server code (e.g. the Stripe webhook's
 // new-paid-signup welcome) rather than an owner-triggered broadcast.
 
-import { createClient } from "@supabase/supabase-js";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
+import { getUserById } from "@/lib/db";
 
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
 const FROM_EMAIL = (process.env.EMAIL_FROM || "CB Edge <hello@cbedge.net>").trim();
-const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -22,26 +20,18 @@ export interface SendResult {
 }
 
 /**
- * Resolve a user's email + first name from Supabase Auth via the service-role
- * admin API (server-only). Returns null if not configured or not found.
+ * Resolve a user's email from our own users table. firstName is always null —
+ * unlike the old Supabase Auth version, our users table doesn't capture a
+ * display name (email/password + Google sign-in only stamp email + a stable
+ * google_sub). Callers already treat firstName as optional personalization.
  */
 export async function lookupUser(
   userId: string
 ): Promise<{ email: string; firstName: string | null } | null> {
-  if (!SUPABASE_URL || !SERVICE_KEY) return null;
   try {
-    const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data, error } = await admin.auth.admin.getUserById(userId);
-    if (error || !data?.user?.email) return null;
-    const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
-    const firstName =
-      (typeof meta.first_name === "string" && meta.first_name) ||
-      (typeof meta.full_name === "string" && meta.full_name.split(" ")[0]) ||
-      (typeof meta.name === "string" && meta.name.split(" ")[0]) ||
-      null;
-    return { email: data.user.email, firstName: firstName || null };
+    const user = await getUserById(userId);
+    if (!user?.email) return null;
+    return { email: user.email, firstName: null };
   } catch (err) {
     console.error("[emails/send] lookupUser failed:", err);
     return null;

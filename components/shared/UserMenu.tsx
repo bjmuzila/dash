@@ -2,15 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { HOME_THEME } from "./homeTheme";
 
 const STRIPE_PORTAL = "https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg";
 
 /**
- * Replacement for Clerk's <UserButton>: a round avatar (Google photo if present,
- * else the display-name initial) that opens a small menu with the email + a
- * Sign out action wired to Supabase Auth.
+ * Replacement for Clerk's <UserButton>: a round avatar (display-name initial)
+ * that opens a small menu with the email + a Sign out action.
+ *
+ * NOTE: the Google-photo avatar this used to show (via Supabase's
+ * user_metadata.avatar_url) isn't available anymore -- our users table only
+ * stores email + a stable google_sub, not a profile photo. Everyone gets the
+ * initials avatar now; low-priority cosmetic regression, not a functional one.
  */
 export default function UserMenu() {
   const { user, displayName, signOut } = useAuth();
@@ -20,10 +23,11 @@ export default function UserMenu() {
 
   const handleResetPassword = async () => {
     if (!user?.email) return;
-    const supabase = getSupabaseBrowser();
-    await supabase.auth.resetPasswordForEmail(user.email, {
-      redirectTo: `${window.location.origin}/auth/reset-password`,
-    });
+    await fetch("/api/auth/forgot-password", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: user.email }),
+    }).catch(() => {});
     setResetSent(true);
     setTimeout(() => setResetSent(false), 4000);
   };
@@ -36,11 +40,7 @@ export default function UserMenu() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
-  const avatarUrl =
-    (typeof meta.avatar_url === "string" && meta.avatar_url) ||
-    (typeof meta.picture === "string" && meta.picture) ||
-    "";
+  const avatarUrl = "";
   const initial = (displayName || "T").charAt(0).toUpperCase();
 
   return (

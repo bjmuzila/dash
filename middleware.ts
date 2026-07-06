@@ -13,9 +13,11 @@ const PUBLIC_PATTERNS: RegExp[] = [
   /^\/sign-in(\/.*)?$/,
   /^\/sign-up(\/.*)?$/,
   /^\/auth\/callback$/,
+  /^\/auth\/reset-password$/,
   // Enforced auth endpoints must be reachable while signed OUT (they're how you
   // sign in). They do their own Turnstile + rate-limit gating internally.
-  /^\/api\/auth\/(login|signup)$/,
+  /^\/api\/auth\/(login|signup|logout|me|forgot-password|reset-password)$/,
+  /^\/api\/auth\/google(\/.*)?$/,
   /^\/api\/waitlist(\/.*)?$/,
   /^\/api\/unsubscribe(\/.*)?$/,
   /^\/unsubscribe$/,
@@ -61,8 +63,8 @@ function ownerMovedTarget(path: string): string | null {
   return null;
 }
 
-// Owner Supabase user UUID that bypasses maintenance + reaches owner routes.
-// Set OWNER_USER_ID in env to the Supabase auth.users.id of the owner account.
+// Owner user id that bypasses maintenance + reaches owner routes. Set
+// OWNER_USER_ID in env to the owner account's users.id (see lib/db.ts).
 // Trimmed so a stray space in the env value can't cause a mismatch (lockout).
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
 
@@ -111,14 +113,14 @@ export async function middleware(req: NextRequest) {
 
   const path = req.nextUrl.pathname;
 
-  // Resolve the Supabase session ONCE. `res` carries any refreshed-session
-  // cookies and must be the object we return on the pass-through paths.
-  const { res, userId, isOwner: ownerClaim, isPaid } = await getUserFromMiddleware(req);
+  // Resolve the session ONCE (cbe_session cookie -> Postgres). `res` is just a
+  // pass-through NextResponse now — no per-request cookie rewriting needed
+  // since our session token doesn't rotate on every request.
+  const { res, userId, isOwner: ownerFlag, isPaid } = await getUserFromMiddleware(req);
 
-  // Owner = the JWT `is_owner` claim (from the custom access-token hook) OR,
-  // as a fallback while the hook is being rolled out, the env id match.
+  // Owner = the users.is_owner column OR, as a fallback, the env id match.
   const ownerById = OWNER_USER_ID ? (userId || "").trim() === OWNER_USER_ID : false;
-  const isOwner = ownerClaim || ownerById;
+  const isOwner = ownerFlag || ownerById;
 
   // ── Maintenance gate ───────────────────────────────────────────────────────
   const exemptFromMaint =
@@ -127,6 +129,7 @@ export async function middleware(req: NextRequest) {
     path.startsWith("/sign-in") ||
     path.startsWith("/sign-up") ||
     path.startsWith("/auth/callback") ||
+    path.startsWith("/auth/reset-password") ||
     path.startsWith("/api/auth/") ||
     path.startsWith("/api/waitlist") ||
     path.startsWith("/api/unsubscribe") ||
@@ -197,6 +200,10 @@ export async function middleware(req: NextRequest) {
   res.headers.set("Cache-Control", "no-store, must-revalidate");
   return res;
 }
+
+// Node.js runtime: session validation now queries Postgres directly (pg needs
+// a real TCP socket), replacing Supabase's edge-compatible getUser() call.
+export const runtime = "nodejs";
 
 export const config = {
   matcher: [

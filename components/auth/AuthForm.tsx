@@ -3,19 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { getSupabaseBrowser } from "@/lib/supabase/client";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 /**
  * Themed email/password + Google auth form.
  *
- * Email/password now POSTs to the server routes /api/auth/login and
+ * Email/password POSTs to the server routes /api/auth/login and
  * /api/auth/signup, which enforce Turnstile CAPTCHA + per-IP rate limiting
- * before signing in (can't be bypassed by scripting Supabase directly). The
- * server sets the session cookies; on success we hard-navigate to /home so the
- * middleware and browser client hydrate the new session.
+ * before signing in against our own users table. The server sets the session
+ * cookie; on success we hard-navigate to /home so middleware picks up the new
+ * session.
  *
- * Google still uses client OAuth (redirects to /auth/callback).
+ * Google navigates to /api/auth/google/start, which redirects to Google's own
+ * consent screen (server-side OAuth code exchange, no client SDK).
  *
  * Turnstile is only rendered when NEXT_PUBLIC_TURNSTILE_SITE_KEY is set, so
  * local/dev builds without the key keep working (the server also skips captcha
@@ -36,7 +36,6 @@ declare global {
 }
 
 export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
-  const supabase = getSupabaseBrowser();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -126,14 +125,9 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
     setCaptchaAttempt((n) => n + 1);
   }
 
-  async function withGoogle() {
+  function withGoogle() {
     setError(null);
-    const redirectTo = `${window.location.origin}/auth/callback?next=/home`;
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo },
-    });
-    if (error) setError(error.message);
+    window.location.assign("/api/auth/google/start?next=/home");
   }
 
   async function withEmail(e: React.FormEvent) {
@@ -209,7 +203,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
     <div
       style={{
         width: "100%",
-        maxWidth: 380,
+        maxWidth: 560,
         background: T.panel,
         border: `1px solid ${T.border}`,
         borderRadius: 16,

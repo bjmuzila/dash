@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseServer } from "@/lib/supabase/server";
+import { randomUUID } from "crypto";
+import { getUserByEmail, createUser } from "@/lib/db";
+import { hashPassword } from "@/lib/auth/password";
+import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC } from "@/lib/auth/session";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { rateLimit, clientIp } from "@/lib/rateLimit";
 
-// Enforced email/password sign-up. Same Turnstile + throttle protections as the
-// login route. If email confirmation is ON in Supabase, no session is returned
-// and the client shows a "check your email" notice.
+// Enforced email/password sign-up against our own users table (replaces
+// Supabase's signUp). Same Turnstile + throttle protections as before.
+// No email-confirmation gate: the account and session are created immediately,
+// matching the prior (confirmation-off) Supabase project config.
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 // Signups are rarer than logins — throttle harder: 5 / hour per IP.
 const RATE = { windowMs: 60 * 60_000, max: 5, blockMs: 60 * 60_000 };
@@ -25,13 +30,11 @@ export async function POST(req: NextRequest) {
   let email = "";
   let password = "";
   let turnstileToken: string | null = null;
-  let emailRedirectTo: string | undefined;
   try {
     const body = await req.json();
-    email = String(body?.email || "").trim();
+    email = String(body?.email || "").trim().toLowerCase();
     password = String(body?.password || "");
     turnstileToken = body?.turnstileToken ?? null;
-    emailRedirectTo = body?.emailRedirectTo ? String(body.emailRedirectTo) : undefined;
   } catch {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
@@ -50,22 +53,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const supabase = await getSupabaseServer();
-  // Forward the same token to Supabase's OWN captcha gate (separate from our
-  // Cloudflare-side verifyTurnstile() check above) — see login/route.ts for
-  // why this was missing and what error it produced.
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      ...(emailRedirectTo ? { emailRedirectTo } : {}),
-      ...(turnstileToken ? { captchaToken: turnstileToken } : {}),
-    },
-  });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
+  const existing = await getUserByEmail(email);
+  if (existing) {
+    // Same generic-error stance as login: don't confirm/deny account existence
+    // beyond what's necessary for a usable error message.
+    return NextResponse.json({ error: "An account with that email already exists." }, { status: 400 });
   }
 
-  // session present → confirmation is OFF, user is signed in; else check email.
-  return NextResponse.json({ ok: true, session: !!data.session });
+  const passwordHash = await hashPassword(password);
+  const user = await createUser({ id: randomUUID(), email, password_hash: passwordHash });
+
+  const { token } = await createSession(user.id, {
+    userAgent: req.headers.get("user-agent"),
+    ip,
+  });
+
+  const res = NextResponse.json({ ok: true, session: true });
+  res.cookies.set(SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: SESSION_COOKIE_MAX_AGE_SEC,
+  });
+  return res;
 }

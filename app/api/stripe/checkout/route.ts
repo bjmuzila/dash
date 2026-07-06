@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseServer } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server";
 import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
 
@@ -19,13 +19,13 @@ function publicOrigin(req: NextRequest): string {
 }
 
 // POST /api/stripe/checkout → creates a Stripe Checkout session for the signed-in
-// Clerk user and returns { url } to redirect to. The Clerk userId is the source
-// of truth and is stamped onto the customer + session metadata so the webhook can
-// map the resulting subscription back to this user.
+// user and returns { url } to redirect to. Our own users.id is the source of
+// truth and is stamped onto the customer + session metadata so the webhook can
+// map the resulting subscription back to this user (metadata key kept as
+// `clerk_user_id` for continuity with subscriptions.clerk_user_id — see lib/db.ts).
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await getSupabaseServer();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getServerUser();
     const userId = user?.id ?? null;
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 

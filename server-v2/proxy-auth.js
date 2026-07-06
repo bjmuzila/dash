@@ -14,9 +14,9 @@
  *     - a tiny PUBLIC allowlist     → no auth (health, maintenance GET, …)
  *     - in-process cron callers     → x-internal-token shared secret bypass
  *
- *   Auth itself reuses ws-auth.verifyWsRequest, which reads the Supabase
- *   session cookie off the upgrade/request headers and revalidates the JWT
- *   against the auth server (getUser), then checks the subscriptions table.
+ *   Auth itself reuses ws-auth.verifyWsRequest, which reads our own session
+ *   cookie (cbe_session) off the request headers, looks it up directly in
+ *   Postgres, then checks the subscriptions table (same join, one round trip).
  *
  * FAIL-CLOSED
  *   Anything we can't positively verify → denied. The owner is allowed on a
@@ -72,7 +72,7 @@ async function checkProxyAccess(req, pathname, method) {
     return { ok: true, who: 'public' };
   }
 
-  // 3) Everything else needs a verified Supabase session.
+  // 3) Everything else needs a verified session.
   let access;
   try {
     access = await verifyWsRequest(req); // { ok, userId?, reason }

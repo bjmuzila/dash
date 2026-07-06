@@ -78,10 +78,17 @@ function applySecurityHeaders(req, res) {
   const cspHeader = process.env.CSP_REPORT_ONLY === '1'
     ? 'Content-Security-Policy-Report-Only'
     : 'Content-Security-Policy';
+  // Dev-only relaxation: Next's Fast Refresh runtime needs eval() to work, and
+  // without it a CSP violation can abort client script execution before React
+  // hydrates -- every button/click handler goes dead, even though the page
+  // renders fine (SSR markup isn't affected). Production never sets this.
+  const scriptSrc = process.env.NODE_ENV === 'production'
+    ? "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "
+    : "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; ";
   res.setHeader(
     cspHeader,
     "default-src 'self'; " +
-      "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; " +
+      scriptSrc +
       "style-src 'self' 'unsafe-inline'; " +
       "img-src 'self' data: blob: https:; " +
       "font-src 'self' data:; " +

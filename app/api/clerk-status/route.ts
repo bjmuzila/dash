@@ -1,17 +1,14 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { getServerUserId } from "@/lib/supabase/server";
+import { countUsers, listRecentUsers, countActiveSessions } from "@/lib/db";
 
-// Owner-only auth status card backend (formerly Clerk; now Supabase Auth).
-// Path/response shape kept stable so the /dev/owner dashboard card still renders
-// without changes. Reports whether Supabase auth env is configured and a few
-// read-only user stats via the service-role admin API. Never returns secrets.
+// Owner-only auth status card backend (formerly Clerk, then Supabase Auth; now
+// our own users/sessions tables). Path/response shape kept stable so the
+// /dev/owner dashboard card still renders without changes.
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
-const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-const ANON = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
-const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 export async function GET() {
   const userId = await getServerUserId();
@@ -20,51 +17,29 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const configured = !!SUPABASE_URL && !!ANON;
-
   let userCount: number | null = null;
-  const activeSessions: number | null = null; // not exposed by Supabase cheaply
+  let activeSessions: number | null = null;
   let recent: Array<{ id: string; email: string | null; name: string | null; createdAt: number | null }> = [];
   let statsError: string | null = null;
 
-  if (SUPABASE_URL && SERVICE_KEY) {
-    try {
-      const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-      // First page gives us the recent users; total count comes from the
-      // paginated response's `total` when available.
-      const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 10 });
-      if (error) {
-        statsError = error.message;
-      } else {
-        const users = data?.users ?? [];
-        userCount = (data as { total?: number })?.total ?? users.length;
-        recent = users.slice(0, 5).map((u) => {
-          const meta = (u.user_metadata ?? {}) as Record<string, unknown>;
-          const name =
-            (typeof meta.full_name === "string" && meta.full_name) ||
-            (typeof meta.name === "string" && meta.name) ||
-            null;
-          return {
-            id: u.id,
-            email: u.email ?? null,
-            name,
-            createdAt: u.created_at ? new Date(u.created_at).getTime() : null,
-          };
-        });
-      }
-    } catch (err) {
-      statsError = String((err as Error)?.message ?? err);
-    }
-  } else {
-    statsError = "SUPABASE_SERVICE_ROLE_KEY not set — user stats unavailable";
+  try {
+    userCount = await countUsers();
+    activeSessions = await countActiveSessions();
+    const rows = await listRecentUsers(5);
+    recent = rows.map((u) => ({
+      id: u.id,
+      email: u.email ?? null,
+      name: null, // no display-name field in our users table
+      createdAt: u.created_at ? new Date(u.created_at).getTime() : null,
+    }));
+  } catch (err) {
+    statsError = String((err as Error)?.message ?? err);
   }
 
   return NextResponse.json({
-    configured,
-    provider: "supabase",
-    environment: configured ? "live" : "unknown",
+    configured: true,
+    provider: "custom",
+    environment: "live",
     mismatch: false,
     stats: { userCount, activeSessions, recent },
     statsError,

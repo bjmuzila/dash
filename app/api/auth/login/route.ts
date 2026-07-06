@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseServer } from "@/lib/supabase/server";
+import { getUserByEmail, updateUserPasswordHash } from "@/lib/db";
+import { verifyPassword, hashPassword } from "@/lib/auth/password";
+import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC } from "@/lib/auth/session";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { rateLimit, rateLimitReset, clientIp } from "@/lib/rateLimit";
 
-// Enforced email/password sign-in. Replaces the client-side signInWithPassword
-// so brute-force protections (Turnstile + per-IP throttle) actually run on the
-// server and can't be bypassed by scripting Supabase directly.
-//
-// Flow: verify Turnstile → per-IP rate limit → signInWithPassword server-side
-// (sets the auth cookies on the response) → 200. The browser then hard-reloads
-// to /home so middleware + browser client hydrate the new session from cookies.
+// Enforced email/password sign-in against our own users table (replaces
+// Supabase's signInWithPassword). Same Turnstile + per-IP throttle protections
+// as before -- those never depended on Supabase and are unchanged.
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 // 10 attempts / 15 min per IP, then a 15 min block. Tuned to blunt automated
 // credential-stuffing without penalizing a human who mistypes a few times.
@@ -50,24 +49,39 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const supabase = await getSupabaseServer();
-  // Forward the same token to Supabase's OWN captcha gate. If Supabase's
-  // project-level "Enable Captcha protection" is on, signInWithPassword
-  // rejects with "captcha protection: request disallowed (no captcha_token
-  // found)" unless a token rides along here — verifyTurnstile() above only
-  // checks OUR Cloudflare-side verification and never forwarded the token,
-  // so the two gates were out of sync.
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-    options: turnstileToken ? { captchaToken: turnstileToken } : undefined,
-  });
-  if (error) {
+  const user = await getUserByEmail(email);
+  const check = await verifyPassword(password, user?.password_hash ?? null);
+  if (!user || !check.ok) {
     // Generic message — never reveal whether the email exists (no enumeration).
     return NextResponse.json({ error: "Invalid login credentials." }, { status: 401 });
   }
 
+  // Transparent upgrade: a legacy (migrated) bcrypt hash that just verified
+  // gets re-hashed with scrypt so it's never checked against bcrypt again.
+  if (check.needsRehash) {
+    try {
+      const upgraded = await hashPassword(password);
+      await updateUserPasswordHash(user.id, upgraded);
+    } catch (err) {
+      console.warn("[auth/login] password rehash failed (non-fatal):", err);
+    }
+  }
+
+  const { token } = await createSession(user.id, {
+    userAgent: req.headers.get("user-agent"),
+    ip,
+  });
+
   // Successful login clears the honest user's throttle counter.
   rateLimitReset(`login:${ip}`);
-  return NextResponse.json({ ok: true });
+
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set(SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: SESSION_COOKIE_MAX_AGE_SEC,
+  });
+  return res;
 }

@@ -7,6 +7,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Volatility Pin Scanner now sorts the strongest pin setups (Pinning, then Squeezing) to the top automatically, and every column header can be clicked to sort the table however you like.
 * Fixed the Options Positioning cards (SPX, NDX, SPY, QQQ) that were stuck showing "no data" — they now update live from the scanner.
 * Added a new "Your Watchlist" row under Options Positioning — type in any 4 tickers you want to track, and your picks are saved to your account.
+* Added a new "Words from Bzila" card to the top of the Traders Dashboard — click to expand and read the latest note.
 
 ## Sunday 7/5/2026
 

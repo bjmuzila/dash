@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseServer, getServerUserId } from "@/lib/supabase/server";
+import { getServerUser, getServerUserId } from "@/lib/supabase/server";
 import { addFarCbTicker, listFarCbTickers } from "@/lib/db";
 
 // Far CB Watch ticker roster. Any signed-in user may add a ticker on top of
@@ -10,8 +10,7 @@ import { addFarCbTicker, listFarCbTickers } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await getSupabaseServer();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getServerUser();
     const userId = user?.id ?? null;
     if (!userId) return NextResponse.json({ error: "Sign in to add a ticker" }, { status: 401 });
 

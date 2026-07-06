@@ -1,43 +1,21 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { getServerUserId } from "@/lib/supabase/server";
-import { getCustomerActivity, getSubscription, PAID_STATUSES } from "@/lib/db";
+import { getCustomerActivity, getSubscription, PAID_STATUSES, listUsersWithLastLogin, type UserWithLastLogin } from "@/lib/db";
 
 // Owner-only customer engagement feed. Joins the page_visits rollup
-// (getCustomerActivity) with Supabase Auth (email + last_sign_in_at) so the
-// admin page can show, per customer: last login, ~time on site, pages visited.
+// (getCustomerActivity) with our own users/sessions tables (email + last
+// session created_at as a "last login" proxy) so the admin page can show, per
+// customer: last login, ~time on site, pages visited.
 //
 // SECURITY: fails CLOSED — unset/mismatched OWNER_USER_ID → 403.
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
-const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
-interface AuthUser { email: string | null; last_sign_in_at: string | null; created_at: string | null }
-
-async function loadAuthUsers(): Promise<Map<string, AuthUser>> {
-  const map = new Map<string, AuthUser>();
-  if (!SUPABASE_URL || !SERVICE_KEY) return map;
-  const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const PER_PAGE = 200;
-  for (let page = 1; page <= 25; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: PER_PAGE });
-    if (error) throw new Error(error.message);
-    const batch = data?.users ?? [];
-    if (batch.length === 0) break;
-    for (const u of batch) {
-      map.set(u.id, {
-        email: u.email ?? null,
-        last_sign_in_at: u.last_sign_in_at ?? null,
-        created_at: u.created_at ?? null,
-      });
-    }
-    if (batch.length < PER_PAGE) break;
-  }
-  return map;
+async function loadAuthUsers(): Promise<Map<string, UserWithLastLogin>> {
+  const rows = await listUsersWithLastLogin();
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 export async function GET() {
@@ -61,7 +39,7 @@ export async function GET() {
         return {
           userId: a.user_id,
           email: au?.email ?? null,
-          lastLogin: au?.last_sign_in_at ?? null,
+          lastLogin: au?.last_login_at ?? null,
           lastSeen: a.last_seen,
           firstSeen: a.first_seen,
           totalLoads: a.total_loads,

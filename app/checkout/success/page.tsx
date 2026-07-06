@@ -1,36 +1,37 @@
 "use client";
 
-// Stripe checkout success landing. The subscription row is written by the
-// webhook, but the signed-in user's JWT still carries the OLD `is_paid` claim
-// until the access token refreshes — which would bounce them off every gated
-// route (except /home, which does a live DB check). So we force a session
-// refresh here to mint a token with `is_paid: true`, then forward to the app.
+// Stripe checkout success landing. Unlike the old Supabase-JWT setup (where
+// is_paid was baked into an access token that needed an explicit refresh),
+// is_paid is now read live from Postgres on every request (via
+// getSessionWithUser's join, cached for a few seconds -- see
+// lib/auth/session.ts). So there's nothing to "refresh": just poll our own
+// /api/auth/me briefly to absorb the short race against the Stripe webhook
+// landing, then forward to /home either way.
 //
-// This route is public (see PUBLIC_PATTERNS in middleware.ts) so the pre-refresh
-// (still-unpaid) token can reach it without being redirected to /pricing.
+// This route is public (see PUBLIC_PATTERNS in middleware.ts) so a
+// still-unpaid session can reach it without being redirected to /pricing.
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getSupabaseBrowser } from "@/lib/supabase/client";
 
 export default function CheckoutSuccessPage() {
   const router = useRouter();
 
   useEffect(() => {
     let done = false;
-    const supabase = getSupabaseBrowser();
 
-    // Poll a short while: the webhook may land a beat after the redirect. Each
-    // refreshSession re-runs the access-token hook, so once the row is written
-    // the new token carries is_paid: true.
     async function settle() {
       for (let i = 0; i < 6 && !done; i++) {
-        const { data } = await supabase.auth.refreshSession();
-        const token = data.session?.access_token;
-        if (token && readClaim(token, "is_paid")) {
-          done = true;
-          router.replace("/home");
-          return;
+        try {
+          const res = await fetch("/api/auth/me", { cache: "no-store" });
+          const data = await res.json();
+          if (data?.user?.isPaid) {
+            done = true;
+            router.replace("/home");
+            return;
+          }
+        } catch {
+          // ignore, retry
         }
         await new Promise((r) => setTimeout(r, 1500));
       }
@@ -39,7 +40,7 @@ export default function CheckoutSuccessPage() {
       if (!done) router.replace("/home");
     }
 
-    settle().catch(() => router.replace("/home"));
+    settle();
     return () => { done = true; };
   }, [router]);
 
@@ -48,14 +49,4 @@ export default function CheckoutSuccessPage() {
       <p style={{ opacity: 0.8 }}>Finalizing your subscription…</p>
     </main>
   );
-}
-
-function readClaim(accessToken: string, key: string): boolean {
-  try {
-    const payload = accessToken.split(".")[1];
-    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(json)?.[key] === true;
-  } catch {
-    return false;
-  }
 }
