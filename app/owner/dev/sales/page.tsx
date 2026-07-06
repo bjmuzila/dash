@@ -391,6 +391,22 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
   );
 }
 
+// Collapse a customer's raw Stripe subscription statuses down to the one tag
+// we show: "paid" (active) beats "trial" (trialing) beats "no sub" (anything
+// else — past_due/canceled/incomplete/unpaid/none). Mirrors PAID_STATUSES
+// (lib/db.ts) access semantics, minus the trial/paid distinction it collapses.
+function customerTag(subs: { status: string }[]): "paid" | "trial" | "no sub" {
+  if (subs.some(s => s.status === "active")) return "paid";
+  if (subs.some(s => s.status === "trialing")) return "trial";
+  return "no sub";
+}
+
+const TAG_COLORS: Record<string, string> = {
+  paid: T.green,
+  trial: T.cyan,
+  "no sub": T.muted,
+};
+
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
     <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
@@ -399,32 +415,31 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
         <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 15 }}>No customers yet</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {customers.filter(c => c.email && c.email !== "—").map((c) => (
-            <div
-              key={c.id}
-              title={`${c.email} · joined ${fmtDate(c.created)}${c.subscriptions.length ? " · " + c.subscriptions.map(s => s.status).join(", ") : " · no subscription"}`}
-              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: T.cyan, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
-                <div style={{ fontSize: 15, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
-              </div>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                {c.subscriptions.length === 0 ? (
-                  <span style={{ fontSize: 9, color: T.muted }}>no sub</span>
-                ) : c.subscriptions.map((s, i) => (
-                  <span key={i} style={{
+          {customers.filter(c => c.email && c.email !== "—").map((c) => {
+            const tag = customerTag(c.subscriptions);
+            return (
+              <div
+                key={c.id}
+                title={`${c.email} · joined ${fmtDate(c.created)}${c.subscriptions.length ? " · " + c.subscriptions.map(s => s.status).join(", ") : " · no subscription"}`}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: T.cyan, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                  <div style={{ fontSize: 15, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
+                </div>
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <span style={{
                     fontSize: 9, padding: "2px 7px", borderRadius: 10,
-                    background: `${STATUS_COLORS[s.status] || T.muted}18`,
-                    border: `1px solid ${STATUS_COLORS[s.status] || T.muted}44`,
-                    color: STATUS_COLORS[s.status] || T.muted,
+                    background: `${TAG_COLORS[tag]}18`,
+                    border: `1px solid ${TAG_COLORS[tag]}44`,
+                    color: TAG_COLORS[tag],
                   }}>
-                    {s.status}
+                    {tag}
                   </span>
-                ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
