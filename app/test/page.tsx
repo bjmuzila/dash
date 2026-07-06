@@ -549,10 +549,18 @@ function pctFrom(spot: number, level: number | null): number | null {
   return ((level - spot) / spot) * 100;
 }
 
-function fmtPct(p: number | null): string {
-  if (p == null) return "—";
-  const sign = p >= 0 ? "+" : "";
-  return `${sign}${p.toFixed(1)}%`;
+// Dollar/point distance from spot — recomputed every scanner poll (30s) off
+// the live `spot`, so these track the market in real time, not a frozen %.
+function deltaFrom(spot: number, level: number | null): number | null {
+  if (level == null || !(spot > 0)) return null;
+  return level - spot;
+}
+
+function fmtDelta(d: number | null): string {
+  if (d == null || !Number.isFinite(d)) return "—";
+  const sign = d >= 0 ? "+" : "-";
+  const abs = Math.abs(d);
+  return `${sign}$${abs.toLocaleString("en-US", { maximumFractionDigits: abs >= 1000 ? 0 : 2 })}`;
 }
 
 function LayersIcon({ color }: { color: string }) {
@@ -583,12 +591,26 @@ function LevelRow({ label, value, color }: { label: string; value: string; color
   );
 }
 
-function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number | null; color: string; maxAbs: number }) {
+function PositionBar({
+  label,
+  pct,
+  delta,
+  color,
+  maxAbs,
+  valueOverride,
+}: {
+  label: string;
+  pct: number | null;
+  delta?: number | null;
+  color: string;
+  maxAbs: number;
+  valueOverride?: string;
+}) {
   const p = pct ?? 0;
   const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
   const isPositive = p >= 0;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 76px", alignItems: "center", gap: 10 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 90px", alignItems: "center", gap: 10 }}>
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "right" }}>{label}</div>
       <div style={{ position: "relative", height: 22, borderRadius: 11, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
         <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
@@ -606,7 +628,9 @@ function PositionBar({ label, pct, color, maxAbs }: { label: string; pct: number
           />
         )}
       </div>
-      <div style={{ fontSize: 15, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>{fmtPct(pct)}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>
+        {valueOverride ?? fmtDelta(delta ?? null)}
+      </div>
     </div>
   );
 }
@@ -630,6 +654,14 @@ function PositioningCard({ row }: { row: PositioningRow }) {
   const magnetPct = pctFrom(spot, gexFlip);
   const gammaHiPct = pctFrom(spot, gammaHi);
   const gammaLoPct = pctFrom(spot, gammaLo);
+
+  // $ / point distance from live spot — recomputed from `spot` every render,
+  // so these move in real time as the scanner poll refreshes spot (30s).
+  const callDelta = deltaFrom(spot, callWall);
+  const putDelta = deltaFrom(spot, putWall);
+  const magnetDelta = deltaFrom(spot, gexFlip);
+  const gammaHiDelta = deltaFrom(spot, gammaHi);
+  const gammaLoDelta = deltaFrom(spot, gammaLo);
 
   const maxAbs = Math.max(1, Math.abs(callPct ?? 0), Math.abs(putPct ?? 0), Math.abs(magnetPct ?? 0)) * 1.15;
 
@@ -661,7 +693,7 @@ function PositioningCard({ row }: { row: PositioningRow }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "100px 1fr 76px",
+          gridTemplateColumns: "100px 1fr 90px",
           fontSize: 15,
           textTransform: "uppercase",
           letterSpacing: "0.04em",
@@ -674,11 +706,12 @@ function PositioningCard({ row }: { row: PositioningRow }) {
         <div style={{ textAlign: "right" }}>Above</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <PositionBar label="Call Wall" pct={callPct} color={HOME_THEME.green} maxAbs={maxAbs} />
-        <PositionBar label="Magnet" pct={magnetPct} color={HOME_THEME.orange} maxAbs={maxAbs} />
-        <PositionBar label="Gamma Hi" pct={gammaHiPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PositionBar label="Gamma Lo" pct={gammaLoPct} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PositionBar label="Put Wall" pct={putPct} color={HOME_THEME.red} maxAbs={maxAbs} />
+        <PositionBar label="Spot" pct={0} color={HOME_THEME.text} maxAbs={maxAbs} valueOverride={fmtPrice(spot)} />
+        <PositionBar label="Call Wall" pct={callPct} delta={callDelta} color={HOME_THEME.green} maxAbs={maxAbs} />
+        <PositionBar label="Magnet" pct={magnetPct} delta={magnetDelta} color={HOME_THEME.orange} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Hi" pct={gammaHiPct} delta={gammaHiDelta} color={LIGHT_BLUE} maxAbs={maxAbs} />
+        <PositionBar label="Gamma Lo" pct={gammaLoPct} delta={gammaLoDelta} color={LIGHT_BLUE} maxAbs={maxAbs} />
+        <PositionBar label="Put Wall" pct={putPct} delta={putDelta} color={HOME_THEME.red} maxAbs={maxAbs} />
       </div>
     </Card>
   );
