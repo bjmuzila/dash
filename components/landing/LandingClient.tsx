@@ -14,8 +14,8 @@ const FEATURES = [
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 
-// Launch: Monday July 6, 2026 at 12:00 AM ET (midnight, UTC-4 in summer)
-const LAUNCH_UTC = new Date("2026-07-06T04:00:00Z");
+// Launch: Tuesday July 7, 2026 at 12:00 AM ET (midnight, UTC-4 in summer)
+const LAUNCH_UTC = new Date("2026-07-07T04:00:00Z");
 
 function useCountdown() {
   const [parts, setParts] = useState({ d: 0, h: 0, m: 0, s: 0, done: false });
@@ -156,7 +156,7 @@ export default function LandingClient() {
             <span style={{ color: T.green, fontWeight: 800 }}>Beta is LIVE</span>
             {" · Full Launch "}
             <span style={{ color: "#E0162B", fontWeight: 800 }}>July</span>{" "}
-            <span style={{ color: "#FFFFFF", fontWeight: 800 }}>6th</span>{" "}
+            <span style={{ color: "#FFFFFF", fontWeight: 800 }}>7th</span>{" "}
             <span style={{ color: "#3C6FE0", fontWeight: 800 }}>Midnight</span>
             <span className="fireworks" aria-hidden>
               <span className="fw fw1" />
@@ -216,7 +216,7 @@ export default function LandingClient() {
           {/* Waitlist form */}
           <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
             <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
-              Beta signups open July 1, 9:30 AM ET · official launch 6/7. Sign up for the newsletter and get notified.
+              Beta signups open July 1, 9:30 AM ET · official launch July 7. Sign up for the newsletter and get notified.
             </label>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <input

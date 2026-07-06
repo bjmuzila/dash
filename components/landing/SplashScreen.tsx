@@ -5,8 +5,8 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
 const APP_NAME = (process.env.NEXT_PUBLIC_APP_NAME || "CB Edge").toUpperCase();
 
-// Beta signups open Wed Jul 1 2026, 9:30 AM ET (EDT = UTC-4 → 13:30 UTC).
-const TARGET = Date.parse("2026-07-06T04:00:00Z");
+// Full launch Tue Jul 7 2026, 12:00 AM ET (EDT = UTC-4 → 04:00 UTC).
+const TARGET = Date.parse("2026-07-07T04:00:00Z");
 const FADE = 650; // fade-out duration (ms)
 const pad = (n: number) => String(Math.max(0, n)).padStart(2, "0");
 
@@ -193,7 +193,7 @@ export default function SplashScreen() {
             fontSize: "clamp(14px,2.2vw,22px)", fontWeight: 900, letterSpacing: ".03em",
             color: "#FFFFFF",
           }}>
-            FULL LAUNCH&nbsp;&nbsp;MONDAY JULY 6&nbsp;&nbsp;12:00 AM ET
+            FULL LAUNCH&nbsp;&nbsp;TUESDAY JULY 7&nbsp;&nbsp;12:00 AM ET
           </span>
         </div>
       </div>
@@ -215,7 +215,7 @@ export default function SplashScreen() {
         🎆 <span style={{ color: "#E0162B" }}>FULL</span>{" "}
         <span style={{ color: "#FFFFFF" }}>LAUNCH</span>{" "}
         <span style={{ color: "#3C6FE0" }}>JULY</span>{" "}
-        <span style={{ color: "#E0162B" }}>6TH</span>{" "}
+        <span style={{ color: "#E0162B" }}>7TH</span>{" "}
         <span style={{ color: "#FFFFFF" }}>MIDNIGHT</span> 🎆
       </div>
 

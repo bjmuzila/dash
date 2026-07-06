@@ -161,37 +161,35 @@ async function fetchOpenInterestTheta(underlying = SYMBOL, expiration) {
 // response (pre-open / weekend) is "no update" — caller preserves prior volume.
 // Feeds netVolGEX (the Vol-Only column); without it Volume Net GEX is blank.
 // ---------------------------------------------------------------------------
-// Check Theta's calendar to confirm the market is open today.
-// Returns true if type === 'open' (full session) or 'early_close'.
-// Cached for the session — no need to re-fetch every 2 min.
-let _calendarOpenCache = null;
-async function isThetaMarketOpen() {
-  if (_calendarOpenCache !== null) return _calendarOpenCache;
-  try {
-    const json = await thetaGet('/v3/calendar/today');
-    // BUG (found 2026-07-06): this endpoint is v3 like every other one in this
-    // file, so `response` is [[...row values]] keyed by `header.format`, NOT an
-    // array of {type} objects. Reading rows[0]?.type directly on a row-ARRAY
-    // always returned undefined -> _calendarOpenCache permanently false ->
-    // fetchVolumeTheta() always bailed empty, ALL day, every day (not just off
-    // hours). rowsFromV3 does the header/format -> object mapping every other
-    // endpoint here already relies on.
-    const rows = rowsFromV3(json);
-    const type = rows[0]?.type ?? '';
-    _calendarOpenCache = type === 'open' || type === 'early_close';
-    console.log(`[CALENDAR] today type="${type}" -> marketOpen=${_calendarOpenCache}`);
-  } catch (e) {
-    console.warn('[CALENDAR] fetch failed, treating as closed:', String(e?.message || e).slice(0, 160));
-    _calendarOpenCache = false;
-  }
-  return _calendarOpenCache;
+// Check whether the index-options session is open right now.
+// FIX (2026-07-06 #2): the previous version hit a `/v3/calendar/today` REST
+// endpoint that was never actually confirmed to exist on ThetaData's v3 API —
+// any fetch failure (404/non-JSON) landed in the catch block, which set
+// _calendarOpenCache=false PERMANENTLY (cached for the session), so
+// fetchVolumeTheta() bailed empty all day regardless of the row-parsing fix
+// that went in earlier. Rather than depend on an unverified endpoint, compute
+// open/closed locally from ET weekday+time — the same approach isRthEt() /
+// isOptionsRthEt() already use successfully elsewhere in this codebase.
+// Session = 9:30-16:15 ET Mon-Fri (SPX/SPXW run 15min past the 16:00 equity
+// cash close). Does not account for market holidays — acceptable tradeoff
+// vs. a fictional network call that silently zeroed volume every day.
+function isThetaMarketOpen() {
+  const now = new Date();
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(now);
+  if (wd === 'Sat' || wd === 'Sun') return false;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
+  }).formatToParts(now);
+  const h = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  const m = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+  const mins = h * 60 + m;
+  return mins >= 9 * 60 + 30 && mins < 16 * 60 + 15; // 570 .. 975
 }
 
 async function fetchVolumeTheta(underlying = SYMBOL, expiration) {
-  // Only fetch intraday volume when Theta confirms the market is open today.
-  // If the calendar says closed/weekend, return empty so caller preserves prior.
-  const marketOpen = await isThetaMarketOpen().catch(() => false);
-  if (!marketOpen) return new Map();
+  // Only fetch intraday volume during the options session (local ET check —
+  // see isThetaMarketOpen above). Outside it, return empty so caller preserves prior.
+  if (!isThetaMarketOpen()) return new Map();
 
   const root = thetaRoot(underlying);
   const out = new Map();
@@ -764,7 +762,9 @@ class ThetaStreamClient {
 }
 
 module.exports = {
-  resetCalendarCache: () => { _calendarOpenCache = null; },
+  // No-op now: isThetaMarketOpen() computes live from ET time, no cache to clear.
+  // Kept so the existing session-rollover call site doesn't need touching.
+  resetCalendarCache: () => {},
   thetaRoot,
   thetaGet,
   rowsFromV3,

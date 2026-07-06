@@ -823,12 +823,15 @@ export function MultGreekClient({
 
   // Screenshot mode: trims each panel to ±CAPTURE_WINDOW strikes around ATM so
   // snaps/Discord shots are centered + compact. Set before capture, cleared after.
-  const CAPTURE_WINDOW = 12; // 25 strikes (ATM ± 12)
+  const CAPTURE_WINDOW = 20; // 41 strikes (ATM ± 20)
   const [captureWindow, setCaptureWindow] = useState<number | null>(null);
   const beginCapture = useCallback(() => {
     setCaptureWindow(CAPTURE_WINDOW);
-    // Wait two frames so React re-renders the trimmed rows before html2canvas runs.
-    return new Promise<void>(res => requestAnimationFrame(() => requestAnimationFrame(() => res())));
+    // Wait two frames, then a short buffer — the trimmed rows + the flex-to-
+    // block collapse below both need to fully reflow/repaint (backdrop-filter
+    // blur compositing can lag a frame or two) before html2canvas measures
+    // anything, or it captures a stale in-between layout.
+    return new Promise<void>(res => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(res, 50))));
   }, []);
   const endCapture = useCallback(() => setCaptureWindow(null), []);
 
@@ -843,7 +846,11 @@ export function MultGreekClient({
   const isCapturing = captureWindow != null;
 
   return (
-    <div ref={pageRef} style={{ ...homeShellStyle, height: isCapturing ? "auto" : "100%", overflow: isCapturing ? "visible" : "hidden" }}>
+    // display:block (not flex) during capture: a flex column's auto height
+    // should equal its children's content height too, but block stacking is
+    // completely unambiguous — no flex-basis/min-height/backdrop-filter edge
+    // case can make it measure taller than its actual visible content.
+    <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", overflow: isCapturing ? "visible" : "hidden" }}>
 
       {isStatic && (
         <div

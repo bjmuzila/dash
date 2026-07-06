@@ -113,12 +113,14 @@ export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basi
     }
     placed.sort((a, b) => a.strike - b.strike);
 
-    // Thin bars: height = a fraction of the on-screen strike spacing, capped so
-    // they never merge into a solid column.
+    // Bar thickness tracks the on-screen strike spacing so bars get thicker as
+    // the chart's Y-axis is expanded and thinner as it's contracted — no fixed
+    // px cap. 0.6x of the tightest on-screen gap guarantees bars never touch
+    // (let alone overlap) regardless of zoom level.
     let minGap = Infinity;
     for (let i = 1; i < placed.length; i++) minGap = Math.min(minGap, Math.abs(placed[i].y - placed[i - 1].y));
     if (!Number.isFinite(minGap)) minGap = 8;
-    const rowH = Math.max(1.5, Math.min(minGap * 0.6, 9));
+    const rowH = Math.max(1.5, minGap * 0.6);
 
     const maxAbs = Math.max(...placed.map((p) => Math.abs(p.net)), 1);
 

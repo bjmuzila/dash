@@ -689,35 +689,40 @@ export default function EsCandlesPage() {
     return buildVolumeProfile(todays, 1);
   }, [rows]);
 
-  // TPO box profiles: previous session + today only. Each profile's box-width
-  // scale is anchored to its own session's real chart x-range (start/end
-  // timestamps), so the boxes sit directly under that day's own candles —
-  // same idea as the volume profile above, just two of them, side by side in
-  // time instead of one sidebar.
+  // TPO box profiles: ONE for ETH (6:00pm - 9:30am ET) and ONE for RTH
+  // (9:30am - 4:00pm ET) — the most recently completed-or-forming pair, not a
+  // calendar-day split. Each profile's box-width scale is anchored to its own
+  // session's real chart x-range (fixed session boundaries, not first/last
+  // candle, so the box column fills that session's full conceptual width even
+  // while it's still forming), same idea as the volume profile above.
   const tpoProfiles = useMemo(() => {
-    if (!rows.length) return { prev: null as TpoProfile | null, today: null as TpoProfile | null };
-    const dayOf = (r: EsCandleRecord) =>
-      r.date || new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(r.timestamp));
-    const today = dayOf(rows[rows.length - 1]);
-    const days = [...new Set(rows.map(dayOf))].sort();
-    const prevDay = days.filter((d) => d < today).pop() ?? null;
-    const todayRows = rows.filter((r) => dayOf(r) === today);
-    const prevRows = prevDay ? rows.filter((r) => dayOf(r) === prevDay) : [];
+    if (!rows.length) return { eth: null as TpoProfile | null, rth: null as TpoProfile | null };
+    void clockTick; // roll the ETH/RTH window forward with the clock, like sessionLevels above
 
-    const todayProfile = buildTpoProfile(todayRows, 1, TPO_PERIOD_MS);
-    if (todayProfile) {
-      todayProfile.startTs = todayRows[0]?.timestamp ?? null;
-      todayProfile.endTs = (todayRows[todayRows.length - 1]?.timestamp ?? 0) + SLOT_MS;
-    }
-    const prevProfile = prevRows.length ? buildTpoProfile(prevRows, 1, TPO_PERIOD_MS) : null;
-    if (prevProfile) {
-      prevProfile.startTs = prevRows[0]?.timestamp ?? null;
-      // End right where today's session starts, so the profile fills exactly
-      // the previous day's own x-span on the chart.
-      prevProfile.endTs = todayRows[0]?.timestamp ?? ((prevRows[prevRows.length - 1]?.timestamp ?? 0) + SLOT_MS);
-    }
-    return { prev: prevProfile, today: todayProfile };
-  }, [rows]);
+    const now = Date.now();
+    const nowMin = etMinutes(now);
+    const etMidnight = (ts: number) => ts - etMinutes(ts) * 60_000 - (new Date(ts).getSeconds() * 1000 + new Date(ts).getMilliseconds());
+    const todayMid = etMidnight(now);
+
+    // The ET calendar day whose RTH (9:30-16:00) we're currently in or about
+    // to enter. Before 16:00 close, that's today (RTH forming or upcoming);
+    // after 16:00 close, the next RTH is tomorrow (ETH now building toward it).
+    const sessionDayMid = nowMin >= 960 ? todayMid + 86_400_000 : todayMid;
+    const rthStart = sessionDayMid + 570 * 60_000;                    // 9:30am
+    const rthEnd = sessionDayMid + 960 * 60_000;                      // 4:00pm
+    const ethStart = sessionDayMid - 86_400_000 + 18 * 60 * 60_000;   // prior-day 6:00pm
+    const ethEnd = rthStart;                                          // up to 9:30am
+
+    const ethRows = rows.filter((r) => r.timestamp >= ethStart && r.timestamp < ethEnd);
+    const rthRows = rows.filter((r) => r.timestamp >= rthStart && r.timestamp < rthEnd);
+
+    const ethProfile = ethRows.length ? buildTpoProfile(ethRows, 1, TPO_PERIOD_MS) : null;
+    if (ethProfile) { ethProfile.startTs = ethStart; ethProfile.endTs = ethEnd; }
+    const rthProfile = rthRows.length ? buildTpoProfile(rthRows, 1, TPO_PERIOD_MS) : null;
+    if (rthProfile) { rthProfile.startTs = rthStart; rthProfile.endTs = rthEnd; }
+
+    return { eth: ethProfile, rth: rthProfile };
+  }, [rows, clockTick]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
   // chart plots ES, so we offset by the live basis (esFut - spx) before drawing.
@@ -1555,8 +1560,8 @@ export default function EsCandlesPage() {
           lvlTpo(tp.val, "rgba(125,211,252,.7)", "VAL", true);
           lvlTpo(tp.mid, "rgba(248,113,113,.65)", "Mid", false);
         };
-        drawTpoProfile(tpoProfiles.prev);
-        drawTpoProfile(tpoProfiles.today);
+        drawTpoProfile(tpoProfiles.eth);
+        drawTpoProfile(tpoProfiles.rth);
       }
 
       // ── 3) MVC history as horizontal step segments (no vertical connectors) ──
@@ -1729,10 +1734,24 @@ export default function EsCandlesPage() {
     if (canvas.parentElement) ro.observe(canvas.parentElement);
     draw();
 
+    // lightweight-charts doesn't expose a price-scale (Y-axis) range-change
+    // event — dragging the right axis to expand/contract the chart vertically
+    // only fires DOM pointer/wheel events, not subscribeVisibleLogicalRangeChange
+    // (that's time-axis only). Without this, the GEX rail's bar thickness
+    // (tied to on-screen strike spacing) would lag ~5s behind a live vertical
+    // zoom/drag instead of tracking it in real time.
+    const container = chartRef.current;
+    container?.addEventListener("wheel", schedule, { passive: true });
+    container?.addEventListener("pointermove", schedule);
+    container?.addEventListener("pointerup", schedule);
+
     return () => {
       cancelAnimationFrame(raf);
       ts.unsubscribeVisibleLogicalRangeChange(schedule);
       ro.disconnect();
+      container?.removeEventListener("wheel", schedule);
+      container?.removeEventListener("pointermove", schedule);
+      container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
   }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory, showAmTbr, amTbrInfo]);
