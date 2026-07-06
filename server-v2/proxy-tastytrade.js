@@ -675,6 +675,14 @@ async function probeRest({ ticker, expiry, type, strike }) {
       theta: g.theta ?? bs?.theta ?? null,
       vega: g.vega ?? bs?.vega ?? null,
       _src: g.delta != null ? 'Theta' : 'Black-Scholes (calculated, this side)',
+      // Pure Black-Scholes values (never Theta-live), for consumers that want
+      // the BS-calculated greeks specifically regardless of Theta coverage
+      // (e.g. the Watch tracker) — same ivForBs basis used for `bs` above.
+      bsIv: ivForBs > 0 ? ivForBs : null,
+      bsDelta: bs?.delta ?? null,
+      bsGamma: bs?.gamma ?? null,
+      bsTheta: bs?.theta ?? null,
+      bsVega: bs?.vega ?? null,
     },
   };
 

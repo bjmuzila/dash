@@ -43,7 +43,10 @@ interface ProbeResult {
       Quote?: { bid?: number; ask?: number; mid?: number; mark?: number };
       Trade?: { last?: number; volume?: number };
       Summary?: { openInterest?: number; prevClose?: number };
-      Greeks?: { iv?: number; delta?: number; gamma?: number; theta?: number; vega?: number };
+      Greeks?: {
+        iv?: number; delta?: number; gamma?: number; theta?: number; vega?: number;
+        bsIv?: number; bsDelta?: number; bsGamma?: number; bsTheta?: number; bsVega?: number;
+      };
     };
     exposures?: { spot?: number; oi?: number; volume?: number };
   };
@@ -82,11 +85,14 @@ async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
     ask: num(q.ask),
     mark,
     last: num(tr.last),
-    iv: num(g.iv),
-    delta: num(g.delta),
-    gamma: num(g.gamma),
-    theta: num(g.theta),
-    vega: num(g.vega),
+    // Watch always shows Black-Scholes-calculated greeks (not raw Theta live
+    // greeks), so values never blank out on Theta gaps and stay consistent
+    // contract-to-contract. See feeds.Greeks.bs* in proxy-tastytrade.js.
+    iv: num(g.bsIv) ?? num(g.iv),
+    delta: num(g.bsDelta),
+    gamma: num(g.bsGamma),
+    theta: num(g.bsTheta),
+    vega: num(g.bsVega),
     open_interest: num(su.openInterest) ?? num(ex.oi),
     volume,
     net_prem: netPrem,

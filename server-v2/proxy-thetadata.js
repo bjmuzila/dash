@@ -169,11 +169,19 @@ async function isThetaMarketOpen() {
   if (_calendarOpenCache !== null) return _calendarOpenCache;
   try {
     const json = await thetaGet('/v3/calendar/today');
-    // Response is an array; we want the first entry's type field.
-    const rows = json?.response ?? (Array.isArray(json) ? json : []);
+    // BUG (found 2026-07-06): this endpoint is v3 like every other one in this
+    // file, so `response` is [[...row values]] keyed by `header.format`, NOT an
+    // array of {type} objects. Reading rows[0]?.type directly on a row-ARRAY
+    // always returned undefined -> _calendarOpenCache permanently false ->
+    // fetchVolumeTheta() always bailed empty, ALL day, every day (not just off
+    // hours). rowsFromV3 does the header/format -> object mapping every other
+    // endpoint here already relies on.
+    const rows = rowsFromV3(json);
     const type = rows[0]?.type ?? '';
     _calendarOpenCache = type === 'open' || type === 'early_close';
-  } catch {
+    console.log(`[CALENDAR] today type="${type}" -> marketOpen=${_calendarOpenCache}`);
+  } catch (e) {
+    console.warn('[CALENDAR] fetch failed, treating as closed:', String(e?.message || e).slice(0, 160));
     _calendarOpenCache = false;
   }
   return _calendarOpenCache;

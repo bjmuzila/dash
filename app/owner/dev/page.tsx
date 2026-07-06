@@ -285,7 +285,10 @@ function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> 
 
 // One feed-type panel: a titled card listing its key/value rows.
 function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record<string, unknown> | undefined; accent?: string }) {
-  const entries = data ? Object.entries(data) : [];
+  // bs* fields are pure-Black-Scholes values added for the Watch tracker's
+  // consumption (see proxy-tastytrade.js feeds.Greeks) — hidden here so this
+  // probe view keeps showing only the Theta-first merged greeks it always has.
+  const entries = data ? Object.entries(data).filter(([k]) => !k.startsWith("bs")) : [];
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
       <div style={{ fontSize: 18, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>{name}</div>

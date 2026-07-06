@@ -132,6 +132,79 @@ function buildVolumeProfile(
   };
 }
 
+// ── TPO (Time Price Opportunity) profile ────────────────────────────────────
+// Classic "letter chart" market profile, but rendered as light-gray boxes
+// instead of letters. Counts are TPO touches (one per 30-min period that
+// traded at a price), NOT volume — same 70%-expansion value-area algorithm as
+// buildVolumeProfile above, just fed period-touch counts instead of volume.
+const TPO_PERIOD_MS = 30 * 60_000;
+type TpoBin = { price: number; count: number };
+type TpoProfile = {
+  bins: TpoBin[];
+  maxCount: number;
+  poc: number | null;   // point of control
+  vah: number | null;   // value area high
+  val: number | null;   // value area low
+  mid: number | null;   // session range midpoint
+  startTs: number | null; // chart x-anchor: first candle of this session
+  endTs: number | null;   // chart x-anchor: where the profile's box-width ends
+};
+
+function buildTpoProfile(
+  candles: Array<{ high: number; low: number; timestamp: number }>,
+  binSize: number,
+  periodMs: number
+): TpoProfile | null {
+  if (!candles.length || !(binSize > 0)) return null;
+  const floorBin = (p: number) => Math.floor(p / binSize) * binSize;
+
+  // Collapse candles into 30-min TPO periods, tracking each period's touched range.
+  const byPeriod = new Map<number, { low: number; high: number }>();
+  let dayHigh = -Infinity, dayLow = Infinity;
+  for (const c of candles) {
+    if (c.high > dayHigh) dayHigh = c.high;
+    if (c.low < dayLow) dayLow = c.low;
+    const p = Math.floor(c.timestamp / periodMs) * periodMs;
+    const cur = byPeriod.get(p);
+    if (!cur) byPeriod.set(p, { low: c.low, high: c.high });
+    else { if (c.low < cur.low) cur.low = c.low; if (c.high > cur.high) cur.high = c.high; }
+  }
+
+  // Each period contributes at most one touch per price bin (TPO count, not volume).
+  const counts = new Map<number, number>();
+  for (const { low, high } of byPeriod.values()) {
+    const b0 = floorBin(low), b1 = floorBin(high);
+    for (let b = b0; b <= b1 + 1e-9; b += binSize) counts.set(b, (counts.get(b) ?? 0) + 1);
+  }
+  const bins: TpoBin[] = [...counts.entries()]
+    .map(([price, count]) => ({ price, count }))
+    .sort((a, b) => a.price - b.price);
+  if (!bins.length) return null;
+
+  let pocIdx = 0;
+  for (let i = 1; i < bins.length; i++) if (bins[i].count > bins[pocIdx].count) pocIdx = i;
+  const total = bins.reduce((s, b) => s + b.count, 0);
+  const target = total * 0.7;
+  let loI = pocIdx, hiI = pocIdx, acc = bins[pocIdx].count;
+  while (acc < target && (loI > 0 || hiI < bins.length - 1)) {
+    const below = loI > 0 ? bins[loI - 1].count : -1;
+    const above = hiI < bins.length - 1 ? bins[hiI + 1].count : -1;
+    if (above >= below) { hiI++; acc += Math.max(0, above); }
+    else { loI--; acc += Math.max(0, below); }
+  }
+
+  return {
+    bins,
+    maxCount: bins[pocIdx].count,
+    poc: bins[pocIdx].price,
+    vah: bins[hiI].price,
+    val: bins[loI].price,
+    mid: Number.isFinite(dayHigh) && Number.isFinite(dayLow) ? (dayHigh + dayLow) / 2 : null,
+    startTs: null,
+    endTs: null,
+  };
+}
+
 // Floor a ms timestamp to its 5-minute candle slot, returned as a UTC ms boundary
 // aligned to the candle grid (candles use raw ms flooring of /ES bars).
 // Snap snapshot timestamps to the chart's 5-minute candle grid. Snapshots
@@ -463,6 +536,7 @@ export default function EsCandlesPage() {
   };
 
   const [showProfile, setShowProfile] = useState(false);
+  const [showTpo, setShowTpo] = useState(false); // prev-day + today TPO box profile
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
@@ -514,14 +588,15 @@ export default function EsCandlesPage() {
   const OVERLAY_SETTERS: Record<string, (v: boolean) => void> = useMemo(() => ({
     heatmap: setShowHeatmap,
     profile: setShowProfile,
+    tpo: setShowTpo,
     levels: setShowLevels,
     pdhon: setShowSessions,
     bias: setShowBias,
   }), []);
   const overlayState = useMemo(() => ({
-    heatmap: showHeatmap, profile: showProfile,
+    heatmap: showHeatmap, profile: showProfile, tpo: showTpo,
     levels: showLevels, pdhon: showSessions, bias: showBias,
-  }), [showHeatmap, showProfile, showLevels, showSessions, showBias]);
+  }), [showHeatmap, showProfile, showTpo, showLevels, showSessions, showBias]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
@@ -612,6 +687,36 @@ export default function EsCandlesPage() {
     const today = rows.length ? rows[rows.length - 1].date : "";
     const todays = today ? rows.filter((r) => r.date === today) : rows;
     return buildVolumeProfile(todays, 1);
+  }, [rows]);
+
+  // TPO box profiles: previous session + today only. Each profile's box-width
+  // scale is anchored to its own session's real chart x-range (start/end
+  // timestamps), so the boxes sit directly under that day's own candles —
+  // same idea as the volume profile above, just two of them, side by side in
+  // time instead of one sidebar.
+  const tpoProfiles = useMemo(() => {
+    if (!rows.length) return { prev: null as TpoProfile | null, today: null as TpoProfile | null };
+    const dayOf = (r: EsCandleRecord) =>
+      r.date || new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(r.timestamp));
+    const today = dayOf(rows[rows.length - 1]);
+    const days = [...new Set(rows.map(dayOf))].sort();
+    const prevDay = days.filter((d) => d < today).pop() ?? null;
+    const todayRows = rows.filter((r) => dayOf(r) === today);
+    const prevRows = prevDay ? rows.filter((r) => dayOf(r) === prevDay) : [];
+
+    const todayProfile = buildTpoProfile(todayRows, 1, TPO_PERIOD_MS);
+    if (todayProfile) {
+      todayProfile.startTs = todayRows[0]?.timestamp ?? null;
+      todayProfile.endTs = (todayRows[todayRows.length - 1]?.timestamp ?? 0) + SLOT_MS;
+    }
+    const prevProfile = prevRows.length ? buildTpoProfile(prevRows, 1, TPO_PERIOD_MS) : null;
+    if (prevProfile) {
+      prevProfile.startTs = prevRows[0]?.timestamp ?? null;
+      // End right where today's session starts, so the profile fills exactly
+      // the previous day's own x-span on the chart.
+      prevProfile.endTs = todayRows[0]?.timestamp ?? ((prevRows[prevRows.length - 1]?.timestamp ?? 0) + SLOT_MS);
+    }
+    return { prev: prevProfile, today: todayProfile };
   }, [rows]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
@@ -1399,6 +1504,61 @@ export default function EsCandlesPage() {
         lvl(profile.lvn, "rgba(245,158,11,.9)", "LVN");
       }
 
+      // ── 2b) TPO box profile — previous session + today, each anchored to its
+      // own session's real x-range so the boxes sit under that day's candles.
+      if (showTpo) {
+        const drawTpoProfile = (tp: TpoProfile | null) => {
+          if (!tp || !tp.bins.length || tp.startTs == null) return;
+          const x0 = ts.timeToCoordinate((tp.startTs / 1000) as UTCTimestamp);
+          if (x0 == null) return;
+          const x1Raw = tp.endTs != null ? ts.timeToCoordinate((tp.endTs / 1000) as UTCTimestamp) : null;
+          const x1 = x1Raw != null ? x1Raw : x0 + 120;
+          const left = Math.min(x0, x1);
+          const spanW = Math.max(20, Math.abs(x1 - x0));
+          const maxCount = tp.maxCount || 1;
+          const boxW = Math.min(1.75, Math.max(0.5, (spanW * 0.9) / maxCount));
+          const boxGap = 0.5;
+
+          for (const b of tp.bins) {
+            const yTop = series.priceToCoordinate(b.price + 1);
+            const yBot = series.priceToCoordinate(b.price);
+            if (yTop == null || yBot == null) continue;
+            const top = Math.min(yTop, yBot);
+            const bh = Math.max(1, Math.abs(yBot - yTop) - 0.5);
+            const inVA = tp.val != null && tp.vah != null && b.price >= tp.val && b.price <= tp.vah;
+            if (inVA) {
+              ctx.fillStyle = "rgba(255,255,255,0.05)";
+              ctx.fillRect(left, top, spanW, bh);
+            }
+            const isPoc = tp.poc != null && Math.abs(b.price - tp.poc) < 0.5;
+            ctx.fillStyle = isPoc ? "rgba(229,231,235,0.9)" : "rgba(156,163,175,0.65)";
+            for (let i = 0; i < b.count; i++) {
+              ctx.fillRect(left + i * (boxW + boxGap), top, boxW, bh);
+            }
+          }
+
+          const lvlTpo = (price: number | null, color: string, label: string, dashed: boolean) => {
+            if (price == null) return;
+            const y = series.priceToCoordinate(price);
+            if (y == null) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            if (dashed) ctx.setLineDash([3, 3]);
+            ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + spanW, y); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = color;
+            ctx.font = "10px Inter, system-ui, sans-serif";
+            ctx.fillText(label, left + spanW + 4, y + 3);
+          };
+          lvlTpo(tp.vah, "rgba(125,211,252,.7)", "VAH", true);
+          lvlTpo(tp.poc, "rgba(251,191,36,.9)", "POC", false);
+          lvlTpo(tp.val, "rgba(125,211,252,.7)", "VAL", true);
+          lvlTpo(tp.mid, "rgba(248,113,113,.65)", "Mid", false);
+        };
+        drawTpoProfile(tpoProfiles.prev);
+        drawTpoProfile(tpoProfiles.today);
+      }
+
       // ── 3) MVC history as horizontal step segments (no vertical connectors) ──
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
@@ -1575,7 +1735,7 @@ export default function EsCandlesPage() {
       ro.disconnect();
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showLevels, mvcHistory, showAmTbr, amTbrInfo]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory, showAmTbr, amTbrInfo]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1680,6 +1840,7 @@ export default function EsCandlesPage() {
             />
           </div>
 <ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent={LIGHT_BLUE} />
+          <ToggleTile label="TPO"     on={showTpo}      onClick={() => setShowTpo((v) => !v)}       accent={LIGHT_BLUE} />
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />

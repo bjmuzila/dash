@@ -201,7 +201,7 @@ function CustomerActivityPanel() {
           <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 17 }}>No tracked activity yet</div>
         ) : (
           sorted.map((r) => (
-            <div key={r.userId} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 12, alignItems: "center" }}>
+            <div key={r.userId} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 17, alignItems: "center" }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
@@ -209,10 +209,10 @@ function CustomerActivityPanel() {
                 </div>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)" }}>{fmtRelative(r.lastSeen)} · {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}</div>
               </div>
-              <span style={{ color: T.text, fontSize: 11 }}>{fmtRelative(r.lastLogin)}</span>
-              <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 11 }}>{fmtDuration(r.approxActiveSec)}</span>
-              <span style={{ color: T.text, fontFamily: "var(--font-mono)", fontSize: 11 }}>{r.totalLoads}</span>
-              <span style={{ color: T.text, fontFamily: "var(--font-mono)", fontSize: 11 }}>{r.distinctPages}</span>
+              <span style={{ color: T.text, fontSize: 17 }}>{fmtRelative(r.lastLogin)}</span>
+              <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 17 }}>{fmtDuration(r.approxActiveSec)}</span>
+              <span style={{ color: T.text, fontFamily: "var(--font-mono)", fontSize: 17 }}>{r.totalLoads}</span>
+              <span style={{ color: T.text, fontFamily: "var(--font-mono)", fontSize: 17 }}>{r.distinctPages}</span>
               <span style={{ color: T.textSecondary, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.topPath ?? "—"}</span>
             </div>
           ))
