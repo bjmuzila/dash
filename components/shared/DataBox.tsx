@@ -205,6 +205,52 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
   }
 
+  // fitContent: DOM-based height estimates keep overshooting (some ancestor
+  // stretches the live panels row taller than its rendered rows), so guarantee
+  // "no empty space" at the bitmap level — scan the rendered pixels for the
+  // last row/column that differs from the page background and crop there.
+  if (fitContent) {
+    try {
+      const ctx = base.getContext("2d");
+      if (ctx && base.width > 4 && base.height > 4) {
+        const { width: bw, height: bh } = base;
+        const data = ctx.getImageData(0, 0, bw, bh).data;
+        // Sample the background from the bottom-right corner (blank region).
+        const ci = ((bh - 2) * bw + (bw - 2)) * 4;
+        const bgR = data[ci], bgG = data[ci + 1], bgB = data[ci + 2];
+        const isContent = (i: number) =>
+          Math.abs(data[i] - bgR) + Math.abs(data[i + 1] - bgG) + Math.abs(data[i + 2] - bgB) > 24;
+        let bottom = bh - 1;
+        outerY: for (let y = bh - 1; y >= 0; y--) {
+          for (let x = 0; x < bw; x += 2) {
+            if (isContent((y * bw + x) * 4)) { bottom = y; break outerY; }
+          }
+        }
+        let right = bw - 1;
+        outerX: for (let x = bw - 1; x >= 0; x--) {
+          for (let y = 0; y <= bottom; y += 2) {
+            if (isContent((y * bw + x) * 4)) { right = x; break outerX; }
+          }
+        }
+        const scale = window.devicePixelRatio || 1;
+        const pad = Math.round(10 * scale);
+        const newH = Math.min(bh, bottom + 1 + pad);
+        const newW = Math.min(bw, right + 1 + pad);
+        // Only re-encode if the crop actually removes something meaningful.
+        if (newH < bh - 4 || newW < bw - 4) {
+          const out = document.createElement("canvas");
+          out.width = newW;
+          out.height = newH;
+          const octx = out.getContext("2d")!;
+          octx.fillStyle = "#05080d";
+          octx.fillRect(0, 0, newW, newH);
+          octx.drawImage(base, 0, 0);
+          return out.toDataURL("image/png");
+        }
+      }
+    } catch { /* tainted canvas or getImageData failure — return uncropped */ }
+  }
+
   return base.toDataURL("image/png");
 }
 

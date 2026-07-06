@@ -190,16 +190,12 @@ function TabWithTip({ def, active, onSelect }: { def: TabDef; active: boolean; o
   const meta = SCAN_META.find((m) => m.tab === def.tab);
 
   const tip: React.CSSProperties = {
+    ...classicCardAccentStyle,
     position: "absolute",
     top: "calc(100% + 8px)",
-    width: 320,
+    width: 340,
     zIndex: 200,
-    padding: "14px 16px",
-    borderRadius: 14,
-    border: `1px solid ${HOME_THEME.border}`,
-    borderTop: `2px solid ${meta?.accent ?? HOME_THEME.cyan}`,
-    background: `radial-gradient(circle at 50% 0%, ${meta?.accent ?? HOME_THEME.cyan}14 0%, transparent 60%), ${HOME_THEME.panel}`,
-    boxShadow: "0 18px 40px rgba(0,0,0,0.5)",
+    padding: "18px 20px",
     pointerEvents: "none",
     textAlign: "left",
     whiteSpace: "normal",
@@ -212,10 +208,10 @@ function TabWithTip({ def, active, onSelect }: { def: TabDef; active: boolean; o
       <button onClick={() => onSelect(def.tab)} style={tabStyle(active, def.accent)}>{def.label}</button>
       {hover && meta && (
         <div role="tooltip" style={tip}>
-          <div style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text, marginBottom: 4 }}>{meta.title}</div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: meta.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>{meta.scope}</div>
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 8 }}>{meta.what}</div>
-          <div style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
+          <div style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text, marginBottom: 6 }}>{meta.title}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: meta.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>{meta.scope}</div>
+          <div style={{ fontSize: 17, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>{meta.what}</div>
+          <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
             <span style={{ color: meta.accent, fontWeight: 800 }}>Tells you: </span>{meta.tells}
           </div>
         </div>

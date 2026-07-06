@@ -432,9 +432,9 @@ function PremarketCard() {
   // Monday pre-open, or the prior session after 4pm) — show the "coming" message.
   const nextDate = nextPremarketDate();
   const isStale = sumDate !== nextDate;
-  const emptyMsg = isStale && sumDate
-    ? `Coming 8:00 AM ET for ${nextDate}.`
-    : "No premarket summary yet — generates ~8am ET.";
+  // Bullets show only 08:00–16:00 ET (isStale rolls to the next session at 4pm).
+  // Outside that window — before 8am, after the 4pm close, weekends — show this.
+  const emptyMsg = "Summary will be up at 8:00 AM Eastern.";
   const g = gapData?.gap ?? null;
   const gapPts = g?.gap_pts ?? null;
   const up = (gapPts ?? 0) > 0;
