@@ -1174,10 +1174,13 @@ export default function OptionsChainPage() {
           // Shared strike axis: ONE strike column on the left, then one
           // value-only column per expiration. Row N = same strike everywhere.
           const STRIKE_COL = 64;
+          const VALUE_COL = 82; // fixed width — never lets rows compress into 2 lines
           return (
           <div style={{
             display: "grid",
-            gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
+            gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, ${VALUE_COL}px)`,
+            width: `max-content`,
+            minWidth: "100%",
             borderRadius: 12,
             overflow: "hidden",
             border: `1px solid ${HT.border}`,
@@ -1256,6 +1259,7 @@ export default function OptionsChainPage() {
                     borderBottom: isATM ? "2px solid #ffffff" : undefined,
                     display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
                     cursor: emTag ? "help" : undefined,
+                    whiteSpace: "nowrap", overflow: "hidden",
                   }}>
                     {emTag && (
                       <span style={{
@@ -1306,6 +1310,7 @@ export default function OptionsChainPage() {
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
                           boxShadow: atmShadow,
+                          whiteSpace: "nowrap", overflow: "hidden",
                           ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                         }}
                       >

@@ -22,17 +22,17 @@ export default function OwnerHubPage() {
   return (
     <div style={homeShellStyle}>
       <div style={homeHeaderStyle}>
-        <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: "0.01em", color: HOME_THEME.text }}>
+        <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "0.01em", color: HOME_THEME.text }}>
           Owner Hub
         </span>
-        <span style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.6 }}>
+        <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
           Everything behind the owner gate
         </span>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 16 }}>
         <div style={{ ...classicCardAccentStyle, padding: "16px 18px" }}>
-          <p style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
+          <p style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
             All routes under /owner are gated once by the owner layout. Add a new page under
             app/owner/ and it is automatically owner-only and listed in the sidebar config.
           </p>
@@ -40,7 +40,7 @@ export default function OwnerHubPage() {
 
         {OWNER_SIDEBAR_GROUPS.map((group) => (
           <div key={group.label} style={{ ...classicCardAccentStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE }}>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE }}>
               {group.label}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 10 }}>
@@ -62,10 +62,10 @@ export default function OwnerHubPage() {
                       border: `1px solid ${LIGHT_BLUE}33`,
                     }}
                   >
-                    <span aria-hidden style={{ fontSize: 17, width: 20, textAlign: "center", color: LIGHT_BLUE }}>
+                    <span aria-hidden style={{ fontSize: 15, width: 20, textAlign: "center", color: LIGHT_BLUE }}>
                       {link.glyph}
                     </span>
-                    <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                    <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>
                       {link.label}
                     </span>
                   </Link>

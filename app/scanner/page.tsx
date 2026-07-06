@@ -1145,6 +1145,17 @@ function WatchThisScanner() {
   const [addStatus, setAddStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [adding, setAdding] = useState(false);
 
+  // When this page is iframed inside the GexDock drawer (?embed=1), internal
+  // links must break out to the top-level window (target="_top") instead of
+  // navigating inside the iframe — otherwise the destination page renders its
+  // own full chrome (GlobalToolbar + sidebar + another GexDock) nested inside
+  // the already-embedded drawer.
+  const [isEmbed, setIsEmbed] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setIsEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
+  }, []);
+
   const addTicker = useCallback(async () => {
     const symbol = newTicker.trim().toUpperCase();
     if (!symbol) return;
@@ -1252,7 +1263,10 @@ function WatchThisScanner() {
               backdropFilter: "blur(20px)",
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-                <span style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text }}>{r.symbol}</span>
+                <span style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text }}>{r.symbol}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, opacity: 0.75 }}>${r.spot.toFixed(2)}</span>
+                </span>
                 <span style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
               </div>
               <div style={{ fontSize: 15, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
@@ -1264,7 +1278,12 @@ function WatchThisScanner() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>{fmtB(r.gex_value)}</span>
-                <a href={chainHref} style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
+                <a
+                  href={chainHref}
+                  target={isEmbed ? "_top" : undefined}
+                  rel={isEmbed ? "noopener" : undefined}
+                  style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}
+                >
                   View chain →
                 </a>
               </div>

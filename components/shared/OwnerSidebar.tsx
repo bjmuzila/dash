@@ -140,7 +140,7 @@ export default function OwnerSidebar() {
         <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
             style={{
-              fontSize: 18,
+              fontSize: 16,
               fontWeight: 800,
               letterSpacing: "0.14em",
               textTransform: "uppercase",
@@ -162,7 +162,7 @@ export default function OwnerSidebar() {
                   gap: 8,
                   padding: "8px 10px",
                   borderRadius: 8,
-                  fontSize: 17,
+                  fontSize: 15,
                   fontWeight: here ? 800 : 600,
                   textDecoration: "none",
                   whiteSpace: "nowrap",

@@ -161,38 +161,17 @@ async function fetchOpenInterestTheta(underlying = SYMBOL, expiration) {
 // response (pre-open / weekend) is "no update" — caller preserves prior volume.
 // Feeds netVolGEX (the Vol-Only column); without it Volume Net GEX is blank.
 // ---------------------------------------------------------------------------
-// Check whether the index-options session is open right now.
-// FIX (2026-07-06 #2): the previous version hit a `/v3/calendar/today` REST
-// endpoint that was never actually confirmed to exist on ThetaData's v3 API —
-// any fetch failure (404/non-JSON) landed in the catch block, which set
-// _calendarOpenCache=false PERMANENTLY (cached for the session), so
-// fetchVolumeTheta() bailed empty all day regardless of the row-parsing fix
-// that went in earlier. Rather than depend on an unverified endpoint, compute
-// open/closed locally from ET weekday+time — the same approach isRthEt() /
-// isOptionsRthEt() already use successfully elsewhere in this codebase.
-// Session = 9:30-16:15 ET Mon-Fri (SPX/SPXW run 15min past the 16:00 equity
-// cash close). Does not account for market holidays — acceptable tradeoff
-// vs. a fictional network call that silently zeroed volume every day.
-function isThetaMarketOpen() {
-  const now = new Date();
-  const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(now);
-  if (wd === 'Sat' || wd === 'Sun') return false;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
-  }).formatToParts(now);
-  const h = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
-  const m = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
-  const mins = h * 60 + m;
-  return mins >= 9 * 60 + 30 && mins < 16 * 60 + 15; // 570 .. 975
-}
-
+// FIX (2026-07-06 #3): SPX/SPXW are NOT gated to the 9:30-16:15 equity-style
+// cash session like single-name options — Cboe runs SPX/VIX options on Global
+// Trading Hours, effectively Sun ~8pm ET through Fri ~4:15pm ET, nearly 24x5.
+// Both prior versions here (a `/v3/calendar/today` call that always failed
+// closed, then a hardcoded 9:30-16:15 Mon-Fri clock check) wrongly zeroed
+// volume outside a narrow equity RTH window that doesn't apply to this
+// product. Dropped the gate entirely — same as fetchOpenInterestTheta/
+// fetchGreeksTheta, which have never had one. A genuinely quiet moment (the
+// short daily maintenance gap) just returns empty rows, already handled below
+// as "no update, preserve prior" — no need to pre-guess it in JS.
 async function fetchVolumeTheta(underlying = SYMBOL, expiration) {
-  // Only fetch intraday volume during the options session (local ET check —
-  // see isThetaMarketOpen above). Outside it, return empty so caller preserves prior.
-  const open = isThetaMarketOpen();
-  console.log(`[VOL_DEBUG] isThetaMarketOpen=${open} exp=${expiration}`);
-  if (!open) return new Map();
-
   const root = thetaRoot(underlying);
   const out = new Map();
   const json = await thetaGet(

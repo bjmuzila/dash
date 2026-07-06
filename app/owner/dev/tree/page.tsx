@@ -33,10 +33,10 @@ export default function TreePage() {
           🌳
         </div>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.accent }}>
+          <h1 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: C.accent }}>
             Bzila Architecture
           </h1>
-          <div style={{ color: C.dim, fontSize: 17 }}>Project Structure Analysis · live scan</div>
+          <div style={{ color: C.dim, fontSize: 15 }}>Project Structure Analysis · live scan</div>
         </div>
       </div>
 
@@ -60,7 +60,7 @@ export default function TreePage() {
               padding: "16px 18px",
             }}
           >
-            <div style={{ color: C.dim, fontSize: 17, marginBottom: 6 }}>{s.label}</div>
+            <div style={{ color: C.dim, fontSize: 15, marginBottom: 6 }}>{s.label}</div>
             <div style={{ fontSize: 26, fontWeight: 800, color: C.accent }}>{s.value}</div>
           </div>
         ))}
@@ -79,7 +79,7 @@ export default function TreePage() {
             <div
               style={{
                 display: "flex", alignItems: "center", gap: 8, marginBottom: 12,
-                fontSize: 18, fontWeight: 700, color: C.accent,
+                fontSize: 16, fontWeight: 700, color: C.accent,
               }}
             >
               <span style={{ width: 8, height: 8, borderRadius: 99, background: C.accent }} />
@@ -95,7 +95,7 @@ export default function TreePage() {
                     borderRadius: 18, padding: "14px 16px",
                   }}
                 >
-                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10, display: "flex", gap: 8 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10, display: "flex", gap: 8 }}>
                     <span>{card.icon}</span>
                     <span style={{ color: C.accent }}>{card.title}</span>
                     <span style={{ marginLeft: "auto", color: C.dim, fontWeight: 400, fontSize: 12 }}>

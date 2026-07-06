@@ -689,15 +689,15 @@ export default function EsCandlesPage() {
     return buildVolumeProfile(todays, 1);
   }, [rows]);
 
-  // TPO box profiles: ONE for ETH (6:00pm - 9:30am ET) and ONE for RTH
-  // (9:30am - 4:00pm ET) — the most recently completed-or-forming pair, not a
-  // calendar-day split. Each profile's box-width scale is anchored to its own
-  // session's real chart x-range (fixed session boundaries, not first/last
-  // candle, so the box column fills that session's full conceptual width even
-  // while it's still forming), same idea as the volume profile above.
+  // TPO box profiles: a running ETH → RTH → ETH → RTH strip covering the past
+  // day + the current day (4 profiles), each anchored to its own fixed session
+  // window (6:00pm-9:30am ET for ETH, 9:30am-4:00pm ET for RTH) so the box
+  // column fills that session's full conceptual width on the chart even while
+  // still forming — same idea as the volume profile above, just one per
+  // session instead of one sidebar.
   const tpoProfiles = useMemo(() => {
-    if (!rows.length) return { eth: null as TpoProfile | null, rth: null as TpoProfile | null };
-    void clockTick; // roll the ETH/RTH window forward with the clock, like sessionLevels above
+    if (!rows.length) return [] as TpoProfile[];
+    void clockTick; // roll the window forward with the clock, like sessionLevels above
 
     const now = Date.now();
     const nowMin = etMinutes(now);
@@ -708,20 +708,26 @@ export default function EsCandlesPage() {
     // to enter. Before 16:00 close, that's today (RTH forming or upcoming);
     // after 16:00 close, the next RTH is tomorrow (ETH now building toward it).
     const sessionDayMid = nowMin >= 960 ? todayMid + 86_400_000 : todayMid;
-    const rthStart = sessionDayMid + 570 * 60_000;                    // 9:30am
-    const rthEnd = sessionDayMid + 960 * 60_000;                      // 4:00pm
-    const ethStart = sessionDayMid - 86_400_000 + 18 * 60 * 60_000;   // prior-day 6:00pm
-    const ethEnd = rthStart;                                          // up to 9:30am
+    // Two session-days — yesterday's and today's (current/most-recent) — each
+    // contributing an ETH then an RTH profile, oldest to newest.
+    const dayMids = [sessionDayMid - 86_400_000, sessionDayMid];
 
-    const ethRows = rows.filter((r) => r.timestamp >= ethStart && r.timestamp < ethEnd);
-    const rthRows = rows.filter((r) => r.timestamp >= rthStart && r.timestamp < rthEnd);
+    const sessions: TpoProfile[] = [];
+    for (const dMid of dayMids) {
+      const rthStart = dMid + 570 * 60_000;                  // 9:30am
+      const rthEnd = dMid + 960 * 60_000;                     // 4:00pm
+      const ethStart = dMid - 86_400_000 + 18 * 60 * 60_000;  // prior-day 6:00pm
+      const ethEnd = rthStart;                                // up to 9:30am
 
-    const ethProfile = ethRows.length ? buildTpoProfile(ethRows, 1, TPO_PERIOD_MS) : null;
-    if (ethProfile) { ethProfile.startTs = ethStart; ethProfile.endTs = ethEnd; }
-    const rthProfile = rthRows.length ? buildTpoProfile(rthRows, 1, TPO_PERIOD_MS) : null;
-    if (rthProfile) { rthProfile.startTs = rthStart; rthProfile.endTs = rthEnd; }
+      const ethRows = rows.filter((r) => r.timestamp >= ethStart && r.timestamp < ethEnd);
+      const ethProfile = ethRows.length ? buildTpoProfile(ethRows, 1, TPO_PERIOD_MS) : null;
+      if (ethProfile) { ethProfile.startTs = ethStart; ethProfile.endTs = ethEnd; sessions.push(ethProfile); }
 
-    return { eth: ethProfile, rth: rthProfile };
+      const rthRows = rows.filter((r) => r.timestamp >= rthStart && r.timestamp < rthEnd);
+      const rthProfile = rthRows.length ? buildTpoProfile(rthRows, 1, TPO_PERIOD_MS) : null;
+      if (rthProfile) { rthProfile.startTs = rthStart; rthProfile.endTs = rthEnd; sessions.push(rthProfile); }
+    }
+    return sessions;
   }, [rows, clockTick]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
@@ -1560,8 +1566,7 @@ export default function EsCandlesPage() {
           lvlTpo(tp.val, "rgba(125,211,252,.7)", "VAL", true);
           lvlTpo(tp.mid, "rgba(248,113,113,.65)", "Mid", false);
         };
-        drawTpoProfile(tpoProfiles.eth);
-        drawTpoProfile(tpoProfiles.rth);
+        for (const tp of tpoProfiles) drawTpoProfile(tp);
       }
 
       // ── 3) MVC history as horizontal step segments (no vertical connectors) ──

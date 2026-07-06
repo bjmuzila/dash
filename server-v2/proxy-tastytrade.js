@@ -2140,13 +2140,15 @@ class TastytradeProxy {
     if (updated) console.log(`[VOL][theta] refreshed volume for ${updated}/${active.length} strikes`);
   }
 
-  /** Self-rescheduling volume refresh. Runs during the options session only
-   *  (9:30-16:15 ET — SPX/SPXW trade 15min past isRthEt()'s 16:00 equity cash
-   *  close, so using isRthEt() here was cutting volume off early); pauses when idle. */
+  /** Self-rescheduling volume refresh. FIX 2026-07-06: no longer gated to any
+   *  equity-style RTH window — SPX/SPXW run on Cboe Global Trading Hours
+   *  (~Sun 8pm ET through Fri 4:15pm ET, nearly 24x5), not the 9:30-16:00/16:15
+   *  single-name options session. fetchVolumeTheta's own empty-response
+   *  handling already covers the brief daily maintenance gap. Pauses when idle. */
   _scheduleVolRefresh() {
     if (this.volTimer) { clearTimeout(this.volTimer); this.volTimer = null; }
     this.volTimer = setTimeout(async () => {
-      if (!this.idle && isOptionsRthEt()) {
+      if (!this.idle) {
         try { await this._refreshVolume(); } catch {}
       }
       this._scheduleVolRefresh();
