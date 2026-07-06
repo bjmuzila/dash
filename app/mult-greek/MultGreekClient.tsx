@@ -850,7 +850,12 @@ export function MultGreekClient({
     // should equal its children's content height too, but block stacking is
     // completely unambiguous — no flex-basis/min-height/backdrop-filter edge
     // case can make it measure taller than its actual visible content.
-    <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", overflow: isCapturing ? "visible" : "hidden" }}>
+    // width:fit-content during capture: the shell otherwise stays pinned to the
+    // full viewport width while the panels collapse to content width, so the
+    // exported PNG kept a huge black void to the right (captureElement crops to
+    // el.scrollWidth = shell width). Hugging the widest child (the panels row)
+    // makes the toolbar + crop match the actual content width.
+    <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", width: isCapturing ? "fit-content" : "100%", minWidth: isCapturing ? "min-content" : undefined, overflow: isCapturing ? "visible" : "hidden" }}>
 
       {isStatic && (
         <div
@@ -936,8 +941,8 @@ export function MultGreekClient({
         {!isStatic && (
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         )}
-        <BoxSnapBtn targetRef={pageRef} label="📷" onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
-        <BoxDiscordBtn targetRef={pageRef} onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        <BoxSnapBtn targetRef={pageRef} label="📷" fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
+        <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>
       </div>
 

@@ -112,6 +112,8 @@ async function ensureSchema() {
     );
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_far_cb_watch_date ON far_cb_watch (date, otm_pct DESC);`);
+  // Vol-only net GEX at the same flagged strike (companion to gex_value = OI+Vol).
+  await p.query(`ALTER TABLE far_cb_watch ADD COLUMN IF NOT EXISTS gex_value_vol DOUBLE PRECISION;`);
 
   // Persistent outcome log — one row per (symbol, strike, expiry) ever flagged.
   // Not a win/loss grade, just the observed result: did spot ever reach that
@@ -243,7 +245,7 @@ async function scanTicker(symbol) {
       for (const r of gexRows) {
         const val = oiVolNet(r);
         if (!best || Math.abs(val) > Math.abs(best.gexValue)) {
-          best = { strike: r.strike, expiry, gexValue: val, dteDays: daysBetween(today, expiry) };
+          best = { strike: r.strike, expiry, gexValue: val, gexValueVol: Number(r.netVolGEX ?? 0), dteDays: daysBetween(today, expiry) };
         }
       }
     }
@@ -260,12 +262,13 @@ async function scanTicker(symbol) {
 async function upsertOrClear(p, date, symbol, result) {
   if (result && result.otmPct > OTM_THRESHOLD_PCT) {
     await p.query(
-      `INSERT INTO far_cb_watch (date, symbol, strike, expiry, gex_value, spot, otm_pct, dte_days, ts)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+      `INSERT INTO far_cb_watch (date, symbol, strike, expiry, gex_value, gex_value_vol, spot, otm_pct, dte_days, ts)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
        ON CONFLICT (date, symbol) DO UPDATE SET
          strike = EXCLUDED.strike, expiry = EXCLUDED.expiry, gex_value = EXCLUDED.gex_value,
+         gex_value_vol = EXCLUDED.gex_value_vol,
          spot = EXCLUDED.spot, otm_pct = EXCLUDED.otm_pct, dte_days = EXCLUDED.dte_days, ts = now()`,
-      [date, symbol, result.strike, result.expiry, result.gexValue, result.spot, result.otmPct, result.dteDays]
+      [date, symbol, result.strike, result.expiry, result.gexValue, result.gexValueVol ?? null, result.spot, result.otmPct, result.dteDays]
     );
     // Log this (symbol, strike, expiry) once — first time it's ever flagged.
     // Later sweeps that re-flag the same triple are no-ops here (ON CONFLICT

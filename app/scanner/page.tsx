@@ -161,6 +161,69 @@ function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
   );
 }
 
+// ── tab bar with hover info (mirrors the Overview cards) ──────────────────────
+
+type TabDef = { tab: MainTab; label: string; accent: string; align?: "right" };
+
+const TAB_DEFS: TabDef[] = [
+  { tab: "overview",      label: "Overview",            accent: HOME_THEME.cyan },
+  { tab: "gex",           label: "GEX Scanner",         accent: HOME_THEME.cyan },
+  { tab: "greeks",        label: "Greeks Sensitivity",  accent: HOME_THEME.cyan },
+  { tab: "volpin",        label: "Vol Pin",             accent: HOME_THEME.purple },
+  { tab: "strike",        label: "Strike Query",        accent: HOME_THEME.cyan },
+  { tab: "oi",            label: "OI Change",           accent: HOME_THEME.orange },
+  { tab: "watch",         label: "Watch This",          accent: LIGHT_BLUE, align: "right" },
+  { tab: "marketquality", label: "Market Quality",      accent: HOME_THEME.orange, align: "right" },
+  { tab: "balance",       label: "Balance / Imbalance", accent: LIGHT_BLUE, align: "right" },
+];
+
+const tabStyle = (active: boolean, accent: string = HOME_THEME.cyan): React.CSSProperties => ({
+  padding: "8px 20px", borderRadius: 8, fontSize: 15, cursor: "pointer", fontWeight: 700,
+  border: `1px solid ${active ? accent : "rgba(255,255,255,0.1)"}`,
+  background: active ? (accent === HOME_THEME.cyan ? "rgba(33,158,188,0.15)" : `${accent}22`) : "transparent",
+  color: active ? HOME_THEME.text : "rgba(255,255,255,0.55)",
+  transition: "all 0.15s",
+});
+
+function TabWithTip({ def, active, onSelect }: { def: TabDef; active: boolean; onSelect: (t: MainTab) => void }) {
+  const [hover, setHover] = useState(false);
+  const meta = SCAN_META.find((m) => m.tab === def.tab);
+
+  const tip: React.CSSProperties = {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    width: 320,
+    zIndex: 200,
+    padding: "14px 16px",
+    borderRadius: 14,
+    border: `1px solid ${HOME_THEME.border}`,
+    borderTop: `2px solid ${meta?.accent ?? HOME_THEME.cyan}`,
+    background: `radial-gradient(circle at 50% 0%, ${meta?.accent ?? HOME_THEME.cyan}14 0%, transparent 60%), ${HOME_THEME.panel}`,
+    boxShadow: "0 18px 40px rgba(0,0,0,0.5)",
+    pointerEvents: "none",
+    textAlign: "left",
+    whiteSpace: "normal",
+  };
+  if (def.align === "right") tip.right = 0; else tip.left = 0;
+
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}
+         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button onClick={() => onSelect(def.tab)} style={tabStyle(active, def.accent)}>{def.label}</button>
+      {hover && meta && (
+        <div role="tooltip" style={tip}>
+          <div style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text, marginBottom: 4 }}>{meta.title}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: meta.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>{meta.scope}</div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 8 }}>{meta.what}</div>
+          <div style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
+            <span style={{ color: meta.accent, fontWeight: 800 }}>Tells you: </span>{meta.tells}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1110,6 +1173,7 @@ type WatchRow = {
   strike: number;
   expiry: string;
   gex_value: number;
+  gex_value_vol?: number | null;
   spot: number;
   otm_pct: number;
   dte_days: number;
@@ -1264,8 +1328,8 @@ function WatchThisScanner() {
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
                 <span style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                  <span style={{ fontWeight: 800, fontSize: 18, color: HOME_THEME.text }}>{r.symbol}</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, opacity: 0.75 }}>${r.spot.toFixed(2)}</span>
+                  <span style={{ fontWeight: 800, fontSize: 18, color: up ? HOME_THEME.green : HOME_THEME.red }}>{r.symbol}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red, opacity: 0.85 }}>${r.spot.toFixed(2)}</span>
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
               </div>
@@ -1277,7 +1341,16 @@ function WatchThisScanner() {
                 farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>{fmtB(r.gex_value)}</span>
+                <span style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
+                    <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600, fontSize: 12 }}>OI+VOL </span>
+                    {fmtB(r.gex_value)}
+                  </span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: (r.gex_value_vol ?? 0) >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                    <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600, fontSize: 12 }}>VOL </span>
+                    {r.gex_value_vol != null ? fmtB(r.gex_value_vol) : "—"}
+                  </span>
+                </span>
                 <a
                   href={chainHref}
                   target={isEmbed ? "_top" : undefined}
@@ -1886,47 +1959,13 @@ function BalanceImbalanceScanner() {
 export default function ScannerPage() {
   const [tab, setTab] = useState<MainTab>("overview");
 
-  const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding: "8px 20px", borderRadius: 8, fontSize: 15, cursor: "pointer", fontWeight: 700,
-    border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
-    background: active ? "rgba(33,158,188,0.15)" : "transparent",
-    color: active ? HOME_THEME.text : "rgba(255,255,255,0.55)",
-    transition: "all 0.15s",
-  });
-
   return (
     <PageShell>
-      {/* Top-level tabs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
-        <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
-        <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
-        <button onClick={() => setTab("greeks")} style={tabStyle(tab === "greeks")}>Greeks Sensitivity</button>
-        <button onClick={() => setTab("volpin")} style={{
-          ...tabStyle(tab === "volpin"),
-          border: `1px solid ${tab === "volpin" ? HOME_THEME.purple : "rgba(255,255,255,0.1)"}`,
-          background: tab === "volpin" ? `${HOME_THEME.purple}22` : "transparent",
-        }}>Vol Pin</button>
-        <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
-        <button onClick={() => setTab("oi")} style={{
-          ...tabStyle(tab === "oi"),
-          border: `1px solid ${tab === "oi" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "oi" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>OI Change</button>
-        <button onClick={() => setTab("watch")} style={{
-          ...tabStyle(tab === "watch"),
-          border: `1px solid ${tab === "watch" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "watch" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>Watch This</button>
-        <button onClick={() => setTab("marketquality")} style={{
-          ...tabStyle(tab === "marketquality"),
-          border: `1px solid ${tab === "marketquality" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "marketquality" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>Market Quality</button>
-        <button onClick={() => setTab("balance")} style={{
-          ...tabStyle(tab === "balance"),
-          border: `1px solid ${tab === "balance" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "balance" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>Balance / Imbalance</button>
+      {/* Top-level tabs — hover any tab to see what that scanner does */}
+      <div style={{ position: "relative", zIndex: 60, display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+        {TAB_DEFS.map((def) => (
+          <TabWithTip key={def.tab} def={def} active={tab === def.tab} onSelect={setTab} />
+        ))}
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}

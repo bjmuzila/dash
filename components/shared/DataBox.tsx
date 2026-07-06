@@ -23,7 +23,7 @@ function useIsOwner(): boolean {
 //    Measure the table's scrollHeight and set an explicit px height instead.
 //  • onclone strips external <link>/<style> so html2canvas never refetches a
 //    (sometimes 404'ing) stylesheet that can abort the render.
-async function captureElement(el: HTMLElement, title?: string): Promise<string> {
+async function captureElement(el: HTMLElement, title?: string, fitContent = false): Promise<string> {
   const titleText = title && title.trim() ? title : "SPX GEX";
   // Measure the true content height of the scrollable body so the capture wraps
   // the data tightly (no empty space) without collapsing rows to zero.
@@ -84,6 +84,15 @@ async function captureElement(el: HTMLElement, title?: string): Promise<string> 
       h += ch.scrollHeight > ch.clientHeight ? ch.scrollHeight : ch.offsetHeight;
     });
     contentH = h || el.scrollHeight;
+  }
+  // fitContent mode (element hugs its content during capture, e.g. mult-greek
+  // screenshot mode): measure the REAL rendered content box — bottom of the
+  // last child relative to the element's top — instead of the child-sum
+  // heuristic, which can overshoot and leave a blank void below the data.
+  if (fitContent) {
+    const r = el.getBoundingClientRect();
+    const last = el.lastElementChild?.getBoundingClientRect();
+    if (last && last.bottom > r.top) contentH = Math.ceil(last.bottom - r.top);
   }
   // Reserve room for the title band for every path. Canvas charts used to skip
   // this (band overlaid the top of the bitmap instead), back when html2canvas
@@ -258,14 +267,14 @@ function IconX({ size = 10 }: { size?: number }) {
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
 /** Screenshot the target element and copy PNG to clipboard. */
-export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string; onBeforeCapture?: () => void | Promise<void>; onAfterCapture?: () => void }) {
+export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, fitContent = false }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string; onBeforeCapture?: () => void | Promise<void>; onAfterCapture?: () => void; /** Element hugs its content during capture — crop the PNG to the real content box. */ fitContent?: boolean }) {
   const [s, set] = useState<BtnState>("idle");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
       await onBeforeCapture?.();
-      const img = await captureElement(targetRef.current, title);
+      const img = await captureElement(targetRef.current, title, fitContent);
       // Convert base64 data URL → Blob → ClipboardItem
       const base64 = img.replace(/^data:image\/\w+;base64,/, "");
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
@@ -274,7 +283,7 @@ export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture }
       set("ok");
     } catch (e) { console.error("[snap] capture failed:", e); set("err"); }
     finally { onAfterCapture?.(); setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, title, onBeforeCapture, onAfterCapture]);
+  }, [s, targetRef, title, onBeforeCapture, onAfterCapture, fitContent]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
@@ -295,6 +304,7 @@ export function BoxDiscordBtn({
   title,
   onBeforeCapture,
   onAfterCapture,
+  fitContent = false,
 }: {
   targetRef: RefObject<HTMLElement | null>;
   label?: string;
@@ -306,6 +316,8 @@ export function BoxDiscordBtn({
   onBeforeCapture?: () => void | Promise<void>;
   /** Run right after capture — restore the pre-capture view. */
   onAfterCapture?: () => void;
+  /** Element hugs its content during capture — crop the PNG to the real content box. */
+  fitContent?: boolean;
 }) {
   const [s, set] = useState<BtnState>("idle");
   const isOwner = useIsOwner();
@@ -314,14 +326,14 @@ export function BoxDiscordBtn({
     set("busy");
     try {
       await onBeforeCapture?.();
-      const img = await captureElement(targetRef.current, title);
+      const img = await captureElement(targetRef.current, title, fitContent);
       const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
       const content = message ?? `📸 **${label || "Panel"}** — ${now} ET`;
       await postToDiscord(img, content);
       set("ok");
     } catch { set("err"); }
     finally { onAfterCapture?.(); setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, label, message, title, onBeforeCapture, onAfterCapture]);
+  }, [s, targetRef, label, message, title, onBeforeCapture, onAfterCapture, fitContent]);
 
   // Discord share is owner-only (cosmetic gate).
   if (!isOwner) return null;

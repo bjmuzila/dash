@@ -1215,7 +1215,7 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
             const { rows } = await p.query(
-              `SELECT symbol, strike, expiry, gex_value, spot, otm_pct, dte_days, date
+              `SELECT symbol, strike, expiry, gex_value, gex_value_vol, spot, otm_pct, dte_days, date
                FROM far_cb_watch
                WHERE date = (SELECT MAX(date) FROM far_cb_watch)
                ORDER BY otm_pct DESC
