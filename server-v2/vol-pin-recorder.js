@@ -184,12 +184,19 @@ async function snapshotTicker(symbol, date, p) {
   if (!(spot > 0)) { console.warn(`[vol-pin] ${symbol}: no spot, skipping`); return; }
 
   // Front expiry.
-  const chain = await fetchChainTheta(symbol).catch(() => null);
+  const chain = await fetchChainTheta(symbol).catch((e) => {
+    console.warn(`[vol-pin] ${symbol}: chain fetch error — ${e.message}`);
+    return null;
+  });
   if (!chain?.expirations?.length) { console.warn(`[vol-pin] ${symbol}: no expirations`); return; }
   const expiry = chain.expirations[0];
 
   // Greeks for ATM IV.
-  const greekMap = await fetchGreeksTheta(symbol, expiry).catch(() => new Map());
+  const greekMap = await fetchGreeksTheta(symbol, expiry).catch((e) => {
+    console.warn(`[vol-pin] ${symbol}: greeks fetch error (expiry ${expiry}) — ${e.message}`);
+    return new Map();
+  });
+  if (!greekMap.size) console.warn(`[vol-pin] ${symbol}: greeks map empty for expiry ${expiry}`);
   let bestDelta = Infinity, atm_strike = 0, atm_call_iv = 0, atm_put_iv = 0;
   for (const [key, g] of greekMap) {
     const [, strikeStr, type] = key.split('|');
@@ -214,7 +221,10 @@ async function snapshotTicker(symbol, date, p) {
   if (!(atm_iv > 0)) { console.warn(`[vol-pin] ${symbol}: no ATM IV`); return; }
 
   // OI → pin strike (highest OI within ±PIN_SEARCH_PCT of spot).
-  const oiMap = await fetchOpenInterestTheta(symbol, expiry).catch(() => new Map());
+  const oiMap = await fetchOpenInterestTheta(symbol, expiry).catch((e) => {
+    console.warn(`[vol-pin] ${symbol}: OI fetch error (expiry ${expiry}) — ${e.message}`);
+    return new Map();
+  });
   let pin_strike = 0, pin_strike_oi = 0;
   const lo = spot * (1 - PIN_SEARCH_PCT), hi = spot * (1 + PIN_SEARCH_PCT);
   for (const [key, oi] of oiMap) {
