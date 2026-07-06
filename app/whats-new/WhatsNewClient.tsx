@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { HOME_THEME } from "@/components/shared/homeTheme";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 type Entry = { date: string; items: string[] };
 
@@ -24,6 +25,31 @@ const COMING_SOON: { label: string; eta?: string; icon: string }[] = [
 
 export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
   const [tab, setTab] = useState<"updates" | "coming-soon">("updates");
+  const [localEntries, setLocalEntries] = useState(entries);
+
+  // Same owner check as components/shared/NavMenu.tsx: compare the signed-in
+  // user's id against the build-time-baked owner id. UI-only — the actual
+  // delete is re-checked server-side in app/api/whats-new/route.ts.
+  const { user } = useAuth();
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = !!ownerId && user?.id === ownerId;
+
+  const removeItem = async (date: string, item: string) => {
+    setLocalEntries((prev) =>
+      prev.map((e) => (e.date === date ? { ...e, items: e.items.filter((it) => it !== item) } : e))
+    );
+    try {
+      const res = await fetch("/api/whats-new", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, item }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } catch (err) {
+      console.error("[whats-new] remove failed, restoring", err);
+      setLocalEntries(entries); // roll back on failure
+    }
+  };
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding: "6px 18px",
@@ -89,11 +115,11 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
       {/* Updates tab */}
       {tab === "updates" && (
         <>
-          {entries.length === 0 && (
+          {localEntries.length === 0 && (
             <div style={{ fontSize: 13, color: HOME_THEME.muted + "99" }}>No updates yet.</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {entries.map((entry, i) => (
+            {localEntries.map((entry, i) => (
               <Card key={i} accent="cyan" padding="20px 24px">
                 <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", color: HOME_THEME.cyan, marginBottom: 14 }}>
                   {entry.date}
@@ -102,7 +128,32 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                   {entry.items.map((item, j) => (
                     <li key={j} style={{ fontSize: 14, lineHeight: 1.65, color: HOME_THEME.text, display: "flex", gap: 10, alignItems: "flex-start" }}>
                       <span style={{ color: HOME_THEME.cyan, marginTop: 3, flexShrink: 0 }}>▸</span>
-                      {item}
+                      <span style={{ flex: 1 }}>{item}</span>
+                      {isOwner && (
+                        <button
+                          onClick={() => removeItem(entry.date, item)}
+                          title="Remove this update (owner only)"
+                          style={{
+                            flexShrink: 0,
+                            width: 18,
+                            height: 18,
+                            marginTop: 1,
+                            borderRadius: 5,
+                            border: `1px solid ${HOME_THEME.border}`,
+                            background: "transparent",
+                            color: HOME_THEME.muted + "cc",
+                            cursor: "pointer",
+                            fontSize: 11,
+                            lineHeight: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: 0,
+                          }}
+                        >
+                          ✕
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>

@@ -6,6 +6,16 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-05 — TPO box profile, GEX rail thickness fix, What's New owner-edit
+
+Added a `showTpo` overlay to `app/es-candles/page.tsx` (`buildTpoProfile()` + canvas draw block) rendering a rolling ETH(6pm-9:30am)/RTH(9:30am-4pm)/ETH/RTH box-profile strip — VAH/VAL/POC/Mid only, half-width gray boxes, each anchored to its own fixed session window via `ts.timeToCoordinate` — and uncapped `components/dashboard/EsGexRail.tsx`'s bar-thickness formula plus added wheel/pointermove listeners so rail bars track live Y-axis zoom instead of a 5s-lagged 9px-capped size. Also removed 3 stale bullets from `CUSTOMER_CHANGELOG.md` and added an owner-only delete button on `/whats-new` (`WhatsNewClient.tsx` + new `app/api/whats-new/route.ts` DELETE, Supabase `getServerUserId()`-gated) so entries can be struck from the page without hand-editing the file. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) was unavailable the entire session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-05 — GEX Levels tab 3rd pass (`app/test/page.tsx`) + AM TBR source line removed (`app/es-candles/page.tsx`)
 
 Reworked `GexLevelsTab` layout to a two-column split (History+Strike table left; Net Gamma/Net Delta bar charts, Open Interest by Date, and a new `OiVolHeatmap` right), added `useChartHover`/`ChartTooltip` for hover tooltips, and swapped `SOFT_RED`→`HOME_THEME.red` across GexLevelsTab/OptionsPositioningTab/ToggleSwitch to match the rest of the dashboard's red. Also removed the "Source concept: nqstats.com/am_tbr.html" attribution line from `AmTbrPanel`'s description text on `/es-candles`. NOT build-verified — no shell access this session.

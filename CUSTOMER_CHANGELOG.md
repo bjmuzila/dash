@@ -4,12 +4,11 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Sunday 7/5/2026
 
-* New: haven't subscribed yet? You can now check out the Home page and Multi Greek page for free with your account — data refreshes about every 30 minutes instead of live.
-* The quick-access side panel and menu now clearly show Home and Multi Greek as available on the free plan, with everything else marked "Upgrade" until you subscribe.
 * The AM TBR indicator on ES Candles now draws right on top of the live candle chart using real price data, instead of a separate mock preview chart underneath.
 * Added a new "Test Lab" section to the menu — an early preview area for experimental features (GEX Levels, Flow Inventory, Options Positioning), with an overview page explaining what each one does. These are early builds, so feedback is welcome.
-* GEX Levels (Test Lab) got a layout refresh — key level history and the strike table now sit side by side with new Net Delta and Open Interest charts, plus hover tooltips for exact values on every chart.
 * Cleaned up the AM TBR description text on ES Candles.
+* New TPO toggle on ES Candles — shows a rolling overnight/day-session profile (value area high/low, point of control, and midpoint) right on the chart.
+* The GEX-by-strike rail on ES Candles now resizes its bars to match the chart when you zoom in or out, so they're always easy to read and never overlap.
 
 ## Saturday 7/4/2026
 
