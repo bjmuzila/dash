@@ -7,6 +7,18 @@ import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
+import { useEsCandles } from "@/hooks/useEsCandles";
+import { useNqCandles } from "@/hooks/useNqCandles";
+import type { EsCandleRecord } from "@/lib/snapdb";
+import { CandlestickSeries, ColorType, CrosshairMode, createChart, createSeriesMarkers } from "lightweight-charts";
+import type { UTCTimestamp, Time, IChartApi, ISeriesApi, CandlestickData, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
+import {
+  fitGaussianHmm,
+  donchianBacktest,
+  alignDecodedPathToCloses,
+  type RegimeLabel,
+  type HmmResult,
+} from "@/lib/regimeHmm";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
@@ -706,12 +718,32 @@ function PositioningCard({ row }: { row: PositioningRow }) {
         <div style={{ textAlign: "right" }}>Above</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <PositionBar label="Spot" pct={0} color={HOME_THEME.text} maxAbs={maxAbs} valueOverride={fmtPrice(spot)} />
-        <PositionBar label="Call Wall" pct={callPct} delta={callDelta} color={HOME_THEME.green} maxAbs={maxAbs} />
-        <PositionBar label="Magnet" pct={magnetPct} delta={magnetDelta} color={HOME_THEME.orange} maxAbs={maxAbs} />
-        <PositionBar label="Gamma Hi" pct={gammaHiPct} delta={gammaHiDelta} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PositionBar label="Gamma Lo" pct={gammaLoPct} delta={gammaLoDelta} color={LIGHT_BLUE} maxAbs={maxAbs} />
-        <PositionBar label="Put Wall" pct={putPct} delta={putDelta} color={HOME_THEME.red} maxAbs={maxAbs} />
+        {(
+          [
+            { label: "Spot", level: spot, pct: 0, delta: null as number | null, color: HOME_THEME.text, valueOverride: fmtPrice(spot) as string | undefined },
+            { label: "Call Wall", level: callWall, pct: callPct, delta: callDelta, color: HOME_THEME.green, valueOverride: undefined },
+            { label: "Magnet", level: gexFlip, pct: magnetPct, delta: magnetDelta, color: HOME_THEME.orange, valueOverride: undefined },
+            { label: "Gamma Hi", level: gammaHi, pct: gammaHiPct, delta: gammaHiDelta, color: LIGHT_BLUE, valueOverride: undefined },
+            { label: "Gamma Lo", level: gammaLo, pct: gammaLoPct, delta: gammaLoDelta, color: LIGHT_BLUE, valueOverride: undefined },
+            { label: "Put Wall", level: putWall, pct: putPct, delta: putDelta, color: HOME_THEME.red, valueOverride: undefined },
+          ]
+        )
+          // Chronological = ordered by actual price level, highest (Above) to
+          // lowest (Below), so the list reads top-to-bottom the same way the
+          // Below/Current/Above bar reads left-to-right.
+          .filter((r) => r.level != null && Number.isFinite(r.level))
+          .sort((a, b) => (b.level as number) - (a.level as number))
+          .map((r) => (
+            <PositionBar
+              key={r.label}
+              label={r.label}
+              pct={r.pct}
+              delta={r.delta}
+              color={r.color}
+              maxAbs={maxAbs}
+              valueOverride={r.valueOverride}
+            />
+          ))}
       </div>
     </Card>
   );
@@ -2231,6 +2263,18 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
       "Live distance-from-spot bars for every level",
     ],
   },
+  {
+    key: "regime",
+    label: "Regime Engine",
+    accent: HOME_THEME.red,
+    blurb: "Hidden Markov Model regime decoder (Trend / Chop / Panic) for ESU or NQU futures, fit live off 5m candles.",
+    points: [
+      "3-state Gaussian HMM, Baum-Welch fit + Viterbi-style decode on log returns",
+      "Live transition matrix, stationary distribution, and per-bar state probabilities",
+      "Price chart shaded by decoded regime, plus a live probability stack",
+      "Same-strategy comparison: naive Donchian vs. the same rule gated by regime",
+    ],
+  },
 ];
 
 function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: TestTab) => void }) {
@@ -2316,7 +2360,7 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "positioning" | "gexlevels";
+type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime";
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
@@ -2324,6 +2368,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
     { key: "gexlevels", label: "GEX Levels" },
     { key: "flow", label: "Flow Inventory" },
     { key: "positioning", label: "Options Positioning" },
+    { key: "regime", label: "Regime Engine" },
   ];
   return (
     <div style={{ display: "flex", gap: 10 }}>
@@ -2395,6 +2440,702 @@ function FlowInventoryTab() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Regime Engine — 3-state Gaussian HMM (Trend/Chop/Panic) decoded live from
+// ESU or NQU 5m candles (lib/regimeHmm.ts). Fit runs client-side; refit is
+// gated to roughly every ~10 new bars so Baum-Welch doesn't re-run every tick.
+// Not build-verified on VPS yet — new test-lab prototype.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type RegimeTicker = "ESU" | "NQU";
+
+const REGIME_COLOR: Record<RegimeLabel, string> = {
+  Trend: HOME_THEME.cyan,
+  Chop: HOME_THEME.orange,
+  Panic: HOME_THEME.red,
+};
+
+// HOME_THEME.green is actually a light blue (#8ECAE6), not a success color — mirrors
+// the un-exported REFRESH_GREEN used internally by homeRefreshButtonStyle. Kept literal
+// here for the same reason that helper does: it's a status color, not chrome.
+const POSITIVE_GREEN = "#1FD98A";
+
+function sampleTail<T>(arr: T[], maxPoints: number): T[] {
+  if (arr.length <= maxPoints) return arr;
+  const step = Math.ceil(arr.length / maxPoints);
+  const out: T[] = [];
+  for (let i = arr.length - 1; i >= 0; i -= step) out.unshift(arr[i]);
+  return out;
+}
+
+// ── Catmull-Rom smoothing — turns a jagged polyline into an organic curve by
+// densely re-sampling a spline through the original points. Two boundaries
+// built from the same dense re-sample of the same source array are pixel-
+// identical, so stacked bands (see smoothBandPath) never show seams.
+function catmullRomAt(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+
+function smoothPolyline(xs: number[], ys: number[], samplesPerSeg = 6): { xs: number[]; ys: number[] } {
+  const n = xs.length;
+  if (n < 3) return { xs, ys };
+  const outX: number[] = [xs[0]];
+  const outY: number[] = [ys[0]];
+  for (let i = 0; i < n - 1; i++) {
+    const i0 = Math.max(0, i - 1), i2 = i + 1, i3 = Math.min(n - 1, i + 2);
+    for (let s = 1; s <= samplesPerSeg; s++) {
+      const t = s / samplesPerSeg;
+      outX.push(catmullRomAt(xs[i0], xs[i], xs[i2], xs[i3], t));
+      outY.push(catmullRomAt(ys[i0], ys[i], ys[i2], ys[i3], t));
+    }
+  }
+  return { xs: outX, ys: outY };
+}
+
+function polylinePath(xs: number[], ys: number[]): string {
+  if (xs.length === 0) return "";
+  let d = `M${xs[0].toFixed(1)},${ys[0].toFixed(1)}`;
+  for (let i = 1; i < xs.length; i++) d += ` L${xs[i].toFixed(1)},${ys[i].toFixed(1)}`;
+  return d;
+}
+
+function smoothBandPath(xs: number[], bottomY: number[], topY: number[]): string {
+  const bot = smoothPolyline(xs, bottomY);
+  const top = smoothPolyline(xs, topY);
+  const revTopX = [...top.xs].reverse();
+  const revTopY = [...top.ys].reverse();
+  return `${polylinePath(bot.xs, bot.ys)} ${polylinePath(revTopX, revTopY).replace(/^M/, "L")} Z`;
+}
+
+// ── Curved connector between two circular nodes: trims the line to the node
+// edges (not centers), bows it perpendicular to the chord, and hands back the
+// bow apex so a probability label can sit right where the arc peaks.
+function curvedEdge(x1: number, y1: number, r1: number, x2: number, y2: number, r2: number, bow: number) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const sx = x1 + ux * r1, sy = y1 + uy * r1;
+  const ex = x2 - ux * r2, ey = y2 - uy * r2;
+  const mx = (sx + ex) / 2, my = (sy + ey) / 2;
+  const px = -uy, py = ux;
+  const bowAmt = len * bow;
+  const cx = mx + px * bowAmt, cy = my + py * bowAmt;
+  return { path: `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`, apexX: cx, apexY: cy };
+}
+
+const REGIME_FLAVOR: Record<RegimeLabel, string> = {
+  Trend: "QUIET GRIND",
+  Chop: "DIRECTIONLESS RANGE",
+  Panic: "VIOLENT SELLOFF",
+};
+
+function RegimeStateGraph({ hmm }: { hmm: HmmResult }) {
+  const order: RegimeLabel[] = ["Trend", "Chop", "Panic"];
+  const pct = (x: number) => Math.round(x * 100);
+  const idxOf = (l: RegimeLabel) => order.indexOf(l);
+  const stationaryOf = (l: RegimeLabel) => hmm.stationary[idxOf(l)];
+  const selfOf = (l: RegimeLabel) => hmm.transition[idxOf(l)][idxOf(l)];
+
+  // Node position anchors + radius scaled by how often the fit says the market
+  // actually sits in that state (stationary distribution) — busier states read
+  // bigger, exactly like the reference.
+  const anchors: Record<RegimeLabel, { cx: number; cy: number }> = {
+    Trend: { cx: 100, cy: 95 },
+    Chop: { cx: 215, cy: 175 },
+    Panic: { cx: 340, cy: 100 },
+  };
+  const radiusOf = (l: RegimeLabel) => 22 + Math.sqrt(Math.max(stationaryOf(l), 0.01)) * 46;
+  const radii = Object.fromEntries(order.map((l) => [l, radiusOf(l)])) as Record<RegimeLabel, number>;
+
+  // Directed edges for every off-diagonal transition, bowed opposite ways per
+  // direction so the two arrows in a pair never overlap.
+  const pairs: [RegimeLabel, RegimeLabel][] = [
+    ["Trend", "Chop"],
+    ["Trend", "Panic"],
+    ["Chop", "Panic"],
+  ];
+  const edges = pairs.flatMap(([a, b]) => [
+    { from: a, to: b, bow: 0.22 },
+    { from: b, to: a, bow: -0.22 },
+  ]);
+
+  return (
+    <svg viewBox="0 0 440 260" style={{ width: "100%", height: 236 }}>
+      {edges.map(({ from, to, bow }, i) => {
+        const A = anchors[from], B = anchors[to];
+        const { path, apexX, apexY } = curvedEdge(A.cx, A.cy, radii[from], B.cx, B.cy, radii[to], bow);
+        const p = hmm.transition[idxOf(from)][idxOf(to)];
+        if (p < 0.015) return null;
+        const markerId = `arrow-${from}-${to}`;
+        return (
+          <g key={`${from}-${to}-${i}`}>
+            <defs>
+              <marker id={markerId} markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
+                <path d="M0,0 L6,3 L0,6 Z" fill={REGIME_COLOR[from]} opacity={0.85} />
+              </marker>
+            </defs>
+            <path d={path} stroke={REGIME_COLOR[from]} strokeOpacity={0.55} strokeWidth={1.4} strokeDasharray="1,4" strokeLinecap="round" fill="none" markerEnd={`url(#${markerId})`} />
+            <circle r={2.2} fill={REGIME_COLOR[from]} opacity={0.9}>
+              <animateMotion dur={`${2.6 + i * 0.4}s`} repeatCount="indefinite" path={path} />
+            </circle>
+            <rect x={apexX - 13} y={apexY - 8} width={26} height={13} rx={6} fill="rgba(5,8,13,0.82)" />
+            <text x={apexX} y={apexY + 2} fill={REGIME_COLOR[from]} fontSize="9" fontWeight={800} textAnchor="middle">{p.toFixed(2)}</text>
+          </g>
+        );
+      })}
+
+      {order.map((l) => {
+        const { cx, cy } = anchors[l];
+        const r = radii[l];
+        const isCurrent = hmm.currentLabel === l;
+        return (
+          <g key={l}>
+            {isCurrent && (
+              <circle cx={cx} cy={cy} r={r} fill="none" stroke={REGIME_COLOR[l]} strokeWidth={2}>
+                <animate attributeName="r" values={`${r};${r + 16};${r}`} dur="2.4s" repeatCount="indefinite" />
+                <animate attributeName="opacity" values="0.55;0;0.55" dur="2.4s" repeatCount="indefinite" />
+              </circle>
+            )}
+            <circle cx={cx} cy={cy} r={r} fill={`${REGIME_COLOR[l]}1f`} stroke={REGIME_COLOR[l]} strokeWidth={isCurrent ? 2.6 : 2} />
+            <circle cx={cx} cy={cy - r - 14} r={11} fill="none" stroke={REGIME_COLOR[l]} strokeOpacity={0.55} strokeWidth={1.4} />
+            <text x={cx} y={cy - r - 10.5} fill={HOME_THEME.text} fillOpacity={0.75} fontSize="10" textAnchor="middle">{selfOf(l).toFixed(2)}</text>
+            <text x={cx} y={cy - 4} fill={REGIME_COLOR[l]} fontSize={r > 40 ? 13 : 11} fontWeight={800} textAnchor="middle">{l.toUpperCase()}</text>
+            <text x={cx} y={cy + 13} fill={HOME_THEME.text} fontSize={r > 40 ? 14 : 12} fontWeight={800} textAnchor="middle">{pct(stationaryOf(l))}%</text>
+            <text x={cx} y={cy + r + 15} fill={HOME_THEME.text} fillOpacity={0.4} fontSize="9" textAnchor="middle">{REGIME_FLAVOR[l]}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function TransitionMatrixTable({ hmm }: { hmm: HmmResult }) {
+  const labels: RegimeLabel[] = ["Trend", "Chop", "Panic"];
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      <thead>
+        <tr>
+          <td />
+          {labels.map((l) => (
+            <td key={l} style={{ textAlign: "center", color: REGIME_COLOR[l], padding: 4, fontWeight: 700 }}>{l.toUpperCase()}</td>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {labels.map((rowLabel, i) => (
+          <tr key={rowLabel}>
+            <td style={{ color: REGIME_COLOR[rowLabel], padding: 4, fontWeight: 700 }}>{rowLabel.toUpperCase()}</td>
+            {labels.map((_, j) => (
+              <td
+                key={j}
+                style={{
+                  background: i === j ? `${REGIME_COLOR[rowLabel]}40` : "rgba(255,255,255,0.05)",
+                  textAlign: "center",
+                  borderRadius: 4,
+                  padding: 8,
+                  fontWeight: i === j ? 800 : 400,
+                }}
+              >
+                {hmm.transition[i][j].toFixed(2)}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function ProbabilityStackChart({
+  series,
+  decoded,
+}: {
+  series: { Trend: number; Chop: number; Panic: number }[];
+  decoded?: RegimeLabel[];
+}) {
+  const W = 600, H = 140;
+  const s = sampleTail(series, 180);
+  const d = decoded ? sampleTail(decoded, 180) : undefined;
+  if (s.length < 2) return <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.5, padding: 20 }}>Warming up the fit…</div>;
+  const n = s.length;
+  const xStep = W / (n - 1);
+  const xs = s.map((_, i) => i * xStep);
+  const baseline = new Array(n).fill(H);
+  const panicTop = s.map((g) => H - g.Panic * H);
+  const chopTop = s.map((g, i) => panicTop[i] - g.Chop * H);
+  const trendTop = s.map((g, i) => chopTop[i] - g.Trend * H);
+  const killY = H - 0.6 * H;
+
+  const flips: number[] = [];
+  if (d) for (let i = 1; i < d.length; i++) if (d[i] !== d[i - 1]) flips.push(i);
+  const recentFlips = flips.slice(-6);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 150 }}>
+      <path d={smoothBandPath(xs, baseline, panicTop)} fill={REGIME_COLOR.Panic} opacity={0.85} />
+      <path d={smoothBandPath(xs, panicTop, chopTop)} fill={REGIME_COLOR.Chop} opacity={0.72} />
+      <path d={smoothBandPath(xs, chopTop, trendTop)} fill={REGIME_COLOR.Trend} opacity={0.9} />
+      <line x1={0} y1={killY} x2={W} y2={killY} stroke={HOME_THEME.text} strokeOpacity={0.35} strokeDasharray="4,4" strokeWidth={1} />
+      <text x={4} y={killY - 4} fill={HOME_THEME.text} fillOpacity={0.55} fontSize="9" fontWeight={700}>KILL 0.60</text>
+      {recentFlips.map((i) => (
+        <g key={i}>
+          <line x1={xs[i]} y1={0} x2={xs[i]} y2={H} stroke={HOME_THEME.text} strokeOpacity={0.4} strokeDasharray="2,3" strokeWidth={1} />
+          <rect x={xs[i] - 15} y={2} width={30} height={12} rx={6} fill="rgba(5,8,13,0.85)" />
+          <text x={xs[i]} y={11} fill={HOME_THEME.text} fillOpacity={0.9} fontSize="8" fontWeight={800} textAnchor="middle">FLIP</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function toChartTime(ts: number): UTCTimestamp {
+  return Math.floor(ts / 1000) as UTCTimestamp;
+}
+
+/**
+ * Real candlestick chart (lightweight-charts, same conventions as
+ * components/dashboard/EsCandlesCard.tsx / app/es-candles/page.tsx: transparent
+ * background, #30d158/#ff5b5b up/down candles) with a canvas layer behind it
+ * painting translucent regime-colored bands, plus FLIP + kill-switch markers.
+ */
+function RegimeCandleChart({
+  rows,
+  decoded,
+  panic,
+  ticker,
+}: {
+  rows: EsCandleRecord[];
+  decoded: (RegimeLabel | undefined)[];
+  panic: (number | undefined)[];
+  ticker: RegimeTicker;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const bandCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const didFitRef = useRef(false);
+  const rowsRef = useRef(rows);
+  const decodedRef = useRef(decoded);
+  rowsRef.current = rows;
+  decodedRef.current = decoded;
+  const repaintRef = useRef<() => void>(() => {});
+
+  // Create the chart + band canvas once.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    host.innerHTML = "";
+
+    const chart = createChart(host, {
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "rgba(255,255,255,.70)", fontFamily: "Inter, system-ui, sans-serif" },
+      grid: { vertLines: { color: "rgba(255,255,255,.06)" }, horzLines: { color: "rgba(255,255,255,.06)" } },
+      rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
+      leftPriceScale: { visible: false },
+      timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false, rightOffset: 2 },
+      crosshair: { mode: CrosshairMode.Normal },
+    });
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: "#30d158",
+      wickUpColor: "#30d158",
+      downColor: "#ff5b5b",
+      wickDownColor: "#ff5b5b",
+      borderVisible: false,
+    });
+    const markers = createSeriesMarkers(series, []);
+    chartRef.current = chart;
+    seriesRef.current = series;
+    markersRef.current = markers;
+
+    const repaintBands = () => {
+      const canvas = bandCanvasRef.current;
+      if (!canvas) return;
+      const w = host.clientWidth, h = host.clientHeight;
+      if (w === 0 || h === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const targetW = Math.round(w * dpr), targetH = Math.round(h * dpr);
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const ts = chart.timeScale();
+      const rs = rowsRef.current, ds = decodedRef.current;
+      if (!rs.length) return;
+      let segStart = 0;
+      for (let i = 1; i <= rs.length; i++) {
+        if (i !== rs.length && ds[i] === ds[segStart]) continue;
+        const label = ds[segStart];
+        if (label) {
+          const x0raw = ts.timeToCoordinate(toChartTime(rs[segStart].timestamp));
+          const nextIdx = Math.min(i, rs.length - 1);
+          const x1raw = i === rs.length ? w : ts.timeToCoordinate(toChartTime(rs[nextIdx].timestamp));
+          if (x0raw != null) {
+            const x0 = Math.max(0, x0raw);
+            const x1 = Math.min(w, typeof x1raw === "number" ? x1raw : w);
+            if (x1 > x0) {
+              ctx.fillStyle = REGIME_COLOR[label];
+              ctx.globalAlpha = 0.11;
+              ctx.fillRect(x0, 0, x1 - x0, h);
+            }
+          }
+        }
+        segStart = i;
+      }
+      ctx.globalAlpha = 1;
+    };
+    repaintRef.current = repaintBands;
+
+    let lastW = 0, lastH = 0;
+    const applySize = () => {
+      const w = host.clientWidth, h = host.clientHeight;
+      if (w > 0 && h > 0 && (w !== lastW || h !== lastH)) {
+        lastW = w; lastH = h;
+        chart.applyOptions({ width: w, height: h });
+        if (!didFitRef.current) chart.timeScale().fitContent();
+        repaintBands();
+      }
+    };
+    const ro = new ResizeObserver(applySize);
+    ro.observe(host);
+
+    let rafId = 0, tries = 0;
+    const pump = () => {
+      applySize();
+      tries++;
+      if ((lastW === 0 || lastH === 0) && tries < 120) rafId = requestAnimationFrame(pump);
+    };
+    rafId = requestAnimationFrame(pump);
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(repaintBands);
+    const onDblClick = () => { chart.timeScale().fitContent(); chart.priceScale("right").applyOptions({ autoScale: true }); };
+    host.addEventListener("dblclick", onDblClick);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      ro.disconnect();
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(repaintBands);
+      host.removeEventListener("dblclick", onDblClick);
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+      markersRef.current = null;
+      didFitRef.current = false;
+    };
+  }, []);
+
+  // Feed candle data + FLIP / kill-switch markers.
+  useEffect(() => {
+    const series = seriesRef.current;
+    const chart = chartRef.current;
+    if (!series || !chart) return;
+    const data: CandlestickData[] = rows.map((r) => ({
+      time: toChartTime(r.timestamp),
+      open: r.open, high: r.high, low: r.low, close: r.close,
+    }));
+    series.setData(data);
+    if (data.length && !didFitRef.current) {
+      chart.timeScale().fitContent();
+      didFitRef.current = true;
+    }
+
+    const markers: SeriesMarker<Time>[] = [];
+    const flipIdxs: number[] = [];
+    for (let i = 1; i < rows.length; i++) if (decoded[i] && decoded[i] !== decoded[i - 1]) flipIdxs.push(i);
+    for (const i of flipIdxs.slice(-8)) {
+      const label = decoded[i]!;
+      markers.push({
+        time: toChartTime(rows[i].timestamp),
+        position: label === "Panic" ? "aboveBar" : "belowBar",
+        color: REGIME_COLOR[label],
+        shape: "circle",
+        text: "FLIP",
+      });
+    }
+    let lastKillIdx = -1;
+    for (let i = 1; i < rows.length; i++) {
+      const p = panic[i], prev = panic[i - 1];
+      if (p != null && prev != null && p > 0.6 && prev <= 0.6) lastKillIdx = i;
+    }
+    if (lastKillIdx >= 0) {
+      markers.push({
+        time: toChartTime(rows[lastKillIdx].timestamp),
+        position: "aboveBar",
+        color: HOME_THEME.red,
+        shape: "arrowDown",
+        text: "KILL SWITCH",
+      });
+    }
+    markers.sort((a, b) => (a.time as number) - (b.time as number));
+    markersRef.current?.setMarkers(markers);
+
+    repaintRef.current();
+  }, [rows, decoded, panic]);
+
+  const last = rows.length ? rows[rows.length - 1] : null;
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: 300 }}>
+      <canvas ref={bandCanvasRef} style={{ position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none", width: "100%", height: "100%" }} />
+      <div ref={hostRef} style={{ position: "absolute", inset: 0, zIndex: 1 }} />
+      {rows.length === 0 && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.text, opacity: 0.4, fontSize: 13 }}>
+          Warming up the fit…
+        </div>
+      )}
+      {last && (
+        <div
+          style={{
+            position: "absolute", left: 8, top: 6, zIndex: 2, pointerEvents: "none",
+            fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text,
+            background: "rgba(5,8,13,.6)", padding: "3px 9px", borderRadius: 6, fontWeight: 700,
+          }}
+        >
+          {ticker} {last.close.toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RegimeEngineTab() {
+  const [ticker, setTicker] = useState<RegimeTicker>("ESU");
+  const es = useEsCandles(ticker === "ESU", 20);
+  const nq = useNqCandles(ticker === "NQU", 20);
+  const active = ticker === "ESU" ? es : nq;
+
+  // Merge history + today's live bars into one ascending series (de-duped by slotKey).
+  const combined = useMemo<EsCandleRecord[]>(() => {
+    const map = new Map<string, EsCandleRecord>();
+    for (const c of active.historical) if (c.slotKey) map.set(c.slotKey, c);
+    for (const c of active.candles) if (c.slotKey) map.set(c.slotKey, c);
+    return [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
+  }, [active.historical, active.candles]);
+
+  // Same filter predicate applied to both — keeps `closes[i]` and `alignedRows[i]`
+  // pointing at the same bar so decoded/gamma arrays (aligned to `closes`) also
+  // line up with `alignedRows` for the candlestick chart.
+  const alignedRows = useMemo(
+    () => combined.filter((c) => Number.isFinite(Number(c.close)) && Number(c.close) > 0),
+    [combined]
+  );
+  const closes = useMemo(() => alignedRows.map((c) => Number(c.close)), [alignedRows]);
+
+  const returns = useMemo(() => {
+    const out: number[] = [];
+    for (let i = 1; i < closes.length; i++) {
+      const r = Math.log(closes[i] / closes[i - 1]);
+      if (Number.isFinite(r)) out.push(r);
+    }
+    return out;
+  }, [closes]);
+
+  // Refit gated to roughly every 10 new bars (Baum-Welch isn't free to run every tick).
+  const refitBucket = Math.floor(returns.length / 10);
+  const hmm = useMemo<HmmResult | null>(() => {
+    if (returns.length < 80) return null;
+    return fitGaussianHmm(returns, { states: 3, iters: 25 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refitBucket, ticker]);
+
+  const decodedAtCloses = useMemo(() => (hmm ? alignDecodedPathToCloses(hmm.decodedPath) : []), [hmm]);
+  // Same shift as alignDecodedPathToCloses (gammaByLabel[k] describes the return
+  // into closes[k+1]) so panicAtCloses[i] lines up with alignedRows[i]/closes[i].
+  const panicAtCloses = useMemo<(number | undefined)[]>(
+    () => (hmm ? [undefined, ...hmm.gammaByLabel.map((g) => g.Panic)] : []),
+    [hmm]
+  );
+
+  const backtests = useMemo(() => {
+    if (!hmm || closes.length < 60) return null;
+    const naive = donchianBacktest(closes, 20);
+    const gated = donchianBacktest(closes, 20, decodedAtCloses, "Trend");
+    return { naive, gated };
+  }, [hmm, closes, decodedAtCloses]);
+
+  const lastBar = combined[combined.length - 1];
+  const lastTimeEt = lastBar
+    ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(lastBar.timestamp))
+    : "—";
+
+  const currentLabel = hmm?.currentLabel;
+  const currentConfidence = hmm ? Math.round(hmm.currentProbs[hmm.currentLabel] * 100) : 0;
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {(["ESU", "NQU"] as RegimeTicker[]).map((t) => {
+            const isActive = t === ticker;
+            return (
+              <button
+                key={t}
+                onClick={() => setTicker(t)}
+                style={{
+                  padding: "10px 22px",
+                  borderRadius: 8,
+                  border: `1px solid ${isActive ? HOME_THEME.cyan : HOME_THEME.border}`,
+                  background: isActive
+                    ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
+                    : "rgba(255,255,255,0.04)",
+                  color: isActive ? HOME_THEME.cyan : HOME_THEME.text,
+                  fontSize: 15,
+                  fontWeight: 800,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                }}
+              >
+                {t}
+              </button>
+            );
+          })}
+          <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+            {active.connected ? `Live · last bar ${lastTimeEt} ET` : "Connecting…"}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Bars decoded</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>{combined.length.toLocaleString("en-US")}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Confidence</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: LIGHT_BLUE }}>{hmm ? `${currentConfidence}%` : "—"}</div>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: currentLabel ? `${REGIME_COLOR[currentLabel]}20` : "rgba(255,255,255,0.05)",
+              border: `1px solid ${currentLabel ? `${REGIME_COLOR[currentLabel]}66` : HOME_THEME.border}`,
+              borderRadius: 20,
+              padding: "5px 12px",
+            }}
+          >
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: currentLabel ? REGIME_COLOR[currentLabel] : "#888" }} />
+            <span style={{ fontSize: 11, fontWeight: 800, color: currentLabel ? REGIME_COLOR[currentLabel] : HOME_THEME.text, letterSpacing: "0.05em" }}>
+              REGIME · {currentLabel ? currentLabel.toUpperCase() : "WARMING UP"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {!hmm ? (
+        <Card variant="budget" accent={HOME_THEME.orange} padding={20}>
+          <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+            Fitting the regime model — needs at least ~80 five-minute bars of {ticker} history. This fills in once the candle
+            backfill loads (today + up to 20 prior sessions).
+          </div>
+        </Card>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
+            <Card accent="cyan" title="Hidden State Graph · P(next | current)" subtitle="Andrey Markov · 1906 — next state depends only on the current one" style={{ flex: "1.4 1 420px" }}>
+              <RegimeStateGraph hmm={hmm} />
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 4 }}>
+                Stationary π shown inside each node · self-loop probability shown on the ring · {hmm.iterations} EM iterations
+              </div>
+            </Card>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16, flex: "1 1 280px" }}>
+              <Card accent={currentLabel ? (currentLabel === "Trend" ? "cyan" : currentLabel === "Chop" ? "orange" : "red") : "cyan"} title="Decoded State · Live" style={{ flex: 1 }}>
+                <div style={{ fontSize: 24, fontWeight: 900, color: currentLabel ? REGIME_COLOR[currentLabel] : HOME_THEME.text }}>
+                  {currentLabel?.toUpperCase()}
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 900 }}>{currentConfidence}%</div>
+                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6 }}>P(state) updates every bar · forward-backward posterior</div>
+              </Card>
+              <Card accent="cyan" title="Transition Matrix" style={{ flex: 1 }}>
+                <TransitionMatrixTable hmm={hmm} />
+                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.4, marginTop: 6 }}>Rows sum to 1.00</div>
+              </Card>
+            </div>
+          </div>
+
+          <Card accent="cyan" title="Live Regime Probability · P(state | returns)">
+            <ProbabilityStackChart series={hmm.gammaByLabel} decoded={hmm.decodedPath} />
+            <div style={{ display: "flex", gap: 20, marginTop: 8, fontSize: 12 }}>
+              {(["Trend", "Chop", "Panic"] as RegimeLabel[]).map((l) => (
+                <div key={l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: REGIME_COLOR[l] }} />
+                  <span style={{ color: HOME_THEME.text, opacity: 0.8 }}>{l}</span>
+                  <b>{Math.round(hmm.currentProbs[l] * 100)}%</b>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card accent={currentLabel === "Panic" ? "red" : "cyan"} title={`${ticker} Price vs. Hidden State`}>
+            <RegimeCandleChart rows={alignedRows} decoded={decodedAtCloses} panic={panicAtCloses} ticker={ticker} />
+          </Card>
+
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <Card accent="cyan" title="Switching" style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>Layer 01</div>
+              <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: HOME_THEME.text }}>
+                {currentLabel === "Panic" ? "All books · Risk-off" : currentLabel === "Chop" ? "Reduced risk · Selective" : "All books · Risk-on"}
+              </div>
+            </Card>
+            <Card accent="orange" title="Sizing" style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>Layer 02</div>
+              <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: HOME_THEME.text }}>
+                Exposure {Math.max(5, Math.round((1 - hmm.currentProbs.Panic) * 100))}%
+              </div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>Scales with (1 − P(Panic))</div>
+            </Card>
+            <Card accent="red" title="Kill Switch" style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>Layer 03</div>
+              <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: hmm.currentProbs.Panic > 0.6 ? HOME_THEME.red : HOME_THEME.text }}>
+                {hmm.currentProbs.Panic > 0.6 ? "Triggered · Gross cut" : "Armed · Not triggered"}
+              </div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>Trips above 60% P(Panic)</div>
+            </Card>
+          </div>
+
+          {backtests && (
+            <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
+              <Card style={{ flex: 1, border: `1px solid ${HOME_THEME.red}59` }} padding={18}>
+                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>
+                  Same Strategy · No Regime Gate
+                </div>
+                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 6 }}>20-bar Donchian breakout, always on</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.naive.returnPct >= 0 ? POSITIVE_GREEN : HOME_THEME.red, marginTop: 4 }}>
+                  {backtests.naive.returnPct >= 0 ? "+" : ""}{backtests.naive.returnPct.toFixed(2)}%
+                </div>
+                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6 }}>
+                  Max drawdown {backtests.naive.maxDrawdownPct.toFixed(1)}% · {backtests.naive.bars} bars
+                </div>
+              </Card>
+              <div style={{ display: "flex", alignItems: "center", fontSize: 13, fontWeight: 800, color: HOME_THEME.text, opacity: 0.5, padding: "0 4px" }}>VS</div>
+              <Card style={{ flex: 1, border: `1px solid ${POSITIVE_GREEN}66` }} padding={18}>
+                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>
+                  Same Strategy · Gated to Trend
+                </div>
+                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 6 }}>Same rule, flat unless decoded state = Trend</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.gated.returnPct >= 0 ? POSITIVE_GREEN : HOME_THEME.red, marginTop: 4 }}>
+                  {backtests.gated.returnPct >= 0 ? "+" : ""}{backtests.gated.returnPct.toFixed(2)}%
+                </div>
+                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6 }}>
+                  Max drawdown {backtests.gated.maxDrawdownPct.toFixed(1)}% · {backtests.gated.bars} bars
+                </div>
+              </Card>
+            </div>
+          )}
+
+          <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.4, textAlign: "center", letterSpacing: "0.04em" }}>
+            HMM-3 · Baum-Welch fit · in-sample decode (no walk-forward yet) · prototype backtest, not a trading recommendation
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 export default function TestPage() {
   const [tab, setTab] = useState<TestTab>("overview");
   return (
@@ -2406,6 +3147,8 @@ export default function TestPage() {
         <GexLevelsTab />
       ) : tab === "flow" ? (
         <FlowInventoryTab />
+      ) : tab === "regime" ? (
+        <RegimeEngineTab />
       ) : (
         <OptionsPositioningTab />
       )}

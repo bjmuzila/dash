@@ -371,7 +371,7 @@ const GX_CSS = `
   .gx-help { font-size: 12px; color: #9aa4b2; line-height: 1.55; max-width: 1100px; margin: 0 auto 22px; }
   .gx-help b { color: #fff; }
   .gx-stage { display: flex; flex-direction: column; gap: 36px; align-items: center; }
-  .gx-cardwrap { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .gx-cardwrap { position: relative; display: flex; flex-direction: column; gap: 12px; align-items: center; }
   .gx-caprow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .gx-caplabel { font-size: 12px; color: #9aa4b2; letter-spacing: 0.04em; }
   .gx-dl { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 16px; border-radius: 7px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all .12s; box-shadow: 0 0 16px rgba(33,158,188,.3); }
@@ -551,57 +551,72 @@ function GexCard({
   }, []);
 
   // ── Live profile / heatmap capture ─────────────────────────────────────────
-  // Same source the "GEX Data" tab uses (/api/gex — the dashboard SnapButton
-  // feed). Chart card grabs the mounted GexChart's own <canvas> directly; the
-  // heatmap card html2canvas-captures the mounted GexHeatmap DOM. Both render
-  // into an offscreen host sized to the card's image slot, then the resulting
-  // PNG becomes the card's visual — same as dropping a screenshot, minus OCR.
+  // Exact same fetch the "GEX Data" tab's "Load profile" uses — /api/gex, the
+  // same feed the home page's NET GEX chart and its SnapButton read (chain,
+  // spotPrice, gexFlip). Chart card grabs the mounted GexChart's own <canvas>
+  // directly (identical to GEX Data's snapProfile); the heatmap card
+  // html2canvas-captures the mounted GexHeatmap DOM. Both render into a host
+  // sized to the card's image slot, then the PNG becomes the card's visual —
+  // same as dropping a screenshot, minus OCR.
   const [gexChain, setGexChain] = useState<ChainRow[]>([]);
   const [gexSpot, setGexSpot] = useState(0);
   const [gexFlip, setGexFlip] = useState<number | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
+  const [liveErr, setLiveErr] = useState(false);
   const captureHostRef = useRef<HTMLDivElement>(null);
   const slot = { w: dims.w - 192, h: dims.h - 192 }; // 96px inset each side, matches .gx-imgwrap
 
   const loadLiveVisual = useCallback(async () => {
     setLiveLoading(true);
+    setLiveErr(false);
     try {
       const res = await fetch("/api/gex", { cache: "no-store" });
       if (!res.ok) throw new Error(`gex ${res.status}`);
       const data = await res.json();
-      setGexChain(Array.isArray(data.chain) ? data.chain : []);
+      const chain = Array.isArray(data.chain) ? data.chain : [];
+      if (!chain.length) throw new Error("empty chain — no live GEX data (needs a live dashboard feed, not local dev)");
+      setGexChain(chain);
       setGexSpot(Number(data.spotPrice ?? 0));
       setGexFlip(data.gexFlip ?? null);
     } catch (e) {
       console.error("[gex-card live visual]", e);
+      setLiveErr(true);
       setLiveLoading(false);
     }
   }, []);
 
-  // Once the chain lands, the offscreen host mounts the real chart/heatmap;
-  // give it a tick to paint, then capture it into `img`.
+  // Once the chain lands, the host (mounted in-flow, just invisible via
+  // opacity so it paints exactly like the visible GEX Data chart does) draws
+  // the real chart/heatmap. Wait two animation frames — guarantees a paint has
+  // happened — instead of guessing at a fixed delay, then capture into `img`.
   useEffect(() => {
     if (!gexChain.length) return;
     let cancelled = false;
-    const t = setTimeout(async () => {
-      const host = captureHostRef.current;
-      if (!host) { setLiveLoading(false); return; }
-      try {
-        if (kind === "chart") {
-          const canvas = host.querySelector<HTMLCanvasElement>("canvas");
-          if (canvas) { setImg(canvas.toDataURL("image/png")); setImgKind("live"); }
-        } else {
-          const html2canvas = await getHtml2Canvas();
-          const canvas = await html2canvas(host, { backgroundColor: "#05080d", scale: 2, useCORS: true, logging: false, width: slot.w, height: slot.h });
-          if (!cancelled) { setImg(canvas.toDataURL("image/png")); setImgKind("live"); }
+    let raf1 = 0, raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(async () => {
+        if (cancelled) return;
+        const host = captureHostRef.current;
+        if (!host) { setLiveLoading(false); return; }
+        try {
+          if (kind === "chart") {
+            const canvas = host.querySelector<HTMLCanvasElement>("canvas");
+            if (canvas) { setImg(canvas.toDataURL("image/png")); setImgKind("live"); }
+            else throw new Error("chart canvas not found");
+          } else {
+            const html2canvas = await getHtml2Canvas();
+            const canvas = await html2canvas(host, { backgroundColor: "#05080d", scale: 2, useCORS: true, logging: false, width: slot.w, height: slot.h });
+            if (!cancelled) { setImg(canvas.toDataURL("image/png")); setImgKind("live"); }
+          }
+        } catch (e) {
+          console.error("[gex-card live capture]", e);
+          if (!cancelled) setLiveErr(true);
+        } finally {
+          if (!cancelled) setLiveLoading(false);
         }
-      } catch (e) {
-        console.error("[gex-card live capture]", e);
-      } finally {
-        if (!cancelled) setLiveLoading(false);
-      }
-    }, 150);
-    return () => { cancelled = true; clearTimeout(t); };
+      });
+    });
+    return () => { cancelled = true; cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gexChain, gexSpot, gexFlip, kind]);
 
@@ -661,8 +676,14 @@ function GexCard({
     <div className="gx-cardwrap">
       <div className="gx-caprow" style={{ width: dims.w }}>
         <div className="gx-caplabel">{kind === "chart" ? "NET GEX chart" : "GEX heatmap"} · {dims.w} × {dims.h}</div>
-        <button type="button" className="gx-btn load" onClick={loadLiveVisual} disabled={liveLoading}>
-          {liveLoading ? "Loading…" : kind === "chart" ? "⤓ Load profile" : "⤓ Get Heatmap"}
+        <button
+          type="button"
+          className="gx-btn load"
+          onClick={loadLiveVisual}
+          disabled={liveLoading}
+          title={liveErr ? "No live GEX data — needs a live dashboard feed (not local dev). Click to retry." : undefined}
+        >
+          {liveLoading ? "Loading…" : liveErr ? "Failed — retry" : kind === "chart" ? "⤓ Load profile" : "⤓ Get Heatmap"}
         </button>
       </div>
       <div ref={cardRef} className={`gx-card ${regimeNeg ? "neg" : "pos"}${kind === "heat" ? " vertical" : ""}`}>
@@ -707,10 +728,12 @@ function GexCard({
         </div>
       </div>
 
-      {/* offscreen host — mounts the real chart/heatmap once loaded, sized to
-          the card's image slot, captured into `img` above then never shown. */}
+      {/* Capture host — mounts the real chart/heatmap once loaded, in normal
+          document flow (just invisible via opacity) so it paints exactly like
+          the visible GEX Data tab's chart does, sized to the card's image
+          slot. Captured into `img` above, then never shown. */}
       {gexChain.length > 0 && (
-        <div ref={captureHostRef} style={{ position: "fixed", left: -99999, top: 0, width: slot.w, height: slot.h, pointerEvents: "none", overflow: "hidden" }}>
+        <div ref={captureHostRef} style={{ position: "absolute", top: 0, left: 0, opacity: 0, zIndex: -1, pointerEvents: "none", width: slot.w, height: slot.h, overflow: "hidden", background: "var(--bg0)" }}>
           {kind === "chart"
             ? <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
             : <GexHeatmap chain={gexChain} spotPrice={gexSpot} />}

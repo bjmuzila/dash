@@ -113,6 +113,23 @@ async function ensureSchema() {
         PRIMARY KEY (date, symbol, ts)
       );
       CREATE INDEX IF NOT EXISTS idx_vpin_date_sym ON vol_pin_snapshots(date, symbol);
+
+      CREATE TABLE IF NOT EXISTS vol_pin_events (
+        id            SERIAL      PRIMARY KEY,
+        date          TEXT        NOT NULL,
+        symbol        TEXT        NOT NULL,
+        status        TEXT        NOT NULL,   -- 'PINNING' | 'SQUEEZING'
+        ts            TIMESTAMPTZ NOT NULL,
+        spot          REAL,
+        pin_strike    REAL,
+        pin_dist_pct  REAL,
+        iv_rv_spread  REAL,
+        spread_delta  REAL,
+        range_pct     REAL,
+        range_delta   REAL,
+        UNIQUE (date, symbol, status)
+      );
+      CREATE INDEX IF NOT EXISTS idx_vpinev_date ON vol_pin_events(date);
     `);
     ensured = true;
     return true;
@@ -269,6 +286,67 @@ async function snapshotTicker(symbol, date, p) {
   return { symbol, spot, atm_iv, rv_ann, iv_rv_spread, pin_strike };
 }
 
+// ── event log (first occurrence per symbol/day/status) ──────────────────────
+// Mirrors the /proxy/vol-pin-scanner trend logic so "PINNING"/"SQUEEZING"
+// status agrees with what the UI shows, then persists the first time each
+// symbol crosses into that status on a given day. ON CONFLICT dedupes so
+// repeated sweeps while a name stays pinned/squeezing don't spam rows.
+async function logPinEvents(p, date, minSnaps = 3) {
+  try {
+    const { rows } = await p.query(
+      `INSERT INTO vol_pin_events
+         (date, symbol, status, ts, spot, pin_strike, pin_dist_pct, iv_rv_spread, spread_delta, range_pct, range_delta)
+       SELECT $1, symbol, status, ts, spot, pin_strike, pin_dist_pct, iv_rv_spread, spread_delta, range_pct, range_delta
+       FROM (
+         WITH latest AS (
+           SELECT DISTINCT ON (symbol)
+             symbol, ts, spot, pin_strike, iv_rv_spread, range_pct
+           FROM vol_pin_snapshots
+           WHERE date = $1 AND atm_iv > 0
+           ORDER BY symbol, ts DESC
+         ),
+         trend AS (
+           SELECT symbol,
+             COUNT(*) AS n_snaps,
+             (ARRAY_AGG(iv_rv_spread ORDER BY ts DESC))[1]
+               - (ARRAY_AGG(iv_rv_spread ORDER BY ts ASC))[1] AS spread_delta,
+             (ARRAY_AGG(range_pct ORDER BY ts DESC))[1]
+               - (ARRAY_AGG(range_pct ORDER BY ts ASC))[1] AS range_delta
+           FROM (
+             SELECT symbol, ts, iv_rv_spread, range_pct
+             FROM vol_pin_snapshots
+             WHERE date = $1 AND iv_rv_spread IS NOT NULL
+             ORDER BY symbol, ts DESC
+           ) sub
+           GROUP BY symbol
+         )
+         SELECT l.symbol, l.ts, l.spot, l.pin_strike, l.iv_rv_spread, l.range_pct,
+           t.spread_delta, t.range_delta,
+           CASE WHEN l.pin_strike > 0 AND l.spot > 0
+                THEN ABS(l.spot - l.pin_strike) / l.spot ELSE NULL END AS pin_dist_pct,
+           CASE
+             WHEN t.spread_delta < -0.005 AND t.range_delta < -0.001
+                  AND l.pin_strike > 0 AND l.spot > 0
+                  AND ABS(l.spot - l.pin_strike) / l.spot < 0.005 THEN 'PINNING'
+             WHEN t.spread_delta < -0.005 AND t.range_delta < -0.001 THEN 'SQUEEZING'
+             ELSE NULL
+           END AS status
+         FROM latest l JOIN trend t ON t.symbol = l.symbol
+         WHERE t.n_snaps >= $2
+       ) scored
+       WHERE status IS NOT NULL
+       ON CONFLICT (date, symbol, status) DO NOTHING
+       RETURNING symbol, status`,
+      [date, minSnaps],
+    );
+    if (rows.length) {
+      console.log(`[vol-pin] event(s) logged: ${rows.map((r) => `${r.symbol}:${r.status}`).join(', ')}`);
+    }
+  } catch (e) {
+    console.warn('[vol-pin] logPinEvents error:', e.message);
+  }
+}
+
 // ── sweep ─────────────────────────────────────────────────────────────────────
 
 async function runSweep({ force = false } = {}) {
@@ -298,6 +376,8 @@ async function runSweep({ force = false } = {}) {
     await new Promise((r) => setTimeout(r, TICKER_DELAY));
   }
 
+  await logPinEvents(p, date).catch((e) => console.warn('[vol-pin] logPinEvents error:', e.message));
+
   console.log(`[vol-pin] sweep done: ${results.length}/${tickers.length} tickers @ ${new Date().toISOString()}`);
   return { ok: true, swept: results.length };
 }
@@ -317,4 +397,4 @@ function startVolPinRecorder() {
   console.log(`[vol-pin] recorder started — sweeping every ${SWEEP_MINS}m`);
 }
 
-module.exports = { startVolPinRecorder, runSweep, ensureSchema, getPool };
+module.exports = { startVolPinRecorder, runSweep, ensureSchema, getPool, logPinEvents };

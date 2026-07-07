@@ -1220,6 +1220,35 @@ async function main() {
         return;
       }
 
+      // ── Vol Pin Event Log ────────────────────────────────────────────────
+      // GET /proxy/vol-pin-events?days=14&limit=200
+      // Persisted history of first-time PINNING/SQUEEZING occurrences per
+      // symbol/day (written by vol-pin-recorder's logPinEvents on each sweep).
+      if (pathname === '/proxy/vol-pin-events' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await volPinEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = volPinGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const days  = Math.min(90, Math.max(1, Number(u.searchParams.get('days') || 14)));
+            const limit = Math.min(500, Math.max(1, Number(u.searchParams.get('limit') || 200)));
+            const cutoff = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' })
+              .format(new Date(Date.now() - days * 24 * 60 * 60 * 1000));
+            const { rows } = await p.query(
+              `SELECT date, symbol, status, ts, spot, pin_strike, pin_dist_pct,
+                      iv_rv_spread, spread_delta, range_pct, range_delta
+               FROM vol_pin_events
+               WHERE date >= $1
+               ORDER BY ts DESC
+               LIMIT $2`,
+              [cutoff, limit],
+            );
+            sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+
       // ── OI Change Scanner ────────────────────────────────────────────────
       // GET /proxy/oi-change?limit=100&side=all&dir=all
       // Top day-over-day OTM open-interest changes for the latest recorded
