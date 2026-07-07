@@ -6,6 +6,10 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-06 — Fixed missing Edit/Delete on "Words from Bzila" (`app/traders-dashboard/page.tsx`)
+
+The new card's owner gate relied only on `isOwnerClaim`; widened it to also accept a `NEXT_PUBLIC_OWNER_USER_ID` env match (same cosmetic-gate pattern as the Discord share button in `DataBox.tsx`), so Edit/Delete now render reliably. Confirmed `AuthProvider.tsx`'s `isOwnerClaim` still exists post-migration (now derived from `user?.isOwner` instead of a Supabase JWT claim) — no further change needed there. NOT build-verified this session.
+
 ## 2026-07-06 — Full custom auth + billing migration off Supabase Auth (`lib/db.ts`, `lib/auth/*`, `lib/supabase/server.ts`+`middleware.ts`, `middleware.ts`, `app/api/auth/*`, `app/auth/callback`, Stripe routes, `server-v2/ws-auth.js`, `scripts/migrate-users-from-supabase.mjs`)
 
 Replaced Supabase Auth entirely with a custom `users`/`sessions`/`password_resets` schema in the existing Render Postgres (scrypt hashing w/ legacy-bcrypt verify + auto-upgrade, opaque session cookies, custom Google OAuth via `lib/auth/google.ts`), keeping all ~40 existing `getServerUserId`/`getServerIsOwner` call sites untouched by preserving their signatures; simplified Stripe webhook/checkout (dropped the cross-DB Supabase claim mirror), rewrote the WS auth gate, admin email/activity routes, and kept Supabase alive only for `/chat` Realtime via a minted JWT (`app/api/auth/chat-token`). Migration script run live (29/29 Supabase users migrated, owner verified); fixed a template-literal syntax bug + a dev-only CSP `unsafe-eval` issue found during local testing, and added a branded reset-password email (`lib/emails/reset-password.ts`); pushed via `push.ps1` — NOT yet confirmed live on prod post-push.

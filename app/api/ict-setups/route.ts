@@ -186,15 +186,19 @@ function extractSetups(candles: IctCandle[]): Detected[] {
 }
 
 /**
- * Grade one setup against the bars after its trigger, tracked like the fails
- * page: reward is measured in R (MFE / risk), where risk = entry→structural stop.
- *   r_multiple = max favorable R reached before the stop was hit (peak MFE / risk)
- *   win  = ran ≥ 1R before the structural stop was touched
+ * Grade one setup against the bars after its trigger — SAME methodology as the
+ * fails page: reward is measured in R (MFE / risk), where risk = entry→structural
+ * stop, and a trade is tracked until it actually resolves (stop hit or session
+ * close). No artificial early cutoff — a setup stays "pending" (re-graded every
+ * 5 min) for as long as the session runs, so winners get credit for the full
+ * move instead of being frozen at whatever R they'd reached an hour in.
+ *   r_multiple = max favorable R reached so far (peak MFE / risk)
+ *   win  = ran ≥ 1R before the structural stop was touched, OR survived to
+ *          session close with a peak ≥ 1R
  *   loss = stopped out having reached < 1R
- *   chop = never stopped and never reached 1R after GRADE_AFTER_BARS / session end
+ *   chop = survived to session close, stop never hit, but never reached 1R
  * Tier hit-rates (1R/2R/3R) are derived downstream from r_multiple.
  */
-const GRADE_AFTER_BARS = 12; // ~1h of 5m bars with no resolution → call it chop
 function gradeSetup(
   row: IctSetupRecord, candles: IctCandle[], sessionClosed: boolean,
 ): {
@@ -225,8 +229,8 @@ function gradeSetup(
     }
   }
   const maxR = round2(mfe / risk);
-  if (after.length >= GRADE_AFTER_BARS || sessionClosed) {
-    // Resolved without stopping: ≥1R reached = win, else chop (went nowhere).
+  if (sessionClosed) {
+    // Session actually ended without stopping: ≥1R reached = win, else chop (went nowhere).
     return { outcome: maxR >= 1 ? "win" : "chop", mfe, mae, r_multiple: maxR,
       resolved_ts: after[after.length - 1].timestamp, resolved_price: after[after.length - 1].close };
   }
