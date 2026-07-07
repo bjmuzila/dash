@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { getSupabaseBrowser } from "@/lib/supabase/client";
 
 export type ChatMessage = {
   id: number;
@@ -12,93 +11,83 @@ export type ChatMessage = {
   created_at: string;
 };
 
-const PAGE = 50;
+const POLL_MS = 3000;
 
 /**
- * Single global subscriber-chat room (Supabase Auth + Realtime).
- * - Loads the latest PAGE messages on mount.
- * - Subscribes to realtime INSERT/DELETE and reflects them live.
- * - send() inserts a row; RLS enforces user_id === auth.uid().
- *
- * The browser client manages its own session token (cookie-based), so there's
- * no getToken bridge and no manual realtime.setAuth — the socket authenticates
- * from the active Supabase session automatically.
+ * Single global subscriber-chat room, server-mediated (see
+ * app/api/chat/messages/route.ts). No direct browser<->Supabase connection
+ * and no Supabase-issued JWT of any kind -- our own session cookie gates the
+ * route, and the service-role key does the actual DB work server-side.
+ * "Live" is short-interval polling rather than a Realtime socket; fine for a
+ * single low-traffic chat room, and immune to Supabase's JWT Signing Keys
+ * migration breaking self-signed tokens.
  */
 export function useChat(displayName: string) {
   const { userId } = useAuth();
-  const supabase = getSupabaseBrowser();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const seen = useRef<Set<number>>(new Set());
+  const known = useRef<Set<number>>(new Set());
 
-  const append = useCallback((m: ChatMessage) => {
-    if (seen.current.has(m.id)) return;
-    seen.current.add(m.id);
-    setMessages((prev) => [...prev, m]);
+  const merge = useCallback((incoming: ChatMessage[]) => {
+    const fresh = incoming.filter((m) => !known.current.has(m.id));
+    if (fresh.length === 0) return;
+    fresh.forEach((m) => known.current.add(m.id));
+    setMessages((prev) => [...prev, ...fresh].sort((a, b) => a.id - b.id));
   }, []);
 
-  const remove = useCallback((id: number) => {
-    seen.current.delete(id);
-    setMessages((prev) => prev.filter((m) => m.id !== id));
-  }, []);
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat/messages", { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(json?.error || `Failed to load (${res.status})`);
+        return;
+      }
+      merge((json.messages ?? []) as ChatMessage[]);
+      setError(null);
+    } catch {
+      setError("Network error loading chat");
+    } finally {
+      setLoading(false);
+    }
+  }, [merge]);
 
   useEffect(() => {
     if (!userId) return;
     let active = true;
-    const channelName = `chat_messages_${Math.random().toString(36).slice(2)}`;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("chat_messages")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(PAGE);
-      if (!active) return;
-      if (error) {
-        setError(error.message);
-      } else {
-        const ordered = (data ?? []).slice().reverse() as ChatMessage[];
-        seen.current = new Set(ordered.map((m) => m.id));
-        setMessages(ordered);
-      }
-      setLoading(false);
-
-      channel = supabase
-        .channel(channelName)
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "chat_messages" },
-          (payload) => append(payload.new as ChatMessage),
-        )
-        .on(
-          "postgres_changes",
-          { event: "DELETE", schema: "public", table: "chat_messages" },
-          (payload) => {
-            const id = (payload.old as { id?: number })?.id;
-            if (typeof id === "number") remove(id);
-          },
-        )
-        .subscribe();
-    })();
-
+    load();
+    const interval = setInterval(() => {
+      if (active) load();
+    }, POLL_MS);
     return () => {
       active = false;
-      if (channel) supabase.removeChannel(channel);
+      clearInterval(interval);
     };
-  }, [userId, supabase, append, remove]);
+  }, [userId, load]);
 
   const send = useCallback(
     async (raw: string) => {
       const body = raw.trim();
       if (!body || !userId) return;
-      const { error } = await supabase
-        .from("chat_messages")
-        .insert({ user_id: userId, display_name: displayName, body });
-      if (error) setError(error.message);
+      try {
+        const res = await fetch("/api/chat/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body, displayName }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(json?.error || `Failed to send (${res.status})`);
+          return;
+        }
+        if (json?.message) merge([json.message as ChatMessage]);
+        setError(null);
+      } catch {
+        setError("Network error sending message");
+      }
     },
-    [userId, supabase, displayName],
+    [userId, displayName, merge],
   );
 
   return { messages, loading, error, send };
