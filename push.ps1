@@ -93,7 +93,8 @@ $deployLines = @(
 $deployScript = ($deployLines -join $LF) + $LF
 $deployScript = $deployScript -replace "[\r]", ""
 
-$deployScript | & ssh @sshOpts $vpsHost "bash -s"
+$encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($deployScript))
+& ssh @sshOpts $vpsHost "echo $encoded | base64 -d | bash -s"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "VPS deploy FAILED. Code is on GitHub - SSH in and rerun, or rollback: git reset --hard HEAD~1" -ForegroundColor Red
     exit 1
