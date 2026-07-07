@@ -615,6 +615,7 @@ function PositionBar({
   color,
   maxAbs,
   valueOverride,
+  level,
 }: {
   label: string;
   pct: number | null;
@@ -622,6 +623,7 @@ function PositionBar({
   color: string;
   maxAbs: number;
   valueOverride?: string;
+  level?: number | null;
 }) {
   const p = pct ?? 0;
   const halfWidthPct = maxAbs > 0 ? Math.min(Math.abs(p) / maxAbs, 1) * 50 : 0;
@@ -646,7 +648,12 @@ function PositionBar({
         )}
       </div>
       <div style={{ fontSize: 15, fontWeight: 700, color, textAlign: "right", fontFamily: "var(--font-mono, monospace)" }}>
-        {valueOverride ?? fmtDelta(delta ?? null)}
+        {valueOverride ?? (
+          <>
+            <div>{fmtDelta(delta ?? null)}</div>
+            <div style={{ fontSize: 13, opacity: 0.75, marginTop: 2 }}>{fmtPrice(level ?? null)}</div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -747,6 +754,7 @@ function PositioningCard({ row }: { row: PositioningRow }) {
               color={r.color}
               maxAbs={maxAbs}
               valueOverride={r.valueOverride}
+              level={r.level}
             />
           ))}
       </div>
@@ -3280,6 +3288,14 @@ function RegimeEngineTab() {
   );
   const closes = useMemo(() => alignedRows.map((c) => Number(c.close)), [alignedRows]);
 
+  // Chart display: only the past 2 hours by default (HMM fit still uses all data)
+  const chartRows = useMemo(() => {
+    const now = Date.now();
+    const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+    const filtered = alignedRows.filter((c) => c.timestamp >= twoHoursAgo);
+    return filtered.length > 0 ? filtered : alignedRows.slice(-24);
+  }, [alignedRows]);
+
   const returns = useMemo(() => {
     const out: number[] = [];
     for (let i = 1; i < closes.length; i++) {
@@ -3304,6 +3320,21 @@ function RegimeEngineTab() {
     () => (hmm ? [undefined, ...hmm.gammaByLabel.map((g) => g.Panic)] : []),
     [hmm]
   );
+
+  // Filter decoded/panic arrays to match the 2-hour chart display window
+  const chartDecoded = useMemo(() => {
+    if (alignedRows.length === 0 || chartRows.length === 0) return decodedAtCloses;
+    const startIdx = alignedRows.findIndex((r) => chartRows[0] && r.timestamp === chartRows[0].timestamp);
+    if (startIdx === -1) return decodedAtCloses.slice(-chartRows.length);
+    return decodedAtCloses.slice(startIdx, startIdx + chartRows.length);
+  }, [alignedRows, chartRows, decodedAtCloses]);
+
+  const chartPanic = useMemo(() => {
+    if (alignedRows.length === 0 || chartRows.length === 0) return panicAtCloses;
+    const startIdx = alignedRows.findIndex((r) => chartRows[0] && r.timestamp === chartRows[0].timestamp);
+    if (startIdx === -1) return panicAtCloses.slice(-chartRows.length);
+    return panicAtCloses.slice(startIdx, startIdx + chartRows.length);
+  }, [alignedRows, chartRows, panicAtCloses]);
 
   const backtests = useMemo(() => {
     if (!hmm || closes.length < 60) return null;
@@ -3444,7 +3475,7 @@ function RegimeEngineTab() {
           </div>
 
           <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>{ticker} Price vs. Hidden State</span>}>
-            <RegimeCandleChart rows={alignedRows} decoded={decodedAtCloses} panic={panicAtCloses} ticker={ticker} />
+            <RegimeCandleChart rows={chartRows} decoded={chartDecoded} panic={chartPanic} ticker={ticker} />
           </Card>
 
           <Card

@@ -1,5 +1,6 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { forwardGet } from "@/lib/proxyForward";
+import { cacheHeaders, CACHE_TTL } from "@/lib/cacheHeaders";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -13,5 +14,13 @@ export const revalidate = 0;
  */
 export async function GET(req: NextRequest) {
   const symbols = (new URL(req.url).searchParams.get("symbols") || "").trim();
-  return forwardGet(`/proxy/quotes?symbols=${encodeURIComponent(symbols)}`);
+  const res = await forwardGet(`/proxy/quotes?symbols=${encodeURIComponent(symbols)}`);
+
+  // Add cache headers for Cloudflare
+  const headers = new Headers(res.headers);
+  Object.entries(cacheHeaders(CACHE_TTL.quotes)).forEach(([key, value]) => {
+    headers.set(key, value);
+  });
+
+  return new NextResponse(res.body, { ...res, headers });
 }

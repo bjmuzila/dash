@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cacheHeaders, CACHE_TTL } from "@/lib/cacheHeaders";
 
 /**
  * /api/gex — thin adapter over the server-v2 in-process proxy (/proxy/gex).
@@ -33,21 +34,24 @@ export async function GET(req: NextRequest) {
     const v2 = await res.json();
 
     // Map server-v2 field names → the dashboard's expected shape.
-    return NextResponse.json({
-      chain: Array.isArray(v2.gexRows) ? v2.gexRows : [],
-      spotPrice: Number(v2.spot ?? 0),
-      expiration: v2.expiry ?? expiry ?? null,
-      expirations: v2.expirations ?? undefined,
-      callWall: v2.callWall ?? null,
-      putWall: v2.putWall ?? null,
-      gexFlip: v2.gexFlip ?? null,
-      totalNetGex: v2.totalNetGex ?? null,
-      totals: v2.totals ?? null,
-      prevClose: v2.prevClose ?? null,
-      prevCloseDate: v2.prevCloseDate ?? null,
-      updatedAt: v2.updatedAt ?? null,
-      symbol: v2.symbol ?? null,
-    });
+    return NextResponse.json(
+      {
+        chain: Array.isArray(v2.gexRows) ? v2.gexRows : [],
+        spotPrice: Number(v2.spot ?? 0),
+        expiration: v2.expiry ?? expiry ?? null,
+        expirations: v2.expirations ?? undefined,
+        callWall: v2.callWall ?? null,
+        putWall: v2.putWall ?? null,
+        gexFlip: v2.gexFlip ?? null,
+        totalNetGex: v2.totalNetGex ?? null,
+        totals: v2.totals ?? null,
+        prevClose: v2.prevClose ?? null,
+        prevCloseDate: v2.prevCloseDate ?? null,
+        updatedAt: v2.updatedAt ?? null,
+        symbol: v2.symbol ?? null,
+      },
+      { headers: cacheHeaders(CACHE_TTL.gex) }
+    );
   } catch (err) {
     return NextResponse.json(
       { error: String((err as Error)?.message || err), chain: [] },

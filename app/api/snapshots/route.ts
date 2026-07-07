@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { cacheHeaders, CACHE_TTL } from "@/lib/cacheHeaders";
 
 // Estimated-Moves / Zones snapshots. Migrated from browser IndexedDB so they
 // persist across browsers, profiles, and origin/domain changes. One row per
@@ -58,7 +59,9 @@ export async function GET(req: NextRequest) {
     } else {
       res = await pool.query("SELECT * FROM em_snapshots ORDER BY ts DESC");
     }
-    return NextResponse.json(res.rows.map(rowToSnapshot));
+    return NextResponse.json(res.rows.map(rowToSnapshot), {
+      headers: cacheHeaders(CACHE_TTL.snapshots),
+    });
   } catch (err) {
     console.error("[/api/snapshots GET]", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
