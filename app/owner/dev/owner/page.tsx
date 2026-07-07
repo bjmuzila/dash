@@ -467,6 +467,80 @@ function SpotFeedHealth() {
   );
 }
 
+type ThetaStatsResp = {
+  ok: boolean;
+  cpuPercent?: number | null;
+  memUsageBytes?: number | null;
+  memLimitBytes?: number | null;
+  memPercent?: number | null;
+  pids?: number | null;
+  status?: string;
+  health?: string | null;
+  restarting?: boolean;
+  oomKilled?: boolean;
+};
+
+const MIB = 1024 * 1024;
+
+// Live docker-stats readout for the theta-terminal container. Added after the
+// 2026-07-07 heap OOM (options prints stopped mid-session, JVM heap exhausted
+// — see docker-compose.yml theta-terminal comment) so a recurrence shows up
+// here before it silently kills the feed again. Sources /api/owner/theta-stats,
+// which reads the docker-socket-proxy sidecar (no raw docker.sock in the app
+// container).
+function ThetaTerminalStats() {
+  const [data, setData] = useState<ThetaStatsResp | null | undefined>(undefined);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const r = await fetch("/api/owner/theta-stats", { cache: "no-store" });
+        const j = await r.json();
+        if (alive) setData(r.ok ? j : null);
+      } catch { if (alive) setData(null); }
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const errored = data === null;
+  const memPct = data?.memPercent ?? null;
+  const unhealthy =
+    !errored && data != null &&
+    (data.status !== "running" || data.restarting || data.oomKilled || data.health === "unhealthy" || (memPct != null && memPct > 95));
+  const warn = !errored && !unhealthy && ((memPct != null && memPct > 80) || data?.health === "starting");
+
+  const color = errored || unhealthy ? HOME_THEME.red : warn ? "#facc15" : "#00e676";
+  const label = data === undefined ? "…" : errored ? "UNREACHABLE" : unhealthy ? "UNHEALTHY" : warn ? "WARN" : "HEALTHY";
+
+  const memStr = data?.memUsageBytes != null && data?.memLimitBytes
+    ? `${(data.memUsageBytes / MIB).toFixed(0)}MiB / ${(data.memLimitBytes / MIB / 1024).toFixed(1)}GiB (${memPct?.toFixed(0)}%)`
+    : "--";
+  const cpuStr = data?.cpuPercent != null ? `${data.cpuPercent.toFixed(1)}%` : "--";
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
+      borderRadius: 12, border: `1px solid ${color}59`, background: `${color}12`,
+    }}>
+      <span style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color }}>Theta Terminal · {label}</div>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
+          cpu {cpuStr} · mem {memStr} · pids {data?.pids ?? "--"}
+        </div>
+      </div>
+      {errored && (
+        <div style={{ marginLeft: "auto", fontSize: 15, color: HOME_THEME.red, opacity: 1, maxWidth: 220, textAlign: "right" }}>
+          Stats unreachable — check docker-proxy sidecar.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Maps each accordion section to its sidebar nav key.
 const SECTION_TAB = {
   system:   "infra",
@@ -2577,6 +2651,10 @@ export default function OwnerDashboard() {
               <a href="/greeks" style={{ ...homeSecondaryButtonStyle, padding: "8px 16px", borderRadius: 8, textDecoration: "none", fontSize: 15, whiteSpace: "nowrap" }}>
                 Open Greeks →
               </a>
+            </div>
+            {/* theta-terminal container health (cpu/mem/pids) — live docker stats */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 260px", minWidth: 260 }}><ThetaTerminalStats /></div>
             </div>
             {/* Toggles */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>

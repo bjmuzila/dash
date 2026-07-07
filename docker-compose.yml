@@ -43,6 +43,45 @@ services:
     depends_on:
       theta-terminal:
         condition: service_healthy
+      docker-proxy:
+        condition: service_started
+
+  # Read-only, locked-down Docker API proxy. Lets the dashboard container query
+  # theta-terminal's live CPU/mem stats (owner page readout) WITHOUT mounting
+  # the raw docker.sock into the app container — a raw socket mount is
+  # root-equivalent host access regardless of any `:ro` flag on the mount
+  # itself. This proxy only allows GET on /containers* (list + stats); POST,
+  # exec, images, volumes, networks, etc. are all off. Not published to the
+  # host — only reachable from sibling containers on the compose network.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 0
+      ALLOW_START: 0
+      ALLOW_STOP: 0
+      ALLOW_RESTARTS: 0
+      EXEC: 0
+      IMAGES: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      INFO: 1
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # Theta Terminal (options/index data source). Previously run standalone via
   # `docker run` on the VPS, which left it with NO JVM heap cap → it OOM'd on the
@@ -63,13 +102,14 @@ services:
       - .env.local
     environment:
       # Cap the JVM heap so the Terminal garbage-collects instead of OOM-ing.
-      # ~1.5g heap under a 2g container limit leaves headroom for non-heap/JVM
-      # overhead. Drop to -Xmx1024m if the box is RAM-tight (check `free -m`).
-      JAVA_TOOL_OPTIONS: -Xmx1500m
+      # Bumped 1500m/2g -> 3000m/4g on 2026-07-07 after a live OOM (heap
+      # exhausted mid-session under real OPRA load, see CHANGELOG). Drop back
+      # only if the box is RAM-tight (check `free -m`) and watch for recurrence.
+      JAVA_TOOL_OPTIONS: -Xmx3000m
     # Hard memory backstop. If the JVM ever blows past the heap cap, the kernel
     # OOM-kills just this container (restart: unless-stopped brings it back)
     # instead of the whole box going into swap-death.
-    mem_limit: 2g
+    mem_limit: 4g
     # Publish to host loopback so an SSH tunnel (local dev) and host curl reach a
     # STABLE address. 25503 = REST, 25520 = live event stream. Loopback-only.
     ports:
