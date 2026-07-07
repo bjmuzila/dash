@@ -364,6 +364,130 @@ const ShareCard = forwardRef<HTMLDivElement, {
   );
 });
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * Tweet Mockup — a shared X-post preview used on every tab. Takes a `getBlob`
+ * (however that tab already renders its image — GexCard.renderBlob,
+ * ExplainerMockup.renderBlob, the Daily-Levels renderCardBlob, the GEX Data
+ * profile canvas, the Brander canvas) and a caption, and shows what the actual
+ * tweet would look like: avatar + handle, caption, the rendered image, then
+ * Copy / Open X. `refreshKey` re-renders the preview whenever the thing that
+ * feeds it changes (e.g. a new image loads) — there's also a manual refresh
+ * button since not every state change is worth wiring into a key.
+ * ════════════════════════════════════════════════════════════════════════════ */
+const TM_CSS = `
+  .tm-wrap { border: 1px solid var(--sm-border); border-radius: 12px; background: var(--bg1); padding: 14px 16px; max-width: 480px; }
+  .tm-title { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); margin-bottom: 10px; }
+  .tm-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .tm-avatar { width: 36px; height: 36px; border-radius: 9px; background: var(--bg0); border: 1px solid var(--sm-border); object-fit: contain; padding: 3px; flex-shrink: 0; }
+  .tm-names { display: flex; flex-direction: column; line-height: 1.25; }
+  .tm-name { font-size: 13px; font-weight: 800; color: var(--text1); }
+  .tm-handle { font-size: 12px; color: var(--sm-muted); }
+  .tm-caption { font-size: 13px; color: var(--text1); line-height: 1.45; white-space: pre-wrap; margin-bottom: 10px; }
+  .tm-caption-edit { width: 100%; box-sizing: border-box; resize: vertical; min-height: 54px; font-family: inherit; font-size: 13px; line-height: 1.45; color: var(--text1); background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+  .tm-imgbox { border: 1px solid var(--sm-border); border-radius: 10px; overflow: hidden; background: var(--bg0); min-height: 90px; display: flex; align-items: center; justify-content: center; }
+  .tm-imgbox img { display: block; width: 100%; height: auto; max-height: 320px; object-fit: contain; }
+  .tm-ph { font-size: 11px; color: var(--sm-muted); padding: 20px; text-align: center; }
+  .tm-acts { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .tm-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; cursor: pointer; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3, rgba(255,255,255,.05)); color: var(--text1); transition: all .12s; }
+  .tm-btn:hover { border-color: var(--cyan); } .tm-btn:disabled { opacity: .5; cursor: default; }
+  .tm-btn.x { background: var(--cyan); border-color: var(--cyan); color: #05060a; }
+`;
+
+interface TweetMockupProps {
+  getBlob: () => Promise<Blob | null>;
+  caption: string;
+  onCaptionChange?: (v: string) => void;
+  refreshKey?: unknown;
+  title?: string;
+}
+function TweetMockup({ getBlob, caption, onCaptionChange, refreshKey, title }: TweetMockupProps) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [copyState, setCopyState] = useState<"" | "copied" | "saved" | "err">("");
+  const urlRef = useRef<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const blob = await getBlob();
+      if (blob) {
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        const url = URL.createObjectURL(blob);
+        urlRef.current = url;
+        setPreviewUrl(url);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [getBlob]);
+
+  // Auto-recapture whenever the thing feeding this mockup changes.
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
+
+  const copyImage = useCallback(async (): Promise<boolean> => {
+    const blob = await getBlob();
+    if (!blob) return false;
+    try {
+      const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+      if (!ClipItem || !navigator.clipboard?.write) throw new Error("no-clip");
+      await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
+      return true;
+    } catch {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `cb-edge-tweet-${todayETStr()}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      return false;
+    }
+  }, [getBlob]);
+
+  const onCopy = useCallback(async () => {
+    const ok = await copyImage();
+    setCopyState(ok ? "copied" : "saved");
+    setTimeout(() => setCopyState(""), 1600);
+  }, [copyImage]);
+
+  const onOpenX = useCallback(async () => {
+    await copyImage();
+    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(caption)}`, "_blank", "noopener");
+  }, [copyImage, caption]);
+
+  return (
+    <div className="tm-wrap">
+      <style>{TM_CSS}</style>
+      <div className="tm-title">{title || "Tweet preview"}</div>
+      <div className="tm-head">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="tm-avatar" src="/cb-edge-logo.png" alt="CB Edge" />
+        <div className="tm-names">
+          <span className="tm-name">CB Edge</span>
+          <span className="tm-handle">@cbedge · now</span>
+        </div>
+      </div>
+      {onCaptionChange
+        ? <textarea className="tm-caption-edit" value={caption} onChange={(e) => onCaptionChange(e.target.value)} />
+        : <div className="tm-caption">{caption}</div>}
+      <div className="tm-imgbox">
+        {previewUrl
+          ? <img src={previewUrl} alt="tweet preview" />
+          : <div className="tm-ph">{loading ? "Rendering preview…" : "No image yet — hit Refresh"}</div>}
+      </div>
+      <div className="tm-acts">
+        <button type="button" className="tm-btn" onClick={refresh} disabled={loading}>{loading ? "Loading…" : "↻ Refresh"}</button>
+        <button type="button" className="tm-btn" onClick={onCopy} disabled={loading}>
+          {copyState === "copied" ? "✓ Copied" : copyState === "saved" ? "✓ Saved" : "Copy"}
+        </button>
+        <button type="button" className="tm-btn x" onClick={onOpenX} disabled={loading}>Open X</button>
+      </div>
+    </div>
+  );
+}
+
 /* Heavy/hype card styling for the GEX Image Cards tab. Scoped under .gx-wrap so
    it can't leak into the rest of the page. Cards are true 1600×900 for export. */
 const GX_CSS = `
@@ -383,25 +507,18 @@ const GX_CSS = `
   .gx-btn.x { background:#1d9bf0; border-color:#1d9bf0; color:#fff; box-shadow: 0 0 16px rgba(29,155,240,.3); }
   .gx-btn.load { border-color: var(--cyan); color: var(--cyan); background: transparent; padding: 7px 13px; font-size: 11px; }
 
-  /* fit into viewport but keep true pixels for capture. Outer card now sources
-     its surface from the dashboard's own tokens (--bg1/--sm-border/--cyan/--amber)
-     instead of a standalone neon palette, so it reads as the same panel language
-     as every other card on the site. */
+  /* fit into viewport but keep true pixels for capture. Outer card is the
+     SAME flat panel used everywhere else on the dashboard (homePanelStyle /
+     classicCardStyle): a subtle top-center accent glow over the solid panel
+     surface, a hairline border, a plain drop shadow. No standalone neon
+     gradient, no corner glow blobs, no rainbow top bar. */
   .gx-card { width: 1600px; height: 900px; flex: 0 0 auto; position: relative; overflow: hidden;
-    background:
-      radial-gradient(900px 380px at 50% -8%, color-mix(in srgb, var(--cyan) 10%, transparent), transparent 60%),
-      var(--bg1);
-    border: 1px solid var(--sm-border); border-radius: 22px;
-    box-shadow: 0 40px 120px rgba(0,0,0,.65);
+    background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--cyan) 7%, transparent) 0%, transparent 55%), var(--bg1);
+    border: 1px solid var(--sm-border); border-radius: 18px;
+    box-shadow: 0 18px 40px rgba(0,0,0,.22);
     display: flex; flex-direction: column; transform-origin: top center; }
   .gx-card.vertical { width: 900px; height: 1600px; }
   .gx-card.neg { border-color: color-mix(in srgb, var(--sm-red) 30%, var(--sm-border)); }
-  .gx-card::before { content:""; position:absolute; top:0; left:0; right:0; height:4px;
-    background: linear-gradient(90deg, var(--cyan), rgba(33,158,188,0) 38%, rgba(249,115,22,0) 62%, var(--amber)); opacity:.9; }
-  .gx-glow { position:absolute; width:420px; height:420px; border-radius:50%; filter: blur(90px); pointer-events:none; z-index:0; }
-  .gx-glow.tl { top:-160px; left:-120px; background: color-mix(in srgb, var(--cyan) 18%, transparent); }
-  .gx-glow.br { bottom:-180px; right:-140px; background: color-mix(in srgb, var(--amber) 16%, transparent); }
-  .gx-card.neg .gx-glow.br { background: color-mix(in srgb, var(--sm-red) 16%, transparent); }
 
   .gx-head { position:absolute; top:0; left:0; right:0; z-index:4; display:grid; grid-template-columns: 1fr auto 1fr; align-items:start; padding: 22px 30px 6px; pointer-events:none; }
   .gx-head-side { display:flex; flex-direction:column; gap:3px; }
@@ -416,9 +533,11 @@ const GX_CSS = `
   .gx-regime.pos { color:#8ECAE6; border-color: rgba(16,185,129,.5); background: rgba(16,185,129,.10); box-shadow: 0 0 18px rgba(16,185,129,.25) inset; }
   .gx-regime i { width:9px; height:9px; border-radius:50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
 
-  /* chart as a full-bleed UNDERLAY — inset ~1in (96px) from the card edge,
-     sits behind all the text/pills (low z-index). */
-  .gx-imgwrap { position:absolute; inset:96px; z-index:1; border:1px solid var(--sm-border); border-radius:16px;
+  /* chart as a full-bleed UNDERLAY — inset ~1in (96px) from the card edge on
+     3 sides. Bottom gets more clearance (150px) than the strip's own 58px
+     offset + ~77px pill height so the chart's own strike-number labels (drawn
+     near ITS canvas bottom) land above the pill strip instead of under it. */
+  .gx-imgwrap { position:absolute; top:96px; right:96px; bottom:150px; left:96px; z-index:1; border:1px solid var(--sm-border); border-radius:16px;
     background:var(--bg0); overflow:hidden; display:flex; align-items:center; justify-content:center; cursor:pointer; }
   /* auto-crop the chart's top toolbar: render the image taller than the box and
      pin it to the bottom so the top ~10% (toolbar row) is clipped by overflow.
@@ -564,7 +683,9 @@ function GexCard({
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveErr, setLiveErr] = useState(false);
   const captureHostRef = useRef<HTMLDivElement>(null);
-  const slot = { w: dims.w - 192, h: dims.h - 192 }; // 96px inset each side, matches .gx-imgwrap
+  // Matches .gx-imgwrap: 96px inset on 3 sides, 150px on the bottom (clears the
+  // pill strip so the chart's own strike labels stay visible above it).
+  const slot = { w: dims.w - 96 - 96, h: dims.h - 96 - 150 };
 
   const loadLiveVisual = useCallback(async () => {
     setLiveLoading(true);
@@ -687,9 +808,6 @@ function GexCard({
         </button>
       </div>
       <div ref={cardRef} className={`gx-card ${regimeNeg ? "neg" : "pos"}${kind === "heat" ? " vertical" : ""}`}>
-        {/* hype glow corners */}
-        <span className="gx-glow tl" /><span className="gx-glow br" />
-
         {/* header: date left · centered chrome logo · regime right */}
         <div className="gx-head">
           <div className="gx-head-side left">
@@ -728,12 +846,14 @@ function GexCard({
         </div>
       </div>
 
-      {/* Capture host — mounts the real chart/heatmap once loaded, in normal
-          document flow (just invisible via opacity) so it paints exactly like
-          the visible GEX Data tab's chart does, sized to the card's image
-          slot. Captured into `img` above, then never shown. */}
+      {/* Capture host — mounts the real chart/heatmap once loaded, parked off
+          -canvas (not opacity:0 — html2canvas renders computed opacity
+          faithfully, so an opacity:0 host captures as a blank image for the
+          heatmap card). Off-screen positioning still paints normally, so both
+          the raw canvas.toDataURL() (chart) and html2canvas (heatmap) see the
+          real content. Sized to the card's image slot; never shown. */}
       {gexChain.length > 0 && (
-        <div ref={captureHostRef} style={{ position: "absolute", top: 0, left: 0, opacity: 0, zIndex: -1, pointerEvents: "none", width: slot.w, height: slot.h, overflow: "hidden", background: "var(--bg0)" }}>
+        <div ref={captureHostRef} style={{ position: "fixed", left: -99999, top: 0, pointerEvents: "none", width: slot.w, height: slot.h, overflow: "hidden", background: "var(--bg0)" }}>
           {kind === "chart"
             ? <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
             : <GexHeatmap chain={gexChain} spotPrice={gexSpot} />}
@@ -747,6 +867,13 @@ function GexCard({
         <button type="button" className="gx-btn x" onClick={onShareX} disabled={busy}>Copy &amp; Open X</button>
         <button type="button" className="gx-dl" onClick={onExport} disabled={busy}>{busy ? "Rendering…" : "Download (PNG)"}</button>
       </div>
+
+      <TweetMockup
+        title={kind === "chart" ? "Tweet preview — NET GEX chart" : "Tweet preview — GEX heatmap"}
+        getBlob={renderBlob}
+        caption={`Todays $SPX Levels\nprovided by https://www.cbedge.net/`}
+        refreshKey={img}
+      />
     </div>
   );
 }
@@ -1469,6 +1596,13 @@ function ExplainerMockup({
           <img className="xp-logo" src="/cb-edge-logo.png" alt="CB Edge" crossOrigin="anonymous" />
         </div>
       </div>
+
+      <TweetMockup
+        title="Tweet preview — GEX read + trade plan"
+        getBlob={renderBlob}
+        caption={`Todays $SPX GEX read + trade plan\nprovided by https://www.cbedge.net/`}
+        refreshKey={`${updated}-${controlNode ? controlNode.k : ""}-${aiMap ? "ai" : "static"}`}
+      />
     </div>
   );
 }
@@ -1507,6 +1641,10 @@ function PostGenerator({ form }: { form: FormState }) {
   const [gexLoading, setGexLoading] = useState(false);
   const [snapState, setSnapState] = useState<"" | "saved" | "copied" | "err">("");
   const chartCaptureRef = useRef<HTMLDivElement>(null);
+  // Same corner-picker logic as Screenshot Brander — move the CB Edge logo /
+  // cbedge.net CTA to any corner of the profile image before copy/download.
+  const [logoCorner, setLogoCorner] = useState<BrCorner>("tl");
+  const [ctaCorner, setCtaCorner] = useState<BrCorner>("br");
 
   const loadGex = useCallback(async () => {
     setGexLoading(true);
@@ -1524,32 +1662,42 @@ function PostGenerator({ form }: { form: FormState }) {
     }
   }, []);
 
-  // Capture the mounted GexChart canvas to a PNG and either copy it to the
-  // clipboard or download it. Mirrors SnapButton.captureGexCanvas but scoped to
-  // this component's chart node so it never grabs an unrelated canvas.
-  const snapProfile = useCallback(async (action: "copy" | "download") => {
+  // Draw the mounted GexChart's raw canvas onto an offscreen canvas at native
+  // size, then stamp the logo/CTA via the SAME drawBrandStamp function
+  // Screenshot Brander uses — so "add/move my logo" behaves identically here.
+  const renderBrandedBlob = useCallback(async (): Promise<Blob | null> => {
     const host = chartCaptureRef.current;
-    const canvas = host?.querySelector<HTMLCanvasElement>("canvas");
-    if (!canvas) { setSnapState("err"); setTimeout(() => setSnapState(""), 1800); return; }
-    canvas.toBlob(async (blob) => {
-      if (!blob) { setSnapState("err"); setTimeout(() => setSnapState(""), 1800); return; }
-      if (action === "copy") {
-        try {
-          const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
-          if (ClipItem && navigator.clipboard?.write) {
-            await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
-            setSnapState("copied"); setTimeout(() => setSnapState(""), 1800); return;
-          }
-        } catch { /* fall through to download */ }
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `cb-edge-gex-profile-${todayETStr()}.png`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-      setSnapState("saved"); setTimeout(() => setSnapState(""), 1800);
-    }, "image/png");
-  }, []);
+    const raw = host?.querySelector<HTMLCanvasElement>("canvas");
+    if (!raw) return null;
+    const out = document.createElement("canvas");
+    out.width = raw.width; out.height = raw.height;
+    const ctx = out.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(raw, 0, 0);
+    drawBrandStamp(ctx, out.width, out.height, logoCorner, ctaCorner);
+    return await new Promise((resolve) => out.toBlob((b) => resolve(b), "image/png"));
+  }, [logoCorner, ctaCorner]);
+
+  // Copy/download the branded profile PNG.
+  const snapProfile = useCallback(async (action: "copy" | "download") => {
+    const blob = await renderBrandedBlob();
+    if (!blob) { setSnapState("err"); setTimeout(() => setSnapState(""), 1800); return; }
+    if (action === "copy") {
+      try {
+        const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+        if (ClipItem && navigator.clipboard?.write) {
+          await navigator.clipboard.write([new ClipItem({ "image/png": blob })]);
+          setSnapState("copied"); setTimeout(() => setSnapState(""), 1800); return;
+        }
+      } catch { /* fall through to download */ }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `cb-edge-gex-profile-${todayETStr()}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setSnapState("saved"); setTimeout(() => setSnapState(""), 1800);
+  }, [renderBrandedBlob]);
 
   const band = emBand(form);
   const regime = regimeOf(form);
@@ -1622,6 +1770,9 @@ function PostGenerator({ form }: { form: FormState }) {
         .pg-type-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 14px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--sm-muted); transition: all 0.12s; }
         .pg-type-btn:hover { color: var(--text1); border-color: var(--cyan); }
         .pg-type-btn.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(33,158,188,0.35); }
+        .pg-corner-row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+        .pg-corner-row label { font-size: 12px; color: var(--sm-muted); display: flex; gap: 7px; align-items: center; }
+        .pg-corner-row select { font-family: var(--sm-mono); font-size: 12px; padding: 6px 9px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg0); color: var(--text1); cursor: pointer; }
         .pg-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.5; }
         .pg-hint b { color: var(--text1); }
         .pg-missing { font-family: var(--sm-mono); font-size: 11px; color: var(--amber); }
@@ -1689,9 +1840,31 @@ function PostGenerator({ form }: { form: FormState }) {
             </div>
           </div>
           {gexChain.length > 0 ? (
-            <div ref={chartCaptureRef} style={{ width: "100%", height: 360, background: "var(--bg0)", borderRadius: 8, overflow: "hidden" }}>
-              <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
-            </div>
+            <>
+              <div className="pg-corner-row">
+                <label>Logo corner
+                  <select value={logoCorner} onChange={(e) => setLogoCorner(e.target.value as BrCorner)}>
+                    {BR_CORNERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
+                  </select>
+                </label>
+                <label>cbedge.net corner
+                  <select value={ctaCorner} onChange={(e) => setCtaCorner(e.target.value as BrCorner)}>
+                    {BR_CORNERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div ref={chartCaptureRef} style={{ width: "100%", height: 360, background: "var(--bg0)", borderRadius: 8, overflow: "hidden", marginTop: 10 }}>
+                <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <TweetMockup
+                  title="Tweet preview — GEX profile"
+                  getBlob={renderBrandedBlob}
+                  caption={`Todays $SPX GEX profile\nprovided by https://www.cbedge.net/`}
+                  refreshKey={`${gexSpot}-${logoCorner}-${ctaCorner}`}
+                />
+              </div>
+            </>
           ) : (
             <div className="pg-hint">Hit <b>Load profile</b> to pull the live GEX profile, then Copy or Download the image to attach to your post.</div>
           )}
@@ -1823,6 +1996,48 @@ const BR_CORNERS: { v: BrCorner; label: string }[] = [
 const BR_DEFAULT_CAPTION =
   `this isn't just another heatmap.\n\nlive charting, automated strategies, a full trader dashboard, and automated ICT setups + alerts — all in one place.\n\ncbedge.net\n\nCB Edge - "Your Unfair Edge in the Markets"`;
 
+// Stamps the CB Edge wordmark + tagline (at `logoCorner`) and the cbedge.net
+// CTA + LIVE dot (at `ctaCorner`) onto an already-drawn canvas, each backed by
+// a radial scrim so it reads over any image. Pure function — no React, no
+// refs — so both Screenshot Brander AND the GEX Data tab's "add my logo" corner
+// picker can call the exact same drawing code onto their own canvas.
+function drawBrandStamp(ctx: CanvasRenderingContext2D, W: number, H: number, logoCorner: BrCorner, ctaCorner: BrCorner) {
+  const u = W / 1600, P = Math.round(40 * u);
+  const scrim = (corner: BrCorner, w: number, h: number) => {
+    const x = corner === "tl" || corner === "bl" ? 0 : W - w;
+    const y = corner === "tl" || corner === "tr" ? 0 : H - h;
+    const gx = x + (corner.includes("l") ? 0 : w), gy = y + (corner.includes("t") ? 0 : h);
+    const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, Math.max(w, h));
+    g.addColorStop(0, "rgba(4,6,11,0.76)"); g.addColorStop(1, "rgba(4,6,11,0)");
+    ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  };
+  // logo
+  const logoSize = Math.round(40 * u), tagSize = Math.round(15 * u);
+  const lLeft = logoCorner === "tl" || logoCorner === "bl", lTop = logoCorner === "tl" || logoCorner === "tr";
+  const lx = lLeft ? P : W - P, ly = lTop ? P + logoSize : H - P - tagSize - Math.round(8 * u);
+  scrim(logoCorner, Math.round(390 * u), Math.round(122 * u));
+  ctx.textAlign = lLeft ? "left" : "right"; ctx.textBaseline = "alphabetic";
+  const grad = ctx.createLinearGradient(0, ly - logoSize, 0, ly + 4);
+  grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.45, "#cfd6dd"); grad.addColorStop(0.55, "#7d8792"); grad.addColorStop(1, "#eef1f4");
+  ctx.fillStyle = grad; ctx.font = `800 ${logoSize}px Inter, "Segoe UI", Arial`;
+  ctx.fillText("CB Edge", lx, ly);
+  ctx.fillStyle = "#ffffff"; ctx.font = `italic 500 ${tagSize}px Inter, "Segoe UI", Arial`;
+  ctx.fillText("“Real Edge - Real Orderflow”", lx, ly + Math.round(24 * u));
+  // cta
+  const ctaSize = Math.round(32 * u);
+  const cLeft = ctaCorner === "tl" || ctaCorner === "bl", cTop = ctaCorner === "tl" || ctaCorner === "tr";
+  const cx = cLeft ? P : W - P, cy = cTop ? P + ctaSize : H - P;
+  scrim(ctaCorner, Math.round(320 * u), Math.round(72 * u));
+  ctx.textAlign = cLeft ? "left" : "right";
+  ctx.fillStyle = "#35D6E8"; ctx.font = `800 ${ctaSize}px Inter, "Segoe UI", Arial`;
+  ctx.fillText("cbedge.net", cx, cy);
+  const tw = ctx.measureText("cbedge.net").width;
+  const dotX = cLeft ? cx + tw + Math.round(20 * u) : cx - tw - Math.round(70 * u);
+  ctx.beginPath(); ctx.arc(dotX, cy - ctaSize * 0.32, Math.round(6 * u), 0, 7); ctx.fillStyle = "#8ECAE6"; ctx.fill();
+  ctx.textAlign = "left"; ctx.fillStyle = "#8ECAE6"; ctx.font = `700 ${Math.round(18 * u)}px Inter, "Segoe UI", Arial`;
+  ctx.fillText("LIVE", dotX + Math.round(12 * u), cy - ctaSize * 0.18);
+}
+
 function ScreenshotBrander() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -1841,40 +2056,7 @@ function ScreenshotBrander() {
     if (!ctx) return;
     cv.width = img.naturalWidth; cv.height = img.naturalHeight;
     ctx.drawImage(img, 0, 0);
-    const W = cv.width, H = cv.height, u = W / 1600, P = Math.round(40 * u);
-    const scrim = (corner: BrCorner, w: number, h: number) => {
-      const x = corner === "tl" || corner === "bl" ? 0 : W - w;
-      const y = corner === "tl" || corner === "tr" ? 0 : H - h;
-      const gx = x + (corner.includes("l") ? 0 : w), gy = y + (corner.includes("t") ? 0 : h);
-      const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, Math.max(w, h));
-      g.addColorStop(0, "rgba(4,6,11,0.76)"); g.addColorStop(1, "rgba(4,6,11,0)");
-      ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
-    };
-    // logo
-    const logoSize = Math.round(40 * u), tagSize = Math.round(15 * u);
-    const lLeft = logoCorner === "tl" || logoCorner === "bl", lTop = logoCorner === "tl" || logoCorner === "tr";
-    const lx = lLeft ? P : W - P, ly = lTop ? P + logoSize : H - P - tagSize - Math.round(8 * u);
-    scrim(logoCorner, Math.round(390 * u), Math.round(122 * u));
-    ctx.textAlign = lLeft ? "left" : "right"; ctx.textBaseline = "alphabetic";
-    const grad = ctx.createLinearGradient(0, ly - logoSize, 0, ly + 4);
-    grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.45, "#cfd6dd"); grad.addColorStop(0.55, "#7d8792"); grad.addColorStop(1, "#eef1f4");
-    ctx.fillStyle = grad; ctx.font = `800 ${logoSize}px Inter, "Segoe UI", Arial`;
-    ctx.fillText("CB Edge", lx, ly);
-    ctx.fillStyle = "#ffffff"; ctx.font = `italic 500 ${tagSize}px Inter, "Segoe UI", Arial`;
-    ctx.fillText("“Real Edge - Real Orderflow”", lx, ly + Math.round(24 * u));
-    // cta
-    const ctaSize = Math.round(32 * u);
-    const cLeft = ctaCorner === "tl" || ctaCorner === "bl", cTop = ctaCorner === "tl" || ctaCorner === "tr";
-    const cx = cLeft ? P : W - P, cy = cTop ? P + ctaSize : H - P;
-    scrim(ctaCorner, Math.round(320 * u), Math.round(72 * u));
-    ctx.textAlign = cLeft ? "left" : "right";
-    ctx.fillStyle = "#35D6E8"; ctx.font = `800 ${ctaSize}px Inter, "Segoe UI", Arial`;
-    ctx.fillText("cbedge.net", cx, cy);
-    const tw = ctx.measureText("cbedge.net").width;
-    const dotX = cLeft ? cx + tw + Math.round(20 * u) : cx - tw - Math.round(70 * u);
-    ctx.beginPath(); ctx.arc(dotX, cy - ctaSize * 0.32, Math.round(6 * u), 0, 7); ctx.fillStyle = "#8ECAE6"; ctx.fill();
-    ctx.textAlign = "left"; ctx.fillStyle = "#8ECAE6"; ctx.font = `700 ${Math.round(18 * u)}px Inter, "Segoe UI", Arial`;
-    ctx.fillText("LIVE", dotX + Math.round(12 * u), cy - ctaSize * 0.18);
+    drawBrandStamp(ctx, cv.width, cv.height, logoCorner, ctaCorner);
   }, [logoCorner, ctaCorner]);
 
   useEffect(() => { if (hasImg) draw(); }, [hasImg, draw]);
@@ -1965,6 +2147,17 @@ function ScreenshotBrander() {
         <canvas ref={canvasRef} style={{ display: hasImg ? "block" : "none" }} />
         {!hasImg && <span className="ph">Branded preview appears here</span>}
       </div>
+
+      {hasImg && (
+        <div style={{ marginTop: 16 }}>
+          <TweetMockup
+            title="Tweet preview — branded screenshot"
+            getBlob={toBlob}
+            caption={caption}
+            refreshKey={`${logoCorner}-${ctaCorner}-${hasImg}`}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -2573,6 +2766,13 @@ export default function SocialMediaPage() {
           <div className="sm-share-hint">
             Copies the card image to your clipboard — paste (Ctrl+V) into the X composer. If your browser blocks image copy, it downloads a PNG to attach.
           </div>
+
+          <TweetMockup
+            title="Tweet preview — Daily Levels"
+            getBlob={renderCardBlob}
+            caption={`Todays $SPX Levels\nprovided by https://www.cbedge.net/`}
+            refreshKey={`${updatedLabel}-${form.spot}-${form.flip}-${form.call}-${form.put}-${form.gex}`}
+          />
         </div>
       </div>
     </div>

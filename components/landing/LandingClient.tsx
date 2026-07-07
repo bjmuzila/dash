@@ -278,9 +278,9 @@ export default function LandingClient() {
           {/* Promo code callout */}
           <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 10, background: "rgba(33,158,188,0.08)", border: "1px solid rgba(33,158,188,0.25)", textAlign: "center" }}>
             <span style={{ fontSize: 13, color: T.muted }}>Use code </span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>CB-BETA</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>LAUNCH</span>
             <span style={{ fontSize: 13, color: T.muted }}> for </span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>50% off</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>20% off</span>
           </div>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -288,8 +288,8 @@ export default function LandingClient() {
               Sign in to dashboard
             </Link>
             <Link href="/pricing?from=landing" style={{ ...primaryBtn, textDecoration: "none" }}>
-              <span>Join the Beta</span>
-              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Code: CB-Beta</span>
+              <span>Join now</span>
+              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Code: LAUNCH</span>
             </Link>
           </div>
         </div>
