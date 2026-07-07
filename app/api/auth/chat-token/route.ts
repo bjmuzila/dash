@@ -39,7 +39,11 @@ function signSupabaseJwt(userId: string, email: string): string {
     exp: now + TTL_SEC,
   };
   const signingInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`;
-  const signature = createHmac("sha256", SUPABASE_JWT_SECRET).update(signingInput).digest();
+  // Supabase's JWT Signing Keys page shows HS256 key material base64-encoded
+  // (padded, e.g. ending in "=="). It's random bytes, not a literal passphrase
+  // -- must decode before using as the HMAC key, or every signature is wrong.
+  const keyBuf = Buffer.from(SUPABASE_JWT_SECRET, "base64");
+  const signature = createHmac("sha256", keyBuf).update(signingInput).digest();
   return `${signingInput}.${b64url(signature)}`;
 }
 
