@@ -13,7 +13,6 @@ import type { EsCandleRecord } from "@/lib/snapdb";
 import { CandlestickSeries, ColorType, CrosshairMode, createChart, createSeriesMarkers } from "lightweight-charts";
 import type { UTCTimestamp, Time, IChartApi, ISeriesApi, CandlestickData, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
 import {
-  fitGaussianHmm,
   donchianBacktest,
   alignDecodedPathToCloses,
   buildProbabilityTree,
@@ -3262,11 +3261,20 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
   );
 }
 
+interface RegimeStateBar { ts: number; close: number }
+interface RegimeStateResponse {
+  ok: boolean;
+  ticker: string;
+  fittedAt: number | null;
+  bars: RegimeStateBar[];
+  hmm: HmmResult | null;
+}
+
 function RegimeEngineTab() {
   const [ticker, setTicker] = useState<RegimeTicker>("ESU");
-  // historyDays=0 → "all we have" (queryEsCandlesHistorical/queryNqCandlesHistorical
-  // drop the daysBack cutoff entirely), so the HMM fit and the candle chart below
-  // both span the full recorded history, not just the last 20 sessions.
+  // historyDays=0 → "all we have", so the OHLC candle chart below can span
+  // full recorded history. NOTE: this feed is display-only now (candle
+  // bodies) — it no longer feeds the HMM fit, see `fit` below.
   const es = useEsCandles(ticker === "ESU", 0);
   const nq = useNqCandles(ticker === "NQU", 0);
   const active = ticker === "ESU" ? es : nq;
@@ -3279,16 +3287,12 @@ function RegimeEngineTab() {
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
   }, [active.historical, active.candles]);
 
-  // Same filter predicate applied to both — keeps `closes[i]` and `alignedRows[i]`
-  // pointing at the same bar so decoded/gamma arrays (aligned to `closes`) also
-  // line up with `alignedRows` for the candlestick chart.
   const alignedRows = useMemo(
     () => combined.filter((c) => Number.isFinite(Number(c.close)) && Number(c.close) > 0),
     [combined]
   );
-  const closes = useMemo(() => alignedRows.map((c) => Number(c.close)), [alignedRows]);
 
-  // Chart display: past 2 days by default (HMM fit still uses all data)
+  // Chart display: past 2 days by default
   const chartRows = useMemo(() => {
     const now = Date.now();
     const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000;
@@ -3296,57 +3300,75 @@ function RegimeEngineTab() {
     return filtered.length > 0 ? filtered : alignedRows.slice(-24);
   }, [alignedRows]);
 
-  const returns = useMemo(() => {
-    const out: number[] = [];
-    for (let i = 1; i < closes.length; i++) {
-      const r = Math.log(closes[i] / closes[i - 1]);
-      if (Number.isFinite(r)) out.push(r);
-    }
-    return out;
-  }, [closes]);
-
-  // Refit gated to roughly every 10 new bars (Baum-Welch isn't free to run every tick).
-  const refitBucket = Math.floor(returns.length / 10);
-  const hmm = useMemo<HmmResult | null>(() => {
-    if (returns.length < 80) return null;
-    return fitGaussianHmm(returns, { states: 3, iters: 25 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refitBucket, ticker]);
-
-  const decodedAtCloses = useMemo(() => (hmm ? alignDecodedPathToCloses(hmm.decodedPath) : []), [hmm]);
-  // Same shift as alignDecodedPathToCloses (gammaByLabel[k] describes the return
-  // into closes[k+1]) so panicAtCloses[i] lines up with alignedRows[i]/closes[i].
-  const panicAtCloses = useMemo<(number | undefined)[]>(
-    () => (hmm ? [undefined, ...hmm.gammaByLabel.map((g) => g.Panic)] : []),
-    [hmm]
-  );
-
-  // Filter decoded/panic arrays to match the 2-hour chart display window
-  const chartDecoded = useMemo(() => {
-    if (alignedRows.length === 0 || chartRows.length === 0) return decodedAtCloses;
-    const startIdx = alignedRows.findIndex((r) => chartRows[0] && r.timestamp === chartRows[0].timestamp);
-    if (startIdx === -1) return decodedAtCloses.slice(-chartRows.length);
-    return decodedAtCloses.slice(startIdx, startIdx + chartRows.length);
-  }, [alignedRows, chartRows, decodedAtCloses]);
-
-  const chartPanic = useMemo(() => {
-    if (alignedRows.length === 0 || chartRows.length === 0) return panicAtCloses;
-    const startIdx = alignedRows.findIndex((r) => chartRows[0] && r.timestamp === chartRows[0].timestamp);
-    if (startIdx === -1) return panicAtCloses.slice(-chartRows.length);
-    return panicAtCloses.slice(startIdx, startIdx + chartRows.length);
-  }, [alignedRows, chartRows, panicAtCloses]);
-
-  const backtests = useMemo(() => {
-    if (!hmm || closes.length < 60) return null;
-    const naive = donchianBacktest(closes, 20);
-    const gated = donchianBacktest(closes, 20, decodedAtCloses, "Trend");
-    return { naive, gated };
-  }, [hmm, closes, decodedAtCloses]);
-
   const lastBar = combined[combined.length - 1];
   const lastTimeEt = lastBar
     ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(lastBar.timestamp))
     : "—";
+
+  // ── Canonical HMM fit — read from the server (regime-alert-recorder.js),
+  // NOT refit in the browser. The client-side refit used to redo Baum-Welch
+  // from scratch on every mount/refresh; tiny data-window differences shifted
+  // the fit into a different local optimum and could relabel near-tied
+  // states (label switching), so the chart repainted on every reload. One
+  // server-side fit, every open tab polls and renders the same thing.
+  const [fit, setFit] = useState<RegimeStateResponse>({ ok: false, ticker: "ESU", fittedAt: null, bars: [], hmm: null });
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await fetch(`/proxy/regime-state?ticker=${ticker}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const j = (await res.json()) as RegimeStateResponse;
+        if (!cancelled) setFit(j);
+      } catch { /* keep last fit on a transient failure */ }
+    };
+    void load();
+    const id = setInterval(load, 20_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [ticker]);
+
+  const hmm = fit.hmm;
+
+  // Map server bar timestamp -> decoded label / P(Panic), so the client's own
+  // OHLC candles (chartRows, for real high/low bodies) can be shaded with the
+  // exact same labels the server decoded. decodedPath[k]/gammaByLabel[k]
+  // describe the return realized AT bars[k+1] (same shift alignDecodedPathToCloses
+  // applies), so the map is built off fit.bars[k+1], not fit.bars[k].
+  const { tsToLabel, tsToPanic } = useMemo(() => {
+    const labelMap = new Map<number, RegimeLabel>();
+    const panicMap = new Map<number, number>();
+    if (hmm) {
+      for (let k = 0; k < hmm.decodedPath.length; k++) {
+        const bar = fit.bars[k + 1];
+        if (!bar) continue;
+        labelMap.set(bar.ts, hmm.decodedPath[k]);
+        panicMap.set(bar.ts, hmm.gammaByLabel[k]?.Panic ?? 0);
+      }
+    }
+    return { tsToLabel: labelMap, tsToPanic: panicMap };
+  }, [hmm, fit.bars]);
+
+  const chartDecoded = useMemo<(RegimeLabel | undefined)[]>(
+    () => chartRows.map((r) => tsToLabel.get(r.timestamp)),
+    [chartRows, tsToLabel]
+  );
+  const chartPanic = useMemo<(number | undefined)[]>(
+    () => chartRows.map((r) => tsToPanic.get(r.timestamp)),
+    [chartRows, tsToPanic]
+  );
+
+  // Backtests run over the SAME closes the server used to produce `hmm`
+  // (not the client's own candle feed) so naive-vs-gated stays internally
+  // consistent with the decoded path driving the gate.
+  const backtests = useMemo(() => {
+    if (!hmm || fit.bars.length < 60) return null;
+    const closes = fit.bars.map((b) => b.close);
+    const decodedAtCloses = alignDecodedPathToCloses(hmm.decodedPath);
+    const naive = donchianBacktest(closes, 20);
+    const gated = donchianBacktest(closes, 20, decodedAtCloses, "Trend");
+    return { naive, gated };
+  }, [hmm, fit.bars]);
 
   const currentLabel = hmm?.currentLabel;
   const currentConfidence = hmm ? Math.round(hmm.currentProbs[hmm.currentLabel] * 100) : 0;
@@ -3387,7 +3409,7 @@ function RegimeEngineTab() {
         <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.08em", color: HOME_THEME.text, textTransform: "uppercase" }}>Bars decoded</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>{combined.length.toLocaleString("en-US")}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>{fit.bars.length.toLocaleString("en-US")}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.08em", color: HOME_THEME.text, textTransform: "uppercase" }}>Confidence</div>
@@ -3415,8 +3437,8 @@ function RegimeEngineTab() {
       {!hmm ? (
         <Card variant="budget" accent={LIGHT_BLUE} padding={20}>
           <div style={{ fontSize: 15, color: HOME_THEME.text }}>
-            Fitting the regime model — needs at least ~80 five-minute bars of {ticker} history. This fills in once the candle
-            backfill loads (today + up to 20 prior sessions).
+            Waiting on the server-side regime fit for {ticker} (needs at least ~80 five-minute bars) — refits every 60s
+            independent of this tab, polled every 20s.
           </div>
         </Card>
       ) : (

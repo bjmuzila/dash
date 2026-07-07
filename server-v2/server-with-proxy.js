@@ -45,7 +45,7 @@ const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEn
 const { startDarkpoolRecorder } = require('./darkpool-recorder');
 const { handleDarkpoolHistory, handleDarkpoolAccum, handleDarkpoolLevels } = require('./darkpool-routes');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
-const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
+const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, getLatestFit: getRegimeLatestFit, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -1461,6 +1461,20 @@ async function main() {
             sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
+        return;
+      }
+      // GET /proxy/regime-state?ticker=ESU — the canonical server-side HMM fit
+      // (same object regime-alert-recorder.js uses to log alerts), refit every
+      // 60s independent of any browser tab. The /test Regime Engine tab reads
+      // THIS instead of running fitGaussianHmm client-side, so every open tab
+      // renders the identical decoded path/labels instead of each cold-refitting
+      // on whatever data window happened to be loaded at page-load time.
+      if (pathname === '/proxy/regime-state' && req.method === 'GET') {
+        const u = new URL(req.url, `http://localhost:${PORT}`);
+        const ticker = u.searchParams.get('ticker') || 'ESU';
+        const fit = getRegimeLatestFit(ticker);
+        if (!fit) { sendJson(res, 200, { ok: true, ticker, fittedAt: null, bars: [], hmm: null }); return; }
+        sendJson(res, 200, { ok: true, ticker, fittedAt: fit.fittedAt, bars: fit.bars, hmm: fit.hmm });
         return;
       }
       // POST /proxy/regime-alerts-run — force one detection pass now (manual test).

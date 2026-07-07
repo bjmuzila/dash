@@ -168,6 +168,18 @@ const mem = {
   NQU: { lastLabel: null, openId: null, openLabel: null, openStartTs: null, openStartPrice: null },
 };
 
+// latestFit[ticker] = { fittedAt, bars: [{ts,close}], hmm } — the canonical,
+// single-source-of-truth HMM fit each ticker's browser tabs read via
+// GET /proxy/regime-state instead of re-fitting client-side (which repainted
+// on every refresh: same algorithm, but each tab cold-refit on whatever data
+// window happened to be loaded at that moment, and near-tied states relabel
+// under tiny data deltas). One fit here, every client renders the same one.
+const latestFit = { ESU: null, NQU: null };
+
+function getLatestFit(tickerKey) {
+  return latestFit[tickerKey] ?? null;
+}
+
 async function runOnceForTicker(base, tk) {
   const bars = await fetchCloses(base, tk.symbol);
   if (bars.length < MIN_RETURNS + 1) return { skipped: 'not-enough-bars' };
@@ -179,6 +191,8 @@ async function runOnceForTicker(base, tk) {
   }
   const hmm = fitGaussianHmm(returns, { states: 3, iters: 25 });
   if (!hmm) return { skipped: 'fit-failed' };
+
+  latestFit[tk.key] = { fittedAt: Date.now(), bars, hmm };
 
   const label = hmm.currentLabel;
   const confidence = hmm.currentProbs[label];
@@ -251,6 +265,7 @@ module.exports = {
   ensureSchema,
   getPool,
   getRecentAlerts,
+  getLatestFit,
   runOnce,
   _mem: mem,
 };
