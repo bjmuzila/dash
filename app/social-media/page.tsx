@@ -647,7 +647,16 @@ function GexCard({
   }, []);
   const labels = kind === "chart" ? CHART_LABELS : HEAT_LABELS;
 
-  const setField = (k: keyof CardFields, v: string) => { touchedRef.current = true; setFields((f) => ({ ...f, [k]: v })); };
+  // Only lock out future re-seeds from `form` if the value actually changed —
+  // a stray click-then-blur on a contentEditable pill (no typing) must not
+  // permanently freeze this card away from live Daily-Input/GEX updates.
+  const setField = (k: keyof CardFields, v: string) => {
+    setFields((f) => {
+      if (f[k] === v) return f;
+      touchedRef.current = true;
+      return { ...f, [k]: v };
+    });
+  };
 
   // Render the card node to a PNG blob at its true export size (transform reset
   // so capture is always at true pixels). Shared by Download / Copy / Share-to-X.
