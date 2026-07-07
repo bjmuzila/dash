@@ -142,7 +142,7 @@ export default function LandingClient() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          padding: "20px 20px 56px",
+          padding: "20px 20px 76px",
           overflowY: "auto",
         }}
       >
@@ -325,6 +325,10 @@ const legalFooter: React.CSSProperties = {
   fontSize: 11.5,
   color: T.muted,
   background: "linear-gradient(180deg, transparent, rgba(5,6,10,0.7))",
+  // Fixed strip sits above the scrolling card (zIndex 2) — without this, its
+  // full-width hit box swallows clicks on whatever card content scrolls under
+  // it (e.g. the Join now button), even over the "transparent" gradient part.
+  pointerEvents: "none",
 };
 
 const legalLink: React.CSSProperties = {
@@ -332,6 +336,7 @@ const legalLink: React.CSSProperties = {
   textDecoration: "none",
   fontWeight: 600,
   letterSpacing: "0.02em",
+  pointerEvents: "auto",
 };
 
 const legalDot: React.CSSProperties = {
