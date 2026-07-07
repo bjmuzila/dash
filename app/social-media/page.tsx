@@ -6,6 +6,7 @@ import { computeRefLevels } from "@/lib/failLevels";
 import dynamic from "next/dynamic";
 import { SegGroup } from "@/components/shared/DockToolbar";
 const GexChart = dynamic(() => import("@/components/dashboard/GexChart"), { ssr: false });
+const GexHeatmap = dynamic(() => import("@/components/dashboard/GexHeatmap"), { ssr: false });
 import type { ChainRow } from "@/lib/calculations/calculations";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -371,7 +372,8 @@ const GX_CSS = `
   .gx-help b { color: #fff; }
   .gx-stage { display: flex; flex-direction: column; gap: 36px; align-items: center; }
   .gx-cardwrap { display: flex; flex-direction: column; gap: 12px; align-items: center; }
-  .gx-caplabel { font-size: 12px; color: #9aa4b2; letter-spacing: 0.04em; align-self: flex-start; margin-left: 4px; }
+  .gx-caprow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .gx-caplabel { font-size: 12px; color: #9aa4b2; letter-spacing: 0.04em; }
   .gx-dl { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 16px; border-radius: 7px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; transition: all .12s; box-shadow: 0 0 16px rgba(33,158,188,.3); }
   .gx-dl:hover { opacity: .92; } .gx-dl:disabled { opacity: .5; cursor: default; }
   .gx-actions { display:flex; gap:10px; align-items:center; }
@@ -379,23 +381,27 @@ const GX_CSS = `
   .gx-btn:hover { opacity:.9; } .gx-btn:disabled { opacity:.5; cursor:default; }
   .gx-btn.copy { background: transparent; border-color: rgba(255,255,255,.22); color:#cfd6df; }
   .gx-btn.x { background:#1d9bf0; border-color:#1d9bf0; color:#fff; box-shadow: 0 0 16px rgba(29,155,240,.3); }
+  .gx-btn.load { border-color: var(--cyan); color: var(--cyan); background: transparent; padding: 7px 13px; font-size: 11px; }
 
-  /* fit into viewport but keep true pixels for capture */
+  /* fit into viewport but keep true pixels for capture. Outer card now sources
+     its surface from the dashboard's own tokens (--bg1/--sm-border/--cyan/--amber)
+     instead of a standalone neon palette, so it reads as the same panel language
+     as every other card on the site. */
   .gx-card { width: 1600px; height: 900px; flex: 0 0 auto; position: relative; overflow: hidden;
     background:
-      radial-gradient(900px 380px at 18% -8%, rgba(33,158,188,.10), transparent 60%),
-      radial-gradient(820px 420px at 92% 112%, rgba(249,115,22,.10), transparent 60%),
-      linear-gradient(180deg, #0a0e16 0%, #05060a 60%, #04050a 100%);
+      radial-gradient(900px 380px at 50% -8%, color-mix(in srgb, var(--cyan) 10%, transparent), transparent 60%),
+      var(--bg1);
     border: 1px solid var(--sm-border); border-radius: 22px;
-    box-shadow: 0 0 0 1px rgba(33,158,188,.05), 0 40px 120px rgba(0,0,0,.65);
+    box-shadow: 0 40px 120px rgba(0,0,0,.65);
     display: flex; flex-direction: column; transform-origin: top center; }
-  .gx-card.neg { box-shadow: 0 0 0 1px rgba(239,68,68,.10), 0 40px 120px rgba(0,0,0,.65); }
+  .gx-card.vertical { width: 900px; height: 1600px; }
+  .gx-card.neg { border-color: color-mix(in srgb, var(--sm-red) 30%, var(--sm-border)); }
   .gx-card::before { content:""; position:absolute; top:0; left:0; right:0; height:4px;
     background: linear-gradient(90deg, var(--cyan), rgba(33,158,188,0) 38%, rgba(249,115,22,0) 62%, var(--amber)); opacity:.9; }
   .gx-glow { position:absolute; width:420px; height:420px; border-radius:50%; filter: blur(90px); pointer-events:none; z-index:0; }
-  .gx-glow.tl { top:-160px; left:-120px; background: rgba(33,158,188,.18); }
-  .gx-glow.br { bottom:-180px; right:-140px; background: rgba(249,115,22,.16); }
-  .gx-card.neg .gx-glow.br { background: rgba(239,68,68,.16); }
+  .gx-glow.tl { top:-160px; left:-120px; background: color-mix(in srgb, var(--cyan) 18%, transparent); }
+  .gx-glow.br { bottom:-180px; right:-140px; background: color-mix(in srgb, var(--amber) 16%, transparent); }
+  .gx-card.neg .gx-glow.br { background: color-mix(in srgb, var(--sm-red) 16%, transparent); }
 
   .gx-head { position:absolute; top:0; left:0; right:0; z-index:4; display:grid; grid-template-columns: 1fr auto 1fr; align-items:start; padding: 22px 30px 6px; pointer-events:none; }
   .gx-head-side { display:flex; flex-direction:column; gap:3px; }
@@ -413,15 +419,14 @@ const GX_CSS = `
   /* chart as a full-bleed UNDERLAY — inset ~1in (96px) from the card edge,
      sits behind all the text/pills (low z-index). */
   .gx-imgwrap { position:absolute; inset:96px; z-index:1; border:1px solid var(--sm-border); border-radius:16px;
-    background:#06080e; overflow:hidden; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+    background:var(--bg0); overflow:hidden; display:flex; align-items:center; justify-content:center; cursor:pointer; }
   /* auto-crop the chart's top toolbar: render the image taller than the box and
-     pin it to the bottom so the top ~10% (toolbar row) is clipped by overflow. */
+     pin it to the bottom so the top ~10% (toolbar row) is clipped by overflow.
+     Only applies to a user-dropped screenshot — our own live-captured profile/
+     heatmap has no toolbar to crop, so it gets a plain contain-fit instead. */
   .gx-imgwrap > img { width:100%; height:112%; object-fit:fill; object-position:center bottom;
     position:absolute; bottom:0; left:0; display:block; }
-  .gx-drop { position:absolute; inset:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
-    border:2px dashed rgba(255,255,255,.18); border-radius:12px; color:#9aa4b2; font-size:16px; text-align:center; transition:.15s; }
-  .gx-imgwrap:hover .gx-drop { border-color: var(--cyan); color:#fff; background: rgba(33,158,188,.03); }
-  .gx-drop .big { font-size:20px; font-weight:800; color:#fff; }
+  .gx-imgwrap.live > img { height:100%; object-fit:contain; object-position:center; }
   .gx-ocr { position:absolute; left:14px; bottom:14px; z-index:3; display:inline-flex; align-items:center; gap:8px;
     font-size:12px; font-weight:700; letter-spacing:.03em; padding:7px 12px; border-radius:7px; border:1px solid rgba(255,255,255,.18);
     background: rgba(5,6,10,.85); color:#9aa4b2; }
@@ -466,6 +471,14 @@ const GX_CSS = `
 type CardKind = "chart" | "heat";
 interface CardFields { a: string; b: string; bSmall: string; c: string; cSmall: string; d: string; }
 
+// Chart card exports landscape (1600×900); the heatmap card exports portrait
+// (900×1600) so the taller strike table actually fits instead of getting
+// squashed into a 16:9 slot.
+const CARD_DIMS: Record<CardKind, { w: number; h: number }> = {
+  chart: { w: 1600, h: 900 },
+  heat: { w: 900, h: 1600 },
+};
+
 const CHART_DEFAULTS: CardFields = { a: "7,346.55", b: "7,330", bSmall: "", c: "−$1.0B", cSmall: "peak", d: "7,250–7,450" };
 const HEAT_DEFAULTS: CardFields = { a: "7,345", b: "−$1.26B", bSmall: "7,330", c: "+ below 7,330", cSmall: "", d: "Neg thru body" };
 
@@ -494,7 +507,11 @@ function fieldsFromForm(kind: CardKind, form: FormState): CardFields {
 function GexCard({
   kind, updated, today, regimeNeg, form, coreBehavior,
 }: { kind: CardKind; updated: string; today: string; regimeNeg: boolean; form: FormState; coreBehavior: string }) {
+  const dims = CARD_DIMS[kind];
   const [img, setImg] = useState<string | null>(null);
+  // "drop" = user-dropped screenshot (gets the toolbar-crop hack); "live" = our
+  // own captured profile/heatmap (plain contain-fit, nothing to crop).
+  const [imgKind, setImgKind] = useState<"drop" | "live" | null>(null);
   const [fields, setFields] = useState<CardFields>(() => fieldsFromForm(kind, form));
   // Re-seed from form until the user has dropped an image / edited a field.
   const touchedRef = useRef(false);
@@ -513,25 +530,80 @@ function GexCard({
 
   const setField = (k: keyof CardFields, v: string) => { touchedRef.current = true; setFields((f) => ({ ...f, [k]: v })); };
 
-  // Render the card node to a 1600×900 PNG blob (transform reset so capture is
-  // always at true pixels). Shared by Download / Copy / Share-to-X.
+  // Render the card node to a PNG blob at its true export size (transform reset
+  // so capture is always at true pixels). Shared by Download / Copy / Share-to-X.
   const renderBlob = useCallback(async (): Promise<Blob | null> => {
     const node = cardRef.current; if (!node) return null;
     const prev = node.style.transform; node.style.transform = "none";
     const html2canvas = await getHtml2Canvas();
-    const canvas = await html2canvas(node, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false, width: 1600, height: 900 });
+    const canvas = await html2canvas(node, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false, width: dims.w, height: dims.h });
     node.style.transform = prev;
     return await new Promise((r) => canvas.toBlob((b: Blob | null) => r(b), "image/png"));
-  }, []);
+  }, [dims.w, dims.h]);
 
   // Levels come from dashboard state (the form). The dropped image is just a
   // visual backdrop for the card — no OCR.
   const loadFile = useCallback((file: File) => {
     if (!file || !file.type.startsWith("image/")) return;
     const rd = new FileReader();
-    rd.onload = (e) => setImg(String(e.target?.result || ""));
+    rd.onload = (e) => { setImg(String(e.target?.result || "")); setImgKind("drop"); };
     rd.readAsDataURL(file);
   }, []);
+
+  // ── Live profile / heatmap capture ─────────────────────────────────────────
+  // Same source the "GEX Data" tab uses (/api/gex — the dashboard SnapButton
+  // feed). Chart card grabs the mounted GexChart's own <canvas> directly; the
+  // heatmap card html2canvas-captures the mounted GexHeatmap DOM. Both render
+  // into an offscreen host sized to the card's image slot, then the resulting
+  // PNG becomes the card's visual — same as dropping a screenshot, minus OCR.
+  const [gexChain, setGexChain] = useState<ChainRow[]>([]);
+  const [gexSpot, setGexSpot] = useState(0);
+  const [gexFlip, setGexFlip] = useState<number | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const captureHostRef = useRef<HTMLDivElement>(null);
+  const slot = { w: dims.w - 192, h: dims.h - 192 }; // 96px inset each side, matches .gx-imgwrap
+
+  const loadLiveVisual = useCallback(async () => {
+    setLiveLoading(true);
+    try {
+      const res = await fetch("/api/gex", { cache: "no-store" });
+      if (!res.ok) throw new Error(`gex ${res.status}`);
+      const data = await res.json();
+      setGexChain(Array.isArray(data.chain) ? data.chain : []);
+      setGexSpot(Number(data.spotPrice ?? 0));
+      setGexFlip(data.gexFlip ?? null);
+    } catch (e) {
+      console.error("[gex-card live visual]", e);
+      setLiveLoading(false);
+    }
+  }, []);
+
+  // Once the chain lands, the offscreen host mounts the real chart/heatmap;
+  // give it a tick to paint, then capture it into `img`.
+  useEffect(() => {
+    if (!gexChain.length) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const host = captureHostRef.current;
+      if (!host) { setLiveLoading(false); return; }
+      try {
+        if (kind === "chart") {
+          const canvas = host.querySelector<HTMLCanvasElement>("canvas");
+          if (canvas) { setImg(canvas.toDataURL("image/png")); setImgKind("live"); }
+        } else {
+          const html2canvas = await getHtml2Canvas();
+          const canvas = await html2canvas(host, { backgroundColor: "#05080d", scale: 2, useCORS: true, logging: false, width: slot.w, height: slot.h });
+          if (!cancelled) { setImg(canvas.toDataURL("image/png")); setImgKind("live"); }
+        }
+      } catch (e) {
+        console.error("[gex-card live capture]", e);
+      } finally {
+        if (!cancelled) setLiveLoading(false);
+      }
+    }, 150);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gexChain, gexSpot, gexFlip, kind]);
 
   const onExport = useCallback(async () => {
     setBusy(true);
@@ -587,8 +659,13 @@ function GexCard({
 
   return (
     <div className="gx-cardwrap">
-      <div className="gx-caplabel">{kind === "chart" ? "NET GEX chart" : "GEX heatmap"} · 1600 × 900</div>
-      <div ref={cardRef} className={`gx-card ${regimeNeg ? "neg" : "pos"}`}>
+      <div className="gx-caprow" style={{ width: dims.w }}>
+        <div className="gx-caplabel">{kind === "chart" ? "NET GEX chart" : "GEX heatmap"} · {dims.w} × {dims.h}</div>
+        <button type="button" className="gx-btn load" onClick={loadLiveVisual} disabled={liveLoading}>
+          {liveLoading ? "Loading…" : kind === "chart" ? "⤓ Load profile" : "⤓ Get Heatmap"}
+        </button>
+      </div>
+      <div ref={cardRef} className={`gx-card ${regimeNeg ? "neg" : "pos"}${kind === "heat" ? " vertical" : ""}`}>
         {/* hype glow corners */}
         <span className="gx-glow tl" /><span className="gx-glow br" />
 
@@ -607,12 +684,10 @@ function GexCard({
         <span className={`gx-regime ${regimeNeg ? "neg" : "pos"}`}><i />{regimeNeg ? "NEGATIVE GAMMA" : "POSITIVE GAMMA"}</span>
 
         {/* image slot */}
-        <div className="gx-imgwrap" onClick={img ? undefined : onPick}
+        <div className={`gx-imgwrap${imgKind === "live" ? " live" : ""}`} onClick={img ? undefined : onPick}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.[0]) loadFile(e.dataTransfer.files[0]); }}>
-          {img
-            ? <img src={img} alt="capture" crossOrigin="anonymous" />
-            : <div className="gx-drop"><div className="big">Drop {kind === "chart" ? "NET GEX chart" : "GEX heatmap"} image</div><div>optional — levels come from the dashboard</div></div>}
+          {img && <img src={img} alt="capture" crossOrigin="anonymous" />}
         </div>
 
         {/* levels strip — main value is editable; the small sub-label is a
@@ -631,6 +706,17 @@ function GexCard({
           <span className="disc">Informational only — not financial advice.</span>
         </div>
       </div>
+
+      {/* offscreen host — mounts the real chart/heatmap once loaded, sized to
+          the card's image slot, captured into `img` above then never shown. */}
+      {gexChain.length > 0 && (
+        <div ref={captureHostRef} style={{ position: "fixed", left: -99999, top: 0, width: slot.w, height: slot.h, pointerEvents: "none", overflow: "hidden" }}>
+          {kind === "chart"
+            ? <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
+            : <GexHeatmap chain={gexChain} spotPrice={gexSpot} />}
+        </div>
+      )}
+
       <div className="gx-actions">
         <button type="button" className="gx-btn copy" onClick={onCopy} disabled={busy}>
           {share === "copied" ? "✓ Copied" : share === "saved" ? "✓ Saved" : share === "err" ? "Failed" : "Copy card"}
@@ -1641,15 +1727,19 @@ function GexImageCards({ updated, today, form }: { updated: string; today: strin
   const neg = reg.neg;
   const stageRef = useRef<HTMLDivElement>(null);
   // Scale cards down to fit the column on screen; export resets transform to none
-  // so PNGs are always captured at true 1600×900.
+  // so PNGs are always captured at true pixel size (1600×900 chart, 900×1600
+  // heatmap — read per-card off CARD_DIMS via the .vertical class).
   useEffect(() => {
     const fit = () => {
       const stage = stageRef.current; if (!stage) return;
-      const avail = Math.min(stage.clientWidth, 1600);
-      const s = Math.min(1, avail / 1600);
       stage.querySelectorAll<HTMLDivElement>(".gx-card").forEach((c) => {
+        const vertical = c.classList.contains("vertical");
+        const w = vertical ? CARD_DIMS.heat.w : CARD_DIMS.chart.w;
+        const h = vertical ? CARD_DIMS.heat.h : CARD_DIMS.chart.h;
+        const avail = Math.min(stage.clientWidth, w);
+        const s = Math.min(1, avail / w);
         c.style.transform = s < 1 ? `scale(${s})` : "none";
-        c.style.marginBottom = s < 1 ? `${-900 * (1 - s)}px` : "0";
+        c.style.marginBottom = s < 1 ? `${-h * (1 - s)}px` : "0";
       });
     };
     fit();
@@ -1660,8 +1750,9 @@ function GexImageCards({ updated, today, form }: { updated: string; today: strin
     <div className="gx-wrap">
       <style>{GX_CSS}</style>
       <p className="gx-help">
-        The level strip is filled <b>live from the dashboard</b> (Daily Input) — spot, CB - Core Bullseye, net GEX and range. Drop a NET GEX chart / heatmap
-        screenshot into a card only for the <b>visual</b> (optional). Every value is click-to-edit. Then <b>Download</b> for a clean 1600×900 image.
+        The level strip is filled <b>live from the dashboard</b> (Daily Input) — spot, CB - Core Bullseye, net GEX and range. Hit <b>Load profile</b> /
+        <b> Get Heatmap</b> to pull the live visual straight from the dashboard, or drop your own screenshot instead. Every value is click-to-edit.
+        Then <b>Download</b> for a clean image (1600×900 chart · 900×1600 heatmap).
       </p>
       <div className="gx-stage" ref={stageRef}>
         <GexCard kind="chart" updated={updated} today={today} regimeNeg={neg} form={form} coreBehavior={reg.coreBehavior} />

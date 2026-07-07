@@ -15,8 +15,8 @@ export default function SignInPage() {
         padding: 20,
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24 }}>
-        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 64, width: "auto" }} />
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 128, width: "auto" }} />
         <AuthForm mode="signin" />
       </div>
     </div>

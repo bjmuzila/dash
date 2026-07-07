@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 
 // Landing page for the link sent by /api/auth/forgot-password. Replaces the
 // old Supabase-hosted reset-password confirmation (Supabase used to handle the
@@ -23,6 +23,8 @@ function ResetPasswordForm() {
   const token = searchParams.get("token") || "";
 
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -32,6 +34,10 @@ function ResetPasswordForm() {
     setError(null);
     if (!token) {
       setError("This reset link is missing its token.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords don't match.");
       return;
     }
     setBusy(true);
@@ -57,7 +63,7 @@ function ResetPasswordForm() {
 
   const inputStyle: React.CSSProperties = {
     width: "100%",
-    padding: "11px 13px",
+    padding: "11px 40px 11px 13px",
     borderRadius: 8,
     border: `1px solid ${T.border}`,
     background: "rgba(255,255,255,0.04)",
@@ -66,17 +72,29 @@ function ResetPasswordForm() {
     outline: "none",
   };
 
+  const eyeButtonStyle: React.CSSProperties = {
+    position: "absolute",
+    right: 8,
+    top: "50%",
+    transform: "translateY(-50%)",
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    fontSize: 16,
+    lineHeight: 1,
+    padding: 4,
+  };
+
   return (
     <main style={{ minHeight: "80vh", display: "grid", placeItems: "center", padding: 24 }}>
       <div
+        className="card-hover"
         style={{
           width: "100%",
-          maxWidth: 560,
-          background: T.panel,
-          border: `1px solid ${T.border}`,
-          borderRadius: 16,
-          padding: 28,
+          maxWidth: 800,
+          ...homeGlossPanelStyle(T.cyan),
           boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
+          padding: 28,
         }}
       >
         <h1 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: "0 0 4px" }}>Set a new password</h1>
@@ -86,15 +104,48 @@ function ResetPasswordForm() {
 
         {!done && (
           <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <input
-              type="password"
-              required
-              minLength={8}
-              placeholder="New password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={inputStyle}
-            />
+            <div style={{ position: "relative" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                required
+                minLength={8}
+                placeholder="New password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={inputStyle}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                style={eyeButtonStyle}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                title={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
+
+            <div style={{ position: "relative" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                required
+                minLength={8}
+                placeholder="Confirm new password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                style={inputStyle}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                style={eyeButtonStyle}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                title={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
+
             <button
               type="submit"
               disabled={busy}

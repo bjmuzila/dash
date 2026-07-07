@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 
 /**
  * Themed email/password + Google auth form.
@@ -190,25 +190,24 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
 
   const inputStyle: React.CSSProperties = {
     width: "100%",
-    padding: "11px 13px",
-    borderRadius: 8,
+    padding: "16px 18px",
+    borderRadius: 10,
     border: `1px solid ${T.border}`,
     background: "rgba(255,255,255,0.04)",
     color: T.text,
-    fontSize: 14,
+    fontSize: 16,
     outline: "none",
   };
 
   return (
     <div
+      className="card-hover"
       style={{
         width: "100%",
-        maxWidth: 560,
-        background: T.panel,
-        border: `1px solid ${T.border}`,
-        borderRadius: 16,
-        padding: 28,
+        maxWidth: 800,
+        ...homeGlossPanelStyle(T.cyan),
         boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
+        padding: 28,
       }}
     >
       <h1 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: "0 0 4px" }}>
@@ -235,13 +234,13 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
           alignItems: "center",
           justifyContent: "center",
           gap: 8,
-          marginBottom: 18,
+          marginBottom: 14,
         }}
       >
         <span style={{ fontWeight: 800, color: "#4285F4" }}>G</span> Continue with Google
       </button>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 18px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 14px" }}>
         <div style={{ flex: 1, height: 1, background: T.border }} />
         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>or</span>
         <div style={{ flex: 1, height: 1, background: T.border }} />
