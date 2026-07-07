@@ -37,6 +37,7 @@ export const OWNER_THEME = {
   purple: "#126783",
   orange: "#FB8501",
   green: "#8ECAE6",
+  gold: "#FFB703",
   red: OWNER_SOFT_RED,          // standardized to #EF4444
   lightBlue: OWNER_LIGHT_BLUE,
   // Drop-in aliases so OWNER_THEME can stand in for HOME_THEME.

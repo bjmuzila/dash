@@ -136,7 +136,7 @@ function KpiCard({
 }) {
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }} title={tooltip}>
-      <div style={{ fontSize: 15, fontWeight: 600, color: T.cyan, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: T.gold, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
         <div style={{ fontSize: 15, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
         {spark && spark.length > 1 && <Sparkline points={spark} color={sparkColor ?? T.cyan} />}
@@ -167,12 +167,12 @@ function SetupBanner() {
   );
 }
 
-type Granularity = "weekly" | "monthly" | "yearly";
+type Granularity = "daily" | "weekly" | "monthly" | "yearly";
 
 function GranTabs({ value, onChange }: { value: Granularity; onChange: (g: Granularity) => void }) {
   return (
     <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: 3 }}>
-      {(["weekly", "monthly", "yearly"] as const).map(g => (
+      {(["daily", "weekly", "monthly", "yearly"] as const).map(g => (
         <button
           key={g}
           onClick={() => onChange(g)}
@@ -220,6 +220,18 @@ function buildPeriods(gran: Granularity, subs: StripeSubscription[]) {
     });
   }
 
+  if (gran === "daily") {
+    const count = 14;
+    return Array.from({ length: count }, (_, i) => {
+      const start = new Date(now);
+      start.setDate(now.getDate() - (count - 1 - i));
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setHours(23, 59, 59, 999);
+      return { label: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }), start, end };
+    });
+  }
+
   // weekly
   const count = 8;
   return Array.from({ length: count }, (_, i) => {
@@ -237,7 +249,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
   const [gran, setGran] = useState<Granularity>("weekly");
 
   const periods = buildPeriods(gran, subs);
-  const periodsPerYear = gran === "yearly" ? 1 : gran === "monthly" ? 12 : 52;
+  const periodsPerYear = gran === "yearly" ? 1 : gran === "monthly" ? 12 : gran === "weekly" ? 52 : 365;
   const expensePerPeriod = expensesMonthly * (12 / periodsPerYear);
 
   const rows = periods.map(p => {
@@ -254,7 +266,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
 
   const maxMrr = Math.max(...rows.map(r => r.mrr), 1);
   const maxSale = Math.max(...rows.flatMap(r => [r.mrr, r.expenses, Math.abs(r.combined)]), 1);
-  const periodWord = gran === "weekly" ? "week" : gran === "monthly" ? "month" : "year";
+  const periodWord = gran === "daily" ? "day" : gran === "weekly" ? "week" : gran === "monthly" ? "month" : "year";
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
@@ -262,7 +274,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
       <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: T.cyan, marginBottom: 3 }}>Revenue Summary</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Revenue Summary</div>
             <div style={{ fontSize: 15, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
           </div>
           <GranTabs value={gran} onChange={setGran} />
@@ -283,7 +295,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
                   cursor: "default",
                 }} />
                 <span style={{ fontSize: 9, color: T.muted, whiteSpace: "nowrap" }}>
-                  {gran !== "weekly" || i % 2 === 0 ? b.label : ""}
+                  {gran === "weekly" || gran === "yearly" || i % 2 === 0 ? b.label : ""}
                 </span>
               </div>
             );
@@ -294,7 +306,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
       {/* Sale Summary — grouped bars: Subscriptions vs Expenses vs Combined, same granularity */}
       <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: T.cyan }}>Sale Summary</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: T.gold }}>Sale Summary</div>
         </div>
         <div style={{ fontSize: 15, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
 
@@ -334,7 +346,7 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan, letterSpacing: "0.01em" }}>Active Subscriptions</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
@@ -410,7 +422,7 @@ const TAG_COLORS: Record<string, string> = {
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
     <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: T.cyan, marginBottom: 12 }}>Recent Customers</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: T.gold, marginBottom: 12 }}>Recent Customers</div>
       {customers.length === 0 ? (
         <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 15 }}>No customers yet</div>
       ) : (
@@ -478,7 +490,7 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan }}>Expenses</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: T.gold }}>Expenses</span>
         <span
           title="Sum of every recurring expense converted to a monthly-equivalent cost (yearly ÷ 12); one-off costs aren't counted in this run-rate."
           style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}

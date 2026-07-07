@@ -457,7 +457,7 @@ export default function GlobalToolbar() {
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
   const { open: gexOpen, togglePanel: toggleGex } = useGexPanel();
-  const { menuOpen, toggleMenu } = useMobileNav();
+  const { menuOpen, toggleMenu, isMobile } = useMobileNav();
 
   // ── hover state for the menu/notes round buttons ──
   const [hoverMenu, setHoverMenu] = useState(false);
@@ -642,8 +642,9 @@ export default function GlobalToolbar() {
             </div>
           )}
 
-          {/* ── Notes — round icon button with count badge ── */}
-          {isSignedIn && (
+          {/* ── Notes — round icon button with count badge (desktop only; the
+              right-side dock is disabled on mobile) ── */}
+          {isSignedIn && !isMobile && (
             <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
               <button
                 onClick={togglePanel}

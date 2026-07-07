@@ -4,6 +4,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 import { useNotes, NotesBody } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
+import { useMobileNav } from "./MobileNavContext";
 import ChatPanel from "./ChatPanel";
 
 const PANEL_WIDTH = 320;
@@ -18,8 +19,11 @@ export default function NotesDock() {
   const { isSignedIn, user } = useAuth();
   const { open, closePanel } = useNotesPanel();
   const { notes, addNote, editNote, deleteNote } = useNotes(user?.id);
+  const { isMobile } = useMobileNav();
 
-  if (!isSignedIn) return null;
+  // Notes dock is desktop-only; disabled on mobile even if a prior desktop
+  // session left it open in persisted state.
+  if (!isSignedIn || isMobile) return null;
 
   return (
     <aside
