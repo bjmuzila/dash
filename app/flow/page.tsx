@@ -26,6 +26,24 @@ import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 
+// ── Dark Pool (TRF prints) types ────────────────────────────────────────────
+// "Dark pool" here = off-exchange stock prints reported through a FINRA/NYSE
+// Trade Reporting Facility (exchange codes 57/58/59 on the Theta stock trade
+// stream) — the same proxy every retail dark-pool tool uses, since the public
+// tape has no further per-ATS breakout. Index tickers (SPX/NDX/RUT/XSP) have no
+// stock listing, so this section is skipped for them.
+type DarkpoolWindow = "intraday" | "5d" | "7d";
+type DarkpoolPrint = {
+  ts: number;
+  underlying: string;
+  price: number;
+  size: number;
+  notional: number;
+  exchange: number | null;
+  exchangeName: string | null;
+};
+type DarkpoolBin = { t: number; volume: number; notional: number; trades: number; date?: string };
+
 const C = HOME_THEME;
 const BUY_GREEN = "#22c55e";
 const BULLISH = BUY_GREEN; // calls / buys
@@ -247,6 +265,60 @@ export default function FlowPage() {
     const id = isToday ? setInterval(load, 15000) : null;
     return () => { cancelled = true; clearTimeout(kick); if (id) clearInterval(id); };
   }, [view, minPremium, date, isToday]);
+
+  // ── Dark Pool (per-ticker): recent TRF-print tape + accumulation window. ──
+  // Polling, not WS — TRF prints can legally be reported seconds-to-minutes
+  // after execution, so a 5s poll is no less "live" than a push feed here.
+  const [dpWindow, setDpWindow] = useState<DarkpoolWindow>("intraday");
+  const [dpTape, setDpTape] = useState<DarkpoolPrint[]>([]);
+  const [dpBins, setDpBins] = useState<DarkpoolBin[]>([]);
+  const isIndexTicker = INDEX_TICKERS.has(active);
+
+  useEffect(() => {
+    if (view !== "ticker" || isIndexTicker) { setDpTape([]); return; }
+    let cancelled = false;
+    const load = () =>
+      fetch(`/proxy/darkpool-history?underlying=${encodeURIComponent(active)}&date=${date}&limit=2000`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (!cancelled && j && Array.isArray(j.tape)) setDpTape(j.tape as DarkpoolPrint[]); })
+        .catch(() => {});
+    load();
+    const id = isToday ? setInterval(load, 5000) : null;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [view, active, date, isToday, isIndexTicker]);
+
+  useEffect(() => {
+    if (view !== "ticker" || isIndexTicker) { setDpBins([]); return; }
+    let cancelled = false;
+    const qp = new URLSearchParams({ underlying: active, window: dpWindow, date });
+    const load = () =>
+      fetch(`/proxy/darkpool-accum?${qp.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (!cancelled && j && Array.isArray(j.bins)) setDpBins(j.bins as DarkpoolBin[]); })
+        .catch(() => {});
+    load();
+    const id = dpWindow === "intraday" && isToday ? setInterval(load, 5000) : null;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [view, active, date, isToday, dpWindow, isIndexTicker]);
+
+  // Cumulative running total across the returned bins (resets each session for
+  // Intraday; keeps building across sessions for 5D/7D).
+  const dpSeries = useMemo(() => {
+    let cum = 0;
+    return dpBins.map((b) => {
+      cum += b.volume;
+      return { time: Math.floor(b.t / 1000) as UTCTimestamp, value: cum };
+    });
+  }, [dpBins]);
+
+  const dpTotals = useMemo(() => {
+    let volume = 0, notional = 0, trades = 0;
+    for (const b of dpBins) { volume += b.volume; notional += b.notional; trades += b.trades; }
+    return { volume, notional, trades };
+  }, [dpBins]);
+
+  // Newest-first, capped for display.
+  const dpVisibleRows = useMemo(() => [...dpTape].reverse().slice(0, 100), [dpTape]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -575,6 +647,57 @@ export default function FlowPage() {
     } catch {}
   }, [netSeries, filtered]);
 
+  // ── Dark Pool accumulation chart (separate lightweight-charts instance). ──
+  const dpChartHostRef = useRef<HTMLDivElement | null>(null);
+  const dpChartRef = useRef<IChartApi | null>(null);
+  const dpLineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const dpWindowRef = useRef<DarkpoolWindow>(dpWindow);
+  dpWindowRef.current = dpWindow;
+
+  useEffect(() => {
+    const host = dpChartHostRef.current;
+    if (!host) return;
+    host.innerHTML = "";
+    const chart = createChart(host, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "rgba(255,255,255,.70)",
+        fontFamily: "Inter, system-ui, sans-serif",
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,.05)" },
+        horzLines: { color: "rgba(255,255,255,.05)" },
+      },
+      rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
+      leftPriceScale: { visible: false },
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)",
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: unknown) => {
+          if (typeof time !== "number") return "";
+          const d = new Date(time * 1000);
+          return dpWindowRef.current === "intraday"
+            ? d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
+            : d.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "numeric", day: "numeric" });
+        },
+      },
+      localization: {
+        priceFormatter: (p: number) => p.toLocaleString(undefined, { maximumFractionDigits: 0 }),
+      },
+    });
+    const line = chart.addSeries(LineSeries, { color: C.cyan, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+    dpChartRef.current = chart;
+    dpLineSeriesRef.current = line;
+    return () => { chart.remove(); dpChartRef.current = null; dpLineSeriesRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    dpLineSeriesRef.current?.setData(dpSeries);
+    try { dpChartRef.current?.timeScale().fitContent(); } catch {}
+  }, [dpSeries]);
+
   // ── Summary of the filtered tape. ──
   const totals = useMemo(() => {
     let prem = 0, callPrem = 0, putPrem = 0;
@@ -848,6 +971,71 @@ export default function FlowPage() {
             </p>
           )}
           {view === "ticker" && renderPremiumSplit()}
+        </Card>
+
+        {/* ── Dark Pool (TRF prints) — per-ticker flow + accumulation. ── */}
+        <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px 8px", flexWrap: "wrap" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
+              Dark Pool Flow — <span style={{ color: C.cyan }}>{active}</span>
+              <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: C.muted }}>TRF PRINTS (57/58/59)</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Window</label>
+              <select
+                style={{ ...homeInputStyle, width: 110 }}
+                value={dpWindow}
+                onChange={(e) => setDpWindow(e.target.value as DarkpoolWindow)}
+              >
+                <option value="intraday">Intraday</option>
+                <option value="5d">5 Day</option>
+                <option value="7d">7 Day</option>
+              </select>
+            </div>
+          </div>
+
+          {isIndexTicker ? (
+            <p style={{ fontSize: 13, padding: "0 20px 20px", color: C.muted }}>
+              {active} is an index — no stock listing, so no dark-pool prints. Pick an equity ticker (e.g. SPY, QQQ) to see this.
+            </p>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
+                <span style={{ color: C.cyan }}>● Volume {dpTotals.volume.toLocaleString()}</span>
+                <span style={{ color: C.text }}>Notional {fmtPremium(dpTotals.notional)}</span>
+                <span style={{ color: C.muted }}>{dpTotals.trades.toLocaleString()} prints</span>
+              </div>
+              <div ref={dpChartHostRef} style={{ height: 220, width: "100%" }} />
+              {dpBins.length === 0 && (
+                <p style={{ fontSize: 13, padding: "8px 20px 12px", color: C.muted, textAlign: "center" }}>
+                  No dark-pool prints recorded for {active} {dpWindow === "intraday" ? `on ${date}` : `in the last ${dpWindow === "5d" ? "5" : "7"} sessions`}.
+                </p>
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "90px 90px 80px 100px 1fr", gap: 8, padding: "10px 20px", borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted }}>
+                <span>Time</span>
+                <span style={{ textAlign: "right" }}>Price</span>
+                <span style={{ textAlign: "right" }}>Size</span>
+                <span style={{ textAlign: "right" }}>Notional</span>
+                <span>Venue</span>
+              </div>
+              <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                {dpVisibleRows.length === 0 ? (
+                  <p style={{ fontSize: 13, padding: 20, color: C.muted }}>No prints yet.</p>
+                ) : (
+                  dpVisibleRows.map((o, i) => (
+                    <div key={`${o.ts}-${i}`} style={{ display: "grid", gridTemplateColumns: "90px 90px 80px 100px 1fr", gap: 8, padding: "6px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontFamily: "var(--font-mono)", alignItems: "center" }}>
+                      <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
+                      <span style={{ textAlign: "right", color: C.text }}>{o.price.toFixed(2)}</span>
+                      <span style={{ textAlign: "right", color: C.text }}>{o.size.toLocaleString()}</span>
+                      <span style={{ textAlign: "right", color: C.cyan }}>{fmtPremium(o.notional)}</span>
+                      <span style={{ color: C.muted }}>{o.exchangeName ?? "—"}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </Card>
       </div>
 

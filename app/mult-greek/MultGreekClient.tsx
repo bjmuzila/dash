@@ -43,6 +43,19 @@ const COL_LABELS: Record<NetCol, string> = {
 
 const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
 
+// Change-mode: "live" = normal GEX values; 15/30/60 = ΔGEX over N minutes,
+// sourced from the strike_growth table (same /proxy/strike-growth/by-expiry
+// endpoint the options-chain page uses). That table only tracks GEX, so the
+// switcher only ever swaps the NET GEX column — DEX/CHEX/VEX stay live.
+const CHANGE_MODES = ["live", "15", "30", "60"] as const;
+type ChangeMode = typeof CHANGE_MODES[number];
+const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
+  live: "Live",
+  "15": "15m Δ",
+  "30": "30m Δ",
+  "60": "60m Δ",
+};
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface LiveEntry {
@@ -291,6 +304,7 @@ function computeTotals(
 
 function TickerPanel({
   ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
+  changeMode, changeMap,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -303,6 +317,9 @@ function TickerPanel({
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
+  /** Live/15m/30m/60m Δ switcher — only ever affects the NET GEX column. */
+  changeMode: ChangeMode;
+  changeMap: Map<number, number> | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -340,6 +357,25 @@ function TickerPanel({
   const totals = strikes.length && spot > 0
     ? computeTotals(strikes, liveData, spot, contractMode)
     : null;
+
+  // When a Δ mode is active, the NET GEX column swaps to strike_growth's
+  // ΔGEX values. Scale/ranking (for heat coloring + the ★ top-3 badge) is
+  // computed separately over the full strike set, mirroring how `computed`'s
+  // own top3/maxAbs are computed pre-capture-trim.
+  const isChangeActive = changeMode !== "live" && !!changeMap && changeMap.size > 0;
+  const gexChange = (() => {
+    if (!isChangeActive || !changeMap) return null;
+    const entries: { strike: number; v: number }[] = [];
+    strikes.forEach(r => {
+      const v = changeMap.get(r.strike);
+      if (v != null) entries.push({ strike: r.strike, v });
+    });
+    const sorted = [...entries].sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    const top3: Record<number, number> = {};
+    sorted.slice(0, 3).forEach((e, idx) => { top3[e.strike] = idx + 1; });
+    const total = entries.reduce((s, e) => s + e.v, 0);
+    return { max: Math.abs(sorted[0]?.v ?? 0) || 1, top3, total };
+  })();
 
   // Highest |GEX| strike on each side of spot → 📍 pin (possible pin/explosive level).
   let pinAbove: number | null = null, pinBelow: number | null = null;
@@ -404,17 +440,23 @@ function TickerPanel({
       {/* Column headers */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
-        {NET_COLS.map(c => (
-          <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: HT.cyan, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>{COL_LABELS[c]}</div>
-        ))}
+        {NET_COLS.map(c => {
+          const isChangeCol = c === "gex" && isChangeActive;
+          return (
+            <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: isChangeCol ? HT.orange : HT.cyan, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              {COL_LABELS[c]}{isChangeCol ? ` ·Δ${changeMode}` : ""}
+            </div>
+          );
+        })}
       </div>
 
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
-          const v = totals?.[c] ?? 0;
-          const fmt = totals ? fmtMoney(v) : { sign: "", value: "--" };
+          const isChangeCol = c === "gex" && isChangeActive;
+          const v = isChangeCol ? (gexChange?.total ?? 0) : (totals?.[c] ?? 0);
+          const fmt = (isChangeCol ? gexChange != null : totals != null) ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c} style={{
               padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
@@ -477,23 +519,26 @@ function TickerPanel({
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>
               {NET_COLS.map(c => {
-                const topRank = (computed.top3[c]?.[r.strike]) || 0;
+                const isChangeCol = c === "gex" && isChangeActive;
+                const val: number | null = isChangeCol ? (changeMap!.get(r.strike) ?? null) : r[c];
+                const topRank = isChangeCol ? ((gexChange?.top3[r.strike]) || 0) : ((computed.top3[c]?.[r.strike]) || 0);
+                const scaleMax = isChangeCol ? (gexChange?.max ?? 1) : computed.maxAbs[c];
                 const weight = topRank === 1 ? 900 : topRank ? 800 : 700;
                 const border = topRank === 1
-                  ? `outline:1px solid ${r[c] >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"};outline-offset:-1px`
+                  ? `outline:1px solid ${(val ?? 0) >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"};outline-offset:-1px`
                   : "";
-                const formatted = fmtMoney(r[c]);
-                const signColor = r[c] > 0 ? "#22c55e" : r[c] < 0 ? "#ef4444" : SOFT_WHITE;
-                const isGexPeak = c === "gex" && r.strike === computed.mvcStrike;
+                const formatted = val == null ? { sign: "", value: "--" } : fmtMoney(val);
+                const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
+                const isGexPeak = c === "gex" && !isChangeCol && r.strike === computed.mvcStrike;
                 return (
                   <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
                     padding: "4px 4px", fontSize: 11, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE,
-                    background: metricBg(r[c], computed.maxAbs[c], topRank, intensity),
+                    background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
                     position: "relative",
-                    ...(topRank === 1 ? { outline: `1px solid ${r[c] >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
+                    ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
                     ...(isGexPeak ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
                   }}>
                     {topRank === 1 && (
@@ -552,6 +597,10 @@ export function MultGreekClient({
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
   const [intensity, setIntensity] = useState(1.75);
+  // Live/15m/30m/60m Δ switcher — swaps NET GEX to strike_growth's ΔGEX.
+  const [changeMode, setChangeMode] = useState<ChangeMode>("live");
+  const [changeMaps, setChangeMaps] = useState<Record<Ticker, Map<number, number>>>({ SPX: new Map(), SPY: new Map(), QQQ: new Map() });
+  const [changeTick, setChangeTick] = useState(0);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
@@ -599,6 +648,42 @@ export function MultGreekClient({
     return () => { cancelled = true; };
   }, [activeExpiry]);
 
+  // Load the strike→ΔGEX map for each ticker when a change mode is on. Reuses
+  // /proxy/strike-growth/by-expiry (same endpoint the options-chain page's
+  // Live/15m/30m/60m switcher uses), filtered to the currently active expiry.
+  // That table only tracks GEX, so this only ever feeds the NET GEX column.
+  useEffect(() => {
+    if (changeMode === "live" || !activeExpiry) {
+      setChangeMaps({ SPX: new Map(), SPY: new Map(), QQQ: new Map() });
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const key = changeMode === "15" ? "chg15" : changeMode === "30" ? "chg30" : "chg60";
+      const entries = await Promise.all(TICKERS.map(async (tk) => {
+        try {
+          const res = await fetch(`/proxy/strike-growth/by-expiry?symbol=${encodeURIComponent(tk)}`, { cache: "no-store" });
+          const j = await res.json().catch(() => null);
+          const m = new Map<number, number>();
+          if (j?.ok && Array.isArray(j.rows)) {
+            for (const row of j.rows) {
+              if (String(row.expiry ?? "") !== activeExpiry) continue;
+              const v = row[key];
+              if (v != null) m.set(Number(row.strike), Number(v));
+            }
+          }
+          return [tk, m] as const;
+        } catch {
+          return [tk, new Map<number, number>()] as const;
+        }
+      }));
+      if (cancelled) return;
+      const next = {} as Record<Ticker, Map<number, number>>;
+      entries.forEach(([tk, m]) => { next[tk] = m; });
+      setChangeMaps(next);
+    })();
+    return () => { cancelled = true; };
+  }, [changeMode, activeExpiry, changeTick]);
 
   // Fetch expirations (from cache or API). Skipped entirely in static mode —
   // the snapshot already carries its one expiry, no live search needed.
@@ -755,6 +840,7 @@ export function MultGreekClient({
     const exp = activeExpiryRef.current;
     if (!exp) throw new Error("No expiry selected");
     await loadAll(exp, true);
+    setChangeTick(t => t + 1); // also refetch the Δ map, if a change mode is active
   }, [isStatic, loadAll]);
 
   // Auto-refresh: TT REST per-strike volume accumulates through the session and
@@ -933,6 +1019,23 @@ export function MultGreekClient({
 
         <DockGap />
 
+        {/* GEX Δ switcher — Live/15m/30m/60m, sourced from strike_growth */}
+        <SegGroup
+          options={CHANGE_MODES.map(m => ({ label: CHANGE_MODE_LABEL[m], value: m }))}
+          active={changeMode}
+          onChange={(v) => setChangeMode(v as ChangeMode)}
+        />
+        {changeMode !== "live" && (
+          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+            color: TICKERS.some(tk => (changeMaps[tk]?.size ?? 0) > 0) ? HT.orange : HT.muted }}>
+            {TICKERS.some(tk => (changeMaps[tk]?.size ?? 0) > 0)
+              ? `Δ ${TICKERS.filter(tk => (changeMaps[tk]?.size ?? 0) > 0).join("/")}`
+              : "no history (not on watchlist)"}
+          </span>
+        )}
+
+        <DockGap />
+
         {/* Intensity slider */}
         <DockSlider label="Intensity" value={intensity} min={0.5} max={3} step={0.01} onChange={setIntensity} width={80} format={(v) => `${v.toFixed(2)}x`} />
 
@@ -971,6 +1074,8 @@ export function MultGreekClient({
             emLevels={emByTicker[ticker]}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
+            changeMode={changeMode}
+            changeMap={changeMaps[ticker]}
           />
         ))}
       </div>

@@ -42,6 +42,8 @@ const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsur
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
+const { startDarkpoolRecorder } = require('./darkpool-recorder');
+const { handleDarkpoolHistory, handleDarkpoolAccum } = require('./darkpool-routes');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
 const { checkProxyAccess } = require('./proxy-auth');
@@ -254,6 +256,24 @@ async function handleProxyRest(req, res) {
   if (pathname === '/proxy/flow-netprem') {
     handleFlowNetPrem(req, res).catch((e) => {
       sendJson(res, 500, { error: 'flow-netprem failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
+  // /proxy/darkpool-history?underlying=SPY&date=YYYY-MM-DD&limit=2000
+  // Per-ticker dark-pool (TRF) print tape, oldest-first.
+  if (pathname === '/proxy/darkpool-history') {
+    handleDarkpoolHistory(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'darkpool-history failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
+  // /proxy/darkpool-accum?underlying=SPY&window=intraday|5d|7d
+  // Accumulation bins for the Dark Pool card's running-total chart.
+  if (pathname === '/proxy/darkpool-accum') {
+    handleDarkpoolAccum(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'darkpool-accum failed', detail: String(e?.message || e) });
     });
     return true;
   }
@@ -875,6 +895,10 @@ async function main() {
             // OTM weight aggressiveness: weight = 1 + otmDist * k. Higher k pushes
             // far-OTM strikes up the ranking harder. Tunable via ?otmK= or env.
             const otmK = Number(u.searchParams.get('otmK') || process.env.STRIKE_GROWTH_OTM_K || 8);
+            // Hard OTM-distance floor (fraction, e.g. 0.02 = 2%). Unlike the otm
+            // *weighting* above, this actually excludes near-the-money strikes
+            // from the candidate pool so far-OTM strikes aren't drowned out.
+            const minOtm = Math.max(0, Number(u.searchParams.get('minOtm') || 0));
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
             // Indices/ETFs excluded — stocks only.
             const EXCLUDE = ['SPX','NDX','VIX','RUT','XSP','SPY','QQQ','IWM','DIA'];
@@ -924,9 +948,10 @@ async function main() {
               SELECT symbol, expiry, strike, latest_chg, mean_chg, sd_chg, n, spot,
                      z_score AS z, otm_dist, weighted_chg, pct_open
               FROM scored
+              WHERE otm_dist >= $6
               ORDER BY ${orderCol} DESC NULLS LAST
               LIMIT $4`;
-            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit, otmK]);
+            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit, otmK, minOtm]);
             sendJson(res, 200, { ok: true, window: win, sort, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -1817,6 +1842,10 @@ async function main() {
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();
+    // Dark pool (TRF) print recorder: separate Theta STOCK trade-stream connection,
+    // filters exchange codes 57/58/59, writes to darkpool_prints for the /flow
+    // page's per-ticker Dark Pool card. Requires a Theta Stocks Pro subscription.
+    startDarkpoolRecorder();
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
     startGreeksTsWriter(PORT);

@@ -838,6 +838,72 @@ function GreeksCard() {
 const IB_OPEN_MIN = 9 * 60 + 30;
 const IB_END_MIN = 10 * 60 + 30;
 
+// Rule interface & evaluation
+interface AppliedRule { title: string; detail: string; color: string; }
+
+function etDayOfWeek(): number {
+  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+  return d.getDay(); // 0=Sun … 2=Tue
+}
+
+function applicableRules(ib: InitialBalance | null): AppliedRule[] {
+  if (!ib) return [];
+  const out: AppliedRule[] = [];
+
+  const { min, sec } = nowEtMinutesSec();
+  const done = min >= IB_END_MIN;
+  const tag = done ? "" : " (provisional — IB still forming)";
+  const preBreak = !ib.brokeHigh && !ib.brokeLow;
+
+  // Lead notice
+  if (!done) {
+    out.push({ title: "IB Forming · Provisional Reads", color: "#ffb300",
+      detail: `Tracking the 9:30–10:30 ET range live${ib.range > 0 ? ` — current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}` : ""}. The reads below use the developing range and can still change; they lock at 10:30 ET.` });
+  } else {
+    out.push({ title: "Inside Day Exception", color: "#219EBC",
+      detail: "IB window complete. Only 0.6% of days stay fully inside the IB — plan for at least one breakout." });
+  }
+
+  const mid = (ib.high + ib.low) / 2;
+  const aboveMid = ib.lastClose != null ? ib.lastClose >= mid : null;
+
+  if (preBreak && aboveMid === true) {
+    out.push({ title: "Above-Mid Dominance (ES)", color: "#00e676",
+      detail: `Price is above the IB midpoint → 83.5% historical probability of an eventual IB High breakout${tag}.` });
+  } else if (preBreak && aboveMid === false) {
+    out.push({ title: "Below-Mid Dominance (ES)", color: "#ff5252",
+      detail: `Price is below the IB midpoint → 94.9% historical probability of an eventual IB Low breakdown. Fading carries ~5% survival${tag}.` });
+  }
+
+  const range = ib.high - ib.low;
+  const rangePct = mid > 0 ? (range / mid) * 100 : 0;
+
+  if (preBreak && rangePct > 0 && rangePct <= 1) {
+    out.push({ title: "Volatility Compression", color: "#ffb300",
+      detail: `IB range is compressed (${rangePct.toFixed(2)}% ≤ 1%). A 5m close below IB Low = 98.01% continued-downside trigger; fading carries ~0% edge${tag}.` });
+  }
+
+  // Timing curve
+  const nowMins = etNowMins();
+  if (done && !ib.brokeHigh && !ib.brokeLow && nowMins > 11 * 60) {
+    out.push({ title: "Timing Curve · Range Mode", color: "#ffffff",
+      detail: "Past 11:00 ET with no breakout — 84.1% of breakouts hit by now. Shift from breakout to range/premium-decay playbook." });
+  }
+
+  if (ib.brokeHigh && !ib.brokeLow) {
+    out.push({ title: "Single-Break Trend Day", color: "#00e676",
+      detail: `One clean side broken — modern ES regime: 75.59% single-break trend days, 22.05% double-breach risk. Respect the first break${tag}.` });
+  } else if (ib.brokeLow && !ib.brokeHigh) {
+    out.push({ title: "Single-Break Trend Day", color: "#00e676",
+      detail: `One clean side broken — modern ES regime: 75.59% single-break trend days, 22.05% double-breach risk. Respect the first break${tag}.` });
+  } else if (ib.brokeHigh && ib.brokeLow) {
+    out.push({ title: "Double Breach (ES)", color: "#ff1744",
+      detail: `Both IB sides broken — the ~40% ES double-cross whiplash profile. Trend-continuation conviction is reduced${tag}.` });
+  }
+
+  return out;
+}
+
 function nowEtMinutesSec(): { min: number; sec: number } {
   const p = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
@@ -894,8 +960,11 @@ function IbCard() {
   const fmt = (n: number | null | undefined) => (n != null ? Math.round(n).toLocaleString() : "—");
   const rangePts = ib ? ib.high - ib.low : null;
 
+  // Calculate applicable rules for this session
+  const rules = applicableRules(ib);
+
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: "auto", overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
@@ -951,6 +1020,33 @@ function IbCard() {
               </div>
             );
           })()}
+
+          {/* Rules In Play section */}
+          {rules.length > 0 && (
+            <>
+              <div style={divider} />
+              <Label>Rules in play ({rules.length})</Label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {rules.map((rule) => (
+                  <div
+                    key={rule.title}
+                    style={{
+                      border: `1px solid ${T.border}`,
+                      borderLeft: `3px solid ${rule.color}`,
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <span style={{ fontSize: 14, fontWeight: 800, color: rule.color }}>{rule.title}</span>
+                    <span style={{ fontSize: 13, color: T.text, lineHeight: 1.5 }}>{rule.detail}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </>
       )}
       <UpdatedStamp at={lastUpdated} />
