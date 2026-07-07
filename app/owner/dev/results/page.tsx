@@ -186,17 +186,17 @@ function ShareStat({ label, stats }: { label: string; stats: OverallStats | null
   const accent = wrColor(wr);
   return (
     <div style={{ flex: "1 1 140px", display: "flex", flexDirection: "column", gap: 6, alignItems: "center", textAlign: "center" }}>
-      <span style={{ fontSize: 13, fontWeight: 800, color: C.label, opacity: 0.55, textTransform: "uppercase", letterSpacing: "0.16em" }}>{label}</span>
-      <span style={{ fontSize: 46, fontWeight: 900, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1, textShadow: `0 0 24px ${rgba(accent, 0.5)}` }}>
+      <span style={{ fontSize: 15, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.16em" }}>{label}</span>
+      <span style={{ fontSize: 52, fontWeight: 900, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1, textShadow: `0 0 24px ${rgba(accent, 0.5)}` }}>
         {wr != null ? `${Math.round(wr * 100)}%` : "—"}
       </span>
-      <span style={{ fontSize: 14, fontWeight: 700, color: C.label, fontFamily: "var(--font-mono)" }}>
+      <span style={{ fontSize: 16, fontWeight: 700, color: C.label, fontFamily: "var(--font-mono)" }}>
         {stats ? `${stats.wins}W · ${stats.losses}L · ${stats.chop}C` : "—"}
       </span>
-      <span style={{ fontSize: 13, fontWeight: 700, color: AMBER, fontFamily: "var(--font-mono)" }}>
+      <span style={{ fontSize: 15, fontWeight: 700, color: AMBER, fontFamily: "var(--font-mono)" }}>
         {stats?.avg_r != null ? `${stats.avg_r > 0 ? "+" : ""}${stats.avg_r.toFixed(2)}R avg` : " "}
       </span>
-      <span style={{ fontSize: 12, color: C.label, opacity: 0.45, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+      <span style={{ fontSize: 14, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>
         {stats ? `${stats.total} logged` : ""}
       </span>
     </div>
@@ -215,31 +215,25 @@ function ShareCard({
     <div style={{ position: "relative", marginBottom: 22 }}>
       <div
         ref={cardRef}
-        style={{
-          borderRadius: 20,
-          border: `1px solid ${rgba(C.cyan, 0.35)}`,
-          background: `radial-gradient(circle at 15% -10%, ${rgba(C.cyan, 0.16)} 0%, transparent 55%), radial-gradient(circle at 90% 110%, ${rgba(AMBER, 0.1)} 0%, transparent 50%), ${HOME_THEME.panel}`,
-          boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
-          padding: "26px 30px",
-        }}
+        style={{ ...CARD, padding: "26px 30px" }}
       >
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 20, fontWeight: 900, color: C.cyan, letterSpacing: "0.08em" }}>CB EDGE</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.label, opacity: 0.55, textTransform: "uppercase", letterSpacing: "0.14em" }}>ICT Setup Results</span>
+          <span style={{ fontSize: 22, fontWeight: 900, color: C.cyan, letterSpacing: "0.08em" }}>CB EDGE</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em" }}>ICT Setup Results</span>
         </div>
-        <div style={{ fontSize: 13, color: C.label, opacity: 0.5, margin: "4px 0 20px" }}>
+        <div style={{ fontSize: 15, color: C.label, margin: "4px 0 20px" }}>
           Auto-graded on 5-minute follow-through — every setup logged, no cherry-picking
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <ShareStat label="Today" stats={overall.today} />
-          <div style={{ width: 1, alignSelf: "stretch", background: rgba(C.cyan, 0.18) }} />
+          <div style={{ width: 1, alignSelf: "stretch", background: C.border }} />
           <ShareStat label="Last 7 Days" stats={overall.w7d} />
-          <div style={{ width: 1, alignSelf: "stretch", background: rgba(C.cyan, 0.18) }} />
+          <div style={{ width: 1, alignSelf: "stretch", background: C.border }} />
           <ShareStat label="All-Time" stats={overall.all} />
         </div>
 
-        <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${rgba(C.cyan, 0.15)}`, display: "flex", justifyContent: "space-between", fontSize: 12, color: C.label, opacity: 0.4 }}>
+        <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", fontSize: 14, color: C.label }}>
           <span>cbedge.net</span>
           <span>{todayETStr()}</span>
         </div>
