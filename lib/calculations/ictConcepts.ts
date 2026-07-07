@@ -107,6 +107,17 @@ export function detectFVGs(
     for (let j = 0; j < candles.length; j++) {
       const k = candles[j];
       if (k.timestamp <= f.ts) continue;
+
+      if (f.inverted) {
+        // Post-inversion: the box now acts as `activeDir` support/resistance.
+        // It stops being an IFVG the moment price CLOSES back through it —
+        // the box stays on screen but stops extending, ending at that break.
+        if (f.invertedTs != null && k.timestamp <= f.invertedTs) continue;
+        const brokeBack = f.activeDir === "bull" ? k.close < f.bottom : k.close > f.top;
+        if (brokeBack) { f.endTs = k.timestamp; break; }
+        continue;
+      }
+
       // Touched the void. First touch → mitigated. A LATER touch on a different
       // candle → retouched (the gap has now been used twice; caller removes it).
       const into = f.dir === "bull" ? k.low <= f.top : k.high >= f.bottom;
@@ -122,14 +133,16 @@ export function detectFVGs(
       const through = f.dir === "bull" ? k.close < f.bottom : k.close > f.top;
       if (through) {
         f.spent = true;
-        if (f.endTs == null) f.endTs = k.timestamp; // box stops at the break
         // Only flips to an IFVG if that break also swept liquidity.
         if (sweepTimes.has(k.timestamp)) {
           f.inverted = true;
           f.invertedTs = k.timestamp;
           f.activeDir = f.dir === "bull" ? "bear" : "bull";
+          f.endTs = null; // IFVG lives on (unbroken) until it's invalidated above
+          continue; // keep scanning for the invalidation break
         }
-        break; // the gap is spent either way (kept if inverted, dropped if not)
+        if (f.endTs == null) f.endTs = k.timestamp; // box stops at the break
+        break; // not inverted → the gap is dropped by the caller
       }
     }
   }

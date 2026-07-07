@@ -488,17 +488,18 @@ export default function IctPage() {
     }
 
     // FVG boxes. A box EXTENDS right only while it's live; once price passes
-    // through it a 2nd time (or breaks it) the box ENDS at that candle (endTs)
+    // through it (2nd touch, or a break) the box ENDS at that candle (endTs)
     // instead of stretching to the live edge. An inverted IFVG keeps drawing
-    // (flipped polarity) from its inversion point to the right edge.
+    // (flipped polarity) from its inversion point — and once price closes back
+    // through IT (it's no longer acting as an inverted zone), it too ends/stops
+    // extending at that candle, staying on screen up to the break.
     if (t.showFvg) {
       for (const f of a.fvgs) {
         const xStart = xOf(f.inverted && f.invertedTs ? f.invertedTs : f.ts);
         const yT = yOf(f.top), yB = yOf(f.bottom);
         if (xStart == null || yT == null || yB == null) continue;
-        // Right edge of the box: endTs if the gap is done, else the live edge.
-        // IFVGs ignore endTs (they live on past the break).
-        const xEndRaw = !f.inverted && f.endTs != null ? xOf(f.endTs) : rightEdge;
+        // Right edge of the box: endTs if the gap/IFVG has ended, else the live edge.
+        const xEndRaw = f.endTs != null ? xOf(f.endTs) : rightEdge;
         const xEnd = xEndRaw == null ? rightEdge : xEndRaw;
         const bull = f.activeDir === "bull";
         const x = Math.min(xStart, xEnd), y = Math.min(yT, yB);
@@ -506,17 +507,17 @@ export default function IctPage() {
         // FVG = BLUE, IFVG = PINK (one color per concept; direction via the ↑/↓
         // in the label, not the box color).
         const arrow = bull ? " ↑" : " ↓";
+        const done = f.endTs != null; // ended box reads fainter than a live one
         if (f.inverted) {
-          ctx.fillStyle = `rgba(${C.ifvg},0.18)`;
+          ctx.fillStyle = `rgba(${C.ifvg},${done ? 0.08 : 0.18})`;
           ctx.fillRect(x, y, w, h);
-          ctx.strokeStyle = `rgba(${C.ifvg},0.95)`;
+          ctx.strokeStyle = `rgba(${C.ifvg},${done ? 0.5 : 0.95})`;
           ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
           ctx.strokeRect(x, y, w, h);
           ctx.setLineDash([]);
-          label(ctx, x + 3, y + 11, "IFVG" + arrow, `rgba(${C.ifvg},1)`);
-          addRect(x, y, w, h, "ifvg", `Inverse FVG ${bull ? "↑ bullish" : "↓ bearish"}`, `${f.bottom.toFixed(2)}–${f.top.toFixed(2)}`);
+          label(ctx, x + 3, y + 11, "IFVG" + arrow, `rgba(${C.ifvg},${done ? 0.6 : 1})`);
+          addRect(x, y, w, h, "ifvg", `Inverse FVG ${bull ? "↑ bullish" : "↓ bearish"}${done ? " (invalidated)" : ""}`, `${f.bottom.toFixed(2)}–${f.top.toFixed(2)}`);
         } else {
-          const done = f.endTs != null; // ended box reads fainter than a live one
           ctx.fillStyle = `rgba(${C.fvg},${done ? 0.08 : 0.16})`;
           ctx.fillRect(x, y, w, h);
           ctx.strokeStyle = `rgba(${C.fvg},0.6)`;
@@ -611,9 +612,10 @@ export default function IctPage() {
   useEffect(() => { didFitRef.current = false; lastFitDayRef.current = ""; }, [instrument]);
 
   const status = connected ? "live" : "offline";
-  // Panel lists gaps still in play: live boxes (no endTs) plus inverted IFVGs.
-  // A box that ended (2nd pass-through or break) drops off the panel.
-  const liveFvg = ict.fvgs.filter((f) => f.inverted || f.endTs == null);
+  // Panel lists gaps still in play: any box with no endTs (live FVGs, and IFVGs
+  // that haven't been invalidated yet). A box that ended (2nd pass-through, a
+  // break, or an IFVG invalidation) drops off the panel.
+  const liveFvg = ict.fvgs.filter((f) => f.endTs == null);
   const unsweptLiq = ict.liquidity.filter((l) => !l.swept);
 
   // Merge the new model detectors into one recent-events feed (newest first).
@@ -666,7 +668,7 @@ export default function IctPage() {
     const a: Record<string, boolean> = {
       // zone concepts
       fvg:    ict.fvgs.some((f) => !f.inverted && f.endTs == null && inZone(f.top, f.bottom)),
-      ifvg:   ict.fvgs.some((f) => f.inverted && inZone(f.top, f.bottom)),
+      ifvg:   ict.fvgs.some((f) => f.inverted && f.endTs == null && inZone(f.top, f.bottom)),
       // Live whenever the latest price is sitting inside ANY order-block zone.
       // (Don't gate on `mitigated`: an OB flips to mitigated the instant price
       //  re-enters it, which would suppress the very "price in zone" state we
@@ -1075,19 +1077,19 @@ export default function IctPage() {
                       <ConceptIcon id={c.id} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-[15px] font-bold text-cyan-300">{c.name}</span>
+                          <span className="text-[16px] font-bold text-cyan-300">{c.name}</span>
                           {liveBadge}
                           <span className="ml-auto text-[12px] text-white/40">▾</span>
                         </div>
                       </div>
                     </div>
-                    <p className="text-[14px] leading-relaxed text-white">{highlightTerms(c.body)}</p>
+                    <p className="text-[15px] leading-relaxed text-white">{highlightTerms(c.body)}</p>
                   </>
                 ) : (
                   <div className="flex flex-col items-center gap-2 py-1 text-center">
                     <ConceptIcon id={c.id} size={2.1} />
                     <div className="flex items-center gap-2">
-                      <span className="text-[15px] font-bold text-cyan-300">{c.name}</span>
+                      <span className="text-[16px] font-bold text-cyan-300">{c.name}</span>
                       {liveBadge}
                     </div>
                   </div>
