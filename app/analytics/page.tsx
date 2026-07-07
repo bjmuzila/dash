@@ -940,7 +940,7 @@ function IbCard() {
   const rules = applicableRules(ib);
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: "auto", overflowY: "auto" }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
         <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
@@ -1002,24 +1002,36 @@ function IbCard() {
             <>
               <div style={divider} />
               <Label>Rules in play ({rules.length})</Label>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {rules.map((rule) => (
-                  <div
-                    key={rule.title}
-                    style={{
-                      border: `1px solid ${T.border}`,
-                      borderLeft: `3px solid ${rule.color}`,
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 4,
-                    }}
-                  >
-                    <span style={{ fontSize: 14, fontWeight: 800, color: rule.color }}>{rule.title}</span>
-                    <span style={{ fontSize: 13, color: T.text, lineHeight: 1.5 }}>{rule.detail}</span>
-                  </div>
-                ))}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+                {rules.map((rule) => {
+                  // Map rule colors to theme tokens
+                  const ruleColorMap: Record<string, string> = {
+                    "#ffb300": T.orange,
+                    "#219EBC": T.cyan,
+                    "#00e676": POS_GREEN,
+                    "#ff5252": T.red,
+                    "#ffffff": T.text,
+                    "#ff1744": T.red,
+                  };
+                  const themeColor = ruleColorMap[rule.color] || T.cyan;
+                  return (
+                    <div
+                      key={rule.title}
+                      style={{
+                        border: `1px solid ${T.border}`,
+                        borderLeft: `3px solid ${themeColor}`,
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 3,
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 800, color: themeColor }}>{rule.title}</span>
+                      <span style={{ fontSize: 12, color: T.text, lineHeight: 1.4 }}>{rule.detail}</span>
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}

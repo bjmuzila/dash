@@ -304,20 +304,6 @@ export default function FlowPage() {
     [dpLevels]
   );
 
-  // "10:17 AM–11:17 AM ET" for Intraday, or a session-date range for 5D/7D.
-  const dpRangeLabel = useMemo(() => {
-    if (!dpLevels) return "";
-    if (dpWindow === "intraday") {
-      if (dpLevels.fromTs == null || dpLevels.toTs == null) return "";
-      const fmt = (ts: number) => new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
-      return `${fmt(dpLevels.fromTs)}–${fmt(dpLevels.toTs)} ET`;
-    }
-    const dates = dpLevels.dates ?? [];
-    if (!dates.length) return "";
-    const fmt = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    const sorted = [...dates].sort();
-    return sorted.length > 1 ? `${fmt(sorted[0])} – ${fmt(sorted[sorted.length - 1])}` : fmt(sorted[0]);
-  }, [dpLevels, dpWindow]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -519,7 +505,7 @@ export default function FlowPage() {
     Object.assign(tooltip.style, {
       position: "absolute", display: "none", pointerEvents: "none", zIndex: "20",
       minWidth: "230px", padding: "0", borderRadius: "12px", overflow: "hidden",
-      fontSize: "12px", lineHeight: "1.4",
+      fontSize: "15px", lineHeight: "1.4",
       background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.10) 0%, transparent 60%), rgba(10,13,20,0.96)",
       border: `1px solid ${C.border}`, borderTop: "2px solid rgba(33,158,188,0.5)",
       color: C.text, whiteSpace: "nowrap",
@@ -532,7 +518,7 @@ export default function FlowPage() {
       autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "rgba(255,255,255,.70)",
+        textColor: C.text,
         fontFamily: "Inter, system-ui, sans-serif",
       },
       grid: {
@@ -597,13 +583,13 @@ export default function FlowPage() {
           `</div>`
         );
       }).join("");
-      const more = orders.length > MAX_ROWS ? `<div style="color:rgba(255,255,255,.45);font-family:var(--font-mono);font-size:11px;padding:4px 8px 0">+${orders.length - MAX_ROWS} more…</div>` : "";
+      const more = orders.length > MAX_ROWS ? `<div style="color:#fff;font-family:var(--font-mono);font-size:15px;padding:4px 8px 0">+${orders.length - MAX_ROWS} more…</div>` : "";
       tip.innerHTML =
         `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.08)">` +
-          `<span style="color:#fff;font-weight:500;font-size:13px">${et}</span>` +
-          `<span style="color:rgba(255,255,255,.5);font-size:10px;font-family:var(--font-mono);letter-spacing:.06em">OTM · ${orders.length} print${orders.length === 1 ? "" : "s"}</span>` +
+          `<span style="color:#fff;font-weight:500;font-size:16px">${et}</span>` +
+          `<span style="color:#fff;font-size:15px;font-family:var(--font-mono);letter-spacing:.06em">OTM · ${orders.length} print${orders.length === 1 ? "" : "s"}</span>` +
         `</div>` +
-        `<div style="padding:8px 10px;font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:5px">${rows}${more}</div>`;
+        `<div style="padding:8px 10px;font-family:var(--font-mono);font-size:15px;display:flex;flex-direction:column;gap:5px">${rows}${more}</div>`;
       tip.style.display = "block";
       const hostW = host.clientWidth, tipW = tip.offsetWidth;
       let left = param.point.x + 16;
@@ -674,7 +660,7 @@ export default function FlowPage() {
 
   // ── Styles ──
   const labelStyle: React.CSSProperties = {
-    fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+    fontSize: 15, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
     color: C.green, marginBottom: 4, display: "block",
   };
   const fieldStyle: React.CSSProperties = { ...homeInputStyle, width: "100%" };
@@ -685,10 +671,10 @@ export default function FlowPage() {
   // + glow; inactive = transparent with dimmed text. Matches the toolbar/nav.
   function segBtn(activeState: boolean): React.CSSProperties {
     return {
-      flex: 1, padding: "8px 6px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+      flex: 1, padding: "8px 6px", fontSize: 15, fontWeight: 700, cursor: "pointer",
       textTransform: "uppercase", letterSpacing: "0.06em", border: "none",
       background: activeState ? DOCK_THEME.activeTile : "transparent",
-      color: activeState ? C.cyan : "rgba(255,255,255,0.55)",
+      color: activeState ? C.cyan : C.text,
       boxShadow: activeState ? DOCK_THEME.activeGlow : "none",
       transition: "all 0.15s",
     };
@@ -718,8 +704,8 @@ export default function FlowPage() {
             return (
               <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
-                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
                 </div>
                 <span style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
                 <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
@@ -752,7 +738,7 @@ export default function FlowPage() {
           <button className="flow-chip" style={segBtn(view === "combined")} onClick={() => setView("combined")}>Combined</button>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
+          <label style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
           <ThemedDatePicker
             value={date}
             onChange={(v) => setDate(v || todayYmdET())}
@@ -762,21 +748,23 @@ export default function FlowPage() {
             <button
               className="flow-chip"
               onClick={() => setDate(todayYmdET())}
-              style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.04em", borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.cyan }}
+              style={{ padding: "6px 12px", fontSize: 15, fontWeight: 700, cursor: "pointer", letterSpacing: "0.04em", borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.cyan }}
             >
               Today
             </button>
           )}
           {!isToday && (
-            <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: "rgba(142,202,230,0.12)", color: C.cyan }}>
+            <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: "rgba(142,202,230,0.12)", color: C.cyan }}>
               HISTORICAL
             </span>
           )}
         </div>
       </div>
 
-      {/* ── Filters ─────────────────────────────────────────────────── */}
-      <Card variant="budget" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0 }}>
+      {/* ── Filters + Dark Pool bars, side by side, full window width, above the chart. ── */}
+      <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", flexShrink: 0 }}>
+      <div style={{ flex: "1 1 480px", minWidth: 0 }}>
+      <Card variant="budget" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0, height: "100%" }}>
         {view === "combined" ? (
           <div style={{ marginBottom: 18 }}>
             <label style={labelStyle}>Scope</label>
@@ -797,7 +785,7 @@ export default function FlowPage() {
                     className="flow-chip"
                     onClick={() => setActive(t)}
                     style={{
-                      padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                      padding: "6px 12px", fontSize: 15, fontWeight: 700, cursor: "pointer",
                       letterSpacing: "0.04em", borderRadius: 6,
                       border: `1px solid ${on ? DOCK_THEME.activeBorder : C.border}`,
                       background: on ? DOCK_THEME.activeTile : "rgba(0,0,0,0.4)",
@@ -886,7 +874,7 @@ export default function FlowPage() {
               className="flow-chip"
               onClick={resetFilters}
               style={{
-                width: "100%", padding: "8px 6px", fontSize: 11, fontWeight: 700,
+                width: "100%", padding: "8px 6px", fontSize: 15, fontWeight: 700,
                 textTransform: "uppercase", letterSpacing: "0.06em", cursor: "pointer",
                 border: `1px solid ${C.border}`, borderRadius: 6, background: "rgba(255,255,255,0.04)", color: C.text,
               }}
@@ -896,39 +884,15 @@ export default function FlowPage() {
           </div>
         </div>
       </Card>
+      </div>
 
-      {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
-           Combined view so the once-created lightweight-chart keeps its ref. ── */}
-      <div style={{ display: view === "ticker" ? "contents" : "none" }}>
-        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
-          <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
-              Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
-              {netSwitching && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted }}>· loading…</span>}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
-            <span style={{ color: BULLISH }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
-            <span style={{ color: BEARISH }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
-            <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
-          </div>
-          <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
-          {!netSeries.hasData && (
-            <p style={{ fontSize: 13, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
-              {!isToday ? `No ${active} flow recorded for ${date}.` : status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
-            </p>
-          )}
-          {view === "ticker" && renderPremiumSplit()}
-        </Card>
-
-        {/* ── Dark Pool (TRF prints) — per-ticker flow + accumulation. ── */}
-        <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px 4px", flexWrap: "wrap" }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>
-              Dark Pool <span style={{ color: C.purple }}>·</span> Off-Exchange
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Window</label>
+      {view === "ticker" && (
+        <div style={{ flex: "1 1 340px", minWidth: 280, maxWidth: 460 }}>
+          <Card variant="budget" padding={0} style={{ height: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px 4px", flexWrap: "wrap" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
+                Dark Pool <span style={{ color: C.purple }}>·</span> Off-Exchange
+              </div>
               <select
                 style={{ ...homeInputStyle, width: 110 }}
                 value={dpWindow}
@@ -939,84 +903,70 @@ export default function FlowPage() {
                 <option value="7d">7 Day</option>
               </select>
             </div>
-          </div>
 
-          {isIndexTicker ? (
-            <p style={{ fontSize: 13, padding: "0 20px 20px", color: C.muted }}>
-              {active} is an index — no stock listing, so no dark-pool prints. Pick an equity ticker (e.g. SPY, QQQ) to see this.
-            </p>
-          ) : !dpLevels || dpLevels.levels.length === 0 ? (
-            <p style={{ fontSize: 13, padding: "8px 20px 20px", color: C.muted }}>
-              No dark-pool prints recorded for {active} {dpWindow === "intraday" ? `on ${date}` : `in the last ${dpWindow === "5d" ? "5" : "7"} sessions`}.
-            </p>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(280px, 1.5fr)", gap: 28, padding: "14px 20px 22px" }}>
-              {/* ── Left: % of volume off-exchange + shares/$ totals ── */}
-              <div>
-                {dpLevels.pctOff != null ? (
-                  <div style={{ fontSize: 32, fontWeight: 800, color: C.purple, lineHeight: 1.15 }}>
-                    {dpLevels.pctOff.toFixed(1)}%
-                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginTop: 2 }}>
-                      of {active} volume traded off-exchange
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
-                    {fmtShares(dpLevels.darkShares)} shares printed off-exchange for {active}
-                  </div>
-                )}
-                {dpRangeLabel && (
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-                    dark pools + ATS + wholesalers · {dpRangeLabel}
-                  </div>
-                )}
-
-                {dpLevels.pctOff != null && (
-                  <div style={{ marginTop: 14, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-                    <div style={{ width: `${Math.min(100, dpLevels.pctOff)}%`, height: "100%", borderRadius: 3, background: C.purple }} />
-                  </div>
-                )}
-
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontSize: 13, fontFamily: "var(--font-mono)" }}>
-                  <span style={{ color: C.purple, fontWeight: 700 }}>{fmtShares(dpLevels.darkShares)} shares dark</span>
-                  {dpLevels.totalShares > 0 && <span style={{ color: C.muted }}>{fmtShares(dpLevels.totalShares)} total</span>}
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 13, fontFamily: "var(--font-mono)" }}>
-                  <span style={{ color: C.purple, fontWeight: 700 }}>{fmtPremium(dpLevels.darkNotional)} off</span>
-                  {dpLevels.totalNotional > 0 && <span style={{ color: C.muted }}>{fmtPremium(dpLevels.totalNotional)} total</span>}
-                </div>
-              </div>
-
-              {/* ── Right: Heaviest Dark Levels (price profile) ── */}
-              <div>
-                <label style={labelStyle}>Heaviest Dark Levels</label>
-                <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 6 }}>
+            {isIndexTicker ? (
+              <p style={{ fontSize: 15, padding: "0 20px 20px", color: C.text }}>
+                {active} is an index — no stock listing, so no dark-pool prints. Pick an equity ticker (e.g. SPY, QQQ) to see this.
+              </p>
+            ) : !dpLevels || dpLevels.levels.length === 0 ? (
+              <p style={{ fontSize: 15, padding: "8px 20px 20px", color: C.text }}>
+                No dark-pool prints recorded for {active} {dpWindow === "intraday" ? `on ${date}` : `in the last ${dpWindow === "5d" ? "5" : "7"} sessions`}.
+              </p>
+            ) : (
+              <div style={{ padding: "10px 20px 20px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {dpLevels.levels.map((lvl) => {
                     const pct = Math.max(3, (lvl.notional / dpMaxLevelNotional) * 100);
                     return (
                       <div key={lvl.price} style={{ display: "grid", gridTemplateColumns: "68px 1fr auto", gap: 10, alignItems: "center" }}>
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: C.text }}>{lvl.price.toFixed(2)}</span>
-                        <div style={{ height: 10, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, color: C.text }}>{lvl.price.toFixed(2)}</span>
+                        <div style={{ height: 12, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
                           <div style={{ width: `${pct}%`, height: "100%", borderRadius: 4, background: `linear-gradient(90deg, ${C.purple}, ${C.cyan})` }} />
                         </div>
                         <div style={{ textAlign: "right", fontFamily: "var(--font-mono)", lineHeight: 1.3 }}>
-                          <div style={{ color: C.purple, fontWeight: 700, fontSize: 12 }}>{fmtPremium(lvl.notional)}</div>
-                          <div style={{ color: C.muted, fontSize: 10 }}>{fmtShares(lvl.shares)} shares</div>
+                          <div style={{ color: C.purple, fontWeight: 700, fontSize: 15 }}>{fmtPremium(lvl.notional)}</div>
+                          <div style={{ color: C.text, fontSize: 15 }}>{fmtShares(lvl.shares)} shares</div>
                         </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
+            )}
+          </Card>
+        </div>
+      )}
+      </div>
+
+      {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
+           Combined view so the once-created lightweight-chart keeps its ref. ── */}
+      <div style={{ display: view === "ticker" ? "contents" : "none" }}>
+        <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
+          <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
+              Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
+              {netSwitching && <span style={{ marginLeft: 8, fontSize: 15, fontWeight: 700, color: C.muted }}>· loading…</span>}
             </div>
+          </div>
+          <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 15, fontWeight: 700, flexWrap: "wrap" }}>
+            <span style={{ color: BULLISH }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
+            <span style={{ color: BEARISH }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
+            <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
+          </div>
+          <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
+          {!netSeries.hasData && (
+            <p style={{ fontSize: 15, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
+              {!isToday ? `No ${active} flow recorded for ${date}.` : status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
+            </p>
           )}
+          {view === "ticker" && renderPremiumSplit()}
         </Card>
       </div>
 
       {view === "combined" && (
         <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
           <div style={{ padding: "16px 20px 4px", textAlign: "center" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
               Premium Split — <span style={{ color: C.cyan }}>{combinedLabel}</span>
             </div>
           </div>
@@ -1028,19 +978,19 @@ export default function FlowPage() {
       <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>
-            {view === "ticker" && historySwitching && <span style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>loading…</span>}
-            <span style={{ fontSize: 12, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
-            <span style={{ fontSize: 12, color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtPremium(totals.prem)}</strong></span>
-            <span style={{ fontSize: 12, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
-            <span style={{ fontSize: 12, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
+            <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>
+            {view === "ticker" && historySwitching && <span style={{ fontSize: 15, fontWeight: 700, color: C.muted }}>loading…</span>}
+            <span style={{ fontSize: 15, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
+            <span style={{ fontSize: 15, color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtPremium(totals.prem)}</strong></span>
+            <span style={{ fontSize: 15, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
+            <span style={{ fontSize: 15, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
           </div>
-          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: (!isToday || status === "LIVE") ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: (!isToday || status === "LIVE") ? C.cyan : C.red }}>
+          <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: (!isToday || status === "LIVE") ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: (!isToday || status === "LIVE") ? C.cyan : C.red }}>
             {isToday ? status : `${date} · HISTORICAL`}
           </span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
           {view === "combined" && <span>Ticker</span>}
           <span>Time</span>
           <span>Side</span>
@@ -1056,7 +1006,7 @@ export default function FlowPage() {
 
         <div>
           {tapeRows.length === 0 ? (
-            <p style={{ fontSize: 13, padding: 24, color: C.muted }}>
+            <p style={{ fontSize: 15, padding: 24, color: C.muted }}>
               {!isToday ? `No ${view === "combined" ? combinedLabel : active} flow recorded for ${date}.` : status === "LIVE" ? `No ${view === "combined" ? combinedLabel : active} flow matches the current filters.` : "Connecting to feed…"}
             </p>
           ) : (
@@ -1079,7 +1029,7 @@ export default function FlowPage() {
                   <span style={{ textAlign: "right", color: C.text }}>{fmtContractCost(o.price)}</span>
                   <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
                   <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
-                  <span style={{ textAlign: "center", fontWeight: 800, fontSize: 11, color: biasColor }}>
+                  <span style={{ textAlign: "center", fontWeight: 800, fontSize: 15, color: biasColor }}>
                     {bull ? "▲ BULL" : "▼ BEAR"}
                   </span>
                 </div>
@@ -1087,7 +1037,7 @@ export default function FlowPage() {
             })
           )}
           {tapeRows.length > MAX_TAPE_ROWS && (
-            <p style={{ fontSize: 12, padding: "10px 20px", color: C.muted, textAlign: "center" }}>
+            <p style={{ fontSize: 15, padding: "10px 20px", color: C.muted, textAlign: "center" }}>
               Showing newest {MAX_TAPE_ROWS.toLocaleString()} of {tapeRows.length.toLocaleString()} — tighten filters to narrow.
             </p>
           )}
