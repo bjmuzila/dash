@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CB Edge — Launch Intro</title>
+<style>
+html,body{margin:0;padding:0;background:#000;width:100%;height:100%;overflow:hidden}
+.stage{width:1920px;height:1080px;transform-origin:top left;position:relative}
+@keyframes cbCandleGrow{0%{transform:scaleY(0);opacity:0}100%{transform:scaleY(1);opacity:1}}
+@keyframes cbTickerScroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+@keyframes cbTickerScrollRev{0%{transform:translateX(-50%)}100%{transform:translateX(0)}}
+@keyframes cbFadeUp{0%{opacity:0;transform:translateY(24px)}100%{opacity:1;transform:translateY(0)}}
+@keyframes cbBadgePulse{0%,100%{box-shadow:0 0 0px rgba(251,133,1,0.0),0 0 26px rgba(33,158,188,0.28)}50%{box-shadow:0 0 32px rgba(251,133,1,0.6),0 0 44px rgba(33,158,188,0.5)}}
+@keyframes cbFloat{0%{transform:translateY(0);opacity:0.15}50%{opacity:0.55}100%{transform:translateY(-60px);opacity:0}}
+@keyframes cbGridDrift{0%{background-position:0 0}100%{background-position:0 48px}}
+.cb-frame{position:relative;width:1920px;height:1080px;overflow:hidden;background:radial-gradient(circle at 18% 22%,rgba(33,158,188,0.18) 0%,transparent 45%),radial-gradient(circle at 82% 78%,rgba(251,133,1,0.12) 0%,transparent 45%),#05060A}
+.cb-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.05) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.05) 1px,transparent 1px);background-size:48px 48px;animation:cbGridDrift 6s linear infinite;opacity:0.5}
+.cb-ticker-row{position:absolute;left:0;right:0;white-space:nowrap;font-family:'SF Mono',Consolas,monospace;font-size:20px;color:#219EBC;letter-spacing:0.04em;opacity:0.9}
+.cb-ticker-top{top:28px}
+.cb-ticker-bottom{bottom:28px;color:#8ECAE6}
+.cb-ticker-track{display:inline-block;padding-left:100%;animation:cbTickerScroll 26s linear infinite}
+.cb-ticker-bottom .cb-ticker-track{animation:cbTickerScrollRev 30s linear infinite;padding-left:0}
+.cb-ticker-item{display:inline-block;padding:0 32px}
+.cb-up{color:#8ECAE6}
+.cb-down{color:#EF4444}
+.cb-candles{position:absolute;left:0;right:0;bottom:0;height:52%;display:flex;align-items:flex-end;justify-content:center;gap:26px;padding:0 8%}
+.cb-candle{width:30px;border-radius:4px 4px 0 0;transform-origin:bottom center;animation:cbCandleGrow 0.9s cubic-bezier(.2,.8,.3,1) both}
+.cb-particle{position:absolute;width:6px;height:6px;border-radius:50%;background:#219EBC;animation:cbFloat 5s ease-in-out infinite}
+.cb-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:18px}
+.cb-logo{font-family:Arial,Helvetica,sans-serif;font-size:112px;font-weight:700;letter-spacing:0.12em;color:#FFFFFF;text-shadow:0 0 40px rgba(33,158,188,0.6),0 0 80px rgba(33,158,188,0.3);animation:cbFadeUp 0.9s ease 0.3s both}
+.cb-logo span{color:#219EBC}
+.cb-accentbar{width:220px;height:3px;background:linear-gradient(90deg,transparent,#219EBC,transparent);animation:cbFadeUp 0.9s ease 0.5s both}
+.cb-tagline{font-family:Arial,Helvetica,sans-serif;font-size:32px;color:#8ECAE6;letter-spacing:0.08em;font-weight:400;animation:cbFadeUp 0.9s ease 0.65s both}
+.cb-badge{margin-top:14px;padding:16px 36px;border-radius:999px;border:1px solid rgba(251,133,1,0.5);background:rgba(13,17,25,0.75);display:flex;align-items:center;gap:18px;animation:cbFadeUp 0.9s ease 0.85s both,cbBadgePulse 2.4s ease-in-out infinite 1.8s}
+.cb-badge b{font-family:Arial,Helvetica,sans-serif;color:#FB8501;font-size:28px;letter-spacing:0.04em}
+.cb-badge code{color:#219EBC;font-family:'SF Mono',Consolas,monospace;font-size:28px;letter-spacing:0.04em}
+</style>
+</head>
+<body>
+<div class="cb-frame" id="cbFrame">
+<div class="cb-grid"></div>
+<div class="cb-ticker-row cb-ticker-top"><div class="cb-ticker-track">
+<span class="cb-ticker-item">SPX 6,847.20 <span class="cb-up">+0.42%</span></span>
+<span class="cb-ticker-item">NQU 24,910.75 <span class="cb-up">+0.61%</span></span>
+<span class="cb-ticker-item">NET GEX <span class="cb-up">+$3.2B</span></span>
+<span class="cb-ticker-item">IV 12.4%</span>
+<span class="cb-ticker-item">GAMMA FLIP 6,820</span>
+<span class="cb-ticker-item">0DTE FLOW <span class="cb-down">-1.8%</span></span>
+<span class="cb-ticker-item">CB TOUCH RATE 78%</span>
+<span class="cb-ticker-item">SPX 6,847.20 <span class="cb-up">+0.42%</span></span>
+<span class="cb-ticker-item">NQU 24,910.75 <span class="cb-up">+0.61%</span></span>
+<span class="cb-ticker-item">NET GEX <span class="cb-up">+$3.2B</span></span>
+<span class="cb-ticker-item">IV 12.4%</span>
+<span class="cb-ticker-item">GAMMA FLIP 6,820</span>
+<span class="cb-ticker-item">0DTE FLOW <span class="cb-down">-1.8%</span></span>
+<span class="cb-ticker-item">CB TOUCH RATE 78%</span>
+</div></div>
+<div class="cb-ticker-row cb-ticker-bottom"><div class="cb-ticker-track">
+<span class="cb-ticker-item">THETA -0.42</span>
+<span class="cb-ticker-item">DELTA 0.51</span>
+<span class="cb-ticker-item">VANNA WATCH</span>
+<span class="cb-ticker-item">DEALER SHORT GAMMA</span>
+<span class="cb-ticker-item">EM 0.62%</span>
+<span class="cb-ticker-item">VIX 13.1 <span class="cb-down">-2.3%</span></span>
+<span class="cb-ticker-item">CODE LAUNCH = 20% OFF</span>
+<span class="cb-ticker-item">THETA -0.42</span>
+<span class="cb-ticker-item">DELTA 0.51</span>
+<span class="cb-ticker-item">VANNA WATCH</span>
+<span class="cb-ticker-item">DEALER SHORT GAMMA</span>
+<span class="cb-ticker-item">EM 0.62%</span>
+<span class="cb-ticker-item">VIX 13.1 <span class="cb-down">-2.3%</span></span>
+<span class="cb-ticker-item">CODE LAUNCH = 20% OFF</span>
+</div></div>
+<div class="cb-candles" id="cbCandles">
+<div class="cb-candle" style="height:38%;background:#219EBC;animation-delay:.05s"></div>
+<div class="cb-candle" style="height:58%;background:#EF4444;animation-delay:.12s"></div>
+<div class="cb-candle" style="height:30%;background:#8ECAE6;animation-delay:.19s"></div>
+<div class="cb-candle" style="height:70%;background:#219EBC;animation-delay:.26s"></div>
+<div class="cb-candle" style="height:44%;background:#EF4444;animation-delay:.33s"></div>
+<div class="cb-candle" style="height:82%;background:#8ECAE6;animation-delay:.40s"></div>
+<div class="cb-candle" style="height:50%;background:#219EBC;animation-delay:.47s"></div>
+<div class="cb-candle" style="height:64%;background:#EF4444;animation-delay:.54s"></div>
+<div class="cb-candle" style="height:36%;background:#8ECAE6;animation-delay:.61s"></div>
+<div class="cb-candle" style="height:76%;background:#219EBC;animation-delay:.68s"></div>
+<div class="cb-candle" style="height:48%;background:#EF4444;animation-delay:.75s"></div>
+<div class="cb-candle" style="height:60%;background:#8ECAE6;animation-delay:.82s"></div>
+<div class="cb-candle" style="height:34%;background:#219EBC;animation-delay:.89s"></div>
+<div class="cb-candle" style="height:56%;background:#EF4444;animation-delay:.96s"></div>
+<div class="cb-candle" style="height:72%;background:#8ECAE6;animation-delay:1.03s"></div>
+</div>
+<div class="cb-particle" style="left:10%;bottom:20%;animation-delay:0s"></div>
+<div class="cb-particle" style="left:22%;bottom:35%;animation-delay:1.1s"></div>
+<div class="cb-particle" style="left:70%;bottom:28%;animation-delay:0.6s"></div>
+<div class="cb-particle" style="left:87%;bottom:40%;animation-delay:1.8s"></div>
+<div class="cb-particle" style="left:52%;bottom:15%;animation-delay:2.4s"></div>
+<div class="cb-particle" style="left:35%;bottom:45%;animation-delay:3.1s"></div>
+<div class="cb-particle" style="left:63%;bottom:22%;animation-delay:0.3s"></div>
+<div class="cb-center">
+<div class="cb-logo">CB <span>EDGE</span></div>
+<div class="cb-accentbar"></div>
+<div class="cb-tagline">YOUR UNFAIR EDGE IN THE MARKETS</div>
+<div class="cb-badge"><b>20% OFF</b><code>CODE: LAUNCH</code></div>
+</div>
+</div>
+<script>
+function restart(){
+  var f=document.getElementById('cbFrame');
+  var c=f.cloneNode(true);
+  f.parentNode.replaceChild(c,f);
+  c.id='cbFrame';
+}
+setInterval(restart,9000);
+document.addEventListener('keydown',function(e){if(e.key===' '){restart();}});
+</script>
+</body>
+</html>
