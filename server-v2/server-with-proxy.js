@@ -40,7 +40,7 @@ const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
-const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
+const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
@@ -1354,6 +1354,27 @@ async function main() {
               LIMIT $${params.length}`;
             const { rows } = await p.query(sql, params);
             sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // GET /proxy/far-cb-outcome-detail?symbol=&strike=&expiry=
+      // Day-by-day detail for one tracked flag's row popup: underlying close +
+      // day/day %, and the watched contract's own close + day/day $ and %,
+      // from first_flagged through today.
+      if (pathname === '/proxy/far-cb-outcome-detail' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = String(u.searchParams.get('symbol') || '').trim().toUpperCase();
+            const strike = Number(u.searchParams.get('strike'));
+            const expiry = String(u.searchParams.get('expiry') || '').trim();
+            if (!symbol || !(strike > 0) || !expiry) {
+              sendJson(res, 400, { ok: false, error: 'symbol, strike, expiry required' });
+              return;
+            }
+            const detail = await farCbOutcomeDetail(symbol, strike, expiry);
+            sendJson(res, detail.ok ? 200 : 404, detail);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

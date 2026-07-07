@@ -204,7 +204,12 @@ async function snapshotTicker(symbol, date, prevDate) {
     if (expiry > cutoffIso) continue; // lexical ISO-date compare
     const strike = Number(strikeStr);
     if (!(strike > 0)) continue;
-    const oiPrev = Number(prevMap.get(key) ?? 0);
+    // prevMap is trimmed to ±STRIKE_RANGE around PRIOR day's spot, todayMap around
+    // TODAY's spot — after any real spot move those windows don't line up, so a
+    // strike missing from prevMap doesn't mean OI was 0 yesterday, just unknown.
+    // Treating unknown as 0 produced fake "built from scratch" spikes. Skip instead.
+    if (!prevMap.has(key)) continue;
+    const oiPrev = Number(prevMap.get(key));
     if (Math.max(oiNow, oiPrev) < MIN_OI_FLOOR) continue;
 
     const otm = type === 'C' ? strike > spot : strike < spot;

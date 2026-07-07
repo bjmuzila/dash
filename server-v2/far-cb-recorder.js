@@ -32,7 +32,7 @@ const {
   fetchIndexPriceTheta,
 } = require('./proxy-thetadata');
 const { getActiveRoster } = require('./far-cb-tickers');
-const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta } = require('./proxy-thetadata');
+const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta, fetchOptionDailyHistoryTheta } = require('./proxy-thetadata');
 
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
@@ -398,6 +398,92 @@ async function runGrading() {
   return { graded: ok, failed: failed.length };
 }
 
+// ── outcome detail (popup) ────────────────────────────────────────────────────
+
+/**
+ * Day-by-day detail for one tracked flag, for the "Tracked results" row popup:
+ * underlying close + day/day % change, alongside the watched contract's own
+ * close + day/day $ and % change, from first_flagged through today.
+ *
+ * Contract type isn't stored directly — inferred from gex_value_at_flag's
+ * sign, same convention the Watch-This cards already use ("Call-side" when
+ * gex_value >= 0, else "Put-side").
+ */
+async function computeOutcomeDetail(symbol, strike, expiry) {
+  if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
+  const p = getPool();
+  if (!p) return { ok: false, error: 'no DB' };
+  const { rows } = await p.query(
+    `SELECT symbol, strike, expiry, first_flagged, spot_at_flag, otm_pct_at_flag,
+            gex_value_at_flag, side, last_checked, last_spot, closest_pct, touched, touched_date, status
+     FROM far_cb_outcomes WHERE symbol = $1 AND strike = $2 AND expiry = $3`,
+    [symbol, strike, expiry]
+  );
+  const row = rows[0];
+  if (!row) return { ok: false, error: 'not found' };
+
+  const type = Number(row.gex_value_at_flag) >= 0 ? 'C' : 'P';
+  const fromDate = new Date(row.first_flagged);
+  const toDate = new Date();
+
+  const [underlyingBars, contractBars] = await Promise.all([
+    (INDEX_SYMBOLS.has(symbol.toUpperCase())
+      ? fetchIndexDailyHistoryTheta(symbol, fromDate, toDate)
+      : fetchStockDailyHistoryTheta(symbol, fromDate, toDate)
+    ).catch(() => []),
+    fetchOptionDailyHistoryTheta(
+      symbol, expiry, strike, type, fromDate, toDate,
+      Math.abs(Number(strike) - Number(row.spot_at_flag)) + 50
+    ).catch(() => []),
+  ]);
+
+  const contractByDay = new Map(
+    contractBars.map((b) => [new Date(b.time).toISOString().slice(0, 10), b.close])
+  );
+
+  const days = [];
+  let prevSpot = null;
+  let prevContract = null;
+  for (const b of underlyingBars) {
+    const dateStr = new Date(b.time).toISOString().slice(0, 10);
+    const spot = b.close;
+    const contractClose = contractByDay.has(dateStr) ? contractByDay.get(dateStr) : null;
+
+    const spotPctChg = prevSpot != null && prevSpot > 0 ? ((spot - prevSpot) / prevSpot) * 100 : null;
+    const contractDollarChg = prevContract != null && contractClose != null ? contractClose - prevContract : null;
+    const contractPctChg = prevContract != null && prevContract > 0 && contractClose != null
+      ? ((contractClose - prevContract) / prevContract) * 100
+      : null;
+
+    days.push({
+      date: dateStr,
+      spot,
+      spotPctChg,
+      contractClose,
+      contractDollarChg,
+      contractPctChg,
+    });
+
+    prevSpot = spot;
+    if (contractClose != null) prevContract = contractClose;
+  }
+
+  return {
+    ok: true,
+    symbol,
+    strike: Number(strike),
+    expiry,
+    type,
+    firstFlagged: row.first_flagged,
+    spotAtFlag: Number(row.spot_at_flag),
+    otmPctAtFlag: Number(row.otm_pct_at_flag),
+    status: row.status,
+    touched: row.touched,
+    touchedDate: row.touched_date,
+    days,
+  };
+}
+
 // ── scheduler ─────────────────────────────────────────────────────────────────
 
 let _timer = null;
@@ -450,6 +536,7 @@ module.exports = {
   ensureSchema,
   getPool,
   scanTicker,
+  computeOutcomeDetail,
   OTM_THRESHOLD_PCT,
   MAX_DTE_DAYS,
 };

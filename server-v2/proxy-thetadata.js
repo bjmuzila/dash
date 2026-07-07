@@ -490,6 +490,40 @@ async function fetchStockDailyHistoryTheta(symbol, startDate, endDate) {
   return _mapDailyOhlc(json);
 }
 
+// Daily EOD close series for ONE specific contract (exact strike + type) over a
+// date range — used by the far-CB "Tracked results" popup to show how the
+// watched contract's premium moved day-to-day since it was flagged.
+// Unlike fetchEodHistoryTheta (single-day, all-strikes, flatSnapshotRows takes
+// only the LAST data point per entry), this walks the full per-contract
+// data[] array so multi-day ranges aren't collapsed to one row.
+// `strikeRangeDollars` must be wide enough to keep the target strike inside
+// Theta's ±range-around-that-day's-spot window for every day in the range —
+// callers should pass something like |strike - spot_at_flag| + a cushion.
+async function fetchOptionDailyHistoryTheta(underlying, expiry, strike, type, startDate, endDate, strikeRangeDollars = 200) {
+  const root = thetaRoot(underlying);
+  const expCompact = ymdCompact(expiry);
+  const json = await thetaGet(
+    `/v3/option/history/eod?symbol=${encodeURIComponent(root)}&expiration=${expCompact}&start_date=${ymdCompact(startDate)}&end_date=${ymdCompact(endDate)}&strike_range=${Math.max(20, Math.ceil(strikeRangeDollars))}`,
+  );
+  const resp = json?.response || [];
+  if (!Array.isArray(resp)) return [];
+  const wantedRight = type === 'C' ? 'C' : 'P';
+  const entry = resp.find(
+    (e) => e?.contract && Number(e.contract.strike) === Number(strike) && rightToType(e.contract.right) === wantedRight,
+  );
+  if (!entry || !Array.isArray(entry.data)) return [];
+  return entry.data
+    .map((r) => {
+      let ymd = String(r.date ?? '');
+      const time = ymd.length === 8
+        ? Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00.000-05:00`)
+        : NaN;
+      return { time, close: Number(r.close), open: Number(r.open), high: Number(r.high), low: Number(r.low) };
+    })
+    .filter((b) => Number.isFinite(b.time) && Number.isFinite(b.close) && b.close > 0)
+    .sort((a, b) => a.time - b.time);
+}
+
 // ---------------------------------------------------------------------------
 // Streaming symbology helpers
 // ---------------------------------------------------------------------------
@@ -811,6 +845,7 @@ module.exports = {
   fetchStockEodTheta,
   fetchIndexDailyHistoryTheta,
   fetchStockDailyHistoryTheta,
+  fetchOptionDailyHistoryTheta,
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,

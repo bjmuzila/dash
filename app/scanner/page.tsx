@@ -1299,6 +1299,31 @@ type OutcomeRow = {
   status: "open" | "touched" | "expired";
 };
 
+type OutcomeDetailDay = {
+  date: string;
+  spot: number;
+  spotPctChg: number | null;
+  contractClose: number | null;
+  contractDollarChg: number | null;
+  contractPctChg: number | null;
+};
+
+type OutcomeDetail = {
+  ok: boolean;
+  error?: string;
+  symbol: string;
+  strike: number;
+  expiry: string;
+  type: "C" | "P";
+  firstFlagged: string;
+  spotAtFlag: number;
+  otmPctAtFlag: number;
+  status: "open" | "touched" | "expired";
+  touched: boolean;
+  touchedDate: string | null;
+  days: OutcomeDetailDay[];
+};
+
 function WatchThisScanner() {
   const [rows, setRows] = useState<WatchRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1307,6 +1332,27 @@ function WatchThisScanner() {
 
   const [outcomes, setOutcomes] = useState<OutcomeRow[]>([]);
   const [outcomeStatus, setOutcomeStatus] = useState<"all" | "open" | "touched" | "expired">("all");
+
+  const [detail, setDetail] = useState<OutcomeDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+
+  const openDetail = useCallback(async (o: OutcomeRow) => {
+    setDetail(null); setDetailErr(null); setDetailLoading(true);
+    try {
+      const qs = new URLSearchParams({ symbol: o.symbol, strike: String(o.strike), expiry: o.expiry }).toString();
+      const res = await fetch(`/proxy/far-cb-outcome-detail?${qs}`, { cache: "no-store" });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || "load failed");
+      setDetail(j);
+    } catch (e: any) {
+      setDetailErr(String(e?.message || e));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const closeDetail = useCallback(() => { setDetail(null); setDetailErr(null); }, []);
 
   const [newTicker, setNewTicker] = useState("");
   const [addStatus, setAddStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
@@ -1505,7 +1551,13 @@ function WatchThisScanner() {
             <tbody>
               {outcomes.map((o, i) => (
                 <tr key={`${o.symbol}-${o.expiry}-${o.strike}`}
-                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                  onClick={() => openDetail(o)}
+                  title="Click for day-by-day detail"
+                  style={{
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                    background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent",
+                    cursor: "pointer",
+                  }}>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
                   <td style={{ ...td, fontWeight: 700 }}>${o.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.expiry}</td>
@@ -1533,6 +1585,90 @@ function WatchThisScanner() {
           </table>
         </div>
       </div>
+
+      {(detailLoading || detail || detailErr) && (
+        <div
+          onClick={closeDetail}
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 100%)", maxHeight: "80vh", overflowY: "auto",
+              borderRadius: 12, padding: "18px 20px",
+              background: "rgba(13,17,25,0.97)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>
+                  {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
+                </div>
+                {detail && (
+                  <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
+                    Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
+                    <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
+                      {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <button onClick={closeDetail} style={{ ...seg(false), padding: "4px 10px" }}>✕</button>
+            </div>
+
+            {detailLoading && (
+              <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text }}>Loading day-by-day detail…</div>
+            )}
+            {detailErr && (
+              <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.orange }}>{detailErr}</div>
+            )}
+            {detail && !detail.days.length && (
+              <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text }}>No daily bars yet.</div>
+            )}
+            {detail && !!detail.days.length && (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+                  <thead>
+                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+                      <th style={{ ...th, textAlign: "left" }}>Date</th>
+                      <th style={th}>Spot</th>
+                      <th style={th}>Spot Δ%</th>
+                      <th style={th}>Contract</th>
+                      <th style={th}>Contract Δ$</th>
+                      <th style={th}>Contract Δ%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.days.map((d, i) => (
+                      <tr key={d.date} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                        <td style={{ ...td, textAlign: "left" }}>{d.date}</td>
+                        <td style={td}>${d.spot.toFixed(2)}</td>
+                        <td style={{ ...td, color: d.spotPctChg == null ? HOME_THEME.text : d.spotPctChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          {d.spotPctChg == null ? "—" : `${d.spotPctChg >= 0 ? "+" : ""}${d.spotPctChg.toFixed(2)}%`}
+                        </td>
+                        <td style={td}>{d.contractClose == null ? "—" : `$${d.contractClose.toFixed(2)}`}</td>
+                        <td style={{ ...td, color: d.contractDollarChg == null ? HOME_THEME.text : d.contractDollarChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          {d.contractDollarChg == null ? "—" : `${d.contractDollarChg >= 0 ? "+" : ""}$${d.contractDollarChg.toFixed(2)}`}
+                        </td>
+                        <td style={{ ...td, color: d.contractPctChg == null ? HOME_THEME.text : d.contractPctChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          {d.contractPctChg == null ? "—" : `${d.contractPctChg >= 0 ? "+" : ""}${d.contractPctChg.toFixed(2)}%`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
