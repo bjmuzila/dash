@@ -3288,11 +3288,11 @@ function RegimeEngineTab() {
   );
   const closes = useMemo(() => alignedRows.map((c) => Number(c.close)), [alignedRows]);
 
-  // Chart display: only the past 2 hours by default (HMM fit still uses all data)
+  // Chart display: past 2 days by default (HMM fit still uses all data)
   const chartRows = useMemo(() => {
     const now = Date.now();
-    const twoHoursAgo = now - 2 * 60 * 60 * 1000;
-    const filtered = alignedRows.filter((c) => c.timestamp >= twoHoursAgo);
+    const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000;
+    const filtered = alignedRows.filter((c) => c.timestamp >= twoDaysAgo);
     return filtered.length > 0 ? filtered : alignedRows.slice(-24);
   }, [alignedRows]);
 

@@ -7,15 +7,18 @@
  *   - /proxy/darkpool-accum    cumulative volume/notional bins — Intraday
  *                              (minute bins, resets each session) or 5D/7D
  *                              (one bin per session, client walks a running total)
+ *   - /proxy/darkpool-levels   "Heaviest Dark Levels" price-level profile + the
+ *                              "% of volume traded off-exchange" summary stat
  *
  * Mirrors the query/cache shape of /proxy/flow-history and /proxy/flow-netprem
  * in server-with-proxy.js so the two feeds feel identical to the frontend.
- * Both handlers auto-track any requested ticker on the live stream client so a
+ * All handlers auto-track any requested ticker on the live stream client so a
  * chip added on the page starts recording going forward without a restart.
  */
 
 const { getPool } = require('./state/darkpool-history-writer');
 const { EXCHANGE_NAMES } = require('./darkpool-stream');
+const thetaAdapter = require('./proxy-thetadata');
 
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -204,4 +207,110 @@ async function handleDarkpoolAccum(req, res) {
   sendJson(res, 200, payload);
 }
 
-module.exports = { handleDarkpoolHistory, handleDarkpoolAccum };
+// ── /proxy/darkpool-levels ───────────────────────────────────────────────────
+// "Heaviest Dark Levels" price profile + the "% of volume traded off-exchange"
+// summary stat. Dark-side numbers (shares/notional/levels) come straight out of
+// darkpool_prints; the TOTAL (lit+dark) volume denominator is best-effort from
+// Theta's stock snapshot/EOD endpoints — if that fetch fails, pctOff/totals come
+// back null/0 rather than showing a wrong percentage.
+const _levelsCache = new Map(); // key -> { at, payload }
+const LEVELS_TTL_MS = 4000;
+
+async function handleDarkpoolLevels(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const underlying = (searchParams.get('underlying') || searchParams.get('symbol') || '').toUpperCase();
+  const win = (searchParams.get('window') || 'intraday').toLowerCase();
+  const date = searchParams.get('date') || todayYmdET();
+
+  if (!underlying) return sendJson(res, 200, { window: win, levels: [] });
+  autoTrack(underlying);
+
+  const cacheKey = `${underlying}|${win}|${date}|levels`;
+  const hit = _levelsCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < LEVELS_TTL_MS) return sendJson(res, 200, hit.payload);
+
+  const pool = getPool();
+  if (!pool) return sendJson(res, 200, { window: win, levels: [] });
+  await ensureSchema(pool);
+
+  // Which session dates this window covers: today only for Intraday, or the
+  // N most-recent distinct dates we've actually recorded prints for.
+  let dateList = [date];
+  try {
+    if (win === '5d' || win === '7d') {
+      const n = win === '5d' ? 5 : 7;
+      const { rows: dateRows } = await pool.query(
+        `SELECT DISTINCT date FROM darkpool_prints WHERE underlying_norm = $1 ORDER BY date DESC LIMIT $2`,
+        [underlying, n]
+      );
+      if (dateRows.length) dateList = dateRows.map((r) => r.date);
+    }
+  } catch (e) {
+    return sendJson(res, 500, { error: 'darkpool-levels failed', detail: String(e?.message || e) });
+  }
+
+  let darkAgg = {};
+  let levelRows = [];
+  try {
+    const { rows: aggRows } = await pool.query(
+      `SELECT sum(size)::bigint AS shares, sum(notional) AS notional, count(*)::bigint AS trades,
+              min(ts) AS min_ts, max(ts) AS max_ts
+         FROM darkpool_prints WHERE underlying_norm = $1 AND date = ANY($2)`,
+      [underlying, dateList]
+    );
+    darkAgg = aggRows[0] || {};
+    const { rows } = await pool.query(
+      `SELECT round(price::numeric, 2) AS level, sum(size)::bigint AS shares, sum(notional) AS notional
+         FROM darkpool_prints WHERE underlying_norm = $1 AND date = ANY($2)
+        GROUP BY level ORDER BY notional DESC LIMIT 8`,
+      [underlying, dateList]
+    );
+    levelRows = rows;
+  } catch (e) {
+    return sendJson(res, 500, { error: 'darkpool-levels failed', detail: String(e?.message || e) });
+  }
+
+  const darkShares = Number(darkAgg.shares) || 0;
+  const darkNotional = Number(darkAgg.notional) || 0;
+
+  // Best-effort total (lit + dark) volume from Theta for the % denominator.
+  let totalShares = 0;
+  let lastPrice = 0;
+  try {
+    const q = await thetaAdapter.fetchStockQuoteTheta(underlying);
+    lastPrice = q?.last || q?.mark || 0;
+    if (win === 'intraday') {
+      totalShares = await thetaAdapter.fetchStockDayVolumeTheta(underlying);
+    } else {
+      const sorted = [...dateList].sort();
+      const series = await thetaAdapter.fetchStockDailyVolumeSeriesTheta(underlying, sorted[0], sorted[sorted.length - 1]);
+      totalShares = series.reduce((s, r) => s + (Number(r.volume) || 0), 0);
+    }
+  } catch { /* best-effort only — totals stay 0/null below */ }
+
+  const totalNotional = totalShares > 0 && lastPrice > 0 ? totalShares * lastPrice : 0;
+  const pctOff = totalShares > 0 ? (darkShares / totalShares) * 100 : null;
+
+  const levels = levelRows.map((r) => ({
+    price: Number(r.level),
+    shares: Number(r.shares),
+    notional: Number(r.notional),
+  }));
+
+  const payload = {
+    window: win,
+    dates: dateList,
+    darkShares,
+    darkNotional,
+    totalShares,
+    totalNotional,
+    pctOff,
+    fromTs: darkAgg.min_ts != null ? Number(darkAgg.min_ts) : null,
+    toTs: darkAgg.max_ts != null ? Number(darkAgg.max_ts) : null,
+    levels,
+  };
+  _levelsCache.set(cacheKey, { at: Date.now(), payload });
+  sendJson(res, 200, payload);
+}
+
+module.exports = { handleDarkpoolHistory, handleDarkpoolAccum, handleDarkpoolLevels };

@@ -33,16 +33,19 @@ import type { FlowOrder } from "@/hooks/useSpxFlow";
 // tape has no further per-ATS breakout. Index tickers (SPX/NDX/RUT/XSP) have no
 // stock listing, so this section is skipped for them.
 type DarkpoolWindow = "intraday" | "5d" | "7d";
-type DarkpoolPrint = {
-  ts: number;
-  underlying: string;
-  price: number;
-  size: number;
-  notional: number;
-  exchange: number | null;
-  exchangeName: string | null;
+type DarkpoolLevel = { price: number; shares: number; notional: number };
+type DarkpoolLevels = {
+  window: DarkpoolWindow;
+  dates?: string[];
+  darkShares: number;
+  darkNotional: number;
+  totalShares: number;
+  totalNotional: number;
+  pctOff: number | null;
+  fromTs: number | null;
+  toTs: number | null;
+  levels: DarkpoolLevel[];
 };
-type DarkpoolBin = { t: number; volume: number; notional: number; trades: number; date?: string };
 
 const C = HOME_THEME;
 const BUY_GREEN = "#22c55e";
@@ -50,6 +53,14 @@ const BULLISH = BUY_GREEN; // calls / buys
 const BEARISH = C.red; //     puts / sells
 const VOL_GREEN = "rgba(34,197,94,0.55)";
 const VOL_RED = "rgba(239,68,68,0.55)";
+
+// Share-count formatter (no $) for the Dark Pool card's shares dark/total.
+function fmtShares(val: number): string {
+  const a = Math.abs(val);
+  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(1)}M`;
+  if (a >= 1_000) return `${(a / 1_000).toFixed(0)}K`;
+  return a.toLocaleString();
+}
 
 function fmtPremium(val: number): string {
   const a = Math.abs(val);
@@ -266,59 +277,47 @@ export default function FlowPage() {
     return () => { cancelled = true; clearTimeout(kick); if (id) clearInterval(id); };
   }, [view, minPremium, date, isToday]);
 
-  // ── Dark Pool (per-ticker): recent TRF-print tape + accumulation window. ──
+  // ── Dark Pool (per-ticker): off-exchange % stat + Heaviest Dark Levels. ──
   // Polling, not WS — TRF prints can legally be reported seconds-to-minutes
   // after execution, so a 5s poll is no less "live" than a push feed here.
   const [dpWindow, setDpWindow] = useState<DarkpoolWindow>("intraday");
-  const [dpTape, setDpTape] = useState<DarkpoolPrint[]>([]);
-  const [dpBins, setDpBins] = useState<DarkpoolBin[]>([]);
+  const [dpLevels, setDpLevels] = useState<DarkpoolLevels | null>(null);
   const isIndexTicker = INDEX_TICKERS.has(active);
 
   useEffect(() => {
-    if (view !== "ticker" || isIndexTicker) { setDpTape([]); return; }
-    let cancelled = false;
-    const load = () =>
-      fetch(`/proxy/darkpool-history?underlying=${encodeURIComponent(active)}&date=${date}&limit=2000`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (!cancelled && j && Array.isArray(j.tape)) setDpTape(j.tape as DarkpoolPrint[]); })
-        .catch(() => {});
-    load();
-    const id = isToday ? setInterval(load, 5000) : null;
-    return () => { cancelled = true; if (id) clearInterval(id); };
-  }, [view, active, date, isToday, isIndexTicker]);
-
-  useEffect(() => {
-    if (view !== "ticker" || isIndexTicker) { setDpBins([]); return; }
+    if (view !== "ticker" || isIndexTicker) { setDpLevels(null); return; }
     let cancelled = false;
     const qp = new URLSearchParams({ underlying: active, window: dpWindow, date });
     const load = () =>
-      fetch(`/proxy/darkpool-accum?${qp.toString()}`)
+      fetch(`/proxy/darkpool-levels?${qp.toString()}`)
         .then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (!cancelled && j && Array.isArray(j.bins)) setDpBins(j.bins as DarkpoolBin[]); })
+        .then((j) => { if (!cancelled && j) setDpLevels(j as DarkpoolLevels); })
         .catch(() => {});
     load();
     const id = dpWindow === "intraday" && isToday ? setInterval(load, 5000) : null;
     return () => { cancelled = true; if (id) clearInterval(id); };
   }, [view, active, date, isToday, dpWindow, isIndexTicker]);
 
-  // Cumulative running total across the returned bins (resets each session for
-  // Intraday; keeps building across sessions for 5D/7D).
-  const dpSeries = useMemo(() => {
-    let cum = 0;
-    return dpBins.map((b) => {
-      cum += b.volume;
-      return { time: Math.floor(b.t / 1000) as UTCTimestamp, value: cum };
-    });
-  }, [dpBins]);
+  // Bar widths in "Heaviest Dark Levels" are relative to the biggest level.
+  const dpMaxLevelNotional = useMemo(
+    () => Math.max(1, ...(dpLevels?.levels ?? []).map((l) => l.notional)),
+    [dpLevels]
+  );
 
-  const dpTotals = useMemo(() => {
-    let volume = 0, notional = 0, trades = 0;
-    for (const b of dpBins) { volume += b.volume; notional += b.notional; trades += b.trades; }
-    return { volume, notional, trades };
-  }, [dpBins]);
-
-  // Newest-first, capped for display.
-  const dpVisibleRows = useMemo(() => [...dpTape].reverse().slice(0, 100), [dpTape]);
+  // "10:17 AM–11:17 AM ET" for Intraday, or a session-date range for 5D/7D.
+  const dpRangeLabel = useMemo(() => {
+    if (!dpLevels) return "";
+    if (dpWindow === "intraday") {
+      if (dpLevels.fromTs == null || dpLevels.toTs == null) return "";
+      const fmt = (ts: number) => new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+      return `${fmt(dpLevels.fromTs)}–${fmt(dpLevels.toTs)} ET`;
+    }
+    const dates = dpLevels.dates ?? [];
+    if (!dates.length) return "";
+    const fmt = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const sorted = [...dates].sort();
+    return sorted.length > 1 ? `${fmt(sorted[0])} – ${fmt(sorted[sorted.length - 1])}` : fmt(sorted[0]);
+  }, [dpLevels, dpWindow]);
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -646,57 +645,6 @@ export default function FlowPage() {
       });
     } catch {}
   }, [netSeries, filtered]);
-
-  // ── Dark Pool accumulation chart (separate lightweight-charts instance). ──
-  const dpChartHostRef = useRef<HTMLDivElement | null>(null);
-  const dpChartRef = useRef<IChartApi | null>(null);
-  const dpLineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const dpWindowRef = useRef<DarkpoolWindow>(dpWindow);
-  dpWindowRef.current = dpWindow;
-
-  useEffect(() => {
-    const host = dpChartHostRef.current;
-    if (!host) return;
-    host.innerHTML = "";
-    const chart = createChart(host, {
-      autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "rgba(255,255,255,.70)",
-        fontFamily: "Inter, system-ui, sans-serif",
-      },
-      grid: {
-        vertLines: { color: "rgba(255,255,255,.05)" },
-        horzLines: { color: "rgba(255,255,255,.05)" },
-      },
-      rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
-      leftPriceScale: { visible: false },
-      timeScale: {
-        borderColor: "rgba(255,255,255,.10)",
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: unknown) => {
-          if (typeof time !== "number") return "";
-          const d = new Date(time * 1000);
-          return dpWindowRef.current === "intraday"
-            ? d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
-            : d.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "numeric", day: "numeric" });
-        },
-      },
-      localization: {
-        priceFormatter: (p: number) => p.toLocaleString(undefined, { maximumFractionDigits: 0 }),
-      },
-    });
-    const line = chart.addSeries(LineSeries, { color: C.cyan, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
-    dpChartRef.current = chart;
-    dpLineSeriesRef.current = line;
-    return () => { chart.remove(); dpChartRef.current = null; dpLineSeriesRef.current = null; };
-  }, []);
-
-  useEffect(() => {
-    dpLineSeriesRef.current?.setData(dpSeries);
-    try { dpChartRef.current?.timeScale().fitContent(); } catch {}
-  }, [dpSeries]);
 
   // ── Summary of the filtered tape. ──
   const totals = useMemo(() => {

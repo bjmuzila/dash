@@ -489,7 +489,7 @@ function TickerPanel({
           // outline at all, so the ATM box vanished from every screenshot/
           // Discord capture even though it showed fine live.
           const atmOutline = r.isATM
-            ? { border: "1px solid rgba(255,255,255,.55)", position: "relative" as const, zIndex: 1 }
+            ? { border: "2px solid rgba(255,255,255,.55)", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
           const is1x = emStrikes != null && (r.strike === emStrikes.d1 || r.strike === emStrikes.u1);
           const is2x = emStrikes != null && (r.strike === emStrikes.d2 || r.strike === emStrikes.u2);

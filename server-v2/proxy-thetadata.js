@@ -429,6 +429,44 @@ async function fetchStockQuoteTheta(symbol) {
   };
 }
 
+/**
+ * Today's total (lit + dark, consolidated) traded share volume for an equity —
+ * used as the denominator for the /flow Dark Pool card's "% of volume traded
+ * off-exchange" stat. Best-effort: returns 0 if the snapshot is empty/gated
+ * (pre-open, or Theta blip) so the caller can omit the stat rather than show 0%.
+ */
+async function fetchStockDayVolumeTheta(symbol) {
+  const json = await thetaGet(
+    `/v3/stock/snapshot/ohlc?symbol=${encodeURIComponent(String(symbol).toUpperCase())}`,
+  );
+  const rows = flatSnapshotRows(json);
+  const r = (rows.length ? rows : rowsFromV3(json))[0] || {};
+  const vol = Number(r.volume ?? r.day_volume);
+  return vol > 0 ? vol : 0;
+}
+
+/**
+ * Daily total share volume over a date range — the multi-day (5D/7D) version of
+ * fetchStockDayVolumeTheta, for the Dark Pool card's multi-session % stat.
+ * Returns [{date:"YYYY-MM-DD", volume}] ascending; empty on failure.
+ */
+async function fetchStockDailyVolumeSeriesTheta(symbol, startDate, endDate) {
+  const json = await thetaGet(
+    `/v3/stock/history/eod?symbol=${encodeURIComponent(String(symbol).toUpperCase())}&start_date=${ymdCompact(startDate)}&end_date=${ymdCompact(endDate)}`,
+  );
+  return rowsFromV3(json)
+    .map((r) => {
+      let ymd = String(r.date ?? r.Date ?? '');
+      if (ymd.length !== 8) return null;
+      return {
+        date: `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`,
+        volume: Number(r.volume) || 0,
+      };
+    })
+    .filter((x) => x && x.date)
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+
 async function fetchIndexEodTheta(symbol, date) {
   const d = ymdCompact(date);
   const json = await thetaGet(
@@ -849,4 +887,6 @@ module.exports = {
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,
+  fetchStockDayVolumeTheta,
+  fetchStockDailyVolumeSeriesTheta,
 };

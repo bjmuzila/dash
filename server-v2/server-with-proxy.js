@@ -43,7 +43,7 @@ const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChang
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startDarkpoolRecorder } = require('./darkpool-recorder');
-const { handleDarkpoolHistory, handleDarkpoolAccum } = require('./darkpool-routes');
+const { handleDarkpoolHistory, handleDarkpoolAccum, handleDarkpoolLevels } = require('./darkpool-routes');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
 const { checkProxyAccess } = require('./proxy-auth');
@@ -274,6 +274,15 @@ async function handleProxyRest(req, res) {
   if (pathname === '/proxy/darkpool-accum') {
     handleDarkpoolAccum(req, res).catch((e) => {
       sendJson(res, 500, { error: 'darkpool-accum failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
+  // /proxy/darkpool-levels?underlying=SPY&window=intraday|5d|7d
+  // Heaviest-dark-levels price profile + % of volume traded off-exchange.
+  if (pathname === '/proxy/darkpool-levels') {
+    handleDarkpoolLevels(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'darkpool-levels failed', detail: String(e?.message || e) });
     });
     return true;
   }

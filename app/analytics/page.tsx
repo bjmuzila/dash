@@ -841,16 +841,11 @@ const IB_END_MIN = 10 * 60 + 30;
 // Rule interface & evaluation
 interface AppliedRule { title: string; detail: string; color: string; }
 
-function etDayOfWeek(): number {
-  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-  return d.getDay(); // 0=Sun … 2=Tue
-}
-
 function applicableRules(ib: InitialBalance | null): AppliedRule[] {
   if (!ib) return [];
   const out: AppliedRule[] = [];
 
-  const { min, sec } = nowEtMinutesSec();
+  const { min } = nowEtMinutesSec();
   const done = min >= IB_END_MIN;
   const tag = done ? "" : " (provisional — IB still forming)";
   const preBreak = !ib.brokeHigh && !ib.brokeLow;
@@ -858,29 +853,10 @@ function applicableRules(ib: InitialBalance | null): AppliedRule[] {
   // Lead notice
   if (!done) {
     out.push({ title: "IB Forming · Provisional Reads", color: "#ffb300",
-      detail: `Tracking the 9:30–10:30 ET range live${ib.range > 0 ? ` — current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}` : ""}. The reads below use the developing range and can still change; they lock at 10:30 ET.` });
+      detail: `Tracking the 9:30–10:30 ET range live — current IB H/L ${ib.high.toFixed(2)} / ${ib.low.toFixed(2)}. The reads below use the developing range and can still change; they lock at 10:30 ET.` });
   } else {
     out.push({ title: "Inside Day Exception", color: "#219EBC",
       detail: "IB window complete. Only 0.6% of days stay fully inside the IB — plan for at least one breakout." });
-  }
-
-  const mid = (ib.high + ib.low) / 2;
-  const aboveMid = ib.lastClose != null ? ib.lastClose >= mid : null;
-
-  if (preBreak && aboveMid === true) {
-    out.push({ title: "Above-Mid Dominance (ES)", color: "#00e676",
-      detail: `Price is above the IB midpoint → 83.5% historical probability of an eventual IB High breakout${tag}.` });
-  } else if (preBreak && aboveMid === false) {
-    out.push({ title: "Below-Mid Dominance (ES)", color: "#ff5252",
-      detail: `Price is below the IB midpoint → 94.9% historical probability of an eventual IB Low breakdown. Fading carries ~5% survival${tag}.` });
-  }
-
-  const range = ib.high - ib.low;
-  const rangePct = mid > 0 ? (range / mid) * 100 : 0;
-
-  if (preBreak && rangePct > 0 && rangePct <= 1) {
-    out.push({ title: "Volatility Compression", color: "#ffb300",
-      detail: `IB range is compressed (${rangePct.toFixed(2)}% ≤ 1%). A 5m close below IB Low = 98.01% continued-downside trigger; fading carries ~0% edge${tag}.` });
   }
 
   // Timing curve
