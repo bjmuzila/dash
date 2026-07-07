@@ -678,16 +678,26 @@ function ConfidenceCard() {
                   const live = isToday && !future && !laterChanged;
                   // Did the CB change from the previous checkpoint to this one?
                   const cbChanged = seg != null && prevSeg != null && seg.strike !== prevSeg.strike;
+                  // If this checkpoint says "pivot" but a later checkpoint has a lower strike,
+                  // it wasn't a pivot — it was just a hit. Override to "HIT" only.
+                  const laterLower = seg && ci < MVC_CHECKPOINTS.length - 1
+                    ? MVC_CHECKPOINTS.slice(ci + 1).some((o, oi) => {
+                        const laterSeg = segmentAt(data?.mvcTimeline, o.min);
+                        return laterSeg && laterSeg.strike < seg.strike;
+                      })
+                    : false;
                   // Priority: future → pending. Past with outcome → show it.
                   // Only fall through to "pending" when the checkpoint has passed
                   // but the segment has no outcome yet (still in-progress).
                   const chip = future
                     ? { text: "pending", color: T.muted }
-                    : seg?.outcome != null
-                      ? outcomeChip(seg.outcome)
-                      : live && cbChanged
-                        ? { text: "CB CHANGED · PENDING", color: T.orange }
-                        : { text: "pending", color: T.muted };
+                    : seg?.outcome === "pivot" && laterLower
+                      ? { text: "HIT", color: POS_GREEN }
+                      : seg?.outcome != null
+                        ? outcomeChip(seg.outcome)
+                        : live && cbChanged
+                          ? { text: "CB CHANGED · PENDING", color: T.orange }
+                          : { text: "pending", color: T.muted };
                   return (
                     <div
                       key={cp.label}
