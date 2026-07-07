@@ -1783,6 +1783,10 @@ class TastytradeProxy {
           },
         });
         this.thetaStream.connect();
+        // Detects the "socket open but theta-terminal wedged, no real prints"
+        // failure mode that a close/error-based reconnect can't see. See
+        // state/flow-watchdog.js.
+        require('./state/flow-watchdog').startFlowWatchdog(this.thetaStream);
       }
       this._subscribeThetaFlow();
       // Multi-ticker flow (FLOW_TICKERS): stream extra roots' near-spot option

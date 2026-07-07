@@ -513,12 +513,12 @@ const GX_CSS = `
      surface, a hairline border, a plain drop shadow. No standalone neon
      gradient, no corner glow blobs, no rainbow top bar. */
   .gx-card { width: 1600px; height: 900px; flex: 0 0 auto; position: relative; overflow: hidden;
-    background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--cyan) 7%, transparent) 0%, transparent 55%), var(--bg1);
+    background: radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), var(--bg1);
     border: 1px solid var(--sm-border); border-radius: 18px;
     box-shadow: 0 18px 40px rgba(0,0,0,.22);
     display: flex; flex-direction: column; transform-origin: top center; }
   .gx-card.vertical { width: 900px; height: 1600px; }
-  .gx-card.neg { border-color: color-mix(in srgb, var(--sm-red) 30%, var(--sm-border)); }
+  .gx-card.neg { border-color: rgba(239,68,68,0.35); }
 
   .gx-head { position:absolute; top:0; left:0; right:0; z-index:4; display:grid; grid-template-columns: 1fr auto 1fr; align-items:start; padding: 22px 30px 6px; pointer-events:none; }
   .gx-head-side { display:flex; flex-direction:column; gap:3px; }

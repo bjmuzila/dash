@@ -611,6 +611,11 @@ class ThetaStreamClient {
     this.nextId = 1;
     this.connected = false;
     this.closing = false;
+    // Last time we actually dispatched a TRADE print — distinct from `connected`,
+    // which just means the socket is open. A stuck/split-brain theta-terminal
+    // session can stay "connected" while silently returning nothing, so the
+    // watchdog (state/flow-watchdog.js) polls this instead of the close event.
+    this.lastTradeAt = 0;
     // contractKey `root|expInt|strikeTenthCents|C|P` -> { bid, ask, t, streamerSymbol, strikeDollars, root }
     this.quotes = new Map();
     // remember subscriptions so we can resubscribe on reconnect
@@ -686,6 +691,18 @@ class ThetaStreamClient {
     if (this.ws && this.connected) {
       try { this.ws.send(JSON.stringify(obj)); } catch { /* noop */ }
     }
+  }
+
+  /**
+   * Force-drop and reopen the socket even though `connected`/no error fired —
+   * used by the flow watchdog when theta-terminal goes stuck-but-listening
+   * (serves NOT_FOUND/empty responses instead of closing). `ws.terminate()`
+   * skips the close handshake, which reliably fires our own `close` handler
+   * and its existing 2s reconnect+resubscribe path.
+   */
+  forceReconnect() {
+    console.warn('[THETA-WS] forceReconnect: no trades for too long, cycling socket');
+    try { this.ws?.terminate(); } catch { /* noop */ }
   }
 
   /**
@@ -816,6 +833,7 @@ class ThetaStreamClient {
       // Prefer a per-root spot (set by MultiFlowManager for non-SPX roots) so
       // isOtm is correct; fall back to the SPX getSpot() for the core engine.
       const rootSpot = this.rootSpot.get(root);
+      this.lastTradeAt = Date.now();
       try {
         this.onTrade({
           streamerSymbol: cache.streamerSymbol,

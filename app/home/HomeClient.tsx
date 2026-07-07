@@ -1001,7 +1001,7 @@ export function HomeClient({
               : "Waiting on the next scheduled snapshot"}
           </span>
           <span style={{ opacity: 0.9 }}>
-            Go live with <strong style={{ color: C.green }}>50% off</strong> — code <strong style={{ color: C.cyan }}>CB-BETA</strong>
+            Go live with <strong style={{ color: C.green }}>50% off</strong> — code <strong style={{ color: C.cyan }}>LAUNCH</strong>
           </span>
           <Link href="/pricing" style={{ textDecoration: "none" }}>
             <button
