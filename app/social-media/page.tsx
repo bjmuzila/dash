@@ -5,7 +5,6 @@ import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
 import dynamic from "next/dynamic";
 import { SegGroup } from "@/components/shared/DockToolbar";
-const BehaviorDemo = dynamic(() => import("@/components/greeks/RegimeMatrix").then(m => ({ default: m.BehaviorDemo })), { ssr: false });
 const GexChart = dynamic(() => import("@/components/dashboard/GexChart"), { ssr: false });
 import type { ChainRow } from "@/lib/calculations/calculations";
 
@@ -708,6 +707,7 @@ const XP_CSS = `
   .xp-zonecard.c-red { border-color:rgba(239,68,68,.55); color:var(--sm-red); }
   .xp-panel { background:rgba(255,255,255,.015); border:1px solid rgba(255,255,255,.10); border-radius:12px; padding:12px 14px; }
   .xp-panel-h { display:flex; align-items:center; font-size:13px; font-weight:800; letter-spacing:.08em; color:#fff; text-align:center; justify-content:center; margin-bottom:10px; }
+  .xp-keylevels .xp-panel-h, .xp-tradeplan .xp-panel-h { font-size:15px; }
 
   /* PANEL 1 — GEX matrix */
   .xp-mx-head { box-sizing:border-box; display:flex; justify-content:space-between; align-items:flex-end; font-size:9px; font-weight:700; letter-spacing:.06em; color:#9aa4b2; height:18px; padding:0 4px 4px; }
@@ -732,21 +732,18 @@ const XP_CSS = `
   .pf-tag.c-green { color:var(--sm-green); } .pf-tag.c-red { color:var(--sm-red); } .pf-tag.c-amber { color:var(--amber); }
 
   /* PANEL 3 — right rail */
-  .xp-kl { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1.5px solid; border-radius:8px; padding:9px 13px; margin-bottom:9px; }
-  .xp-kl .lbl { font-size:11px; font-weight:800; letter-spacing:.04em; }
-  .xp-kl .v { font-size:18px; font-weight:900; color:#fff; }
+  .xp-kl { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1.5px solid; border-radius:8px; padding:11px 15px; margin-bottom:10px; }
+  .xp-kl .lbl { font-size:13px; font-weight:800; letter-spacing:.04em; }
+  .xp-kl .v { font-size:22px; font-weight:900; color:#fff; }
   .xp-kl.green { border-color:rgba(16,185,129,.55);} .xp-kl.green .lbl { color:var(--sm-green);}
   .xp-kl.amber { border-color:rgba(249,158,11,.6);} .xp-kl.amber .lbl { color:var(--amber);}
   .xp-kl.cyan { border-color:rgba(33,158,188,.5);} .xp-kl.cyan .lbl { color:var(--cyan);}
   .xp-kl.red { border-color:rgba(239,68,68,.55);} .xp-kl.red .lbl { color:var(--sm-red);}
 
   .xp-tradeplan .xp-panel-h { justify-content:space-between; }
-  .xp-behavior { display:flex; flex-direction:column; }
-  .xp-behavior .xp-panel-h { justify-content:space-between; }
-  .xp-beh-empty { flex:1; display:flex; align-items:center; justify-content:center; font-size:11px; color:#9aa4b2; text-align:center; padding:18px 8px; line-height:1.5; }
-  .xp-tp { border:1.5px solid; border-radius:8px; padding:10px 13px; margin-bottom:9px; }
-  .xp-tp .tp-h { font-size:12px; font-weight:900; letter-spacing:.04em; margin-bottom:5px; }
-  .xp-tp .tp-b { font-size:11px; line-height:1.45; color:#e6ebf2; }
+  .xp-tp { border:1.5px solid; border-radius:8px; padding:12px 15px; margin-bottom:10px; }
+  .xp-tp .tp-h { font-size:14px; font-weight:900; letter-spacing:.04em; margin-bottom:6px; }
+  .xp-tp .tp-b { font-size:13px; line-height:1.5; color:#e6ebf2; }
   .xp-tp.green { border-color:rgba(16,185,129,.5);} .xp-tp.green .tp-h { color:var(--sm-green);}
   .xp-tp.red { border-color:rgba(239,68,68,.5);} .xp-tp.red .tp-h { color:var(--sm-red);}
   .xp-tp.amber { border-color:rgba(249,158,11,.55);} .xp-tp.amber .tp-h { color:var(--amber);}
@@ -801,35 +798,6 @@ function ExplainerMockup({
   });
   const [aiState, setAiState] = useState<"idle" | "busy" | "err">("idle");
 
-  // On-demand "Behavior Demonstration" (from /greeks). Fetched only when the user
-  // clicks Generate — never on load. Holds the four aggregate greeks; BehaviorDemo
-  // only uses their signs.
-  type Greeks = { gex: number; dex: number; chex: number; vex: number };
-  const [greeks, setGreeks] = useState<Greeks | null>(null);
-  const [behState, setBehState] = useState<"idle" | "busy" | "err">("idle");
-  const genBehavior = useCallback(async () => {
-    setBehState("busy");
-    try {
-      const r = await fetch("/api/insights/gex", { cache: "no-store" });
-      if (!r.ok) throw new Error(`insights ${r.status}`);
-      const json = await r.json();
-      const t = (json?.data?.totals ?? json?.totals) as Record<string, number> | null;
-      if (!t) throw new Error("no totals");
-      // Default basis = OI+Vol, matching /greeks. Fall back to legacy OI fields.
-      const dexOi = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
-      const g: Greeks = {
-        gex: Number(t.totalGEXOiVol ?? t.totalGEX ?? 0) / 1e9,
-        dex: Number(t.totalDeltaOiVol ?? dexOi) / 1e9,
-        chex: Number(t.totalCHEXOiVol ?? t.totalCHEX ?? 0) / 1e6,
-        vex: Number(t.totalVEXOiVol ?? t.totalVEX ?? 0) / 1e6,
-      };
-      setGreeks(g);
-      setBehState("idle");
-    } catch {
-      setBehState("err");
-      setTimeout(() => setBehState("idle"), 2000);
-    }
-  }, []);
   // Ladder-derived levels, mirrored into a ref so genTriggerMap (declared above
   // the levelStrikes useMemo) can send the SAME numbers the panels display.
   const levelsRef = useRef<{ resistance: number | null; support: number | null; pivot: number | null; node: number | null }>({
@@ -1377,24 +1345,6 @@ function ExplainerMockup({
               </div>
             </div>
 
-            {/* ── Behavior Demonstration (from /greeks) — on demand only ── */}
-            <div className="xp-panel xp-behavior">
-              <div className="xp-panel-h">
-                BEHAVIOR
-                <button
-                  type="button"
-                  className="xp-gen-btn xp-noexport"
-                  onClick={genBehavior}
-                  disabled={behState === "busy"}
-                  title="Pull live aggregate greeks and show the regime behavior demo"
-                >
-                  {behState === "busy" ? "Loading…" : behState === "err" ? "Failed — retry" : greeks ? "↻ Regenerate" : "✨ Generate"}
-                </button>
-              </div>
-              {greeks
-                ? <BehaviorDemo gex={greeks.gex} dex={greeks.dex} chex={greeks.chex} vex={greeks.vex} hasData />
-                : <div className="xp-beh-empty">Generate to load the live greeks regime + simulated price action.</div>}
-            </div>
           </div>
         </div>
 

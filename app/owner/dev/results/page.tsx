@@ -110,30 +110,38 @@ function wrColor(wr: number | null): string {
   return RED;
 }
 
-// Win-rate progress bar — single accent color, filled to win% (matches the
-// Fail Rate tab's bar style).
+// ICT-card accent — same idea as wrColor but swaps the mid-tier gold for the
+// dashboard's own cyan accent (no amber anywhere in the ICT results cards).
+function ictColor(wr: number | null): string {
+  if (wr == null) return MUTED;
+  if (wr >= 0.6) return GREEN;
+  if (wr >= 0.45) return C.cyan;
+  return RED;
+}
+
+// Win-rate progress bar — rounded pill, dashboard-cyan glow, filled to win%.
 function WinRateBar({ wr, color }: { wr: number | null; color: string }) {
   const p = wr != null ? Math.round(wr * 100) : 0;
   return (
-    <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
-      <div style={{ width: `${p}%`, height: "100%", background: color }} />
+    <div style={{ height: 8, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.06)", border: `1px solid ${C.border}` }}>
+      <div style={{ width: `${p}%`, height: "100%", borderRadius: 999, background: color, boxShadow: `0 0 8px ${rgba(color, 0.6)}` }} />
     </div>
   );
 }
 
 function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
   const wr = r.win_rate;
-  const accent = wrColor(wr);
+  const accent = ictColor(wr);
   return (
     <div
       onClick={onClick}
       title="Click to view the logged plays for this setup"
       className="card-hover"
-      style={{ ...CARD, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
+      style={{ ...CARD, height: "100%", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, minHeight: 44 }}>
         <span style={{ fontSize: 16, fontWeight: 800, color: C.label, letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>
-        <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em" }}>{r.total} logged</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>{r.total} logged</span>
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -152,7 +160,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
         {R_TIERS.map((t) => {
           const rate = t === 1 ? r.rate1 : t === 2 ? r.rate2 : r.rate3;
           const hits = t === 1 ? r.hit1 : t === 2 ? r.hit2 : r.hit3;
-          const ac = wrColor(rate);
+          const ac = ictColor(rate);
           return (
             <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
@@ -169,9 +177,9 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
         <Metric label="Wins" value={String(r.wins)} color={GREEN} />
         <Metric label="Losses" value={String(r.losses)} color={RED} />
         <Metric label="Chop" value={String(r.chop)} color={MUTED} />
-        <Metric label="Live" value={String(r.pending)} color={AMBER} />
+        <Metric label="Live" value={String(r.pending)} color={C.cyan} />
         <Metric label="Avg max R" value={r.avg_r != null ? `${r.avg_r > 0 ? "+" : ""}${r.avg_r.toFixed(2)}R` : "—"}
-          color={r.avg_r == null ? MUTED : r.avg_r >= 1 ? GREEN : r.avg_r >= 0.5 ? AMBER : RED} />
+          color={r.avg_r == null ? MUTED : r.avg_r >= 1 ? GREEN : r.avg_r >= 0.5 ? C.cyan : RED} />
         <Metric label="Avg MFE" value={r.avg_mfe != null ? `${r.avg_mfe.toFixed(1)} pt` : "—"} color={HOME_THEME.cyan} />
       </div>
     </div>
@@ -183,7 +191,7 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
 // button (rendered as a sibling, not a child) never shows up in the export.
 function ShareStat({ label, stats }: { label: string; stats: OverallStats | null }) {
   const wr = stats?.win_rate ?? null;
-  const accent = wrColor(wr);
+  const accent = ictColor(wr);
   return (
     <div style={{ flex: "1 1 140px", display: "flex", flexDirection: "column", gap: 6, alignItems: "center", textAlign: "center" }}>
       <span style={{ fontSize: 15, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.16em" }}>{label}</span>
@@ -193,7 +201,7 @@ function ShareStat({ label, stats }: { label: string; stats: OverallStats | null
       <span style={{ fontSize: 16, fontWeight: 700, color: C.label, fontFamily: "var(--font-mono)" }}>
         {stats ? `${stats.wins}W · ${stats.losses}L · ${stats.chop}C` : "—"}
       </span>
-      <span style={{ fontSize: 15, fontWeight: 700, color: AMBER, fontFamily: "var(--font-mono)" }}>
+      <span style={{ fontSize: 15, fontWeight: 700, color: C.cyan, fontFamily: "var(--font-mono)" }}>
         {stats?.avg_r != null ? `${stats.avg_r > 0 ? "+" : ""}${stats.avg_r.toFixed(2)}R avg` : " "}
       </span>
       <span style={{ fontSize: 14, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -419,7 +427,7 @@ export default function ResultsPage() {
           the futures session (Sun 6pm → Fri 4pm ET) — results will populate here as setups fire and resolve.
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gridAutoRows: "1fr", gap: 14 }}>
           {sorted.map((r) => <StatCard key={r.kind} r={r} onClick={() => setSelectedKind(r.kind)} />)}
         </div>
       )}
@@ -460,7 +468,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
   const td: React.CSSProperties = { padding: "8px 12px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   const oc = (o: SetupRow["outcome"]) =>
-    o === "win" ? GREEN : o === "loss" ? RED : o === "chop" ? MUTED : AMBER;
+    o === "win" ? GREEN : o === "loss" ? RED : o === "chop" ? MUTED : C.cyan;
   const dirColor = (d?: string | null) => (d === "bull" ? GREEN : d === "bear" ? RED : MUTED);
 
   return (
@@ -510,7 +518,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
                       <td style={{ ...td, textAlign: "right", color: C.label }}>{e.target != null ? e.target.toFixed(2) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: C.label }}>{e.invalidation != null ? e.invalidation.toFixed(2) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: HOME_THEME.cyan }}>{e.mfe != null ? e.mfe.toFixed(1) : "—"}</td>
-                      <td style={{ ...td, textAlign: "right", color: e.r_multiple == null ? C.label : e.r_multiple >= 1 ? GREEN : e.r_multiple < 0 ? RED : AMBER }}>{e.r_multiple == null ? "—" : `${e.r_multiple > 0 ? "+" : ""}${e.r_multiple.toFixed(2)}R`}</td>
+                      <td style={{ ...td, textAlign: "right", color: e.r_multiple == null ? C.label : e.r_multiple >= 1 ? GREEN : e.r_multiple < 0 ? RED : C.cyan }}>{e.r_multiple == null ? "—" : `${e.r_multiple > 0 ? "+" : ""}${e.r_multiple.toFixed(2)}R`}</td>
                       <td style={{ ...td, textAlign: "center" }}>
                         <span style={{ fontSize: 15, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59`, textTransform: "uppercase" }}>{e.outcome}</span>
                       </td>
