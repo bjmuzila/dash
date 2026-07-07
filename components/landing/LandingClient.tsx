@@ -67,10 +67,8 @@ export default function LandingClient() {
 
   return (
     <div
+      className="explore-root"
       style={{
-        position: "absolute",
-        inset: 0,
-        overflowY: "auto",
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
         color: T.text,
       }}

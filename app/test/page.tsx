@@ -3129,6 +3129,131 @@ function RegimeCandleChart({
   );
 }
 
+/** One row from server-v2/regime-alert-recorder.js's `regime_alerts` table. */
+interface RegimeAlertRow {
+  id: number;
+  ticker: string;
+  label: RegimeLabel;
+  status: "open" | "closed";
+  start_ts: number | string;
+  start_price: number | string;
+  start_confidence: number | string | null;
+  end_ts: number | string | null;
+  end_price: number | string | null;
+  return_pct: number | string | null;
+  max_up_pct: number | string | null;
+  max_down_pct: number | string | null;
+  bars_elapsed: number | string | null;
+}
+
+function fmtAlertEt(ts: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).format(new Date(ts));
+}
+
+/**
+ * Alert Log — every time the server-side HMM (regime-alert-recorder.js, same
+ * fit as this tab, refit every 60s independent of any open browser tab) flips
+ * INTO Trend or Panic, then closed out with the realized price reaction once
+ * the regime flips away again. Answers "how did the market actually react"
+ * instead of just showing the live posterior.
+ */
+function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
+  const [rows, setRows] = useState<RegimeAlertRow[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await fetch(`/proxy/regime-alerts?ticker=${ticker}&limit=30`, { cache: "no-store" });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (!cancelled && Array.isArray(j.rows)) setRows(j.rows as RegimeAlertRow[]);
+      } catch { /* keep last list on a transient failure */ }
+    };
+    void load();
+    const id = setInterval(load, 20_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [ticker]);
+
+  if (!rows.length) {
+    return (
+      <div style={{ fontSize: 15, color: HOME_THEME.text, padding: 8 }}>
+        No Trend/Panic alerts recorded yet for {ticker} — the server-side recorder needs to see a regime flip first.
+      </div>
+    );
+  }
+
+  const cols = ["Regime", "Status", "Started (ET)", "Confidence", "Duration", "Return", "Max Up", "Max Down"];
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <thead>
+          <tr>
+            {cols.map((h) => (
+              <th
+                key={h}
+                style={{
+                  textAlign: h === "Regime" ? "left" : "right", padding: "6px 10px", fontSize: 13, fontWeight: 900,
+                  letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text,
+                  borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap",
+                }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const label = r.label;
+            const isOpen = r.status === "open";
+            const startTs = Number(r.start_ts);
+            const bars = r.bars_elapsed != null ? Number(r.bars_elapsed) : null;
+            const returnPct = r.return_pct != null ? Number(r.return_pct) : null;
+            const maxUp = r.max_up_pct != null ? Number(r.max_up_pct) : null;
+            const maxDown = r.max_down_pct != null ? Number(r.max_down_pct) : null;
+            const conf = r.start_confidence != null ? Math.round(Number(r.start_confidence) * 100) : null;
+            const durationTxt = isOpen ? "running…" : bars != null ? `${bars} bars (~${bars * 5}m)` : "—";
+            return (
+              <tr key={r.id}>
+                <td style={{ padding: "6px 10px", color: REGIME_COLOR[label], fontWeight: 900 }}>{label.toUpperCase()}</td>
+                <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                  <span
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 10px", borderRadius: 12,
+                      background: isOpen ? `${REGIME_COLOR[label]}20` : "rgba(255,255,255,0.05)",
+                      border: `1px solid ${isOpen ? `${REGIME_COLOR[label]}66` : HOME_THEME.border}`,
+                      color: isOpen ? REGIME_COLOR[label] : HOME_THEME.text, fontSize: 12, fontWeight: 800, textTransform: "uppercase",
+                    }}
+                  >
+                    {isOpen && <span style={{ width: 6, height: 6, borderRadius: "50%", background: REGIME_COLOR[label] }} />}
+                    {r.status}
+                  </span>
+                </td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: HOME_THEME.text }}>{fmtAlertEt(startTs)}</td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: HOME_THEME.text }}>{conf != null ? `${conf}%` : "—"}</td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: HOME_THEME.text }}>{durationTxt}</td>
+                <td
+                  style={{
+                    padding: "6px 10px", textAlign: "right", fontWeight: 900,
+                    color: returnPct == null ? HOME_THEME.text : returnPct >= 0 ? HOME_THEME.green : SOFT_RED,
+                  }}
+                >
+                  {returnPct != null ? `${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(2)}%` : "—"}
+                </td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: HOME_THEME.green }}>{maxUp != null ? `+${maxUp.toFixed(2)}%` : "—"}</td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: SOFT_RED }}>{maxDown != null ? `${maxDown.toFixed(2)}%` : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function RegimeEngineTab() {
   const [ticker, setTicker] = useState<RegimeTicker>("ESU");
   const es = useEsCandles(ticker === "ESU", 20);
@@ -3317,6 +3442,15 @@ function RegimeEngineTab() {
 
           <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>{ticker} Price vs. Hidden State</span>}>
             <RegimeCandleChart rows={alignedRows} decoded={decodedAtCloses} panic={panicAtCloses} ticker={ticker} />
+          </Card>
+
+          <Card
+            variant="budget"
+            accent={LIGHT_BLUE}
+            title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Alert Log · Trend/Panic Reactions</span>}
+            subtitle="Server-side HMM, refit every 60s — logs every flip into Trend/Panic and closes it out with the realized price move once the regime flips away"
+          >
+            <RegimeAlertLog ticker={ticker} />
           </Card>
 
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>

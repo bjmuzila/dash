@@ -43,6 +43,7 @@ const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChang
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
+const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -1390,6 +1391,31 @@ async function main() {
         return;
       }
 
+      // GET /proxy/regime-alerts?ticker=ESU&limit=50
+      // Trend/Panic regime-flip alerts from regime-alert-recorder.js (newest
+      // first) — start price/confidence, and once closed, the realized reaction
+      // (return %, max up/down excursion, bars elapsed). Read by the "Alert Log"
+      // card on the /test Regime Engine tab.
+      if (pathname === '/proxy/regime-alerts' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
+            const ticker = u.searchParams.get('ticker') || '';
+            const rows = await getRegimeAlertRows({ ticker, limit });
+            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // POST /proxy/regime-alerts-run — force one detection pass now (manual test).
+      if (pathname === '/proxy/regime-alerts-run' && req.method === 'POST') {
+        runRegimeAlertsOnce(`http://localhost:${PORT}`)
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
       if (pathname === '/proxy/mvc-snapshot' && req.method === 'POST') {
@@ -1796,6 +1822,13 @@ async function main() {
     // ES signals → trade_signals table (+ optional Discord). Alerts only, no
     // orders. Read via /proxy/signals; force a pass via POST /proxy/signals-run.
     startSignalsEngine(PORT);
+    // Regime Engine alert recorder: every 60s refits the same Trend/Chop/Panic
+    // HMM as the /test Regime Engine tab (ESU + NQU, server-side, no browser tab
+    // needed), logs an alert whenever the decoded state flips into Trend or
+    // Panic, and closes it out with the realized price reaction once the regime
+    // flips away. Read via /proxy/regime-alerts; force a pass via POST
+    // /proxy/regime-alerts-run.
+    startRegimeAlertRecorder(PORT);
     // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.

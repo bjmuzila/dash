@@ -18,6 +18,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const SUPABASE_JWT_SECRET = (process.env.SUPABASE_JWT_SECRET || "").trim();
+const SUPABASE_JWT_KID = (process.env.SUPABASE_JWT_KID || "").trim();
 const TTL_SEC = 3600;
 
 function b64url(input: Buffer | string): string {
@@ -27,7 +28,8 @@ function b64url(input: Buffer | string): string {
 
 function signSupabaseJwt(userId: string, email: string): string {
   const now = Math.floor(Date.now() / 1000);
-  const header = { alg: "HS256", typ: "JWT" };
+  const header: Record<string, string> = { alg: "HS256", typ: "JWT" };
+  if (SUPABASE_JWT_KID) header.kid = SUPABASE_JWT_KID;
   const payload = {
     sub: userId,
     email,
