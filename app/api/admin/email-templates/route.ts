@@ -8,7 +8,7 @@ import {
 import { betaLaunchEmail, betaLaunchEmailText, BETA_LAUNCH_SUBJECT } from "@/lib/emails/beta-launch";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 import { maintenanceEmail, maintenanceEmailText, MAINTENANCE_SUBJECT } from "@/lib/emails/maintenance";
-import { betaCouponExpiryEmail, betaCouponExpiryText, BETA_COUPON_EXPIRY_SUBJECT } from "@/lib/emails/beta-coupon-expiry";
+import { launchEmail, launchEmailText, LAUNCH_SUBJECT } from "@/lib/emails/launch";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -64,11 +64,11 @@ function buildTemplates(): Template[] {
       text: maintenanceEmailText(),
     },
     {
-      id: "beta-coupon-expiry",
-      label: "Last chance — 50% off ends Jul 6",
-      subject: BETA_COUPON_EXPIRY_SUBJECT,
-      html: betaCouponExpiryEmail(),
-      text: betaCouponExpiryText(),
+      id: "launch",
+      label: "Fully launched — 20% off (LAUNCH)",
+      subject: LAUNCH_SUBJECT,
+      html: launchEmail(),
+      text: launchEmailText(),
     },
   ];
 }

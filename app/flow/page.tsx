@@ -923,10 +923,9 @@ export default function FlowPage() {
 
         {/* ── Dark Pool (TRF prints) — per-ticker flow + accumulation. ── */}
         <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px 8px", flexWrap: "wrap" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.02em" }}>
-              Dark Pool Flow — <span style={{ color: C.cyan }}>{active}</span>
-              <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: C.muted }}>TRF PRINTS (57/58/59)</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px 4px", flexWrap: "wrap" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>
+              Dark Pool <span style={{ color: C.purple }}>·</span> Off-Exchange
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Window</label>
@@ -946,43 +945,70 @@ export default function FlowPage() {
             <p style={{ fontSize: 13, padding: "0 20px 20px", color: C.muted }}>
               {active} is an index — no stock listing, so no dark-pool prints. Pick an equity ticker (e.g. SPY, QQQ) to see this.
             </p>
+          ) : !dpLevels || dpLevels.levels.length === 0 ? (
+            <p style={{ fontSize: 13, padding: "8px 20px 20px", color: C.muted }}>
+              No dark-pool prints recorded for {active} {dpWindow === "intraday" ? `on ${date}` : `in the last ${dpWindow === "5d" ? "5" : "7"} sessions`}.
+            </p>
           ) : (
-            <>
-              <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 13, fontWeight: 700, flexWrap: "wrap" }}>
-                <span style={{ color: C.cyan }}>● Volume {dpTotals.volume.toLocaleString()}</span>
-                <span style={{ color: C.text }}>Notional {fmtPremium(dpTotals.notional)}</span>
-                <span style={{ color: C.muted }}>{dpTotals.trades.toLocaleString()} prints</span>
-              </div>
-              <div ref={dpChartHostRef} style={{ height: 220, width: "100%" }} />
-              {dpBins.length === 0 && (
-                <p style={{ fontSize: 13, padding: "8px 20px 12px", color: C.muted, textAlign: "center" }}>
-                  No dark-pool prints recorded for {active} {dpWindow === "intraday" ? `on ${date}` : `in the last ${dpWindow === "5d" ? "5" : "7"} sessions`}.
-                </p>
-              )}
-
-              <div style={{ display: "grid", gridTemplateColumns: "90px 90px 80px 100px 1fr", gap: 8, padding: "10px 20px", borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted }}>
-                <span>Time</span>
-                <span style={{ textAlign: "right" }}>Price</span>
-                <span style={{ textAlign: "right" }}>Size</span>
-                <span style={{ textAlign: "right" }}>Notional</span>
-                <span>Venue</span>
-              </div>
-              <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                {dpVisibleRows.length === 0 ? (
-                  <p style={{ fontSize: 13, padding: 20, color: C.muted }}>No prints yet.</p>
-                ) : (
-                  dpVisibleRows.map((o, i) => (
-                    <div key={`${o.ts}-${i}`} style={{ display: "grid", gridTemplateColumns: "90px 90px 80px 100px 1fr", gap: 8, padding: "6px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontFamily: "var(--font-mono)", alignItems: "center" }}>
-                      <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
-                      <span style={{ textAlign: "right", color: C.text }}>{o.price.toFixed(2)}</span>
-                      <span style={{ textAlign: "right", color: C.text }}>{o.size.toLocaleString()}</span>
-                      <span style={{ textAlign: "right", color: C.cyan }}>{fmtPremium(o.notional)}</span>
-                      <span style={{ color: C.muted }}>{o.exchangeName ?? "—"}</span>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(280px, 1.5fr)", gap: 28, padding: "14px 20px 22px" }}>
+              {/* ── Left: % of volume off-exchange + shares/$ totals ── */}
+              <div>
+                {dpLevels.pctOff != null ? (
+                  <div style={{ fontSize: 32, fontWeight: 800, color: C.purple, lineHeight: 1.15 }}>
+                    {dpLevels.pctOff.toFixed(1)}%
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginTop: 2 }}>
+                      of {active} volume traded off-exchange
                     </div>
-                  ))
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
+                    {fmtShares(dpLevels.darkShares)} shares printed off-exchange for {active}
+                  </div>
                 )}
+                {dpRangeLabel && (
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                    dark pools + ATS + wholesalers · {dpRangeLabel}
+                  </div>
+                )}
+
+                {dpLevels.pctOff != null && (
+                  <div style={{ marginTop: 14, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, dpLevels.pctOff)}%`, height: "100%", borderRadius: 3, background: C.purple }} />
+                  </div>
+                )}
+
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontSize: 13, fontFamily: "var(--font-mono)" }}>
+                  <span style={{ color: C.purple, fontWeight: 700 }}>{fmtShares(dpLevels.darkShares)} shares dark</span>
+                  {dpLevels.totalShares > 0 && <span style={{ color: C.muted }}>{fmtShares(dpLevels.totalShares)} total</span>}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 13, fontFamily: "var(--font-mono)" }}>
+                  <span style={{ color: C.purple, fontWeight: 700 }}>{fmtPremium(dpLevels.darkNotional)} off</span>
+                  {dpLevels.totalNotional > 0 && <span style={{ color: C.muted }}>{fmtPremium(dpLevels.totalNotional)} total</span>}
+                </div>
               </div>
-            </>
+
+              {/* ── Right: Heaviest Dark Levels (price profile) ── */}
+              <div>
+                <label style={labelStyle}>Heaviest Dark Levels</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 6 }}>
+                  {dpLevels.levels.map((lvl) => {
+                    const pct = Math.max(3, (lvl.notional / dpMaxLevelNotional) * 100);
+                    return (
+                      <div key={lvl.price} style={{ display: "grid", gridTemplateColumns: "68px 1fr auto", gap: 10, alignItems: "center" }}>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: C.text }}>{lvl.price.toFixed(2)}</span>
+                        <div style={{ height: 10, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+                          <div style={{ width: `${pct}%`, height: "100%", borderRadius: 4, background: `linear-gradient(90deg, ${C.purple}, ${C.cyan})` }} />
+                        </div>
+                        <div style={{ textAlign: "right", fontFamily: "var(--font-mono)", lineHeight: 1.3 }}>
+                          <div style={{ color: C.purple, fontWeight: 700, fontSize: 12 }}>{fmtPremium(lvl.notional)}</div>
+                          <div style={{ color: C.muted, fontSize: 10 }}>{fmtShares(lvl.shares)} shares</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           )}
         </Card>
       </div>
