@@ -307,3 +307,128 @@ export function alignDecodedPathToCloses(decodedPath: RegimeLabel[]): (RegimeLab
   for (const l of decodedPath) out.push(l);
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Probability tree — K-step unfold of the fitted transition matrix from a root
+// state. Every number on this tree is real model output (fitted transition
+// probabilities + chain rule for path probability; fitted per-state Gaussian
+// means/stds for the EV/tail estimate) — nothing here is a placeholder.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ProbTreeNode {
+  label: RegimeLabel;
+  /** transition probability from the parent (1 for the root). */
+  edgeProb: number;
+  /** product of edgeProb along the path from the root (chain rule). */
+  cumProb: number;
+  depth: number;
+  children: ProbTreeNode[];
+  /** assigned by layoutProbabilityTree — depth index (x) and vertical slot (y), both 0..1 */
+  x: number;
+  y: number;
+}
+
+/**
+ * Unfold `depth` steps forward from `root`, using the label-ordered transition
+ * matrix. Branches below `minEdgeProb` are pruned (kept truthful to the fitted
+ * matrix rather than forcing an artificial fixed branching factor — a node
+ * ends up with 1-3 children depending on what the model actually says).
+ */
+export function buildProbabilityTree(
+  hmm: HmmResult,
+  root: RegimeLabel,
+  depth: number,
+  minEdgeProb = 0.04
+): ProbTreeNode {
+  function rec(label: RegimeLabel, d: number, edgeProb: number, cumProb: number): ProbTreeNode {
+    const node: ProbTreeNode = { label, edgeProb, cumProb, depth: d, children: [], x: 0, y: 0 };
+    if (d >= depth) return node;
+    const i = REGIME_LABELS.indexOf(label);
+    const kids = REGIME_LABELS.map((l, j) => ({ l, p: hmm.transition[i][j] }))
+      .filter(({ p }) => p >= minEdgeProb)
+      .sort((a, b) => b.p - a.p);
+    node.children = kids.map(({ l, p }) => rec(l, d + 1, p, cumProb * p));
+    return node;
+  }
+  return rec(root, 0, 1, 1);
+}
+
+/** In-place layout: x = depth/maxDepth, y = 0..1 vertical slot (leaves evenly spaced, parents centered on children). */
+export function layoutProbabilityTree(root: ProbTreeNode, maxDepth: number): void {
+  let leafCount = 0;
+  function countLeaves(n: ProbTreeNode) {
+    if (n.children.length === 0) { leafCount++; return; }
+    n.children.forEach(countLeaves);
+  }
+  countLeaves(root);
+  let leafIdx = 0;
+  function assign(n: ProbTreeNode) {
+    n.x = maxDepth > 0 ? n.depth / maxDepth : 0;
+    if (n.children.length === 0) {
+      n.y = leafCount > 1 ? leafIdx / (leafCount - 1) : 0.5;
+      leafIdx++;
+      return;
+    }
+    n.children.forEach(assign);
+    n.y = n.children.reduce((s, c) => s + c.y, 0) / n.children.length;
+  }
+  assign(root);
+}
+
+/** Every node on the root->this-node path, root first. */
+function pathTo(root: ProbTreeNode, target: ProbTreeNode): ProbTreeNode[] {
+  const stack: ProbTreeNode[][] = [[root]];
+  while (stack.length) {
+    const path = stack.pop()!;
+    const last = path[path.length - 1];
+    if (last === target) return path;
+    for (const c of last.children) stack.push([...path, c]);
+  }
+  return [root];
+}
+
+/** Every node in the tree, any order. */
+function allNodes(root: ProbTreeNode): ProbTreeNode[] {
+  const out: ProbTreeNode[] = [];
+  (function walk(n: ProbTreeNode) { out.push(n); n.children.forEach(walk); })(root);
+  return out;
+}
+
+/** The single highest cumulative-probability leaf anywhere in the tree. */
+export function mostLikelyLeaf(root: ProbTreeNode): ProbTreeNode {
+  const leaves = allNodes(root).filter((n) => n.children.length === 0);
+  return leaves.reduce((best, n) => (n.cumProb > best.cumProb ? n : best), leaves[0] ?? root);
+}
+
+export function mostLikelyPath(root: ProbTreeNode): ProbTreeNode[] {
+  return pathTo(root, mostLikelyLeaf(root));
+}
+
+export interface PathEvEstimate {
+  /** sum of the fitted per-state mean log-return across the path's states (excluding the root). */
+  sumLogReturn: number;
+  /** sqrt(sum of fitted per-state variance) across the path — independence-of-steps simplification. */
+  totalStd: number;
+  evDollars: number;
+  tailDollars: number; // mean - 2*std downside, in dollars
+}
+
+/**
+ * EV / 2-sigma-tail estimate for a path, in dollars against a hypothetical
+ * notional. Treats each step's log-return as an independent draw from that
+ * state's FITTED Gaussian (mean/std from the Baum-Welch fit) — a simplification
+ * (ignores serial correlation within a path), not a guarantee of real P&L.
+ */
+export function pathEvEstimate(hmm: HmmResult, path: ProbTreeNode[], notional: number): PathEvEstimate {
+  const steps = path.slice(1); // exclude root (no return realized getting "into" the root)
+  let sumMean = 0, sumVar = 0;
+  for (const n of steps) {
+    const i = hmm.stateIndexByLabel[n.label];
+    sumMean += hmm.means[i];
+    sumVar += hmm.stds[i] * hmm.stds[i];
+  }
+  const totalStd = Math.sqrt(sumVar);
+  const evDollars = notional * Math.expm1(sumMean);
+  const tailDollars = notional * Math.expm1(sumMean - 2 * totalStd);
+  return { sumLogReturn: sumMean, totalStd, evDollars, tailDollars };
+}

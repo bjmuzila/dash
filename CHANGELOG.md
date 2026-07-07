@@ -6,6 +6,16 @@ CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 
+## 2026-07-06 — Regime Engine tab build-out + layout fixes (`app/test/page.tsx`, `lib/regimeHmm.ts`)
+
+Built a new "Regime Engine" tab on `/test` (3-state Gaussian HMM — Trend/Chop/Panic — Baum-Welch fit on ESU/NQU 5m candles, ticker toggle, hidden-state graph, live regime probability chart, K=3 probability tree with EV/tail estimates, real lightweight-charts candlestick with regime bands, naive-vs-gated Donchian backtest comparison); retrofitted to the Budget UI style (`LIGHT_BLUE`/`SOFT_RED`, one accent, no top bars) per uploaded `BUDGET_UI_STYLE.md`, then fixed `ProbabilityStackChart`/`ProbabilityTreeChart` so their SVGs grow via `flex:"1 1 auto"` to fill the stretched Card height instead of leaving blank space. Also tightened `StrikeLevelTable` (GEX Levels tab) to show only rows within ±$300 of spot with the rest scrollable. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable all session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-06 — Fixed missing Edit/Delete on "Words from Bzila" (`app/traders-dashboard/page.tsx`)
 
 The new card's owner gate relied only on `isOwnerClaim`; widened it to also accept a `NEXT_PUBLIC_OWNER_USER_ID` env match (same cosmetic-gate pattern as the Discord share button in `DataBox.tsx`), so Edit/Delete now render reliably. Confirmed `AuthProvider.tsx`'s `isOwnerClaim` still exists post-migration (now derived from `user?.isOwner` instead of a Supabase JWT claim) — no further change needed there. NOT build-verified this session.

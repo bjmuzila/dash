@@ -16,8 +16,13 @@ import {
   fitGaussianHmm,
   donchianBacktest,
   alignDecodedPathToCloses,
+  buildProbabilityTree,
+  layoutProbabilityTree,
+  mostLikelyPath,
+  pathEvEstimate,
   type RegimeLabel,
   type HmmResult,
+  type ProbTreeNode,
 } from "@/lib/regimeHmm";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1690,6 +1695,15 @@ function StrikeLevelTable({
   rows, spot,
 }: { rows: GexLevelsRow[]; spot: number }) {
   const sorted = useMemo(() => rows.slice().sort((a, b) => b.strike - a.strike), [rows]);
+  // Default visible window = spot ± $300 (rest of the chain reachable by
+  // scrolling) — sized off the actual row count in that band so it works for
+  // both $25-wide and $50-wide strike spacing without a hardcoded row count.
+  const ROW_H = 34;
+  const nearCount = useMemo(() => {
+    const n = sorted.filter((r) => Math.abs(r.strike - spot) <= 300).length;
+    return n > 0 ? n : 6;
+  }, [sorted, spot]);
+  const visibleHeight = nearCount * ROW_H;
   // Nearest listed strike to spot = the ATM row we highlight + auto-center on.
   const atmStrike = useMemo(() => {
     if (!sorted.length) return null;
@@ -1746,7 +1760,7 @@ function StrikeLevelTable({
   );
 
   return (
-    <div style={{ borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden" }}>
+    <div style={{ borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       {/* Header lives in its own non-scrolling table above the body — avoids
           the sticky-thead ghosting/ overlap glitch from rows showing through
           a sticky header while scrolling. */}
@@ -1764,7 +1778,7 @@ function StrikeLevelTable({
           </tr>
         </thead>
       </table>
-      <div ref={scrollRef} style={{ maxHeight: 900, overflow: "auto" }}>
+      <div ref={scrollRef} style={{ maxHeight: visibleHeight, overflow: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <Cols />
           <tbody>
@@ -1920,7 +1934,7 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
 // grabbing anywhere inside a chart still pans it (useChartPan above) — the
 // two gestures would otherwise fight over the same mousedown+drag. Order
 // persists in localStorage so it survives reloads.
-const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "callPutGamma", "netDelta", "oiDate"] as const;
+const RIGHT_CARD_KEYS = ["history", "oiExpiry", "netGamma", "callPutGamma", "netDelta", "oiDate"] as const;
 type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
 const CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-v1";
 
@@ -2006,6 +2020,21 @@ function GexLevelsTab() {
   const { trigger, label, style: refreshStyle } = useRefreshButton(load);
   const cardOrder = useCardOrder(RIGHT_CARD_KEYS);
   const [history, setHistory] = useState<GlHistoryEntry[]>([]);
+
+  // Measures the right column's rendered height so the left strike table can
+  // be stretched to match it (full-length card instead of its old fixed cap).
+  const rightColRef = useRef<HTMLDivElement | null>(null);
+  const [rightColHeight, setRightColHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = rightColRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect?.height;
+      if (h) setRightColHeight(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
 
@@ -2113,24 +2142,38 @@ function GexLevelsTab() {
       </Card>
 
       {d && (
-        // Left half: history of key level changes + strike-level table.
-        // Right half, in reference-mock order: Open Interest by Expiration,
-        // Net Gamma (cumulative — crosses zero at the flip), Call/Put Gamma
-        // by strike, then Net Delta + Open Interest by Date underneath (real,
+        // Left half: strike-level table, stretched to match the full height
+        // of the stacked right column (measured via ResizeObserver above).
+        // Right half: History of key level changes on top, then in
+        // reference-mock order: Open Interest by Expiration, Net Gamma
+        // (cumulative — crosses zero at the flip), Call/Put Gamma by strike,
+        // then Net Delta + Open Interest by Date underneath (real,
         // already-working panels kept below the 3-panel reference layout).
         <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
-          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 16 }}>History of key level changes</span>} subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen">
-              {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
-            </Card>
-            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 16 }}>Strike level net gamma &amp; call/put OI positioning</span>}>
+          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column" }}>
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<span style={{ fontSize: 16 }}>Strike level net gamma &amp; call/put OI positioning</span>}
+              style={{ display: "flex", flexDirection: "column", height: rightColHeight ?? undefined }}
+            >
               <StrikeLevelTable rows={d.rows} spot={d.spot} />
             </Card>
           </div>
 
-          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
+          <div ref={rightColRef} style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
             {(() => {
               const content: Record<RightCardKey, ReactNode> = {
+                history: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="History of key level changes" onDragStart={cardOrder.handleDragStart("history")} onDragEnd={cardOrder.handleDragEnd} />}
+                    subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen"
+                  >
+                    {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
+                  </Card>
+                ),
                 oiExpiry: (
                   <Card
                     variant="budget"
@@ -2449,16 +2492,15 @@ function FlowInventoryTab() {
 
 type RegimeTicker = "ESU" | "NQU";
 
+// Budget UI style (BUDGET_UI_STYLE.md): reds are always SOFT_RED on this tab,
+// never the harsher HOME_THEME.red (#EF4444) — applies to the Panic state
+// color everywhere it's used (state graph, transition matrix, probability
+// chart, candlestick shading, probability tree) as well as money/warning text.
 const REGIME_COLOR: Record<RegimeLabel, string> = {
   Trend: HOME_THEME.cyan,
   Chop: HOME_THEME.orange,
-  Panic: HOME_THEME.red,
+  Panic: SOFT_RED,
 };
-
-// HOME_THEME.green is actually a light blue (#8ECAE6), not a success color — mirrors
-// the un-exported REFRESH_GREEN used internally by homeRefreshButtonStyle. Kept literal
-// here for the same reason that helper does: it's a status color, not chrome.
-const POSITIVE_GREEN = "#1FD98A";
 
 function sampleTail<T>(arr: T[], maxPoints: number): T[] {
   if (arr.length <= maxPoints) return arr;
@@ -2539,13 +2581,15 @@ function RegimeStateGraph({ hmm }: { hmm: HmmResult }) {
 
   // Node position anchors + radius scaled by how often the fit says the market
   // actually sits in that state (stationary distribution) — busier states read
-  // bigger, exactly like the reference.
+  // bigger, exactly like the reference. Bigger canvas overall per Brandon's
+  // "make the hidden state graph bigger" note (viewBox chosen close to typical
+  // rendered card width so the SVG unit labels read near real page-body size).
   const anchors: Record<RegimeLabel, { cx: number; cy: number }> = {
-    Trend: { cx: 100, cy: 95 },
-    Chop: { cx: 215, cy: 175 },
-    Panic: { cx: 340, cy: 100 },
+    Trend: { cx: 150, cy: 160 },
+    Chop: { cx: 370, cy: 305 },
+    Panic: { cx: 540, cy: 160 },
   };
-  const radiusOf = (l: RegimeLabel) => 22 + Math.sqrt(Math.max(stationaryOf(l), 0.01)) * 46;
+  const radiusOf = (l: RegimeLabel) => 36 + Math.sqrt(Math.max(stationaryOf(l), 0.01)) * 78;
   const radii = Object.fromEntries(order.map((l) => [l, radiusOf(l)])) as Record<RegimeLabel, number>;
 
   // Directed edges for every off-diagonal transition, bowed opposite ways per
@@ -2561,7 +2605,7 @@ function RegimeStateGraph({ hmm }: { hmm: HmmResult }) {
   ]);
 
   return (
-    <svg viewBox="0 0 440 260" style={{ width: "100%", height: 236 }}>
+    <svg viewBox="0 0 680 500" style={{ width: "100%", height: 500 }}>
       {edges.map(({ from, to, bow }, i) => {
         const A = anchors[from], B = anchors[to];
         const { path, apexX, apexY } = curvedEdge(A.cx, A.cy, radii[from], B.cx, B.cy, radii[to], bow);
@@ -2571,16 +2615,16 @@ function RegimeStateGraph({ hmm }: { hmm: HmmResult }) {
         return (
           <g key={`${from}-${to}-${i}`}>
             <defs>
-              <marker id={markerId} markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
-                <path d="M0,0 L6,3 L0,6 Z" fill={REGIME_COLOR[from]} opacity={0.85} />
+              <marker id={markerId} markerWidth="8" markerHeight="8" refX="6" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 Z" fill={REGIME_COLOR[from]} opacity={0.85} />
               </marker>
             </defs>
-            <path d={path} stroke={REGIME_COLOR[from]} strokeOpacity={0.55} strokeWidth={1.4} strokeDasharray="1,4" strokeLinecap="round" fill="none" markerEnd={`url(#${markerId})`} />
-            <circle r={2.2} fill={REGIME_COLOR[from]} opacity={0.9}>
+            <path d={path} stroke={REGIME_COLOR[from]} strokeOpacity={0.55} strokeWidth={1.8} strokeDasharray="1,5" strokeLinecap="round" fill="none" markerEnd={`url(#${markerId})`} />
+            <circle r={2.8} fill={REGIME_COLOR[from]} opacity={0.9}>
               <animateMotion dur={`${2.6 + i * 0.4}s`} repeatCount="indefinite" path={path} />
             </circle>
-            <rect x={apexX - 13} y={apexY - 8} width={26} height={13} rx={6} fill="rgba(5,8,13,0.82)" />
-            <text x={apexX} y={apexY + 2} fill={REGIME_COLOR[from]} fontSize="9" fontWeight={800} textAnchor="middle">{p.toFixed(2)}</text>
+            <rect x={apexX - 17} y={apexY - 11} width={34} height={18} rx={8} fill={`${HOME_THEME.bg}d1`} />
+            <text x={apexX} y={apexY + 3} fill={REGIME_COLOR[from]} fontSize="13" fontWeight={800} textAnchor="middle">{p.toFixed(2)}</text>
           </g>
         );
       })}
@@ -2592,17 +2636,17 @@ function RegimeStateGraph({ hmm }: { hmm: HmmResult }) {
         return (
           <g key={l}>
             {isCurrent && (
-              <circle cx={cx} cy={cy} r={r} fill="none" stroke={REGIME_COLOR[l]} strokeWidth={2}>
-                <animate attributeName="r" values={`${r};${r + 16};${r}`} dur="2.4s" repeatCount="indefinite" />
+              <circle cx={cx} cy={cy} r={r} fill="none" stroke={REGIME_COLOR[l]} strokeWidth={2.5}>
+                <animate attributeName="r" values={`${r};${r + 20};${r}`} dur="2.4s" repeatCount="indefinite" />
                 <animate attributeName="opacity" values="0.55;0;0.55" dur="2.4s" repeatCount="indefinite" />
               </circle>
             )}
-            <circle cx={cx} cy={cy} r={r} fill={`${REGIME_COLOR[l]}1f`} stroke={REGIME_COLOR[l]} strokeWidth={isCurrent ? 2.6 : 2} />
-            <circle cx={cx} cy={cy - r - 14} r={11} fill="none" stroke={REGIME_COLOR[l]} strokeOpacity={0.55} strokeWidth={1.4} />
-            <text x={cx} y={cy - r - 10.5} fill={HOME_THEME.text} fillOpacity={0.75} fontSize="10" textAnchor="middle">{selfOf(l).toFixed(2)}</text>
-            <text x={cx} y={cy - 4} fill={REGIME_COLOR[l]} fontSize={r > 40 ? 13 : 11} fontWeight={800} textAnchor="middle">{l.toUpperCase()}</text>
-            <text x={cx} y={cy + 13} fill={HOME_THEME.text} fontSize={r > 40 ? 14 : 12} fontWeight={800} textAnchor="middle">{pct(stationaryOf(l))}%</text>
-            <text x={cx} y={cy + r + 15} fill={HOME_THEME.text} fillOpacity={0.4} fontSize="9" textAnchor="middle">{REGIME_FLAVOR[l]}</text>
+            <circle cx={cx} cy={cy} r={r} fill={`${REGIME_COLOR[l]}1f`} stroke={REGIME_COLOR[l]} strokeWidth={isCurrent ? 3 : 2.2} />
+            <circle cx={cx} cy={cy - r - 20} r={15} fill="none" stroke={REGIME_COLOR[l]} strokeOpacity={0.55} strokeWidth={1.8} />
+            <text x={cx} y={cy - r - 15.5} fill={HOME_THEME.text} fillOpacity={0.8} fontSize="13" textAnchor="middle">{selfOf(l).toFixed(2)}</text>
+            <text x={cx} y={cy - 6} fill={REGIME_COLOR[l]} fontSize={r > 55 ? 18 : 15} fontWeight={800} textAnchor="middle">{l.toUpperCase()}</text>
+            <text x={cx} y={cy + 18} fill={HOME_THEME.text} fontSize={r > 55 ? 20 : 16} fontWeight={800} textAnchor="middle">{pct(stationaryOf(l))}%</text>
+            <text x={cx} y={cy + r + 20} fill={HOME_THEME.text} fillOpacity={0.45} fontSize="12" textAnchor="middle">{REGIME_FLAVOR[l]}</text>
           </g>
         );
       })}
@@ -2613,7 +2657,7 @@ function RegimeStateGraph({ hmm }: { hmm: HmmResult }) {
 function TransitionMatrixTable({ hmm }: { hmm: HmmResult }) {
   const labels: RegimeLabel[] = ["Trend", "Chop", "Panic"];
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
       <thead>
         <tr>
           <td />
@@ -2647,6 +2691,129 @@ function TransitionMatrixTable({ hmm }: { hmm: HmmResult }) {
   );
 }
 
+/** Elapsed-time display ("3.6s ago") that ticks every 200ms — used for the tree's "regrown" chip. */
+function useElapsedSince(sinceMs: number): string {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 200);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, (Date.now() - sinceMs) / 1000);
+  return secs < 60 ? `${secs.toFixed(1)}s` : `${Math.floor(secs / 60)}m`;
+}
+
+/**
+ * Probability tree — unfolds the fitted transition matrix K steps forward
+ * from the current decoded state. Every branch probability, the chain-rule
+ * path probability, and the EV/tail figures are computed from the real HMM
+ * fit (transition matrix + per-state Gaussian means/stds) — nothing here is
+ * a placeholder number.
+ */
+function ProbabilityTreeChart({ hmm, notional = 10000 }: { hmm: HmmResult; notional?: number }) {
+  const depth = 3;
+  const fitSinceRef = useRef(Date.now());
+  useEffect(() => {
+    fitSinceRef.current = Date.now();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hmm.iterations, hmm.currentLabel]);
+  const elapsed = useElapsedSince(fitSinceRef.current);
+
+  const tree = useMemo(() => {
+    const root = buildProbabilityTree(hmm, hmm.currentLabel, depth);
+    layoutProbabilityTree(root, depth);
+    return root;
+  }, [hmm]);
+
+  const bestPath = useMemo(() => mostLikelyPath(tree), [tree]);
+  const bestLeaf = bestPath[bestPath.length - 1];
+  const bestPathKeys = useMemo(() => new Set(bestPath.map((n) => `${n.depth}:${n.label}:${n.cumProb.toFixed(6)}`)), [bestPath]);
+  const isOnBestPath = (n: ProbTreeNode) => bestPathKeys.has(`${n.depth}:${n.label}:${n.cumProb.toFixed(6)}`);
+  const ev = useMemo(() => pathEvEstimate(hmm, bestPath, notional), [hmm, bestPath, notional]);
+
+  const W = 640, H = 300;
+  const padX = 70, padY = 30;
+  const allEdges: { from: ProbTreeNode; to: ProbTreeNode }[] = [];
+  (function collect(n: ProbTreeNode) {
+    for (const c of n.children) { allEdges.push({ from: n, to: c }); collect(c); }
+  })(tree);
+  const allN: ProbTreeNode[] = [];
+  (function collectN(n: ProbTreeNode) { allN.push(n); n.children.forEach(collectN); })(tree);
+
+  const px = (n: ProbTreeNode) => padX + n.x * (W - padX * 2);
+  const py = (n: ProbTreeNode) => padY + n.y * (H - padY * 2);
+  const chainLabel = bestPath.map((n) => n.label[0]).join("→");
+  const chainMath = bestPath.slice(1).map((n) => n.edgeProb.toFixed(2)).join(" × ");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 380 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+        <span style={{ fontSize: 15, color: HOME_THEME.orange, opacity: 0.85, border: `1px solid ${HOME_THEME.orange}55`, borderRadius: 10, padding: "3px 10px" }}>
+          Regrown {elapsed} ago
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", flex: "1 1 auto", minHeight: 220 }}>
+        {allEdges.map(({ from, to }, i) => {
+          const onBest = isOnBestPath(from) && isOnBestPath(to);
+          return (
+            <g key={i}>
+              <line
+                x1={px(from)} y1={py(from)} x2={px(to)} y2={py(to)}
+                stroke={onBest ? REGIME_COLOR[to.label] : HOME_THEME.text}
+                strokeOpacity={onBest ? 0.9 : 0.18}
+                strokeWidth={onBest ? 2.6 : 1.4}
+              />
+              <rect x={(px(from) + px(to)) / 2 - 16} y={(py(from) + py(to)) / 2 - 10} width={32} height={16} rx={4} fill={`${HOME_THEME.bg}d1`} />
+              <text
+                x={(px(from) + px(to)) / 2} y={(py(from) + py(to)) / 2 + 3}
+                fill={onBest ? REGIME_COLOR[to.label] : HOME_THEME.text}
+                fillOpacity={onBest ? 1 : 0.55}
+                fontSize="13" fontWeight={onBest ? 800 : 600} textAnchor="middle"
+              >
+                {to.edgeProb.toFixed(2)}
+              </text>
+            </g>
+          );
+        })}
+        {allN.map((n, i) => {
+          const onBest = isOnBestPath(n);
+          const isLeaf = n.children.length === 0;
+          const r = onBest ? 17 : 13;
+          return (
+            <g key={i}>
+              <circle cx={px(n)} cy={py(n)} r={r} fill={`${REGIME_COLOR[n.label]}${onBest ? "40" : "22"}`} stroke={REGIME_COLOR[n.label]} strokeWidth={onBest ? 2.6 : 1.6} />
+              <text x={px(n)} y={py(n) + 5} fill={REGIME_COLOR[n.label]} fontSize={onBest ? 15 : 13} fontWeight={800} textAnchor="middle">{n.label[0]}</text>
+              {isLeaf && (
+                <text x={px(n) + r + 8} y={py(n) + 4} fill={HOME_THEME.text} fillOpacity={onBest ? 0.95 : 0.5} fontSize="13" fontWeight={onBest ? 800 : 600}>
+                  {(n.cumProb * 100).toFixed(1)}%{onBest ? " ★" : ""}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.5, marginTop: 4 }}>
+        Most likely path · chain rule
+      </div>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 2 }}>
+        <span style={{ fontWeight: 800 }}>{chainLabel}</span>
+        <span style={{ opacity: 0.6 }}> · {chainMath} = {(bestLeaf.cumProb * 100).toFixed(1)}%</span>
+      </div>
+      <div style={{ fontSize: 15, marginTop: 8 }}>
+        <span style={{ color: ev.evDollars >= 0 ? HOME_THEME.green : SOFT_RED, fontWeight: 800 }}>
+          EV {ev.evDollars >= 0 ? "+" : ""}${Math.round(ev.evDollars).toLocaleString("en-US")}
+        </span>
+        <span style={{ color: HOME_THEME.text, opacity: 0.6 }}> / ${notional.toLocaleString("en-US")} hypothetical · </span>
+        <span style={{ color: SOFT_RED, fontWeight: 800 }}>
+          Tail {ev.tailDollars >= 0 ? "+" : ""}${Math.round(ev.tailDollars).toLocaleString("en-US")}
+        </span>
+      </div>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.4, marginTop: 4 }}>
+        EV/tail assume independent draws from each state&rsquo;s fitted return distribution along the path — a simplification, not a P&amp;L guarantee.
+      </div>
+    </div>
+  );
+}
+
 function ProbabilityStackChart({
   series,
   decoded,
@@ -2654,10 +2821,12 @@ function ProbabilityStackChart({
   series: { Trend: number; Chop: number; Panic: number }[];
   decoded?: RegimeLabel[];
 }) {
-  const W = 600, H = 140;
-  const s = sampleTail(series, 180);
-  const d = decoded ? sampleTail(decoded, 180) : undefined;
-  if (s.length < 2) return <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.5, padding: 20 }}>Warming up the fit…</div>;
+  const W = 960, H = 260;
+  const s = sampleTail(series, 400);
+  const d = decoded ? sampleTail(decoded, 400) : undefined;
+  if (s.length < 2) {
+    return <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.5, padding: 20 }}>Warming up the fit…</div>;
+  }
   const n = s.length;
   const xStep = W / (n - 1);
   const xs = s.map((_, i) => i * xStep);
@@ -2671,21 +2840,79 @@ function ProbabilityStackChart({
   if (d) for (let i = 1; i < d.length; i++) if (d[i] !== d[i - 1]) flips.push(i);
   const recentFlips = flips.slice(-6);
 
+  const last = s[s.length - 1];
+  const prev = s.length > 1 ? s[s.length - 2] : last;
+  const stats: { l: RegimeLabel; v: number; trend: "up" | "down" | "flat" }[] = (
+    ["Trend", "Chop", "Panic"] as RegimeLabel[]
+  ).map((l) => {
+    const v = last[l];
+    const dv = v - prev[l];
+    return { l, v, trend: dv > 0.01 ? "up" : dv < -0.01 ? "down" : "flat" };
+  });
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 150 }}>
-      <path d={smoothBandPath(xs, baseline, panicTop)} fill={REGIME_COLOR.Panic} opacity={0.85} />
-      <path d={smoothBandPath(xs, panicTop, chopTop)} fill={REGIME_COLOR.Chop} opacity={0.72} />
-      <path d={smoothBandPath(xs, chopTop, trendTop)} fill={REGIME_COLOR.Trend} opacity={0.9} />
-      <line x1={0} y1={killY} x2={W} y2={killY} stroke={HOME_THEME.text} strokeOpacity={0.35} strokeDasharray="4,4" strokeWidth={1} />
-      <text x={4} y={killY - 4} fill={HOME_THEME.text} fillOpacity={0.55} fontSize="9" fontWeight={700}>KILL 0.60</text>
-      {recentFlips.map((i) => (
-        <g key={i}>
-          <line x1={xs[i]} y1={0} x2={xs[i]} y2={H} stroke={HOME_THEME.text} strokeOpacity={0.4} strokeDasharray="2,3" strokeWidth={1} />
-          <rect x={xs[i] - 15} y={2} width={30} height={12} rx={6} fill="rgba(5,8,13,0.85)" />
-          <text x={xs[i]} y={11} fill={HOME_THEME.text} fillOpacity={0.9} fontSize="8" fontWeight={800} textAnchor="middle">FLIP</text>
-        </g>
-      ))}
-    </svg>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, flex: "1 1 auto" }}>
+      <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
+        {stats.map(({ l, v, trend }) => (
+          <div key={l} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ width: 10, height: 10, borderRadius: "50%", background: REGIME_COLOR[l], flexShrink: 0 }} />
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ fontSize: 15, color: HOME_THEME.text, letterSpacing: "0.04em" }}>{l.toUpperCase()}</span>
+              <span style={{ fontSize: 22, fontWeight: 900, color: REGIME_COLOR[l] }}>
+                {Math.round(v * 100)}%
+                <span style={{ fontSize: 13, marginLeft: 6, opacity: 0.6 }}>{trend === "up" ? "▲" : trend === "down" ? "▼" : "–"}</span>
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", height: "auto", aspectRatio: `${W} / ${H}`, maxHeight: 320 }}>
+        <defs>
+          <linearGradient id="pg-panic" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={REGIME_COLOR.Panic} stopOpacity={0.95} />
+            <stop offset="100%" stopColor={REGIME_COLOR.Panic} stopOpacity={0.55} />
+          </linearGradient>
+          <linearGradient id="pg-chop" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={REGIME_COLOR.Chop} stopOpacity={0.85} />
+            <stop offset="100%" stopColor={REGIME_COLOR.Chop} stopOpacity={0.45} />
+          </linearGradient>
+          <linearGradient id="pg-trend" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={REGIME_COLOR.Trend} stopOpacity={0.95} />
+            <stop offset="100%" stopColor={REGIME_COLOR.Trend} stopOpacity={0.6} />
+          </linearGradient>
+        </defs>
+
+        {/* value gridlines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((frac) => (
+          <line key={frac} x1={0} y1={H * (1 - frac)} x2={W} y2={H * (1 - frac)} stroke={HOME_THEME.text} strokeOpacity={frac === 0 || frac === 1 ? 0 : 0.08} strokeWidth={1} />
+        ))}
+
+        <path d={smoothBandPath(xs, baseline, panicTop)} fill="url(#pg-panic)" />
+        <path d={smoothBandPath(xs, panicTop, chopTop)} fill="url(#pg-chop)" />
+        <path d={smoothBandPath(xs, chopTop, trendTop)} fill="url(#pg-trend)" />
+        {/* crisp boundary strokes so stacked bands stay well-defined against each other */}
+        <path d={polylinePath(smoothPolyline(xs, panicTop).xs, smoothPolyline(xs, panicTop).ys)} stroke={REGIME_COLOR.Panic} strokeWidth={1.6} fill="none" opacity={0.9} />
+        <path d={polylinePath(smoothPolyline(xs, chopTop).xs, smoothPolyline(xs, chopTop).ys)} stroke={REGIME_COLOR.Chop} strokeWidth={1.6} fill="none" opacity={0.9} />
+
+        <line x1={0} y1={killY} x2={W} y2={killY} stroke={HOME_THEME.text} strokeOpacity={0.4} strokeDasharray="5,5" strokeWidth={1.2} />
+        <rect x={4} y={killY - 20} width={82} height={16} rx={4} fill={`${HOME_THEME.bg}cc`} />
+        <text x={10} y={killY - 8} fill={HOME_THEME.text} fillOpacity={0.75} fontSize="12" fontWeight={700}>KILL · 0.60</text>
+
+        {[1, 0.5, 0].map((frac) => (
+          <text key={frac} x={W - 4} y={H * (1 - frac) + (frac === 1 ? 14 : frac === 0 ? -5 : 5)} fill={HOME_THEME.text} fillOpacity={0.4} fontSize="11" textAnchor="end">
+            {Math.round(frac * 100)}%
+          </text>
+        ))}
+
+        {recentFlips.map((i) => (
+          <g key={i}>
+            <line x1={xs[i]} y1={0} x2={xs[i]} y2={H} stroke={HOME_THEME.text} strokeOpacity={0.4} strokeDasharray="2,4" strokeWidth={1} />
+            <rect x={xs[i] - 20} y={4} width={40} height={18} rx={9} fill={`${HOME_THEME.bg}e0`} />
+            <text x={xs[i]} y={16} fill={HOME_THEME.text} fillOpacity={0.9} fontSize="11" fontWeight={800} textAnchor="middle">FLIP</text>
+          </g>
+        ))}
+      </svg>
+    </div>
   );
 }
 
@@ -2865,7 +3092,7 @@ function RegimeCandleChart({
       markers.push({
         time: toChartTime(rows[lastKillIdx].timestamp),
         position: "aboveBar",
-        color: HOME_THEME.red,
+        color: SOFT_RED,
         shape: "arrowDown",
         text: "KILL SWITCH",
       });
@@ -2883,7 +3110,7 @@ function RegimeCandleChart({
       <canvas ref={bandCanvasRef} style={{ position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none", width: "100%", height: "100%" }} />
       <div ref={hostRef} style={{ position: "absolute", inset: 0, zIndex: 1 }} />
       {rows.length === 0 && (
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.text, opacity: 0.4, fontSize: 13 }}>
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.text, opacity: 0.4, fontSize: 15 }}>
           Warming up the fit…
         </div>
       )}
@@ -2891,8 +3118,8 @@ function RegimeCandleChart({
         <div
           style={{
             position: "absolute", left: 8, top: 6, zIndex: 2, pointerEvents: "none",
-            fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text,
-            background: "rgba(5,8,13,.6)", padding: "3px 9px", borderRadius: 6, fontWeight: 700,
+            fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text,
+            background: `${HOME_THEME.bg}99`, padding: "3px 9px", borderRadius: 6, fontWeight: 700,
           }}
         >
           {ticker} {last.close.toFixed(2)}
@@ -2994,32 +3221,32 @@ function RegimeEngineTab() {
               </button>
             );
           })}
-          <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.text }}>
             {active.connected ? `Live · last bar ${lastTimeEt} ET` : "Connecting…"}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Bars decoded</div>
+            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.08em", color: HOME_THEME.text, textTransform: "uppercase" }}>Bars decoded</div>
             <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>{combined.length.toLocaleString("en-US")}</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Confidence</div>
+            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.08em", color: HOME_THEME.text, textTransform: "uppercase" }}>Confidence</div>
             <div style={{ fontSize: 15, fontWeight: 700, color: LIGHT_BLUE }}>{hmm ? `${currentConfidence}%` : "—"}</div>
           </div>
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 6,
+              gap: 8,
               background: currentLabel ? `${REGIME_COLOR[currentLabel]}20` : "rgba(255,255,255,0.05)",
               border: `1px solid ${currentLabel ? `${REGIME_COLOR[currentLabel]}66` : HOME_THEME.border}`,
               borderRadius: 20,
-              padding: "5px 12px",
+              padding: "6px 14px",
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: currentLabel ? REGIME_COLOR[currentLabel] : "#888" }} />
-            <span style={{ fontSize: 11, fontWeight: 800, color: currentLabel ? REGIME_COLOR[currentLabel] : HOME_THEME.text, letterSpacing: "0.05em" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: currentLabel ? REGIME_COLOR[currentLabel] : `${HOME_THEME.text}59` }} />
+            <span style={{ fontSize: 15, fontWeight: 800, color: currentLabel ? REGIME_COLOR[currentLabel] : HOME_THEME.text, letterSpacing: "0.05em" }}>
               REGIME · {currentLabel ? currentLabel.toUpperCase() : "WARMING UP"}
             </span>
           </div>
@@ -3027,7 +3254,7 @@ function RegimeEngineTab() {
       </div>
 
       {!hmm ? (
-        <Card variant="budget" accent={HOME_THEME.orange} padding={20}>
+        <Card variant="budget" accent={LIGHT_BLUE} padding={20}>
           <div style={{ fontSize: 15, color: HOME_THEME.text }}>
             Fitting the regime model — needs at least ~80 five-minute bars of {ticker} history. This fills in once the candle
             backfill loads (today + up to 20 prior sessions).
@@ -3036,98 +3263,116 @@ function RegimeEngineTab() {
       ) : (
         <>
           <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
-            <Card accent="cyan" title="Hidden State Graph · P(next | current)" subtitle="Andrey Markov · 1906 — next state depends only on the current one" style={{ flex: "1.4 1 420px" }}>
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Hidden State Graph · P(next | current)</span>}
+              subtitle="Andrey Markov · 1906 — next state depends only on the current one"
+              style={{ flex: "1.4 1 420px" }}
+            >
               <RegimeStateGraph hmm={hmm} />
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 4 }}>
+              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>
                 Stationary π shown inside each node · self-loop probability shown on the ring · {hmm.iterations} EM iterations
               </div>
             </Card>
             <div style={{ display: "flex", flexDirection: "column", gap: 16, flex: "1 1 280px" }}>
-              <Card accent={currentLabel ? (currentLabel === "Trend" ? "cyan" : currentLabel === "Chop" ? "orange" : "red") : "cyan"} title="Decoded State · Live" style={{ flex: 1 }}>
+              <Card
+                variant="budget"
+                accent={LIGHT_BLUE}
+                title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Decoded State · Live</span>}
+                style={{ flex: 1 }}
+              >
                 <div style={{ fontSize: 24, fontWeight: 900, color: currentLabel ? REGIME_COLOR[currentLabel] : HOME_THEME.text }}>
                   {currentLabel?.toUpperCase()}
                 </div>
                 <div style={{ fontSize: 28, fontWeight: 900 }}>{currentConfidence}%</div>
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6 }}>P(state) updates every bar · forward-backward posterior</div>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>P(state) updates every bar · forward-backward posterior</div>
               </Card>
-              <Card accent="cyan" title="Transition Matrix" style={{ flex: 1 }}>
+              <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Transition Matrix</span>} style={{ flex: 1 }}>
                 <TransitionMatrixTable hmm={hmm} />
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.4, marginTop: 6 }}>Rows sum to 1.00</div>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>Rows sum to 1.00</div>
               </Card>
             </div>
           </div>
 
-          <Card accent="cyan" title="Live Regime Probability · P(state | returns)">
-            <ProbabilityStackChart series={hmm.gammaByLabel} decoded={hmm.decodedPath} />
-            <div style={{ display: "flex", gap: 20, marginTop: 8, fontSize: 12 }}>
-              {(["Trend", "Chop", "Panic"] as RegimeLabel[]).map((l) => (
-                <div key={l} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: REGIME_COLOR[l] }} />
-                  <span style={{ color: HOME_THEME.text, opacity: 0.8 }}>{l}</span>
-                  <b>{Math.round(hmm.currentProbs[l] * 100)}%</b>
-                </div>
-              ))}
-            </div>
-          </Card>
+          <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Live Regime Probability · P(state | returns)</span>}
+              style={{ flex: "1 1 460px", display: "flex", flexDirection: "column" }}
+            >
+              <ProbabilityStackChart series={hmm.gammaByLabel} decoded={hmm.decodedPath} />
+            </Card>
 
-          <Card accent={currentLabel === "Panic" ? "red" : "cyan"} title={`${ticker} Price vs. Hidden State`}>
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Probability Tree · K=3 Unfold</span>}
+              style={{ flex: "1 1 460px", display: "flex", flexDirection: "column" }}
+            >
+              <ProbabilityTreeChart hmm={hmm} />
+            </Card>
+          </div>
+
+          <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>{ticker} Price vs. Hidden State</span>}>
             <RegimeCandleChart rows={alignedRows} decoded={decodedAtCloses} panic={panicAtCloses} ticker={ticker} />
           </Card>
 
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <Card accent="cyan" title="Switching" style={{ flex: "1 1 220px" }}>
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>Layer 01</div>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Switching</span>} style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 15, color: HOME_THEME.text }}>Layer 01</div>
               <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: HOME_THEME.text }}>
                 {currentLabel === "Panic" ? "All books · Risk-off" : currentLabel === "Chop" ? "Reduced risk · Selective" : "All books · Risk-on"}
               </div>
             </Card>
-            <Card accent="orange" title="Sizing" style={{ flex: "1 1 220px" }}>
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>Layer 02</div>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Sizing</span>} style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 15, color: HOME_THEME.text }}>Layer 02</div>
               <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: HOME_THEME.text }}>
                 Exposure {Math.max(5, Math.round((1 - hmm.currentProbs.Panic) * 100))}%
               </div>
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>Scales with (1 − P(Panic))</div>
+              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 2 }}>Scales with (1 − P(Panic))</div>
             </Card>
-            <Card accent="red" title="Kill Switch" style={{ flex: "1 1 220px" }}>
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>Layer 03</div>
-              <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: hmm.currentProbs.Panic > 0.6 ? HOME_THEME.red : HOME_THEME.text }}>
+            <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>Kill Switch</span>} style={{ flex: "1 1 220px" }}>
+              <div style={{ fontSize: 15, color: HOME_THEME.text }}>Layer 03</div>
+              <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4, color: hmm.currentProbs.Panic > 0.6 ? SOFT_RED : HOME_THEME.text }}>
                 {hmm.currentProbs.Panic > 0.6 ? "Triggered · Gross cut" : "Armed · Not triggered"}
               </div>
-              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>Trips above 60% P(Panic)</div>
+              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 2 }}>Trips above 60% P(Panic)</div>
             </Card>
           </div>
 
           {backtests && (
             <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-              <Card style={{ flex: 1, border: `1px solid ${HOME_THEME.red}59` }} padding={18}>
-                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>
+              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={18}>
+                <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em", color: HOME_THEME.text, textTransform: "uppercase" }}>
                   Same Strategy · No Regime Gate
                 </div>
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 6 }}>20-bar Donchian breakout, always on</div>
-                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.naive.returnPct >= 0 ? POSITIVE_GREEN : HOME_THEME.red, marginTop: 4 }}>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>20-bar Donchian breakout, always on</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.naive.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
                   {backtests.naive.returnPct >= 0 ? "+" : ""}{backtests.naive.returnPct.toFixed(2)}%
                 </div>
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6 }}>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>
                   Max drawdown {backtests.naive.maxDrawdownPct.toFixed(1)}% · {backtests.naive.bars} bars
                 </div>
               </Card>
-              <div style={{ display: "flex", alignItems: "center", fontSize: 13, fontWeight: 800, color: HOME_THEME.text, opacity: 0.5, padding: "0 4px" }}>VS</div>
-              <Card style={{ flex: 1, border: `1px solid ${POSITIVE_GREEN}66` }} padding={18}>
-                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>
+              <div style={{ display: "flex", alignItems: "center", fontSize: 15, fontWeight: 800, color: HOME_THEME.text, padding: "0 4px" }}>VS</div>
+              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={18}>
+                <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em", color: HOME_THEME.text, textTransform: "uppercase" }}>
                   Same Strategy · Gated to Trend
                 </div>
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 6 }}>Same rule, flat unless decoded state = Trend</div>
-                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.gated.returnPct >= 0 ? POSITIVE_GREEN : HOME_THEME.red, marginTop: 4 }}>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>Same rule, flat unless decoded state = Trend</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.gated.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
                   {backtests.gated.returnPct >= 0 ? "+" : ""}{backtests.gated.returnPct.toFixed(2)}%
                 </div>
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6 }}>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>
                   Max drawdown {backtests.gated.maxDrawdownPct.toFixed(1)}% · {backtests.gated.bars} bars
                 </div>
               </Card>
             </div>
           )}
 
-          <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.4, textAlign: "center", letterSpacing: "0.04em" }}>
+          <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", letterSpacing: "0.04em" }}>
             HMM-3 · Baum-Welch fit · in-sample decode (no walk-forward yet) · prototype backtest, not a trading recommendation
           </div>
         </>
