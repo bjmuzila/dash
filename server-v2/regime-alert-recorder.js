@@ -144,12 +144,21 @@ async function getRecentAlerts({ ticker = '', limit = 50 } = {}) {
   }
 }
 
+// Internal server-to-server calls carry a shared-secret header instead of a
+// session (see middleware.ts) — without this the request gets redirected to
+// "/" and comes back as 200 landing-page HTML, which silently parses to
+// `{}` below, i.e. "not enough bars" forever. Same pattern as ref-levels-recorder.js.
+function internalHeaders(extra = {}) {
+  return Object.assign({}, extra,
+    process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {});
+}
+
 // ── candle fetch — through the Next.js API, the same tables/rows the client
 // hooks (useEsCandles/useNqCandles) read, so the server sees identical history.
 async function fetchCloses(base, symbol) {
   const qs = symbol ? `symbol=${encodeURIComponent(symbol)}&daysBack=10&limit=5000` : `daysBack=10&limit=5000`;
   try {
-    const res = await fetch(`${base}/api/snapshots/candles?${qs}`, { cache: 'no-store' });
+    const res = await fetch(`${base}/api/snapshots/candles?${qs}`, { cache: 'no-store', headers: internalHeaders() });
     if (!res.ok) return [];
     const j = await res.json().catch(() => ({}));
     const rows = Array.isArray(j.rows) ? j.rows : [];
