@@ -860,7 +860,7 @@ function applicableRules(ib: InitialBalance | null): AppliedRule[] {
   }
 
   // Timing curve
-  const nowMins = etNowMins();
+  const { min: nowMins } = nowEtMinutesSec();
   if (done && !ib.brokeHigh && !ib.brokeLow && nowMins > 11 * 60) {
     out.push({ title: "Timing Curve · Range Mode", color: "#ffffff",
       detail: "Past 11:00 ET with no breakout — 84.1% of breakouts hit by now. Shift from breakout to range/premium-decay playbook." });
