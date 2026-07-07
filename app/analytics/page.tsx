@@ -970,29 +970,15 @@ function IbCard() {
           <Label>IB read</Label>
           {(() => {
             const leanColor = amt?.bias.lean === "long" ? POS_GREEN : amt?.bias.lean === "short" ? T.red : T.muted;
-            // Where is price relative to the IB right now?
-            const breakState = !ib.locked && cd.phase !== "done"
-              ? "IB still forming"
-              : ib.brokeHigh && ib.brokeLow
-                ? "Probed both extremes — two-sided"
-                : ib.brokeHigh
-                  ? "Range extension ↑ above IB high"
-                  : ib.brokeLow
-                    ? "Range extension ↓ below IB low"
-                    : "Holding inside IB";
             return (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Row>
-                  <span style={{ fontSize: 15, fontWeight: 800, color: leanColor }}>{amt?.dayTypeLabel ?? "—"}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: leanColor }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <Row style={{ marginBottom: 2 }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: leanColor }}>{amt?.dayTypeLabel ?? "—"}</span>
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: leanColor }}>
                     {amt?.bias.lean ?? "neutral"}
                   </span>
                 </Row>
-                <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.5 }}>{amt?.dayTypeDetail}</span>
-                <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
-                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>{breakState}</span>
-                  <span style={{ fontSize: 16, color: T.text, lineHeight: 1.5 }}>{amt?.bias.text}</span>
-                </div>
+                <span style={{ fontSize: 13, color: T.text, lineHeight: 1.4 }}>{amt?.bias.text}</span>
               </div>
             );
           })()}
@@ -1002,7 +988,7 @@ function IbCard() {
             <>
               <div style={divider} />
               <Label>Rules in play ({rules.length})</Label>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, overflowY: "auto", minHeight: 0 }}>
                 {rules.map((rule) => {
                   // Map rule colors to theme tokens
                   const ruleColorMap: Record<string, string> = {
