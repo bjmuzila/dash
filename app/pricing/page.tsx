@@ -147,17 +147,39 @@ export default async function PricingPage({
           {/* Plan / action card */}
           <section style={{ ...homeGlossPanelStyle(T.cyan), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
             <div style={{ ...sectionLabel, color: T.cyan }}>Membership</div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 4px" }}>
-              <span style={{ fontSize: 39, fontWeight: 800, color: T.cyan }}>Full access</span>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "4px 0 14px" }}>
+              <PlanPrice label="Monthly" original={120} price={96} period="/mo" />
+              <PlanPrice label="Yearly" original={1000} price={800} period="/yr" />
             </div>
+
+            <div
+              style={{
+                marginBottom: 18,
+                padding: "8px 14px",
+                borderRadius: 10,
+                background: "rgba(33,158,188,0.08)",
+                border: "1px solid rgba(33,158,188,0.25)",
+                textAlign: "center",
+              }}
+            >
+              <span style={{ fontSize: 13, color: DIM }}>20% off with code </span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>LAUNCH</span>
+            </div>
+
             <p style={{ color: DIM, fontSize: 14.5, margin: "0 0 22px", lineHeight: 1.5 }}>
               Everything on the platform. Cancel anytime from your billing portal.
             </p>
 
             {userId ? (
-              <PricingActions hasAccess={access.ok} hasBilling={hasBilling} />
+              <PricingActions
+                hasAccess={access.ok}
+                hasBilling={hasBilling}
+                monthlyLabel="Subscribe monthly — $96/mo"
+                yearlyLabel="Subscribe yearly — $800/yr"
+              />
             ) : (
-              <BetaGate serverNow={Date.now()} />
+              <BetaGate />
             )}
           </section>
         </div>
@@ -170,6 +192,31 @@ export default async function PricingPage({
           tool and not financial advice.
         </div>
       </main>
+    </div>
+  );
+}
+
+function PlanPrice({
+  label,
+  original,
+  price,
+  period,
+}: {
+  label: string;
+  original: number;
+  price: number;
+  period: string;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+      <span style={{ fontSize: 13, fontWeight: 700, color: DIM, minWidth: 58 }}>{label}</span>
+      <span style={{ fontSize: 15, color: "rgba(255,255,255,0.4)", textDecoration: "line-through" }}>
+        ${original}
+      </span>
+      <span style={{ fontSize: 24, fontWeight: 800, color: T.cyan }}>
+        ${price}
+        <span style={{ fontSize: 14, fontWeight: 700, color: DIM }}>{period}</span>
+      </span>
     </div>
   );
 }
