@@ -3256,8 +3256,11 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
 
 function RegimeEngineTab() {
   const [ticker, setTicker] = useState<RegimeTicker>("ESU");
-  const es = useEsCandles(ticker === "ESU", 20);
-  const nq = useNqCandles(ticker === "NQU", 20);
+  // historyDays=0 → "all we have" (queryEsCandlesHistorical/queryNqCandlesHistorical
+  // drop the daysBack cutoff entirely), so the HMM fit and the candle chart below
+  // both span the full recorded history, not just the last 20 sessions.
+  const es = useEsCandles(ticker === "ESU", 0);
+  const nq = useNqCandles(ticker === "NQU", 0);
   const active = ticker === "ESU" ? es : nq;
 
   // Merge history + today's live bars into one ascending series (de-duped by slotKey).

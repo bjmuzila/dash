@@ -40,7 +40,10 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const date     = searchParams.get("date")     ?? undefined;
     const daysBack = searchParams.get("daysBack") ? Number(searchParams.get("daysBack")) : undefined;
-    const limit    = Math.min(Number(searchParams.get("limit") ?? 2000), 10000);
+    // Capped at 50000 (was 10000) so a daysBack-less "give me everything we
+    // have" fetch (see lib/snapdb.ts queryEsCandlesHistorical/queryNqCandlesHistorical
+    // with daysBack<=0) doesn't silently get truncated back down to ~20 days.
+    const limit    = Math.min(Number(searchParams.get("limit") ?? 2000), 50000);
     const rows     = isNq(searchParams.get("symbol"))
       ? await getNqCandles(date, daysBack, limit)
       : await getEsCandles(date, daysBack, limit);

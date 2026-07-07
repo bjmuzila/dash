@@ -397,8 +397,13 @@ export async function queryEsCandlesToday(): Promise<EsCandleRecord[]> {
   return _dedupeCandles(`/api/snapshots/candles?date=${today}&limit=2000`);
 }
 
+/** daysBack <= 0 means "no cutoff" — every candle we have (route drops the
+ *  `daysBack` filter entirely and falls back to ORDER BY timestamp DESC, so a
+ *  bigger limit still keeps the most-recent bars intact rather than truncating
+ *  them off the tail). */
 export async function queryEsCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
-  return _dedupeCandles(`/api/snapshots/candles?daysBack=${daysBack}&limit=10000`);
+  const qs = daysBack > 0 ? `daysBack=${daysBack}&limit=10000` : `limit=50000`;
+  return _dedupeCandles(`/api/snapshots/candles?${qs}`);
 }
 
 // NQ variants — same endpoint, symbol=/NQ selects the nq_candles table.
@@ -408,7 +413,8 @@ export async function queryNqCandlesToday(): Promise<EsCandleRecord[]> {
 }
 
 export async function queryNqCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
-  return _dedupeCandles(`/api/snapshots/candles?symbol=/NQ&daysBack=${daysBack}&limit=10000`);
+  const qs = daysBack > 0 ? `symbol=/NQ&daysBack=${daysBack}&limit=10000` : `symbol=/NQ&limit=50000`;
+  return _dedupeCandles(`/api/snapshots/candles?${qs}`);
 }
 
 // ── IB Levels (locked Initial Balance per day) ──────────────────────────────────
