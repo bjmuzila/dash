@@ -891,7 +891,7 @@ async function main() {
                 SELECT symbol, expiry, MAX(ts) AS ts FROM strike_growth
                 WHERE date = $1 AND symbol = $2 GROUP BY symbol, expiry
               )
-              SELECT sg.expiry, sg.strike, sg.gex_now, sg.delta_abs,
+              SELECT sg.expiry, sg.strike, sg.gex_now, sg.delta_abs, sg.spot,
                      (sg.gex_now - b15.gex_now) AS chg15,
                      (sg.gex_now - b30.gex_now) AS chg30,
                      (sg.gex_now - b60.gex_now) AS chg60

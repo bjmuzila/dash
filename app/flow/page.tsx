@@ -190,7 +190,7 @@ export default function FlowPage() {
   const [expiry, setExpiry] = useState<string>("all");
   const [dteMin, setDteMin] = useState<number>(0);
   const [dteMax, setDteMax] = useState<number | null>(null);
-  const [otmOnly, setOtmOnly] = useState(false);
+  const [otmOnly, setOtmOnly] = useState(true);
 
   const [history, setHistory] = useState<FlowOrder[]>([]);
 
@@ -647,7 +647,7 @@ export default function FlowPage() {
 
   function resetFilters() {
     setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0);
-    setExpiry("all"); setDteMin(0); setDteMax(null); setOtmOnly(false);
+    setExpiry("all"); setDteMin(0); setDteMax(null); setOtmOnly(true);
   }
 
   function addTicker() {

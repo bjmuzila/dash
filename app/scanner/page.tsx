@@ -955,6 +955,7 @@ type SqRow = {
   chg15: number | null;
   chg30: number | null;
   chg60: number | null;
+  spot?: number | null;
 };
 
 type SqCol = "strike" | "gex_now" | "chg15" | "chg30" | "chg60" | "delta_abs";
@@ -975,6 +976,8 @@ function StrikeQueryScanner() {
   const [limit, setLimit] = useState(25);
   const [colSort, setColSort] = useState<{ col: SqCol; dir: "desc" | "asc" }>({ col: "gex_now", dir: "desc" });
   const [cardScope, setCardScope] = useState<"all" | "exidx">("all");
+  const [moneyness, setMoneyness] = useState<"all" | "otm">("all");
+  const [minOtm, setMinOtm] = useState(0.02);
 
   const symbolList = watchlist.length > 0 ? watchlist : SQ_FALLBACK;
 
@@ -1023,9 +1026,12 @@ function StrikeQueryScanner() {
 
   const INDICES = new Set(["SPX", "SPY", "QQQ", "IWM", "NDX"]);
 
+  const otmDist = (r: SqRow) => (r.spot && r.spot > 0 ? Math.abs(r.strike - r.spot) / r.spot : 0);
+
   const displayRows = (() => {
     let f = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
     if (cardScope === "exidx") f = f.filter((r) => !INDICES.has(r.symbol));
+    if (moneyness === "otm") f = f.filter((r) => otmDist(r) >= minOtm);
     f = [...f].sort((a, b) => {
       const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
       const cmp = colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
@@ -1041,6 +1047,7 @@ function StrikeQueryScanner() {
   const topCards = (() => {
     let base = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
     if (cardScope === "exidx") base = base.filter((r) => !INDICES.has(r.symbol));
+    if (moneyness === "otm") base = base.filter((r) => otmDist(r) >= minOtm);
     const ranked = [...base].sort((a, b) => {
       const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
       return colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
@@ -1071,7 +1078,7 @@ function StrikeQueryScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>Strike GEX Query</span>}
-      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${loading ? " · loading…" : ""}`}>
+      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · loading…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1089,6 +1096,24 @@ function StrikeQueryScanner() {
           <ThemedSelect ariaLabel="Limit" width={90} value={String(limit)} onChange={(v) => setLimit(Number(v))}
             options={[10, 25, 50, 100].map((l) => ({ value: String(l), label: String(l) }))} />
         </div>
+        <span style={{ color: HOME_THEME.border }}>|</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setMoneyness("all")} style={seg(moneyness === "all")}>ITM/All</button>
+          <button onClick={() => setMoneyness("otm")} style={seg(moneyness === "otm")}>OTM</button>
+        </div>
+        {moneyness === "otm" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }}>
+            min OTM
+            <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
+              style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+              <option value={0.02}>2%+</option>
+              <option value={0.05}>5%+</option>
+              <option value={0.10}>10%+</option>
+              <option value={0.15}>15%+</option>
+              <option value={0.20}>20%+</option>
+            </select>
+          </label>
+        )}
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
         <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
       </div>
@@ -1143,6 +1168,7 @@ function StrikeQueryScanner() {
             <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
               {showSymbol && <th style={{ ...th, textAlign: "left" }}>Symbol</th>}
               {showExpiry && <th style={{ ...th, textAlign: "left" }}>Expiry</th>}
+              <th style={th}>OTM%</th>
               {cols.map((c) => {
                 const active = colSort.col === c.key;
                 const arrow = active ? (colSort.dir === "desc" ? " ↓" : " ↑") : " ⇅";
@@ -1163,6 +1189,9 @@ function StrikeQueryScanner() {
                 style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                 {showSymbol && <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>}
                 {showExpiry && <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 15 }}>{r.expiry}</td>}
+                <td style={{ ...td, color: otmDist(r) * 100 >= 5 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>
+                  {r.spot ? `${(otmDist(r) * 100).toFixed(1)}%` : "—"}
+                </td>
                 <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
                 <td style={td}>{fmtB(r.gex_now)}</td>
                 <td style={{ ...td, color: r.chg15 == null ? HOME_THEME.text : r.chg15 >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{r.chg15 == null ? "—" : fmtB(r.chg15)}</td>
@@ -1172,7 +1201,7 @@ function StrikeQueryScanner() {
               </tr>
             ))}
             {!displayRows.length && !loading && !err && (
-              <tr><td colSpan={cols.length + (showSymbol ? 1 : 0) + (showExpiry ? 1 : 0)} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+              <tr><td colSpan={cols.length + 1 + (showSymbol ? 1 : 0) + (showExpiry ? 1 : 0)} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                 No rows yet. Needs recorder history for the selected ticker(s).
               </td></tr>
             )}

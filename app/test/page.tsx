@@ -2417,6 +2417,50 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
         {OVERVIEW_CARDS.map((def) => (
           <OverviewCard key={def.key} def={def} onOpen={onOpen} />
         ))}
+        {/* Flow GEX History lives at its own route (/flow-gex-history), not as
+            a tab in this page's switch — plain link card instead of onOpen. */}
+        <Card variant="classic" accent={HOME_THEME.cyan} padding={24}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <FlaskIcon color={HOME_THEME.cyan} />
+            <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>Flow GEX History</div>
+          </div>
+          <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
+            Per-minute Flow GEX reconstructed from the tape for a window of strikes around spot.
+          </div>
+          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+            {[
+              "Auto-tracks the ±20 strikes around ATM as spot moves",
+              "Per-strike line chart + a vertical Flow GEX rail underneath",
+              "Click any strike to toggle its line on/off — the rail bar stays visible either way",
+            ].map((p) => (
+              <li key={p} style={{ display: "flex", gap: 8, fontSize: 15, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
+                <span style={{ color: HOME_THEME.cyan, flexShrink: 0 }}>›</span>
+                <span>{p}</span>
+              </li>
+            ))}
+          </ul>
+          <a
+            href="/flow-gex-history"
+            style={{
+              display: "block",
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "10px 0",
+              borderRadius: 8,
+              border: `1px solid ${HOME_THEME.cyan}`,
+              background: `${HOME_THEME.cyan}1a`,
+              color: HOME_THEME.cyan,
+              fontSize: 15,
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              textAlign: "center",
+              textDecoration: "none",
+            }}
+          >
+            Open Flow GEX History →
+          </a>
+        </Card>
       </div>
     </>
   );
@@ -2530,7 +2574,7 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {/* Timing Windows */}
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, marginBottom: 10 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 10 }}>
             Timing Windows
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -2541,45 +2585,67 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
         </div>
 
         {/* Walls by Timeframe */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
-          {[
-            { label: "5m Call Wall", value: callWall5m, color: HOME_THEME.green },
-            { label: "5m Put Wall", value: putWall5m, color: HOME_THEME.red },
-            { label: "15m Call Wall", value: callWall15m, color: HOME_THEME.green },
-            { label: "15m Put Wall", value: putWall15m, color: HOME_THEME.red },
-            { label: "30m Call Wall", value: callWall30m, color: HOME_THEME.green },
-            { label: "30m Put Wall", value: putWall30m, color: HOME_THEME.red },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                {label}
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
-                {value != null ? `$${value.toFixed(0)}` : "—"}
-              </div>
-              {value != null && spot > 0 && (
-                <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.5 }}>
-                  {((value - spot) / spot * 100).toFixed(2)}%
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Call Walls */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            {[
+              { label: "5m Call Wall", value: callWall5m, color: HOME_THEME.green },
+              { label: "15m Call Wall", value: callWall15m, color: HOME_THEME.green },
+              { label: "30m Call Wall", value: callWall30m, color: HOME_THEME.green },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {label}
                 </div>
-              )}
-            </div>
-          ))}
+                <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
+                  {value != null ? `$${value.toFixed(0)}` : "—"}
+                </div>
+                {value != null && spot > 0 && (
+                  <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+                    {((value - spot) / spot * 100).toFixed(2)}%
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* Put Walls */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            {[
+              { label: "5m Put Wall", value: putWall5m, color: HOME_THEME.red },
+              { label: "15m Put Wall", value: putWall15m, color: HOME_THEME.red },
+              { label: "30m Put Wall", value: putWall30m, color: HOME_THEME.red },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
+                  {value != null ? `$${value.toFixed(0)}` : "—"}
+                </div>
+                {value != null && spot > 0 && (
+                  <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+                    {((value - spot) / spot * 100).toFixed(2)}%
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* GEX Swing Detection */}
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, marginBottom: 8 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 8 }}>
             GEX Swings
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, opacity: 0.7, marginBottom: 4 }}>5m Swing</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>5m Swing</div>
               <div style={{ fontSize: 16, fontWeight: 900, color: (gexSwing5m ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
                 {gexSwing5m != null ? `${gexSwing5m > 0 ? "+" : ""}${(gexSwing5m / 1e6).toFixed(1)}M` : "—"}
               </div>
             </div>
             <div style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, opacity: 0.7, marginBottom: 4 }}>15m Swing</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>15m Swing</div>
               <div style={{ fontSize: 16, fontWeight: 900, color: (gexSwing15m ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
                 {gexSwing15m != null ? `${gexSwing15m > 0 ? "+" : ""}${(gexSwing15m / 1e6).toFixed(1)}M` : "—"}
               </div>
@@ -2589,7 +2655,7 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
 
         {/* Spot */}
         <div style={{ paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, marginBottom: 4 }}>Current Price</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>Current Price</div>
           <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
             ${spot.toFixed(2)}
           </div>

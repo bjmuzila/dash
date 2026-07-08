@@ -280,7 +280,7 @@ export default function FlowGexHistoryPage() {
                   title={`${strike}${isAtm ? " (ATM)" : ""} — ${latest == null ? "no data" : fmtMoney(latest)}${on ? "" : " (line hidden)"}`}
                   style={{
                     flex: 1,
-                    minWidth: 10,
+                    minWidth: 16,
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",
@@ -308,9 +308,10 @@ export default function FlowGexHistoryPage() {
                   {/* on/off indicator — small dot above the bar, does not affect the bar itself */}
                   <span style={{
                     position: "absolute", top: 2, left: "50%", transform: "translateX(-50%)",
-                    width: 5, height: 5, borderRadius: "50%",
+                    width: 10, height: 10, borderRadius: "50%",
                     background: on ? color.stroke : "transparent",
-                    border: `1px solid ${color.stroke}`,
+                    border: `2px solid ${color.stroke}`,
+                    boxShadow: on ? `0 0 5px ${color.stroke}` : "none",
                   }} />
                 </button>
               );
@@ -322,16 +323,16 @@ export default function FlowGexHistoryPage() {
                 key={strike}
                 style={{
                   flex: 1,
-                  minWidth: 10,
+                  minWidth: 16,
                   textAlign: "center",
-                  fontSize: 8,
+                  fontSize: 12,
                   fontFamily: "var(--font-mono)",
-                  color: isAtm ? HOME_THEME.cyan : HOME_THEME.muted,
-                  fontWeight: isAtm ? 800 : 500,
-                  opacity: isAtm ? 1 : 0.6,
+                  color: isAtm ? HOME_THEME.cyan : HOME_THEME.text,
+                  fontWeight: isAtm ? 800 : 600,
+                  opacity: isAtm ? 1 : 0.85,
                   writingMode: "vertical-rl",
                   transform: "rotate(180deg)",
-                  height: 42,
+                  height: 58,
                   overflow: "hidden",
                 }}
               >
