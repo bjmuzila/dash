@@ -58,7 +58,9 @@ export async function GET(req: NextRequest) {
     const notPaying = recipients.filter((r) => !r.paid).map((r) => r.email);
     let waitlist: string[] = [];
     try { waitlist = await listWaitlistEmails(); } catch { /* table optional */ }
-    const { oldEmails, oldEmails2 } = loadLegacyEmails();
+    const legacy = loadLegacyEmails();
+    const oldEmails = legacy.oldEmails.filter((e) => !suppressed.has(e.trim().toLowerCase()));
+    const oldEmails2 = legacy.oldEmails2.filter((e) => !suppressed.has(e.trim().toLowerCase()));
     return NextResponse.json({
       ok: true,
       configured: !!RESEND_API_KEY,
