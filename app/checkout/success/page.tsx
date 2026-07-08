@@ -13,6 +13,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { trackXEvent, X_SUBSCRIBE_EVENT_ID } from "@/lib/analytics/xPixel";
 
 export default function CheckoutSuccessPage() {
   const router = useRouter();
@@ -27,6 +28,7 @@ export default function CheckoutSuccessPage() {
           const data = await res.json();
           if (data?.user?.isPaid) {
             done = true;
+            trackXEvent(X_SUBSCRIBE_EVENT_ID);
             router.replace("/home");
             return;
           }

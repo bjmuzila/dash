@@ -1,0 +1,67 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>CB Edge — everything included</title>
+<desc>Feature list: Live GEX and levels, Estimated moves, ES candles and flow, Fully automatic ICT live, Morning briefing</desc>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1200" y2="720" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#0a0e14"/>
+<stop offset="1" stop-color="#0d1420"/>
+</linearGradient>
+<linearGradient id="accentbar" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#22d3ee"/>
+<stop offset="1" stop-color="#0891b2"/>
+</linearGradient>
+</defs>
+
+<rect x="0" y="0" width="1200" height="720" fill="url(#bg)"/>
+
+<circle cx="1120" cy="60" r="180" fill="#22d3ee" opacity="0.05"/>
+<circle cx="60" cy="680" r="220" fill="#22d3ee" opacity="0.04"/>
+
+<image href="public/cb-edge-logo.png" x="52" y="12" width="220" height="122" preserveAspectRatio="xMidYMid meet"/>
+
+<text x="1140" y="66" text-anchor="end" font-family="Arial, sans-serif" font-size="15" font-weight="600" fill="#5eead4" letter-spacing="2">LIVE OPTIONS FLOW &amp; GEX</text>
+
+<text x="60" y="152" font-family="Arial, sans-serif" font-size="16" font-weight="700" font-style="italic" fill="#5eead4" letter-spacing="1">Your unfair edge in the markets</text>
+
+<text x="60" y="192" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#f5f9fc">Everything is included.</text>
+<text x="60" y="222" font-family="Arial, sans-serif" font-size="18" font-weight="400" fill="#8aa0b4">No add-ons, no upsells. One subscription, the full dashboard.</text>
+
+<g font-family="Arial, sans-serif">
+
+<rect x="60" y="250" width="1080" height="80" rx="12" fill="#121a24" stroke="#1c2836" stroke-width="1"/>
+<rect x="60" y="250" width="4" height="80" fill="url(#accentbar)"/>
+<circle cx="100" cy="290" r="16" fill="#0e3a44" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M92 290 L98 296 L109 283" fill="none" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="130" y="283" font-size="19" font-weight="700" fill="#f5f9fc">Live GEX &amp; levels</text>
+<text x="130" y="307" font-size="15" font-weight="400" fill="#93a7ba">Gamma-exposure surfaces, call/put walls, and flip levels updating in real time.</text>
+
+<rect x="60" y="342" width="1080" height="80" rx="12" fill="#121a24" stroke="#1c2836" stroke-width="1"/>
+<rect x="60" y="342" width="4" height="80" fill="url(#accentbar)"/>
+<circle cx="100" cy="382" r="16" fill="#0e3a44" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M92 382 L98 388 L109 375" fill="none" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="130" y="375" font-size="19" font-weight="700" fill="#f5f9fc">Estimated moves</text>
+<text x="130" y="399" font-size="15" font-weight="400" fill="#93a7ba">Weekly customer levels and expected-move zones across the major indices.</text>
+
+<rect x="60" y="434" width="1080" height="80" rx="12" fill="#121a24" stroke="#1c2836" stroke-width="1"/>
+<rect x="60" y="434" width="4" height="80" fill="url(#accentbar)"/>
+<circle cx="100" cy="474" r="16" fill="#0e3a44" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M92 474 L98 480 L109 467" fill="none" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="130" y="467" font-size="19" font-weight="700" fill="#f5f9fc">ES candles &amp; flow</text>
+<text x="130" y="491" font-size="15" font-weight="400" fill="#93a7ba">5-minute ES heatmaps with net-premium flow and live order tape.</text>
+
+<rect x="60" y="526" width="1080" height="80" rx="12" fill="#121a24" stroke="#1c2836" stroke-width="1"/>
+<rect x="60" y="526" width="4" height="80" fill="url(#accentbar)"/>
+<circle cx="100" cy="566" r="16" fill="#0e3a44" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M92 566 L98 572 L109 559" fill="none" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="130" y="559" font-size="19" font-weight="700" fill="#f5f9fc">Fully automatic ICT</text>
+<text x="130" y="583" font-size="15" font-weight="400" fill="#93a7ba">Automated ICT chart, tracker, and alerts working for you around the clock.</text>
+
+<rect x="60" y="618" width="1080" height="80" rx="12" fill="#121a24" stroke="#1c2836" stroke-width="1"/>
+<rect x="60" y="618" width="4" height="80" fill="url(#accentbar)"/>
+<circle cx="100" cy="658" r="16" fill="#0e3a44" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M92 658 L98 664 L109 651" fill="none" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="130" y="651" font-size="19" font-weight="700" fill="#f5f9fc">Morning briefing</text>
+<text x="130" y="675" font-size="15" font-weight="400" fill="#93a7ba">A Traders Dashboard with futures, key drivers, and an AI market overview.</text>
+
+</g>
+</svg>
