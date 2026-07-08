@@ -1641,6 +1641,7 @@ function WatchThisScanner() {
                 <th style={th}>Strike</th>
                 <th style={{ ...th, textAlign: "left" }}>Expiry</th>
                 <th style={{ ...th, textAlign: "left" }}>Flagged</th>
+                <th style={th}>Flagged Spot</th>
                 <th style={th}>OTM at flag</th>
                 <th style={th}>Closest</th>
                 <th style={{ ...th, textAlign: "left" }}>Status</th>
@@ -1657,9 +1658,10 @@ function WatchThisScanner() {
                     cursor: "pointer",
                   }}>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
-                  <td style={{ ...td, fontWeight: 700 }}>${o.strike}</td>
+                  <td style={{ ...td, fontWeight: 700, color: o.side === "above" ? HOME_THEME.green : HOME_THEME.red }}>${o.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.expiry}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.first_flagged}</td>
+                  <td style={td}>${o.spot_at_flag.toFixed(2)}</td>
                   <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
                   <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
                     {o.closest_pct != null ? `${o.closest_pct.toFixed(1)}%` : "—"}
@@ -1675,7 +1677,7 @@ function WatchThisScanner() {
                 </tr>
               ))}
               {!outcomes.length && (
-                <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
+                <tr><td colSpan={8} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
                 </td></tr>
               )}

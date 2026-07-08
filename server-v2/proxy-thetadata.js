@@ -541,13 +541,14 @@ async function fetchOptionDailyHistoryTheta(underlying, expiry, strike, type, st
   const root = thetaRoot(underlying);
   const expCompact = ymdCompact(expiry);
   const json = await thetaGet(
-    `/v3/option/history/eod?symbol=${encodeURIComponent(root)}&expiration=${expCompact}&start_date=${ymdCompact(startDate)}&end_date=${ymdCompact(endDate)}&strike_range=${Math.max(20, Math.ceil(strikeRangeDollars))}`,
+    `/v3/option/history/eod?symbol=${encodeURIComponent(root)}&expiration=${expCompact}&start_date=${ymdCompact(startDate)}&end_date=${ymdCompact(endDate)}&strike_range=${Math.max(40, Math.ceil(strikeRangeDollars))}`,
   );
   const resp = json?.response || [];
   if (!Array.isArray(resp)) return [];
   const wantedRight = type === 'C' ? 'C' : 'P';
+  const wantedStrike = Number(strike);
   const entry = resp.find(
-    (e) => e?.contract && Number(e.contract.strike) === Number(strike) && rightToType(e.contract.right) === wantedRight,
+    (e) => e?.contract && Math.abs(Number(e.contract.strike) - wantedStrike) < 0.01 && rightToType(e.contract.right) === wantedRight,
   );
   if (!entry || !Array.isArray(entry.data)) return [];
   return entry.data

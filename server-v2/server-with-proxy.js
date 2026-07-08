@@ -41,7 +41,7 @@ const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
-const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
+const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startDarkpoolRecorder } = require('./darkpool-recorder');
 const { handleDarkpoolHistory, handleDarkpoolAccum, handleDarkpoolLevels } = require('./darkpool-routes');
@@ -1408,7 +1408,13 @@ async function main() {
               ORDER BY first_flagged DESC
               LIMIT $${params.length}`;
             const { rows } = await p.query(sql, params);
-            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
+            const fmtRows = rows.map((r) => ({
+              ...r,
+              first_flagged: farCbToYmd(r.first_flagged),
+              touched_date: farCbToYmd(r.touched_date),
+              last_checked: farCbToYmd(r.last_checked),
+            }));
+            sendJson(res, 200, { ok: true, rows: fmtRows, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

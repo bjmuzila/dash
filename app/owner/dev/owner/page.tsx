@@ -384,7 +384,7 @@ function Sparkline({ data, accent, height = 22, axisLabels }: { data: number[]; 
         <path d={line} fill="none" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
       </svg>
       {axisLabels && (axisLabels[0] || axisLabels[1]) && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2, fontSize: 8, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.5, lineHeight: 1 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2, fontSize: 14, fontFamily: "var(--font-mono)", color: "#fff", opacity: 1, lineHeight: 1 }}>
           <span>{axisLabels[0]}</span>
           <span>{axisLabels[1]}</span>
         </div>
@@ -745,9 +745,9 @@ function LineChartCard({
             zIndex: 2,
           }}
         >
-          <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{labels[hover]}</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{labels[hover]}</div>
           <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>
-            {ptsA[hover].v.toLocaleString()} <span style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, opacity: 1 }}>visits</span>
+            {ptsA[hover].v.toLocaleString()} <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, opacity: 1 }}>visits</span>
           </div>
         </div>
       )}
@@ -783,17 +783,17 @@ function BarChartCard({
                 ? `linear-gradient(180deg, ${HOME_THEME.green} 0%, ${HOME_THEME.green}99 100%)`
                 : `linear-gradient(180deg, ${HOME_THEME.green}aa 0%, ${HOME_THEME.green}66 100%)`,
             }} />
-            <span style={{ fontSize: 8, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{labels[i]}</span>
+            <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{labels[i]}</span>
           </div>
         ))}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
-          <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Minimum</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Minimum</div>
           <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{footerMin}</div>
         </div>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 10px" }}>
-          <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Maximum</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Maximum</div>
           <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{footerMax}</div>
         </div>
       </div>
@@ -846,7 +846,7 @@ function AgendaItem({ time, title, who, accent, status }: { time: string; title:
         <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{time} · {who}</div>
       </div>
       {status && (
-        <span style={{ fontSize: 8.5, fontWeight: 500, color: `${HOME_THEME.text}`, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
+        <span style={{ fontSize: 14, fontWeight: 500, color: `${HOME_THEME.text}`, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "2px 7px", flexShrink: 0, letterSpacing: "0.06em" }}>{status}</span>
       )}
     </div>
   );
@@ -1170,7 +1170,7 @@ function OverviewSection({ metrics }: {
         <div style={{ display: "grid", gridTemplateColumns: "32px repeat(24, 1fr)", gap: 2 }}>
           <div />
           {Array.from({ length: 24 }, (_, h) => (
-            <div key={"h" + h} style={{ fontSize: 8, color: HOME_THEME.text, opacity: 1, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
+            <div key={"h" + h} style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
           ))}
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, di) => (
             <Fragment key={d}>
@@ -2160,7 +2160,7 @@ export default function OwnerDashboard() {
               <span>{item.label}</span>
               {badge != null && (
                 <span style={{
-                  fontSize: 9, padding: "1px 6px", borderRadius: 10, fontWeight: 600,
+                  fontSize: 14, padding: "1px 6px", borderRadius: 10, fontWeight: 600,
                   background: item.badgeRed ? `${HOME_THEME.red}22` : `${HOME_THEME.cyan}22`,
                   color: item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan,
                   border: `1px solid ${item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan}44`,
@@ -2320,7 +2320,7 @@ export default function OwnerDashboard() {
                     {item.label}
                     {badge != null && (
                       <span style={{
-                        fontSize: 9, padding: "0 5px", borderRadius: 10, fontWeight: 700,
+                        fontSize: 14, padding: "0 5px", borderRadius: 10, fontWeight: 700,
                         background: item.badgeRed ? `${HOME_THEME.red}33` : `${HOME_THEME.cyan}33`,
                         color: item.badgeRed ? HOME_THEME.red : HOME_THEME.cyan,
                       }}>{badge}</span>
@@ -2412,7 +2412,7 @@ export default function OwnerDashboard() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
                         <span style={{
-                          fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
+                          fontSize: 14, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
                           padding: "2px 8px", borderRadius: 20,
                           color: catColor[f.category] ?? HOME_THEME.cyan,
                           background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
@@ -2501,7 +2501,7 @@ export default function OwnerDashboard() {
                   disabled={renderLoading}
                   style={{
                     padding: "3px 10px",
-                    fontSize: 9,
+                    fontSize: 14,
                     fontWeight: 500,
                     borderRadius: 4,
                     border: "none",
@@ -2518,7 +2518,7 @@ export default function OwnerDashboard() {
               ))}
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(5, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(1, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
             <StatCard
               label={`CF Egress · ${renderWindow === "live" ? "24h" : renderWindow === "weekly" ? "7d" : "30d"}`}
               value={cfMetrics?.egress.value != null
@@ -2533,10 +2533,11 @@ export default function OwnerDashboard() {
               accent={HOME_THEME.orange}
               mono
               footer={cfMetrics?.unconfigured && cfMetrics.egress.value == null
-                ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
+                ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
                 : <Sparkline
                     data={cfMetrics?.egress.spark ?? []}
                     accent={HOME_THEME.orange}
+                    height={44}
                     axisLabels={sparkTimeLabels(
                       renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
                       cfMetrics?.fetchedAt
@@ -2555,10 +2556,11 @@ export default function OwnerDashboard() {
               accent={HOME_THEME.cyan}
               mono
               footer={renderMetrics?.unconfigured && renderMetrics.bandwidth.value == null
-                ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
+                ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
                 : <Sparkline
                     data={renderMetrics?.bandwidth.spark ?? []}
                     accent={HOME_THEME.cyan}
+                    height={44}
                     axisLabels={sparkTimeLabels(
                       renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
                       renderMetrics?.fetchedAt
@@ -2574,7 +2576,7 @@ export default function OwnerDashboard() {
                 : "—"}
               accent={memAccent}
               mono
-              footer={<Sparkline data={renderMetrics?.memory.spark ?? []} accent={memAccent} />}
+              footer={<Sparkline data={renderMetrics?.memory.spark ?? []} accent={memAccent} height={44} />}
             />
             <StatCard
               label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
@@ -2586,19 +2588,22 @@ export default function OwnerDashboard() {
               footer={<Sparkline
                 data={renderMetrics?.cpu.spark ?? []}
                 accent={cpuAccent}
+                height={44}
                 axisLabels={sparkTimeLabels(
                   renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
                   renderMetrics?.fetchedAt
                 )}
               />}
             />
-            <div style={{ containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px", overflow: "hidden" }}>
-              <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>Updated</div>
-              <div style={{ fontSize: "clamp(8px, 7.5cqw, 11px)", fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Updated</span>
+              <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                 {renderMetrics?.fetchedAt
                   ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
                   : "—"}
-              </div>
+              </span>
             </div>
           </div>
 
@@ -2648,7 +2653,7 @@ export default function OwnerDashboard() {
                         accent={ACCENT[t] ?? HOME_THEME.text}
                         mono
                         footer={
-                          <div style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
+                          <div style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
                             {wsBw && total > 0 ? `${(((lastMin[t] ?? 0) / total) * 100).toFixed(0)}% of out` : "—"}
                           </div>
                         }
@@ -2660,7 +2665,7 @@ export default function OwnerDashboard() {
                     <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                       {entries.filter(([t]) => !["flow", "gex", "snapshot"].includes(t)).map(([t, b]) => (
                         <span key={t} style={{
-                          fontSize: 9.5, fontFamily: "var(--font-mono)", fontWeight: 700,
+                          fontSize: 14, fontFamily: "var(--font-mono)", fontWeight: 700,
                           color: ACCENT[t] ?? HOME_THEME.text,
                           border: `1px solid ${ACCENT[t] ?? HOME_THEME.text}44`,
                           background: `${ACCENT[t] ?? HOME_THEME.text}10`,
@@ -2671,7 +2676,7 @@ export default function OwnerDashboard() {
                       ))}
                     </div>
                   )}
-                  <div style={{ fontSize: 9.5, color: HOME_THEME.text, opacity: 1, marginTop: 8, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, marginTop: 8, lineHeight: 1.5 }}>
                     Projected from the trailing 60s × open clients. If <b style={{ color: HOME_THEME.orange }}>FLOW</b> dominates and the
                     number is high while the market is closed, the flow-tape dedupe regressed. Cross-check Cloudflare Outbound.
                   </div>
@@ -2710,7 +2715,7 @@ export default function OwnerDashboard() {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
               {/* Idle */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Idle Mode (feed)</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Idle Mode (feed)</span>
                 <button
                   onClick={toggleIdle}
                   disabled={ctlBusy === "idle"}
@@ -2726,7 +2731,7 @@ export default function OwnerDashboard() {
               </div>
               {/* MVC auto */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>CB Auto (5m)</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>CB Auto (5m)</span>
                 <button
                   onClick={toggleMvcAuto}
                   disabled={ctlBusy === "mvcAuto"}
@@ -2742,7 +2747,7 @@ export default function OwnerDashboard() {
               </div>
               {/* Maintenance mode */}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Maintenance</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Maintenance</span>
                 <button
                   onClick={toggleMaint}
                   disabled={ctlBusy === "maint"}
@@ -2838,19 +2843,19 @@ export default function OwnerDashboard() {
                 label={levels.lastRun ? (levelsAreStale(levels.lastRun) ? "Stale" : "Current") : "Never run"}
               />
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Last Published</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Last Published</span>
                 <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.lastRun)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>EM Grabbed</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>EM Grabbed</span>
                 <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.emGrabbed)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Tickers</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Tickers</span>
                 <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{levels.count}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: 9, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Schedule</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Schedule</span>
                 <span style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>Sat ~09:00 ET</span>
               </div>
               <button
@@ -3017,7 +3022,7 @@ export default function OwnerDashboard() {
 
                 {/* Auth provider (Supabase). Secrets never leave the server. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 9, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Provider</span>
+                  <span style={{ fontSize: 14, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Provider</span>
                   <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", color: clerk.configured ? HOME_THEME.green : HOME_THEME.red }}>
                     {clerk.provider === "supabase" ? "Supabase Auth" : clerk.provider || "supabase"}
                   </span>
@@ -3078,7 +3083,7 @@ export default function OwnerDashboard() {
                                 {u.name && u.email ? "  " : null}
                                 {u.email ? <span style={{ fontFamily: "var(--font-mono)", color: "#c8d8e8" }}>{u.email}</span> : (!u.name ? <span style={{ color: HOME_THEME.text, opacity: 1 }}>(no email)</span> : null)}
                               </span>
-                              <span style={{ fontSize: 9, color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>
+                              <span style={{ fontSize: 14, color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>
                                 {u.createdAt ? fmtAgo(new Date(u.createdAt).toISOString()) : "—"}
                               </span>
                             </div>

@@ -180,6 +180,23 @@ function daysBetween(fromYmd, toYmd) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// pg DATE columns come back as JS Date objects built from LOCAL date parts
+// (server tz). JSON.stringify then calls toISOString(), which reinterprets
+// those local parts as UTC and shifts the clock (e.g. midnight ET -> "T04:00
+// :00.000Z"), corrupting the calendar date shown to the user. Format using
+// local getters (not UTC getters) so the string matches the true ET session
+// date the row was written for.
+function toYmd(d) {
+  if (d == null) return null;
+  if (typeof d === 'string') return d.slice(0, 10);
+  const dt = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // ── per-ticker scan ───────────────────────────────────────────────────────────
 
 /**
@@ -474,12 +491,12 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
     strike: Number(strike),
     expiry,
     type,
-    firstFlagged: row.first_flagged,
+    firstFlagged: toYmd(row.first_flagged),
     spotAtFlag: Number(row.spot_at_flag),
     otmPctAtFlag: Number(row.otm_pct_at_flag),
     status: row.status,
     touched: row.touched,
-    touchedDate: row.touched_date,
+    touchedDate: toYmd(row.touched_date),
     days,
   };
 }
@@ -537,6 +554,7 @@ module.exports = {
   getPool,
   scanTicker,
   computeOutcomeDetail,
+  toYmd,
   OTM_THRESHOLD_PCT,
   MAX_DTE_DAYS,
 };
