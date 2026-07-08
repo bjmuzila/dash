@@ -2,6 +2,14 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 7/7/2026
+
+* Fixed ES Candles heatmap drifting throughout the day — GEX levels now stay locked in place instead of moving around as market conditions change, so intraday price action aligns with the levels you saw earlier.
+* Initial Balance card on Analytics now shows the IB high, mid, low, and range prominently at the top, plus live rule evaluations (Inside Day Exception, Timing Curve, Single-Break vs Double-Break patterns) that update as the session develops.
+* Confidence Score card now correctly shows "HIT" when a breakout is hit but continues lower instead of reversing — no false "pivot" labels when the market trends through multiple checkpoints.
+* Added a new Dark Pool view to the Flow page — see the heaviest price levels where off-exchange (dark pool) activity has been concentrated for your selected ticker, with a quick toggle between Intraday, 5-day, and 7-day views.
+* Flow page text is now bigger and easier to read, with brighter white labels throughout.
+
 ## Monday 7/6/2026
 
 * Added an early-preview "Regime Engine" tab to the Test Lab — detects whether ES/NQ futures are trending, choppy, or panicking, with a probability tree showing likely paths ahead.

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-07 — Dark Pool feature on /flow + font/color pass (`app/flow/page.tsx`, `server-v2/darkpool-stream.js`, `darkpool-recorder.js`, `state/darkpool-history-writer.js`, `darkpool-routes.js`, `proxy-thetadata.js`, `server-with-proxy.js`)
+
+Added an off-exchange "Dark Pool" feature to `/flow`: new `server-v2/darkpool-stream.js`/`darkpool-recorder.js`/`state/darkpool-history-writer.js`/`darkpool-routes.js` (plus two new volume fetchers in `proxy-thetadata.js`, wired into `server-with-proxy.js`) identify TRF-reported (exchange codes 57/58/59) stock prints and serve a `/proxy/darkpool-levels` endpoint, which `app/flow/page.tsx` renders as a "Heaviest Dark Levels" bar list positioned beside the Filters card, above the chart. Also bumped `/flow` body/title text to 15px/16px and converted remaining gray text to white across `app/flow/page.tsx`; NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable all session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-07 — IB card stats + Rules In Play on /analytics (`app/analytics/page.tsx`)
+
+Added IB HIGH/MID/LOW/RANGE stats display to the Initial Balance card and integrated Rules In Play section with dynamic rule evaluation (Inside Day Exception, Timing Curve, Single-Break Trend, Double Breach); applied dashboard theme colors to rules cards and fixed Confidence Score card logic to show "HIT" instead of "HIT · PIVOT" when later checkpoints drop lower. Card height fixed to 480px with scrollable rules section.
+
+## 2026-07-07 — ES Candles heatmap basis lock (`app/es-candles/page.tsx`)
+
+Locked basis calculation to set once on first WebSocket message and never update intraday, preventing heatmap position drift throughout the session. Modified lines 800–802 to guard `basisRef.current` updates with `!basisRef.current` check so strikes/levels stay fixed in chart coordinates as ES basis evolves.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED
 CHAT CLOSED

@@ -205,6 +205,73 @@ const mem = {
          lastBarTs: null, candidateLabel: null, candidateCount: 0 },
 };
 
+/**
+ * On process start, `mem` is blank — but the DB may still hold a `status='open'`
+ * row from before the last restart/redeploy. Left alone, that row is orphaned
+ * forever: nothing in this fresh process knows about it, so it never gets
+ * closed no matter how long ago the regime actually moved on, and the Alert
+ * Log shows it "running" indefinitely. This resumes tracking of the most
+ * recent open row per ticker (so it closes normally on the next real flip),
+ * and auto-closes any OLDER open rows for that ticker (a bug state that could
+ * only happen pre-fix, across multiple restarts) using the next alert's start
+ * as a best-effort close point.
+ */
+async function reconcileOpenAlertsOnStartup(base) {
+  const p = getPool();
+  if (!p || !(await ensureSchema())) return;
+  for (const tk of TICKERS) {
+    try {
+      const { rows } = await p.query(
+        `SELECT id, label, start_ts, start_price FROM regime_alerts WHERE ticker=$1 AND status='open' ORDER BY start_ts ASC`,
+        [tk.key]
+      );
+      if (!rows.length) continue;
+      if (rows.length > 1) {
+        console.warn(`[regime-alerts] ${tk.key}: found ${rows.length} open alerts on startup (stale from a prior restart) — auto-closing all but the most recent`);
+      }
+      const bars = await fetchCloses(base, tk.symbol);
+      for (let i = 0; i < rows.length - 1; i++) {
+        const r = rows[i];
+        const next = rows[i + 1];
+        const startPrice = Number(r.start_price);
+        const endPrice = Number(next.start_price);
+        const windowBars = bars.filter((b) => b.ts > Number(r.start_ts) && b.ts <= Number(next.start_ts));
+        let maxUp = 0, maxDown = 0, maxUpPts = 0, maxDownPts = 0;
+        for (const b of windowBars) {
+          const diff = b.close - startPrice;
+          const chg = (diff / startPrice) * 100;
+          if (chg > maxUp) maxUp = chg;
+          if (chg < maxDown) maxDown = chg;
+          if (diff > maxUpPts) maxUpPts = diff;
+          if (diff < maxDownPts) maxDownPts = diff;
+        }
+        const returnPts = endPrice - startPrice;
+        const returnPct = (returnPts / startPrice) * 100;
+        await closeAlertRow(r.id, {
+          ts: Number(next.start_ts), price: endPrice, returnPct, maxUpPct: maxUp, maxDownPct: maxDown,
+          returnPts, maxUpPts, maxDownPts, bars: windowBars.length,
+        });
+        console.log(`[regime-alerts] ${tk.key}: auto-closed orphaned alert #${r.id} (${r.label}), stuck open since a prior process restart`);
+      }
+      const resume = rows[rows.length - 1];
+      const m = mem[tk.key];
+      m.openId = resume.id;
+      m.openLabel = resume.label;
+      m.openStartTs = Number(resume.start_ts);
+      m.openStartPrice = Number(resume.start_price);
+      // Resume tracking from the known label instead of the blank "first
+      // observation" baseline, so the normal flip-detection logic (and its
+      // CONFIRM_BARS debounce) naturally closes this alert out on the next
+      // real regime change — it doesn't just sit there forever again.
+      m.lastLabel = resume.label;
+      m.lastBarTs = null;
+      console.log(`[regime-alerts] ${tk.key}: resumed open ${resume.label} alert #${resume.id} from ${new Date(Number(resume.start_ts)).toISOString()}`);
+    } catch (e) {
+      console.warn(`[regime-alerts] reconcile failed for ${tk.key}:`, e.message);
+    }
+  }
+}
+
 // latestFit[ticker] = { fittedAt, bars: [{ts,close}], hmm } — the canonical,
 // single-source-of-truth HMM fit each ticker's browser tabs read via
 // GET /proxy/regime-state instead of re-fitting client-side (which repainted
@@ -328,10 +395,18 @@ function startRegimeAlertRecorder(port) {
     return () => {};
   }
   console.log(`[regime-alerts] enabled — HMM regime-flip alert recorder every ${EVAL_MS}ms (ESU/NQU)`);
-  ensureSchema().catch(() => {});
-  timer = setInterval(() => { void runOnce(base); }, EVAL_MS);
-  void runOnce(base); // fire once immediately so the table isn't empty for a full EVAL_MS
-  return () => { if (timer) clearInterval(timer); timer = null; };
+  let stopped = false;
+  (async () => {
+    await ensureSchema().catch(() => {});
+    // Resume/close out any alert left open by a prior process instance BEFORE
+    // the first eval loop runs, so a stale "running" row never gets a chance
+    // to be treated as brand-new state (see reconcileOpenAlertsOnStartup).
+    await reconcileOpenAlertsOnStartup(base).catch((e) => console.warn('[regime-alerts] reconcile error:', e.message));
+    if (stopped) return;
+    timer = setInterval(() => { void runOnce(base); }, EVAL_MS);
+    void runOnce(base); // fire once immediately so the table isn't empty for a full EVAL_MS
+  })();
+  return () => { stopped = true; if (timer) clearInterval(timer); timer = null; };
 }
 
 module.exports = {

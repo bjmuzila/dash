@@ -3430,10 +3430,13 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
   }
 
   const cols = ["Regime", "Status", "Started (ET)", "Confidence", "Duration", "Return (pts)", "Max Up (pts)", "Max Down (pts)"];
+  // Only ~10 rows visible at once — past that, the log scrolls inside its own
+  // fixed-height box instead of growing the card. Header stays pinned via
+  // sticky positioning so it doesn't scroll out of view with the rows.
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: 360 }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
-        <thead>
+        <thead style={{ position: "sticky", top: 0, zIndex: 1, background: HOME_THEME.panelBgStrong }}>
           <tr>
             {cols.map((h) => (
               <th
@@ -3812,13 +3815,13 @@ function RegimeEngineTab() {
           </div>
 
           {backtests && (
-            <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={18}>
+            <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={16}>
                 <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em", color: HOME_THEME.text, textTransform: "uppercase" }}>
                   Same Strategy · No Regime Gate
                 </div>
                 <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>20-bar Donchian breakout, always on</div>
-                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.naive.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
+                <div style={{ fontSize: 22, fontWeight: 900, color: backtests.naive.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
                   {backtests.naive.returnPct >= 0 ? "+" : ""}{backtests.naive.returnPct.toFixed(2)}%
                 </div>
                 <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>
@@ -3826,12 +3829,12 @@ function RegimeEngineTab() {
                 </div>
               </Card>
               <div style={{ display: "flex", alignItems: "center", fontSize: 15, fontWeight: 800, color: HOME_THEME.text, padding: "0 4px" }}>VS</div>
-              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={18}>
+              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={16}>
                 <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em", color: HOME_THEME.text, textTransform: "uppercase" }}>
                   Same Strategy · Gated to Trend
                 </div>
                 <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>Same rule, flat unless decoded state = Trend</div>
-                <div style={{ fontSize: 24, fontWeight: 900, color: backtests.gated.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
+                <div style={{ fontSize: 22, fontWeight: 900, color: backtests.gated.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
                   {backtests.gated.returnPct >= 0 ? "+" : ""}{backtests.gated.returnPct.toFixed(2)}%
                 </div>
                 <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>

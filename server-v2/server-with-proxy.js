@@ -145,7 +145,9 @@ async function handleProxyRest(req, res) {
     case '/proxy/snapshot':
       sendJson(res, 200, buildSnapshot(state));
       return true;
-    case '/proxy/gex':
+    case '/proxy/gex': {
+      const url = new URL(req.url || '/', 'http://localhost');
+      const basis = url.searchParams.get('basis') || 'net'; // net | vol | flow
       sendJson(res, 200, {
         symbol: state.symbol,
         spot: state.spot,
@@ -164,9 +166,11 @@ async function handleProxyRest(req, res) {
         gexFlip: state.gexFlip,
         totalNetGex: state.totalNetGex,
         totalFlowGex: state.totalFlowGex || 0, // flow GEX from dealer inventory
+        basis, // echo requested basis so client knows which mode to display
         updatedAt: state.updatedAt,
       });
       return true;
+    }
     case '/proxy/flow':
       sendJson(res, 200, state.flow || {});
       return true;

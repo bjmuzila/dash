@@ -294,8 +294,11 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
                   borderRadius: "3px 3px 0 0",
                   cursor: "default",
                 }} />
-                <span style={{ fontSize: 9, color: T.muted, whiteSpace: "nowrap" }}>
-                  {gran === "weekly" || gran === "yearly" || i % 2 === 0 ? b.label : ""}
+                <span style={{
+                  fontSize: 9, color: T.muted, whiteSpace: "nowrap",
+                  visibility: gran === "weekly" || gran === "yearly" || i % 2 === 0 ? "visible" : "hidden",
+                }}>
+                  {b.label}
                 </span>
               </div>
             );
