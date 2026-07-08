@@ -13,25 +13,42 @@ import {
   homeShellStyle,
 } from "@/components/shared/homeTheme";
 import { DockCalendar } from "@/components/shared/DockToolbar";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
-const TABLES = [
-  { id: "eod_gex", label: "EOD GEX" },
-  { id: "mvc_snapshots", label: "CB - Core Bullseye Snapshots" },
-  { id: "premium_flow", label: "Premium Flow" },
-  { id: "greeks_ts", label: "Greeks TS" },
-  { id: "playbook_feed", label: "Playbook Feed" },
-  { id: "page_load_status", label: "Page Status" },
-  { id: "es_candles", label: "ES Candles" },
-  { id: "bzila_snapshots", label: "Bzila Snaps" },
-  { id: "flow_calls", label: "Flow Calls" },
-  { id: "snapshots", label: "EM Snapshots" },
-  { id: "ticker_levels", label: "Levels (/em)" },
-  { id: "es_stats", label: "ES Stats" },
-  { id: "trades", label: "Trades" },
-  { id: "expirations_cache", label: "Exp Cache" },
+// Friendly labels for the tables we already know about. Any table not listed
+// here (including new ones added later) still shows up — just titlecased from
+// its raw name — because the picker is now driven by /api/db/tables, which
+// reads information_schema, not this array.
+const KNOWN_LABELS: Record<string, string> = {
+  eod_gex: "EOD GEX",
+  mvc_snapshots: "CB - Core Bullseye Snapshots",
+  premium_flow: "Premium Flow",
+  greeks_ts: "Greeks TS",
+  playbook_feed: "Playbook Feed",
+  page_load_status: "Page Status",
+  es_candles: "ES Candles",
+  bzila_snapshots: "Bzila Snaps",
+  flow_calls: "Flow Calls",
+  snapshots: "EM Snapshots",
+  ticker_levels: "Levels (/em)",
+  es_stats: "ES Stats",
+  trades: "Trades",
+  expirations_cache: "Exp Cache",
+};
+
+function labelFor(table: string): string {
+  return KNOWN_LABELS[table] ?? table.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// The small "today" summary widgets below only track this curated subset —
+// the main table browser (DatabasePage) is the part that covers every table.
+const CURATED_TABLES = [
+  "eod_gex", "mvc_snapshots", "premium_flow", "greeks_ts", "playbook_feed",
+  "page_load_status", "es_candles", "bzila_snapshots", "flow_calls",
+  "snapshots", "ticker_levels", "es_stats", "trades", "expirations_cache",
 ] as const;
 
-type TableId = typeof TABLES[number]["id"];
+type TableId = string;
 
 /**
  * Rows-written-today counts per tracked table. Moved here from the owner
@@ -47,7 +64,7 @@ function RowCountsToday() {
     const today = todayET();
     const out: Record<string, number> = {};
     await Promise.all(
-      TABLES.map(async ({ id }) => {
+      CURATED_TABLES.map(async (id) => {
         try {
           const r = await fetch(`/api/db?table=${id}&limit=1&date=${today}&countOnly=true`, { cache: "no-store" });
           const j = await r.json();
@@ -66,14 +83,14 @@ function RowCountsToday() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Database · Today</span>
         <span style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
-          {loading ? "loading…" : `${TABLES.length} tables tracked`}
+          {loading ? "loading…" : `${CURATED_TABLES.length} tracked · use the browser below for all tables`}
         </span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(120px, 1fr))", gap: 10 }}>
-        {TABLES.map(({ id, label }) => (
+        {CURATED_TABLES.map((id) => (
           <div key={id} style={{ ...homePanelStyle, minHeight: 0, padding: "10px 14px", overflow: "hidden" }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.muted, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {label}
+              {labelFor(id)}
             </div>
             <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {counts[id] != null ? counts[id].toLocaleString() : "—"}
@@ -244,6 +261,18 @@ export default function DatabasePage() {
   const [count, setCount] = useState(0);
   const [dateFilter, setDateFilter] = useState<string>(todayET());
   const [limit, setLimit] = useState(200);
+  const [allTables, setAllTables] = useState<{ name: string; approx_rows: number }[]>([]);
+  const [tableSearch, setTableSearch] = useState("");
+
+  // Every base table in the DB, fetched once from information_schema (via
+  // /api/db/tables) — this is what makes the picker cover EVERYTHING being
+  // saved, not just the curated 14 this page originally shipped with.
+  useEffect(() => {
+    fetch("/api/db/tables", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setAllTables(Array.isArray(j.tables) ? j.tables : []))
+      .catch(() => setAllTables([]));
+  }, []);
 
   const load = useCallback(async (t: TableId, date: string, lim: number) => {
     setLoading(true);
@@ -340,36 +369,60 @@ export default function DatabasePage() {
         <EodGexToday />
         <RowCountsToday />
         <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <div className="flex flex-shrink-0 overflow-x-auto" style={{ gap: 6, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-            {TABLES.map((t) => {
-              const on = tab === t.id;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => setTab(t.id)}
-                  style={{
-                    padding: "6px 12px",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    letterSpacing: ".08em",
-                    textTransform: "uppercase",
-                    borderRadius: 8,
-                    border: on ? `1px solid ${HOME_THEME.cyan}59` : `1px solid ${HOME_THEME.border}`,
-                    background: on
-                      ? `linear-gradient(180deg, ${HOME_THEME.cyan}2e, ${HOME_THEME.cyan}0d)`
-                      : "rgba(255,255,255,0.04)",
-                    color: on ? HOME_THEME.cyan : HOME_THEME.text,
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                    flexShrink: 0,
-                    boxShadow: on ? `0 0 14px ${HOME_THEME.cyan}3a, 0 2px 8px rgba(0,0,0,0.35)` : "none",
-                    transition: "background .14s, color .14s, border-color .14s",
-                  }}
-                >
-                  {t.label}
-                </button>
-              );
-            })}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            {/* Full table picker — every base table in the DB (information_schema), not just the curated set below. */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+                Table ({allTables.length || "…"})
+              </span>
+              <input
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                placeholder="filter…"
+                style={{ ...homeInputStyle, width: 140, fontSize: 11, padding: "5px 8px" }}
+              />
+              <ThemedSelect
+                value={tab}
+                onChange={setTab}
+                width={280}
+                placeholder="Pick a table"
+                options={(allTables.length ? allTables.map((t) => ({ name: t.name, approx_rows: t.approx_rows })) : CURATED_TABLES.map((n) => ({ name: n, approx_rows: 0 })))
+                  .filter((t) => t.name.toLowerCase().includes(tableSearch.toLowerCase()))
+                  .map((t) => ({ value: t.name, label: `${labelFor(t.name)} (${t.approx_rows.toLocaleString()})` }))}
+              />
+            </div>
+            {/* Quick-access buttons for the tables this page has always tracked closely. */}
+            <div className="flex flex-shrink-0 overflow-x-auto" style={{ gap: 6 }}>
+              {CURATED_TABLES.map((id) => {
+                const on = tab === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => setTab(id)}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      letterSpacing: ".08em",
+                      textTransform: "uppercase",
+                      borderRadius: 8,
+                      border: on ? `1px solid ${HOME_THEME.cyan}59` : `1px solid ${HOME_THEME.border}`,
+                      background: on
+                        ? `linear-gradient(180deg, ${HOME_THEME.cyan}2e, ${HOME_THEME.cyan}0d)`
+                        : "rgba(255,255,255,0.04)",
+                      color: on ? HOME_THEME.cyan : HOME_THEME.text,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                      boxShadow: on ? `0 0 14px ${HOME_THEME.cyan}3a, 0 2px 8px rgba(0,0,0,0.35)` : "none",
+                      transition: "background .14s, color .14s, border-color .14s",
+                    }}
+                  >
+                    {labelFor(id)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="flex-1 overflow-auto">

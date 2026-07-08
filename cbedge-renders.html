@@ -1,0 +1,119 @@
+<!-- CB Edge — X render series (ICT style). Open in a browser, Download PNG / Download all. -->
+<meta charset="utf-8">
+<title>CB Edge — Renders</title>
+<style>
+  body{margin:0;background:#05070d;color:#e9eff7;font-family:Inter,"Segoe UI",system-ui,Arial,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#05070dee;backdrop-filter:blur(6px);padding:16px 24px;border-bottom:1px solid #14202f;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0}header .sub{color:#35d6e8;font-size:13px}
+  button{cursor:pointer;border:1px solid #1e9fb0;background:#0a2028;color:#35d6e8;font-weight:700;padding:8px 14px;border-radius:8px;font-size:13px}
+  button:hover{background:#0e2c37}
+  .wrap{max-width:1040px;margin:0 auto;padding:22px}
+  .card{margin:0 0 30px}.bar{display:flex;justify-content:space-between;align-items:center;margin:0 0 9px}
+  .bar .lbl{color:#9fb0c6;font-size:13px}.bar .lbl b{color:#e9eff7}
+  .frame{border-radius:12px;overflow:hidden;border:1px solid #14202f;box-shadow:0 10px 40px #0009}
+  svg{display:block;width:100%;height:auto}
+</style>
+<header><h1>CB&nbsp;Edge — Renders</h1><span class="sub">ICT style · click for a PNG</span>
+  <button onclick="downloadAll()">⬇ Download all PNGs</button></header>
+<div class="wrap" id="wrap"></div>
+
+<script>
+const W=1600,H=900;
+const C={green:"#26c281",red:"#e24b4a",blue:"#3b82f6",blueHi:"#5aa2f0",cyan:"#35d6e8",
+  orange:"#e0842c",amber:"#e0a22b",text:"#e9eff7",muted:"#7e8da6",grid:"#111a28"};
+function rnd(i){return ((i*9301+49297)%233280)/233280;}
+
+function defs(){return `<defs>
+  <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fff"/><stop offset="42%" stop-color="#cfd6dd"/><stop offset="54%" stop-color="#828c98"/><stop offset="66%" stop-color="#aab2bb"/><stop offset="100%" stop-color="#eef1f4"/></linearGradient>
+  <clipPath id="plot"><rect x="30" y="100" width="1476" height="712" rx="2"/></clipPath>
+</defs>`;}
+
+/* ── top chrome: ICT toolbar (matches the reference) ─────────────────────── */
+function topbar(){
+  let s=`<rect x="0" y="0" width="${W}" height="46" fill="#080c14"/><line x1="0" y1="46" x2="${W}" y2="46" stroke="#14202f"/>`;
+  s+=`<rect x="16" y="10" width="42" height="26" rx="6" fill="#0e1a2a" stroke="#22364e"/><text x="37" y="28" text-anchor="middle" font-family="Inter,Arial" font-size="14" font-weight="800" fill="${C.cyan}">ICT</text>`;
+  s+=`<rect x="66" y="10" width="46" height="26" rx="6" fill="#0e2a30" stroke="${C.cyan}" stroke-opacity=".6"/><text x="89" y="28" text-anchor="middle" font-family="Inter,Arial" font-size="13" font-weight="800" fill="${C.cyan}">ES</text>`;
+  s+=`<rect x="114" y="10" width="52" height="26" rx="6" fill="#0e1a2a" stroke="#22364e"/><text x="140" y="28" text-anchor="middle" font-family="Inter,Arial" font-size="13" font-weight="700" fill="${C.muted}">NQU</text>`;
+  s+=`<rect x="180" y="10" width="132" height="26" rx="6" fill="#0e2620" stroke="#1f5a3f"/><text x="200" y="28" font-family="Inter,Arial" font-size="13" font-weight="800" fill="${C.green}">🏆 LEADERBOARD</text>`;
+  s+=`<text x="336" y="28" font-family="Inter,Arial" font-size="14" font-weight="700" fill="${C.text}">INNER CIRCLE TRADER · <tspan fill="${C.cyan}">LIVE ES DETECTION</tspan></text>`;
+  s+=`<circle cx="596" cy="23" r="5" fill="${C.green}"/><text x="608" y="28" font-family="Inter,Arial" font-size="13" font-weight="800" fill="${C.green}">LIVE</text>`;
+  // CB Edge branding in the top bar (right of center)
+  s+=`<text x="${W-360}" y="30" text-anchor="end" font-family="Inter,Arial" font-size="22" font-weight="800" fill="url(#chrome)" stroke="#5a636d" stroke-width="0.4" letter-spacing="1">CB Edge</text>`;
+  s+=`<rect x="${W-176}" y="10" width="96" height="26" rx="6" fill="#0e1a2a" stroke="#22364e"/><text x="${W-128}" y="28" text-anchor="middle" font-family="Inter,Arial" font-size="12" font-weight="700" fill="${C.text}">Copyshot</text>`;
+  return s;
+}
+function toolbar(){
+  let s="";const tabs=[["FVG",C.cyan,1],["ORDER BLOCKS",C.green,0],["LIQUIDITY",C.orange,1],["STRUCTURE",C.muted,0],["KILL ZONES",C.muted,0],["PREMIUM/DISCOUNT",C.muted,0]];
+  let x=44;tabs.forEach(([t,col,on])=>{const w=t.length*8.6+26;s+=`<rect x="${x}" y="60" width="${w}" height="24" rx="6" fill="${on?col+'22':'#0c1622'}" stroke="${on?col:'#22364e'}" stroke-opacity="${on?.9:.7}"/><text x="${x+w/2}" y="76" text-anchor="middle" font-family="Inter,Arial" font-size="11.5" font-weight="800" fill="${on?col:C.muted}" letter-spacing=".04em">${t}</text>`;x+=w+10;});
+  const tf=[["5M",1],["15M",0],["30M",0],["1H",0]];let tx=1150;tf.forEach(([t,on])=>{s+=`<rect x="${tx}" y="60" width="42" height="24" rx="6" fill="${on?'#0e2a30':'#0c1622'}" stroke="${on?C.cyan:'#22364e'}"/><text x="${tx+21}" y="76" text-anchor="middle" font-family="Inter,Arial" font-size="12" font-weight="800" fill="${on?C.cyan:C.muted}">${t}</text>`;tx+=48;});
+  s+=`<rect x="1348" y="60" width="128" height="24" rx="6" fill="#2a1a08" stroke="${C.orange}"/><text x="1412" y="76" text-anchor="middle" font-family="Inter,Arial" font-size="11.5" font-weight="800" fill="${C.orange}">HOVER INFO ON</text>`;
+  return s;
+}
+
+/* ── the ICT chart ───────────────────────────────────────────────────────── */
+function ictChart(){
+  const PL=36,PR=1424,PT=104,PB=808, pMin=7466,pMax=7634;
+  const yOf=p=>PT+(1-(p-pMin)/(pMax-pMin))*(PB-PT);
+  const xOf=f=>PL+f*(PR-PL);
+  const cps=[[0,7542],[0.05,7596],[0.09,7538],[0.15,7480],[0.21,7546],[0.30,7542],[0.38,7556],[0.46,7548],[0.54,7566],[0.60,7602],[0.66,7592],[0.72,7532],[0.79,7590],[0.85,7548],[0.92,7566],[1,7550]];
+  const priceAt=f=>{for(let k=0;k<cps.length-1;k++){if(f>=cps[k][0]&&f<=cps[k+1][0]){const t=(f-cps[k][0])/(cps[k+1][0]-cps[k][0]);return cps[k][1]+t*(cps[k+1][1]-cps[k][1]);}}return cps[cps.length-1][1];};
+  let s="";
+  // panel + subtle premium/discount shading
+  s+=`<rect x="24" y="52" width="1552" height="812" rx="10" fill="#06090f" stroke="#16233b"/>`;
+  s+=`<g clip-path="url(#plot)">`;
+  s+=`<rect x="${PL}" y="${yOf(7602)}" width="${PR-PL}" height="${yOf(7560)-yOf(7602)}" fill="${C.green}" opacity="0.05"/>`;
+  s+=`<rect x="${PL}" y="${yOf(7560)}" width="${PR-PL}" height="${yOf(7500)-yOf(7560)}" fill="${C.blue}" opacity="0.05"/>`;
+  // gridlines
+  for(let p=7470;p<=7630;p+=10)s+=`<line x1="${PL}" y1="${yOf(p)}" x2="${PR}" y2="${yOf(p)}" stroke="${C.grid}" stroke-width="1"/>`;
+  // FVG boxes (blue), OB boxes (green) — evocative of the reference
+  const fvg=(f0,f1,off,dir)=>{const pc=priceAt((f0+f1)/2)+off,hh=Math.abs(off)>6?18:11;const y=yOf(pc+hh/2),h=yOf(pc-hh/2)-y;return `<rect x="${xOf(f0)}" y="${y}" width="${xOf(f1)-xOf(f0)}" height="${h}" fill="${C.blue}" opacity="0.13" stroke="${C.blueHi}" stroke-opacity=".6"/><text x="${xOf(f0)+5}" y="${y+13}" font-family="Inter,Arial" font-size="10" font-weight="700" fill="${C.blueHi}">FVG ${dir}</text>`;};
+  s+=fvg(0.03,0.10,20,"↓")+fvg(0.05,0.095,8,"↑")+fvg(0.19,0.35,-10,"↑")+fvg(0.31,0.40,4,"↑")+fvg(0.43,0.54,14,"↑")+fvg(0.45,0.60,2,"↑")+fvg(0.71,0.80,10,"↑")+fvg(0.82,0.93,-4,"↑")+fvg(0.86,0.99,-14,"↑");
+  const ob=(f0,f1,off)=>{const pc=priceAt((f0+f1)/2)+off,y=yOf(pc+7),h=yOf(pc-7)-y;return `<rect x="${xOf(f0)}" y="${y}" width="${xOf(f1)-xOf(f0)}" height="${h}" fill="${C.green}" opacity="0.12" stroke="${C.green}" stroke-opacity=".55"/><text x="${xOf(f0)+5}" y="${y+13}" font-family="Inter,Arial" font-size="10" font-weight="700" fill="${C.green}">OB ↑</text>`;};
+  s+=ob(0.145,0.20,-16)+ob(0.90,0.99,-20);
+  // candles
+  const n=98,cw=(PR-PL)/n*0.62;let prev=priceAt(0);
+  for(let i=0;i<n;i++){const f=i/(n-1),c=priceAt(f)+(rnd(i*3+1)-0.5)*4,o=prev,hi=Math.max(o,c)+rnd(i*5+1)*3.5,lo=Math.min(o,c)-rnd(i*7+1)*3.5;
+    const x=xOf(f),up=c>=o,col=up?C.green:C.red;
+    s+=`<line x1="${x}" y1="${yOf(hi)}" x2="${x}" y2="${yOf(lo)}" stroke="${col}" stroke-width="1.1"/><rect x="${x-cw/2}" y="${yOf(Math.max(o,c))}" width="${cw}" height="${Math.max(1,Math.abs(yOf(o)-yOf(c)))}" fill="${col}"/>`;prev=c;}
+  const last=priceAt(1);
+  // PDH + a lower level (orange)
+  s+=`<line x1="${PL}" y1="${yOf(7602.5)}" x2="${PR}" y2="${yOf(7602.5)}" stroke="${C.amber}" stroke-width="1.3"/>`;
+  s+=`<line x1="${PL}" y1="${yOf(7539.75)}" x2="${PR}" y2="${yOf(7539.75)}" stroke="${C.amber}" stroke-width="1" opacity=".8"/>`;
+  // liquidity lines (right side)
+  const liq=[[7572,"BSL×6 swept"],[7562,"BSL×7"],[7557,"BSL×8"],[7547,"SSL×7 swept"]];
+  liq.forEach(([p,l])=>{s+=`<line x1="${xOf(0.74)}" y1="${yOf(p)}" x2="${PR}" y2="${yOf(p)}" stroke="${C.orange}" stroke-width="1" opacity=".85"/><text x="${xOf(0.75)}" y="${yOf(p)-4}" font-family="Inter,Arial" font-size="10" font-weight="700" fill="${C.orange}">${l}</text>`;});
+  // current price dashed (blue) + tag
+  s+=`<line x1="${PL}" y1="${yOf(last)}" x2="${PR}" y2="${yOf(last)}" stroke="${C.blue}" stroke-width="1" stroke-dasharray="3 4" opacity=".9"/>`;
+  s+=`</g>`;
+  // PDH label
+  s+=`<text x="${PL+4}" y="${yOf(7602.5)-4}" font-family="Inter,Arial" font-size="11" font-weight="700" fill="${C.amber}">PDH 7602.50</text>`;
+  s+=`<text x="${PL+4}" y="${yOf(7539.75)-4}" font-family="Inter,Arial" font-size="10" font-weight="700" fill="${C.amber}">7539.75</text>`;
+  // price axis (right)
+  for(let p=7470;p<=7630;p+=10)s+=`<text x="${PR+16}" y="${yOf(p)+4}" font-family="Inter,Arial" font-size="11" fill="${C.muted}">${p.toFixed(2)}</text>`;
+  s+=`<rect x="${PR+8}" y="${yOf(last)-11}" width="72" height="22" rx="3" fill="${C.blue}"/><text x="${PR+44}" y="${yOf(last)+4}" text-anchor="middle" font-family="Inter,Arial" font-size="12" font-weight="800" fill="#fff">${last.toFixed(2)}</text>`;
+  // date axis (bottom)
+  const dates=["Jul 2","Jul 2","Jul 3","Jul 3","Jul 5","Jul 6","Jul 6","Jul 6","Jul 7","Jul 7","Jul 7"];
+  dates.forEach((d,i)=>{const x=PL+ (i/(dates.length-1))*(PR-PL);s+=`<text x="${x}" y="${PB+22}" text-anchor="middle" font-family="Inter,Arial" font-size="11" fill="${C.muted}">${d}</text>`;});
+  // TradingView mark bottom-left
+  s+=`<text x="40" y="${PB+40}" font-family="Inter,Arial" font-size="15" font-weight="800" fill="${C.muted}">TV</text>`;
+  return s;
+}
+
+function brand(){return `
+  <text x="1548" y="${H-40}" text-anchor="end" font-family="Inter,Arial" font-size="24" font-weight="800" fill="${C.cyan}" opacity=".95">cbedge.net</text>
+  <text x="1548" y="${H-16}" text-anchor="end" font-family="Inter,Arial" font-size="14" font-weight="600" fill="${C.muted}" letter-spacing="1">YOUR UNFAIR EDGE IN THE MARKETS</text>`;}
+
+const CARDS=[
+ {n:1,title:"ICT Overview",build:()=>topbar()+toolbar()+ictChart()+brand()},
+];
+function buildSVG(p){return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${defs()}<rect width="${W}" height="${H}" fill="#05070d"/>${p.build()}</svg>`;}
+
+const wrap=document.getElementById("wrap");
+CARDS.forEach(p=>{const card=document.createElement("div");card.className="card";
+  card.innerHTML=`<div class="bar"><div class="lbl">Render <b>#${p.n}</b> · ${p.title}</div><button>⬇ Download PNG</button></div><div class="frame" id="f${p.n}">${buildSVG(p)}</div>`;
+  wrap.appendChild(card);card.querySelector("button").onclick=()=>dl(p.n);});
+function dl(n){const svg=document.querySelector(`#f${n} svg`);const data=new XMLSerializer().serializeToString(svg);const img=new Image();
+  img.onload=()=>{const s=2,cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;const ctx=cv.getContext("2d");ctx.fillStyle="#05070d";ctx.fillRect(0,0,cv.width,cv.height);ctx.drawImage(img,0,0,cv.width,cv.height);cv.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`cbedge-render-${String(n).padStart(2,"0")}.png`;a.click();},"image/png");};
+  img.src="data:image/svg+xml;base64,"+btoa(unescape(encodeURIComponent(data)));}
+function downloadAll(){CARDS.forEach((p,i)=>setTimeout(()=>dl(p.n),i*450));}
+</script>
