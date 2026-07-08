@@ -1756,6 +1756,15 @@ class TastytradeProxy {
         this.thetaStream = new thetaAdapter.ThetaStreamClient({
           getSpot: () => this.spot || marketState.getSpot(),
           onTrade: (print) => {
+            // rawTape has read 0 in production despite a confirmed-live Theta
+            // firehose — log the first several raw prints reaching this
+            // handler (shape + any addPrint exception) so we can see exactly
+            // where the chain breaks instead of guessing further blind.
+            if (!this._flowPrintLogCount) this._flowPrintLogCount = 0;
+            if (this._flowPrintLogCount < 10) {
+              this._flowPrintLogCount++;
+              console.log('[FLOW_DEBUG] onTrade fired:', JSON.stringify(print));
+            }
             try {
               this.flow.addPrint(print);
               // Accumulate session-level call/put premium for the sparkline card.
@@ -1773,7 +1782,12 @@ class TastytradeProxy {
                   }
                 }
               }
-            } catch {}
+            } catch (e) {
+              if (!this._addPrintErrCount) this._addPrintErrCount = 0;
+              if (this._addPrintErrCount++ < 5) {
+                console.error('[FLOW_DEBUG] addPrint threw:', e?.message, JSON.stringify(print));
+              }
+            }
           },
           onIndex: (root, price) => this._onThetaIndex(root, price),
           onGreeks: (streamerSymbol, entry) => {
