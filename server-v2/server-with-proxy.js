@@ -163,6 +163,7 @@ async function handleProxyRest(req, res) {
         putWall: state.putWall,
         gexFlip: state.gexFlip,
         totalNetGex: state.totalNetGex,
+        totalFlowGex: state.totalFlowGex || 0, // flow GEX from dealer inventory
         updatedAt: state.updatedAt,
       });
       return true;

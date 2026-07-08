@@ -5,7 +5,7 @@ import { type ChainRow, type CalcMode, callGEXOf, putGEXOf, netGEXOf } from "@/l
 import { type GexBaselines } from "@/hooks/useStrikeGexHistory";
 
 export type GexMode   = "net" | "call-put";
-export type DataMode  = "oi-vol" | "vol-only";
+export type DataMode  = "oi-vol" | "vol-only" | "flow";
 export type ChartMode = "line" | "bars";
 
 interface GexChartProps {
@@ -220,6 +220,7 @@ export default function GexChart({
     if (!data.length) return;
 
     const isVol     = dataMode === "vol-only";
+    const isFlow    = dataMode === "flow";
     const isCallPut = mode === "call-put";
     // Resolve the contract basis once; compute GEX from the chain rows via the
     // shared library so all bases (OI+Vol / OI / Vol) are consistent everywhere
@@ -229,7 +230,7 @@ export default function GexChart({
     // passed explicitly (chart chain rows often lack spotPrice). calls +, puts −, abs γ.
     const getCall = (r: ChainRow) => callGEXOf(r, calcMode, spotPrice);
     const getPut  = (r: ChainRow) => putGEXOf(r, calcMode, spotPrice);
-    const getNet  = (r: ChainRow) => netGEXOf(r, calcMode, spotPrice);
+    const getNet  = (r: ChainRow) => isFlow ? (r.flowGEX ?? 0) : netGEXOf(r, calcMode, spotPrice);
 
     // ── Chart area (no axis border space) ──
     const cW    = W - PAD_L - PAD_R;

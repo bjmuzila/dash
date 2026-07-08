@@ -36,6 +36,7 @@ const lastEventStore = require('./state/last-event-store');
 const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
 const { FlowProcessor } = require('./computation/flow-processor');
+const { FlowGexAccumulator } = require('./computation/flow-gex');
 const { MultiFlowManager } = require('./multi-flow');
 const {
   parseOptionSymbol,
@@ -1471,6 +1472,7 @@ class TastytradeProxy {
   constructor() {
     this.client = null;
     this.flow = new FlowProcessor();
+    this.flowGexAccumulator = new FlowGexAccumulator(); // tracks dealer inventory for flow GEX
     this.contracts = new Map(); // streamerSymbol -> contract meta
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
     this.summaries = new Map(); // streamerSymbol -> { oi, prevClose }
@@ -1823,6 +1825,8 @@ class TastytradeProxy {
     this.flowTimer = setInterval(() => {
       const bucket = this.flow.bucket(SYMBOL);
       marketState.setFlow(bucket);
+      // Ingest the tape into the flow GEX accumulator (dealer inventory tracking).
+      this.flowGexAccumulator.ingestTape(bucket.tape, this.expiry);
       // Persist the (coalesced, floor-filtered) tape so /flow can backfill today.
       // Fire-and-forget; no-ops without DATABASE_URL.
       writeFlowTape(bucket.tape);
@@ -2840,7 +2844,9 @@ class TastytradeProxy {
       });
     }
 
-    const { rows: gexRows, callWall, putWall, gexFlip, totalNetGex } = computeGexSummary(rows, this.spot);
+    // Get dealer inventory for flow GEX calculation
+    const flowInventory = this.flowGexAccumulator.getInventory(this.expiry);
+    const { rows: gexRows, callWall, putWall, gexFlip, totalNetGex, totalFlowGex } = computeGexSummary(rows, this.spot, flowInventory);
 
     // Greeks coverage: fraction of in-window legs that carried a REAL streamed
     // broker gamma this pass. Legs without one fall back to BS/ATM-IV gamma,

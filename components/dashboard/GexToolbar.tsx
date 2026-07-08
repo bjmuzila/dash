@@ -90,7 +90,7 @@ export default function GexToolbar({
 
         {/* Data mode */}
         <SegGroup
-          options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]}
+          options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }, { label: "Flow GEX", value: "flow" }]}
           active={dataMode}
           onChange={(v) => onDataMode(v as DataMode)}
         />

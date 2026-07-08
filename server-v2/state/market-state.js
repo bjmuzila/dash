@@ -56,6 +56,7 @@ const state = {
   putWall: null,
   gexFlip: null,
   totalNetGex: 0,
+  totalFlowGex: 0, // flow-based GEX from dealer inventory
   // Latest flow bucket
   flow: null,
   // 5-minute ES futures candles (raw OHLCV bars, ~15 sessions). Client computes
@@ -159,6 +160,7 @@ function setGexUpdate({
   putWall,
   gexFlip,
   totalNetGex,
+  totalFlowGex,
 }) {
   if (spot > 0) setStateSilent({ spotAt: Date.now() });
   setState({
@@ -170,6 +172,7 @@ function setGexUpdate({
     putWall: putWall ?? state.putWall,
     gexFlip: gexFlip ?? state.gexFlip,
     totalNetGex: totalNetGex ?? state.totalNetGex,
+    totalFlowGex: totalFlowGex ?? state.totalFlowGex,
     updatedAt: Date.now(),
   });
   if (spot > 0) _recomputeBasis();

@@ -22,9 +22,10 @@ const { computeVexChexRow } = require('./vex-chex');
  * @param {Array<object>} rows - flattened option rows, each with:
  *   { strike, side:'call'|'put', oi, volume, gamma, delta, theta, vega, vanna, charm, iv, dte }
  * @param {number} spot - SPX spot price
+ * @param {Map<number, {callNet, putNet}>} [flowInventory] - dealer inventory per strike for flow GEX
  * @returns {Array<object>} per-strike rows sorted ascending by strike
  */
-function computeGexRows(rows, spot) {
+function computeGexRows(rows, spot, flowInventory = null) {
   if (!Array.isArray(rows) || !rows.length || !(spot > 0)) return [];
 
   const byStrike = new Map();
@@ -73,6 +74,16 @@ function computeGexRows(rows, spot) {
     const volNetDEX =
       callDelta * callVolume * spot * 100 - putDelta * putVolume * spot * 100;
 
+    // Flow GEX = gamma × dealer_inventory × spot²
+    // Dealer inventory is mirror of taker flow; positive = dealer long
+    let flowGEX = 0;
+    if (flowInventory && flowInventory.has(strike)) {
+      const inv = flowInventory.get(strike);
+      const callFlowGEX = callGamma * inv.callNet * spot * spot;
+      const putFlowGEX = -(putGamma * inv.putNet * spot * spot);
+      flowGEX = callFlowGEX + putFlowGEX;
+    }
+
     // Vanna / charm exposure computed by sibling module.
     // Field names match the dashboard's ChainRow: netVanna, netVolVanna.
     const { netVanna, netVolVanna, chex, volChex } = computeVexChexRow({ call, put, spot });
@@ -92,6 +103,7 @@ function computeGexRows(rows, spot) {
       putGEX,
       netGEX,
       netVolGEX,
+      flowGEX,
       netDEX,
       volNetDEX,
       netVanna,
@@ -155,18 +167,24 @@ function totalNetGex(gexRows) {
   return gexRows.reduce((sum, r) => sum + oiVolNet(r), 0);
 }
 
+/** Total flow GEX across all strikes. */
+function totalFlowGex(gexRows) {
+  return gexRows.reduce((sum, r) => sum + (Number(r.flowGEX ?? 0)), 0);
+}
+
 /**
  * Convenience: compute rows + all summary levels in one pass.
- * @returns {{rows, callWall, putWall, gexFlip, totalNetGex}}
+ * @returns {{rows, callWall, putWall, gexFlip, totalNetGex, totalFlowGex}}
  */
-function computeGexSummary(rows, spot) {
-  const computed = computeGexRows(rows, spot);
+function computeGexSummary(rows, spot, flowInventory = null) {
+  const computed = computeGexRows(rows, spot, flowInventory);
   return {
     rows: computed,
     callWall: findCallWall(computed, spot),
     putWall: findPutWall(computed, spot),
     gexFlip: findGexFlip(computed, spot),
     totalNetGex: totalNetGex(computed),
+    totalFlowGex: totalFlowGex(computed),
   };
 }
 
@@ -176,5 +194,6 @@ module.exports = {
   findCallWall,
   findPutWall,
   totalNetGex,
+  totalFlowGex,
   computeGexSummary,
 };
