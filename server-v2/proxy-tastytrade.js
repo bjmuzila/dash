@@ -2722,6 +2722,14 @@ class TastytradeProxy {
     const staged = [];
     let atmIV = 0;
     let atmDist = Infinity;
+    // strike -> { C: iv, P: iv } for legs whose OWN price solved. A stale/
+    // crossed quote (mid below intrinsic — happens on thin ITM 0DTE legs)
+    // makes impliedVol() return NaN; the same-strike opposite side almost
+    // always still solves (OTM legs have intrinsic 0, any positive price
+    // works), and since gamma is identical for calls/puts at the same
+    // strike/expiry/vol, that sibling IV is a far better fallback than the
+    // nearest-distinct-strike atmIV (which can carry a very different skew).
+    const strikeIV = new Map();
 
     const _dbgActive = this._activeContracts();
     if (process.env.GEX_DEBUG) {
@@ -2770,6 +2778,9 @@ class TastytradeProxy {
           atmDist = dist;
           atmIV = iv;
         }
+        const rec = strikeIV.get(c.strike) || {};
+        rec[c.type] = iv;
+        strikeIV.set(c.strike, rec);
       }
       staged.push({ c, oi, vol, T, iv, gk, mark: mid });
     }
@@ -2785,7 +2796,9 @@ class TastytradeProxy {
     const rows = [];
     for (const st of staged) {
       const { c, oi, vol, T, gk, mark } = st;
-      const iv = st.iv > 0 ? st.iv : atmIV;
+      const siblingType = c.type === 'C' ? 'P' : 'C';
+      const siblingIV = strikeIV.get(c.strike)?.[siblingType] || 0;
+      const iv = st.iv > 0 ? st.iv : (siblingIV > 0 ? siblingIV : atmIV);
 
       // BS is used to source vanna/charm (dxFeed Greeks has neither) and as the
       // fallback for delta/gamma/vega when no broker greeks arrived for a strike.
