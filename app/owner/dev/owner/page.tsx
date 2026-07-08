@@ -960,6 +960,31 @@ function dailyVisitSeries(visits: PageVisit[], days = 12): { counts: number[]; l
 }
 
 /**
+ * Bucket signups (Clerk recent users, by createdAt ms) into the last `days`
+ * calendar days (ET), oldest → newest. Same shape as dailyVisitSeries so the
+ * rolling-7-day cumulative-users chart can share its rendering.
+ */
+function dailySignupSeries(signups: Array<{ createdAt: number | null }>, days = 7): { counts: number[]; labels: string[] } {
+  const byDay = new Map<string, number>();
+  for (const s of signups) {
+    if (s.createdAt == null) continue;
+    const t = new Date(s.createdAt);
+    if (isNaN(t.getTime())) continue;
+    const k = etDayKey(t);
+    byDay.set(k, (byDay.get(k) ?? 0) + 1);
+  }
+  const counts: number[] = [];
+  const labels: string[] = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 86400000);
+    counts.push(byDay.get(etDayKey(d)) ?? 0);
+    labels.push(etDayLabel(d));
+  }
+  return { counts, labels };
+}
+
+/**
  * Bucket signups (Clerk recent users, by createdAt ms) into the last `weeks`
  * ISO-ish weeks, oldest → newest. Falls back to an all-zero series the chart can
  * still render. Returns { counts, labels } with "DD Mon" week-start labels.
@@ -997,6 +1022,7 @@ function weeklySignupSeries(
 function OverviewSection({ metrics }: {
   metrics: {
     daily: { counts: number[]; labels: string[] };
+    dailySignups: { counts: number[]; labels: string[] };
     weekly: { counts: number[]; labels: string[] };
     totalVisits: number;
     activePages: number;
@@ -1025,7 +1051,7 @@ function OverviewSection({ metrics }: {
     };
   };
 }) {
-  const { daily, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, infra, ops } = metrics;
+  const { daily, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, infra, ops } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1037,16 +1063,16 @@ function OverviewSection({ metrics }: {
   const cardStyle: React.CSSProperties = { ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 };
   const titleStyle: React.CSSProperties = { fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 };
 
-  // Traffic line path (12 days).
+  // Traffic — 7-day rolling daily bar chart (bars read far more clearly than a
+  // squished min/max line, especially when daily counts are close together).
   const traffic = daily.counts.length ? daily.counts : [0];
-  const tMin = Math.min(...traffic), tMax = Math.max(...traffic), tRange = tMax - tMin || 1;
-  const trafficPath = traffic.map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, traffic.length - 1)) * 100},${30 - ((v - tMin) / tRange) * 26}`).join(" ");
+  const tMax = Math.max(...traffic, 1);
 
-  // Cumulative users (running sum of weekly signups) — illustrative shape.
+  // Cumulative users — 7-day rolling: running total of daily signups, baselined
+  // so the last bar lands on the current total user count.
   const cum: number[] = [];
-  weekly.counts.reduce((acc, v) => { const n = acc + v; cum.push(n); return n; }, (users ?? 0) - weekly.counts.reduce((a, b) => a + b, 0));
-  const cMin = Math.min(...(cum.length ? cum : [0])), cMax = Math.max(...(cum.length ? cum : [1])), cRange = cMax - cMin || 1;
-  const cumPath = (cum.length ? cum : [0]).map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, cum.length - 1)) * 100},${30 - ((v - cMin) / cRange) * 26}`).join(" ");
+  dailySignups.counts.reduce((acc, v) => { const n = acc + v; cum.push(n); return n; }, (users ?? 0) - dailySignups.counts.reduce((a, b) => a + b, 0));
+  const cMax = Math.max(...(cum.length ? cum : [1]), 1);
 
   const wkMax = weekly.counts.length ? Math.max(...weekly.counts) : 1;
   const topMax = topPages.length ? Math.max(...topPages.map((p) => p.loads), 1) : 1;
@@ -1111,12 +1137,18 @@ function OverviewSection({ metrics }: {
 
       {/* Traffic · signups · cumulative */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(3, minmax(0,1fr))", gap: 10 }}>
-        <div style={cardStyle} title="Total page loads per day across the site for the last 12 days (ET day buckets). The % is the change from the first day in the window to the most recent.">
-          <div style={titleStyle}>Traffic · 12 days</div>
-          <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: "100%", height: 90, display: "block" }}>
-            <path d={`${trafficPath} L100,32 L0,32 Z`} fill={pc(3) + "22"} stroke="none" />
-            <path d={trafficPath} fill="none" stroke={pc(3)} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-          </svg>
+        <div style={cardStyle} title="Total page loads per day across the site for the last 7 days (ET day buckets). The % is the change from the first day in the window to the most recent.">
+          <div style={titleStyle}>Traffic · 7 days</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
+            {traffic.map((v, i) => (
+              <div key={i} style={{ flex: 1, background: pc(3), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / tMax) * 82))}px` }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 7, marginTop: 4 }}>
+            {daily.labels.map((l, i) => (
+              <div key={i} style={{ flex: 1, fontSize: 14, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+            ))}
+          </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
             <span>{totalVisits.toLocaleString()} visits</span>
             {trafficDelta != null && <span style={{ color: trafficDelta >= 0 ? pc(1) : HOME_THEME.red }}>{trafficDelta >= 0 ? "▲" : "▼"} {Math.abs(trafficDelta)}%</span>}
@@ -1134,12 +1166,18 @@ function OverviewSection({ metrics }: {
             <span style={{ color: pc(1) }}>▲ {weekly.counts[weekly.counts.length - 1] ?? 0} this wk</span>
           </div>
         </div>
-        <div style={cardStyle} title="Running total of registered users over time (each week's signups added to the prior total). Right value is total users; 'active now' is current live sessions.">
-          <div style={titleStyle}>Cumulative users</div>
-          <svg viewBox="0 0 100 32" preserveAspectRatio="none" style={{ width: "100%", height: 90, display: "block" }}>
-            <path d={`${cumPath} L100,32 L0,32 Z`} fill={pc(0) + "22"} stroke="none" />
-            <path d={cumPath} fill="none" stroke={pc(0)} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-          </svg>
+        <div style={cardStyle} title="Running total of registered users over the last 7 days (each day's signups added to the prior total). Right value is total users; 'active now' is current live sessions.">
+          <div style={titleStyle}>Cumulative users · 7 days</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
+            {(cum.length ? cum : [0]).map((v, i) => (
+              <div key={i} style={{ flex: 1, background: pc(0), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / cMax) * 82))}px` }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 7, marginTop: 4 }}>
+            {dailySignups.labels.map((l, i) => (
+              <div key={i} style={{ flex: 1, fontSize: 14, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+            ))}
+          </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
             <span>{users != null ? `${users.toLocaleString()} total` : "—"}</span>
             <span>{activeSessions != null ? `${activeSessions} active now` : ""}</span>
@@ -2056,7 +2094,8 @@ export default function OwnerDashboard() {
     };
 
     return {
-      daily: dailyVisitSeries(visits, 12),
+      daily: dailyVisitSeries(visits, 7),
+      dailySignups: dailySignupSeries(signups, 7),
       weekly: weeklySignupSeries(signups, 7),
       totalVisits,
       activePages,
