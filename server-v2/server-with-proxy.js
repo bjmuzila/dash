@@ -32,6 +32,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 
 const next = require('next');
 const marketState = require('./state/market-state');
+const { getFlowGexHistoryWindow } = require('./state/flow-gex-history');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
@@ -174,6 +175,21 @@ async function handleProxyRest(req, res) {
     case '/proxy/flow':
       sendJson(res, 200, state.flow || {});
       return true;
+    case '/proxy/flow-gex-history': {
+      // Reconstructs per-minute Flow GEX history for a window of strikes
+      // around spot, entirely from Postgres (flow_prints tape + the
+      // call_gamma/put_gamma snapshots in option_strike_gex_history) — no
+      // in-memory dependency, works for any strike that had recorded tape
+      // today. See server-v2/state/flow-gex-history.js for the reconstruction.
+      const url = new URL(req.url || '/', 'http://localhost');
+      const expiration = url.searchParams.get('expiration') || state.expiry;
+      const date = url.searchParams.get('date') || undefined;
+      const windowSize = Math.max(1, Math.min(50, Number(url.searchParams.get('window')) || 20));
+      const spot = state.spot;
+      const result = await getFlowGexHistoryWindow({ spot, expiration, date, windowSize });
+      sendJson(res, 200, result);
+      return true;
+    }
     case '/proxy/expirations':
       if (req.method === 'POST') {
         // POST { expiry: 'YYYY-MM-DD' } to manually switch the active expiry.
