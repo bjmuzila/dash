@@ -11,6 +11,19 @@ function fmtTime(iso: string): string {
 }
 
 export default function ChatPage() {
+  // TEMP: chat disabled site-wide — see app/api/chat/messages/route.ts
+  return (
+    <PageShell maxWidth={720}>
+      <Card accent="cyan" title="Subscriber Chat" subtitle="Unavailable">
+        <div style={{ color: HOME_THEME.muted, fontSize: 14, padding: "24px 4px" }}>
+          Chat is temporarily disabled.
+        </div>
+      </Card>
+    </PageShell>
+  );
+}
+
+function DisabledChatPageOldBody() {
   const { user, displayName } = useAuth();
 
   const { messages, loading, error, send } = useChat(displayName);

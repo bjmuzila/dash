@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 
@@ -13,31 +13,11 @@ const FEATURES = [
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
 
-// Launch: Tuesday July 7, 2026 at 12:00 AM ET (midnight, UTC-4 in summer)
-const LAUNCH_UTC = new Date("2026-07-07T04:00:00Z");
-
-function useCountdown() {
-  const [parts, setParts] = useState({ d: 0, h: 0, m: 0, s: 0, done: false });
-  useEffect(() => {
-    function tick() {
-      const diff = LAUNCH_UTC.getTime() - Date.now();
-      if (diff <= 0) { setParts({ d: 0, h: 0, m: 0, s: 0, done: true }); return; }
-      const s = Math.floor(diff / 1000);
-      setParts({ d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600), m: Math.floor((s % 3600) / 60), s: s % 60, done: false });
-    }
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
-  return parts;
-}
-
 export default function LandingClient() {
   const [email, setEmail] = useState("");
   const [xHover, setXHover] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
   const [msg, setMsg] = useState("");
-  const countdown = useCountdown();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -148,42 +128,6 @@ export default function LandingClient() {
           {/* Accent glow bleeding through the glass */}
           <div style={cardGlow} aria-hidden />
 
-          <div style={badge} className="launch-badge">
-            <span style={{ color: T.green, fontWeight: 800 }}>Beta is LIVE</span>
-            {" · Full Launch "}
-            <span style={{ color: "#E0162B", fontWeight: 800 }}>July</span>{" "}
-            <span style={{ color: "#FFFFFF", fontWeight: 800 }}>7th</span>{" "}
-            <span style={{ color: "#3C6FE0", fontWeight: 800 }}>Midnight</span>
-            <span className="fireworks" aria-hidden>
-              <span className="fw fw1" />
-              <span className="fw fw2" />
-              <span className="fw fw3" />
-            </span>
-          </div>
-
-          {/* Countdown to full launch */}
-          {!countdown.done ? (
-            <div style={{ display: "flex", gap: 10, justifyContent: "center", margin: "14px 0 4px", flexWrap: "wrap" }}>
-              {[
-                { v: countdown.d, label: "days" },
-                { v: countdown.h, label: "hrs" },
-                { v: countdown.m, label: "min" },
-                { v: countdown.s, label: "sec" },
-              ].map(({ v, label }) => (
-                <div key={label} style={{ textAlign: "center", minWidth: 52, background: "rgba(33,158,188,0.08)", border: "1px solid rgba(33,158,188,0.2)", borderRadius: 10, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: T.cyan, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
-                    {String(v).padStart(2, "0")}
-                  </div>
-                  <div style={{ fontSize: 10, color: T.muted, marginTop: 3, letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ textAlign: "center", margin: "14px 0 4px", fontSize: 14, fontWeight: 800, color: T.green }}>
-              🚀 Full launch is LIVE!
-            </div>
-          )}
-
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
 
@@ -212,7 +156,7 @@ export default function LandingClient() {
           {/* Waitlist form */}
           <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
             <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
-              Beta signups open July 1, 9:30 AM ET · official launch July 7. Sign up for the newsletter and get notified.
+              Sign up for the newsletter and get notified.
             </label>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <input

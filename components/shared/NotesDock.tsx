@@ -5,7 +5,8 @@ import { HOME_THEME } from "./homeTheme";
 import { useNotes, NotesBody } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
 import { useMobileNav } from "./MobileNavContext";
-import ChatPanel from "./ChatPanel";
+// TEMP: chat disabled site-wide — see app/api/chat/messages/route.ts
+// import ChatPanel from "./ChatPanel";
 
 const PANEL_WIDTH = 320;
 
@@ -77,20 +78,7 @@ export default function NotesDock() {
           <NotesBody notes={notes} addNote={addNote} editNote={editNote} deleteNote={deleteNote} />
         </div>
 
-        {/* chat — pinned to the bottom of the dock, below a divider */}
-        <div
-          style={{
-            flexShrink: 0,
-            marginTop: 14,
-            paddingTop: 14,
-            borderTop: `1px solid ${HOME_THEME.border}`,
-            display: "flex",
-            flexDirection: "column",
-            maxHeight: "45%",
-          }}
-        >
-          <ChatPanel />
-        </div>
+        {/* chat — TEMP disabled, see app/api/chat/messages/route.ts */}
       </div>
     </aside>
   );

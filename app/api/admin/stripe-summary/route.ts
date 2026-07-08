@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getServerUserId } from "@/lib/supabase/server";
 
 // Lazy-load stripe so the app still boots without the key configured
 async function getStripe() {
@@ -8,7 +9,20 @@ async function getStripe() {
   return new Stripe(key, { apiVersion: "2024-06-20" });
 }
 
+// Owner-only: MRR, churn, and customer emails. Middleware only gates the
+// /owner/* page, not this /api/admin/* route, so this must self-check.
+// SECURITY: fails CLOSED — unset/mismatched OWNER_USER_ID → 403.
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
+
 export async function GET() {
+  const userId = await getServerUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!OWNER_USER_ID || userId !== OWNER_USER_ID) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const stripe = await getStripe();
 
