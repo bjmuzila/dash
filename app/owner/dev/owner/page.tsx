@@ -338,8 +338,23 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-/** Tiny inline area sparkline. Scales to its container width; fixed small height. */
-function Sparkline({ data, accent, height = 22 }: { data: number[]; accent: string; height?: number }) {
+/** Given a window duration ending at `endIso`, format [start, end] axis labels.
+ *  Sub-day windows show ET clock time; multi-day windows show month/day. */
+function sparkTimeLabels(durationMs: number, endIso?: string | null): [string, string] {
+  if (!endIso) return ["", ""];
+  const end = new Date(endIso);
+  if (isNaN(end.getTime())) return ["", ""];
+  const start = new Date(end.getTime() - durationMs);
+  const daily = durationMs > 36 * 3_600_000; // > 36h → date labels read better than clock time
+  const fmt = (d: Date) => daily
+    ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" })
+    : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: false, timeZone: "America/New_York" });
+  return [fmt(start), fmt(end)];
+}
+
+/** Tiny inline area sparkline. Scales to its container width; fixed small height.
+ *  Pass `axisLabels` (from sparkTimeLabels) to print start/end time under the line. */
+function Sparkline({ data, accent, height = 22, axisLabels }: { data: number[]; accent: string; height?: number; axisLabels?: [string, string] }) {
   if (!data || data.length < 1) return null;
   const W = 100; // viewBox width; SVG stretches to container via width:100%
   // A single point can't show a trend — draw a flat baseline so the card isn't empty.
@@ -357,16 +372,24 @@ function Sparkline({ data, accent, height = 22 }: { data: number[]; accent: stri
   const area = `${line} L${W},${height} L0,${height} Z`;
   const gradId = `spark-${accent.replace(/[^a-z0-9]/gi, "")}`;
   return (
-    <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" style={{ width: "100%", height, display: "block" }}>
-      <defs>
-        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={accent} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={accent} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#${gradId})`} />
-      <path d={line} fill="none" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-    </svg>
+    <div style={{ width: "100%" }}>
+      <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" style={{ width: "100%", height, display: "block" }}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={accent} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={accent} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={area} fill={`url(#${gradId})`} />
+        <path d={line} fill="none" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      {axisLabels && (axisLabels[0] || axisLabels[1]) && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2, fontSize: 8, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.5, lineHeight: 1 }}>
+          <span>{axisLabels[0]}</span>
+          <span>{axisLabels[1]}</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -549,7 +572,6 @@ const SECTION_TAB = {
   controls: "infra",
   // Renders under the "Supabase / Users" nav item (Auth · Supabase key status card).
   auth:     "auth",
-  activity: "activity",
 } as const;
 
 interface FeedbackItem {
@@ -1200,7 +1222,7 @@ function OverviewSection({ metrics }: {
 
 // FE / BE tab + accordion (one section open at a time). The `tab` of each
 // section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "infra" | "auth" | "activity";
+type OwnerTab = "overview" | "infra" | "auth";
 
 export default function OwnerDashboard() {
   const isMobile = useIsMobile();
@@ -1210,7 +1232,7 @@ export default function OwnerDashboard() {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
-      const VALID_TABS: OwnerTab[] = ["overview","infra","activity"];
+      const VALID_TABS: OwnerTab[] = ["overview","infra"];
       const param = new URLSearchParams(window.location.search).get("tab") as OwnerTab | null;
       if (param && VALID_TABS.includes(param)) {
         setOwnerTab(param);
@@ -1230,7 +1252,7 @@ export default function OwnerDashboard() {
   // keeps this page mounted, so the mount effect above won't re-run).
   const searchParams = useSearchParams();
   useEffect(() => {
-    const VALID_TABS: OwnerTab[] = ["overview","infra","activity"];
+    const VALID_TABS: OwnerTab[] = ["overview","infra"];
     const param = searchParams.get("tab") as OwnerTab | null;
     if (param && VALID_TABS.includes(param)) {
       setOwnerTab(param);
@@ -2055,7 +2077,6 @@ export default function OwnerDashboard() {
     { id: "overview",  label: "Overview" },
     { id: "infra",     label: "Infra" },
     { id: "auth",      label: "Supabase / Users", badge: clerk?.stats?.userCount ?? undefined },
-    { id: "activity",  label: "Activity" },
   ];
   // Inject feedback badge on overview
   const feedbackBadge = feedbackOpenCount > 0 ? feedbackOpenCount : undefined;
@@ -2330,6 +2351,14 @@ export default function OwnerDashboard() {
         {/* ── Overview dashboard (real front-end data) ── */}
         {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} />}
 
+        {/* ── Flow / EM ticker visit trackers (overview tab, above feedback) ── */}
+        {ownerTab === "overview" && (
+          <>
+            <TickerVisitsCard source="flow" icon="📡" label="Flow · Ticker Visits" />
+            <TickerVisitsCard source="em" icon="🎯" label="EM · Ticker Visits" />
+          </>
+        )}
+
         {/* ── Customer feedback feed (overview tab) ── */}
         {ownerTab === "overview" && (
         <AccordionCard
@@ -2505,7 +2534,14 @@ export default function OwnerDashboard() {
               mono
               footer={cfMetrics?.unconfigured && cfMetrics.egress.value == null
                 ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
-                : <Sparkline data={cfMetrics?.egress.spark ?? []} accent={HOME_THEME.orange} />}
+                : <Sparkline
+                    data={cfMetrics?.egress.spark ?? []}
+                    accent={HOME_THEME.orange}
+                    axisLabels={sparkTimeLabels(
+                      renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
+                      cfMetrics?.fetchedAt
+                    )}
+                  />}
             />
             <StatCard
               label={`Host Net · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
@@ -2520,7 +2556,14 @@ export default function OwnerDashboard() {
               mono
               footer={renderMetrics?.unconfigured && renderMetrics.bandwidth.value == null
                 ? <div style={{ fontSize: 9, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
-                : <Sparkline data={renderMetrics?.bandwidth.spark ?? []} accent={HOME_THEME.cyan} />}
+                : <Sparkline
+                    data={renderMetrics?.bandwidth.spark ?? []}
+                    accent={HOME_THEME.cyan}
+                    axisLabels={sparkTimeLabels(
+                      renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
+                      renderMetrics?.fetchedAt
+                    )}
+                  />}
             />
             <StatCard
               label="Memory · App RSS"
@@ -2540,7 +2583,14 @@ export default function OwnerDashboard() {
                 : "—"}
               accent={cpuAccent}
               mono
-              footer={<Sparkline data={renderMetrics?.cpu.spark ?? []} accent={cpuAccent} />}
+              footer={<Sparkline
+                data={renderMetrics?.cpu.spark ?? []}
+                accent={cpuAccent}
+                axisLabels={sparkTimeLabels(
+                  renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
+                  renderMetrics?.fetchedAt
+                )}
+              />}
             />
             <div style={{ containerType: "inline-size", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 4px", overflow: "hidden" }}>
               <div style={{ fontSize: "clamp(7px, 6cqw, 9px)", fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>Updated</div>
@@ -3046,227 +3096,7 @@ export default function OwnerDashboard() {
         </AccordionCard>
         )}
 
-        {/* ── Page activity by nav group ── */}
-        {SECTION_TAB.activity === ownerTab && (() => {
-          // Friendly label lookup for any page_key the feed surfaces, even pages
-          // that aren't in NAV_GROUPS (so the feed can show their real name).
-          const labelFor = (key: string): string => {
-            const hit = NAV_GROUPS.flatMap((g) => g.items).find(
-              (it) => it.href.replace(/^\//, "") === key || it.href === key
-            );
-            return hit?.label ?? key;
-          };
-          // Recent-activity feed: every tracked page that has a last-seen stamp,
-          // newest first. This is the live "who's been hit" log the dealer wants.
-          const feed = pageStatuses
-            .filter((p) => p.lastSeen && !isNaN(new Date(p.lastSeen).getTime()))
-            .sort((a, b) => new Date(b.lastSeen!).getTime() - new Date(a.lastSeen!).getTime())
-            .slice(0, 14);
-          const totalVisits = pageStatuses.reduce((sum, p) => sum + (p.totalLoads ?? 0), 0);
-          const activeCount = pageStatuses.filter((p) => p.status === "active").length;
-
-          return (
-        <div style={{ ...homePanelStyle }}>
-          <div
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${HOME_THEME.border}` }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <SectionLabel>Page Activity</SectionLabel>
-              <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
-                {totalVisits.toLocaleString()} visits · {activeCount} active now
-              </span>
-            </div>
-          </div>
-
-          {(
-          <div style={{ padding: "14px", display: "flex", flexDirection: "column", gap: 14 }}>
-            {/* Legend — what the three states mean + counter caveat */}
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 15, color: HOME_THEME.text, opacity: 1 }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 9, height: 9, borderRadius: "50%", background: HOME_THEME.green, boxShadow: `0 0 6px ${HOME_THEME.green}` }} />
-                <b style={{ color: HOME_THEME.green, fontWeight: 700 }}>Open now</b> — a tab has it open
-              </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 9, height: 9, borderRadius: "50%", background: HOME_THEME.orange, boxShadow: `0 0 6px ${HOME_THEME.orange}` }} />
-                <b style={{ color: HOME_THEME.orange, fontWeight: 700 }}>Seen before</b> — visited, none open
-              </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 9, height: 9, borderRadius: "50%", background: HOME_THEME.red }} />
-                <b style={{ color: HOME_THEME.red, fontWeight: 700 }}>Never visited</b> — no load recorded yet
-              </span>
-              <span style={{ marginLeft: "auto", fontStyle: "italic", fontSize: 15 }}>
-                Counts start from this deploy — not backfilled.
-              </span>
-            </div>
-
-            {/* Recent activity feed */}
-            <div style={{ ...homePanelStyle, overflow: "hidden" }}>
-              <div style={{
-                display: "flex", alignItems: "center", gap: 8,
-                padding: "8px 14px",
-                borderBottom: `1px solid ${HOME_THEME.border}`,
-                background: "rgba(13,17,25,0.60)",
-              }}>
-                <span style={{ fontSize: 15 }}>🛰️</span>
-                <span style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
-                  Recent Activity
-                </span>
-                <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 1, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
-                  newest first
-                </span>
-              </div>
-              <div style={{ maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin" }}>
-                {feed.length === 0 ? (
-                  <div style={{ padding: "12px 14px", fontSize: 15, color: HOME_THEME.text, opacity: 1 }}>
-                    No page loads recorded yet.
-                  </div>
-                ) : feed.map((p) => {
-                  const active = p.status === "active";
-                  return (
-                    <div
-                      key={p.pageKey}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 10,
-                        padding: "6px 14px",
-                        borderBottom: `1px solid ${HOME_THEME.border}`,
-                        fontFamily: "var(--font-mono)", fontSize: 15,
-                      }}
-                    >
-                      <span style={{
-                        width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
-                        background: active ? HOME_THEME.green : HOME_THEME.orange,
-                        boxShadow: active ? `0 0 6px ${HOME_THEME.green}` : `0 0 5px ${HOME_THEME.orange}`,
-                      }} />
-                      <span style={{ color: HOME_THEME.text, fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                        {labelFor(p.pageKey)}
-                      </span>
-                      <span style={{ color: HOME_THEME.text, opacity: 1, flexShrink: 0 }}>
-                        {(p.totalLoads ?? 0).toLocaleString()}×
-                      </span>
-                      <span style={{ color: active ? HOME_THEME.green : "#fff", flexShrink: 0, minWidth: 64, textAlign: "right" }}>
-                        {fmtAgo(p.lastSeen)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Flow ticker visit tracker */}
-            <TickerVisitsCard source="flow" icon="📡" label="Flow · Ticker Visits" />
-
-            {/* Estimated Moves ticker visit tracker */}
-            <TickerVisitsCard source="em" icon="🎯" label="EM · Ticker Visits" />
-
-            {/* Per-group grid */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, 1fr)", gap: 10 }}>
-            {NAV_GROUPS.map((group) => {
-              return (
-                <div key={group.id} style={{ ...homePanelStyle, overflow: "hidden" }}>
-                  {/* Group header */}
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    padding: "8px 14px",
-                    borderBottom: `1px solid ${HOME_THEME.border}`,
-                    background: "rgba(13,17,25,0.60)",
-                  }}>
-                    <span style={{ fontSize: 16 }}>{group.emoji}</span>
-                    <span style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
-                      {group.label}
-                    </span>
-                  </div>
-                  {/* Items */}
-                  <div style={{ display: "flex", flexDirection: "column" }}>
-                    {group.items.map((item) => {
-                      const status = pageStatuses.find(
-                        (p) => p.pageKey === item.href.replace(/^\//, "") || p.pageKey === item.href
-                      );
-                      const active = status?.status === "active";
-                      const seen = status?.lastSeen;
-                      const loads = status?.totalLoads ?? 0;
-                      return (
-                        <div
-                          key={item.href}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: 8,
-                            padding: "7px 14px",
-                            borderBottom: `1px solid ${HOME_THEME.border}`,
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                            {(() => {
-                              const dot = active ? HOME_THEME.green : status ? HOME_THEME.orange : HOME_THEME.red;
-                              return (
-                                <span
-                                  style={{
-                                    width: 9,
-                                    height: 9,
-                                    borderRadius: "50%",
-                                    flexShrink: 0,
-                                    background: status ? dot : "transparent",
-                                    border: status ? "none" : `1px solid ${HOME_THEME.red}66`,
-                                    boxShadow: active ? `0 0 7px ${dot}` : status ? `0 0 5px ${dot}` : "none",
-                                  }}
-                                />
-                              );
-                            })()}
-                            <span style={{ fontSize: 15, fontWeight: 600, color: HOME_THEME.text, opacity: active ? 1 : 0.7, whiteSpace: "nowrap" }}>{item.label}</span>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                            {/* Visit count pill */}
-                            <span
-                              title={`${loads.toLocaleString()} total loads`}
-                              style={{
-                                fontSize: 15,
-                                fontFamily: "var(--font-mono)",
-                                fontWeight: 700,
-                                padding: "2px 7px",
-                                borderRadius: 4,
-                                color: loads > 0 ? HOME_THEME.cyan : `${HOME_THEME.text}44`,
-                                background: loads > 0 ? `${HOME_THEME.cyan}14` : "transparent",
-                                border: `1px solid ${loads > 0 ? `${HOME_THEME.cyan}33` : HOME_THEME.border}`,
-                              }}
-                            >
-                              {loads.toLocaleString()}×
-                            </span>
-                            {status ? (
-                              active ? (
-                                <StatusBadge ok label="Open now" />
-                              ) : (
-                                <span style={{
-                                  display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px",
-                                  borderRadius: 999, fontSize: 15, fontWeight: 500,
-                                  background: `${HOME_THEME.orange}1f`, border: `1px solid ${HOME_THEME.orange}55`, color: HOME_THEME.orange,
-                                }}>
-                                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: HOME_THEME.orange }} />
-                                  Seen before
-                                </span>
-                              )
-                            ) : (
-                              <span style={{ fontSize: 15, color: HOME_THEME.red, opacity: 1 }}>never visited</span>
-                            )}
-                            {seen && (
-                              <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
-                                {fmtAgo(seen)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-            </div>
-          </div>
-          )}
-        </div>
-          );
-        })()}
+        {/* Activity tab removed — flow/EM ticker visit trackers moved to Overview. */}
 
 
       </div>
