@@ -138,6 +138,31 @@ class FlowGexAccumulator {
     this.lastDate = null;
     this._seenSize = new WeakMap();
   }
+
+  /**
+   * Bulk-load pre-aggregated per-strike buy/sell volumes (e.g. rebuilt from
+   * Postgres flow_prints on process boot) without going through ingestTape's
+   * per-order delta tracking. Merges additively so this can also be used to
+   * fold in a rehydrate batch on top of whatever's already accumulated.
+   * @param {string} date 'YYYY-MM-DD'
+   * @param {string} expiration
+   * @param {Map<number, {callBuyVol,callSellVol,putBuyVol,putSellVol}>} inventoryByStrike
+   */
+  hydrate(date, expiration, inventoryByStrike) {
+    if (!date || !inventoryByStrike) return;
+    this.lastDate = date;
+    for (const [strike, vols] of inventoryByStrike) {
+      const key = `${date}|${expiration}|${strike}`;
+      const inv = this.dealerInventory.get(key) || {
+        callBuyVol: 0, callSellVol: 0, putBuyVol: 0, putSellVol: 0,
+      };
+      inv.callBuyVol += Number(vols.callBuyVol ?? 0);
+      inv.callSellVol += Number(vols.callSellVol ?? 0);
+      inv.putBuyVol += Number(vols.putBuyVol ?? 0);
+      inv.putSellVol += Number(vols.putSellVol ?? 0);
+      this.dealerInventory.set(key, inv);
+    }
+  }
 }
 
 module.exports = {

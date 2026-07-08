@@ -34,14 +34,18 @@ function emBadgeDataUri(label: "EM" | "2× EM"): string {
 // metric-tinted cells. Used for neutral numeric values / signs.
 const SOFT_WHITE = "#c3ccda";
 
-const NET_COLS  = ["gex", "dex", "chex", "flow"] as const;
+const NET_COLS  = ["gex", "dex", "chex", "vex"] as const;
 type NetCol = typeof NET_COLS[number];
 
 const COL_LABELS: Record<NetCol, string> = {
-  gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", flow: "FLOW GEX",
+  gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", vex: "NET VEX",
 };
 
 const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
+
+// Stable empty map for SPY/QQQ (no dealer-flow tracking) so passing it as a
+// prop doesn't create a new reference every render.
+const EMPTY_FLOW_MAP = new Map<number, number>();
 
 // Change-mode: "live" = normal GEX values; 15/30/60 = ΔGEX over N minutes,
 // sourced from the strike_growth table (same /proxy/strike-growth/by-expiry
@@ -83,7 +87,7 @@ interface ComputedRow {
   gex: number;
   dex: number;
   chex: number;
-  flow: number;
+  vex: number;
 }
 
 interface ComputedResult {
@@ -226,6 +230,7 @@ function computeRows(
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol" | "flow",
+  flowGexMap: Map<number, number> | null = null,
 ): ComputedResult {
   let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
   let atmStrike = 0;
@@ -241,20 +246,27 @@ function computeRows(
   const out: ComputedRow[] = rows.map(r => {
     const cd = liveData[r.callSym ?? ""] || {};
     const pd = liveData[r.putSym  ?? ""] || {};
+    // Flow mode only swaps the OI/vol basis for GEX itself — DEX/CHEX/VEX stay
+    // on the OI+Vol basis (mirrors the home page heatmap's Flow GEX toggle).
     const volOnly = contractMode === "vol";
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
     const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
     return {
       strike: r.strike,
       isATM: r.strike === atmStrike,
-      gex:  (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
+      // Flow GEX = gamma × dealer inventory × spot², keyed off real dealer
+      // inventory (SPX only — SPY/QQQ have no dealer-flow tracking, so the
+      // map is empty for them and this falls back to 0).
+      gex: contractMode === "flow"
+        ? (flowGexMap?.get(r.strike) ?? 0)
+        : (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
       dex:  (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
       chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
-      flow: contractMode === "flow" ? 0 : 0,  // SPY/QQQ: no dealer inventory, flow GEX = 0
+      vex:  ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
     };
   });
 
-  const maxAbs = { gex: 1, dex: 1, chex: 1, flow: 1 } as Record<NetCol, number>;
+  const maxAbs = { gex: 1, dex: 1, chex: 1, vex: 1 } as Record<NetCol, number>;
   out.forEach(r => {
     NET_COLS.forEach(c => { if (Math.abs(r[c]) > maxAbs[c]) maxAbs[c] = Math.abs(r[c]); });
   });
@@ -283,8 +295,9 @@ function computeTotals(
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol" | "flow",
+  flowGexMap: Map<number, number> | null = null,
 ): Record<NetCol, number> {
-  const totals = { gex: 0, dex: 0, chex: 0, flow: 0 } as Record<NetCol, number>;
+  const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
   const volOnly = contractMode === "vol";
 
   strikes.forEach(r => {
@@ -292,10 +305,12 @@ function computeTotals(
     const pd = liveData[r.putSym  ?? ""] || {};
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
     const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
-    totals.gex  += (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
+    totals.gex  += contractMode === "flow"
+      ? (flowGexMap?.get(r.strike) ?? 0)
+      : (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
     totals.dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
     totals.chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
-    totals.flow += 0;  // SPY/QQQ: no dealer inventory, flow GEX = 0
+    totals.vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;
   });
   return totals;
 }
@@ -304,7 +319,7 @@ function computeTotals(
 
 function TickerPanel({
   ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  changeMode, changeMap,
+  changeMode, changeMap, flowGexMap,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -320,12 +335,15 @@ function TickerPanel({
   /** Live/15m/30m/60m Δ switcher — only ever affects the NET GEX column. */
   changeMode: ChangeMode;
   changeMap: Map<number, number> | null;
+  /** Real dealer-inventory Flow GEX per strike (SPX only; null/empty for
+   *  SPY/QQQ, which have no dealer-flow tracking). */
+  flowGexMap: Map<number, number> | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
   const computedFull = strikes.length
-    ? computeRows(strikes, liveData, spot, contractMode)
+    ? computeRows(strikes, liveData, spot, contractMode, flowGexMap)
     : null;
 
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
@@ -355,7 +373,7 @@ function TickerPanel({
     : null;
 
   const totals = strikes.length && spot > 0
-    ? computeTotals(strikes, liveData, spot, contractMode)
+    ? computeTotals(strikes, liveData, spot, contractMode, flowGexMap)
     : null;
 
   // When a Δ mode is active, the NET GEX column swaps to strike_growth's
@@ -442,9 +460,10 @@ function TickerPanel({
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
         {NET_COLS.map(c => {
           const isChangeCol = c === "gex" && isChangeActive;
+          const isFlowCol = c === "gex" && !isChangeActive && contractMode === "flow";
           return (
-            <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: isChangeCol ? HT.orange : HT.cyan, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              {COL_LABELS[c]}{isChangeCol ? ` ·Δ${changeMode}` : ""}
+            <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: isChangeCol ? HT.orange : isFlowCol ? HT.green : HT.cyan, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              {COL_LABELS[c]}{isChangeCol ? ` ·Δ${changeMode}` : isFlowCol ? " ·FLOW" : ""}
             </div>
           );
         })}
@@ -601,6 +620,10 @@ export function MultGreekClient({
   const [changeMode, setChangeMode] = useState<ChangeMode>("live");
   const [changeMaps, setChangeMaps] = useState<Record<Ticker, Map<number, number>>>({ SPX: new Map(), SPY: new Map(), QQQ: new Map() });
   const [changeTick, setChangeTick] = useState(0);
+  // Real dealer-inventory Flow GEX per strike — SPX only (/proxy/gex carries
+  // flowGEX on every gexRow from the live FlowGexAccumulator). SPY/QQQ have no
+  // dealer-flow tracking so their maps stay empty and the column reads 0.
+  const [flowGexMap, setFlowGexMap] = useState<Map<number, number>>(new Map());
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
@@ -647,6 +670,32 @@ export function MultGreekClient({
     })();
     return () => { cancelled = true; };
   }, [activeExpiry]);
+
+  // Fetch real per-strike Flow GEX (SPX only) whenever the FLOW GEX toggle is
+  // active. /proxy/gex's gexRows always carry flowGEX (computed live from the
+  // FlowGexAccumulator dealer inventory), so this is a plain read, not a mode
+  // switch on the server. Re-polled every 15s alongside the other auto-refresh
+  // loops so the column doesn't go stale while FLOW GEX stays selected.
+  useEffect(() => {
+    if (isStatic || contractMode !== "flow") { setFlowGexMap(new Map()); return; }
+    let cancelled = false;
+    const fetchFlow = async () => {
+      try {
+        const res = await fetch(`/proxy/gex?basis=flow`, { cache: "no-store" });
+        const json = await res.json().catch(() => null);
+        if (cancelled || !Array.isArray(json?.gexRows)) return;
+        const m = new Map<number, number>();
+        for (const r of json.gexRows) {
+          const strike = Number(r.strike);
+          if (Number.isFinite(strike)) m.set(strike, Number(r.flowGEX ?? 0));
+        }
+        setFlowGexMap(m);
+      } catch { /* keep last-known map */ }
+    };
+    fetchFlow();
+    const id = setInterval(fetchFlow, 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [isStatic, contractMode]);
 
   // Load the strike→ΔGEX map for each ticker when a change mode is on. Reuses
   // /proxy/strike-growth/by-expiry (same endpoint the options-chain page's
@@ -1076,6 +1125,7 @@ export function MultGreekClient({
             captureWindow={captureWindow}
             changeMode={changeMode}
             changeMap={changeMaps[ticker]}
+            flowGexMap={ticker === "SPX" ? flowGexMap : EMPTY_FLOW_MAP}
           />
         ))}
       </div>

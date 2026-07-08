@@ -29,6 +29,12 @@ async function ensureVolColumn(p) {
   if (columnEnsured) return;
   try {
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL');
+    // Raw per-strike call/put gamma, alongside the already-multiplied net_gex /
+    // net_vol_gex columns. Needed to reconstruct Flow GEX (gamma × dealer
+    // inventory × spot²) for any past instant from flow_prints, instead of only
+    // ever having "now"'s value out of the in-memory FlowGexAccumulator.
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_gamma REAL');
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_gamma REAL');
     columnEnsured = true;
   } catch (e) {
     console.warn('[gex-history] ensure net_vol_gex column failed:', e.message);
@@ -114,12 +120,16 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
       let netVolGex = Number(row.netVolGEX);
       if (!Number.isFinite(netVolGex)) netVolGex = null;
       else if (Math.abs(netVolGex) < 1e-30) netVolGex = 0;
-      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
-      params.push(now, date, expiry, spot, strike, netGex, netVolGex);
+      let callGamma = Number(row.callGamma);
+      if (!Number.isFinite(callGamma)) callGamma = null;
+      let putGamma = Number(row.putGamma);
+      if (!Number.isFinite(putGamma)) putGamma = null;
+      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
+      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma);
     }
     if (!values.length) return;
     await p.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex)
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma)
        VALUES ${values.join(', ')}`,
       params
     );

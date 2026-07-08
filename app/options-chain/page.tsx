@@ -559,15 +559,21 @@ export default function OptionsChainPage() {
       setChainError(null);
       setLoadProgress(8);
 
-      // If flow mode, fetch flowGEX data from /proxy/gex
+      // Flow GEX is only tracked for SPX (the live FlowGexAccumulator has no
+      // dealer inventory for other tickers) — fetch it only when the active
+      // ticker is SPX, so other tickers' columns read 0 instead of SPX's
+      // strikes/values under a different chain. Response shape is
+      // { gexRows: [...] } (each row carries flowGEX), not { ok, rows } —
+      // the previous check against those never matched, so this toggle never
+      // actually populated any values before this fix.
       let flowGexMap: Map<number, number> = new Map();
-      if (dataModeRef.current === "flow") {
+      if (dataModeRef.current === "flow" && ticker.toUpperCase() === "SPX") {
         try {
           const gexRes = await fetch(`/proxy/gex?basis=flow${bust ? "&noCache=1" : ""}`);
           const gexJson = await gexRes.json().catch(() => null);
-          if (gexJson?.ok && Array.isArray(gexJson.rows)) {
+          if (Array.isArray(gexJson?.gexRows)) {
             flowGexMap = new Map(
-              gexJson.rows.map((r: any) => [Number(r.strike), Number(r.flowGEX ?? 0)])
+              gexJson.gexRows.map((r: any) => [Number(r.strike), Number(r.flowGEX ?? 0)])
             );
           }
         } catch {

@@ -29,6 +29,7 @@ const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./state/gex-history-writer');
 const { writeFlowTape } = require('./state/flow-history-writer');
+const { rehydrateAccumulator } = require('./state/flow-gex-rehydrate');
 const { writeEsCandles, writeNqCandles } = require('./state/es-candle-writer');
 const { recordSignals } = require('./state/momentum-bias-writer');
 const { getMomentumBiasIndex } = require('../lib/momentumBias.js');
@@ -1675,6 +1676,11 @@ class TastytradeProxy {
     const { ymd } = todayYmd();
     this.expiry = expirations.find((e) => e >= ymd) || expirations[0] || '';
     marketState.setExpiry(this.expiry);
+
+    // Rebuild today's dealer inventory from flow_prints (already persisted by
+    // the 500ms flow tape writer) so a mid-day process restart doesn't reset
+    // Flow GEX to zero. Fire-and-forget; no-ops without DATABASE_URL.
+    rehydrateAccumulator(this.flowGexAccumulator, this.expiry).catch(() => {});
 
     // Use the resolved dxLink streamer symbol for the underlying quote.
     // e.g. /ESU6 -> /ESU26:XCME ; SPX -> SPX ; NVDA -> NVDA
