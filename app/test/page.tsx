@@ -3201,7 +3201,22 @@ function RegimeCandleChart({
       grid: { vertLines: { color: "rgba(255,255,255,.06)" }, horzLines: { color: "rgba(255,255,255,.06)" } },
       rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
       leftPriceScale: { visible: false },
-      timeScale: { borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false, rightOffset: 2 },
+      // Axis tick labels + crosshair time both forced to ET regardless of the
+      // viewer's browser timezone — lightweight-charts otherwise formats
+      // UTCTimestamp in local time, same fix already used in EsCandlesCard.
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false, rightOffset: 2,
+        tickMarkFormatter: (time: Time) =>
+          typeof time === "number"
+            ? new Date(time * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
+            : "",
+      },
+      localization: {
+        timeFormatter: (time: unknown) =>
+          typeof time === "number"
+            ? new Date(time * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
+            : "",
+      },
       crosshair: { mode: CrosshairMode.Normal },
     });
     const series = chart.addSeries(CandlestickSeries, {
@@ -3387,6 +3402,7 @@ interface RegimeAlertRow {
   return_pts: number | string | null;
   max_up_pts: number | string | null;
   max_down_pts: number | string | null;
+  direction: number | string | null;
   bars_elapsed: number | string | null;
 }
 
@@ -3458,7 +3474,14 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
             const isOpen = r.status === "open";
             const startTs = Number(r.start_ts);
             const bars = r.bars_elapsed != null ? Number(r.bars_elapsed) : null;
-            const returnPts = r.return_pts != null ? Number(r.return_pts) : null;
+            // direction flips raw price movement into a win/loss relative to
+            // what the regime implied — e.g. a down-trend alert that actually
+            // moved down shows positive (it went the way of the regime), the
+            // same drop under an up-trend alert shows negative. Rows opened
+            // before this existed have direction=null, treated as +1 (no flip).
+            const direction = r.direction != null ? Number(r.direction) : 1;
+            const rawReturnPts = r.return_pts != null ? Number(r.return_pts) : null;
+            const returnPts = rawReturnPts != null ? rawReturnPts * direction : null;
             const maxUpPts = r.max_up_pts != null ? Number(r.max_up_pts) : null;
             const maxDownPts = r.max_down_pts != null ? Number(r.max_down_pts) : null;
             const conf = r.start_confidence != null ? Math.round(Number(r.start_confidence) * 100) : null;
@@ -3786,7 +3809,7 @@ function RegimeEngineTab() {
             accent={LIGHT_BLUE}
             padding={16}
             title={<span style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em" }}>Alert Log · Trend/Panic Reactions</span>}
-            subtitle="Server-side HMM, refit every 60s — logs every flip into Trend/Panic and closes it out with the realized price move once the regime flips away"
+            subtitle="Server-side HMM, refit every 60s — logs every flip into Trend/Panic and closes it out once the regime flips away. Return (pts) is signed as a win/loss relative to the regime's own direction, not raw price change"
           >
             <RegimeAlertLog ticker={ticker} />
           </Card>

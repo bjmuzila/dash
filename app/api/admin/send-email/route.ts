@@ -48,7 +48,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, history });
     }
 
-    const recipients = await listAllUsersForBroadcast();
+    const suppressed = await getUnsubscribedSet().catch(() => new Set<string>());
+    const recipients = (await listAllUsersForBroadcast()).filter(
+      (r) => !suppressed.has(r.email.trim().toLowerCase())
+    );
     const all = recipients.map((r) => r.email);
     const subscribers = recipients.filter((r) => r.paid).map((r) => r.email);
     // Signed up (has an account) but never converted to a paid plan.

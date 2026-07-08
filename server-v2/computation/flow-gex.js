@@ -20,6 +20,12 @@ class FlowGexAccumulator {
     this.dealerInventory = new Map();
     // Track current trading day to detect roll/reset
     this.lastDate = null;
+    // bucket()'s tape is a rolling snapshot (same order objects persist and
+    // mutate in place while coalescing) re-ingested every 500ms tick — track
+    // the size already counted per order so re-ingesting doesn't re-add it,
+    // and a coalesced size bump only contributes its delta. WeakMap so
+    // evicted/spliced orders are freed automatically.
+    this._seenSize = new WeakMap();
   }
 
   /**
@@ -37,12 +43,20 @@ class FlowGexAccumulator {
     if (this.lastDate && this.lastDate !== currentDate) {
       // Market opened on a new day → reset inventory
       this.dealerInventory.clear();
+      this._seenSize = new WeakMap();
     }
     this.lastDate = currentDate;
 
     for (const order of tape) {
       const { type, side, strike, size } = order;
       if (!(strike > 0) || !(size > 0)) continue;
+
+      // Only count what's new since the last tick for this order (see
+      // _seenSize comment in the constructor).
+      const lastSeen = this._seenSize.get(order) ?? 0;
+      const delta = size - lastSeen;
+      if (delta <= 0) continue;
+      this._seenSize.set(order, size);
 
       const key = `${currentDate}|${expiration}|${strike}`;
       if (!this.dealerInventory.has(key)) {
@@ -60,15 +74,15 @@ class FlowGexAccumulator {
       // Taker sell → dealer long (adds to inventory)
       if (type === 'C') {
         if (side === 'buy') {
-          inv.callSellVol += size; // dealer sold call to taker
+          inv.callSellVol += delta; // dealer sold call to taker
         } else {
-          inv.callBuyVol += size; // dealer bought call from taker
+          inv.callBuyVol += delta; // dealer bought call from taker
         }
       } else if (type === 'P') {
         if (side === 'buy') {
-          inv.putSellVol += size; // dealer sold put to taker
+          inv.putSellVol += delta; // dealer sold put to taker
         } else {
-          inv.putBuyVol += size; // dealer bought put from taker
+          inv.putBuyVol += delta; // dealer bought put from taker
         }
       }
     }
@@ -122,6 +136,7 @@ class FlowGexAccumulator {
   reset() {
     this.dealerInventory.clear();
     this.lastDate = null;
+    this._seenSize = new WeakMap();
   }
 }
 

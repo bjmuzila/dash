@@ -67,8 +67,22 @@ function dteFromIso(expirationIso, now = Date.now()) {
  */
 function yearsToExpiry(expirationIso, now = Date.now()) {
   const exp = new Date(`${expirationIso}T20:00:00Z`).getTime();
-  const ms = Math.max(exp - now, 60 * 60 * 1000); // floor 1h
-  return ms / (365 * 24 * 60 * 60 * 1000);
+  const rawMs = exp - now;
+  if (rawMs > 60 * 60 * 1000) return rawMs / (365 * 24 * 60 * 60 * 1000);
+  // Inside the last hour (or past nominal close): floor by RTH fraction
+  // remaining today, not a flat 1h — the flat floor overstates T at low-vol/
+  // near-close ATM strikes and blows up BS gamma (matches rthFractionLeft()
+  // in lib/calculations/calculations.ts).
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(now));
+  const g = (t) => Number(parts.find((p) => p.type === t).value);
+  const nowSec = g('hour') * 3600 + g('minute') * 60 + g('second');
+  const open = 9.5 * 3600, close = 16 * 3600, len = close - open;
+  const rthFracLeft = Math.min(Math.max((close - nowSec) / len, 0), 1);
+  const days = Math.max(rthFracLeft, 1 / 78); // floor: ~1 five-min bar
+  return days / 262;
 }
 
 // ---------------------------------------------------------------------------

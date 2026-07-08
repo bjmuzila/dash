@@ -100,6 +100,14 @@ async function ensureSchema() {
       ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS return_pts REAL;
       ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS max_up_pts REAL;
       ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS max_down_pts REAL;
+      -- +1 if this regime's fitted mean return was positive (Trend up / a
+      -- bullish-skewed Panic), -1 if negative. Return (pts) is displayed as
+      -- return_pts * direction, so a move that goes the way the regime
+      -- implied always reads positive ("win"), one that goes against it
+      -- always reads negative ("loss") — regardless of raw price sign.
+      -- NULL on rows opened before this migration; treated as +1 (no flip)
+      -- at read time since we can't reconstruct their fit after the fact.
+      ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS direction SMALLINT;
       CREATE INDEX IF NOT EXISTS idx_regime_alerts_ticker_ts ON regime_alerts(ticker, start_ts DESC);
       CREATE INDEX IF NOT EXISTS idx_regime_alerts_status ON regime_alerts(status);
     `);
@@ -111,14 +119,14 @@ async function ensureSchema() {
   }
 }
 
-async function openAlert({ ticker, label, ts, price, confidence }) {
+async function openAlert({ ticker, label, ts, price, confidence, direction }) {
   const p = getPool();
   if (!p || !(await ensureSchema())) return null;
   try {
     const { rows } = await p.query(
-      `INSERT INTO regime_alerts (ticker, label, status, start_ts, start_price, start_confidence)
-       VALUES ($1,$2,'open',$3,$4,$5) RETURNING id`,
-      [ticker, label, ts, price, confidence ?? null]
+      `INSERT INTO regime_alerts (ticker, label, status, start_ts, start_price, start_confidence, direction)
+       VALUES ($1,$2,'open',$3,$4,$5,$6) RETURNING id`,
+      [ticker, label, ts, price, confidence ?? null, direction ?? 1]
     );
     return rows[0]?.id ?? null;
   } catch (e) {
@@ -153,7 +161,7 @@ async function getRecentAlerts({ ticker = '', limit = 50 } = {}) {
   params.push(Math.min(200, Math.max(1, limit)));
   const sql = `SELECT id, ticker, label, status, start_ts, start_price, start_confidence,
                       end_ts, end_price, return_pct, max_up_pct, max_down_pct,
-                      return_pts, max_up_pts, max_down_pts, bars_elapsed
+                      return_pts, max_up_pts, max_down_pts, direction, bars_elapsed
                FROM regime_alerts
                ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                ORDER BY start_ts DESC LIMIT $${params.length}`;
@@ -366,10 +374,15 @@ async function runOnceForTicker(base, tk) {
   }
   // Open a new alert if we flipped INTO Trend or Panic.
   if (label === 'Trend' || label === 'Panic') {
-    const id = await openAlert({ ticker: tk.key, label, ts: nowBar.ts, price: nowBar.close, confidence });
+    // direction = which way this regime's fitted mean return leans (+1 up /
+    // -1 down). Stored so the Alert Log can show Return (pts) as a win/loss
+    // relative to the regime's own implied direction instead of raw price sign.
+    const stateMean = hmm.means[hmm.stateIndexByLabel[label]];
+    const direction = Math.sign(stateMean) || 1;
+    const id = await openAlert({ ticker: tk.key, label, ts: nowBar.ts, price: nowBar.close, confidence, direction });
     if (id != null) {
       m.openId = id; m.openLabel = label; m.openStartTs = nowBar.ts; m.openStartPrice = nowBar.close;
-      console.log(`[regime-alerts] opened ${tk.key} ${label} alert #${id} @ ${nowBar.close} (${Math.round(confidence * 100)}% confidence)`);
+      console.log(`[regime-alerts] opened ${tk.key} ${label} alert #${id} @ ${nowBar.close} (${Math.round(confidence * 100)}% confidence, direction ${direction > 0 ? 'up' : 'down'})`);
     }
   }
   m.lastLabel = label;

@@ -2914,6 +2914,7 @@ class TastytradeProxy {
       putWall,
       gexFlip,
       totalNetGex,
+      totalFlowGex,
     });
 
     // Flow is aggregated + broadcast on its own 500ms loop (see flowTimer).

@@ -305,6 +305,12 @@ async function logPinEvents(p, date, minSnaps = 3) {
            WHERE date = $1 AND atm_iv > 0
            ORDER BY symbol, ts DESC
          ),
+         sub AS (
+           SELECT symbol, ts, iv_rv_spread, range_pct,
+             ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY ts DESC) AS rn
+           FROM vol_pin_snapshots
+           WHERE date = $1 AND iv_rv_spread IS NOT NULL
+         ),
          trend AS (
            SELECT symbol,
              COUNT(*) AS n_snaps,
@@ -312,12 +318,8 @@ async function logPinEvents(p, date, minSnaps = 3) {
                - (ARRAY_AGG(iv_rv_spread ORDER BY ts ASC))[1] AS spread_delta,
              (ARRAY_AGG(range_pct ORDER BY ts DESC))[1]
                - (ARRAY_AGG(range_pct ORDER BY ts ASC))[1] AS range_delta
-           FROM (
-             SELECT symbol, ts, iv_rv_spread, range_pct
-             FROM vol_pin_snapshots
-             WHERE date = $1 AND iv_rv_spread IS NOT NULL
-             ORDER BY symbol, ts DESC
-           ) sub
+           FROM sub
+           WHERE rn <= $2
            GROUP BY symbol
          )
          SELECT l.symbol, l.ts, l.spot, l.pin_strike, l.iv_rv_spread, l.range_pct,
