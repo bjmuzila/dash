@@ -75,12 +75,20 @@ function computeGexRows(rows, spot, flowInventory = null) {
       callDelta * callVolume * spot * 100 - putDelta * putVolume * spot * 100;
 
     // Flow GEX = gamma × dealer_inventory × spot²
-    // Dealer inventory is mirror of taker flow; positive = dealer long
+    // inv.callNet / inv.putNet are already the DEALER'S OWN signed position
+    // (positive = dealer long, negative = dealer short) — unlike OI-based GEX
+    // (callOI/putOI), which is customer/public open interest and needs the
+    // put term negated to convert "customer long puts" into "dealer implicitly
+    // short puts." That conversion is already baked into inv.putNet's sign, so
+    // negating again here would double-flip it: a dealer net SHORT puts
+    // (inv.putNet < 0) is a short-gamma position and must contribute
+    // NEGATIVE flow GEX, same polarity as being short calls — no separate
+    // sign flip between the two legs like the OI-based formula uses.
     let flowGEX = 0;
     if (flowInventory && flowInventory.has(strike)) {
       const inv = flowInventory.get(strike);
       const callFlowGEX = callGamma * inv.callNet * spot * spot;
-      const putFlowGEX = -(putGamma * inv.putNet * spot * spot);
+      const putFlowGEX = putGamma * inv.putNet * spot * spot;
       flowGEX = callFlowGEX + putFlowGEX;
     }
 

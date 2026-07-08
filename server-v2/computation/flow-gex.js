@@ -117,8 +117,15 @@ class FlowGexAccumulator {
   /**
    * Compute flow GEX contribution for a strike given dealer inventory and gamma.
    * Flow GEX = gamma × dealer_inventory × spot²
-   * - Calls contribute positively (long call = positive gamma exposure)
-   * - Puts contribute negatively (long put = negative gamma exposure)
+   *
+   * callInventory/putInventory are the DEALER'S OWN signed position (positive
+   * = dealer long, negative = dealer short) — not customer/public OI. Unlike
+   * OI-based GEX (which negates the put term to convert "customer long puts"
+   * into "dealer implicitly short puts"), that conversion is already baked
+   * into these signs, so both legs use the same polarity: dealer long
+   * (either side) = positive contribution, dealer short (either side) =
+   * negative contribution. See computeGexRows's inline flowGEX for the same
+   * reasoning (this static method itself isn't currently wired up anywhere).
    * @param {number} callGamma absolute call gamma
    * @param {number} putGamma absolute put gamma
    * @param {number} callInventory dealer call inventory (positive = long)
@@ -129,7 +136,7 @@ class FlowGexAccumulator {
   static computeFlowGEX(callGamma, putGamma, callInventory, putInventory, spot) {
     if (!(spot > 0)) return 0;
     const callGEX = callGamma * callInventory * spot * spot;
-    const putGEX = -(putGamma * putInventory * spot * spot);
+    const putGEX = putGamma * putInventory * spot * spot;
     return callGEX + putGEX;
   }
 
