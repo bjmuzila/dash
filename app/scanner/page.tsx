@@ -181,7 +181,7 @@ type GexRow = {
 };
 type Win = 5 | 15 | 30 | 60;
 type GexSort = "z" | "abs" | "otm" | "pct";
-type ColSort = { col: "latest_chg" | "mean_chg" | "z"; dir: "desc" | "asc" } | null;
+type ColSort = { col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open"; dir: "desc" | "asc" } | null;
 
 function GexScanner() {
   const [rows, setRows] = useState<GexRow[]>([]);
@@ -193,8 +193,10 @@ function GexScanner() {
   const [colSort, setColSort] = useState<ColSort>(null);
   const [moneyness, setMoneyness] = useState<"all" | "otm">("all");
   const [minOtm, setMinOtm] = useState(0.02);
+  const [minExpiry, setMinExpiry] = useState("");
+  const [maxExpiry, setMaxExpiry] = useState("");
 
-  const toggleColSort = (col: "latest_chg" | "mean_chg" | "z") => {
+  const toggleColSort = (col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open") => {
     setColSort(prev =>
       prev?.col === col
         ? { col, dir: prev.dir === "desc" ? "asc" : "desc" }
@@ -202,13 +204,29 @@ function GexScanner() {
     );
   };
 
+  const colSortValue = (r: GexRow, col: NonNullable<ColSort>["col"]) => {
+    switch (col) {
+      case "z": return r.z ?? 0;
+      case "latest_chg": return r.latest_chg;
+      case "mean_chg": return r.mean_chg;
+      case "otm_dist": return r.otm_dist ?? 0;
+      case "pct_open": return r.pct_open ?? -Infinity;
+    }
+  };
+
+  const expiryFilteredRows = rows.filter((r) => {
+    if (minExpiry && r.expiry < minExpiry) return false;
+    if (maxExpiry && r.expiry > maxExpiry) return false;
+    return true;
+  });
+
   const displayRows = colSort
-    ? [...rows].sort((a, b) => {
-        const av = colSort.col === "z" ? (a.z ?? 0) : (colSort.col === "latest_chg" ? a.latest_chg : a.mean_chg);
-        const bv = colSort.col === "z" ? (b.z ?? 0) : (colSort.col === "latest_chg" ? b.latest_chg : b.mean_chg);
+    ? [...expiryFilteredRows].sort((a, b) => {
+        const av = colSortValue(a, colSort.col);
+        const bv = colSortValue(b, colSort.col);
         return colSort.dir === "desc" ? bv - av : av - bv;
       })
-    : rows;
+    : expiryFilteredRows;
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -277,6 +295,20 @@ function GexScanner() {
             <option value={3}>3.0+</option>
           </select>
         </label>
+        <span style={{ color: HOME_THEME.border }}>|</span>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.cyan }}>
+          min expiry
+          <input type="date" value={minExpiry} onChange={(e) => setMinExpiry(e.target.value)}
+            style={{ fontSize: 15, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.cyan }}>
+          max expiry
+          <input type="date" value={maxExpiry} onChange={(e) => setMaxExpiry(e.target.value)}
+            style={{ fontSize: 15, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
+        </label>
+        {(minExpiry || maxExpiry) && (
+          <button onClick={() => { setMinExpiry(""); setMaxExpiry(""); }} style={seg(false)}>Clear</button>
+        )}
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
       </div>
 
@@ -307,8 +339,24 @@ function GexScanner() {
                   </th>
                 );
               })}
-              <th style={th}>OTM%</th>
-              <th style={th}>%vsOpen</th>
+              {([
+                { col: "otm_dist" as const, label: "OTM%" },
+                { col: "pct_open" as const, label: "%vsOpen" },
+              ]).map(({ col, label }) => {
+                const active = colSort?.col === col;
+                const arrow = active ? (colSort!.dir === "desc" ? " ↓" : " ↑") : " ⇅";
+                return (
+                  <th key={col} onClick={() => toggleColSort(col)} style={{
+                    ...th,
+                    cursor: "pointer",
+                    color: active ? HOME_THEME.cyan : HOME_THEME.green,
+                    userSelect: "none",
+                    whiteSpace: "nowrap",
+                  }}>
+                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 15 }}>{arrow}</span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>

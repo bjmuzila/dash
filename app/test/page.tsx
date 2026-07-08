@@ -3534,6 +3534,48 @@ interface RegimeStateResponse {
   hmm: HmmResult | null;
 }
 
+// Must match REGIME_ALERT_CONFIRM_BARS's default in server-v2/regime-alert-recorder.js —
+// the Alert Log only opens/closes an alert once a flip holds for this many
+// consecutive bars (filters HMM-refit noise). The price chart used to shade
+// every raw decoded flip immediately, so a 1-bar wobble that never became a
+// real alert still painted a band on the chart — the two never lined up.
+// buildConfirmedPath below applies the identical hysteresis to the chart's
+// decoded path so a color change on the chart always corresponds to an
+// actual alert open/close, at the same bar.
+const CHART_CONFIRM_BARS = 2;
+
+/** Same confirm-then-commit hysteresis as regime-alert-recorder.js's flip
+ * detection, run over an already-decoded label path instead of live bars. A
+ * raw label change only "commits" (and the output flips) once it has held
+ * for CHART_CONFIRM_BARS consecutive entries — until then the output keeps
+ * showing the last confirmed label, exactly like the alert log keeps the old
+ * alert open until the flip is confirmed. */
+function buildConfirmedPath(decodedPath: RegimeLabel[]): RegimeLabel[] {
+  const out: RegimeLabel[] = new Array(decodedPath.length);
+  let lastLabel: RegimeLabel | null = null;
+  let candidateLabel: RegimeLabel | null = null;
+  let candidateCount = 0;
+  for (let k = 0; k < decodedPath.length; k++) {
+    const raw = decodedPath[k];
+    if (lastLabel == null) {
+      lastLabel = raw;
+    } else if (raw === lastLabel) {
+      candidateLabel = null;
+      candidateCount = 0;
+    } else {
+      candidateCount = candidateLabel === raw ? candidateCount + 1 : 1;
+      candidateLabel = raw;
+      if (candidateCount >= CHART_CONFIRM_BARS) {
+        lastLabel = raw;
+        candidateLabel = null;
+        candidateCount = 0;
+      }
+    }
+    out[k] = lastLabel;
+  }
+  return out;
+}
+
 function RegimeEngineTab() {
   const [ticker, setTicker] = useState<RegimeTicker>("ESU");
   // historyDays=0 → "all we have", so the OHLC candle chart below can span
@@ -3614,10 +3656,15 @@ function RegimeEngineTab() {
     const labelMap = new Map<number, RegimeLabel>();
     const panicMap = new Map<number, number>();
     if (f.hmm) {
-      for (let k = 0; k < f.hmm.decodedPath.length; k++) {
+      // Shade the chart with the CONFIRMED path (same hysteresis the alert
+      // log uses), not the raw per-bar decode — otherwise a 1-bar wobble
+      // that never became a real alert still shows up as a band on the
+      // chart, and the two visibly disagree about when regimes flipped.
+      const confirmed = buildConfirmedPath(f.hmm.decodedPath);
+      for (let k = 0; k < confirmed.length; k++) {
         const bar = f.bars[k + 1];
         if (!bar) continue;
-        labelMap.set(bar.ts, f.hmm.decodedPath[k]);
+        labelMap.set(bar.ts, confirmed[k]);
         panicMap.set(bar.ts, f.hmm.gammaByLabel[k]?.Panic ?? 0);
       }
     }

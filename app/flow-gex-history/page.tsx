@@ -222,7 +222,9 @@ export default function FlowGexHistoryPage() {
         latest: last ? last.flowGex : null,
       };
     });
-    rows.sort((a, b) => b.strike - a.strike);
+    // Ascending (low → high, left → right) — reads naturally as a price axis
+    // when laid out as a horizontal row of vertical bars under the chart.
+    rows.sort((a, b) => a.strike - b.strike);
     return rows;
   }, [data]);
 
@@ -247,64 +249,95 @@ export default function FlowGexHistoryPage() {
           <div style={{ fontSize: 12, color: HOME_THEME.red, marginBottom: 10 }}>{error}</div>
         )}
 
-        <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
-          <div ref={chartContainerRef} style={{ flex: 1, minWidth: 0, height: 460, position: "relative" }} />
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+          <button style={homeButtonStyle} onClick={trigger}>{label}</button>
+          <button style={homeButtonStyle} onClick={allOn}>All on</button>
+          <button style={homeButtonStyle} onClick={allOff}>All off</button>
+        </div>
 
-          {/* GEX flow rail — buttons live at its top, rows below match up 1:1
-              with the strikes plotted on the chart (same order, same colors). */}
-          <div style={{ width: 190, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-              <button style={{ ...homeButtonStyle, padding: "5px 8px" }} onClick={trigger}>{label}</button>
-              <button style={{ ...homeButtonStyle, padding: "5px 8px" }} onClick={allOn}>All on</button>
-              <button style={{ ...homeButtonStyle, padding: "5px 8px" }} onClick={allOff}>All off</button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8 }}>
-              {railRows.map(({ strike, color, isAtm, latest }) => {
-                const on = !hidden.has(strike);
-                const pos = (latest ?? 0) >= 0;
-                const barPct = latest == null ? 0 : Math.min(100, (Math.abs(latest) / maxAbsLatest) * 100);
-                return (
-                  <button
-                    key={strike}
-                    onClick={() => toggleStrike(strike)}
-                    title={on ? "Click to hide" : "Click to show"}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "5px 8px",
-                      border: "none",
-                      borderBottom: `1px solid ${HOME_THEME.border}`,
-                      background: isAtm ? "rgba(255,255,255,0.05)" : "transparent",
-                      cursor: "pointer",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    {/* Strike label + dot reflect on/off (dot hollows out when the
-                        line is hidden) — but the value + bar below stay at full
-                        strength always, so the rail keeps reading as "current
-                        positioning" even for strikes you've turned off the chart. */}
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: isAtm ? 800 : 600, color: on ? HOME_THEME.text : HOME_THEME.muted, opacity: on ? 1 : 0.55 }}>
-                        <span style={{
-                          width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                          background: on ? color.stroke : "transparent",
-                          border: `1.5px solid ${color.stroke}`,
-                          boxSizing: "border-box",
-                        }} />
-                        {strike}{isAtm ? " ·ATM" : ""}
-                      </span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: latest == null ? HOME_THEME.muted : pos ? HOME_THEME.cyan : HOME_THEME.red, opacity: latest == null ? 0.5 : 1 }}>
-                        {latest == null ? "--" : fmtMoney(latest)}
-                      </span>
-                    </div>
-                    <div style={{ marginTop: 3, height: 3, borderRadius: 2, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${barPct}%`, background: pos ? HOME_THEME.cyan : HOME_THEME.red, opacity: 0.75 }} />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+        <div ref={chartContainerRef} style={{ width: "100%", height: 420, position: "relative" }} />
+
+        {/* GEX flow rail — one vertical bar per strike, directly under the
+            chart, same left→right strike order. Bar height/color/direction
+            (up = positive, down = negative from the zero line) always reflects
+            the strike's latest value regardless of on/off state; clicking a
+            column only toggles that strike's line on the chart above — the
+            bar itself never dims, so the rail keeps reading as "current
+            positioning" even for strikes you've hidden. */}
+        <div style={{ marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "10px 6px 6px" }}>
+          <div style={{ display: "flex", alignItems: "stretch", height: 130, position: "relative" }}>
+            {/* zero baseline */}
+            <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: HOME_THEME.border }} />
+            {railRows.map(({ strike, color, isAtm, latest }) => {
+              const on = !hidden.has(strike);
+              const pos = (latest ?? 0) >= 0;
+              const pct = latest == null ? 0 : Math.min(100, (Math.abs(latest) / maxAbsLatest) * 100);
+              const barColor = pos ? HOME_THEME.cyan : HOME_THEME.red;
+              return (
+                <button
+                  key={strike}
+                  onClick={() => toggleStrike(strike)}
+                  title={`${strike}${isAtm ? " (ATM)" : ""} — ${latest == null ? "no data" : fmtMoney(latest)}${on ? "" : " (line hidden)"}`}
+                  style={{
+                    flex: 1,
+                    minWidth: 10,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "100%",
+                    border: "none",
+                    borderLeft: isAtm ? `1px solid ${HOME_THEME.border}` : "none",
+                    borderRight: isAtm ? `1px solid ${HOME_THEME.border}` : "none",
+                    background: isAtm ? "rgba(255,255,255,0.04)" : "transparent",
+                    cursor: "pointer",
+                    padding: 0,
+                    position: "relative",
+                  }}
+                >
+                  {/* diverging bar: top half of the column = positive region, grows
+                      UP from the center line; bottom half = negative region, grows
+                      DOWN from the center line. pct is already 0-100 against the
+                      window's max, so it maps 1:1 onto each half's own height. */}
+                  <div style={{ position: "absolute", left: "20%", right: "20%", top: 0, height: "50%", display: "flex", alignItems: "flex-end" }}>
+                    <div style={{ width: "100%", height: `${pos ? pct : 0}%`, background: barColor, opacity: 0.85, borderRadius: "2px 2px 0 0" }} />
+                  </div>
+                  <div style={{ position: "absolute", left: "20%", right: "20%", top: "50%", height: "50%", display: "flex", alignItems: "flex-start" }}>
+                    <div style={{ width: "100%", height: `${!pos ? pct : 0}%`, background: barColor, opacity: 0.85, borderRadius: "0 0 2px 2px" }} />
+                  </div>
+                  {/* on/off indicator — small dot above the bar, does not affect the bar itself */}
+                  <span style={{
+                    position: "absolute", top: 2, left: "50%", transform: "translateX(-50%)",
+                    width: 5, height: 5, borderRadius: "50%",
+                    background: on ? color.stroke : "transparent",
+                    border: `1px solid ${color.stroke}`,
+                  }} />
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", marginTop: 4 }}>
+            {railRows.map(({ strike, isAtm }) => (
+              <div
+                key={strike}
+                style={{
+                  flex: 1,
+                  minWidth: 10,
+                  textAlign: "center",
+                  fontSize: 8,
+                  fontFamily: "var(--font-mono)",
+                  color: isAtm ? HOME_THEME.cyan : HOME_THEME.muted,
+                  fontWeight: isAtm ? 800 : 500,
+                  opacity: isAtm ? 1 : 0.6,
+                  writingMode: "vertical-rl",
+                  transform: "rotate(180deg)",
+                  height: 42,
+                  overflow: "hidden",
+                }}
+              >
+                {strike}
+              </div>
+            ))}
           </div>
         </div>
 
