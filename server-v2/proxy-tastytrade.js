@@ -2791,6 +2791,23 @@ class TastytradeProxy {
 
     if (!staged.length) return;
 
+    // strike -> { C: gamma, P: gamma } for legs with a REAL non-zero broker
+    // gamma. A leg whose own broker gamma reads exactly 0 (a known Theta 0DTE
+    // placeholder bug) borrows its same-strike sibling's real gamma below,
+    // ahead of the BS fallback — empirically the BS approximation runs far
+    // hotter than live broker/webull gammas for 0DTE ATM strikes late in the
+    // session (BS assumes literal T→0 decay; real feeds read much smaller,
+    // e.g. webull showed 0.0063 for a strike where BS fallback gave 0.047).
+    const strikeGamma = new Map();
+    for (const st of staged) {
+      const g = st.gk?.gamma;
+      if (Number.isFinite(g) && g !== 0) {
+        const rec = strikeGamma.get(st.c.strike) || {};
+        rec[st.c.type] = g;
+        strikeGamma.set(st.c.strike, rec);
+      }
+    }
+
     // Pass 2: compute greeks. Deep-ITM/illiquid legs (iv unsolved) fall back to
     // ATM IV so their gamma is non-zero and their OI counts toward GEX.
     const rows = [];
@@ -2808,8 +2825,11 @@ class TastytradeProxy {
         bs = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
       }
 
-      // Prefer raw broker greeks for delta/gamma/vega; fall back to BS per-field.
-      const gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma : bs.gamma;
+      // Prefer raw broker greeks for delta/gamma/vega; fall back to the
+      // same-strike sibling's real gamma, then BS, per-field.
+      const siblingGamma = strikeGamma.get(c.strike)?.[siblingType] || 0;
+      const gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma
+        : (siblingGamma > 0 ? siblingGamma : bs.gamma);
       const delta = gk && Number.isFinite(gk.delta) && gk.delta !== 0 ? gk.delta : bs.delta;
       const theta = gk && Number.isFinite(gk.theta) && gk.theta !== 0 ? gk.theta : bs.theta;
       const vega  = gk && Number.isFinite(gk.vega)  && gk.vega  !== 0 ? gk.vega  : bs.vega;

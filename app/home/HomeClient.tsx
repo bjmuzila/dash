@@ -790,6 +790,14 @@ export function HomeClient({
   // WS chain kicks in once live data arrives and overrides at least a few strikes.
   const chartRows = gexChainRows.length > 0 ? gexChainRows : wsChainRows;
   const chartSpot = gexSpot > 0 ? gexSpot : spot;
+  // The clicked row is a one-time snapshot; while the popup stays open, re-look
+  // it up in the live chartRows every render so price/gamma/OI/OTM-side track
+  // the market instead of freezing at click time (was showing stale marks and
+  // a stale OTM call/put label once spot crossed the strike after opening).
+  const liveSelectedRow = useMemo(() => {
+    if (!selectedStrike) return null;
+    return chartRows.find((r) => r.strike === selectedStrike.row.strike) ?? selectedStrike.row;
+  }, [selectedStrike, chartRows]);
 
   // For heatmap: merge gexChainRows with any live WS updates for accurate real-time deltas
   const chainRows = useMemo(() => {
@@ -1341,9 +1349,9 @@ export function HomeClient({
       </main>
 
       {/* Strike detail popup — style switchable via the toolbar toggle. */}
-      {selectedStrike && (
+      {selectedStrike && liveSelectedRow && (
         <StrikeDetailPopup
-          row={selectedStrike.row}
+          row={liveSelectedRow}
           spotPrice={chartSpot}
           baselines={strikeBaselines}
           popupStyle={popupStyle}
