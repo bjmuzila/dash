@@ -2803,29 +2803,16 @@ class TastytradeProxy {
       }
     }
 
-    // Gamma and vega are theoretically IDENTICAL for a call and put at the same
-    // strike/expiry/vol (put-call parity) — they must never disagree. The OTM
-    // side (call above spot, put below) is always the reliable one: intrinsic
-    // value is 0, so any live quote solves cleanly, whereas the ITM side can
-    // quote below intrinsic on a stale/thin book, which either fails to solve
-    // (falls to a possibly-wrong borrowed IV) or ships a broker gamma that's
-    // empirically been seen wildly off (0.0388 vs webull's 0.0063, ITM call,
-    // vs a same-strike OTM-side-consistent ~0.004-0.006 put reading). Resolve
-    // ONE authoritative {iv, gamma} per strike from the OTM leg and apply it
-    // to BOTH legs, instead of trusting each leg's own reading independently.
-    const strikeAuthoritative = new Map(); // strike -> { iv, gamma }
-    for (const st of staged) {
-      const { c, T, gk } = st;
-      const isOtm = (c.type === 'C' && c.strike > this.spot) || (c.type === 'P' && c.strike < this.spot);
-      if (!isOtm) continue;
-      const ownIv = st.iv > 0 ? st.iv : atmIV;
-      if (!(ownIv > 0)) continue;
-      let gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma : 0;
-      if (!(gamma > 0)) {
-        gamma = bsGreeks({ S: this.spot, K: c.strike, T, sigma: ownIv, r: RISK_FREE, type: c.type }).gamma;
-      }
-      if (gamma > 0) strikeAuthoritative.set(c.strike, { iv: ownIv, gamma });
-    }
+    // NOTE: an earlier version of this fix forced both legs at a strike to
+    // share the OTM side's gamma, on the assumption that put-call gamma parity
+    // must hold. A raw pull direct from ThetaData's REST API (bypassing all of
+    // our fallback logic) disproved that: at SPXW 7/8 7500, Theta's OWN live
+    // greeks show call iv=3.34% / gamma=0.0485 vs put iv=55.25% / gamma=0.0034
+    // — both are genuine broker values (not placeholders), just backed out
+    // from very different quotes (the call trades barely above intrinsic late
+    // in a 0DTE session, which legitimately solves to a much lower IV/higher
+    // gamma than the OTM put). Forcing parity there was actively wrong, so
+    // that override was removed — trust each leg's own broker gamma again.
 
     // Pass 2: compute greeks. Deep-ITM/illiquid legs (iv unsolved) fall back to
     // ATM IV so their gamma is non-zero and their OI counts toward GEX.
@@ -2833,9 +2820,8 @@ class TastytradeProxy {
     for (const st of staged) {
       const { c, oi, vol, T, gk, mark } = st;
       const siblingType = c.type === 'C' ? 'P' : 'C';
-      const auth = strikeAuthoritative.get(c.strike);
       const siblingIV = strikeIV.get(c.strike)?.[siblingType] || 0;
-      const iv = auth ? auth.iv : (st.iv > 0 ? st.iv : (siblingIV > 0 ? siblingIV : atmIV));
+      const iv = st.iv > 0 ? st.iv : (siblingIV > 0 ? siblingIV : atmIV);
 
       // BS is used to source vanna/charm (dxFeed Greeks has neither) and as the
       // fallback for delta/gamma/vega when no broker greeks arrived for a strike.
@@ -2845,12 +2831,12 @@ class TastytradeProxy {
         bs = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
       }
 
-      // Prefer the strike's authoritative (OTM-sourced) gamma so calls/puts at
-      // the same strike always agree; else raw broker greeks; else the
-      // same-strike sibling's real gamma; else BS.
+      // Prefer raw broker greeks for delta/gamma/vega; only when a leg's OWN
+      // broker gamma is genuinely missing/zero (the known Theta 0DTE
+      // placeholder case), borrow the same-strike sibling's real gamma before
+      // falling to BS.
       const siblingGamma = strikeGamma.get(c.strike)?.[siblingType] || 0;
-      const gamma = auth ? auth.gamma
-        : gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma
+      const gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma
         : (siblingGamma > 0 ? siblingGamma : bs.gamma);
       const delta = gk && Number.isFinite(gk.delta) && gk.delta !== 0 ? gk.delta : bs.delta;
       const theta = gk && Number.isFinite(gk.theta) && gk.theta !== 0 ? gk.theta : bs.theta;
