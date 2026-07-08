@@ -9,6 +9,7 @@ import { betaLaunchEmail, betaLaunchEmailText, BETA_LAUNCH_SUBJECT } from "@/lib
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 import { maintenanceEmail, maintenanceEmailText, MAINTENANCE_SUBJECT } from "@/lib/emails/maintenance";
 import { launchEmail, launchEmailText, LAUNCH_SUBJECT } from "@/lib/emails/launch";
+import { launchPromoEmail, launchPromoText, LAUNCH_PROMO_SUBJECT } from "@/lib/emails/launch-promo";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -69,6 +70,13 @@ function buildTemplates(): Template[] {
       subject: LAUNCH_SUBJECT,
       html: launchEmail(),
       text: launchEmailText(),
+    },
+    {
+      id: "launch-promo",
+      label: "🚀 Launch sale promo — 20% off (LAUNCH)",
+      subject: LAUNCH_PROMO_SUBJECT,
+      html: launchPromoEmail(),
+      text: launchPromoText(),
     },
   ];
 }
