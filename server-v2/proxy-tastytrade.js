@@ -2792,12 +2792,7 @@ class TastytradeProxy {
     if (!staged.length) return;
 
     // strike -> { C: gamma, P: gamma } for legs with a REAL non-zero broker
-    // gamma. A leg whose own broker gamma reads exactly 0 (a known Theta 0DTE
-    // placeholder bug) borrows its same-strike sibling's real gamma below,
-    // ahead of the BS fallback — empirically the BS approximation runs far
-    // hotter than live broker/webull gammas for 0DTE ATM strikes late in the
-    // session (BS assumes literal T→0 decay; real feeds read much smaller,
-    // e.g. webull showed 0.0063 for a strike where BS fallback gave 0.047).
+    // gamma — used as a last-resort fallback below.
     const strikeGamma = new Map();
     for (const st of staged) {
       const g = st.gk?.gamma;
@@ -2808,14 +2803,39 @@ class TastytradeProxy {
       }
     }
 
+    // Gamma and vega are theoretically IDENTICAL for a call and put at the same
+    // strike/expiry/vol (put-call parity) — they must never disagree. The OTM
+    // side (call above spot, put below) is always the reliable one: intrinsic
+    // value is 0, so any live quote solves cleanly, whereas the ITM side can
+    // quote below intrinsic on a stale/thin book, which either fails to solve
+    // (falls to a possibly-wrong borrowed IV) or ships a broker gamma that's
+    // empirically been seen wildly off (0.0388 vs webull's 0.0063, ITM call,
+    // vs a same-strike OTM-side-consistent ~0.004-0.006 put reading). Resolve
+    // ONE authoritative {iv, gamma} per strike from the OTM leg and apply it
+    // to BOTH legs, instead of trusting each leg's own reading independently.
+    const strikeAuthoritative = new Map(); // strike -> { iv, gamma }
+    for (const st of staged) {
+      const { c, T, gk } = st;
+      const isOtm = (c.type === 'C' && c.strike > this.spot) || (c.type === 'P' && c.strike < this.spot);
+      if (!isOtm) continue;
+      const ownIv = st.iv > 0 ? st.iv : atmIV;
+      if (!(ownIv > 0)) continue;
+      let gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma : 0;
+      if (!(gamma > 0)) {
+        gamma = bsGreeks({ S: this.spot, K: c.strike, T, sigma: ownIv, r: RISK_FREE, type: c.type }).gamma;
+      }
+      if (gamma > 0) strikeAuthoritative.set(c.strike, { iv: ownIv, gamma });
+    }
+
     // Pass 2: compute greeks. Deep-ITM/illiquid legs (iv unsolved) fall back to
     // ATM IV so their gamma is non-zero and their OI counts toward GEX.
     const rows = [];
     for (const st of staged) {
       const { c, oi, vol, T, gk, mark } = st;
       const siblingType = c.type === 'C' ? 'P' : 'C';
+      const auth = strikeAuthoritative.get(c.strike);
       const siblingIV = strikeIV.get(c.strike)?.[siblingType] || 0;
-      const iv = st.iv > 0 ? st.iv : (siblingIV > 0 ? siblingIV : atmIV);
+      const iv = auth ? auth.iv : (st.iv > 0 ? st.iv : (siblingIV > 0 ? siblingIV : atmIV));
 
       // BS is used to source vanna/charm (dxFeed Greeks has neither) and as the
       // fallback for delta/gamma/vega when no broker greeks arrived for a strike.
@@ -2825,10 +2845,12 @@ class TastytradeProxy {
         bs = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
       }
 
-      // Prefer raw broker greeks for delta/gamma/vega; fall back to the
-      // same-strike sibling's real gamma, then BS, per-field.
+      // Prefer the strike's authoritative (OTM-sourced) gamma so calls/puts at
+      // the same strike always agree; else raw broker greeks; else the
+      // same-strike sibling's real gamma; else BS.
       const siblingGamma = strikeGamma.get(c.strike)?.[siblingType] || 0;
-      const gamma = gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma
+      const gamma = auth ? auth.gamma
+        : gk && Number.isFinite(gk.gamma) && gk.gamma !== 0 ? gk.gamma
         : (siblingGamma > 0 ? siblingGamma : bs.gamma);
       const delta = gk && Number.isFinite(gk.delta) && gk.delta !== 0 ? gk.delta : bs.delta;
       const theta = gk && Number.isFinite(gk.theta) && gk.theta !== 0 ? gk.theta : bs.theta;
