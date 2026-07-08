@@ -2529,7 +2529,7 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {/* Timing Windows */}
         <div>
-          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, marginBottom: 10 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, marginBottom: 10 }}>
             Timing Windows
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -2550,14 +2550,14 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
             { label: "30m Put Wall", value: putWall30m, color: HOME_THEME.red },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 {label}
               </div>
               <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
                 {value != null ? `$${value.toFixed(0)}` : "—"}
               </div>
               {value != null && spot > 0 && (
-                <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5 }}>
+                <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.5 }}>
                   {((value - spot) / spot * 100).toFixed(2)}%
                 </div>
               )}
@@ -2567,18 +2567,18 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
 
         {/* GEX Swing Detection */}
         <div>
-          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, marginBottom: 8 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, marginBottom: 8 }}>
             GEX Swings
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.7, marginBottom: 4 }}>5m Swing</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, opacity: 0.7, marginBottom: 4 }}>5m Swing</div>
               <div style={{ fontSize: 16, fontWeight: 900, color: (gexSwing5m ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
                 {gexSwing5m != null ? `${gexSwing5m > 0 ? "+" : ""}${(gexSwing5m / 1e6).toFixed(1)}M` : "—"}
               </div>
             </div>
             <div style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.7, marginBottom: 4 }}>15m Swing</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, opacity: 0.7, marginBottom: 4 }}>15m Swing</div>
               <div style={{ fontSize: 16, fontWeight: 900, color: (gexSwing15m ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
                 {gexSwing15m != null ? `${gexSwing15m > 0 ? "+" : ""}${(gexSwing15m / 1e6).toFixed(1)}M` : "—"}
               </div>
@@ -2588,8 +2588,8 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
 
         {/* Spot */}
         <div style={{ paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, marginBottom: 4 }}>Current Price</div>
-          <div style={{ fontSize: 18, fontWeight: 900, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, marginBottom: 4 }}>Current Price</div>
+          <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
             ${spot.toFixed(2)}
           </div>
         </div>
@@ -2616,10 +2616,10 @@ function WallsFlowsTab() {
       {error && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 12 }}>Walls & flows error: {error}</div>}
 
       <div style={{ marginBottom: 16, padding: 16, borderRadius: 10, background: `${HOME_THEME.orange}15`, border: `1px solid ${HOME_THEME.orange}40` }}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.orange, marginBottom: 8, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.orange, marginBottom: 8, letterSpacing: "0.05em", textTransform: "uppercase" }}>
           About This Tab
         </div>
-        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.5 }}>
           Call/Put Walls ranked by |GEX| per timeframe (5m/15m/30m) · GEX Swings detect dealer positioning shifts (positive = long gamma, negative = short) ·
           Timing Windows highlight market hours that historically show gamma acceleration (9:30 open, 2pm churn, 3:30 close).
         </div>
@@ -2638,7 +2638,7 @@ function WallsFlowsTab() {
         </div>
       )}
 
-      <div style={{ fontSize: 14, color: HOME_THEME.text, textAlign: "center", opacity: 0.5, marginTop: 16, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", opacity: 0.5, marginTop: 16, lineHeight: 1.6 }}>
         Walls sourced from live multi-ticker GEX scanner (scanner_snapshots table). GEX swings detect intraday dealer positioning momentum. Timing windows auto-highlight market hours with historical gamma peaks.
       </div>
     </>
