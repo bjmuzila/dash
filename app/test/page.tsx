@@ -2504,6 +2504,7 @@ function TimingWindowChip({ window, isActive }: { window: WallTimingWindow; isAc
         fontWeight: 800,
         letterSpacing: "0.05em",
         textTransform: "uppercase",
+        textAlign: "center",
       }}
     >
       {window} {isActive && "▶"}

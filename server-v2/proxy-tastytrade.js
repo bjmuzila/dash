@@ -1822,6 +1822,7 @@ class TastytradeProxy {
     // Aggregate + broadcast the flow tape every 500ms (independent of GEX).
     // Tape is multi-ticker (SPX engine + FLOW_TICKERS via MultiFlowManager);
     // SYMBOL here only labels the bucket, it does not filter the tape.
+    this._flowDebugTick = 0;
     this.flowTimer = setInterval(() => {
       const bucket = this.flow.bucket(SYMBOL);
       marketState.setFlow(bucket);
@@ -1830,6 +1831,19 @@ class TastytradeProxy {
       // Persist the (coalesced, floor-filtered) tape so /flow can backfill today.
       // Fire-and-forget; no-ops without DATABASE_URL.
       writeFlowTape(bucket.tape);
+      // Flow GEX has read as ~0 with no clear cause from static review alone —
+      // throttled (~every 5s) visibility into the actual pipeline counts so it
+      // can be diagnosed from `docker compose logs` instead of guessing again:
+      // raw tape size, post-floor-filter size, and how many strikes currently
+      // have non-zero dealer inventory for the active expiry.
+      if (++this._flowDebugTick % 10 === 0) {
+        const inv = this.flowGexAccumulator.getInventory(this.expiry);
+        console.log(
+          `[FLOW_DEBUG] expiry=${this.expiry} rawTape=${this.flow.tape.length} ` +
+          `bucketTape=${bucket.tape.length} floor=$${this.flow.tapeFloorPremium} ` +
+          `dealerStrikes=${inv.size}`
+        );
+      }
     }, FLOW_AGGREGATE_MS);
 
     // Post cumulative session call/put premium to /api/snapshots/premium every 30s
