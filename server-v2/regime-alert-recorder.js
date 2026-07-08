@@ -7,8 +7,12 @@
  * (Trend/Chop/Panic) on ESU/NQU 5m candles independently of any open browser
  * tab, and logs an ALERT every time the decoded state flips INTO Trend or
  * Panic. An alert stays OPEN until the regime flips away, at which point it's
- * closed out with the realized price reaction (return %, max up/down
- * excursion, bars elapsed) — i.e. "how did the market actually react".
+ * closed out with the realized price reaction (return pts, max up/down
+ * excursion in pts — plus the original % versions, bars elapsed) — i.e. "how
+ * did the market actually react". A raw label flip only closes/opens an
+ * alert once it holds for CONFIRM_BARS consecutive new bars (see below) —
+ * otherwise a single noisy bar from the refit would open+close a spurious
+ * alert every time it wobbled.
  *
  * Alerts-only, same spirit as signals-engine.js: nothing here places or sizes
  * a trade, it's an observability/backtest log.
@@ -24,6 +28,15 @@ const { fitGaussianHmm } = require('./regimeHmm');
 
 const EVAL_MS = Number(process.env.REGIME_ALERT_EVAL_MS || 60_000);
 const MIN_RETURNS = 80; // same floor as the client fit (states*20)
+// The HMM is refit from scratch every cycle, and a full refit can relabel a
+// near-tied bar for a single bar even when nothing really changed (same
+// instability noted in the client fit comments below). Left unguarded, that
+// used to open+close a brand-new alert on every such wobble ("new alert on
+// every bar"). A raw label flip now only becomes a real open/close once it
+// has held for CONFIRM_BARS consecutive NEW closed bars in a row — a
+// momentary flip that reverts before then is treated as noise, not a
+// separate alert.
+const CONFIRM_BARS = Number(process.env.REGIME_ALERT_CONFIRM_BARS || 2);
 const TICKERS = [
   { key: 'ESU', symbol: undefined }, // default table = es_candles
   { key: 'NQU', symbol: '/NQ' },     // nq_candles
@@ -80,6 +93,13 @@ async function ensureSchema() {
         bars_elapsed     INTEGER,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      -- Point-based (raw price-diff) results, added alongside the original
+      -- percentage columns — ES/NQ futures traders think in points, not %, so
+      -- the Alert Log now displays these instead. ADD COLUMN IF NOT EXISTS so
+      -- this is safe to run against a table that already exists in prod.
+      ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS return_pts REAL;
+      ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS max_up_pts REAL;
+      ALTER TABLE regime_alerts ADD COLUMN IF NOT EXISTS max_down_pts REAL;
       CREATE INDEX IF NOT EXISTS idx_regime_alerts_ticker_ts ON regime_alerts(ticker, start_ts DESC);
       CREATE INDEX IF NOT EXISTS idx_regime_alerts_status ON regime_alerts(status);
     `);
@@ -107,15 +127,16 @@ async function openAlert({ ticker, label, ts, price, confidence }) {
   }
 }
 
-async function closeAlertRow(id, { ts, price, returnPct, maxUpPct, maxDownPct, bars }) {
+async function closeAlertRow(id, { ts, price, returnPct, maxUpPct, maxDownPct, returnPts, maxUpPts, maxDownPts, bars }) {
   const p = getPool();
   if (!p) return;
   try {
     await p.query(
       `UPDATE regime_alerts SET status='closed', end_ts=$2, end_price=$3,
-         return_pct=$4, max_up_pct=$5, max_down_pct=$6, bars_elapsed=$7
+         return_pct=$4, max_up_pct=$5, max_down_pct=$6, bars_elapsed=$7,
+         return_pts=$8, max_up_pts=$9, max_down_pts=$10
        WHERE id=$1`,
-      [id, ts, price, returnPct, maxUpPct, maxDownPct, bars]
+      [id, ts, price, returnPct, maxUpPct, maxDownPct, bars, returnPts, maxUpPts, maxDownPts]
     );
   } catch (e) {
     console.warn('[regime-alerts] close update failed:', e.message);
@@ -131,7 +152,8 @@ async function getRecentAlerts({ ticker = '', limit = 50 } = {}) {
   if (ticker) { params.push(ticker); where.push(`ticker = $${params.length}`); }
   params.push(Math.min(200, Math.max(1, limit)));
   const sql = `SELECT id, ticker, label, status, start_ts, start_price, start_confidence,
-                      end_ts, end_price, return_pct, max_up_pct, max_down_pct, bars_elapsed
+                      end_ts, end_price, return_pct, max_up_pct, max_down_pct,
+                      return_pts, max_up_pts, max_down_pts, bars_elapsed
                FROM regime_alerts
                ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                ORDER BY start_ts DESC LIMIT $${params.length}`;
@@ -171,10 +193,16 @@ async function fetchCloses(base, symbol) {
   }
 }
 
-// mem[ticker] = { lastLabel, openId, openLabel, openStartTs, openStartPrice }
+// mem[ticker] = { lastLabel, openId, openLabel, openStartTs, openStartPrice,
+//   lastBarTs, candidateLabel, candidateCount }
+// candidateLabel/candidateCount track an as-yet-unconfirmed flip: a raw label
+// change only becomes a real open/close once it's held for CONFIRM_BARS
+// consecutive new bars (see CONFIRM_BARS above).
 const mem = {
-  ESU: { lastLabel: null, openId: null, openLabel: null, openStartTs: null, openStartPrice: null },
-  NQU: { lastLabel: null, openId: null, openLabel: null, openStartTs: null, openStartPrice: null },
+  ESU: { lastLabel: null, openId: null, openLabel: null, openStartTs: null, openStartPrice: null,
+         lastBarTs: null, candidateLabel: null, candidateCount: 0 },
+  NQU: { lastLabel: null, openId: null, openLabel: null, openStartTs: null, openStartPrice: null,
+         lastBarTs: null, candidateLabel: null, candidateCount: 0 },
 };
 
 // latestFit[ticker] = { fittedAt, bars: [{ts,close}], hmm } — the canonical,
@@ -212,37 +240,74 @@ async function runOnceForTicker(base, tk) {
     // First observation this process lifetime — establish a baseline only.
     // We didn't see this regime start, so don't synthesize a fake alert for it.
     m.lastLabel = label;
+    m.lastBarTs = nowBar.ts;
     return { init: label };
   }
 
-  if (label !== m.lastLabel) {
-    // Close an open alert whenever we flip AWAY from its label.
-    if (m.openId != null) {
-      const windowBars = bars.filter((b) => b.ts > m.openStartTs && b.ts <= nowBar.ts);
-      let maxUp = 0, maxDown = 0;
-      for (const b of windowBars) {
-        const chg = ((b.close - m.openStartPrice) / m.openStartPrice) * 100;
-        if (chg > maxUp) maxUp = chg;
-        if (chg < maxDown) maxDown = chg;
-      }
-      const returnPct = ((nowBar.close - m.openStartPrice) / m.openStartPrice) * 100;
-      await closeAlertRow(m.openId, {
-        ts: nowBar.ts, price: nowBar.close, returnPct, maxUpPct: maxUp, maxDownPct: maxDown,
-        bars: windowBars.length,
-      });
-      console.log(`[regime-alerts] closed ${tk.key} ${m.openLabel} alert #${m.openId} — ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}% over ${windowBars.length} bars`);
-      m.openId = null; m.openLabel = null; m.openStartTs = null; m.openStartPrice = null;
-    }
-    // Open a new alert if we flipped INTO Trend or Panic.
-    if (label === 'Trend' || label === 'Panic') {
-      const id = await openAlert({ ticker: tk.key, label, ts: nowBar.ts, price: nowBar.close, confidence });
-      if (id != null) {
-        m.openId = id; m.openLabel = label; m.openStartTs = nowBar.ts; m.openStartPrice = nowBar.close;
-        console.log(`[regime-alerts] opened ${tk.key} ${label} alert #${id} @ ${nowBar.close} (${Math.round(confidence * 100)}% confidence)`);
-      }
-    }
-    m.lastLabel = label;
+  // The recorder runs every EVAL_MS (60s) but bars only close every 5m, so
+  // most cycles see the exact same `bars` array (fetchCloses returns nothing
+  // new) and would refit to an identical result anyway. Still, only let a
+  // NEW closed bar advance the confirmation counter below — re-running the
+  // fit against unchanged data must never count as a fresh observation.
+  if (nowBar.ts === m.lastBarTs) {
+    return { label, confidence, open: m.openId, unchanged: true };
   }
+  m.lastBarTs = nowBar.ts;
+
+  if (label === m.lastLabel) {
+    // Regime confirmed unchanged on this bar — clear any pending flip candidate.
+    m.candidateLabel = null;
+    m.candidateCount = 0;
+    return { label, confidence, open: m.openId };
+  }
+
+  // label !== m.lastLabel: a full HMM refit relabeled the current bar. Don't
+  // act on it yet — require the SAME new label to hold for CONFIRM_BARS
+  // consecutive new bars before treating it as a real flip. A one-bar wobble
+  // that reverts before then never opens or closes anything, which is what
+  // used to cause a spurious alert on every noisy bar.
+  if (m.candidateLabel === label) {
+    m.candidateCount += 1;
+  } else {
+    m.candidateLabel = label;
+    m.candidateCount = 1;
+  }
+  if (m.candidateCount < CONFIRM_BARS) {
+    return { label, confidence, open: m.openId, pendingFlip: `${label} (${m.candidateCount}/${CONFIRM_BARS})` };
+  }
+
+  // Confirmed flip — close the open alert (if any) and open a new one.
+  if (m.openId != null) {
+    const windowBars = bars.filter((b) => b.ts > m.openStartTs && b.ts <= nowBar.ts);
+    let maxUp = 0, maxDown = 0, maxUpPts = 0, maxDownPts = 0;
+    for (const b of windowBars) {
+      const diff = b.close - m.openStartPrice;
+      const chg = (diff / m.openStartPrice) * 100;
+      if (chg > maxUp) maxUp = chg;
+      if (chg < maxDown) maxDown = chg;
+      if (diff > maxUpPts) maxUpPts = diff;
+      if (diff < maxDownPts) maxDownPts = diff;
+    }
+    const returnPts = nowBar.close - m.openStartPrice;
+    const returnPct = (returnPts / m.openStartPrice) * 100;
+    await closeAlertRow(m.openId, {
+      ts: nowBar.ts, price: nowBar.close, returnPct, maxUpPct: maxUp, maxDownPct: maxDown,
+      returnPts, maxUpPts, maxDownPts, bars: windowBars.length,
+    });
+    console.log(`[regime-alerts] closed ${tk.key} ${m.openLabel} alert #${m.openId} — ${returnPts >= 0 ? '+' : ''}${returnPts.toFixed(2)} pts over ${windowBars.length} bars`);
+    m.openId = null; m.openLabel = null; m.openStartTs = null; m.openStartPrice = null;
+  }
+  // Open a new alert if we flipped INTO Trend or Panic.
+  if (label === 'Trend' || label === 'Panic') {
+    const id = await openAlert({ ticker: tk.key, label, ts: nowBar.ts, price: nowBar.close, confidence });
+    if (id != null) {
+      m.openId = id; m.openLabel = label; m.openStartTs = nowBar.ts; m.openStartPrice = nowBar.close;
+      console.log(`[regime-alerts] opened ${tk.key} ${label} alert #${id} @ ${nowBar.close} (${Math.round(confidence * 100)}% confidence)`);
+    }
+  }
+  m.lastLabel = label;
+  m.candidateLabel = null;
+  m.candidateCount = 0;
   return { label, confidence, open: m.openId };
 }
 

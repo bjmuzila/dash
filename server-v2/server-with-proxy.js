@@ -1449,8 +1449,8 @@ async function main() {
       // GET /proxy/regime-alerts?ticker=ESU&limit=50
       // Trend/Panic regime-flip alerts from regime-alert-recorder.js (newest
       // first) — start price/confidence, and once closed, the realized reaction
-      // (return %, max up/down excursion, bars elapsed). Read by the "Alert Log"
-      // card on the /test Regime Engine tab.
+      // in points (return/max up/max down pts, plus the original % fields,
+      // bars elapsed). Read by the "Alert Log" card on the /test Regime Engine tab.
       if (pathname === '/proxy/regime-alerts' && req.method === 'GET') {
         (async () => {
           try {

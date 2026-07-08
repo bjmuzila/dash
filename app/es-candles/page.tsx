@@ -798,8 +798,9 @@ export default function EsCandlesPage() {
         // this was the source of the jumpy basis / Put Wall line) when the
         // server hasn't published one yet at all.
         const nextBasis = dBasis != null ? dBasis : prev.basis;
-        if (nextBasis != null) basisRef.current = nextBasis;
-        else if (nextSpx != null && nextEs != null) basisRef.current = nextEs - nextSpx;
+        // Lock basis on first set only — never recalculate intraday so heatmap stays fixed.
+        if (nextBasis != null && !basisRef.current) basisRef.current = nextBasis;
+        else if (!basisRef.current && nextSpx != null && nextEs != null) basisRef.current = nextEs - nextSpx;
         return {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,

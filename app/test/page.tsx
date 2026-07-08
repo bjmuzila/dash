@@ -3113,7 +3113,7 @@ function RegimeCandleChart({
   const last = rows.length ? rows[rows.length - 1] : null;
 
   return (
-    <div style={{ position: "relative", width: "100%", height: 300 }}>
+    <div style={{ position: "relative", width: "100%", height: 520 }}>
       <canvas ref={bandCanvasRef} style={{ position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none", width: "100%", height: "100%" }} />
       <div ref={hostRef} style={{ position: "absolute", inset: 0, zIndex: 1 }} />
       {rows.length === 0 && (
@@ -3150,6 +3150,9 @@ interface RegimeAlertRow {
   return_pct: number | string | null;
   max_up_pct: number | string | null;
   max_down_pct: number | string | null;
+  return_pts: number | string | null;
+  max_up_pts: number | string | null;
+  max_down_pts: number | string | null;
   bars_elapsed: number | string | null;
 }
 
@@ -3192,7 +3195,7 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
     );
   }
 
-  const cols = ["Regime", "Status", "Started (ET)", "Confidence", "Duration", "Return", "Max Up", "Max Down"];
+  const cols = ["Regime", "Status", "Started (ET)", "Confidence", "Duration", "Return (pts)", "Max Up (pts)", "Max Down (pts)"];
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
@@ -3218,9 +3221,9 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
             const isOpen = r.status === "open";
             const startTs = Number(r.start_ts);
             const bars = r.bars_elapsed != null ? Number(r.bars_elapsed) : null;
-            const returnPct = r.return_pct != null ? Number(r.return_pct) : null;
-            const maxUp = r.max_up_pct != null ? Number(r.max_up_pct) : null;
-            const maxDown = r.max_down_pct != null ? Number(r.max_down_pct) : null;
+            const returnPts = r.return_pts != null ? Number(r.return_pts) : null;
+            const maxUpPts = r.max_up_pts != null ? Number(r.max_up_pts) : null;
+            const maxDownPts = r.max_down_pts != null ? Number(r.max_down_pts) : null;
             const conf = r.start_confidence != null ? Math.round(Number(r.start_confidence) * 100) : null;
             const durationTxt = isOpen ? "running…" : bars != null ? `${bars} bars (~${bars * 5}m)` : "—";
             return (
@@ -3245,13 +3248,13 @@ function RegimeAlertLog({ ticker }: { ticker: RegimeTicker }) {
                 <td
                   style={{
                     padding: "6px 10px", textAlign: "right", fontWeight: 900,
-                    color: returnPct == null ? HOME_THEME.text : returnPct >= 0 ? HOME_THEME.green : SOFT_RED,
+                    color: returnPts == null ? HOME_THEME.text : returnPts >= 0 ? HOME_THEME.green : SOFT_RED,
                   }}
                 >
-                  {returnPct != null ? `${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(2)}%` : "—"}
+                  {returnPts != null ? `${returnPts >= 0 ? "+" : ""}${returnPts.toFixed(2)}` : "—"}
                 </td>
-                <td style={{ padding: "6px 10px", textAlign: "right", color: HOME_THEME.green }}>{maxUp != null ? `+${maxUp.toFixed(2)}%` : "—"}</td>
-                <td style={{ padding: "6px 10px", textAlign: "right", color: SOFT_RED }}>{maxDown != null ? `${maxDown.toFixed(2)}%` : "—"}</td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: HOME_THEME.green }}>{maxUpPts != null ? `+${maxUpPts.toFixed(2)}` : "—"}</td>
+                <td style={{ padding: "6px 10px", textAlign: "right", color: SOFT_RED }}>{maxDownPts != null ? `${maxDownPts.toFixed(2)}` : "—"}</td>
               </tr>
             );
           })}
@@ -3275,8 +3278,10 @@ function RegimeEngineTab() {
   // historyDays=0 → "all we have", so the OHLC candle chart below can span
   // full recorded history. NOTE: this feed is display-only now (candle
   // bodies) — it no longer feeds the HMM fit, see `fit` below.
-  const es = useEsCandles(ticker === "ESU", 0);
-  const nq = useNqCandles(ticker === "NQU", 0);
+  // Both feeds stay active regardless of the toggle so the ESU + NQU price
+  // charts can render side-by-side (see esChartRows/nqChartRows below).
+  const es = useEsCandles(true, 0);
+  const nq = useNqCandles(true, 0);
   const active = ticker === "ESU" ? es : nq;
 
   // Merge history + today's live bars into one ascending series (de-duped by slotKey).
@@ -3287,23 +3292,26 @@ function RegimeEngineTab() {
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
   }, [active.historical, active.candles]);
 
-  const alignedRows = useMemo(
-    () => combined.filter((c) => Number.isFinite(Number(c.close)) && Number(c.close) > 0),
-    [combined]
-  );
-
-  // Chart display: past 2 days by default
-  const chartRows = useMemo(() => {
-    const now = Date.now();
-    const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000;
-    const filtered = alignedRows.filter((c) => c.timestamp >= twoDaysAgo);
-    return filtered.length > 0 ? filtered : alignedRows.slice(-24);
-  }, [alignedRows]);
-
   const lastBar = combined[combined.length - 1];
   const lastTimeEt = lastBar
     ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(lastBar.timestamp))
     : "—";
+
+  // Same merge, done independently for ESU and NQU (rather than just the
+  // toggled `active` feed) so both price panels can render side-by-side.
+  const buildChartRows = (feed: { historical: EsCandleRecord[]; candles: EsCandleRecord[] }) => {
+    const map = new Map<string, EsCandleRecord>();
+    for (const c of feed.historical) if (c.slotKey) map.set(c.slotKey, c);
+    for (const c of feed.candles) if (c.slotKey) map.set(c.slotKey, c);
+    const sorted = [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
+    const aligned = sorted.filter((c) => Number.isFinite(Number(c.close)) && Number(c.close) > 0);
+    const now = Date.now();
+    const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000;
+    const filtered = aligned.filter((c) => c.timestamp >= twoDaysAgo);
+    return filtered.length > 0 ? filtered : aligned.slice(-24);
+  };
+  const esChartRows = useMemo(() => buildChartRows(es), [es.historical, es.candles]);
+  const nqChartRows = useMemo(() => buildChartRows(nq), [nq.historical, nq.candles]);
 
   // ── Canonical HMM fit — read from the server (regime-alert-recorder.js),
   // NOT refit in the browser. The client-side refit used to redo Baum-Welch
@@ -3311,23 +3319,29 @@ function RegimeEngineTab() {
   // the fit into a different local optimum and could relabel near-tied
   // states (label switching), so the chart repainted on every reload. One
   // server-side fit, every open tab polls and renders the same thing.
-  const [fit, setFit] = useState<RegimeStateResponse>({ ok: false, ticker: "ESU", fittedAt: null, bars: [], hmm: null });
+  // Both ESU + NQU fits are polled regardless of the toggle so the two price
+  // panels can each show their own regime shading at the same time.
+  const [fitEsu, setFitEsu] = useState<RegimeStateResponse>({ ok: false, ticker: "ESU", fittedAt: null, bars: [], hmm: null });
+  const [fitNqu, setFitNqu] = useState<RegimeStateResponse>({ ok: false, ticker: "NQU", fittedAt: null, bars: [], hmm: null });
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       if (typeof document !== "undefined" && document.hidden) return;
       try {
-        const res = await fetch(`/proxy/regime-state?ticker=${ticker}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const j = (await res.json()) as RegimeStateResponse;
-        if (!cancelled) setFit(j);
+        const [resEsu, resNqu] = await Promise.all([
+          fetch(`/proxy/regime-state?ticker=ESU`, { cache: "no-store" }),
+          fetch(`/proxy/regime-state?ticker=NQU`, { cache: "no-store" }),
+        ]);
+        if (resEsu.ok) { const j = (await resEsu.json()) as RegimeStateResponse; if (!cancelled) setFitEsu(j); }
+        if (resNqu.ok) { const j = (await resNqu.json()) as RegimeStateResponse; if (!cancelled) setFitNqu(j); }
       } catch { /* keep last fit on a transient failure */ }
     };
     void load();
     const id = setInterval(load, 20_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [ticker]);
+  }, []);
 
+  const fit = ticker === "ESU" ? fitEsu : fitNqu;
   const hmm = fit.hmm;
 
   // Map server bar timestamp -> decoded label / P(Panic), so the client's own
@@ -3335,27 +3349,37 @@ function RegimeEngineTab() {
   // exact same labels the server decoded. decodedPath[k]/gammaByLabel[k]
   // describe the return realized AT bars[k+1] (same shift alignDecodedPathToCloses
   // applies), so the map is built off fit.bars[k+1], not fit.bars[k].
-  const { tsToLabel, tsToPanic } = useMemo(() => {
+  const buildRegimeMaps = (f: RegimeStateResponse) => {
     const labelMap = new Map<number, RegimeLabel>();
     const panicMap = new Map<number, number>();
-    if (hmm) {
-      for (let k = 0; k < hmm.decodedPath.length; k++) {
-        const bar = fit.bars[k + 1];
+    if (f.hmm) {
+      for (let k = 0; k < f.hmm.decodedPath.length; k++) {
+        const bar = f.bars[k + 1];
         if (!bar) continue;
-        labelMap.set(bar.ts, hmm.decodedPath[k]);
-        panicMap.set(bar.ts, hmm.gammaByLabel[k]?.Panic ?? 0);
+        labelMap.set(bar.ts, f.hmm.decodedPath[k]);
+        panicMap.set(bar.ts, f.hmm.gammaByLabel[k]?.Panic ?? 0);
       }
     }
     return { tsToLabel: labelMap, tsToPanic: panicMap };
-  }, [hmm, fit.bars]);
+  };
+  const esMaps = useMemo(() => buildRegimeMaps(fitEsu), [fitEsu]);
+  const nqMaps = useMemo(() => buildRegimeMaps(fitNqu), [fitNqu]);
 
-  const chartDecoded = useMemo<(RegimeLabel | undefined)[]>(
-    () => chartRows.map((r) => tsToLabel.get(r.timestamp)),
-    [chartRows, tsToLabel]
+  const esChartDecoded = useMemo<(RegimeLabel | undefined)[]>(
+    () => esChartRows.map((r) => esMaps.tsToLabel.get(r.timestamp)),
+    [esChartRows, esMaps]
   );
-  const chartPanic = useMemo<(number | undefined)[]>(
-    () => chartRows.map((r) => tsToPanic.get(r.timestamp)),
-    [chartRows, tsToPanic]
+  const esChartPanic = useMemo<(number | undefined)[]>(
+    () => esChartRows.map((r) => esMaps.tsToPanic.get(r.timestamp)),
+    [esChartRows, esMaps]
+  );
+  const nqChartDecoded = useMemo<(RegimeLabel | undefined)[]>(
+    () => nqChartRows.map((r) => nqMaps.tsToLabel.get(r.timestamp)),
+    [nqChartRows, nqMaps]
+  );
+  const nqChartPanic = useMemo<(number | undefined)[]>(
+    () => nqChartRows.map((r) => nqMaps.tsToPanic.get(r.timestamp)),
+    [nqChartRows, nqMaps]
   );
 
   // Backtests run over the SAME closes the server used to produce `hmm`
@@ -3496,9 +3520,24 @@ function RegimeEngineTab() {
             </Card>
           </div>
 
-          <Card variant="budget" accent={LIGHT_BLUE} title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>{ticker} Price vs. Hidden State</span>}>
-            <RegimeCandleChart rows={chartRows} decoded={chartDecoded} panic={chartPanic} ticker={ticker} />
-          </Card>
+          <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>ESU Price vs. Hidden State</span>}
+              style={{ flex: "1 1 0", minWidth: 320 }}
+            >
+              <RegimeCandleChart rows={esChartRows} decoded={esChartDecoded} panic={esChartPanic} ticker="ESU" />
+            </Card>
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<span style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.1em" }}>NQU Price vs. Hidden State</span>}
+              style={{ flex: "1 1 0", minWidth: 320 }}
+            >
+              <RegimeCandleChart rows={nqChartRows} decoded={nqChartDecoded} panic={nqChartPanic} ticker="NQU" />
+            </Card>
+          </div>
 
           <Card
             variant="budget"
