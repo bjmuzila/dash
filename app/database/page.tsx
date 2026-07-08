@@ -13,7 +13,6 @@ import {
   homeShellStyle,
 } from "@/components/shared/homeTheme";
 import { DockCalendar } from "@/components/shared/DockToolbar";
-import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // Friendly labels for the tables we already know about. Any table not listed
 // here (including new ones added later) still shows up — just titlecased from
@@ -370,7 +369,7 @@ export default function DatabasePage() {
         <RowCountsToday />
         <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-            {/* Full table picker — every base table in the DB (information_schema), not just the curated set below. */}
+            {/* Every base table in the DB (information_schema) — one push button each, count shown in the button. */}
             <div className="flex items-center gap-2 flex-wrap">
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
                 Table ({allTables.length || "…"})
@@ -381,47 +380,38 @@ export default function DatabasePage() {
                 placeholder="filter…"
                 style={{ ...homeInputStyle, width: 140, fontSize: 11, padding: "5px 8px" }}
               />
-              <ThemedSelect
-                value={tab}
-                onChange={setTab}
-                width={280}
-                placeholder="Pick a table"
-                options={(allTables.length ? allTables.map((t) => ({ name: t.name, approx_rows: t.approx_rows })) : CURATED_TABLES.map((n) => ({ name: n, approx_rows: 0 })))
-                  .filter((t) => t.name.toLowerCase().includes(tableSearch.toLowerCase()))
-                  .map((t) => ({ value: t.name, label: `${labelFor(t.name)} (${t.approx_rows.toLocaleString()})` }))}
-              />
             </div>
-            {/* Quick-access buttons for the tables this page has always tracked closely. */}
-            <div className="flex flex-shrink-0 overflow-x-auto" style={{ gap: 6 }}>
-              {CURATED_TABLES.map((id) => {
-                const on = tab === id;
-                return (
-                  <button
-                    key={id}
-                    onClick={() => setTab(id)}
-                    style={{
-                      padding: "6px 12px",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      letterSpacing: ".08em",
-                      textTransform: "uppercase",
-                      borderRadius: 8,
-                      border: on ? `1px solid ${HOME_THEME.cyan}59` : `1px solid ${HOME_THEME.border}`,
-                      background: on
-                        ? `linear-gradient(180deg, ${HOME_THEME.cyan}2e, ${HOME_THEME.cyan}0d)`
-                        : "rgba(255,255,255,0.04)",
-                      color: on ? HOME_THEME.cyan : HOME_THEME.text,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                      flexShrink: 0,
-                      boxShadow: on ? `0 0 14px ${HOME_THEME.cyan}3a, 0 2px 8px rgba(0,0,0,0.35)` : "none",
-                      transition: "background .14s, color .14s, border-color .14s",
-                    }}
-                  >
-                    {labelFor(id)}
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap" style={{ gap: 6 }}>
+              {(allTables.length ? allTables : CURATED_TABLES.map((n) => ({ name: n, approx_rows: 0 })))
+                .filter((t) => t.name.toLowerCase().includes(tableSearch.toLowerCase()))
+                .map((t) => {
+                  const on = tab === t.name;
+                  return (
+                    <button
+                      key={t.name}
+                      onClick={() => setTab(t.name)}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        letterSpacing: ".08em",
+                        textTransform: "uppercase",
+                        borderRadius: 8,
+                        border: on ? `1px solid ${HOME_THEME.cyan}59` : `1px solid ${HOME_THEME.border}`,
+                        background: on
+                          ? `linear-gradient(180deg, ${HOME_THEME.cyan}2e, ${HOME_THEME.cyan}0d)`
+                          : "rgba(255,255,255,0.04)",
+                        color: on ? HOME_THEME.cyan : HOME_THEME.text,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                        boxShadow: on ? `0 0 14px ${HOME_THEME.cyan}3a, 0 2px 8px rgba(0,0,0,0.35)` : "none",
+                        transition: "background .14s, color .14s, border-color .14s",
+                      }}
+                    >
+                      {labelFor(t.name)} ({t.approx_rows.toLocaleString()})
+                    </button>
+                  );
+                })}
             </div>
           </div>
 

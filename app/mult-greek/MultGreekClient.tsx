@@ -34,11 +34,11 @@ function emBadgeDataUri(label: "EM" | "2× EM"): string {
 // metric-tinted cells. Used for neutral numeric values / signs.
 const SOFT_WHITE = "#c3ccda";
 
-const NET_COLS  = ["gex", "dex", "chex", "vex"] as const;
+const NET_COLS  = ["gex", "dex", "chex", "flow"] as const;
 type NetCol = typeof NET_COLS[number];
 
 const COL_LABELS: Record<NetCol, string> = {
-  gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", vex: "NET VEX",
+  gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", flow: "FLOW GEX",
 };
 
 const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
@@ -83,7 +83,7 @@ interface ComputedRow {
   gex: number;
   dex: number;
   chex: number;
-  vex: number;
+  flow: number;
 }
 
 interface ComputedResult {
@@ -225,7 +225,7 @@ function computeRows(
   strikes: StrikeRow[],
   liveData: Record<string, LiveEntry>,
   spot: number,
-  contractMode: "oivol" | "vol",
+  contractMode: "oivol" | "vol" | "flow",
 ): ComputedResult {
   let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
   let atmStrike = 0;
@@ -250,11 +250,11 @@ function computeRows(
       gex:  (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
       dex:  (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
       chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
-      vex:  ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
+      flow: contractMode === "flow" ? 0 : 0,  // SPY/QQQ: no dealer inventory, flow GEX = 0
     };
   });
 
-  const maxAbs = { gex: 1, dex: 1, chex: 1, vex: 1 } as Record<NetCol, number>;
+  const maxAbs = { gex: 1, dex: 1, chex: 1, flow: 1 } as Record<NetCol, number>;
   out.forEach(r => {
     NET_COLS.forEach(c => { if (Math.abs(r[c]) > maxAbs[c]) maxAbs[c] = Math.abs(r[c]); });
   });
@@ -282,9 +282,9 @@ function computeTotals(
   strikes: StrikeRow[],
   liveData: Record<string, LiveEntry>,
   spot: number,
-  contractMode: "oivol" | "vol",
+  contractMode: "oivol" | "vol" | "flow",
 ): Record<NetCol, number> {
-  const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
+  const totals = { gex: 0, dex: 0, chex: 0, flow: 0 } as Record<NetCol, number>;
   const volOnly = contractMode === "vol";
 
   strikes.forEach(r => {
@@ -295,7 +295,7 @@ function computeTotals(
     totals.gex  += (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
     totals.dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
     totals.chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
-    totals.vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;
+    totals.flow += 0;  // SPY/QQQ: no dealer inventory, flow GEX = 0
   });
   return totals;
 }
@@ -310,7 +310,7 @@ function TickerPanel({
   strikes: StrikeRow[];
   liveData: Record<string, LiveEntry>;
   spot: number;
-  contractMode: "oivol" | "vol";
+  contractMode: "oivol" | "vol" | "flow";
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
@@ -595,7 +595,7 @@ export function MultGreekClient({
   const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
-  const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
+  const [contractMode, setContractMode] = useState<"oivol" | "vol" | "flow">("oivol");
   const [intensity, setIntensity] = useState(1.75);
   // Live/15m/30m/60m Δ switcher — swaps NET GEX to strike_growth's ΔGEX.
   const [changeMode, setChangeMode] = useState<ChangeMode>("live");
@@ -1012,7 +1012,7 @@ export function MultGreekClient({
 
         {/* Contract basis toggle */}
         <SegGroup
-          options={[{ label: "OI+VOL", value: "oivol" }, { label: "VOL", value: "vol" }]}
+          options={[{ label: "OI+VOL", value: "oivol" }, { label: "VOL", value: "vol" }, { label: "FLOW GEX", value: "flow" }]}
           active={contractMode}
           onChange={(v) => setContractMode(v as typeof contractMode)}
         />

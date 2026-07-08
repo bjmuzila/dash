@@ -276,7 +276,7 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
     const net = (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
     const volOnly = row.netVolGEX ?? 0;
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
-    const vex = (row.netVanna ?? 0) + (row.netVolVanna ?? 0);  // Net VEX (vanna)
+    const flowGex = row.flowGEX ?? 0;  // Flow GEX from dealer inventory
     const rolling = rollingByStrike?.get(row.strike); // 30-min rolling net GEX
     const isAtm = row.strike === atmStrike;
     let type: HeatmapRow["type"] = "neutral";
@@ -293,7 +293,7 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
       netGexVal: net,        netGex: fmtMoney(net),
       volOnlyVal: volOnly,   volOnly: fmtMoney(volOnly),
       dexVal: dex,           dex: fmtMoney(dex),
-      gexVexVal: vex,        gexVex: fmtMoney(vex),
+      gexVexVal: flowGex,    gexVex: fmtMoney(flowGex),
       rollingVal: rolling ?? null,
       rolling: rolling == null ? "—" : fmtMoney(rolling),
       type,
