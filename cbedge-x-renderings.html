@@ -1,0 +1,186 @@
+<!-- CB Edge — 20 X renderings (Voltage theme). Open in a browser, Download PNG / Download all. -->
+<meta charset="utf-8">
+<title>CB Edge — 20 X Renderings</title>
+<style>
+  body{margin:0;background:#07040e;color:#efe9ff;font-family:Inter,"Segoe UI",system-ui,Arial,sans-serif}
+  header{position:sticky;top:0;z-index:5;background:#07040eee;backdrop-filter:blur(6px);
+    padding:16px 24px;border-bottom:1px solid #241a3a;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0;letter-spacing:.5px}
+  header .sub{color:#c084fc;font-size:13px}
+  button{cursor:pointer;border:1px solid #6d28d9;background:#1a0f2e;color:#c084fc;font-weight:700;
+    padding:8px 14px;border-radius:8px;font-size:13px}
+  button:hover{background:#241443}
+  .wrap{max-width:940px;margin:0 auto;padding:22px}
+  .card{margin:0 0 30px}
+  .bar{display:flex;justify-content:space-between;align-items:center;margin:0 0 9px}
+  .bar .lbl{color:#b9b6d6;font-size:13px}.bar .lbl b{color:#efe9ff}
+  .frame{border-radius:12px;overflow:hidden;border:1px solid #241a3a;box-shadow:0 10px 40px #000a}
+  svg{display:block;width:100%;height:auto}
+</style>
+<header>
+  <h1>CB&nbsp;Edge — 20 X Renderings</h1>
+  <span class="sub">Voltage theme · click a card for a 3200×1800 PNG</span>
+  <button onclick="downloadAll()">⬇ Download all PNGs</button>
+</header>
+<div class="wrap" id="wrap"></div>
+
+<script>
+const W=1600,H=900;
+const C={ bg:"#05030a", ink:"#ffffff", muted:"#b9b6d6",
+  violet:"#a855f7", violetHi:"#c084fc", cyan:"#22d3ee", magenta:"#ec4899",
+  green:"#34d399", red:"#fb7185", gold:"#fbbf24", blue:"#3b82f6" };
+function rnd(i){return ((i*9301+49297)%233280)/233280;}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+
+function defs(){return `<defs>
+  <radialGradient id="fbg" cx="28%" cy="-8%" r="130%"><stop offset="0%" stop-color="#160a2c"/><stop offset="40%" stop-color="#0a0518"/><stop offset="100%" stop-color="#05030a"/></radialGradient>
+  <radialGradient id="orbV" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${C.violet}" stop-opacity="0.5"/><stop offset="100%" stop-color="${C.violet}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="orbC" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${C.cyan}" stop-opacity="0.42"/><stop offset="100%" stop-color="${C.cyan}" stop-opacity="0"/></radialGradient>
+  <radialGradient id="orbM" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${C.magenta}" stop-opacity="0.32"/><stop offset="100%" stop-color="${C.magenta}" stop-opacity="0"/></radialGradient>
+  <linearGradient id="gAccent" gradientUnits="userSpaceOnUse" x1="120" y1="0" x2="1480" y2="0"><stop offset="0%" stop-color="${C.violet}"/><stop offset="55%" stop-color="${C.magenta}"/><stop offset="100%" stop-color="${C.cyan}"/></linearGradient>
+  <linearGradient id="gInk" gradientUnits="userSpaceOnUse" x1="200" y1="0" x2="1400" y2="0"><stop offset="0%" stop-color="#ffffff"/><stop offset="60%" stop-color="#e6dcff"/><stop offset="100%" stop-color="${C.violetHi}"/></linearGradient>
+  <linearGradient id="gUp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${C.cyan}"/><stop offset="100%" stop-color="#0e6b7a"/></linearGradient>
+  <linearGradient id="gDn" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6b2a6b"/><stop offset="100%" stop-color="${C.magenta}"/></linearGradient>
+  <linearGradient id="glassHi" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/><stop offset="30%" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+  <pattern id="grid" width="46" height="46" patternUnits="userSpaceOnUse"><path d="M46 0H0V46" fill="none" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1"/></pattern>
+  <filter id="fBlur" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="7"/></filter>
+  <filter id="fBig" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="46"/></filter>
+</defs>`;}
+
+function bgLayer(){return `<rect width="${W}" height="${H}" fill="url(#fbg)"/>
+  <rect width="${W}" height="${H}" fill="url(#grid)"/>
+  <ellipse cx="180" cy="120" rx="520" ry="420" fill="url(#orbV)" filter="url(#fBig)"/>
+  <ellipse cx="1480" cy="820" rx="560" ry="440" fill="url(#orbC)" filter="url(#fBig)"/>
+  <ellipse cx="1360" cy="80" rx="360" ry="300" fill="url(#orbM)" filter="url(#fBig)"/>`;}
+
+function chrome(){return `
+  <g font-family="Inter,Segoe UI,Arial"><text x="40" y="58" font-size="38" font-weight="800" fill="url(#gAccent)" letter-spacing="1">CB EDGE</text><text x="42" y="82" font-size="13" font-style="italic" fill="${C.muted}">&#8220;Real Edge - Real Orderflow&#8221;</text></g>
+  <circle cx="${W-196}" cy="52" r="6" fill="${C.cyan}"/><text x="${W-180}" y="59" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="700" fill="${C.cyan}">LIVE</text>
+  <text x="${W-40}" y="60" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="26" font-weight="800" fill="url(#gAccent)">cbedge.net</text>
+  <text x="${W/2}" y="${H-36}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" letter-spacing="4" fill="${C.muted}">YOUR UNFAIR EDGE IN THE MARKETS</text>`;}
+
+function glass(x,y,w,h,r){r=r||20;return `
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="none" stroke="url(#gAccent)" stroke-width="7" filter="url(#fBlur)" opacity="0.6"/>
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="rgba(255,255,255,0.04)" stroke="url(#gAccent)" stroke-width="1.6"/>
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="url(#glassHi)"/>`;}
+
+function head(txt,y,size){size=size||56;return `<text x="${W/2}" y="${y}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="${size}" font-weight="800" fill="url(#gInk)">${esc(txt)}</text>`;}
+function headAccent(txt,acc,y,size){size=size||56;const p=txt.split(acc);return `<text x="${W/2}" y="${y}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="${size}" font-weight="800" fill="url(#gInk)">${esc(p[0])}<tspan fill="url(#gAccent)">${esc(acc)}</tspan>${esc(p[1]||"")}</text>`;}
+
+/* ── feature visuals (box bx,by,bw,bh) — recolored to Voltage ─────────────── */
+function vGamma(bx,by,bw,bh){let s="";const n=48,cw=bw/n,base=by+bh*0.60,amp=bh*0.34;
+  for(let i=0;i<n;i++){const v=-Math.sin((i+0.5)/n*2*Math.PI),j=0.5+rnd(i*7+3)*0.7,m=Math.abs(v)*amp*j,up=v>=0;
+    s+=up?`<rect x="${bx+i*cw+2}" y="${base-m}" width="${cw-3}" height="${m}" fill="url(#gUp)"/>`:`<rect x="${bx+i*cw+2}" y="${base}" width="${cw-3}" height="${m}" fill="url(#gDn)"/>`;}
+  s+=`<line x1="${bx}" y1="${base}" x2="${bx+bw}" y2="${base}" stroke="${C.violetHi}" stroke-width="1.5" stroke-dasharray="9 7" opacity=".8"/>`;
+  s+=`<text x="${bx+6}" y="${base+34}" font-family="Inter,Segoe UI,Arial" font-size="14" font-weight="700" fill="${C.magenta}">− NEGATIVE</text><text x="${bx+bw-6}" y="${by+30}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="14" font-weight="700" fill="${C.cyan}">+ POSITIVE</text>`;return s;}
+function vHeat(bx,by,bw,bh){let s="";const cols=16,rows=8,cw=bw/cols,ch=bh/rows;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const v=Math.sin(r*0.9+c*0.5)+Math.cos(c*0.6-r*0.3),pos=v>=0,it=Math.min(1,Math.abs(v)/2);
+    s+=`<rect x="${bx+c*cw}" y="${by+r*ch}" width="${cw-1.5}" height="${ch-1.5}" fill="${pos?C.cyan:C.magenta}" opacity="${0.08+it*0.5}"/>`;}
+  let p=`M ${bx} ${by+ch*4}`;for(let c=1;c<=cols;c++)p+=` L ${bx+c*cw} ${by+ch*(4+1.6*Math.sin(c*0.6))}`;
+  s+=`<path d="${p}" fill="none" stroke="#fff" stroke-width="3"/>`;
+  s+=`<rect x="${bx+bw-140}" y="${by+ch*1-11}" width="128" height="22" rx="4" fill="${C.green}"/><text x="${bx+bw-132}" y="${by+ch*1+5}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="800" fill="#052018">CALL WALL 7520</text>`;
+  s+=`<rect x="${bx+bw-140}" y="${by+ch*6-11}" width="128" height="22" rx="4" fill="${C.red}"/><text x="${bx+bw-132}" y="${by+ch*6+5}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="800" fill="#2a0810">PUT WALL 7475</text>`;
+  s+=`<rect x="${bx}" y="${by+ch*4-11}" width="82" height="22" rx="4" fill="${C.cyan}"/><text x="${bx+6}" y="${by+ch*4+5}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="800" fill="#052028">FLIP 7482</text>`;return s;}
+function vCandles(bx,by,bw,bh){let s="";const n=40,cw=bw/n,cl=[];let pr=0;for(let i=0;i<n;i++){pr+=(rnd(i*3+2)-0.47)*2;cl.push(pr);}
+  const mn=Math.min(...cl)-1.5,mx=Math.max(...cl)+1.5,yo=v=>by+(1-(v-mn)/(mx-mn))*bh;
+  for(let r=0;r<7;r++){const yy=by+r*bh/7,up=r<3.5;for(let c=0;c<6;c++)s+=`<rect x="${bx+c*bw/6}" y="${yy}" width="${bw/6}" height="${bh/7}" fill="${up?C.cyan:C.magenta}" opacity="${rnd(r*6+c)*0.14}"/>`;}
+  let prev=cl[0];for(let i=0;i<n;i++){const c=cl[i],o=prev,hi=Math.max(o,c)+rnd(i*5)*0.8,lo=Math.min(o,c)-rnd(i*7)*0.8,x=bx+i*cw+cw/2,up=c>=o,col=up?C.green:C.red;
+    s+=`<line x1="${x}" y1="${yo(hi)}" x2="${x}" y2="${yo(lo)}" stroke="${col}" stroke-width="1.4"/><rect x="${x-cw*0.3}" y="${yo(Math.max(o,c))}" width="${cw*0.6}" height="${Math.max(1,Math.abs(yo(o)-yo(c)))}" fill="${col}"/>`;prev=c;}
+  s+=`<line x1="${bx}" y1="${yo(mx-0.8)}" x2="${bx+bw*0.5}" y2="${yo(mx-0.8)}" stroke="#fff" stroke-width="2"/><line x1="${bx}" y1="${yo(cl[n-1])}" x2="${bx+bw}" y2="${yo(cl[n-1])}" stroke="${C.cyan}" stroke-width="1" stroke-dasharray="4 4" opacity=".9"/>`;return s;}
+function vLevels(bx,by,bw,bh){let s="";const L=[["CALL WALL 7,520",C.green,by+bh*0.18],["FLIP 7,482",C.cyan,by+bh*0.52],["PUT WALL 7,475",C.magenta,by+bh*0.82]];
+  let py=by+bh*0.5;for(let i=0;i<26;i++){const x=bx+40+i*((bw-60)/26),d=Math.sin(i*0.7)*bh*0.12,c2=py-d,up=c2<py,col=up?C.green:C.red;
+    s+=`<line x1="${x}" y1="${Math.min(py,c2)-8}" x2="${x}" y2="${Math.max(py,c2)+8}" stroke="${col}" stroke-width="2"/><rect x="${x-5}" y="${Math.min(py,c2)}" width="10" height="${Math.max(5,Math.abs(d))}" fill="${col}"/>`;py=c2;if(py<by+bh*0.15||py>by+bh*0.85)py=by+bh*0.5;}
+  for(const[t,c,y] of L){s+=`<line x1="${bx}" y1="${y}" x2="${bx+bw}" y2="${y}" stroke="${c}" stroke-width="2" stroke-dasharray="12 8" opacity=".9"/><rect x="${bx}" y="${y-13}" width="150" height="26" rx="4" fill="${c}"/><text x="${bx+10}" y="${y+5}" font-family="Inter,Segoe UI,Arial" font-size="14" font-weight="800" fill="#0a0518">${t}</text>`;}return s;}
+function vTarget(bx,by,bw,bh){let s="";const cx=bx+bh*0.5+10,cy=by+bh/2;[bh*0.46,bh*0.32,bh*0.18].forEach((r,i)=>{s+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${i%2?C.green:C.cyan}" stroke-width="9" opacity="${0.4+i*0.14}"/>`;});s+=`<circle cx="${cx}" cy="${cy}" r="12" fill="${C.green}"/>`;
+  const cps=[["9:45","67%"],["10:30","67%"],["12:00","67%"]];const rx=bx+bw*0.55;cps.forEach((c,i)=>{const y=by+40+i*((bh-60)/2.4);s+=`<text x="${rx}" y="${y}" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" fill="${C.muted}">${c[0]}</text><text x="${rx}" y="${y+44}" font-family="Inter,Segoe UI,Arial" font-size="42" font-weight="800" fill="${C.green}">${c[1]}</text><text x="${rx+150}" y="${y+44}" font-family="Inter,Segoe UI,Arial" font-size="16" fill="${C.muted}">HIT · 4/6</text>`;});return s;}
+function vFlow(bx,by,bw,bh){const rows=[["SPX 7480C","BUY","1,240",C.green],["SPX 7475P","SELL","880",C.red],["SPX 7500C","BUY","2,110",C.green],["SPX 7460P","BUY","640",C.green],["SPX 7520C","SELL","1,530",C.red],["SPX 7490C","BUY","3,020",C.green]];let s="";const rh=(bh-40)/rows.length;
+  rows.forEach((r,i)=>{const y=by+i*rh;s+=`<rect x="${bx}" y="${y}" width="${bw}" height="${rh-6}" rx="6" fill="rgba(255,255,255,0.04)"/><text x="${bx+16}" y="${y+rh*0.55}" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="700" fill="${C.ink}">${r[0]}</text><rect x="${bx+300}" y="${y+rh*0.24}" width="64" height="22" rx="4" fill="${r[3]}"/><text x="${bx+332}" y="${y+rh*0.55}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="800" fill="${r[1]==='BUY'?'#052018':'#2a0810'}">${r[1]}</text><text x="${bx+bw-16}" y="${y+rh*0.55}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="800" fill="${r[3]}">${r[2]}×</text>`;});
+  let p=`M ${bx} ${by+bh-20}`;for(let i=1;i<=20;i++)p+=` L ${bx+i*(bw/20)} ${by+bh-20-(16+i*3+Math.sin(i)*12)}`;s+=`<path d="${p}" fill="none" stroke="${C.cyan}" stroke-width="3" opacity=".9"/>`;return s;}
+function vEM(bx,by,bw,bh){const cards=[["CLOSE","7,354",C.ink],["EM","115.5",C.gold],["UP","7,469",C.green],["DOWN","7,238",C.red]];let s="";const cw=(bw-3*12)/4;
+  cards.forEach((c,i)=>{const x=bx+i*(cw+12);s+=`<rect x="${x}" y="${by}" width="${cw}" height="94" rx="8" fill="rgba(255,255,255,0.04)"/><text x="${x+cw/2}" y="${by+30}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${C.muted}">${c[0]}</text><text x="${x+cw/2}" y="${by+68}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="24" font-weight="800" fill="${c[2]}">${c[1]}</text>`;});
+  const hy=by+112;s+=`<text x="${bx}" y="${hy+18}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="700" fill="${C.muted}">EM HIT RATE</text><text x="${bx+bw}" y="${hy+18}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="16" font-weight="800" fill="${C.gold}">63%</text><rect x="${bx}" y="${hy+28}" width="${bw}" height="10" rx="5" fill="rgba(255,255,255,0.08)"/><rect x="${bx}" y="${hy+28}" width="${bw*0.63}" height="10" rx="5" fill="${C.green}"/>`;
+  const zy=by+bh-96,zw=(bw-16)/2;const zone=(x,t,col,a)=>`<rect x="${x}" y="${zy}" width="${zw}" height="90" rx="8" fill="rgba(255,255,255,0.04)" stroke="${col}" stroke-opacity=".5"/><text x="${x+16}" y="${zy+28}" font-family="Inter,Segoe UI,Arial" font-size="14" font-weight="800" fill="${col}">${t}</text><text x="${x+16}" y="${zy+64}" font-family="Inter,Segoe UI,Arial" font-size="13" fill="${C.muted}">NEAR</text><text x="${x+zw-16}" y="${zy+64}" text-anchor="end" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" fill="${col}">${a}</text>`;
+  s+=zone(bx,"BUY ZONE",C.green,"7,157")+zone(bx+zw+16,"SELL ZONE",C.red,"7,628");return s;}
+function vICT(bx,by,bw,bh){let s="";const n=44,cw=bw/n,cl=[];let pr=0;for(let i=0;i<n;i++){pr+=(rnd(i*3+4)-0.46)*2;cl.push(pr);}
+  const mn=Math.min(...cl)-2,mx=Math.max(...cl)+2,yo=v=>by+(1-(v-mn)/(mx-mn))*bh;let prev=cl[0];
+  for(let i=0;i<n;i++){const c=cl[i],o=prev,hi=Math.max(o,c)+rnd(i*5)*0.8,lo=Math.min(o,c)-rnd(i*7)*0.8,x=bx+i*cw+cw/2,up=c>=o,col=up?C.green:C.red;s+=`<line x1="${x}" y1="${yo(hi)}" x2="${x}" y2="${yo(lo)}" stroke="${col}" stroke-width="1.2"/><rect x="${x-cw*0.32}" y="${yo(Math.max(o,c))}" width="${cw*0.64}" height="${Math.max(1,Math.abs(yo(o)-yo(c)))}" fill="${col}"/>`;prev=c;}
+  const fvg=(i0,i1,vT,vB,l)=>`<rect x="${bx+i0*cw}" y="${yo(vT)}" width="${(i1-i0)*cw}" height="${Math.abs(yo(vB)-yo(vT))}" fill="${C.cyan}" opacity="0.14" stroke="${C.cyan}" stroke-opacity=".55"/><text x="${bx+i0*cw+3}" y="${yo(vT)+13}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="700" fill="${C.cyan}">${l}</text>`;
+  s+=fvg(12,22,cl[15]+1.4,cl[15]-0.3,"FVG↑")+fvg(30,42,cl[36]+1.1,cl[36]-1.1,"FVG↑");
+  const tag=(i,v,t,col)=>`<text x="${bx+i*cw}" y="${yo(v)-5}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="800" fill="${col}">${t}</text>`;
+  s+=tag(8,cl[8],"BOS↑",C.cyan)+tag(18,cl[18],"MSS↓",C.red)+tag(33,cl[33],"OB",C.violetHi);
+  s+=`<line x1="${bx}" y1="${yo(mx-0.5)}" x2="${bx+bw}" y2="${yo(mx-0.5)}" stroke="${C.gold}" stroke-width="1" opacity=".85"/><text x="${bx+2}" y="${yo(mx-0.5)-3}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="700" fill="${C.gold}">PDH</text><line x1="${bx}" y1="${yo(mn+0.5)}" x2="${bx+bw}" y2="${yo(mn+0.5)}" stroke="${C.gold}" stroke-width="1" opacity=".85"/><text x="${bx+2}" y="${yo(mn+0.5)-3}" font-family="Inter,Segoe UI,Arial" font-size="10" font-weight="700" fill="${C.gold}">PDL</text>`;
+  s+=`<rect x="${bx+8}" y="${by+bh-40}" width="120" height="32" rx="7" fill="rgba(255,255,255,0.05)" stroke="${C.green}" stroke-opacity=".5"/><text x="${bx+20}" y="${by+bh-26}" font-family="Inter,Segoe UI,Arial" font-size="9" font-weight="700" fill="${C.muted}">DAILY BIAS</text><text x="${bx+20}" y="${by+bh-13}" font-family="Inter,Segoe UI,Arial" font-size="13" font-weight="800" fill="${C.green}">BULL</text>`;return s;}
+const VIS={gamma:vGamma,heat:vHeat,candles:vCandles,levels:vLevels,target:vTarget,flow:vFlow,em:vEM,ict:vICT};
+
+/* ── templates ────────────────────────────────────────────────────────────── */
+function tHero(p){let s="";const lines=p.lines,y0=430-(lines.length-1)*44;
+  lines.forEach((ln,i)=>{s+=`<text x="${W/2}" y="${y0+i*92}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="76" font-weight="800" fill="${i===p.acci?'url(#gAccent)':'url(#gInk)'}">${esc(ln)}</text>`;});
+  const uy=y0+lines.length*92+2;s+=`<rect x="${W/2-170}" y="${uy}" width="340" height="7" rx="3" fill="url(#gAccent)" filter="url(#fBlur)"/><rect x="${W/2-170}" y="${uy}" width="340" height="4" rx="2" fill="url(#gAccent)"/>`;
+  s+=`<text x="${W/2}" y="${uy+56}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="24" font-weight="500" fill="${C.muted}">${esc(p.sub)}</text>`;return s;}
+function tStat(p){let s=`<text x="${W/2}" y="254" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="800" letter-spacing="4" fill="${C.violetHi}">${esc(p.kicker)}</text>`;
+  s+=`<ellipse cx="${W/2}" cy="486" rx="380" ry="210" fill="url(#orbV)" filter="url(#fBig)"/>`;
+  s+=`<text x="${W/2}" y="540" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="215" font-weight="800" fill="url(#gAccent)">${esc(p.stat)}</text>`;
+  s+=`<text x="${W/2}" y="632" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="34" font-weight="800" fill="url(#gInk)">${esc(p.big)}</text>`;
+  s+=`<text x="${W/2}" y="686" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="500" fill="${C.muted}">${esc(p.sub)}</text>`;return s;}
+function tGrid(p){let s=headAccent(p.head,p.accent,206,52);
+  const gx=110,gw=W-220,gap=60,cw=(gw-gap)/2,gy=270,ch=(H-270-116-gap)/2;
+  p.cells.forEach((c,i)=>{const cx=gx+(i%2)*(cw+gap),cy=gy+Math.floor(i/2)*(ch+gap);s+=glass(cx,cy,cw,ch);
+    const mx=cx+cw/2,n=c[1].length,cH=30+18+n*28,ty=cy+(ch-cH)/2+24;
+    s+=`<text x="${mx}" y="${ty}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="28" font-weight="800" fill="url(#gAccent)">${esc(c[0])}</text>`;
+    c[1].forEach((ln,j)=>{s+=`<text x="${mx}" y="${ty+42+j*28}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="18" font-weight="500" fill="${C.muted}">${esc(ln)}</text>`;});});return s;}
+function tSpot(p){let s=headAccent(p.head,p.accent,214,48);const cx=120,cy=278,cw=W-240,ch=440;s+=glass(cx,cy,cw,ch);
+  s+=(VIS[p.vis]||vGamma)(cx+34,cy+30,cw-68,ch-100);
+  s+=`<text x="${W/2}" y="${cy+ch-24}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="20" font-weight="500" fill="${C.muted}">${esc(p.sub)}</text>`;return s;}
+function tSplit(p){let s="";const lx=90;
+  p.lines.forEach((ln,i)=>{s+=`<text x="${lx}" y="${356+i*76}" font-family="Inter,Segoe UI,Arial" font-size="66" font-weight="800" fill="${i===p.acci?'url(#gAccent)':'url(#gInk)'}">${esc(ln)}</text>`;});
+  s+=`<text x="${lx+2}" y="${356+p.lines.length*76+18}" font-family="Inter,Segoe UI,Arial" font-size="21" font-weight="500" fill="${C.muted}">${esc(p.sub)}</text>`;
+  const cx=790,cy=210,cw=720,ch=520;s+=glass(cx,cy,cw,ch);s+=(VIS[p.vis]||vGamma)(cx+30,cy+30,cw-60,ch-60);return s;}
+function tQuote(p){let s="";const lines=p.lines,y0=440-(lines.length-1)*42;
+  lines.forEach((ln,i)=>{s+=`<text x="${W/2}" y="${y0+i*84}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="66" font-weight="800" fill="${i===lines.length-1&&p.accentLast?'url(#gAccent)':'url(#gInk)'}">${esc(ln)}</text>`;});
+  const uy=y0+lines.length*84+4;s+=`<rect x="${W/2-160}" y="${uy}" width="320" height="7" rx="3" fill="url(#gAccent)" filter="url(#fBlur)"/><rect x="${W/2-160}" y="${uy}" width="320" height="4" rx="2" fill="url(#gAccent)"/>`;
+  if(p.sub)s+=`<text x="${W/2}" y="${uy+52}" text-anchor="middle" font-family="Inter,Segoe UI,Arial" font-size="22" font-weight="500" fill="${C.muted}">${esc(p.sub)}</text>`;return s;}
+const TPL={hero:tHero,stat:tStat,grid:tGrid,spot:tSpot,split:tSplit,quote:tQuote};
+
+/* ── 20 cards ─────────────────────────────────────────────────────────────── */
+const CARDS=[
+ {n:1,tpl:"hero",lines:["THE MARKET HAS A MAP.","NOW YOU HAVE IT."],acci:1,sub:"real-time SPX gamma, flow & key levels — the dealer picture, live."},
+ {n:2,tpl:"stat",kicker:"CB CORE BULLSEYE",stat:"67%",big:"HIT RATE — EVERY CHECKPOINT",sub:"9:45 · 10:30 · 12:00 — hit = within 8 pts. avg 6.0 / 7.4 / 5.8."},
+ {n:3,tpl:"spot",head:"LIVE GEX HEATMAP.",accent:"HEATMAP.",vis:"heat",sub:"dealer positioning, gamma clusters, call & put walls — live."},
+ {n:4,tpl:"spot",head:"ES CANDLES ON THE GAMMA.",accent:"GAMMA.",vis:"candles",sub:"watch price hit the wall, reject, and run to the next zone."},
+ {n:5,tpl:"grid",head:"THIS ISN'T JUST ANOTHER HEATMAP.",accent:"HEATMAP.",cells:[
+   ["Real-time SPX GEX",["Live gamma exposure profiles &","flip levels from the chain."]],
+   ["Confidence Score",["Every level scored 0–100 for","Hit, Pivot or Chop."]],
+   ["ICT Automation",["FVGs, order blocks & structure","on ES and NQ — live."]],
+   ["Estimated Moves",["Weekly EM zones, backed by","2+ years of data."]]]},
+ {n:6,tpl:"stat",kicker:"ESTIMATED MOVE TRACKER",stat:"380+",big:"TICKERS COVERED",sub:"weekly EM, prior-week high/low, and the zones that contain price."},
+ {n:7,tpl:"spot",head:"CONFIDENCE, SCORED LIVE.",accent:"SCORED",vis:"target",sub:"every key level graded 0–100 — Hit, Pivot or Chop."},
+ {n:8,tpl:"spot",head:"ICT, FULLY AUTOMATED.",accent:"AUTOMATED.",vis:"ict",sub:"FVG · order blocks · BOS/MSS · liquidity · bias — with alerts."},
+ {n:9,tpl:"split",lines:["NET GEX","BY STRIKE."],acci:1,vis:"gamma",sub:"where price gets sticky — and where it accelerates."},
+ {n:10,tpl:"spot",head:"THE FLOW NEVER SLEEPS.",accent:"FLOW",vis:"flow",sub:"live options flow, net premium & pressure — all session."},
+ {n:11,tpl:"quote",lines:["TRADE WITH THE DEALERS,","NOT AGAINST THEM."],accentLast:true,sub:"positioning is the edge. we map it in real time."},
+ {n:12,tpl:"grid",head:"ONE DASHBOARD. EVERY EDGE.",accent:"EVERY EDGE.",cells:[
+   ["GEX Heatmap",["Live gamma + ES candles on","one chart."]],
+   ["Options Flow",["Net premium & pressure","streaming all session."]],
+   ["Key Levels",["Walls, flip, PDH/PDL & EM","zones before the bell."]],
+   ["Greeks & Exposure",["DEX, VEX, charm — dealer","picture in one view."]]]},
+ {n:13,tpl:"stat",kicker:"0DTE, MAPPED",stat:"4",big:"GREEKS, LIVE FOR TODAY",sub:"net GEX · DEX · charm · vanna — see exactly where dealers are pinned."},
+ {n:14,tpl:"spot",head:"WEEKLY ESTIMATED MOVE.",accent:"MOVE.",vis:"em",sub:"the range, the hit rate, and the buy / sell zones — every week."},
+ {n:15,tpl:"quote",lines:["THE LEVEL WITH THE","MATH BEHIND IT."],accentLast:true,sub:"dealer positioning, gamma concentration, OI + volume at the strike."},
+ {n:16,tpl:"split",lines:["LEVELS","BEFORE","THE BELL."],acci:2,vis:"levels",sub:"call wall · put wall · flip — published live before the open."},
+ {n:17,tpl:"stat",kicker:"TRADERS DASHBOARD",stat:"7AM",big:"AI MARKET OVERVIEW",sub:"futures, key drivers, your levels & an AI read — before the open."},
+ {n:18,tpl:"spot",head:"REJECTED THE WALL, TO THE TICK.",accent:"THE TICK.",vis:"heat",sub:"not luck — positioning. the wall was on the chart at 9:15."},
+ {n:19,tpl:"quote",lines:["STOP GUESSING.","HIT THE LEVEL THAT MATTERS."],accentLast:true,sub:"the tools are live. the data is stacking. this is your edge."},
+ {n:20,tpl:"hero",lines:["FIND YOUR EDGE.","KILL THE MARKET."],acci:1,sub:"cbedge.net"},
+];
+
+function buildSVG(p){return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${defs()}${bgLayer()}${chrome()}${(TPL[p.tpl]||tQuote)(p)}</svg>`;}
+
+const wrap=document.getElementById("wrap");
+CARDS.forEach(p=>{const card=document.createElement("div");card.className="card";
+  card.innerHTML=`<div class="bar"><div class="lbl">Card <b>#${p.n}</b> · ${p.tpl}</div><button>⬇ Download PNG</button></div><div class="frame" id="f${p.n}">${buildSVG(p)}</div>`;
+  wrap.appendChild(card);card.querySelector("button").onclick=()=>dl(p.n);});
+function dl(n){const svg=document.querySelector(`#f${n} svg`);const data=new XMLSerializer().serializeToString(svg);const img=new Image();
+  img.onload=()=>{const s=2,cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;const ctx=cv.getContext("2d");ctx.fillStyle="#05030a";ctx.fillRect(0,0,cv.width,cv.height);ctx.drawImage(img,0,0,cv.width,cv.height);cv.toBlob(b=>{const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`cbedge-x-${String(n).padStart(2,"0")}.png`;a.click();},"image/png");};
+  img.src="data:image/svg+xml;base64,"+btoa(unescape(encodeURIComponent(data)));}
+function downloadAll(){CARDS.forEach((p,i)=>setTimeout(()=>dl(p.n),i*450));}
+</script>

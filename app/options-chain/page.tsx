@@ -168,11 +168,12 @@ const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
-const DATA_MODES = ["oi-vol", "vol-only"] as const;
+const DATA_MODES = ["oi-vol", "vol-only", "flow"] as const;
 type DataMode = typeof DATA_MODES[number];
 const DATA_MODE_LABEL: Record<DataMode, string> = {
   "oi-vol": "OI + Vol",
   "vol-only": "Vol Only",
+  "flow": "Flow GEX",
 };
 
 // Change-mode: "live" = normal greek values; 15/30/60 = Δ in front-expiry
@@ -422,7 +423,8 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
 // Parse one expiration's chain payload into strike→greek cells.
 // GEX/DEX/CHEX/VEX use the same formulas the single-expiry view used:
 //   contracts = OI + volume (per side); GEX = (γc·cc − γp·pc)·S²·0.01·100, etc.
-function parseExpiration(items: unknown[], expDate: string, spot: number, dataMode: DataMode = "oi-vol"): Map<number, GreekCell> {
+// When dataMode is "flow", the gex cell uses flowGEX from flowGexMap instead.
+function parseExpiration(items: unknown[], expDate: string, spot: number, dataMode: DataMode = "oi-vol", flowGexMap: Map<number, number> = new Map()): Map<number, GreekCell> {
   const cells = new Map<number, GreekCell>();
   const target = (items as { "expiration-date"?: string; strikes?: unknown[] }[]).filter(
     i => String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10),
@@ -449,8 +451,15 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
       const pc = cnt(p);
       const live = cc > 0 || pc > 0;
 
+      let gexValue = 0;
+      if (dataMode === "flow") {
+        gexValue = flowGexMap.get(strike) ?? 0;
+      } else {
+        gexValue = live ? (num(c, "gamma") * cc - num(p, "gamma") * pc) * S * S * 0.01 * 100 : 0;
+      }
+
       cells.set(strike, {
-        gex:  live ? (num(c, "gamma") * cc - num(p, "gamma") * pc) * S * S * 0.01 * 100 : 0,
+        gex:  gexValue,
         dex:  live ? (Math.abs(num(c, "delta")) * cc - Math.abs(num(p, "delta")) * pc) * S * 100 : 0,
         chex: live ? (-num(c, "theta") * cc + num(p, "theta") * pc) * S * 100 : 0,
         vex:  live ? (num(c, "vega") * cc - num(p, "vega") * pc) * S * 100 : 0,
@@ -527,6 +536,7 @@ export default function OptionsChainPage() {
 
   // Load the 7 closest expirations starting at `startExp`, building a strike→
   // greek map per expiration. Each expiration is one /api/chains call.
+  // When dataMode is "flow", also fetch flowGEX from /proxy/gex and merge.
   const loadChain = async (ticker: string, startExp: string, bustCache = false, force = false) => {
     // Drop overlapping calls, and rate-limit non-forced (auto/poll) loads. User
     // refresh/GO pass force=true to bypass the min-interval but still serialize.
@@ -549,6 +559,22 @@ export default function OptionsChainPage() {
       setChainError(null);
       setLoadProgress(8);
 
+      // If flow mode, fetch flowGEX data from /proxy/gex
+      let flowGexMap: Map<number, number> = new Map();
+      if (dataModeRef.current === "flow") {
+        try {
+          const gexRes = await fetch(`/proxy/gex?basis=flow${bust ? "&noCache=1" : ""}`);
+          const gexJson = await gexRes.json().catch(() => null);
+          if (gexJson?.ok && Array.isArray(gexJson.rows)) {
+            flowGexMap = new Map(
+              gexJson.rows.map((r: any) => [Number(r.strike), Number(r.flowGEX ?? 0)])
+            );
+          }
+        } catch {
+          // Continue without flow data
+        }
+      }
+
       const results = await Promise.all(
         targets.map(async (t, i) => {
           const res = await fetch(
@@ -565,7 +591,7 @@ export default function OptionsChainPage() {
             expiration: t.value,
             label: t.label,
             underlying,
-            cells: parseExpiration(items, t.value, underlying, dataModeRef.current),
+            cells: parseExpiration(items, t.value, underlying, dataModeRef.current, flowGexMap),
           } as ExpColumn;
         }),
       );
