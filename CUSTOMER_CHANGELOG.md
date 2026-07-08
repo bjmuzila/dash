@@ -2,6 +2,11 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Wednesday 7/8/2026
+
+* Fixed font sizing on the Walls & Flows test tab — text is now consistently readable at 15px with 16px titles for better hierarchy and scannability.
+* Removed ES Candles from the Quick Pages sidebar pin menu — the sidebar now shows only the most-used dashboard pages.
+
 ## Tuesday 7/7/2026
 
 * Fixed ES Candles heatmap drifting throughout the day — GEX levels now stay locked in place instead of moving around as market conditions change, so intraday price action aligns with the levels you saw earlier.

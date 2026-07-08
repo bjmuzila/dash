@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-08 — Walls & Flows tab font sizing + ES Candles sidebar removal (`app/test/page.tsx`, `components/shared/GlobalToolbar.tsx`)
+
+Updated font sizing on Walls & Flows test page to 15px text and 16px titles across WallsFlowsCard, WallsFlowsTab, and TimingWindowChip components for consistency. Removed ES Candles from Quick Pages sidebar pin menu (deleted `/es-candles` entry from QUICK_META in GlobalToolbar.tsx line 94).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-07 — Dark Pool feature on /flow + font/color pass (`app/flow/page.tsx`, `server-v2/darkpool-stream.js`, `darkpool-recorder.js`, `state/darkpool-history-writer.js`, `darkpool-routes.js`, `proxy-thetadata.js`, `server-with-proxy.js`)
 
 Added an off-exchange "Dark Pool" feature to `/flow`: new `server-v2/darkpool-stream.js`/`darkpool-recorder.js`/`state/darkpool-history-writer.js`/`darkpool-routes.js` (plus two new volume fetchers in `proxy-thetadata.js`, wired into `server-with-proxy.js`) identify TRF-reported (exchange codes 57/58/59) stock prints and serve a `/proxy/darkpool-levels` endpoint, which `app/flow/page.tsx` renders as a "Heaviest Dark Levels" bar list positioned beside the Filters card, above the chart. Also bumped `/flow` body/title text to 15px/16px and converted remaining gray text to white across `app/flow/page.tsx`; NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable all session.

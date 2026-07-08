@@ -41,12 +41,18 @@ function fmtMoney(v: number): string {
 
 export default function FlowGexHistoryPage() {
   const [data, setData] = useState<FlowGexHistoryResponse | null>(null);
-  const [visible, setVisible] = useState<Set<number>>(new Set());
+  // Strikes the user has explicitly turned OFF. Kept separate from the fetched
+  // strike list (which shifts every poll as spot moves the ±20 window) so a
+  // refresh/poll never resets anyone's toggles — a strike only starts hidden
+  // if it's in this set, and this set is only ever touched by clicking.
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<Map<number, ISeriesApi<"Line">>>(new Map());
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
 
   const load = useCallback(async () => {
     try {
@@ -61,15 +67,6 @@ export default function FlowGexHistoryPage() {
         setError("No tape recorded for any strike today yet.");
       }
       setData(json);
-      // Default: every returned strike visible. Only reset the visible set when
-      // the strike window actually changes (spot moved far enough that the
-      // ±20 window shifted) — otherwise a manual refresh would silently
-      // re-show strikes the user had clicked off.
-      setVisible((prev) => {
-        const nextStrikes = new Set(json.strikes);
-        const sameWindow = prev.size > 0 && [...prev].every((s) => nextStrikes.has(s)) && prev.size === nextStrikes.size;
-        return sameWindow ? prev : nextStrikes;
-      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fetch failed");
     }
@@ -141,6 +138,9 @@ export default function FlowGexHistoryPage() {
   // Rebuild series whenever fresh data arrives. Strikes list changes shape
   // (window follows spot), so it's simplest to fully reconcile: drop series
   // for strikes no longer present, add series for new ones, update the rest.
+  // Visibility is read from hiddenRef (not the `hidden` state directly) so
+  // this effect doesn't need `hidden` as a dependency — a toggle click is
+  // handled by the cheap effect below instead of re-running this one.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data) return;
@@ -173,25 +173,22 @@ export default function FlowGexHistoryPage() {
         series.applyOptions({ color: stroke });
       }
       series.setData(points);
-      series.applyOptions({ visible: visible.has(strike) });
+      series.applyOptions({ visible: !hiddenRef.current.has(strike) });
     });
 
     chart.timeScale().fitContent();
-    // visible intentionally excluded — toggling is handled by the dedicated
-    // effect below so a click doesn't force a full data re-set.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   // Cheap path for visibility toggles — no data re-fetch/re-set, just flips
-  // the series option.
+  // the series option on the strikes currently plotted.
   useEffect(() => {
     for (const [strike, series] of seriesRef.current) {
-      series.applyOptions({ visible: visible.has(strike) });
+      series.applyOptions({ visible: !hidden.has(strike) });
     }
-  }, [visible]);
+  }, [hidden]);
 
   const toggleStrike = useCallback((strike: number) => {
-    setVisible((prev) => {
+    setHidden((prev) => {
       const next = new Set(prev);
       if (next.has(strike)) next.delete(strike);
       else next.add(strike);
@@ -199,23 +196,40 @@ export default function FlowGexHistoryPage() {
     });
   }, []);
 
-  const allOn = useCallback(() => {
+  const allOn = useCallback(() => setHidden(new Set()), []);
+  const allOff = useCallback(() => {
     if (!data) return;
-    setVisible(new Set(data.strikes));
+    setHidden(new Set(data.strikes));
   }, [data]);
 
-  const allOff = useCallback(() => setVisible(new Set()), []);
-
-  const strikeChips = useMemo(() => {
+  // Rail rows: strikes sorted highest-first (top of the rail = highest strike,
+  // matching every other strike-indexed table in the app), each carrying its
+  // line color, latest Flow GEX value, and a magnitude bar scaled against the
+  // window's largest |value| so the rail visually "matches up with" the chart.
+  const railRows = useMemo(() => {
     if (!data) return [];
-    return data.strikes.map((strike, i) => ({
-      strike,
-      color: colorForIndex(i, data.strikes.length),
-      isAtm: data.strikes.length
-        ? strike === data.strikes.reduce((best, s) => (Math.abs(s - data.spot) < Math.abs(best - data.spot) ? s : best), data.strikes[0])
-        : false,
-    }));
+    const atm = data.strikes.length
+      ? data.strikes.reduce((best, s) => (Math.abs(s - data.spot) < Math.abs(best - data.spot) ? s : best), data.strikes[0])
+      : null;
+    const indexByStrike = new Map(data.strikes.map((s, i) => [s, i]));
+    const rows = data.strikes.map((strike) => {
+      const points = data.seriesByStrike[String(strike)] ?? [];
+      const last = [...points].reverse().find((p) => p.flowGex != null) ?? null;
+      return {
+        strike,
+        color: colorForIndex(indexByStrike.get(strike) ?? 0, data.strikes.length),
+        isAtm: strike === atm,
+        latest: last ? last.flowGex : null,
+      };
+    });
+    rows.sort((a, b) => b.strike - a.strike);
+    return rows;
   }, [data]);
+
+  const maxAbsLatest = useMemo(
+    () => Math.max(1, ...railRows.map((r) => Math.abs(r.latest ?? 0))),
+    [railRows]
+  );
 
   return (
     <PageShell>
@@ -229,51 +243,73 @@ export default function FlowGexHistoryPage() {
         }
         padding={16}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-          <button style={homeButtonStyle} onClick={trigger}>{label}</button>
-          <button style={homeButtonStyle} onClick={allOn}>All on</button>
-          <button style={homeButtonStyle} onClick={allOff}>All off</button>
-          <span style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.6, marginLeft: "auto" }}>
-            Approximation: each strike uses its latest known gamma, not gamma-at-that-instant.
-          </span>
-        </div>
-
         {error && (
           <div style={{ fontSize: 12, color: HOME_THEME.red, marginBottom: 10 }}>{error}</div>
         )}
 
-        <div ref={chartContainerRef} style={{ width: "100%", height: 420, position: "relative" }} />
+        <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
+          <div ref={chartContainerRef} style={{ flex: 1, minWidth: 0, height: 460, position: "relative" }} />
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 14 }}>
-          {strikeChips.map(({ strike, color, isAtm }) => {
-            const on = visible.has(strike);
-            return (
-              <button
-                key={strike}
-                onClick={() => toggleStrike(strike)}
-                title={on ? "Click to hide" : "Click to show"}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "4px 8px",
-                  borderRadius: 6,
-                  border: `1px solid ${on ? color.stroke : HOME_THEME.border}`,
-                  background: on ? color.bg : "rgba(255,255,255,0.03)",
-                  color: on ? HOME_THEME.text : HOME_THEME.muted,
-                  opacity: on ? 1 : 0.45,
-                  fontSize: 11,
-                  fontWeight: isAtm ? 800 : 600,
-                  fontFamily: "var(--font-mono)",
-                  cursor: "pointer",
-                }}
-              >
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: color.stroke, flexShrink: 0 }} />
-                {strike}
-                {isAtm ? " · ATM" : ""}
-              </button>
-            );
-          })}
+          {/* GEX flow rail — buttons live at its top, rows below match up 1:1
+              with the strikes plotted on the chart (same order, same colors). */}
+          <div style={{ width: 190, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <button style={{ ...homeButtonStyle, padding: "5px 8px" }} onClick={trigger}>{label}</button>
+              <button style={{ ...homeButtonStyle, padding: "5px 8px" }} onClick={allOn}>All on</button>
+              <button style={{ ...homeButtonStyle, padding: "5px 8px" }} onClick={allOff}>All off</button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8 }}>
+              {railRows.map(({ strike, color, isAtm, latest }) => {
+                const on = !hidden.has(strike);
+                const pos = (latest ?? 0) >= 0;
+                const barPct = latest == null ? 0 : Math.min(100, (Math.abs(latest) / maxAbsLatest) * 100);
+                return (
+                  <button
+                    key={strike}
+                    onClick={() => toggleStrike(strike)}
+                    title={on ? "Click to hide" : "Click to show"}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "5px 8px",
+                      border: "none",
+                      borderBottom: `1px solid ${HOME_THEME.border}`,
+                      background: isAtm ? "rgba(255,255,255,0.05)" : "transparent",
+                      cursor: "pointer",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {/* Strike label + dot reflect on/off (dot hollows out when the
+                        line is hidden) — but the value + bar below stay at full
+                        strength always, so the rail keeps reading as "current
+                        positioning" even for strikes you've turned off the chart. */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: isAtm ? 800 : 600, color: on ? HOME_THEME.text : HOME_THEME.muted, opacity: on ? 1 : 0.55 }}>
+                        <span style={{
+                          width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                          background: on ? color.stroke : "transparent",
+                          border: `1.5px solid ${color.stroke}`,
+                          boxSizing: "border-box",
+                        }} />
+                        {strike}{isAtm ? " ·ATM" : ""}
+                      </span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: latest == null ? HOME_THEME.muted : pos ? HOME_THEME.cyan : HOME_THEME.red, opacity: latest == null ? 0.5 : 1 }}>
+                        {latest == null ? "--" : fmtMoney(latest)}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 3, height: 3, borderRadius: 2, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${barPct}%`, background: pos ? HOME_THEME.cyan : HOME_THEME.red, opacity: 0.75 }} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.6, marginTop: 10 }}>
+          Approximation: each strike uses its latest known gamma, not gamma-at-that-instant. Rail is sorted by strike, highest at top.
         </div>
       </Card>
     </PageShell>
