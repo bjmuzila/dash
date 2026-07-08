@@ -164,7 +164,7 @@ function isAmWindow() {
 // ── Data fetchers ─────────────────────────────────────────────────────────────
 
 /**
- * Get totalNetGex + spot for $SPX from /proxy/gex (reads market-state directly).
+ * Get totalNetGex + totalFlowGex + spot for $SPX from /proxy/gex (reads market-state directly).
  * Returns null if data is not ready.
  */
 async function fetchSpxState(base) {
@@ -179,6 +179,7 @@ async function fetchSpxState(base) {
   const gexRows = Array.isArray(v2.gexRows) ? v2.gexRows : [];
   const spot = Number(v2.spot ?? 0);
   const tng = Number(v2.totalNetGex ?? 0);
+  const tfg = Number(v2.totalFlowGex ?? 0);
 
   if (!(spot > 0)) throw new Error('spot is 0 in market-state');
 
@@ -190,7 +191,7 @@ async function fetchSpxState(base) {
     throw new Error(`$SPX: only ${populated} populated strikes (min ${MIN_POPULATED_STRIKES}) — skipping`);
   }
 
-  return { totalNetGex: tng, spot };
+  return { totalNetGex: tng, totalFlowGex: tfg, spot };
 }
 
 /**
@@ -253,22 +254,23 @@ async function fetchChainGex(_base, chainTicker) {
   }
 
   const tng = totalNetGex(gexRows);
-  return { totalNetGex: tng, spot };
+  return { totalNetGex: tng, totalFlowGex: 0, spot }; // SPY/QQQ: no dealer inventory, flow GEX = 0
 }
 
 // ── Upsert ────────────────────────────────────────────────────────────────────
 
-async function upsertEodGex(date, symbol, total_gex, spot, computed_at) {
+async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at) {
   const p = getPool();
   if (!p) { console.warn('[eod-gex] no DB — skipping write'); return; }
   await p.query(
-    `INSERT INTO eod_gex (date, symbol, total_gex, spot, computed_at)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (date, symbol) DO UPDATE SET
-       total_gex   = EXCLUDED.total_gex,
-       spot        = EXCLUDED.spot,
-       computed_at = EXCLUDED.computed_at`,
-    [date, symbol, total_gex, spot, computed_at]
+       total_gex      = EXCLUDED.total_gex,
+       total_flow_gex = EXCLUDED.total_flow_gex,
+       spot           = EXCLUDED.spot,
+       computed_at    = EXCLUDED.computed_at`,
+    [date, symbol, total_gex, total_flow_gex, spot, computed_at]
   );
 }
 
@@ -292,17 +294,17 @@ async function collectEodGex(base, opts = {}) {
         result = await fetchChainGex(base, chainTicker);
       }
 
-      const { totalNetGex: tng, spot } = result;
+      const { totalNetGex: tng, totalFlowGex: tfg, spot } = result;
 
       if (!Number.isFinite(tng) || !Number.isFinite(spot) || !(spot > 0)) {
         console.warn(`[eod-gex] ${symbol}: invalid totalNetGex=${tng} spot=${spot} — skip`);
         continue;
       }
 
-      await upsertEodGex(date, symbol, tng, spot, computedAt);
+      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt);
       saved.push(symbol);
       console.log(
-        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`
+        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`
       );
     } catch (e) {
       console.warn(`[eod-gex] ${symbol} — ${e.message}`);
