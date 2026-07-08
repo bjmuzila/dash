@@ -102,14 +102,14 @@ services:
       - .env.local
     environment:
       # Cap the JVM heap so the Terminal garbage-collects instead of OOM-ing.
-      # Bumped 1500m/2g -> 3000m/4g on 2026-07-07 after a live OOM (heap
-      # exhausted mid-session under real OPRA load, see CHANGELOG). Drop back
-      # only if the box is RAM-tight (check `free -m`) and watch for recurrence.
-      JAVA_TOOL_OPTIONS: -Xmx3000m
+      # Bumped 1500m/2g -> 3000m/4g on 2026-07-07, then to 5500m/6g on 2026-07-08
+      # after continued socket wedging under OPRA load. Drop back only if the box
+      # is RAM-tight (check `free -m`) and watch for recurrence.
+      JAVA_TOOL_OPTIONS: -Xmx5500m
     # Hard memory backstop. If the JVM ever blows past the heap cap, the kernel
     # OOM-kills just this container (restart: unless-stopped brings it back)
     # instead of the whole box going into swap-death.
-    mem_limit: 4g
+    mem_limit: 6g
     # Publish to host loopback so an SSH tunnel (local dev) and host curl reach a
     # STABLE address. 25503 = REST, 25520 = live event stream. Loopback-only.
     ports:
