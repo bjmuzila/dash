@@ -796,6 +796,24 @@ class ThetaStreamClient {
     }
 
     const root = contract.root;
+    // DEBUG: onTrade has never fired in production despite a confirmed-live
+    // Theta firehose carrying real SPXW TRADE messages (verified via a raw
+    // side-channel WS test). Log the bulk-gate decision for every SPXW
+    // message (any type) the first several times so we can see whether it's
+    // this gate, a downstream check, or something else eating them — capped
+    // so it can't flood logs once the answer is captured.
+    if (root === 'SPXW') {
+      if (!this._spxwGateLogCount) this._spxwGateLogCount = 0;
+      if (this._spxwGateLogCount < 15) {
+        this._spxwGateLogCount++;
+        const passes = !(this.bulkTrades && !this.bulkRoots.has(String(root).toUpperCase()));
+        console.log(
+          `[THETA-WS-DEBUG] SPXW msg type=${type} bulkTrades=${this.bulkTrades} ` +
+          `bulkRoots=[${[...this.bulkRoots].join(',')}] gatePasses=${passes} ` +
+          `strike=${contract.strike} right=${contract.right}`
+        );
+      }
+    }
     // Bulk mode: the firehose carries the whole OPRA tape. Drop any root we don't
     // track BEFORE building a cache entry — this is the hot path, keep it cheap.
     if (this.bulkTrades && !this.bulkRoots.has(String(root).toUpperCase())) return;
@@ -826,6 +844,10 @@ class ThetaStreamClient {
     if (type === 'TRADE' && msg.trade) {
       const price = Number(msg.trade.price);
       const size = Number(msg.trade.size);
+      if (root === 'SPXW' && (this._spxwTradeLogCount ?? 0) < 15) {
+        this._spxwTradeLogCount = (this._spxwTradeLogCount ?? 0) + 1;
+        console.log(`[THETA-WS-DEBUG] SPXW TRADE dispatch: price=${price} size=${size} onTrade=${typeof this.onTrade}`);
+      }
       if (!(price > 0) || !(size > 0)) return;
       const quote = (cache.bid != null && cache.ask != null)
         ? { bid: cache.bid, ask: cache.ask, t: cache.t }
