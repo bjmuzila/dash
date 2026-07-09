@@ -610,25 +610,8 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
         new-home
       </div>
 
-      {/* New tab switcher + floating FAB menu */}
+      {/* Floating FAB menu */}
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ display: "flex", borderRadius: 999, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
-          {["Overview", "Chain", "Flow"].map((tab, i) => (
-            <span
-              key={tab}
-              style={{
-                padding: "5px 12px",
-                fontSize: 15,
-                fontWeight: 700,
-                letterSpacing: "0.06em",
-                color: i === 0 ? LIGHT_BLUE : HOME_THEME.text,
-                background: i === 0 ? rgba(LIGHT_BLUE, 0.14) : "transparent",
-              }}
-            >
-              {tab}
-            </span>
-          ))}
-        </div>
         <FabMenu ticker={ticker} />
       </div>
     </div>

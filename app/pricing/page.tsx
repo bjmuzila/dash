@@ -149,8 +149,8 @@ export default async function PricingPage({
             <div style={{ ...sectionLabel, color: T.cyan }}>Membership</div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "4px 0 14px" }}>
-              <PlanPrice label="Monthly" original={120} price={96} period="/mo" />
-              <PlanPrice label="Yearly" original={1000} price={800} period="/yr" />
+              <PlanPrice label="Monthly" original={120} price={45} period="/mo" />
+              <PlanPrice label="Yearly" original={1000} price={500} period="/yr" />
             </div>
 
             <div
@@ -163,8 +163,11 @@ export default async function PricingPage({
                 textAlign: "center",
               }}
             >
-              <span style={{ fontSize: 13, color: DIM }}>20% off with code </span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>LAUNCH</span>
+              <span style={{ fontSize: 13, color: DIM }}>Enter code </span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
+              <span style={{ fontSize: 13, color: DIM }}> or </span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
+              <span style={{ fontSize: 13, color: DIM }}> at checkout to lock in this price</span>
             </div>
 
             <p style={{ color: DIM, fontSize: 14.5, margin: "0 0 22px", lineHeight: 1.5 }}>
@@ -175,8 +178,8 @@ export default async function PricingPage({
               <PricingActions
                 hasAccess={access.ok}
                 hasBilling={hasBilling}
-                monthlyLabel="Subscribe monthly — $96/mo"
-                yearlyLabel="Subscribe yearly — $800/yr"
+                monthlyLabel="Subscribe monthly — $45/mo"
+                yearlyLabel="Subscribe yearly — $500/yr"
               />
             ) : (
               <BetaGate />
