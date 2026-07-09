@@ -314,7 +314,7 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .ec-event{font-size:${econEventSize}px;font-weight:600}
 .ec-num{font-size:${econNumSize}px;font-weight:700;text-align:right;color:var(--text)}
 .ec-impact{text-align:left}
-.impact-pill{display:inline-block;border:1px solid;border-radius:8px;padding:${pillPadV}px ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase}
+.impact-pill{display:inline-flex;align-items:center;justify-content:center;line-height:1;border:1px solid;border-radius:8px;padding:${pillPadV}px ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase}
 .logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:80px;height:80px;object-fit:contain}
 </style></head><body>

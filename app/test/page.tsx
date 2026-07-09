@@ -3770,17 +3770,6 @@ function RegimeEngineTab() {
     [nqChartRows, nqMaps]
   );
 
-  // Backtests run over the SAME closes the server used to produce `hmm`
-  // (not the client's own candle feed) so naive-vs-gated stays internally
-  // consistent with the decoded path driving the gate.
-  const backtests = useMemo(() => {
-    if (!hmm || fit.bars.length < 60) return null;
-    const closes = fit.bars.map((b) => b.close);
-    const decodedAtCloses = alignDecodedPathToCloses(hmm.decodedPath);
-    const naive = donchianBacktest(closes, 20);
-    const gated = donchianBacktest(closes, 20, decodedAtCloses, "Trend");
-    return { naive, gated };
-  }, [hmm, fit.bars]);
 
   const currentLabel = hmm?.currentLabel;
   const currentConfidence = hmm ? Math.round(hmm.currentProbs[hmm.currentLabel] * 100) : 0;
@@ -3944,85 +3933,6 @@ function RegimeEngineTab() {
 
           <RegimePersistentLearningCard ticker={ticker} />
 
-          {backtests && (
-            <Card
-              variant="budget"
-              accent={LIGHT_BLUE}
-              padding={16}
-              title={<span style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em" }}>Signal Backtest · Regime vs. Naive</span>}
-              subtitle="Signals filtered by regime persistence (≥2 bars). Donchian 20-bar breakout tested with/without regime gate."
-            >
-              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
-                <div style={{ flex: "1 1 200px" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 12 }}>Naive Donchian</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text }}>
-                      <span>Total</span>
-                      <span style={{ fontFamily: "monospace" }}>{backtests.naive.total}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.green }}>
-                      <span>Wins</span>
-                      <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{backtests.naive.wins}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.red }}>
-                      <span>Losses</span>
-                      <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{backtests.naive.losses}</span>
-                    </div>
-                    <div style={{ height: 1, background: HOME_THEME.border, margin: "8px 0" }} />
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 800, color: HOME_THEME.cyan }}>
-                      <span>Win%</span>
-                      <span style={{ fontFamily: "monospace" }}>{backtests.naive.winPct.toFixed(1)}%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ flex: "1 1 200px" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 12 }}>Regime-Gated (Trend Only)</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text }}>
-                      <span>Total</span>
-                      <span style={{ fontFamily: "monospace" }}>{backtests.gated.total}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.green }}>
-                      <span>Wins</span>
-                      <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{backtests.gated.wins}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.red }}>
-                      <span>Losses</span>
-                      <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{backtests.gated.losses}</span>
-                    </div>
-                    <div style={{ height: 1, background: HOME_THEME.border, margin: "8px 0" }} />
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 800, color: HOME_THEME.cyan }}>
-                      <span>Win%</span>
-                      <span style={{ fontFamily: "monospace" }}>{backtests.gated.winPct.toFixed(1)}%</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ flex: "1 1 200px" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 12 }}>Improvement</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text }}>
-                      <span>Signals Reduced</span>
-                      <span style={{ fontFamily: "monospace" }}>{Math.round((1 - backtests.gated.total / backtests.naive.total) * 100)}%</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: backtests.gated.winPct > backtests.naive.winPct ? HOME_THEME.green : HOME_THEME.red }}>
-                      <span>Win% Delta</span>
-                      <span style={{ fontFamily: "monospace", fontWeight: 700 }}>
-                        {(backtests.gated.winPct - backtests.naive.winPct).toFixed(1)}%
-                      </span>
-                    </div>
-                    <div style={{ height: 1, background: HOME_THEME.border, margin: "8px 0" }} />
-                    <div style={{ fontSize: 13, color: HOME_THEME.text, fontStyle: "italic", lineHeight: 1.4 }}>
-                      {backtests.gated.winPct > backtests.naive.winPct
-                        ? "Regime filter improves win rate"
-                        : "Naive performs better — regime may filter out winners"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          )}
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <Card variant="budget" accent={LIGHT_BLUE} padding={16} title={<span style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em" }}>Switching</span>} style={{ flex: "1 1 220px" }}>
