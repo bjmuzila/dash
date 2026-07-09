@@ -408,7 +408,10 @@ export function HomeClient({
   const lastGexAppliedRef = useRef(0);
 
   const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "greeks" | "scanner" | "escandles">("calendar");
-  const [econCollapsed, setEconCollapsed] = useState(false);
+  // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
+  // the column with the GEX chart above it, "full" = fills the whole left column
+  // (chart hidden). Replaces the old econCollapsed boolean.
+  const [econSize, setEconSize] = useState<"min" | "half" | "full">("half");
   const [gexMode, setGexMode] = useState<GexMode>("net");
 
   // ── Ticker auto-fit: scale the whole ticker box down so it always fits its
@@ -1056,7 +1059,7 @@ export function HomeClient({
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
-            <div ref={gexContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
+            <div ref={gexContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
               {/* Full-featured toolbar — scales to fit instead of scrolling */}
               <FitScale min={0.6}>
               <GexToolbar
@@ -1117,7 +1120,7 @@ export function HomeClient({
               </div>
             </div>
 
-            <div style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econCollapsed ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: 24 }}>
+            <div style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 24 }}>
               <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
@@ -1135,11 +1138,33 @@ export function HomeClient({
                   <EconCalendarTemplateCopyBtn />
                   <EconCalendarDiscordBtn />
                 </div>
-                <button onClick={() => setEconCollapsed((v) => !v)} aria-label={econCollapsed ? "Expand" : "Collapse"} style={{ display: "flex", alignItems: "center", padding: "12px 16px", background: "none", border: "none", cursor: "pointer", color: "#fff" }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: econCollapsed ? "rotate(-90deg)" : "none", transition: "transform 0.2s" }}><polyline points="6 9 12 15 18 9" /></svg>
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 8 }}>
+                  {([
+                    { id: "min", title: "Minimize (tabs only)" },
+                    { id: "half", title: "Half height" },
+                    { id: "full", title: "Full height" },
+                  ] as const).map((o) => {
+                    const on = econSize === o.id;
+                    // Filled bar grows min→half→full so the glyph reads as a size.
+                    const fillY = o.id === "min" ? 11 : o.id === "half" ? 7 : 3;
+                    return (
+                      <button
+                        key={o.id}
+                        onClick={() => setEconSize(o.id)}
+                        aria-label={o.title}
+                        title={o.title}
+                        style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "6px 7px", background: on ? "rgba(33,158,188,0.16)" : "none", border: "none", borderRadius: 6, cursor: "pointer", color: on ? C.cyan : "#fff" }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16">
+                          <rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.4" opacity={on ? 0.55 : 0.4} />
+                          <rect x="2" y={fillY} width="12" height={14 - fillY} rx="1.5" fill="currentColor" />
+                        </svg>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: 24, display: econCollapsed ? "none" : "block" }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: 24, display: econSize === "min" ? "none" : "block" }}>
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel controlsPortalEl={econControlsSlotEl} />

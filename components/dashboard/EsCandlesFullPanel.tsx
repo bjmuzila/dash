@@ -2,11 +2,14 @@
 
 // EsCandlesFullPanel — the "exact chart" from the full /es-candles page,
 // self-contained for the HOME2 dashboard tab grid: live ES 5m candlesticks
-// PLUS the GEX overlay (Call Wall / Put Wall / Gamma Flip price lines) and
-// the vertical GEX-by-strike rail, fed by the same useEsCandles hook + the
-// same /ws/gex level stream the full page uses. No toolbar / Dock / nav
-// chrome, no heatmap canvas, no TPO/volume-profile/session-H-L extras — those
-// live behind buttons on the full page and aren't part of "the chart" itself.
+// PLUS the GEX overlay (Call Wall / Put Wall / Gamma Flip price lines), the
+// GEX heatmap behind the candles, and the vertical GEX-by-strike rail, fed by
+// the same useEsCandles hook + the same /ws/gex level stream the full page
+// uses. No toolbar / Dock / nav chrome, and no TPO/volume-profile/session-H-L
+// extras — those live behind buttons on the full page. The heatmap here is
+// locked to the live front (current/closest) expiry only: no DTE picker, no
+// multi-expiry backfill — it ingests the front-expiry columns the feed sends
+// plus a 1-day front-expiry history backfill so the band is populated on load.
 // Zero required props; fills whatever box it's placed in (ResizeObserver).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +23,39 @@ import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
+}
+
+// ── GEX heatmap (front/current expiry only) ────────────────────────────────
+// One painted cell = a strike bucket at a 5-min slot. netOiVol = gamma×(OI+vol).
+// Ported from app/es-candles/page.tsx, trimmed to the single Vol+OI metric (no
+// toggle) since this embed follows the live front expiry only.
+type GexCell = { strike: number; netOiVol: number };
+type GexColumn = { slotTs: number; cells: GexCell[] };
+const SLOT_MS = 300_000; // 5-min candle grid
+const HEATMAP_INTENSITY = 0.65; // matches the full page's default slider value
+function slotFloorMs(ts: number): number {
+  return Math.floor(ts / SLOT_MS) * SLOT_MS;
+}
+
+/**
+ * GEX heatmap color: positive GEX = cyan, negative = red. The 3 largest
+ * magnitudes per column get fixed rank floors so the dominant walls stand out;
+ * everything else follows a curve scaled by `intensity`. Copied verbatim from
+ * the full /es-candles page so the two surfaces read identically.
+ */
+function gexColor(value: number, maxValue: number, intensity: number, top3: number[]): string | null {
+  const n = value || 0;
+  const m = maxValue || 0;
+  if (m === 0 || !n) return null;
+  const pos = n >= 0;
+  const rank = top3.indexOf(Math.abs(n)) + 1;
+  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+  if (rank === 2) return pos ? "rgba(41,182,246,0.55)" : "rgba(255,71,87,0.55)";
+  if (rank === 3) return pos ? "rgba(41,182,246,0.35)" : "rgba(255,71,87,0.35)";
+  const ratio = Math.min(Math.abs(n) / m, 1);
+  const eased = Math.pow(ratio, 0.6);
+  const alpha = Math.min(0.30, 0.04 + eased * (intensity || 0.1) * 0.26);
+  return pos ? `rgba(41,182,246,${alpha.toFixed(3)})` : `rgba(255,71,87,${alpha.toFixed(3)})`;
 }
 
 // Auto-collapse the fixed-width rail when the panel gets too narrow, same
@@ -44,6 +80,15 @@ export default function EsCandlesFullPanel() {
 
   const [railFits, setRailFits] = useState(true);
   const railDrawRef = useRef<() => void>(() => {});
+
+  // ── Heatmap state (front/current expiry only) ──
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const columnsRef = useRef<Map<number, GexColumn>>(new Map()); // keyed by 5-min slot
+  const drawOverlayRef = useRef<() => void>(() => {});
+  const hmScaleWRef = useRef(0);            // cached right-axis gutter width
+  const candleBandRef = useRef<{ lo: number; hi: number } | null>(null); // visible ES band
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [feedExpiry, setFeedExpiry] = useState(""); // live front expiry → drives backfill
 
   // GEX levels + basis, mirrors app/es-candles/page.tsx `levels` state.
   const [levels, setLevels] = useState<{
@@ -181,12 +226,23 @@ export default function EsCandlesFullPanel() {
     }));
     candleSeries.setData(candleData);
 
+    // Track the ES price band the candles occupy so the heatmap can fade cells
+    // by distance from it (far GEX walls read as faint context, not loud bars).
+    if (candleData.length) {
+      let lo = Infinity, hi = -Infinity;
+      for (const r of rows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
+      candleBandRef.current = Number.isFinite(lo) ? { lo, hi } : null;
+    } else {
+      candleBandRef.current = null;
+    }
+
     const lastDay = candleData.length ? rows[rows.length - 1].date : "";
     if (candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
       chart.timeScale().fitContent();
       didFitRef.current = true;
       lastFitDayRef.current = lastDay;
     }
+    drawOverlayRef.current();
     railDrawRef.current();
   }, [rows]);
 
@@ -201,6 +257,10 @@ export default function EsCandlesFullPanel() {
       const esFut = Number(d.esFut ?? 0);
       const rawBasis = Number(d.basis);
       const dBasis = Number.isFinite(rawBasis) && Math.abs(rawBasis) > 0.01 ? rawBasis : null;
+      // Live gexRows are always the FRONT (current/closest) expiry — capture it
+      // once to seed the 1-day history backfill for the same contract.
+      const exp = typeof d.expiry === "string" ? d.expiry : "";
+      if (exp) setFeedExpiry((cur) => cur || exp);
 
       let computedFlip: number | null = null;
       if (Array.isArray(d.gexRows) && d.gexRows.length) {
@@ -225,6 +285,7 @@ export default function EsCandlesFullPanel() {
       const gexRows = d.gexRows;
       if (Array.isArray(gexRows) && gexRows.length) {
         const nextRail: RailRow[] = [];
+        const cells: GexCell[] = [];
         for (const r of gexRows as Array<Record<string, unknown>>) {
           const strike = Number(r.strike ?? 0);
           const netOi = Number(r.netGEX ?? r.net_gex ?? r.netGexVal ?? 0);
@@ -232,8 +293,17 @@ export default function EsCandlesFullPanel() {
           if (!(strike > 0)) continue;
           const net = (Number.isFinite(netOi) ? netOi : 0) + (Number.isFinite(netVol) ? netVol : 0);
           nextRail.push({ strike, net });
+          cells.push({ strike, netOiVol: net });
         }
         if (nextRail.length) setRailRows(nextRail);
+        // Snapshot the front-expiry per-strike net into the current 5-min column.
+        if (cells.length) {
+          const slotTs = slotFloorMs(Date.now());
+          const map = columnsRef.current;
+          map.set(slotTs, { slotTs, cells });
+          if (map.size > 10000) map.delete(Math.min(...map.keys())); // cap history
+          drawOverlayRef.current();
+        }
       }
     };
 
@@ -303,6 +373,191 @@ export default function EsCandlesFullPanel() {
     }
   }, [levels, effectiveBasis]);
 
+  // ── Heatmap history backfill (front/current expiry, 1 day) ────────────────
+  // Seeded once the live feed reports its front expiry. Uses anyExpiry=1 so the
+  // rolling 0DTE front contract matches by time window (same as the full page's
+  // front mode) — this is the current/closest contract, not a multi-expiry mix.
+  useEffect(() => {
+    if (!feedExpiry) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=1440&expiry=${encodeURIComponent(feedExpiry)}&anyExpiry=1`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = await res.json();
+        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number }> };
+        const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
+        if (cancelled || !raw.length) return;
+        const map = columnsRef.current;
+        // History rows are 1-min granular; snap to the 5-min grid, newest wins.
+        const sortedRaw = [...raw].sort((a, b) => b.slotTs - a.slotTs);
+        for (const col of sortedRaw) {
+          const slotTs = slotFloorMs(col.slotTs);
+          if (map.has(slotTs)) continue; // live columns win on collision
+          const cells: GexCell[] = col.cells
+            .filter((c) => c.strike > 0 && Number.isFinite(c.net))
+            .map((c) => ({ strike: c.strike, netOiVol: c.net }));
+          map.set(slotTs, { slotTs, cells });
+        }
+        drawOverlayRef.current();
+      } catch { /* live feed still populates the front expiry going forward */ }
+    })();
+    return () => { cancelled = true; };
+  }, [feedExpiry]);
+
+  // ── Heatmap canvas overlay ────────────────────────────────────────────────
+  // Paints one column per 5-min GEX snapshot behind the candles. Each cell spans
+  // its strike bucket (strike → next strike up, SPX→ES via basis) and its 5-min
+  // slot, colored by gexColor and faded by distance from the candle band. Ported
+  // from app/es-candles/page.tsx (heatmap layer only).
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    const chart = chartApiRef.current;
+    const series = candleSeriesRef.current;
+    if (!canvas || !chart || !series) return;
+
+    const draw = () => {
+      const ctx = canvas.getContext("2d");
+      const parent = canvas.parentElement;
+      if (!ctx || !parent) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const w = parent.clientWidth;
+      const h = parent.clientHeight;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      if (!showHeatmap) return;
+
+      const cols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+      if (!cols.length) return;
+
+      const timeScale = chart.timeScale();
+      const basis = basisRef.current;
+      const slotX = (slotTs: number): { left: number; w: number } | null => {
+        const x0 = timeScale.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
+        const xEndRaw = timeScale.timeToCoordinate(((slotTs + SLOT_MS) / 1000) as UTCTimestamp);
+        if (x0 == null) return null;
+        const x1 = xEndRaw != null ? xEndRaw : x0 + 8;
+        return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
+      };
+
+      // Stretch the latest column to the plot's right edge (canvas minus the
+      // price-axis gutter). Cache the gutter width, only accepting >=1px changes
+      // so the live price label's sub-pixel wobble doesn't shimmer the band edge.
+      let measuredScaleW = 0;
+      try { measuredScaleW = chart.priceScale("right").width(); } catch {}
+      if (Math.abs(measuredScaleW - hmScaleWRef.current) >= 1) hmScaleWRef.current = measuredScaleW;
+      const hmPlotRight = Math.max(0, w - hmScaleWRef.current - 1);
+      const lastSlotTs = cols[cols.length - 1].slotTs;
+
+      // Draw to an offscreen buffer, then composite through a blur so adjacent
+      // cells melt into smooth bands instead of hard tiles.
+      const buf = document.createElement("canvas");
+      buf.width = Math.max(1, Math.round(w));
+      buf.height = Math.max(1, Math.round(h));
+      const bctx = buf.getContext("2d");
+      if (bctx) {
+        const band = candleBandRef.current;
+        const fadeSpan = 30; // ES points to fade to ~floor past the band edge
+        const distFade = (esStrike: number): number => {
+          if (!band) return 1;
+          const d = esStrike < band.lo ? band.lo - esStrike
+                  : esStrike > band.hi ? esStrike - band.hi : 0;
+          if (d <= 0) return 1;
+          return Math.max(0.12, 1 - d / fadeSpan);
+        };
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const sx = slotX(col.slotTs);
+          if (!sx) continue;
+          // Carry each column forward to the next stored column's left edge so
+          // skipped (unchanged) slots leave no gaps; the last one runs to the axis.
+          if (col.slotTs === lastSlotTs && hmPlotRight > sx.left) {
+            sx.w = hmPlotRight - sx.left;
+          } else if (ci + 1 < cols.length) {
+            const nextX = slotX(cols[ci + 1].slotTs);
+            if (nextX && nextX.left > sx.left) sx.w = nextX.left - sx.left;
+          }
+          const absVals = col.cells.map((c) => Math.abs(c.netOiVol)).filter((v) => v > 0);
+          const colMax = absVals.length ? Math.max(...absVals) : 1;
+          const colTop3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
+          const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
+          for (let i = 0; i < sorted.length; i++) {
+            const cell = sorted[i];
+            const color = gexColor(cell.netOiVol, colMax, HEATMAP_INTENSITY, colTop3);
+            if (!color) continue;
+            const fade = distFade(cell.strike + basis);
+            if (fade <= 0) continue;
+            const faded = fade >= 0.999
+              ? color
+              : color.replace(/,([0-9.]+)\)$/, (_m, a) => `,${(parseFloat(a) * fade).toFixed(3)})`);
+            const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
+            const pTop = series.priceToCoordinate(nextStrike + basis);
+            const pBot = series.priceToCoordinate(cell.strike + basis);
+            if (pTop == null || pBot == null) continue;
+            const top = Math.min(pTop, pBot);
+            const cellH = Math.max(1, Math.abs(pBot - pTop));
+            bctx.fillStyle = faded;
+            bctx.fillRect(sx.left - 0.5, top - 0.5, sx.w + 1, cellH + 1);
+          }
+        }
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        ctx.filter = "blur(2.5px)";
+        ctx.drawImage(buf, 0, 0, w, h);
+        ctx.filter = "none";
+        ctx.globalAlpha = 0.45;
+        ctx.drawImage(buf, 0, 0, w, h);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+    };
+
+    drawOverlayRef.current = draw;
+
+    // Coalesce every repaint trigger through one rAF so the layout settles to a
+    // fixed point before we paint (the overlay reads the right-axis width, which
+    // shifts the plot width, which fires a range-change → avoid the ping-pong).
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; draw(); railDrawRef.current(); });
+    };
+
+    const timeScale = chart.timeScale();
+    timeScale.subscribeVisibleLogicalRangeChange(schedule);
+    const ro = new ResizeObserver(schedule);
+    if (canvas.parentElement) ro.observe(canvas.parentElement);
+    draw();
+
+    // No Y-axis range-change event exists in lightweight-charts, so mirror the
+    // full page and repaint on pointer/wheel over the chart to track vertical
+    // drag-zoom of the price scale in real time.
+    const container = chartContainerRef.current;
+    container?.addEventListener("wheel", schedule, { passive: true });
+    container?.addEventListener("pointermove", schedule);
+    container?.addEventListener("pointerup", schedule);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      timeScale.unsubscribeVisibleLogicalRangeChange(schedule);
+      ro.disconnect();
+      container?.removeEventListener("wheel", schedule);
+      container?.removeEventListener("pointermove", schedule);
+      container?.removeEventListener("pointerup", schedule);
+      drawOverlayRef.current = () => {};
+    };
+  }, [showHeatmap]);
+
   // Auto-collapse the rail when the panel is too narrow for both it and a
   // usable candle chart (mirrors app/es-candles/page.tsx RAIL_MIN_WIDTH gate).
   useEffect(() => {
@@ -320,16 +575,34 @@ export default function EsCandlesFullPanel() {
   return (
     <div ref={wrapRef} style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, display: "flex" }}>
       <div style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0 }}>
-        <div ref={chartContainerRef} style={{ position: "absolute", inset: 0 }} />
+        {/* Heatmap sits BEHIND the chart; the chart's transparent background
+            lets it show through so candles always read on the top layer. */}
+        <canvas ref={overlayRef} style={{ position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none" }} />
+        <div ref={chartContainerRef} style={{ position: "absolute", inset: 0, zIndex: 2 }} />
+        {/* Heatmap on/off — front (current/closest) expiry GEX only. */}
+        <button
+          onClick={() => setShowHeatmap((v) => !v)}
+          title={showHeatmap ? "Hide GEX heatmap" : "Show GEX heatmap"}
+          style={{
+            position: "absolute", right: 8, top: 6, zIndex: 3,
+            fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+            padding: "3px 8px", borderRadius: 6, cursor: "pointer",
+            border: `1px solid ${showHeatmap ? "rgba(41,182,246,0.5)" : HOME_THEME.border}`,
+            background: showHeatmap ? "rgba(41,182,246,0.16)" : "rgba(5,8,13,.6)",
+            color: showHeatmap ? "rgba(41,182,246,1)" : HOME_THEME.muted,
+          }}
+        >
+          Heatmap
+        </button>
         {rows.length === 0 && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#6f7d8c", fontSize: 11 }}>
+          <div style={{ position: "absolute", inset: 0, zIndex: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "#6f7d8c", fontSize: 11 }}>
             {connected ? "Loading ES candles…" : "Connecting…"}
           </div>
         )}
         {last && (
           <div
             style={{
-              position: "absolute", left: 8, top: 6, fontSize: 11,
+              position: "absolute", left: 8, top: 6, zIndex: 3, fontSize: 11,
               fontFamily: "var(--font-mono)", color: HOME_THEME.text,
               background: "rgba(5,8,13,.6)", padding: "2px 7px", borderRadius: 6,
               pointerEvents: "none",

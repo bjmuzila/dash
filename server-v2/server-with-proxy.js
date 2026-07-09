@@ -407,6 +407,12 @@ async function ensureFlowPrintsSchema(pool) {
     await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
     await pool.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS spot REAL');
     await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
+    // Covering index for /proxy/flow-netprem: that query filters on type/side/
+    // premium/is_otm, none of which are in the index above, so a hot ticker
+    // (SPX 0DTE, hundreds of k prints/day) forces a heap fetch per matching row
+    // on every 5s poll. INCLUDE-ing the filtered+summed columns here lets
+    // Postgres answer straight from the index (index-only scan) instead.
+    await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_netprem_covering_idx ON flow_prints (date, underlying_norm, ts) INCLUDE (type, side, premium, size, is_otm)');
     await pool.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
     _flowSchemaEnsured = true;
   } catch (e) {
@@ -559,7 +565,10 @@ async function handleFlowHistory(req, res) {
 // Tiny in-memory cache so N concurrent /flow pages polling the same
 // ticker+filters every 5s collapse to one GROUP BY per key per TTL.
 const _netPremCache = new Map(); // key -> { at: ms, payload }
-const NETPREM_TTL_MS = 4000;
+// Must be >= the client poll interval (5s, see FlowNetPremPanel.tsx / app/flow
+// /page.tsx) or the cache expires between polls and never actually saves a
+// query for a single viewer, not just concurrent ones.
+const NETPREM_TTL_MS = 6000;
 
 async function handleFlowNetPrem(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');

@@ -77,6 +77,10 @@ async function ensureTable(p) {
   // btree index and forces a per-row scan of the whole date partition.
   await p.query('ALTER TABLE flow_prints ADD COLUMN IF NOT EXISTS underlying_norm TEXT');
   await p.query('CREATE INDEX IF NOT EXISTS flow_prints_date_norm_ts_idx ON flow_prints (date, underlying_norm, ts)');
+  // Covering index for /proxy/flow-netprem (see server-with-proxy.js) so the
+  // per-bin aggregate query on a hot ticker like SPX can be answered as an
+  // index-only scan instead of a heap fetch per matching row.
+  await p.query('CREATE INDEX IF NOT EXISTS flow_prints_netprem_covering_idx ON flow_prints (date, underlying_norm, ts) INCLUDE (type, side, premium, size, is_otm)');
   // One-time backfill for rows written before this column existed.
   await p.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
   tableEnsured = true;
