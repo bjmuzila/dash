@@ -12,7 +12,16 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { PageShell } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle, statTileStyle } from "@/components/shared/homeTheme";
 import EsCandlesCard from "@/components/dashboard/EsCandlesCard";
-import CompactOptionChain from "@/components/dashboard/CompactOptionChain";
+import ChainStatsBar from "@/components/dashboard/ChainStatsBar";
+// The exact same option chain component used on the standalone /options-chain
+// route — own toolbar, ticker input, GO, mode toggles, everything. Rendered
+// here as-is (not wrapped in DCard — it already has its own themed shell), so
+// it's pixel-identical to the dashboard page, just embedded in this grid cell.
+import OptionsChainPage from "@/app/options-chain/page";
+// The exact same greeks page used on the standalone /greeks route (GEX/DEX/
+// CHEX/VEX gauges + trend graphs, own toolbar/basis toggle) — same embed
+// pattern as OptionsChainPage above.
+import GreeksPage from "@/app/greeks/page";
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -76,13 +85,6 @@ function saveFavoriteTickers(list: string[]) {
 
 // ── static placeholder data (UI only) ───────────────────────────────────────
 const STAT_CARDS = ["GEX", "DEX", "FLIP", "IV"];
-const GAUGES = ["GEX", "DEX", "CHEX", "VEX"];
-
-// Option chain sizing — caps CompactOptionChain's live matrix. Real
-// /options-chain page defaults to 14 expirations; new-home is capped smaller
-// since it's a secondary summary view.
-const CHAIN_EXPIRY_COUNT = 5;
-const CHAIN_STRIKE_ROWS = 9;
 
 // ── ticker switcher: click the chip to type any ticker (uppercased, Enter/blur
 // commits, Escape cancels); the whole page re-keys off `ticker`, so every
@@ -409,67 +411,28 @@ function StatCardsRow({ ticker }: { ticker: string }) {
 }
 
 // ── option chain (left column, main) ────────────────────────────────────────
-// Live now — CompactOptionChain fetches real expirations + chains for the
-// active ticker (from TickerSwitcher), capped to CHAIN_EXPIRY_COUNT columns
-// and CHAIN_STRIKE_ROWS around ATM. Same GEX math + data source as the full
-// /options-chain page, no toolbar (this page's TickerSwitcher drives it).
-function OptionChainPanel({ ticker }: { ticker: string }) {
+// The real /options-chain page component, embedded as-is — its own toolbar,
+// ticker input/GO, intensity slider, greek/data/change-mode toggles, all of
+// it. It manages its own ticker state independently of this page's
+// TickerSwitcher (it has no ticker prop to accept), same as opening the
+// standalone route. Rounded so it doesn't run edge-to-edge in this grid cell.
+function OptionChainPanel() {
   return (
-    <DCard title="Option chain" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <CompactOptionChain ticker={ticker} maxExpirations={CHAIN_EXPIRY_COUNT} rows={CHAIN_STRIKE_ROWS} />
-    </DCard>
-  );
-}
-
-// ── static greeks gauge (visual only, no live value) — compact size ────────
-function StaticGauge({ label }: { label: string }) {
-  const cx = 44, cy = 46, r = 32;
-  const pt = (deg: number) => ({
-    x: cx + r * Math.sin((deg * Math.PI) / 180),
-    y: cy - r * Math.cos((deg * Math.PI) / 180),
-  });
-  const arc = (d0: number, d1: number) => {
-    const a = pt(d0), b = pt(d1);
-    const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
-    const sweep = d1 > d0 ? 1 : 0;
-    return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
-  };
-  return (
-    <div
-      className="card-hover"
-      style={{
-        ...statTileStyle,
-        padding: "8px 4px 6px",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-      }}
-    >
-      <svg viewBox="0 0 88 72" width="100%" style={{ display: "block", maxWidth: 84 }}>
-        <path d={arc(-135, 0)} fill="none" stroke="#2a1a20" strokeWidth={6} strokeLinecap="round" />
-        <path d={arc(0, 135)} fill="none" stroke="#15242b" strokeWidth={6} strokeLinecap="round" />
-        <line x1={cx} y1={cy - r - 6} x2={cx} y2={cy - r + 1} stroke="#fff" strokeWidth={1.2} />
-        <circle cx={cx} cy={cy - r} r={1.8} fill="#fff" />
-        <text x={cx} y={cy + 1} textAnchor="middle" fontSize={13} fontWeight={800} fill="#fff" fontFamily="monospace">
-          --
-        </text>
-        <text x={cx} y={cy + 14} textAnchor="middle" fontSize={7.5} letterSpacing="1.5" fill="#fff">
-          {label}
-        </text>
-      </svg>
+    <div style={{ flex: 1, minHeight: 0, borderRadius: 20, overflow: "hidden" }}>
+      <OptionsChainPage />
     </div>
   );
 }
 
-function GreeksGaugesPanel() {
+// ── greeks (right column) ───────────────────────────────────────────────────
+// The real /greeks page component, embedded as-is — GEX/DEX/CHEX/VEX gauges,
+// trend graphs, basis toggle, its own toolbar. Same pattern as
+// OptionChainPanel: not wrapped in DCard since it has its own themed shell.
+function GreeksPanel() {
   return (
-    <DCard title="Greeks gauges">
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 6 }}>
-        {GAUGES.map((label) => (
-          <StaticGauge key={label} label={label} />
-        ))}
-      </div>
-    </DCard>
+    <div style={{ flex: 1, minHeight: 320, borderRadius: 20, overflow: "hidden" }}>
+      <GreeksPage />
+    </div>
   );
 }
 
@@ -501,9 +464,10 @@ function EsCandlesPanel() {
 
 export default function NewHomePage() {
   // Active ticker lives here — switching it (via TickerSwitcher) re-labels the
-  // page and drives the live option chain below. Stat cards / gauges / stats
-  // panel are still static "--" placeholders; the chain is the first panel
-  // wired to real data.
+  // page and drives the live option chain + stats bar below. The embedded
+  // OptionsChainPage and GreeksPage manage their own ticker/basis state
+  // independently (same as opening those routes directly). Stat cards row and
+  // the Stats panel are still static "--" placeholders.
   const [ticker, setTicker] = useState("SPX");
 
   return (
@@ -513,12 +477,13 @@ export default function NewHomePage() {
         {/* left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <StatCardsRow ticker={ticker} />
-          <OptionChainPanel ticker={ticker} />
+          <ChainStatsBar ticker={ticker} />
+          <OptionChainPanel />
         </div>
 
         {/* right column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-          <GreeksGaugesPanel />
+          <GreeksPanel />
           <StatsPlaceholderPanel />
           <EsCandlesPanel />
         </div>
