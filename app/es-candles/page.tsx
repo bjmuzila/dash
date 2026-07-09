@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, LineSeries, createChart, createSeriesMarkers } from "lightweight-charts";
-import type { UTCTimestamp, Time, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
+import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -11,10 +11,8 @@ import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
-import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle, statTileStyle } from "@/components/shared/homeTheme";
-import { Card } from "@/components/shared/PageCard";
+import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
-import { getMomentumBiasIndex } from "@/lib/momentumBias";
 import type { EsCandleRecord } from "@/lib/snapdb";
 
 
@@ -234,135 +232,6 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 // there, not on the chart page. See app/test/page.tsx OptionsPositioningTab.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AM TBR strip: 8am-12pm Time-Based-Range overlay (nqstats.com/am_tbr concept).
-// Previously a separate mock/rescaled SVG mini-chart with its own candle
-// series and its own useEsCandles() fetch. Per Brandon's ask, this now draws
-// straight onto the REAL ES candle chart's canvas overlay (see section 4 in
-// the draw() effect below) — no duplicate candles, no second data fetch.
-// Percentile band widths are still placeholder magnitudes (see
-// AmTbrStatsCards), just anchored to today's real 8am ES open instead of an
-// arbitrary SVG pixel grid.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Gold/amber has no equivalent HOME_THEME token (palette has no yellow) — this
-// is the one intentional exception, scoped to this chart's TBR Open + MFE band.
-const TBR_GOLD = "#eab308";
-
-// ES-point offsets from TBR Open, derived from the original mockup's pixel
-// proportions (50px == the real 0.25 trigger distance) so the band shapes
-// look the same, just expressed in real price units now.
-const AMTBR_TRIGGER = 0.25;
-const AMTBR_NR_MAE = { med: 1.20, p75: 1.675, p90: 2.05 };  // Non-Reverted MAE — above Open
-const AMTBR_RM_MAE = { med: 0.45, p75: 0.65, p90: 1.00 };   // Reverted MAE — above Open, inside NR band
-const AMTBR_RM_MFE = { med: 0.55, p75: 1.10, p90: 1.75 };   // Reverted MFE — below Open
-
-type AmTbrInfo = {
-  openRow: EsCandleRecord;
-  windowRows: EsCandleRecord[]; // today, 08:00–12:00 ET inclusive
-  triggered: "up" | "down" | null;
-  triggerRow: EsCandleRecord | null;
-};
-
-// Derives today's real TBR Open (8am ES bar) + whether the +/-0.25 trigger has
-// been touched yet, straight from the same merged `rows` the main chart
-// renders — so the overlay and this status card never disagree with what's
-// on screen.
-function computeAmTbrInfo(rows: EsCandleRecord[]): AmTbrInfo | null {
-  if (!rows.length) return null;
-  const timeOf = (r: EsCandleRecord) => r.time || (r.slotKey ?? "").slice(11, 16);
-  const today = rows[rows.length - 1].date;
-  const todayRows = rows.filter((r) => r.date === today);
-  const openRow = todayRows.find((r) => timeOf(r) === "08:00")
-    ?? todayRows.find((r) => timeOf(r) >= "08:00")
-    ?? null;
-  if (!openRow) return null;
-  const windowRows = todayRows.filter((r) => timeOf(r) >= "08:00" && timeOf(r) <= "12:00");
-  let triggered: "up" | "down" | null = null;
-  let triggerRow: EsCandleRecord | null = null;
-  for (const r of windowRows) {
-    if (r.high >= openRow.open + AMTBR_TRIGGER) { triggered = "up"; triggerRow = r; break; }
-    if (r.low <= openRow.open - AMTBR_TRIGGER) { triggered = "down"; triggerRow = r; break; }
-  }
-  return { openRow, windowRows, triggered, triggerRow };
-}
-
-function AmTbrPanel({ info }: { info: AmTbrInfo | null }) {
-  const statusText = !info
-    ? "No 8am ES bar yet today — bands appear on the chart once the TBR Open prints."
-    : info.triggered === "up"
-    ? `Triggered UP through +${AMTBR_TRIGGER} — watching for reversion back to TBR Open ${info.openRow.open.toFixed(2)}.`
-    : info.triggered === "down"
-    ? `Triggered DOWN through -${AMTBR_TRIGGER} — watching for reversion back to TBR Open ${info.openRow.open.toFixed(2)}.`
-    : `TBR Open ${info.openRow.open.toFixed(2)} — no ±${AMTBR_TRIGGER} trigger yet.`;
-
-  const legend: { label: string; color: string }[] = [
-    { label: "Non-Reverted MAE", color: HOME_THEME.red },
-    { label: "Reverted MAE", color: HOME_THEME.green },
-    { label: "Reverted MFE", color: TBR_GOLD },
-    { label: "TBR Open / ±0.25", color: TBR_GOLD },
-  ];
-
-  return (
-    <Card
-      variant="dissolve"
-      accent={TBR_GOLD}
-      title={<span style={{ fontSize: 18 }}>AM TBR — Time-Based Range</span>}
-      subtitle="Bands drawn on the ES chart above · reversion to TBR Open"
-    >
-      <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.85, marginBottom: 12 }}>{statusText}</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginBottom: 12 }}>
-        {legend.map((l) => (
-          <span key={l.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: HOME_THEME.text, opacity: 0.8 }}>
-            <span style={{ width: 10, height: 10, borderRadius: 3, background: l.color, display: "inline-block" }} />
-            {l.label}
-          </span>
-        ))}
-      </div>
-      <div style={{ fontSize: 17, color: HOME_THEME.text, lineHeight: 1.7, opacity: 0.85 }}>
-        Collects a rolling 20-day price distribution of the 8am–12pm time-based range to derive the +/-0.25
-        sdev trigger points. Whichever is hit first creates the expectation of reversion back to the TBR Open
-        (8am open). MAE is shown for reverted vs. non-reverted events; MFE beyond TBR Open is shown for
-        reverted events. Reversions within the first hour (8am hour) have the highest hit rate.
-      </div>
-    </Card>
-  );
-}
-
-function AmTbrStatTile({ label, value, accent }: { label: string; value: string; accent: string }) {
-  return (
-    <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 30, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
-    </div>
-  );
-}
-
-// Illustrative numbers only — not computed from data, just filling out the mockup.
-function AmTbrStatsCards() {
-  return (
-    <Card
-      variant="classic"
-      accent={TBR_GOLD}
-      title={<span style={{ fontSize: 18 }}>AM TBR — Sample Stats</span>}
-      subtitle="Placeholder figures for layout only"
-    >
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-        <AmTbrStatTile label="8am Hour Reversion Rate" value="71%" accent={HOME_THEME.green} />
-        <AmTbrStatTile label="Total Reversion Rate" value="86%" accent={HOME_THEME.cyan} />
-        <AmTbrStatTile label="Non-Reverted MAE (Median)" value="0.41" accent={HOME_THEME.red} />
-        <AmTbrStatTile label="Reverted MAE (Median)" value="0.18" accent={HOME_THEME.green} />
-        <AmTbrStatTile label="Reverted MFE (Median)" value="0.63" accent={TBR_GOLD} />
-        <AmTbrStatTile label="Avg Time to Trigger" value="42m" accent={HOME_THEME.orange} />
-        <AmTbrStatTile label="Rolling Window" value="20d" accent={HOME_THEME.purple} />
-        <AmTbrStatTile label="Sample Size" value="2,510" accent={HOME_THEME.cyan} />
-      </div>
-    </Card>
-  );
-}
-
 export default function EsCandlesPage() {
   const esShouldConnect = useWsLifecycle();
   const esShouldConnectRef = useRef(esShouldConnect);
@@ -382,18 +251,6 @@ export default function EsCandlesPage() {
     for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
   }, [historical, liveRows]);
-  // Momentum Bias Index over the visible candles, aligned 1:1 with `rows`.
-  // Same lib/momentumBias module the server records TP signals with — the arrows
-  // rendered here are the events that get logged/graded server-side.
-  const biasBars = useMemo(
-    () => getMomentumBiasIndex(rows.map((r) => ({ high: r.high, low: r.low, close: r.close }))),
-    [rows]
-  );
-  // AM TBR: today's real 8am ES open + trigger status, derived from the same
-  // merged `rows` the candles are built from (see computeAmTbrInfo above).
-  // Feeds both the canvas overlay (section 4, drawn on the real chart) and
-  // the AmTbrPanel status card — no separate candle series, no second fetch.
-  const amTbrInfo = useMemo(() => computeAmTbrInfo(rows), [rows]);
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
   const chartRef = useRef<HTMLDivElement>(null);
@@ -402,13 +259,6 @@ export default function EsCandlesPage() {
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
-  // Momentum Bias oscillator sub-pane (pane 1) + the TP arrow-marker plugin on
-  // the candle series (pane 0). Created lazily by drawBiasRef when Bias is on.
-  const biasUpSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const biasDownSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const biasBoundarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const biasMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const drawBiasRef = useRef<() => void>(() => {});
   const didFitRef = useRef(false);
   // ET date of the latest bar the last fitContent() ran for. When the session
   // rolls to a new ET day, new bars append far to the right; without re-fitting
@@ -432,16 +282,12 @@ export default function EsCandlesPage() {
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
   const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
-  // Momentum Bias oscillator sub-pane + TP arrow markers. On by default on the
-  // full page; OFF in the dock embed (like the heatmap) to keep the card clean.
-  const [showBias, setShowBias] = useState(false);
   // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
   // profile OFF (user can still toggle it on). Done as an effect, not a lazy
   // initializer, so it applies client-side after SSR hydration.
   useEffect(() => {
     if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("embed") === "1") {
       setShowHeatmap(false);
-      setShowBias(false);
     }
   }, []);
   // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
@@ -522,7 +368,6 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
-  const [showAmTbr, setShowAmTbr] = useState(false); // bottom AM TBR (time-based-range) strip
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.
@@ -554,12 +399,11 @@ export default function EsCandlesPage() {
     tpo: setShowTpo,
     levels: setShowLevels,
     pdhon: setShowSessions,
-    bias: setShowBias,
   }), []);
   const overlayState = useMemo(() => ({
     heatmap: showHeatmap, profile: showProfile, tpo: showTpo,
-    levels: showLevels, pdhon: showSessions, bias: showBias,
-  }), [showHeatmap, showProfile, showTpo, showLevels, showSessions, showBias]);
+    levels: showLevels, pdhon: showSessions,
+  }), [showHeatmap, showProfile, showTpo, showLevels, showSessions]);
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return; // only in an iframe
@@ -1009,11 +853,6 @@ export default function EsCandlesPage() {
       });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
-      // TP arrow markers live on the candle series (pane 0); the plugin is created
-      // once here and fed by drawBiasRef. Empty until Bias is on + data arrives.
-      biasMarkersRef.current = createSeriesMarkers(candleSeries, []);
-      // Paint the bias pane as soon as the chart exists (data may already be in).
-      drawBiasRef.current();
 
       // lightweight-charts v5 renders candles into internal canvases that
       // html2canvas copies blank. Expose the library's own takeScreenshot()
@@ -1092,52 +931,8 @@ export default function EsCandlesPage() {
       chartApiRef.current?.remove();
       chartApiRef.current = null;
       candleSeriesRef.current = null;
-      // chart.remove() disposes every pane/series; just drop our stale handles.
-      biasUpSeriesRef.current = null;
-      biasDownSeriesRef.current = null;
-      biasBoundarySeriesRef.current = null;
-      biasMarkersRef.current = null;
     };
   }, []);
-
-  // ── Momentum Bias oscillator pane ────────────────────────────────────────
-  // A sub-pane below price holds the boundary line only. The boundary is the
-  // stdev impulse level. Series are created lazily (and torn down when toggled
-  // off) so the pane fully disappears rather than lingering empty. NaN warmup
-  // bars are dropped by the null filter. Kept out of the WS payload — computed
-  // here from the same lib/momentumBias the server records with.
-  useEffect(() => {
-    drawBiasRef.current = () => {
-      const chart = chartApiRef.current;
-      const candleSeries = candleSeriesRef.current;
-      if (!chart || !candleSeries) return;
-
-      if (!showBias) {
-        for (const ref of [biasUpSeriesRef, biasDownSeriesRef, biasBoundarySeriesRef]) {
-          if (ref.current) { try { chart.removeSeries(ref.current); } catch {} ref.current = null; }
-        }
-        biasMarkersRef.current?.setMarkers([]);
-        return;
-      }
-
-      if (!biasBoundarySeriesRef.current) {
-        const base = { priceLineVisible: false, lastValueVisible: false } as const;
-        biasBoundarySeriesRef.current = chart.addSeries(LineSeries, { ...base, color: "rgba(255,255,255,.40)", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "Boundary" }, 1);
-        try { chartApiRef.current?.panes()[1]?.setHeight(150); } catch {}
-      }
-
-      const bound: LineData[] = [];
-      for (let i = 0; i < rows.length; i++) {
-        const b = biasBars[i];
-        if (!b) continue;
-        const t = toChartTime(rows[i].timestamp);
-        if (b.boundary != null) bound.push({ time: t, value: b.boundary });
-      }
-      biasBoundarySeriesRef.current?.setData(bound);
-      biasMarkersRef.current?.setMarkers([]);
-    };
-    drawBiasRef.current();
-  }, [biasBars, rows, showBias]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -1577,111 +1372,6 @@ export default function EsCandlesPage() {
         ctx.restore();
       }
 
-      // ── 4) AM TBR bands (8am–12pm time-based-range) ──
-      // Painted directly onto this real candle series — no separate mini-chart,
-      // no second data fetch. Anchored to today's real 8am ES open (amTbrInfo);
-      // percentile widths are still placeholder magnitudes (see
-      // AmTbrStatsCards), converted from the original mockup's pixel
-      // proportions into real ES points.
-      if (showAmTbr && amTbrInfo) {
-        const { openRow, windowRows, triggered, triggerRow } = amTbrInfo;
-        const xLeft = ts.timeToCoordinate((openRow.timestamp / 1000) as UTCTimestamp);
-        if (xLeft != null) {
-          const lastWin = windowRows.length ? windowRows[windowRows.length - 1] : openRow;
-          const lastWinTime = lastWin.time || (lastWin.slotKey ?? "").slice(11, 16);
-          const xEndRaw = ts.timeToCoordinate((lastWin.timestamp / 1000) as UTCTimestamp);
-          let scaleW = 0;
-          try { scaleW = chart.priceScale("right").width(); } catch {}
-          const plotRight = Math.max(0, w - scaleW - 2);
-          // Window still live (hasn't reached 12:00 yet) → stretch to the right
-          // axis, same convention the heatmap uses for its latest column.
-          const xRight = lastWinTime >= "12:00" && xEndRaw != null ? xEndRaw : plotRight;
-
-          if (xRight > xLeft) {
-            const openPrice = openRow.open;
-            const yOf = (price: number) => series.priceToCoordinate(price);
-            const yOpen = yOf(openPrice);
-            const yPlus = yOf(openPrice + AMTBR_TRIGGER);
-            const yMinus = yOf(openPrice - AMTBR_TRIGGER);
-            const yNrMed = yOf(openPrice + AMTBR_NR_MAE.med);
-            const yNr75 = yOf(openPrice + AMTBR_NR_MAE.p75);
-            const yNr90 = yOf(openPrice + AMTBR_NR_MAE.p90);
-            const yRmMed = yOf(openPrice + AMTBR_RM_MAE.med);
-            const yRm75 = yOf(openPrice + AMTBR_RM_MAE.p75);
-            const yRm90 = yOf(openPrice + AMTBR_RM_MAE.p90);
-            const yMfeMed = yOf(openPrice - AMTBR_RM_MFE.med);
-            const yMfe75 = yOf(openPrice - AMTBR_RM_MFE.p75);
-            const yMfe90 = yOf(openPrice - AMTBR_RM_MFE.p90);
-
-            ctx.save();
-            const band = (yTop: number | null, yBot: number | null, fill: string, stroke: string) => {
-              if (yTop == null || yBot == null) return;
-              const top = Math.min(yTop, yBot);
-              const hgt = Math.max(1, Math.abs(yBot - yTop));
-              ctx.fillStyle = fill;
-              ctx.fillRect(xLeft, top, xRight - xLeft, hgt);
-              ctx.strokeStyle = stroke;
-              ctx.lineWidth = 1.5;
-              ctx.setLineDash([]);
-              ctx.strokeRect(xLeft, top, xRight - xLeft, hgt);
-            };
-            band(yNr90, yNrMed, `${HOME_THEME.red}22`, HOME_THEME.red);     // Non-Reverted MAE
-            band(yRm90, yRmMed, `${HOME_THEME.green}22`, HOME_THEME.green); // Reverted MAE
-            band(yMfeMed, yMfe90, `${TBR_GOLD}1f`, TBR_GOLD);               // Reverted MFE
-
-            const hline = (y: number | null, color: string, dash: number[]) => {
-              if (y == null) return;
-              ctx.strokeStyle = color;
-              ctx.lineWidth = dash.length ? 1.5 : 1;
-              ctx.setLineDash(dash);
-              ctx.beginPath(); ctx.moveTo(xLeft, y); ctx.lineTo(xRight, y); ctx.stroke();
-              ctx.setLineDash([]);
-            };
-            hline(yNr75, HOME_THEME.red, []);
-            hline(yRm75, HOME_THEME.green, []);
-            hline(yMfe75, TBR_GOLD, []);
-            hline(yPlus, HOME_THEME.green, [6, 5]);
-            hline(yOpen, TBR_GOLD, [6, 5]);
-            hline(yMinus, HOME_THEME.red, [6, 5]);
-
-            ctx.font = "10px Inter, system-ui, sans-serif";
-            const label = (y: number | null, text: string, color: string) => {
-              if (y == null) return;
-              ctx.fillStyle = color;
-              ctx.fillText(text, xLeft + 4, y - 3);
-            };
-            label(yNrMed, "Non-Reverted MAE", HOME_THEME.red);
-            label(yRmMed, "Reverted MAE", HOME_THEME.green);
-            label(yMfeMed, "Reverted MFE", TBR_GOLD);
-            label(yPlus, "+0.25", HOME_THEME.green);
-            label(yOpen, "TBR Open", TBR_GOLD);
-            label(yMinus, "-0.25", HOME_THEME.red);
-
-            // Left edge guide at the TBR Open time.
-            ctx.strokeStyle = `${TBR_GOLD}55`;
-            ctx.lineWidth = 1;
-            ctx.setLineDash([3, 3]);
-            ctx.beginPath(); ctx.moveTo(xLeft, 0); ctx.lineTo(xLeft, h); ctx.stroke();
-            ctx.setLineDash([]);
-
-            // Real trigger-touch marker — placed at the actual candle/price
-            // that crossed +/-0.25 today, not a scripted index like the old mock.
-            if (triggered && triggerRow) {
-              const tx = ts.timeToCoordinate((triggerRow.timestamp / 1000) as UTCTimestamp);
-              const ty = yOf(triggered === "up" ? openPrice + AMTBR_TRIGGER : openPrice - AMTBR_TRIGGER);
-              if (tx != null && ty != null) {
-                ctx.beginPath();
-                ctx.arc(tx, ty, 7, 0, Math.PI * 2);
-                ctx.strokeStyle = HOME_THEME.orange;
-                ctx.lineWidth = 2;
-                ctx.stroke();
-              }
-            }
-            ctx.restore();
-          }
-        }
-      }
-
       // (Greek-flow is now rendered as an HTML mini-chart, top-left of the chart
 
     };
@@ -1727,7 +1417,7 @@ export default function EsCandlesPage() {
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory, showAmTbr, amTbrInfo]);
+  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1836,8 +1526,6 @@ export default function EsCandlesPage() {
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
-          <ToggleTile label="Bias"     on={showBias}     onClick={() => setShowBias((v) => !v)}     accent={LIGHT_BLUE} />
-          <ToggleTile label="AM TBR" on={showAmTbr} onClick={() => setShowAmTbr((v) => !v)} accent={LIGHT_BLUE} />
 
           <DockGap />
 
@@ -1959,17 +1647,6 @@ export default function EsCandlesPage() {
         ) : null}
 
       </div>
-
-      {/* ── AM TBR strip ────────────────────────────────────────────────────────
-          8am–12pm Time-Based-Range distribution mock (nqstats.com/am_tbr),
-          moved here from /test as an on/off strip like Signals — Brandon
-          wanted it living with the ES chart instead of a separate tab. */}
-      {showAmTbr ? (
-        <div className="px-4 pb-4" style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 16 }}>
-          <AmTbrPanel info={amTbrInfo} />
-          <AmTbrStatsCards />
-        </div>
-      ) : null}
       </div>
     </div>
   );
