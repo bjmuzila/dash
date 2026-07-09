@@ -1374,6 +1374,15 @@ async function main() {
         return;
       }
 
+      // Manual fire: POST /proxy/retention-cleanup-run  (bypasses the 00:05-00:40
+      // ET window + the once-per-day gate; for testing the nightly prune on demand)
+      if (pathname === '/proxy/retention-cleanup-run' && req.method === 'POST') {
+        require('./state/retention-cleanup').runCleanup({ force: true })
+          .then((r) => sendJson(res, 200, r))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // ── Far CB Watch ─────────────────────────────────────────────────────
       // GET /proxy/far-cb-watch — today's flagged tickers (highest OI+Vol GEX
       // strike within 30d sits > OTM_THRESHOLD_PCT% away from spot), ranked by
@@ -2008,6 +2017,16 @@ async function main() {
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.
     require('./watch-recorder').startWatchRecorder(PORT);
+
+    // Nightly retention prune (00:05-00:40 ET): deletes aged-out rows from the
+    // high-volume tape/snapshot tables (flow_prints, option_strike_gex_history,
+    // strike_growth, darkpool_prints, etc. — see server-v2/state/retention-cleanup.js
+    // for the full list + per-table cutoffs) and runs a plain VACUUM (ANALYZE)
+    // afterward. Deliberately never runs VACUUM FULL unattended — that needs up
+    // to 2x a table's on-disk size free and running it blind on a tight disk is
+    // what took the DB down in the first place; reclaiming actual file size back
+    // stays a manual, monitored step (scripts/db-prune.sql).
+    require('./state/retention-cleanup').startRetentionCleanup();
 
     // Traders Dashboard overnight overview: at ~07:00 ET (weekdays) Claude
     // web-searches what moved markets overnight and writes td_overview.

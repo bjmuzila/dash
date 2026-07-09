@@ -5,11 +5,15 @@
 //      ticker's nearest (0DTE-style) expiry chain, same math /gex2 and /test's
 //      Positioning tab use (net GEX per strike, zero-crossing flip, payout-
 //      minimizing max pain).
-//   2. 5m / 15m / 30m wall history — call+put wall strikes as of N minutes
-//      ago. SPX reads /proxy/gex-history (option_strike_gex_history, the same
-//      source /test's Walls & Flows tab uses for SPX); every other ticker
-//      reads /proxy/wall-history (ticker-wall-recorder), same as /test uses
-//      for NDX/SPY/QQQ.
+//   2. 5m / 15m wall history (call+put wall strikes N minutes ago — 30m
+//      dropped per Brandon's ask, just the two nearest windows) plus, same
+//      row, Bull/Bear % and ITM/OTM % — the same premium-weighted calc as
+//      /test's Flow Inventory tab (`aggregateFlow` there), reading the same
+//      /proxy/flow-history tape rather than importing that tab's private
+//      internals. SPX wall history reads /proxy/gex-history
+//      (option_strike_gex_history, same source /test's Walls & Flows tab
+//      uses for SPX); every other ticker reads /proxy/wall-history
+//      (ticker-wall-recorder), same as /test uses for NDX/SPY/QQQ.
 // Independent fetch from CompactOptionChain (small extra /api/chains call for
 // one expiry) — kept separate so this bar doesn't couple to the matrix's
 // internal multi-expiry state.
@@ -22,7 +26,7 @@ function rgba(hex: string, a: number): string {
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
-const WALL_AGES = ["5", "15", "30"] as const;
+const WALL_AGES = ["5", "15"] as const;
 
 async function resolveNearestExpiry(ticker: string): Promise<string | null> {
   const json = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`).then((r) => r.json()).catch(() => null);
@@ -149,6 +153,36 @@ function fmtStrike(v: number | null): string {
   return Number.isInteger(v) ? v.toFixed(0) : v.toFixed(2);
 }
 
+// ── Bull/Bear % + ITM/OTM %, same premium-weighted logic as /test's Flow
+// Inventory tab (aggregateFlow there): bullish = buy-calls or sell-puts;
+// ITM/OTM split reads each print's server-computed `isOtm` flag. That tab's
+// internals are private to app/test/page.tsx, so this re-fetches the same
+// /proxy/flow-history tape rather than importing them.
+type FlowOrderLite = { premium?: number; type?: string; side?: string; isOtm?: boolean };
+type FlowSentiment = { bullPct: number; otmPct: number };
+
+async function fetchFlowSentiment(ticker: string): Promise<FlowSentiment | null> {
+  const json = await fetch(`/proxy/flow-history?underlying=${encodeURIComponent(ticker)}&limit=20000`)
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const tape: FlowOrderLite[] = Array.isArray(json?.tape) ? json.tape : [];
+  if (!tape.length) return null;
+  let bullPrem = 0, bearPrem = 0, otmPrem = 0, itmPrem = 0;
+  for (const o of tape) {
+    const prem = o.premium || 0;
+    const isPut = o.type === "P";
+    const isBuy = o.side === "buy";
+    const bullish = (isBuy && !isPut) || (!isBuy && isPut);
+    if (bullish) bullPrem += prem; else bearPrem += prem;
+    if (o.isOtm) otmPrem += prem; else itmPrem += prem;
+  }
+  const bbTotal = bullPrem + bearPrem;
+  const ioTotal = otmPrem + itmPrem;
+  return {
+    bullPct: bbTotal > 0 ? Math.round((bullPrem / bbTotal) * 100) : 50,
+    otmPct: ioTotal > 0 ? Math.round((otmPrem / ioTotal) * 100) : 50,
+  };
+}
+
 function StatTile({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div
@@ -172,18 +206,21 @@ function StatTile({ label, value, color }: { label: string; value: string; color
 export default function ChainStatsBar({ ticker }: { ticker: string }) {
   const [stats, setStats] = useState<FrontStats | null>(null);
   const [windows, setWindows] = useState<WallWindow[]>(WALL_AGES.map((age) => ({ age, callWall: null, putWall: null })));
+  const [sentiment, setSentiment] = useState<FlowSentiment | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       const expiry = await resolveNearestExpiry(ticker).catch(() => null);
-      const [front, wallHist] = await Promise.all([
+      const [front, wallHist, flowSent] = await Promise.all([
         fetchFrontStats(ticker).catch(() => null),
         fetchWallHistory(ticker, expiry).catch(() => WALL_AGES.map((age) => ({ age, callWall: null, putWall: null }))),
+        fetchFlowSentiment(ticker).catch(() => null),
       ]);
       if (cancelled) return;
       setStats(front);
       setWindows(wallHist);
+      setSentiment(flowSent);
     };
     load();
     const id = setInterval(load, 60000);
@@ -200,7 +237,7 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
         <StatTile label="Max pain" value={fmtStrike(stats?.maxPain ?? null)} />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
         {windows.map((w) => (
           <div
             key={w.age}
@@ -231,6 +268,53 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
             </div>
           </div>
         ))}
+
+        {/* Bull/Bear % and ITM/OTM % — same row, same premium-weighted math as
+            /test's Flow Inventory tab (see fetchFlowSentiment above). */}
+        <div
+          style={{
+            background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.06)} 0%, transparent 60%), rgba(13,17,25,0.18)`,
+            backdropFilter: "blur(16px)",
+            borderRadius: 10,
+            padding: "5px 10px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 15,
+          }}
+        >
+          <span style={{ color: HT.text, opacity: 0.6 }}>Bull</span>
+          <span style={{ color: HT.green, fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>
+            {sentiment ? `${sentiment.bullPct}%` : "--"}
+          </span>
+          <span style={{ color: HT.text, opacity: 0.3 }}>/</span>
+          <span style={{ color: HT.red, fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>
+            {sentiment ? `${100 - sentiment.bullPct}%` : "--"}
+          </span>
+          <span style={{ color: HT.text, opacity: 0.6 }}>Bear</span>
+        </div>
+        <div
+          style={{
+            background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.06)} 0%, transparent 60%), rgba(13,17,25,0.18)`,
+            backdropFilter: "blur(16px)",
+            borderRadius: 10,
+            padding: "5px 10px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 15,
+          }}
+        >
+          <span style={{ color: HT.text, opacity: 0.6 }}>OTM</span>
+          <span style={{ color: LIGHT_BLUE, fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>
+            {sentiment ? `${sentiment.otmPct}%` : "--"}
+          </span>
+          <span style={{ color: HT.text, opacity: 0.3 }}>/</span>
+          <span style={{ color: HT.orange, fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>
+            {sentiment ? `${100 - sentiment.otmPct}%` : "--"}
+          </span>
+          <span style={{ color: HT.text, opacity: 0.6 }}>ITM</span>
+        </div>
       </div>
     </div>
   );

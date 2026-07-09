@@ -8,7 +8,7 @@
 // this page's own pill row sits just below it and owns the new ticker/tab
 // switchers + FAB.
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { PageShell } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsCandlesCard from "@/components/dashboard/EsCandlesCard";
@@ -221,7 +221,7 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
             borderRadius: 10,
             padding: "4px 0",
             boxShadow: "0 20px 44px -14px rgba(0,0,0,0.75)",
-            zIndex: 20,
+            zIndex: 9999,
           }}
         >
           {favorites.map((t) => (
@@ -258,58 +258,148 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
 //      page runs its own 1s/60s polling loops; embedding it here would double
 //      those up, so this is a preview + link rather than an inline embed)
 //   5. Analytics — links out to /analytics for the same reason
+// Labels are the page name (abbreviated to fit the 26px circle) instead of
+// digits, per Brandon's ask — the button itself should read as the
+// destination, not a numbered slot.
 const FAB_ITEMS = [
-  { key: "econ", label: "1", title: "Economic Calendar" },
-  { key: "flow", label: "2", title: "Option Flow" },
-  { key: "notes", label: "3", title: "Notes" },
-  { key: "trader", label: "4", title: "Trader Dashboard" },
-  { key: "analytics", label: "5", title: "Analytics" },
+  { key: "econ", label: "ECO", title: "Economic Calendar" },
+  { key: "flow", label: "FLOW", title: "Option Flow" },
+  { key: "notes", label: "NOTE", title: "Notes" },
+  { key: "trader", label: "TRD", title: "Trader Dashboard" },
+  { key: "analytics", label: "ANLY", title: "Analytics" },
 ] as const;
 type FabKey = (typeof FAB_ITEMS)[number]["key"];
-const FAB_RADIUS = 64;
+const FAB_RADIUS = 74;
 
-// ── popup #2 content: option flow sparkline for the active ticker ──────────
-// Polls /proxy/scanner (the same multi-ticker GEX scanner /test's Positioning
-// tab reads) every 20s and tracks that ticker's totalNetGex over time as a
-// zero-crossing sparkline (green above zero / red below, same rule as the
-// greek gauges). This is a real net-GEX flow read, not mock data.
+// ── popup #2 content: sparkline of the closest qualifying contract's flow ──
+// "Closest contract that is OTM and has $50k+ premium" — reads the same live
+// tape /test's Flow Inventory tab reads (/proxy/flow-history?underlying=
+// <ticker>&limit=20000, each print already carries a server-computed isOtm
+// flag + premium total). Filters to isOtm && premium >= threshold, picks the
+// print whose strike is nearest the most recent spot, then plots that exact
+// contract's (strike+type+expiration) signed cumulative premium over the
+// session — buys add, sells subtract, so it crosses zero the same way the
+// greek gauges' sparklines do. Threshold is the one adjustable "setting"
+// Brandon asked for — a small gear popover, persisted to localStorage so it
+// sticks across reloads.
+const FLOW_PREMIUM_KEY = "new-home-flow-premium-threshold";
+function loadPremiumThreshold(): number {
+  if (typeof window === "undefined") return 50000;
+  const raw = Number(window.localStorage.getItem(FLOW_PREMIUM_KEY));
+  return Number.isFinite(raw) && raw > 0 ? raw : 50000;
+}
+
+type FlowTapeOrder = {
+  ts: number; strike: number; type: "C" | "P"; side: "buy" | "sell";
+  expiration?: string; premium?: number; isOtm?: boolean; spot?: number;
+};
+
 function OptionFlowPopupContent({ ticker }: { ticker: string }) {
-  const [points, setPoints] = useState<number[]>([]);
-  const [latest, setLatest] = useState<number | null>(null);
+  const [tape, setTape] = useState<FlowTapeOrder[]>([]);
+  const [threshold, setThreshold] = useState(50000);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [draftThreshold, setDraftThreshold] = useState("50000");
+
+  useEffect(() => {
+    setThreshold(loadPremiumThreshold());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setPoints([]);
-    setLatest(null);
     const load = async () => {
       try {
-        const res = await fetch(`/proxy/scanner?limit=200&any=1`);
+        const res = await fetch(`/proxy/flow-history?underlying=${encodeURIComponent(ticker)}&limit=20000`);
         const json = await res.json();
-        const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
-        const row = list.find((r) => String(r.symbol ?? "").toUpperCase() === ticker.toUpperCase());
-        if (!row || cancelled) return;
-        const v = Number(row.total_net_gex) || 0;
-        setLatest(v);
-        setPoints((prev) => [...prev, v].slice(-40));
+        if (cancelled) return;
+        setTape(Array.isArray(json?.tape) ? json.tape : []);
       } catch {
-        /* ignore — keep last known points */
+        /* ignore — keep last known tape */
       }
     };
     load();
-    const id = setInterval(load, 20000);
+    const id = setInterval(load, 30000);
     return () => { cancelled = true; clearInterval(id); };
   }, [ticker]);
 
+  // Candidate contract: OTM, premium >= threshold, strike closest to the most
+  // recent print's spot.
+  const candidate = useMemo(() => {
+    const qualifying = tape.filter((o) => o.isOtm && (o.premium ?? 0) >= threshold);
+    if (!qualifying.length) return null;
+    const lastSpot = [...tape].reverse().find((o) => o.spot)?.spot ?? null;
+    if (lastSpot == null) return qualifying[qualifying.length - 1];
+    return qualifying.reduce((best, o) =>
+      Math.abs(o.strike - lastSpot) < Math.abs(best.strike - lastSpot) ? o : best
+    );
+  }, [tape, threshold]);
+
+  // Signed cumulative premium for that exact contract (strike+type+expiration).
+  const points = useMemo(() => {
+    if (!candidate) return [];
+    const matching = tape
+      .filter((o) => o.strike === candidate.strike && o.type === candidate.type && o.expiration === candidate.expiration)
+      .sort((a, b) => a.ts - b.ts);
+    let running = 0;
+    return matching.map((o) => {
+      running += o.side === "buy" ? (o.premium ?? 0) : -(o.premium ?? 0);
+      return running;
+    });
+  }, [tape, candidate]);
+
   const scale = Math.max(1, ...points.map((v) => Math.abs(v)));
+  const latest = points.length ? points[points.length - 1] : null;
+
+  const saveThreshold = () => {
+    const n = Number(draftThreshold);
+    if (Number.isFinite(n) && n > 0) {
+      setThreshold(n);
+      if (typeof window !== "undefined") window.localStorage.setItem(FLOW_PREMIUM_KEY, String(n));
+    }
+    setSettingsOpen(false);
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
-        {ticker} net GEX flow
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
+          {candidate ? `${ticker} ${candidate.strike}${candidate.type} · OTM · $${threshold.toLocaleString()}+` : `${ticker} · OTM · $${threshold.toLocaleString()}+`}
+        </div>
+        <button
+          onClick={() => { setDraftThreshold(String(threshold)); setSettingsOpen((o) => !o); }}
+          title="Settings"
+          style={{ background: "none", border: "none", cursor: "pointer", color: HOME_THEME.text, opacity: 0.6, fontSize: 15 }}
+        >
+          ⚙
+        </button>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono, monospace)", color: latest == null ? HOME_THEME.text : latest >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-        {latest == null ? "--" : `${latest >= 0 ? "+" : ""}${(latest / 1e9).toFixed(3)}B`}
-      </div>
-      <Sparkline points={points} fullScale={scale} width={260} height={54} />
+
+      {settingsOpen && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>Min premium $</span>
+          <input
+            value={draftThreshold}
+            onChange={(e) => setDraftThreshold(e.target.value.replace(/[^0-9]/g, ""))}
+            onKeyDown={(e) => { if (e.key === "Enter") saveThreshold(); }}
+            style={{ width: 80, fontSize: 15, padding: "3px 6px", borderRadius: 6, border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`, background: "rgba(13,17,25,0.6)", color: LIGHT_BLUE }}
+          />
+          <button onClick={saveThreshold} style={{ fontSize: 15, color: LIGHT_BLUE, background: "none", border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+            Save
+          </button>
+        </div>
+      )}
+
+      {!candidate ? (
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.5 }}>
+          No OTM contract with ${threshold.toLocaleString()}+ premium in today's tape yet.
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono, monospace)", color: latest == null ? HOME_THEME.text : latest >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+            {latest == null ? "--" : `${latest >= 0 ? "+" : ""}$${Math.round(Math.abs(latest)).toLocaleString()}`}
+          </div>
+          <Sparkline points={points} fullScale={scale} width={260} height={54} />
+        </>
+      )}
     </div>
   );
 }
@@ -415,17 +505,18 @@ function FabMenu({ ticker }: { ticker: string }) {
               position: "absolute",
               top: 14,
               left: 14,
-              width: 26,
-              height: 26,
-              marginTop: -13,
-              marginLeft: -13,
+              width: 36,
+              height: 36,
+              marginTop: -18,
+              marginLeft: -18,
               borderRadius: "50%",
               border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
               background: "rgba(13,17,25,0.92)",
               backdropFilter: "blur(16px)",
               color: LIGHT_BLUE,
-              fontSize: 15,
+              fontSize: 8,
               fontWeight: 800,
+              letterSpacing: "0.02em",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -510,7 +601,7 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
         padding: "10px 18px",
         flexShrink: 0,
         position: "relative",
-        zIndex: 100,
+        zIndex: 9999,
       }}
     >
       <TickerSwitcher ticker={ticker} onChange={onTickerChange} />

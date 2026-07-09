@@ -531,24 +531,39 @@ function fmtFlowMoney(v: number): string {
 function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; expiration: string; onClose: () => void }) {
   const [data, setData] = useState<FlowGexHistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
+  // 15s client-side timeout — this query reconstructs per-minute history from
+  // raw tape (Postgres window-function CTE over flow_prints), which can be
+  // slow under load; better to surface "still loading, try again" than hang
+  // on "Loading…" forever with no feedback.
   useEffect(() => {
     let cancelled = false;
     setData(null);
     setError(null);
-    fetch(`/proxy/flow-gex-history?expiration=${encodeURIComponent(expiration)}`, { cache: "no-store" })
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    fetch(`/proxy/flow-gex-history?expiration=${encodeURIComponent(expiration)}`, { cache: "no-store", signal: controller.signal })
       .then((r) => r.json())
       .then((json: FlowGexHistoryResponse) => {
         if (cancelled) return;
         if (!json || !Array.isArray(json.strikes)) { setError("No response from /proxy/flow-gex-history"); return; }
+        if (!json.strikes.includes(strike)) {
+          setError(`No tape recorded for strike ${strike} in today's ±20-strike window around spot.`);
+          return;
+        }
         setData(json);
       })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Fetch failed"); });
-    return () => { cancelled = true; };
-  }, [expiration]);
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e?.name === "AbortError" ? "Request timed out after 15s — the flow-history query may be slow right now." : (e instanceof Error ? e.message : "Fetch failed"));
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => { cancelled = true; controller.abort(); clearTimeout(timeout); };
+  }, [expiration, strike, retryTick]);
 
   useEffect(() => {
     const container = chartContainerRef.current;
@@ -604,15 +619,25 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: HT.text, opacity: 0.7, fontSize: 15 }}>✕</button>
         </div>
         <div style={{ fontSize: 15, color: HT.muted, marginBottom: 10 }}>
-          {data ? `spot ${data.spot ? data.spot.toFixed(2) : "--"}` : "Loading…"}
+          {data ? `spot ${data.spot ? data.spot.toFixed(2) : "--"}` : error ? "" : "Loading…"}
           {latest != null && (
             <span style={{ marginLeft: 10, fontFamily: "var(--font-mono)", fontWeight: 800, color: (latest.flowGex ?? 0) >= 0 ? HT.green : HT.red }}>
               {fmtFlowMoney(latest.flowGex ?? 0)}
             </span>
           )}
         </div>
-        {error && <div style={{ fontSize: 15, color: HT.red, marginBottom: 8 }}>{error}</div>}
-        <div ref={chartContainerRef} style={{ width: "100%", height: 260, position: "relative" }} />
+        {error && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 15, color: HT.red }}>{error}</div>
+            <button
+              onClick={() => setRetryTick((t) => t + 1)}
+              style={{ fontSize: 15, color: HT.cyan, background: "none", border: `1px solid ${rgba(HT.cyan, 0.4)}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        <div ref={chartContainerRef} style={{ width: "100%", height: 260, position: "relative", display: data ? "block" : "none" }} />
         <div style={{ fontSize: 11, color: HT.muted, opacity: 0.6, marginTop: 8 }}>
           Combined call+put flow GEX for this strike (approximation: latest known gamma, not gamma-at-that-instant).
         </div>
