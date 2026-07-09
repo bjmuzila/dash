@@ -175,6 +175,15 @@ function totalNetGex(gexRows) {
   return gexRows.reduce((sum, r) => sum + oiVolNet(r), 0);
 }
 
+/** Adds normalizedGexPct to each row: |netGEX| / Σ|netGEX| × 100. */
+function normalizeGex(gexRows) {
+  const totalAbs = gexRows.reduce((sum, r) => sum + Math.abs(oiVolNet(r)), 0);
+  return gexRows.map((r) => ({
+    ...r,
+    normalizedGexPct: totalAbs > 0 ? (Math.abs(oiVolNet(r)) / totalAbs) * 100 : 0,
+  }));
+}
+
 /** Total flow GEX across all strikes. */
 function totalFlowGex(gexRows) {
   return gexRows.reduce((sum, r) => sum + (Number(r.flowGEX ?? 0)), 0);
@@ -203,5 +212,6 @@ module.exports = {
   findPutWall,
   totalNetGex,
   totalFlowGex,
+  normalizeGex,
   computeGexSummary,
 };
