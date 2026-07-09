@@ -240,7 +240,7 @@ export default function FlowGexHistoryPage() {
         title="Flow GEX history"
         subtitle={
           data
-            ? `${data.expiration || "—"} · spot ${data.spot ? data.spot.toFixed(2) : "--"} · ${data.strikes.length} strikes (±20 of ATM) · reconstructed from flow_prints + gamma snapshots`
+            ? `${data.expiration || "—"} · spot ${data.spot ? data.spot.toFixed(2) : "--"} · ${data.strikes.length} strikes (±20 of ATM)`
             : "Loading…"
         }
         padding={16}

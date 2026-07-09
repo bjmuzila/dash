@@ -58,6 +58,15 @@ function todayYmdET() {
   }).format(new Date());
 }
 
+/** Calendar-date-only subtraction (no timezone conversion needed — `ymd` is
+ * already an ET date string, we just want "the day before" as a string). */
+function prevYmd(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
 /**
  * @param {object} opts
  * @param {number} opts.spot - current spot, used to center the strike window
@@ -68,17 +77,26 @@ function todayYmdET() {
  */
 async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20 }) {
   const day = date || todayYmdET();
-  const empty = { date: day, expiration: expiration || '', spot: spot || 0, strikes: [], seriesByStrike: {} };
+  // SPX/SPXW trade Cboe Global Trading Hours (~6-8pm ET through 4:15pm ET the
+  // next day), not just the 9:30-16:15 cash session — so the "current
+  // session's" tape can start the EVENING BEFORE `day` and still be tagged
+  // with that earlier calendar date in flow_prints (date = the ET calendar
+  // date the print occurred on, not which session it logically belongs to).
+  // Querying both `day` and the day before covers the full overnight session
+  // instead of silently dropping everything before midnight ET.
+  const dateWindow = [prevYmd(day), day];
+  const empty = { date: day, dateWindow, expiration: expiration || '', spot: spot || 0, strikes: [], seriesByStrike: {} };
   const p = getPool();
   if (!p || !expiration || !(spot > 0)) return empty;
 
   try {
-    // 1. Which strikes actually have tape today for this expiration.
+    // 1. Which strikes actually have tape in the overnight+today window for
+    // this expiration.
     const { rows: strikeRows } = await p.query(
       `SELECT DISTINCT strike FROM flow_prints
-        WHERE date = $1 AND expiration = $2 AND strike IS NOT NULL
+        WHERE date = ANY($1::text[]) AND expiration = $2 AND strike IS NOT NULL
         ORDER BY strike`,
-      [day, expiration]
+      [dateWindow, expiration]
     );
     const allStrikes = strikeRows.map((r) => Number(r.strike)).filter((s) => s > 0);
     if (!allStrikes.length) return empty;
@@ -94,12 +112,15 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
     const strikes = allStrikes.slice(start, end);
 
     // 3. Latest known gamma per strike (approximation — see module docstring).
+    // Also widened across the overnight+today window so a query run early in
+    // the morning (before today's first gamma snapshot lands) still finds
+    // last night's most recent value instead of coming up empty.
     const { rows: gammaRows } = await p.query(
       `SELECT DISTINCT ON (strike) strike, call_gamma, put_gamma
          FROM option_strike_gex_history
-        WHERE date = $1 AND strike = ANY($2::real[]) AND call_gamma IS NOT NULL
+        WHERE date = ANY($1::text[]) AND strike = ANY($2::real[]) AND call_gamma IS NOT NULL
         ORDER BY strike, timestamp DESC`,
-      [day, strikes]
+      [dateWindow, strikes]
     );
     const gammaByStrike = new Map(gammaRows.map((r) => [Number(r.strike), { callGamma: Number(r.call_gamma), putGamma: Number(r.put_gamma) }]));
 
@@ -116,7 +137,7 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
            SUM(CASE WHEN type='P' AND side='sell' THEN size WHEN type='P' AND side='buy' THEN -size ELSE 0 END)
              OVER (PARTITION BY strike ORDER BY ts) AS put_net
          FROM flow_prints
-        WHERE date = $1 AND expiration = $2 AND strike = ANY($3::real[])
+        WHERE date = ANY($1::text[]) AND expiration = $2 AND strike = ANY($3::real[])
        )
        SELECT DISTINCT ON (strike, minute_et) strike,
               to_char(minute_et, 'HH24:MI') AS time_et,
@@ -128,7 +149,7 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
               call_net, put_net, spot
          FROM tape
         ORDER BY strike, minute_et, ts DESC`,
-      [day, expiration, strikes]
+      [dateWindow, expiration, strikes]
     );
 
     // time_et is formatted server-side (to_char) rather than re-parsed as a JS
@@ -150,7 +171,7 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
       (seriesByStrike[strike] ||= []).push({ ts: Number(r.ts_epoch), timeEt: r.time_et, callNet, putNet, flowGex });
     }
 
-    return { date: day, expiration, spot, strikes, seriesByStrike };
+    return { date: day, dateWindow, expiration, spot, strikes, seriesByStrike };
   } catch (e) {
     console.warn('[flow-gex-history] query failed:', e.message);
     return empty;

@@ -353,8 +353,18 @@ function sparkTimeLabels(durationMs: number, endIso?: string | null): [string, s
 }
 
 /** Tiny inline area sparkline. Scales to its container width; fixed small height.
- *  Pass `axisLabels` (from sparkTimeLabels) to print start/end time under the line. */
-function Sparkline({ data, accent, height = 22, axisLabels }: { data: number[]; accent: string; height?: number; axisLabels?: [string, string] }) {
+ *  Pass `axisLabels` (from sparkTimeLabels) to print start/end time under the line.
+ *  Pass `durationMs` + `endIso` (same values fed to sparkTimeLabels) to enable a
+ *  hover tooltip showing each point's real timestamp + value. `formatValue` controls
+ *  how the raw number in that tooltip is displayed (defaults to 2-decimal). */
+function Sparkline({
+  data, accent, height = 22, axisLabels, durationMs, endIso, formatValue,
+}: {
+  data: number[]; accent: string; height?: number; axisLabels?: [string, string];
+  durationMs?: number; endIso?: string | null; formatValue?: (v: number) => string;
+}) {
+  const [hoverI, setHoverI] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   if (!data || data.length < 1) return null;
   const W = 100; // viewBox width; SVG stretches to container via width:100%
   // A single point can't show a trend — draw a flat baseline so the card isn't empty.
@@ -371,9 +381,35 @@ function Sparkline({ data, accent, height = 22, axisLabels }: { data: number[]; 
   const line = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   const area = `${line} L${W},${height} L0,${height} Z`;
   const gradId = `spark-${accent.replace(/[^a-z0-9]/gi, "")}`;
+
+  const canHover = series.length > 1;
+  const hoverTime = (i: number): string => {
+    if (!durationMs || !endIso) return "";
+    const end = new Date(endIso).getTime();
+    if (isNaN(end)) return "";
+    const t = end - durationMs + (i / (series.length - 1)) * durationMs;
+    const d = new Date(t);
+    return durationMs > 36 * 3_600_000
+      ? d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: false, timeZone: "America/New_York" })
+      : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "America/New_York" }) + " ET";
+  };
+  const handleMove: React.MouseEventHandler<SVGSVGElement> = (e) => {
+    if (!canHover || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHoverI(Math.round(frac * (series.length - 1)));
+  };
+
   return (
-    <div style={{ width: "100%" }}>
-      <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none" style={{ width: "100%", height, display: "block" }}>
+    <div style={{ width: "100%", position: "relative" }}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${height}`}
+        preserveAspectRatio="none"
+        style={{ width: "100%", height, display: "block", cursor: canHover ? "crosshair" : "default" }}
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHoverI(null)}
+      >
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={accent} stopOpacity="0.35" />
@@ -382,7 +418,37 @@ function Sparkline({ data, accent, height = 22, axisLabels }: { data: number[]; 
         </defs>
         <path d={area} fill={`url(#${gradId})`} />
         <path d={line} fill="none" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        {hoverI != null && (
+          <>
+            <line x1={pts[hoverI][0]} y1={0} x2={pts[hoverI][0]} y2={height} stroke={accent} strokeWidth="0.6" strokeOpacity="0.5" vectorEffect="non-scaling-stroke" />
+            <circle cx={pts[hoverI][0]} cy={pts[hoverI][1]} r={2.2} fill={accent} stroke="#0d1119" strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
+          </>
+        )}
       </svg>
+      {hoverI != null && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: `calc(100% + 4px)`,
+            left: `${(pts[hoverI][0] / W) * 100}%`,
+            transform: `translateX(${hoverI === 0 ? "0%" : hoverI === series.length - 1 ? "-100%" : "-50%"})`,
+            background: "#0d1119",
+            border: `1px solid ${accent}66`,
+            borderRadius: 6,
+            padding: "4px 8px",
+            fontSize: 14,
+            fontFamily: "var(--font-mono)",
+            color: "#fff",
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            zIndex: 10,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+          }}
+        >
+          <div style={{ fontWeight: 700, color: accent }}>{(formatValue ?? ((v: number) => v.toFixed(2)))(series[hoverI])}</div>
+          {hoverTime(hoverI) && <div style={{ opacity: 0.7, marginTop: 1 }}>{hoverTime(hoverI)}</div>}
+        </div>
+      )}
       {axisLabels && (axisLabels[0] || axisLabels[1]) && (
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2, fontSize: 14, fontFamily: "var(--font-mono)", color: "#fff", opacity: 1, lineHeight: 1 }}>
           <span>{axisLabels[0]}</span>
@@ -2577,6 +2643,9 @@ export default function OwnerDashboard() {
                     data={cfMetrics?.egress.spark ?? []}
                     accent={HOME_THEME.orange}
                     height={44}
+                    durationMs={renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
+                    endIso={cfMetrics?.fetchedAt}
+                    formatValue={(v) => v < 1024 ? `${v.toFixed(1)} MB` : v < 1024 * 1024 ? `${(v / 1024).toFixed(2)} GB` : `${(v / 1024 / 1024).toFixed(2)} TB`}
                     axisLabels={sparkTimeLabels(
                       renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
                       cfMetrics?.fetchedAt
@@ -2600,6 +2669,9 @@ export default function OwnerDashboard() {
                     data={renderMetrics?.bandwidth.spark ?? []}
                     accent={HOME_THEME.cyan}
                     height={44}
+                    durationMs={renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
+                    endIso={renderMetrics?.fetchedAt}
+                    formatValue={(v) => v < 1024 ? `${v.toFixed(1)} MB` : `${(v / 1024).toFixed(2)} GB`}
                     axisLabels={sparkTimeLabels(
                       renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
                       renderMetrics?.fetchedAt
@@ -2615,7 +2687,18 @@ export default function OwnerDashboard() {
                 : "—"}
               accent={memAccent}
               mono
-              footer={<Sparkline data={renderMetrics?.memory.spark ?? []} accent={memAccent} height={44} />}
+              footer={<Sparkline
+                data={renderMetrics?.memory.spark ?? []}
+                accent={memAccent}
+                height={44}
+                durationMs={renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
+                endIso={renderMetrics?.fetchedAt}
+                formatValue={(v) => v < 1024 * 1024 ? `${(v / 1024).toFixed(0)} KB` : `${(v / 1024 / 1024).toFixed(0)} MB`}
+                axisLabels={sparkTimeLabels(
+                  renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
+                  renderMetrics?.fetchedAt
+                )}
+              />}
             />
             <StatCard
               label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
@@ -2628,6 +2711,9 @@ export default function OwnerDashboard() {
                 data={renderMetrics?.cpu.spark ?? []}
                 accent={cpuAccent}
                 height={44}
+                durationMs={renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
+                endIso={renderMetrics?.fetchedAt}
+                formatValue={(v) => `${(v * 100).toFixed(1)}%`}
                 axisLabels={sparkTimeLabels(
                   renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
                   renderMetrics?.fetchedAt
