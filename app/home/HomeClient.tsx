@@ -191,13 +191,11 @@ function buildChainRows(strikes: StrikeRow[], liveData: Record<string, LiveEntry
     const putGamma = Math.abs(put.gamma ?? 0);
     const callDelta = call.delta ?? 0;
     const putDelta = Math.abs(put.delta ?? 0);
-    // Net GEX column = OI+Vol basis (open interest + volume), matching the header
-    // total, the heatmap cells, and the OI+Vol/Vol-Only toggle. netVolGEX is the
-    // Vol-Only column (volume alone). callGamma/putGamma are already abs'd above.
-    const callPos = callOI + callVolume;
-    const putPos = putOI + putVolume;
-    const callGEX = callGamma * callPos * spot * spot;
-    const putGEX = -putGamma * putPos * spot * spot;
+    // netGEX = OI-only basis. netVolGEX = Vol-only basis. Their sum = OI+Vol.
+    // This matches the heatmap column calculation and the calculations.ts basis rules.
+    // callGamma/putGamma are already abs'd above.
+    const callGEX = callGamma * callOI * spot * spot;
+    const putGEX = -putGamma * putOI * spot * spot;
     const netGEX = callGEX + putGEX;
     const netVolGEX = callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot;
     const netDEX = callDelta * callPos * spot * 100 - putDelta * putPos * spot * 100;
