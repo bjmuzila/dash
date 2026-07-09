@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import UserMenu from "./UserMenu";
@@ -75,83 +75,6 @@ function EtClock() {
   );
 }
 
-// ── CB Edge logo → Quick Pages dropdown ──
-// Matches the frosted-dock visual language used by NavMenu. The dropdown mirrors
-// the user's pinned Quick Pages (max 4) from localStorage `sidebar-quick-pages-v1`.
-const QUICK_STORAGE_KEY = "sidebar-quick-pages-v1";
-const QUICK_MAX = 4;
-
-// Label + monochrome glyph per route (kept in sync with NavMenu's NAV_ITEM_BY_HREF
-// + ROUTE_SYMBOL). Only routes that can be pinned need an entry here.
-const QUICK_META: Record<string, { label: string; emoji: string }> = {
-  "/home": { label: "Home", emoji: "🏠" },
-  "/mult-greek": { label: "Multi Greek", emoji: "🧮" },
-  "/traders-dashboard": { label: "Traders Dashboard", emoji: "📊" },
-  "/options-chain": { label: "Options Chain", emoji: "⛓️" },
-  "/greeks": { label: "Greeks", emoji: "📐" },
-  "/confidence-score": { label: "Confidence Score", emoji: "🎯" },
-  "/fails": { label: "Fails", emoji: "❌" },
-  "/social-media": { label: "Social Media", emoji: "💬" },
-  "/ict": { label: "ICT", emoji: "🎯" },
-  "/test": { label: "Test Lab", emoji: "⚗️" },
-  "/economic-calendar": { label: "Economic Calendar", emoji: "📅" },
-  "/em": { label: "Estimated Moves", emoji: "↔️" },
-  "/estimated-move": { label: "Estimated Move", emoji: "🔀" },
-  "/analytics": { label: "Analytics", emoji: "📈" },
-  "/scanner": { label: "Scanner", emoji: "🔍" },
-  "/flow": { label: "Flow", emoji: "≈" },
-  "/premarket": { label: "Premarket", emoji: "☀️" },
-  "/trading": { label: "Trading", emoji: "✏️" },
-  "/docs": { label: "Help & Docs", emoji: "📖" },
-  "/database": { label: "Database", emoji: "🗄️" },
-  "/pricing": { label: "Pricing", emoji: "💲" },
-  "/changelog": { label: "Changelog", emoji: "🔄" },
-  "/whats-new": { label: "What's New", emoji: "✨" },
-  "/feedback": { label: "Feedback", emoji: "✉️" },
-};
-
-/** Read the user's pinned Quick Pages from localStorage, resolving label + glyph. */
-function useQuickPages() {
-  const [items, setItems] = useState<{ href: string; label: string; emoji: string }[]>([]);
-  const refresh = useCallback(() => {
-    try {
-      const raw = localStorage.getItem(QUICK_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(parsed)) return setItems([]);
-      setItems(
-        parsed
-          .filter((h: unknown): h is string => typeof h === "string" && !!QUICK_META[h])
-          .slice(0, QUICK_MAX)
-          .map((href: string) => ({ href, ...QUICK_META[href] }))
-      );
-    } catch { setItems([]); }
-  }, []);
-  // Persist a new pinned list (customer-side, localStorage). Same key the sidebar
-  // uses, so both stay in sync. In-tab writes don't fire `storage`, so refresh + a
-  // manual same-tab event to notify any other mounted listeners.
-  const save = useCallback((hrefs: string[]) => {
-    const next = hrefs.filter((h) => !!QUICK_META[h]).slice(0, QUICK_MAX);
-    try {
-      localStorage.setItem(QUICK_STORAGE_KEY, JSON.stringify(next));
-      window.dispatchEvent(new CustomEvent("quick-pages-changed"));
-    } catch { /* ignore */ }
-    setItems(next.map((href) => ({ href, ...QUICK_META[href] })));
-  }, []);
-  useEffect(() => {
-    refresh();
-    // Re-read when another tab repins (storage only fires cross-tab) or when this
-    // tab edits via the toolbar editor (custom same-tab event).
-    const onStorage = (e: StorageEvent) => { if (e.key === QUICK_STORAGE_KEY) refresh(); };
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("quick-pages-changed", refresh);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("quick-pages-changed", refresh);
-    };
-  }, [refresh]);
-  return { items, refresh, save };
-}
-
 function LogoMenu() {
   return (
     <div style={{ position: "relative", flexShrink: 0, display: "flex" }}>
@@ -168,12 +91,9 @@ function LogoMenu() {
 }
 
 /**
- * QuickPagesBar — inline shortcut "emotes": a round glyph button with the page
- * title underneath, for the user's pinned Quick Pages (max 4). Sourced from the
- * same customer-side store the sidebar uses (`sidebar-quick-pages-v1`). A trailing
- * ✎ edit button opens a picker to choose which pages appear; changes persist to
- * localStorage. Always renders the edit button (even with zero pins) so the user
- * can add pages from the toolbar.
+ * QuickCircle — one inline shortcut "emote": a round glyph button with a title
+ * underneath. Renders a Link when `href` is set (full-page navigation) or a
+ * button when `onClick` is set. Used by GexGroupNav for the left-side nav strip.
  */
 function QuickCircle({
   href, label, emoji, onClick,
@@ -255,165 +175,24 @@ function QuickCircle({
   );
 }
 
-function QuickPagesEditor({
-  selected, onSave, onClose,
-}: { selected: string[]; onSave: (hrefs: string[]) => void; onClose: () => void }) {
-  const [picked, setPicked] = useState<string[]>(selected);
-  const toggle = (href: string) => {
-    setPicked((p) =>
-      p.includes(href) ? p.filter((h) => h !== href) : p.length >= QUICK_MAX ? p : [...p, href]
-    );
-  };
-  return (
-    <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 199 }} />
-      <div
-        style={{
-          position: "absolute",
-          top: "calc(100% + 10px)",
-          left: 0,
-          zIndex: 200,
-          width: 260,
-          maxHeight: 380,
-          overflowY: "auto",
-          background: "rgba(15,18,28,0.97)",
-          border: `1px solid ${cyanA(0.35)}`,
-          borderRadius: 12,
-          padding: 12,
-          boxShadow: "0 8px 32px -4px rgba(0,0,0,0.7)",
-          backdropFilter: "blur(16px)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <span style={{ fontWeight: 700, color: HOME_THEME.text, fontSize: 13 }}>Quick Pages</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 11, color: cyanA(0.9) }}>{picked.length}/{QUICK_MAX}</span>
-            <button
-              type="button"
-              onClick={() => { onSave(picked); onClose(); }}
-              style={{ padding: "5px 14px", borderRadius: 8, border: "none", background: CYAN, color: "#04222b", fontWeight: 700, fontSize: 12, cursor: "pointer" }}
-            >
-              Save
-            </button>
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          {Object.entries(QUICK_META).map(([href, meta]) => {
-            const on = picked.includes(href);
-            const disabled = !on && picked.length >= QUICK_MAX;
-            return (
-              <button
-                key={href}
-                type="button"
-                onClick={() => toggle(href)}
-                disabled={disabled}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "6px 8px",
-                  borderRadius: 8,
-                  border: `1px solid ${on ? cyanA(0.5) : "transparent"}`,
-                  background: on ? cyanA(0.14) : "transparent",
-                  color: HOME_THEME.text,
-                  cursor: disabled ? "not-allowed" : "pointer",
-                  opacity: disabled ? 0.4 : 1,
-                  textAlign: "left",
-                  fontSize: 13,
-                }}
-              >
-                <span aria-hidden style={{ width: 18, textAlign: "center", fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{meta.emoji}</span>
-                <span style={{ flex: 1 }}>{meta.label}</span>
-                {on && <span style={{ color: CYAN }}>✓</span>}
-              </button>
-            );
-          })}
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          style={{ width: "100%", padding: "7px 0", marginTop: 10, borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.text, fontSize: 13, cursor: "pointer" }}
-        >
-          Cancel
-        </button>
-      </div>
-    </>
-  );
-}
-
-function QuickPagesBar() {
-  const { items, save } = useQuickPages();
-  const [editing, setEditing] = useState(false);
-  return (
-    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-      {items.map((item) => (
-        <QuickCircle key={item.href} href={item.href} label={item.label} emoji={item.emoji} />
-      ))}
-      <div style={{ position: "relative", display: "flex" }}>
-        <QuickCircle label="Edit" emoji="✎" onClick={() => setEditing((v) => !v)} />
-        {editing && (
-          <QuickPagesEditor
-            selected={items.map((i) => i.href)}
-            onSave={save}
-            onClose={() => setEditing(false)}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
 const CYAN = HOME_THEME.cyan; // #219EBC
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 
 /**
- * GexGroupButtons — one round emoji button per GEX group (sourced from
- * GexDock's exported GROUPS). Clicking a button opens that group directly in
- * the GexDock drawer via openGroup(id). Replaces both the old numbered 1-5
- * shortcuts and the in-drawer tile picker — the emoji buttons ARE the picker now.
+ * GexGroupNav — the left-side nav strip. One icon+label button per GEX group
+ * (sourced from GexDock's exported GROUPS); clicking navigates the whole page to
+ * that group's route. Replaces the old user-pinned Quick Pages bar and the
+ * in-drawer tile picker.
  */
-function GexGroupButtons({ onOpenGroup }: { onOpenGroup: (id: string) => void }) {
+function GexGroupNav() {
   return (
-    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-      {GROUPS.map((g) => (
-        <button
-          key={g.id}
-          type="button"
-          onClick={() => onOpenGroup(g.id)}
-          title={g.title}
-          aria-label={g.title}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 30,
-            height: 30,
-            flexShrink: 0,
-            borderRadius: "50%",
-            border: `1px solid ${cyanA(0.35)}`,
-            background: "rgba(255,255,255,0.04)",
-            color: HOME_THEME.text,
-            fontSize: 15,
-            lineHeight: 1,
-            cursor: "pointer",
-            fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
-            transition: "background 0.14s, border-color 0.14s, transform 0.14s",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = cyanA(0.14);
-            e.currentTarget.style.borderColor = cyanA(0.55);
-            e.currentTarget.style.transform = "translateY(-1px)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-            e.currentTarget.style.borderColor = cyanA(0.35);
-            e.currentTarget.style.transform = "none";
-          }}
-        >
-          <span aria-hidden>{g.emoji}</span>
-        </button>
-      ))}
+    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+      {GROUPS.map((g) => {
+        // Full-page route = the group's embed path minus the ?embed=1 query.
+        const href = (g.embed ?? `/${g.id}`).split("?")[0];
+        return <QuickCircle key={g.id} href={href} label={g.title} emoji={g.emoji} />;
+      })}
     </div>
   );
 }
@@ -507,7 +286,7 @@ export default function GlobalToolbar() {
   const { isSignedIn, user } = useAuth();
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
-  const { open: gexOpen, togglePanel: toggleGex, openGroup } = useGexPanel();
+  const { open: gexOpen, togglePanel: toggleGex } = useGexPanel();
   const { menuOpen, toggleMenu, isMobile } = useMobileNav();
 
   // ── hover state for the menu/notes round buttons ──
@@ -639,12 +418,13 @@ export default function GlobalToolbar() {
             <LogoMenu />
           </div>
 
-          {/* ── Quick Pages — inline emoji shortcuts (user-pinned, max 4) ── */}
-          <QuickPagesBar />
+          {/* ── GEX-group nav — left-side icon+label shortcuts; each navigates
+              the whole page to that group's route ── */}
+          <GexGroupNav />
 
           <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />
 
-          {/* ── Live ticker (VIX / ESU / SPX / NQU + dropdown) — grows to fill,
+          {/* ── Live ticker (ESU / NQU + dropdown) — grows to fill,
               centered, clips on narrow screens. ── */}
           <div style={{ position: "relative", zIndex: 1, flex: 1, minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden" }}>
             <ToolbarTicker />
@@ -659,11 +439,6 @@ export default function GlobalToolbar() {
 
           {/* ── Maintenance alert ── */}
           <MaintenanceAlert />
-
-          {/* ── GEX-group emoji buttons: one per group, opens it in the dock ── */}
-          {isSignedIn && (
-            <GexGroupButtons onOpenGroup={openGroup} />
-          )}
 
           {/* ── GEX groups — round pop-out button (opens GexDock) ── */}
           {isSignedIn && (

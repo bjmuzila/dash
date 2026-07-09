@@ -1087,6 +1087,25 @@ export function HomeClient({
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
               </FitScale>
+              {/* Levels strip — NET GEX / walls / flip / CB / max pain, in the
+                  empty band above the chart, right-aligned. Same in-scope live
+                  values as the heatmap stat bar so it always agrees with the
+                  chart. (Pop-up alerts will hook off these tiles later.) */}
+              <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, padding: "0 10px 6px", flexShrink: 0 }}>
+                {[
+                  { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
+                  { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
+                  { label: "Put Wall",  value: (putWallOiVol ?? putWall) != null ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—", color: C.red },
+                  { label: "Flip",      value: flipPoint != null ? formatStrikeValue(flipPoint) : "—", color: C.orange },
+                  { label: "CB",        value: mvcStrike != null ? formatStrikeValue(mvcStrike) : "—", color: C.purple },
+                  { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
+                ].map((t) => (
+                  <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
+                    <span style={{ fontSize: 9, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 800, color: t.color }}>{t.value}</span>
+                  </div>
+                ))}
+              </div>
               {/* Chart canvas — uses fast gex-chain data. Held behind a loader
                   until the server reports OI + greeks are warm, so a half-built
                   / inflated frame never renders. */}
