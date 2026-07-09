@@ -21,7 +21,16 @@ import ChainStatsBar from "@/components/dashboard/ChainStatsBar";
 import OptionsChainPage from "@/app/options-chain/page";
 // Just the 4 live gauges from /greeks (GEX/DEX/CHEX/VEX) — always-on WS feed,
 // no toolbar/graphs/basis toggle/idle timeout like the full page has.
-import LiveGreeksGauges from "@/components/dashboard/LiveGreeksGauges";
+import LiveGreeksGauges, { Sparkline } from "@/components/dashboard/LiveGreeksGauges";
+// FAB popup contents: real economic calendar widget (compact mode) and the
+// real per-user notes list — both already built to be embedded (see
+// app/analytics/page.tsx and components/shared/NotesDock.tsx for the same
+// pattern). Trader Dashboard / Analytics are full heavy pages with their own
+// polling loops (memory: not designed for embedding), so their popups link
+// out to the real routes instead of duplicating that page inline.
+import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import { useNotes, NotesBody } from "@/components/shared/notes";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -238,41 +247,170 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
   );
 }
 
-// ── floating FAB menu — mock only, no real destinations yet. Main round button
-// toggles 5 sub-buttons that fan out in a quarter-circle above/left of it (arc
-// layout), with a rotate animation on the "+" and click-outside-to-close —
-// same behavior as the vanilla mainBtn/subButtons pattern, ported to React
-// state instead of classList.toggle("hidden").
-const FAB_MOCK_ITEMS = ["1", "2", "3", "4", "5"];
+// ── floating FAB menu — main round button toggles 5 sub-buttons that fan out
+// in a quarter-circle (bottom-left quadrant) with a rotate animation on the
+// "+" and click-outside-to-close. Clicking a numbered sub-button closes the
+// fan and opens a popup panel with that button's real content:
+//   1. Economic calendar (live, compact EconCalendarPanel)
+//   2. Option flow for the active ticker — net-GEX sparkline, polls /proxy/scanner
+//   3. Notes — the same per-user notes list as the right-side Notes dock
+//   4. Trader Dashboard — links out to the full /traders-dashboard page (that
+//      page runs its own 1s/60s polling loops; embedding it here would double
+//      those up, so this is a preview + link rather than an inline embed)
+//   5. Analytics — links out to /analytics for the same reason
+const FAB_ITEMS = [
+  { key: "econ", label: "1", title: "Economic Calendar" },
+  { key: "flow", label: "2", title: "Option Flow" },
+  { key: "notes", label: "3", title: "Notes" },
+  { key: "trader", label: "4", title: "Trader Dashboard" },
+  { key: "analytics", label: "5", title: "Analytics" },
+] as const;
+type FabKey = (typeof FAB_ITEMS)[number]["key"];
 const FAB_RADIUS = 64;
 
-function FabMenu() {
+// ── popup #2 content: option flow sparkline for the active ticker ──────────
+// Polls /proxy/scanner (the same multi-ticker GEX scanner /test's Positioning
+// tab reads) every 20s and tracks that ticker's totalNetGex over time as a
+// zero-crossing sparkline (green above zero / red below, same rule as the
+// greek gauges). This is a real net-GEX flow read, not mock data.
+function OptionFlowPopupContent({ ticker }: { ticker: string }) {
+  const [points, setPoints] = useState<number[]>([]);
+  const [latest, setLatest] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPoints([]);
+    setLatest(null);
+    const load = async () => {
+      try {
+        const res = await fetch(`/proxy/scanner?limit=200&any=1`);
+        const json = await res.json();
+        const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
+        const row = list.find((r) => String(r.symbol ?? "").toUpperCase() === ticker.toUpperCase());
+        if (!row || cancelled) return;
+        const v = Number(row.total_net_gex) || 0;
+        setLatest(v);
+        setPoints((prev) => [...prev, v].slice(-40));
+      } catch {
+        /* ignore — keep last known points */
+      }
+    };
+    load();
+    const id = setInterval(load, 20000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [ticker]);
+
+  const scale = Math.max(1, ...points.map((v) => Math.abs(v)));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
+        {ticker} net GEX flow
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono, monospace)", color: latest == null ? HOME_THEME.text : latest >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+        {latest == null ? "--" : `${latest >= 0 ? "+" : ""}${(latest / 1e9).toFixed(3)}B`}
+      </div>
+      <Sparkline points={points} fullScale={scale} width={260} height={54} />
+    </div>
+  );
+}
+
+// ── popup #3 content: real per-user notes list (same data as the right-side
+// Notes dock — components/shared/NotesDock.tsx — just NotesBody + useNotes
+// reused directly here instead of the push-panel chrome). ──────────────────
+function NotesPopupContent() {
+  const { isSignedIn, user } = useAuth();
+  const { notes, addNote, editNote, deleteNote } = useNotes(user?.id);
+  if (!isSignedIn) {
+    return <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>Sign in to use notes.</div>;
+  }
+  return (
+    <div style={{ maxHeight: 360, overflow: "auto" }}>
+      <NotesBody notes={notes} addNote={addNote} editNote={editNote} deleteNote={deleteNote} />
+    </div>
+  );
+}
+
+// ── popup #4 / #5 content: link-out preview cards (see comment above FAB_ITEMS
+// for why these don't embed the full pages inline). ────────────────────────
+function LinkOutPopupContent({ href, label }: { href: string; label: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
+        Full page has its own live polling — opens in a new tab rather than embedding here.
+      </div>
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          alignSelf: "flex-start",
+          fontSize: 15,
+          fontWeight: 800,
+          color: LIGHT_BLUE,
+          textDecoration: "none",
+          border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
+          borderRadius: 999,
+          padding: "6px 14px",
+        }}
+      >
+        Open {label} →
+      </a>
+    </div>
+  );
+}
+
+function FabPopupBody({ fabKey, ticker }: { fabKey: FabKey; ticker: string }) {
+  switch (fabKey) {
+    case "econ":
+      return (
+        <div style={{ maxHeight: 420, overflow: "auto" }}>
+          <EconCalendarPanel todayOnly hideToolbar />
+        </div>
+      );
+    case "flow":
+      return <OptionFlowPopupContent ticker={ticker} />;
+    case "notes":
+      return <NotesPopupContent />;
+    case "trader":
+      return <LinkOutPopupContent href="/traders-dashboard" label="Trader Dashboard" />;
+    case "analytics":
+      return <LinkOutPopupContent href="/analytics" label="Analytics" />;
+  }
+}
+
+function FabMenu({ ticker }: { ticker: string }) {
   const [open, setOpen] = useState(false);
+  const [activePopup, setActivePopup] = useState<FabKey | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setActivePopup(null);
+      }
     }
     window.addEventListener("click", onDocClick);
     return () => window.removeEventListener("click", onDocClick);
   }, []);
 
+  const activeItem = FAB_ITEMS.find((it) => it.key === activePopup);
+
   return (
     <div ref={rootRef} style={{ position: "relative", width: 28, height: 28, zIndex: 100 }}>
-      {FAB_MOCK_ITEMS.map((label, i) => {
+      {FAB_ITEMS.map((item, i) => {
         // Fan across a quarter-circle from 90° (straight down) to 180° (straight
         // left), so the sub-buttons sweep down-and-left (bottom-left quadrant)
         // away from the top-right corner FAB, staying on-screen.
-        const angle = 90 + (i / (FAB_MOCK_ITEMS.length - 1)) * 90;
+        const angle = 90 + (i / (FAB_ITEMS.length - 1)) * 90;
         const rad = (angle * Math.PI) / 180;
         const x = Math.cos(rad) * FAB_RADIUS;
         const y = Math.sin(rad) * FAB_RADIUS;
         return (
           <button
-            key={label}
-            onClick={() => setOpen(false)}
-            title={`Sub-button ${label} (mock)`}
+            key={item.key}
+            onClick={(e) => { e.stopPropagation(); setOpen(false); setActivePopup(item.key); }}
+            title={item.title}
             style={{
               position: "absolute",
               top: 14,
@@ -298,13 +436,13 @@ function FabMenu() {
               transition: `transform 0.22s ease ${open ? i * 0.03 : 0}s, opacity 0.18s ease ${open ? i * 0.03 : 0}s`,
             }}
           >
-            {label}
+            {item.label}
           </button>
         );
       })}
 
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); setActivePopup(null); }}
         title="Floating FAB menu"
         style={{
           position: "relative",
@@ -326,6 +464,32 @@ function FabMenu() {
       >
         +
       </button>
+
+      {activeItem && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            ...dissolveCardStyle,
+            position: "absolute",
+            top: 40,
+            right: 0,
+            width: 320,
+            padding: 16,
+            zIndex: 150,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ ...labelCap, fontSize: 15 }}>{activeItem.title}</div>
+            <button
+              onClick={() => setActivePopup(null)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}
+            >
+              ✕
+            </button>
+          </div>
+          <FabPopupBody fabKey={activeItem.key} ticker={ticker} />
+        </div>
+      )}
     </div>
   );
 }
@@ -374,7 +538,7 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
             </span>
           ))}
         </div>
-        <FabMenu />
+        <FabMenu ticker={ticker} />
       </div>
     </div>
   );
@@ -449,20 +613,23 @@ export default function NewHomePage() {
   return (
     <PageShell>
       <NewHomeTopPill ticker={ticker} onTickerChange={setTicker} />
-      {/* flex:1 lets this row fill a tall viewport as before; minHeight is left
-          at its default (auto, not 0) so on a short window the row keeps its
-          content's natural height instead of being crushed to fit — PageShell's
-          <main> (overflow: auto) then scrolls the page rather than every panel
-          getting squeezed unreadably small. */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: 16, flex: 1 }}>
+      {/* minHeight: 0 lets this row (and the columns/panels inside it) shrink to
+          actually fit the available viewport height instead of ballooning to
+          their content's natural size — that "auto" min-height is what made
+          the chain balloon huge. Each leaf panel below still has its own
+          pixel min-height floor (OptionChainPanel 230, GreeksPanel 150, etc.),
+          so on a short window nothing gets squeezed unreadably small; once
+          those floors don't all fit, PageShell's <main> (overflow: auto)
+          scrolls the page instead. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: 16, flex: 1, minHeight: 0 }}>
         {/* left column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <ChainStatsBar ticker={ticker} />
           <OptionChainPanel ticker={ticker} />
         </div>
 
         {/* right column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <GreeksPanel />
           <StatsPlaceholderPanel />
           <EsCandlesPanel />

@@ -366,6 +366,67 @@ const CYAN = HOME_THEME.cyan; // #219EBC
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 
+/**
+ * NumberedQuickButtons — 5 small numbered circles (1-5), each a direct
+ * deep-link into one popup instead of opening the GEX-groups tile picker and
+ * clicking a tile: 1 Econ Calendar, 2 Flow (option-flow sparkline for the
+ * active ticker), 3 Notes, 4 Traders Dashboard, 5 Analytics. Reuses the same
+ * GexDock drawer (via openGroup) for 1/2/4/5; 3 toggles the existing Notes
+ * panel so there's only one notes implementation.
+ */
+function NumberedQuickButtons({
+  onOpenGroup, onNotes,
+}: { onOpenGroup: (id: string) => void; onNotes: () => void }) {
+  const items: { n: number; title: string; onClick: () => void }[] = [
+    { n: 1, title: "Economic Calendar", onClick: () => onOpenGroup("economic-calendar") },
+    { n: 2, title: "Option Flow (sparkline)", onClick: () => onOpenGroup("flow") },
+    { n: 3, title: "Notes", onClick: onNotes },
+    { n: 4, title: "Traders Dashboard", onClick: () => onOpenGroup("traders-dashboard") },
+    { n: 5, title: "Analytics", onClick: () => onOpenGroup("analytics") },
+  ];
+  return (
+    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      {items.map((item) => (
+        <button
+          key={item.n}
+          type="button"
+          onClick={item.onClick}
+          title={item.title}
+          aria-label={item.title}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 26,
+            height: 26,
+            flexShrink: 0,
+            borderRadius: "50%",
+            border: `1px solid ${cyanA(0.35)}`,
+            background: "rgba(255,255,255,0.04)",
+            color: HOME_THEME.text,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: "pointer",
+            transition: "background 0.14s, border-color 0.14s, transform 0.14s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = cyanA(0.14);
+            e.currentTarget.style.borderColor = cyanA(0.55);
+            e.currentTarget.style.transform = "translateY(-1px)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+            e.currentTarget.style.borderColor = cyanA(0.35);
+            e.currentTarget.style.transform = "none";
+          }}
+        >
+          {item.n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Pencil "notes" icon (stroked, matches toolbar icon language). */
 function PencilIcon({ size = 18 }: { size?: number }) {
   return (
@@ -455,7 +516,7 @@ export default function GlobalToolbar() {
   const { isSignedIn, user } = useAuth();
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
-  const { open: gexOpen, togglePanel: toggleGex } = useGexPanel();
+  const { open: gexOpen, togglePanel: toggleGex, openGroup } = useGexPanel();
   const { menuOpen, toggleMenu, isMobile } = useMobileNav();
 
   // ── hover state for the menu/notes round buttons ──
@@ -607,6 +668,12 @@ export default function GlobalToolbar() {
 
           {/* ── Maintenance alert ── */}
           <MaintenanceAlert />
+
+          {/* ── Numbered quick-launch (1-5): direct deep-links into GexDock
+              tiles / Notes, skipping the tile picker ── */}
+          {isSignedIn && (
+            <NumberedQuickButtons onOpenGroup={openGroup} onNotes={togglePanel} />
+          )}
 
           {/* ── GEX groups — round pop-out button (opens GexDock) ── */}
           {isSignedIn && (

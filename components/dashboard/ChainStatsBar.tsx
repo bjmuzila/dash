@@ -155,12 +155,12 @@ function StatTile({ label, value, color }: { label: string; value: string; color
       style={{
         background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.10)} 0%, transparent 60%), rgba(13,17,25,0.20)`,
         backdropFilter: "blur(20px)",
-        borderRadius: 14,
-        padding: "10px 8px",
+        borderRadius: 12,
+        padding: "6px 8px",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 4,
+        gap: 2,
       }}
     >
       <div style={{ fontSize: 15, letterSpacing: "0.1em", color: HT.text, textTransform: "uppercase" }}>{label}</div>
@@ -207,11 +207,11 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
             style={{
               background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.06)} 0%, transparent 60%), rgba(13,17,25,0.18)`,
               backdropFilter: "blur(16px)",
-              borderRadius: 12,
-              padding: "8px 10px",
+              borderRadius: 10,
+              padding: "5px 10px",
               display: "flex",
               flexDirection: "column",
-              gap: 3,
+              gap: 1,
               fontSize: 15,
             }}
           >

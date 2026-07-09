@@ -11,6 +11,13 @@ type GexPanelCtx = {
   openPanel: () => void;
   closePanel: () => void;
   togglePanel: () => void;
+  // Deep-link into a specific GexDock tile (e.g. from the toolbar's 1-5 quick
+  // buttons) instead of just opening to whatever tile was last selected.
+  // `requestedGroup` is a one-shot signal: GexDock consumes it (sets its
+  // selectedId + clears it back to null) on the render after it changes.
+  requestedGroup: string | null;
+  openGroup: (id: string) => void;
+  clearRequestedGroup: () => void;
 };
 
 const Ctx = createContext<GexPanelCtx>({
@@ -18,10 +25,14 @@ const Ctx = createContext<GexPanelCtx>({
   openPanel: () => {},
   closePanel: () => {},
   togglePanel: () => {},
+  requestedGroup: null,
+  openGroup: () => {},
+  clearRequestedGroup: () => {},
 });
 
 export function GexPanelProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [requestedGroup, setRequestedGroup] = useState<string | null>(null);
 
   useEffect(() => {
     try { setOpen(localStorage.getItem(OPEN_STORAGE_KEY) === "1"); } catch { /* ignore */ }
@@ -37,6 +48,12 @@ export function GexPanelProvider({ children }: { children: React.ReactNode }) {
     openPanel: () => setOpen(persist(true)),
     closePanel: () => setOpen(persist(false)),
     togglePanel: () => setOpen((v) => persist(!v)),
+    requestedGroup,
+    openGroup: (id: string) => {
+      setRequestedGroup(id);
+      setOpen(persist(true));
+    },
+    clearRequestedGroup: () => setRequestedGroup(null),
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

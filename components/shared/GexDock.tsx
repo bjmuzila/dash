@@ -31,6 +31,7 @@ const GROUPS: GexGroup[] = [
   { id: "analytics",         emoji: "📊", title: "Analytics",    embed: "/analytics?embed=1" },
   { id: "es-candles",        emoji: "🕯️", title: "ES Candles",   embed: "/es-candles?embed=1" },
   { id: "scanner",           emoji: "🔍", title: "Scanner",      embed: "/scanner?embed=1" },
+  { id: "economic-calendar", emoji: "📅", title: "Econ Cal.",    embed: "/economic-calendar?embed=1" },
 ];
 
 // Groups that still work in "delayed" mode for unpaid signed-in users (mirrors
@@ -47,7 +48,7 @@ const PANEL_WIDTH = "40vw";
 const DESKTOP_MIN = 920;
 
 export default function GexDock() {
-  const { open, closePanel } = useGexPanel();
+  const { open, closePanel, requestedGroup, clearRequestedGroup } = useGexPanel();
   const onClose = closePanel;
   const pathname = usePathname();
   const { user, isPaid, isOwnerClaim } = useAuth();
@@ -70,6 +71,15 @@ export default function GexDock() {
     else if (pathname?.startsWith("/mult-greek")) setSelectedId("home");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Deep-link: the toolbar's numbered quick buttons call openGroup(id), which
+  // sets requestedGroup — jump straight to that tile, then clear the request
+  // so it doesn't fight manual tile clicks made afterward.
+  useEffect(() => {
+    if (!requestedGroup) return;
+    if (GROUPS.some((g) => g.id === requestedGroup)) setSelectedId(requestedGroup);
+    clearRequestedGroup();
+  }, [requestedGroup, clearRequestedGroup]);
 
   // Measure the content viewport so the embedded iframe can be sized + scaled.
   const contentRef = useRef<HTMLDivElement>(null);

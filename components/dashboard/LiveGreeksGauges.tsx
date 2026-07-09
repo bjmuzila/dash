@@ -71,8 +71,8 @@ function pointFromTotals(
 // Small trend line under the gauge — zero line pinned at the vertical middle,
 // each segment colored by the sign of its endpoints (green above zero, red
 // below), so a line crossing zero visibly flips color right at the crossing.
-const GREEN = "#00e676", RED = "#ff5252";
-function Sparkline({ points, fullScale, width = 76, height = 18 }: { points: number[]; fullScale: number; width?: number; height?: number }) {
+export const GREEN = "#00e676", RED = "#ff5252";
+export function Sparkline({ points, fullScale, width = 76, height = 18 }: { points: number[]; fullScale: number; width?: number; height?: number }) {
   if (points.length < 2) {
     return <svg width={width} height={height} style={{ display: "block", marginTop: 2 }} />;
   }
