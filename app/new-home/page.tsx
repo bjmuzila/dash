@@ -12,18 +12,21 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 import { PageShell } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle, statTileStyle } from "@/components/shared/homeTheme";
 import EsCandlesCard from "@/components/dashboard/EsCandlesCard";
+import CompactOptionChain from "@/components/dashboard/CompactOptionChain";
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
+// Section title style — the one place that stays at 16px; everything else on
+// this page is 15px per the flat sizing pass.
 const labelCap: CSSProperties = {
-  fontSize: 10,
+  fontSize: 16,
   fontWeight: 800,
   letterSpacing: "0.14em",
   textTransform: "uppercase",
-  color: rgba(HOME_THEME.text, 0.75),
+  color: HOME_THEME.text,
 };
 
 // ── shared dissolve card (single accent, no top bar) ────────────────────────
@@ -75,12 +78,10 @@ function saveFavoriteTickers(list: string[]) {
 const STAT_CARDS = ["GEX", "DEX", "FLIP", "IV"];
 const GAUGES = ["GEX", "DEX", "CHEX", "VEX"];
 
-// Option chain placeholder shape — mirrors the real /options-chain matrix:
-// one strike column + N expiry columns (each expiry showing GEX only, like
-// the carded matrix view). Real page defaults to 14 expirations; the
-// new-home panel is capped smaller since it's a secondary summary view.
+// Option chain sizing — caps CompactOptionChain's live matrix. Real
+// /options-chain page defaults to 14 expirations; new-home is capped smaller
+// since it's a secondary summary view.
 const CHAIN_EXPIRY_COUNT = 5;
-const CHAIN_EXPIRY_LABELS = Array.from({ length: CHAIN_EXPIRY_COUNT }, (_, i) => `EXP ${i + 1}`);
 const CHAIN_STRIKE_ROWS = 9;
 
 // ── ticker switcher: click the chip to type any ticker (uppercased, Enter/blur
@@ -130,7 +131,7 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
   const isFav = favorites.includes(ticker);
 
   return (
-    <div ref={rootRef} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 800, letterSpacing: "0.08em", position: "relative" }}>
+    <div ref={rootRef} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", position: "relative" }}>
       {editing ? (
         <input
           ref={inputRef}
@@ -150,7 +151,7 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
             border: `1px solid ${rgba(LIGHT_BLUE, 0.5)}`,
             background: rgba(LIGHT_BLUE, 0.12),
             color: LIGHT_BLUE,
-            fontSize: 13,
+            fontSize: 15,
             fontWeight: 800,
             letterSpacing: "0.08em",
             outline: "none",
@@ -184,7 +185,7 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
           cursor: "pointer",
           fontSize: 15,
           lineHeight: 1,
-          color: isFav ? "#fbbf24" : "#5c6b7a",
+          color: isFav ? "#fbbf24" : HOME_THEME.text,
         }}
       >
         {isFav ? "★" : "☆"}
@@ -194,7 +195,7 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
         <button
           onClick={() => setFavOpen((o) => !o)}
           title="Favorite tickers"
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 10, color: "#5c6b7a", opacity: 0.7 }}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}
         >
           ▾
         </button>
@@ -221,7 +222,7 @@ function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: st
               onClick={() => { onChange(t); setFavOpen(false); }}
               style={{
                 padding: "6px 14px",
-                fontSize: 11,
+                fontSize: 15,
                 fontWeight: t === ticker ? 800 : 600,
                 color: t === ticker ? LIGHT_BLUE : HOME_THEME.text,
                 background: t === ticker ? rgba(LIGHT_BLUE, 0.1) : "transparent",
@@ -259,11 +260,12 @@ function FabMenu() {
   }, []);
 
   return (
-    <div ref={rootRef} style={{ position: "relative", width: 28, height: 28 }}>
+    <div ref={rootRef} style={{ position: "relative", width: 28, height: 28, zIndex: 100 }}>
       {FAB_MOCK_ITEMS.map((label, i) => {
-        // Fan across a quarter-circle from 180° (left) to 270° (up), so the
-        // sub-buttons sweep up-and-left away from the top-right corner FAB.
-        const angle = 180 + (i / (FAB_MOCK_ITEMS.length - 1)) * 90;
+        // Fan across a quarter-circle from 90° (straight down) to 180° (straight
+        // left), so the sub-buttons sweep down-and-left (bottom-left quadrant)
+        // away from the top-right corner FAB, staying on-screen.
+        const angle = 90 + (i / (FAB_MOCK_ITEMS.length - 1)) * 90;
         const rad = (angle * Math.PI) / 180;
         const x = Math.cos(rad) * FAB_RADIUS;
         const y = Math.sin(rad) * FAB_RADIUS;
@@ -285,7 +287,7 @@ function FabMenu() {
               background: "rgba(13,17,25,0.92)",
               backdropFilter: "blur(16px)",
               color: LIGHT_BLUE,
-              fontSize: 10,
+              fontSize: 15,
               fontWeight: 800,
               display: "flex",
               alignItems: "center",
@@ -344,11 +346,13 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
         backdropFilter: "blur(24px)",
         padding: "10px 18px",
         flexShrink: 0,
+        position: "relative",
+        zIndex: 100,
       }}
     >
       <TickerSwitcher ticker={ticker} onChange={onTickerChange} />
 
-      <div style={{ fontSize: 10, letterSpacing: "0.16em", color: "#5c6b7a", textTransform: "uppercase" }}>
+      <div style={{ fontSize: 15, letterSpacing: "0.16em", color: HOME_THEME.text, textTransform: "uppercase" }}>
         new-home
       </div>
 
@@ -360,10 +364,10 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
               key={tab}
               style={{
                 padding: "5px 12px",
-                fontSize: 11,
+                fontSize: 15,
                 fontWeight: 700,
                 letterSpacing: "0.06em",
-                color: i === 0 ? LIGHT_BLUE : "#8a99a8",
+                color: i === 0 ? LIGHT_BLUE : HOME_THEME.text,
                 background: i === 0 ? rgba(LIGHT_BLUE, 0.14) : "transparent",
               }}
             >
@@ -396,66 +400,23 @@ function StatCardsRow({ ticker }: { ticker: string }) {
             gap: 5,
           }}
         >
-          <div style={{ fontSize: 9, letterSpacing: "0.12em", color: "#8a99a8", textTransform: "uppercase" }}>{label}</div>
-          <div style={{ fontSize: 17, fontWeight: 800, fontFamily: "var(--font-mono, monospace)" }}>--</div>
+          <div style={{ fontSize: 15, letterSpacing: "0.12em", color: HOME_THEME.text, textTransform: "uppercase" }}>{label}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono, monospace)" }}>--</div>
         </div>
       ))}
     </div>
   );
 }
 
-// ── option chain placeholder (left column, main) ────────────────────────────
-// Static shape only — strike column + CHAIN_EXPIRY_COUNT expiry columns, each
-// row a placeholder strike. No fetch, no state; wire to /options-chain's
-// matrix (capped to this column count) once the layout is approved.
-function OptionChainPlaceholder() {
+// ── option chain (left column, main) ────────────────────────────────────────
+// Live now — CompactOptionChain fetches real expirations + chains for the
+// active ticker (from TickerSwitcher), capped to CHAIN_EXPIRY_COUNT columns
+// and CHAIN_STRIKE_ROWS around ATM. Same GEX math + data source as the full
+// /options-chain page, no toolbar (this page's TickerSwitcher drives it).
+function OptionChainPanel({ ticker }: { ticker: string }) {
   return (
     <DCard title="Option chain" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `56px repeat(${CHAIN_EXPIRY_COUNT}, minmax(0,1fr))`,
-          fontSize: 10,
-          letterSpacing: "0.06em",
-          color: "#8a99a8",
-          textTransform: "uppercase",
-          borderBottom: `1px solid ${HOME_THEME.border}`,
-          paddingBottom: 8,
-          marginBottom: 6,
-        }}
-      >
-        <div />
-        {CHAIN_EXPIRY_LABELS.map((label) => (
-          <div key={label} style={{ textAlign: "center" }}>{label}</div>
-        ))}
-      </div>
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
-        {Array.from({ length: CHAIN_STRIKE_ROWS }).map((_, r) => {
-          const isAtm = r === Math.floor(CHAIN_STRIKE_ROWS / 2);
-          return (
-            <div
-              key={r}
-              style={{
-                display: "grid",
-                gridTemplateColumns: `56px repeat(${CHAIN_EXPIRY_COUNT}, minmax(0,1fr))`,
-                alignItems: "center",
-                borderRadius: 6,
-                background: isAtm ? rgba(LIGHT_BLUE, 0.08) : "transparent",
-                padding: "4px 0",
-              }}
-            >
-              <div style={{ fontSize: 10, textAlign: "center", color: isAtm ? LIGHT_BLUE : "#8a99a8", fontFamily: "var(--font-mono, monospace)" }}>
-                {isAtm ? "ATM" : "----"}
-              </div>
-              {CHAIN_EXPIRY_LABELS.map((label) => (
-                <div key={label} style={{ textAlign: "center", fontSize: 10, color: "#5c6b7a", fontFamily: "var(--font-mono, monospace)" }}>
-                  --
-                </div>
-              ))}
-            </div>
-          );
-        })}
-      </div>
+      <CompactOptionChain ticker={ticker} maxExpirations={CHAIN_EXPIRY_COUNT} rows={CHAIN_STRIKE_ROWS} />
     </DCard>
   );
 }
@@ -492,7 +453,7 @@ function StaticGauge({ label }: { label: string }) {
         <text x={cx} y={cy + 1} textAnchor="middle" fontSize={13} fontWeight={800} fill="#fff" fontFamily="monospace">
           --
         </text>
-        <text x={cx} y={cy + 14} textAnchor="middle" fontSize={7.5} letterSpacing="1.5" fill="#9fb3c8">
+        <text x={cx} y={cy + 14} textAnchor="middle" fontSize={7.5} letterSpacing="1.5" fill="#fff">
           {label}
         </text>
       </svg>
@@ -518,8 +479,8 @@ function StatsPlaceholderPanel() {
     <DCard title="Stats">
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rows.map((r) => (
-          <div key={r} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-            <span style={{ color: "#8a99a8" }}>{r}</span>
+          <div key={r} style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+            <span style={{ color: HOME_THEME.text }}>{r}</span>
             <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>--</span>
           </div>
         ))}
@@ -540,8 +501,9 @@ function EsCandlesPanel() {
 
 export default function NewHomePage() {
   // Active ticker lives here — switching it (via TickerSwitcher) re-labels the
-  // whole page. Panels are still static "--" values; wiring real per-ticker
-  // data is the next step once this layout + interaction is approved.
+  // page and drives the live option chain below. Stat cards / gauges / stats
+  // panel are still static "--" placeholders; the chain is the first panel
+  // wired to real data.
   const [ticker, setTicker] = useState("SPX");
 
   return (
@@ -551,7 +513,7 @@ export default function NewHomePage() {
         {/* left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <StatCardsRow ticker={ticker} />
-          <OptionChainPlaceholder />
+          <OptionChainPanel ticker={ticker} />
         </div>
 
         {/* right column */}
