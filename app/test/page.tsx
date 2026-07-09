@@ -2476,15 +2476,10 @@ type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "w
 type WallTimingWindow = "9:30" | "2pm" | "3:30";
 type WallsFlowsRow = {
   symbol: string;
-  spot: number;
-  callWall5m: number | null;
-  putWall5m: number | null;
-  callWall15m: number | null;
-  putWall15m: number | null;
-  callWall30m: number | null;
-  putWall30m: number | null;
   gexSwing5m: number | null;
   gexSwing15m: number | null;
+  gexSwing30m: number | null;
+  gexSwing60m: number | null;
   ts: number;
 };
 
@@ -2495,29 +2490,44 @@ function useWallsFlows() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/proxy/scanner?limit=20&any=1`);
+      // Get 0DTE expiry
+      const expiryRes = await fetch(`/api/chains?ticker=SPX&range=0dte`);
+      if (!expiryRes.ok) throw new Error(`Failed to get expiry: HTTP ${expiryRes.status}`);
+      const expiryJson = await expiryRes.json();
+      const expirations = Array.isArray(expiryJson?.data?.expirations) ? expiryJson.data.expirations : [];
+      const expiry = expirations[0];
+      if (!expiry) throw new Error("No 0DTE expiry found");
+
+      // Fetch GEX history for 5m, 15m, 30m, 60m windows
+      const res = await fetch(`/proxy/gex-history?expiry=${encodeURIComponent(expiry)}&ages=5,15,30,60`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      if (json?.ok === false) throw new Error(json.error || "scanner unavailable");
-      const list: Record<string, unknown>[] = Array.isArray(json?.rows) ? json.rows : [];
-      const bySymbol: Record<string, WallsFlowsRow> = {};
-      for (const r of list) {
-        const symbol = String(r.symbol ?? "");
-        if (!symbol) continue;
-        bySymbol[symbol] = {
-          symbol,
-          spot: Number(r.spot) || 0,
-          callWall5m: r.call_wall != null ? Number(r.call_wall) : null,
-          putWall5m: r.put_wall != null ? Number(r.put_wall) : null,
-          callWall15m: r.call_wall != null ? Number(r.call_wall) * 0.98 : null,
-          putWall15m: r.put_wall != null ? Number(r.put_wall) * 1.02 : null,
-          callWall30m: r.call_wall != null ? Number(r.call_wall) * 0.96 : null,
-          putWall30m: r.put_wall != null ? Number(r.put_wall) * 1.04 : null,
-          gexSwing5m: Math.random() > 0.5 ? Number(r.total_net_gex) * 0.1 : -Number(r.total_net_gex) * 0.1,
-          gexSwing15m: Math.random() > 0.5 ? Number(r.total_net_gex) * 0.05 : -Number(r.total_net_gex) * 0.05,
-          ts: Number(r.ts) || 0,
-        };
+
+      const baselines: Record<string, Record<string, number>> = json?.baselines ?? {};
+
+      // Find strikes with biggest GEX swings (highest positive = calls, lowest negative = puts)
+      // For simplicity, showing the aggregate swing across key strikes
+      const ages = ["5", "15", "30", "60"];
+      const swings: Record<string, number | null> = {};
+
+      for (const age of ages) {
+        const values = Object.values(baselines).map((b: any) => Number(b[age]) || 0);
+        const maxPositive = Math.max(0, ...values);
+        const maxNegative = Math.min(0, ...values);
+        swings[age] = Math.max(Math.abs(maxPositive), Math.abs(maxNegative)) > 0 ? (maxPositive + maxNegative) / 2 : 0;
       }
+
+      const bySymbol: Record<string, WallsFlowsRow> = {
+        SPX: {
+          symbol: "SPX",
+          gexSwing5m: Number(swings["5"]) || 0,
+          gexSwing15m: Number(swings["15"]) || 0,
+          gexSwing30m: Number(swings["30"]) || 0,
+          gexSwing60m: Number(swings["60"]) || 0,
+          ts: Date.now(),
+        },
+      };
+
       setData(bySymbol);
       setError(null);
       setLoadedAt(Date.now());
@@ -2557,7 +2567,7 @@ function TimingWindowChip({ window, isActive }: { window: WallTimingWindow; isAc
 }
 
 function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow }) {
-  const { spot, callWall5m, putWall5m, callWall15m, putWall15m, callWall30m, putWall30m, gexSwing5m, gexSwing15m } = row;
+  const { gexSwing5m, gexSwing15m, gexSwing30m, gexSwing60m } = row;
 
   // Determine which timing window is active
   const now = new Date();
@@ -2584,80 +2594,24 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
           </div>
         </div>
 
-        {/* Walls by Timeframe */}
+        {/* GEX Swings by Timeframe */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Call Walls */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
             {[
-              { label: "5m Call Wall", value: callWall5m, color: HOME_THEME.green },
-              { label: "15m Call Wall", value: callWall15m, color: HOME_THEME.green },
-              { label: "30m Call Wall", value: callWall30m, color: HOME_THEME.green },
-            ].map(({ label, value, color }) => (
-              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              { label: "5m Swing", value: gexSwing5m },
+              { label: "15m Swing", value: gexSwing15m },
+              { label: "30m Swing", value: gexSwing30m },
+              { label: "60m Swing", value: gexSwing60m },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>
                   {label}
                 </div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
-                  {value != null ? `$${value.toFixed(0)}` : "—"}
+                <div style={{ fontSize: 16, fontWeight: 900, color: (value ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                  {value != null ? `${value > 0 ? "+" : ""}${(value / 1e6).toFixed(1)}M` : "—"}
                 </div>
-                {value != null && spot > 0 && (
-                  <div style={{ fontSize: 15, color: HOME_THEME.text }}>
-                    {((value - spot) / spot * 100).toFixed(2)}%
-                  </div>
-                )}
               </div>
             ))}
-          </div>
-          {/* Put Walls */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            {[
-              { label: "5m Put Wall", value: putWall5m, color: HOME_THEME.red },
-              { label: "15m Put Wall", value: putWall15m, color: HOME_THEME.red },
-              { label: "30m Put Wall", value: putWall30m, color: HOME_THEME.red },
-            ].map(({ label, value, color }) => (
-              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  {label}
-                </div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
-                  {value != null ? `$${value.toFixed(0)}` : "—"}
-                </div>
-                {value != null && spot > 0 && (
-                  <div style={{ fontSize: 15, color: HOME_THEME.text }}>
-                    {((value - spot) / spot * 100).toFixed(2)}%
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* GEX Swing Detection */}
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 8 }}>
-            GEX Swings
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>5m Swing</div>
-              <div style={{ fontSize: 16, fontWeight: 900, color: (gexSwing5m ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                {gexSwing5m != null ? `${gexSwing5m > 0 ? "+" : ""}${(gexSwing5m / 1e6).toFixed(1)}M` : "—"}
-              </div>
-            </div>
-            <div style={{ padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>15m Swing</div>
-              <div style={{ fontSize: 16, fontWeight: 900, color: (gexSwing15m ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                {gexSwing15m != null ? `${gexSwing15m > 0 ? "+" : ""}${(gexSwing15m / 1e6).toFixed(1)}M` : "—"}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Spot */}
-        <div style={{ paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginBottom: 4 }}>Current Price</div>
-          <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>
-            ${spot.toFixed(2)}
           </div>
         </div>
       </div>
@@ -2667,7 +2621,7 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
 
 function WallsFlowsTab() {
   const { data, error, loadedAt, reload } = useWallsFlows();
-  const topSymbols = ["SPX", "SPY", "QQQ", "NDX"];
+  const topSymbols = ["SPX"];
 
   return (
     <>
@@ -2686,8 +2640,8 @@ function WallsFlowsTab() {
         <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.orange, marginBottom: 8, letterSpacing: "0.05em", textTransform: "uppercase" }}>
           About This Tab
         </div>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.5 }}>
-          Call/Put Walls ranked by |GEX| per timeframe (5m/15m/30m) · GEX Swings detect dealer positioning shifts (positive = long gamma, negative = short) ·
+        <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5 }}>
+          Live GEX change over 5m, 15m, 30m, and 60m windows from the 0DTE options chain. Positive = dealers becoming long gamma (supportive), Negative = dealers becoming short gamma (volatile) ·
           Timing Windows highlight market hours that historically show gamma acceleration (9:30 open, 2pm churn, 3:30 close).
         </div>
       </div>
@@ -2705,8 +2659,8 @@ function WallsFlowsTab() {
         </div>
       )}
 
-      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", opacity: 0.5, marginTop: 16, lineHeight: 1.6 }}>
-        Walls sourced from live multi-ticker GEX scanner (scanner_snapshots table). GEX swings detect intraday dealer positioning momentum. Timing windows auto-highlight market hours with historical gamma peaks.
+      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
+        GEX swings sourced from 0DTE option chain history (option_strike_gex_history). Positive swing = dealers long gamma, Negative = short gamma.
       </div>
     </>
   );

@@ -198,7 +198,7 @@ function buildChainRows(strikes: StrikeRow[], liveData: Record<string, LiveEntry
     const putGEX = -putGamma * putOI * spot * spot;
     const netGEX = callGEX + putGEX;
     const netVolGEX = callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot;
-    const netDEX = callDelta * callPos * spot * 100 - putDelta * putPos * spot * 100;
+    const netDEX = callDelta * callOI * spot * 100 - putDelta * putOI * spot * 100;
     const volNetDEX = callDelta * callVolume * spot * 100 - putDelta * putVolume * spot * 100;
     const netVanna = ((call.vega ?? 0) * callOI - (put.vega ?? 0) * putOI) * 100;
     const netVolVanna = ((call.vega ?? 0) * callVolume - (put.vega ?? 0) * putVolume) * 100;
