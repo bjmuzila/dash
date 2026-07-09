@@ -177,9 +177,11 @@ function parseExpiration(items: unknown[], expDate: string, spot: number): Map<n
   return cells;
 }
 
+// rows=21 → 10 strikes above spot + 10 below + the ATM row itself (wing = 10
+// each side, per the visibleStrikes windowing below).
 export default function CompactOptionChain({
   ticker,
-  rows = 9,
+  rows = 21,
 }: {
   ticker: string;
   rows?: number;

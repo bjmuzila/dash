@@ -13,11 +13,12 @@ import { PageShell } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsCandlesCard from "@/components/dashboard/EsCandlesCard";
 import ChainStatsBar from "@/components/dashboard/ChainStatsBar";
-// Trimmed option chain: same GEX math + data source as /options-chain, but
-// fixed to 4 columns (0DTE/1DTE/closest weekly/closest monthly) with none of
-// that page's own toolbar/ticker input/mode toggles — this page's
-// TickerSwitcher drives it.
-import CompactOptionChain from "@/components/dashboard/CompactOptionChain";
+// The exact same option chain component/UI as the standalone /options-chain
+// route — same toolbar, ticker input/GO, intensity slider, greek/data-mode
+// toggles (change-mode toggle removed site-wide, see that page). The only
+// difference here is expirySelection="key": fixed 0DTE/1DTE/closest weekly/
+// closest monthly columns instead of the next 14 sequential expirations.
+import OptionsChainPage from "@/app/options-chain/page";
 // Just the 4 live gauges from /greeks (GEX/DEX/CHEX/VEX) — always-on WS feed,
 // no toolbar/graphs/basis toggle/idle timeout like the full page has.
 import LiveGreeksGauges from "@/components/dashboard/LiveGreeksGauges";
@@ -380,14 +381,18 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
 }
 
 // ── option chain (left column, main) ────────────────────────────────────────
-// CompactOptionChain fixed to 0DTE/1DTE/closest weekly/closest monthly for the
-// active ticker (from TickerSwitcher). Same GEX math + data source as the
-// full /options-chain page, no toolbar.
-function OptionChainPanel({ ticker }: { ticker: string }) {
+// The real /options-chain page, embedded as-is (own toolbar, ticker input/GO,
+// intensity slider, greek/data-mode toggles) — expirySelection="key" swaps
+// its column selection to 0DTE/1DTE/closest weekly/closest monthly instead of
+// the standalone route's next-14-sequential default, and fixedStrikeWindow=10
+// locks the strike window to exactly 10 above spot + 10 below (the "% strikes"
+// toolbar control is hidden in this mode). It manages its own ticker state
+// independently of this page's TickerSwitcher (no ticker prop).
+function OptionChainPanel() {
   return (
-    <DCard title="Option chain" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <CompactOptionChain ticker={ticker} rows={9} />
-    </DCard>
+    <div style={{ flex: 1, minHeight: 0, borderRadius: 20, overflow: "hidden" }}>
+      <OptionsChainPage expirySelection="key" fixedStrikeWindow={10} />
+    </div>
   );
 }
 
@@ -429,10 +434,11 @@ function EsCandlesPanel() {
 }
 
 export default function NewHomePage() {
-  // Active ticker lives here — switching it (via TickerSwitcher) re-labels the
-  // page and drives the stats bar + option chain below. LiveGreeksGauges is
-  // ticker-agnostic (same /ws/gex totals feed as /greeks). The Stats panel is
-  // still a static "--" placeholder.
+  // Active ticker lives here — switching it (via TickerSwitcher) drives the
+  // ChainStatsBar below. The embedded OptionsChainPage manages its own ticker
+  // independently (own ticker input/GO, same as opening the standalone
+  // route); LiveGreeksGauges is ticker-agnostic (same /ws/gex totals feed as
+  // /greeks). The Stats panel is still a static "--" placeholder.
   const [ticker, setTicker] = useState("SPX");
 
   return (
@@ -442,7 +448,7 @@ export default function NewHomePage() {
         {/* left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <ChainStatsBar ticker={ticker} />
-          <OptionChainPanel ticker={ticker} />
+          <OptionChainPanel />
         </div>
 
         {/* right column */}

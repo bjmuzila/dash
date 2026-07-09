@@ -189,8 +189,47 @@ const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
   "60": "60m Δ",
 };
 
-// Number of expirations shown side-by-side across the matrix.
+// Number of expirations shown side-by-side across the matrix (sequential mode).
 const EXP_COLUMNS = 14;
+
+// "key" mode (used by the /new-home embed): instead of the next N sequential
+// expirations from the user's selected date, show exactly 0DTE / 1DTE /
+// closest weekly (nearest Friday listing) / closest monthly (nearest 3rd-
+// Friday standard monthly listing). Each slot is claimed independently so a
+// Friday 0DTE doesn't also swallow the weekly column.
+function pickKeyExpirations(all: Array<{ value: string; label: string }>): Array<{ value: string; label: string }> {
+  const todayKey = etDateKey(etToday());
+  const future = [...all].filter((e) => e.value >= todayKey).sort((a, b) => a.value.localeCompare(b.value));
+  if (!future.length) return [];
+
+  const claimed = new Set<string>();
+  const out: Array<{ value: string; label: string }> = [];
+
+  const zeroDte = future[0];
+  claimed.add(zeroDte.value);
+  out.push(zeroDte);
+
+  const oneDte = future.find((e) => !claimed.has(e.value));
+  if (oneDte) { claimed.add(oneDte.value); out.push(oneDte); }
+
+  const isFriday = (iso: string) => new Date(iso + "T12:00:00").getDay() === 5;
+  const weekly = future.find((e) => !claimed.has(e.value) && isFriday(e.value)) ?? future.find((e) => !claimed.has(e.value));
+  if (weekly) { claimed.add(weekly.value); out.push(weekly); }
+
+  const isThirdFriday = (iso: string) => {
+    const d = new Date(iso + "T12:00:00");
+    if (d.getDay() !== 5) return false;
+    const day = d.getDate();
+    return day >= 15 && day <= 21;
+  };
+  const monthly =
+    future.find((e) => !claimed.has(e.value) && isThirdFriday(e.value)) ??
+    future.find((e) => !claimed.has(e.value) && isFriday(e.value)) ??
+    future.find((e) => !claimed.has(e.value));
+  if (monthly) { claimed.add(monthly.value); out.push(monthly); }
+
+  return out;
+}
 
 // Per-strike, per-expiration greek values.
 type GreekCell = {
@@ -470,7 +509,22 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
   return cells;
 }
 
-export default function OptionsChainPage() {
+export default function OptionsChainPage({
+  expirySelection = "sequential",
+  fixedStrikeWindow,
+}: {
+  // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
+  // expirations starting at the user's selected date. "key" (/new-home embed):
+  // fixed 0DTE/1DTE/weekly/monthly set via pickKeyExpirations, ignoring
+  // selectedExpiry/displayPercent's usual windowing role for column selection.
+  expirySelection?: "sequential" | "key";
+  // When set, the visible strike window is always exactly this many strikes
+  // above spot + the same number below (+ the ATM row), ignoring the "%
+  // strikes" toolbar control entirely — used by the /new-home embed for a
+  // literal "10 above / 10 below" default instead of the standalone route's
+  // percentage-of-total-strikes windowing.
+  fixedStrikeWindow?: number;
+} = {}) {
   // Fallback calendar list (used only until/if the per-ticker expirations
   // fetch resolves). Real listings come from /api/expirations so we never
   // offer a date the ticker doesn't actually trade (e.g. NVDA has no Monday
@@ -549,10 +603,17 @@ export default function OptionsChainPage() {
     const token = loadTokenRef.current;
     const bust = bustCache ? `&noCache=1` : "";
 
-    // 7 expirations: the selected one + the next 6 from the listed expiries.
     const all = expiriesRef.current.length ? expiriesRef.current : expiries;
-    const startIdx = Math.max(0, all.findIndex(e => e.value === startExp));
-    const targets = all.slice(startIdx, startIdx + EXP_COLUMNS);
+    // "key" mode: fixed 0DTE/1DTE/weekly/monthly, independent of startExp.
+    // "sequential" mode (default): the selected expiry + the next N from the
+    // listed expiries.
+    let targets: Array<{ value: string; label: string }>;
+    if (expirySelection === "key") {
+      targets = pickKeyExpirations(all);
+    } else {
+      const startIdx = Math.max(0, all.findIndex(e => e.value === startExp));
+      targets = all.slice(startIdx, startIdx + EXP_COLUMNS);
+    }
     if (!targets.length) targets.push({ value: startExp, label: startExp });
 
     try {
@@ -833,15 +894,20 @@ export default function OptionsChainPage() {
   // we pad that side with nulls so ATM stays centered no matter the window size.
   const visibleStrikes = useMemo(() => {
     if (!allStrikes.length) return [] as (number | null)[];
-    if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a) as (number | null)[];
-
     const ascending = [...allStrikes].sort((a, b) => a - b);
     const atmIndex = ascending.findIndex(s => s === nearestStrike);
     if (atmIndex < 0) return [...ascending].sort((a, b) => b - a) as (number | null)[];
 
-    let targetCount = Math.max(11, Math.round(ascending.length * (autoDisplayPercent / 100)));
-    if (targetCount % 2 === 0) targetCount += 1; // force odd → real center row
-    const wing = (targetCount - 1) / 2; // strikes on each side of ATM
+    let wing: number;
+    if (fixedStrikeWindow != null) {
+      // Literal N above / N below, ignoring the % control entirely.
+      wing = fixedStrikeWindow;
+    } else {
+      if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a) as (number | null)[];
+      let targetCount = Math.max(11, Math.round(ascending.length * (autoDisplayPercent / 100)));
+      if (targetCount % 2 === 0) targetCount += 1; // force odd → real center row
+      wing = (targetCount - 1) / 2; // strikes on each side of ATM
+    }
 
     const out: (number | null)[] = [];
     // High → low: above ATM (descending), then ATM, then below ATM.
@@ -855,7 +921,7 @@ export default function OptionsChainPage() {
       out.push(idx >= 0 ? ascending[idx] : null);
     }
     return out;
-  }, [allStrikes, autoDisplayPercent, nearestStrike]);
+  }, [allStrikes, autoDisplayPercent, nearestStrike, fixedStrikeWindow]);
 
   // Active-greek value lookup: column index → strike → number.
   const valueAt = useCallback(
@@ -881,6 +947,18 @@ export default function OptionsChainPage() {
       return { max: sorted[0] ?? 1, top3: sorted.slice(0, 3) };
     });
   }, [columns, visibleStrikes, valueAt]);
+
+  // Normalized GEX (%) per column = |strike net GEX| / Σ|net GEX| × 100,
+  // summed over the WHOLE expiration's chain (not just the visible strike
+  // window) so the % reflects true share of that expiration's total gamma.
+  const colGexTotalAbs = useMemo(() => {
+    return columns.map(col => {
+      if (!col) return 0;
+      let total = 0;
+      col.cells.forEach(cell => { total += Math.abs(cell.gex); });
+      return total;
+    });
+  }, [columns]);
 
   // MVC per column = the visible strike with the highest ABSOLUTE net GEX.
   // Always keyed on GEX (the MVC definition), independent of the active greek.
@@ -1001,9 +1079,10 @@ export default function OptionsChainPage() {
     };
   }, [emLevels, visibleStrikes]);
 
-  // Always render EXP_COLUMNS slots so the grid keeps a stable width even before
-  // all 7 expirations resolve (or when a ticker lists fewer than 7).
-  const gridCols = Math.max(columns.length, EXP_COLUMNS);
+  // Always render the target slot count so the grid keeps a stable width even
+  // before all expirations resolve — EXP_COLUMNS (14) in sequential mode, 4 in
+  // key mode (0DTE/1DTE/weekly/monthly).
+  const gridCols = Math.max(columns.length, expirySelection === "key" ? 4 : EXP_COLUMNS);
 
   // EM bands only apply to current-week expirations. Mark which visible columns
   // qualify so the band draws across only those columns.
@@ -1016,7 +1095,7 @@ export default function OptionsChainPage() {
   );
   const anyCurrentWeek = colIsCurrentWeek.some(Boolean);
 
-  const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
+  const autoPercentNote = fixedStrikeWindow == null && autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -1086,12 +1165,14 @@ export default function OptionsChainPage() {
           {QUOTE_PANEL_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
         </datalist>
 
-        <CustomDropdown
-          value={displayPercent}
-          options={DISPLAY_PERCENTS}
-          onChange={setDisplayPercent}
-          formatLabel={v => `${v}% strikes`}
-        />
+        {fixedStrikeWindow == null && (
+          <CustomDropdown
+            value={displayPercent}
+            options={DISPLAY_PERCENTS}
+            onChange={setDisplayPercent}
+            formatLabel={v => `${v}% strikes`}
+          />
+        )}
 
         <button
           onClick={doGo}
@@ -1150,20 +1231,6 @@ export default function OptionsChainPage() {
           active={greekMode}
           onChange={(v) => setGreekMode(v as GreekMode)}
         />
-
-        <span style={{ color: HT.border }}>|</span>
-
-        <SegGroup
-          options={CHANGE_MODES.map(m => ({ label: CHANGE_MODE_LABEL[m], value: m }))}
-          active={changeMode}
-          onChange={(v) => setChangeMode(v as ChangeMode)}
-        />
-        {changeMode !== "live" && (
-          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
-            color: changeMeta.hasData ? HT.orange : HT.muted }}>
-            {changeMeta.hasData ? `Δ ${changeMeta.expiries.size} exp` : "no history (not on watchlist)"}
-          </span>
-        )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: HT.green }} />
@@ -1315,6 +1382,11 @@ export default function OptionsChainPage() {
                       ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
                       : scale;
                     const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
+                    const gexTotalAbs = colGexTotalAbs[colIdx] ?? 0;
+                    const normalizedGexPct =
+                      !isChangeCol && greekMode === "gex" && value != null && gexTotalAbs > 0
+                        ? (Math.abs(value) / gexTotalAbs) * 100
+                        : null;
                     const pin = pinByCol[colIdx];
                     const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
                     const isFirst = posInRow === 0;
@@ -1353,6 +1425,11 @@ export default function OptionsChainPage() {
                           </span>
                         )}
                         {value == null ? "·" : fmtMoney(value)}
+                        {normalizedGexPct != null && (
+                          <div style={{ fontSize: 9, fontWeight: 600, opacity: 0.75, color: "#cfe8ff" }}>
+                            {normalizedGexPct.toFixed(1)}%
+                          </div>
+                        )}
                       </div>
                     );
                   })}
