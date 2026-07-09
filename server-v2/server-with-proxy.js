@@ -33,6 +33,7 @@ dotenv.config({ path: path.join(ROOT_DIR, '.env.local'), override: true });
 const next = require('next');
 const marketState = require('./state/market-state');
 const { getFlowGexHistoryWindow } = require('./state/flow-gex-history');
+const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = require('./state/ticker-wall-recorder');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
@@ -260,6 +261,26 @@ async function handleProxyRest(req, res) {
     handleGexHistory(req, res).catch((e) => {
       sendJson(res, 500, { error: 'gex-history failed', detail: String(e?.message || e) });
     });
+    return true;
+  }
+
+  // /proxy/wall-history?ticker=NDX&ages=5,15,30,60
+  // Server-recorded call/put GEX wall for NDX/SPY/QQQ (ticker-wall-recorder.js),
+  // shaped for the Walls & Flows tab: { ages:[...], windows:[{age,callWall,putWall}] }.
+  // Unlike /proxy/gex-history (SPX only, per-strike), this reads pre-computed
+  // wall snapshots so it survives regardless of whether a browser is open.
+  if (pathname === '/proxy/wall-history') {
+    const wallUrl = new URL(req.url || '/', 'http://localhost');
+    const ticker = (wallUrl.searchParams.get('ticker') || '').trim().toUpperCase();
+    const ages = (wallUrl.searchParams.get('ages') || '5,15,30,60')
+      .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+    if (!ticker || !ages.length) {
+      sendJson(res, 200, { ages, windows: [] });
+      return true;
+    }
+    getTickerWallHistory(ticker, ages)
+      .then((result) => sendJson(res, 200, result))
+      .catch((e) => sendJson(res, 500, { error: 'wall-history failed', detail: String(e?.message || e) }));
     return true;
   }
 
@@ -1918,6 +1939,11 @@ async function main() {
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();
+    // NDX/SPY/QQQ 0DTE call/put wall recorder: writes one row per ticker every
+    // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side
+    // instead of depending on a browser tab staying open. NDX runs 24/7;
+    // SPY/QQQ only tick during RTH. Feeds /proxy/wall-history.
+    startTickerWallRecorder();
     // Dark pool (TRF) print recorder: separate Theta STOCK trade-stream connection,
     // filters exchange codes 57/58/59, writes to darkpool_prints for the /flow
     // page's per-ticker Dark Pool card. Requires a Theta Stocks Pro subscription.

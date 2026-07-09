@@ -2449,84 +2449,26 @@ type WallsFlowsRow = {
   symbol: string;
   spot: number | null;
   windows: WallsFlowsWindow[];
-  // true for NDX/SPY/QQQ: their 5/15/30/60m windows come from a rolling
-  // buffer this browser builds client-side (see WF_BUFFER_* below), not from
-  // Postgres like SPX. Windows show "—" until enough time has passed since
-  // this browser started polling that ticker.
+  // true for NDX/SPY/QQQ: their 5/15/30/60m windows come from the server-side
+  // ticker-wall-recorder (Postgres, ticker_wall_snapshots), which is younger
+  // than SPX's option_strike_gex_history. Windows show "—" until enough time
+  // has passed since the recorder started ticking for that ticker.
   buffered: boolean;
   ts: number;
 };
 
-// SPX keeps the full 5/15/30/60m historical windows (backed by
-// option_strike_gex_history, which today only ever gets written by the single
-// shared live SPX feed). SPY/QQQ/NDX don't have that server-side history, so
-// each browser builds its own rolling buffer client-side (localStorage) from
-// repeated live snapshots instead — a real 5/15/30/60m-ago comparison, just
-// warmed up locally rather than backed by the DB. SPX and NDX run all day and
-// all night; SPY/QQQ are RTH-only (their 0DTE chains aren't meaningfully
-// tradable outside 9:30–16:00 ET).
+// SPX keeps the full 5/15/30/60m historical windows, backed by
+// option_strike_gex_history (written by the single shared live SPX feed).
+// NDX/SPY/QQQ get the same 5/15/30/60m windows from a dedicated server-side
+// recorder (server-v2/state/ticker-wall-recorder.js → ticker_wall_snapshots,
+// read via /proxy/wall-history) that ticks every 60s on its own — independent
+// of whether any browser has this tab open, so the data persists across
+// devices/reloads. SPX and NDX run all day and all night; SPY/QQQ are
+// RTH-only (their 0DTE chains aren't meaningfully tradable outside
+// 9:30–16:00 ET).
 const WALLS_FLOWS_SYMBOLS = ["SPX", "NDX", "SPY", "QQQ"] as const;
 const WALLS_FLOWS_RTH_ONLY: Record<string, boolean> = { SPX: false, NDX: false, SPY: true, QQQ: true };
 const WALLS_FLOWS_AGES = ["5", "15", "30", "60"] as const;
-
-// ── Client-side rolling buffer for NDX/SPY/QQQ (no server-side history) ──────
-type WfBufEntry = { ts: number; callWall: WallLevel; putWall: WallLevel };
-const WF_BUFFER_MAX_AGE_MS = 65 * 60 * 1000; // keep ~65 min of snapshots
-const WF_BUFFER_TOLERANCE_MS = 4 * 60 * 1000; // "N min ago" must match within 4 min
-
-function wfBufferKey(ticker: string): string {
-  return `cbedge_walls_flows_buffer_${ticker}`;
-}
-
-function loadWfBuffer(ticker: string): WfBufEntry[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(wfBufferKey(ticker));
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveWfBuffer(ticker: string, buf: WfBufEntry[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(wfBufferKey(ticker), JSON.stringify(buf));
-  } catch {
-    // localStorage full/unavailable — buffer just won't persist across reloads.
-  }
-}
-
-// Append this poll's snapshot, prune anything older than WF_BUFFER_MAX_AGE_MS,
-// persist, and return the pruned buffer for immediate use.
-function recordWfSnapshot(ticker: string, callWall: WallLevel, putWall: WallLevel): WfBufEntry[] {
-  const now = Date.now();
-  const buf = loadWfBuffer(ticker);
-  buf.push({ ts: now, callWall, putWall });
-  const pruned = buf.filter((e) => now - e.ts <= WF_BUFFER_MAX_AGE_MS);
-  saveWfBuffer(ticker, pruned);
-  return pruned;
-}
-
-// Nearest buffered snapshot to (now − ageMin), within tolerance. Returns nulls
-// when the buffer doesn't reach back that far yet (first ~N minutes after this
-// browser starts polling this ticker).
-function wallAtAge(buf: WfBufEntry[], ageMin: number): { callWall: WallLevel; putWall: WallLevel } {
-  if (!buf.length) return { callWall: null, putWall: null };
-  const target = Date.now() - ageMin * 60_000;
-  let best = buf[0];
-  let bestDiff = Math.abs(buf[0].ts - target);
-  for (const e of buf) {
-    const diff = Math.abs(e.ts - target);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = e;
-    }
-  }
-  if (bestDiff > WF_BUFFER_TOLERANCE_MS) return { callWall: null, putWall: null };
-  return { callWall: best.callWall, putWall: best.putWall };
-}
 
 function isRthNowET(): boolean {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -2648,22 +2590,27 @@ function useWallsFlows() {
         bySymbol.SPX = { symbol: "SPX", spot: null, windows, buffered: false, ts: Date.now() };
       }
 
-      // NDX/SPY/QQQ — 5/15/30/60m windows from each browser's own rolling
-      // buffer (no server-side history for these tickers). Every poll fetches
-      // the current wall and records it into the buffer, then each age window
-      // is filled from whichever buffered snapshot lands closest to that time
-      // ago. NDX runs 24/7; SPY/QQQ only fetch/buffer during RTH.
+      // NDX/SPY/QQQ — 5/15/30/60m windows from the server-side recorder
+      // (server-v2/state/ticker-wall-recorder.js), which ticks every 60s on
+      // its own regardless of whether any browser has this tab open. Spot is
+      // still pulled live for display. NDX runs 24/7; SPY/QQQ are RTH-only.
       for (const sym of ["NDX", "SPY", "QQQ"] as const) {
         if (WALLS_FLOWS_RTH_ONLY[sym] && !rthOpen) {
           skipped.push(sym);
           continue;
         }
-        const live = await fetchLiveWall(sym).catch(() => null);
-        const buf = recordWfSnapshot(sym, live?.callWall ?? null, live?.putWall ?? null);
-        const windows: WallsFlowsWindow[] = WALLS_FLOWS_AGES.map((age) => {
-          const { callWall, putWall } = wallAtAge(buf, Number(age));
-          return { age, callWall, putWall };
-        });
+        const [live, history] = await Promise.all([
+          fetchLiveWall(sym).catch(() => null),
+          fetch(`/proxy/wall-history?ticker=${encodeURIComponent(sym)}&ages=${WALLS_FLOWS_AGES.join(",")}`)
+            .then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        ]);
+        const windows: WallsFlowsWindow[] = Array.isArray(history?.windows) && history.windows.length
+          ? history.windows.map((w: { age: string; callWall: WallLevel; putWall: WallLevel }) => ({
+              age: String(w.age),
+              callWall: w.callWall ?? null,
+              putWall: w.putWall ?? null,
+            }))
+          : WALLS_FLOWS_AGES.map((age) => ({ age, callWall: null, putWall: null }));
         bySymbol[sym] = { symbol: sym, spot: live?.spot ?? null, windows, buffered: true, ts: Date.now() };
       }
 
@@ -2705,7 +2652,7 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {buffered && (
           <div style={{ fontSize: 15, color: HOME_THEME.text }}>
-            {`Browser-buffered${spot ? ` · spot ${spot.toFixed(2)}` : ""} — windows fill in as history accumulates`}
+            {`Server-recorded${spot ? ` · spot ${spot.toFixed(2)}` : ""} — windows fill in as history accumulates`}
           </div>
         )}
         {/* Call/Put Walls by Timeframe */}
@@ -2768,7 +2715,7 @@ function WallsFlowsTab() {
           About This Tab
         </div>
         <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          All four tickers show 5m, 15m, 30m, and 60m call/put GEX wall windows. SPX is backed by stored 0DTE history in Postgres. NDX, SPY, and QQQ have no stored history, so each browser builds its own rolling buffer from repeated live snapshots — those windows show "—" until enough time has passed since this browser started polling, then fill in for real.
+          All four tickers show 5m, 15m, 30m, and 60m call/put GEX wall windows, backed by Postgres history that keeps recording whether or not anyone has this tab open. NDX/SPY/QQQ use a newer recorder than SPX's, so their windows show "—" until enough time has passed since that recorder started ticking, then fill in for real.
           SPX and NDX run all day and all night; SPY and QQQ are RTH-gated (9:30–16:00 ET) since their 0DTE chains only matter during market hours. Call wall = largest positive net GEX (resistance), Put wall = largest negative net GEX (support/acceleration).
         </div>
       </div>
@@ -2789,7 +2736,7 @@ function WallsFlowsTab() {
       )}
 
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
-        SPX walls sourced from 0DTE option chain history (option_strike_gex_history). NDX/SPY/QQQ walls sourced from a rolling browser-local buffer of each ticker's own live 0DTE chain. Call wall = dealers long gamma, Put wall = dealers short gamma.
+        SPX walls sourced from 0DTE option chain history (option_strike_gex_history). NDX/SPY/QQQ walls sourced from the server-side ticker wall recorder (ticker_wall_snapshots). Call wall = dealers long gamma, Put wall = dealers short gamma.
       </div>
     </>
   );
