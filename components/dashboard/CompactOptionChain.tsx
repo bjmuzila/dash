@@ -22,6 +22,12 @@ function rgba(hex: string, a: number): string {
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
+// Lighter/softer text tones derived from the theme's white (HT.text) — used to
+// dial down the chain grid's heaviness. Neutral text on the dark bg, and a
+// slightly brighter tone for numbers sitting on colored metric cells.
+const TEXT_SOFT = rgba(HT.text, 0.72);
+const VALUE_SOFT = rgba(HT.text, 0.9);
+
 // ── date/session helpers (copied from /options-chain, trimmed) ─────────────
 function etToday(): Date {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -334,7 +340,7 @@ export default function CompactOptionChain({
           gridTemplateColumns: `56px repeat(${gridCols}, minmax(0,1fr))`,
           fontSize: 15,
           letterSpacing: "0.06em",
-          color: HT.text,
+          color: TEXT_SOFT,
           borderBottom: `1px solid ${HT.border}`,
           paddingBottom: 8,
           marginBottom: 6,
@@ -343,10 +349,10 @@ export default function CompactOptionChain({
         <div />
         {Array.from({ length: gridCols }).map((_, i) => (
           <div key={i} style={{ textAlign: "center" }}>
-            <div style={{ fontWeight: 800, color: LIGHT_BLUE, fontSize: 13, letterSpacing: "0.08em" }}>
+            <div style={{ fontWeight: 600, color: LIGHT_BLUE, fontSize: 13, letterSpacing: "0.08em" }}>
               {columns[i]?.label ?? keyExpiries[i]?.label ?? "—"}
             </div>
-            <div style={{ fontWeight: 700 }}>{columns[i] ? fmtExpHeader(columns[i].expiration) : ""}</div>
+            <div style={{ fontWeight: 500 }}>{columns[i] ? fmtExpHeader(columns[i].expiration) : ""}</div>
           </div>
         ))}
       </div>
@@ -369,7 +375,7 @@ export default function CompactOptionChain({
                 padding: "4px 0",
               }}
             >
-              <div style={{ fontSize: 15, textAlign: "center", fontWeight: 800, color: isAtm ? LIGHT_BLUE : HT.text, fontFamily: "var(--font-mono, monospace)" }}>
+              <div style={{ fontSize: 15, textAlign: "center", fontWeight: 500, color: isAtm ? LIGHT_BLUE : TEXT_SOFT, fontFamily: "var(--font-mono, monospace)" }}>
                 {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
               </div>
               {Array.from({ length: gridCols }).map((_, colIdx) => {
@@ -382,8 +388,8 @@ export default function CompactOptionChain({
                     style={{
                       textAlign: "center",
                       fontSize: 15,
-                      fontWeight: 700,
-                      color: value == null ? HT.text : "#fff",
+                      fontWeight: 500,
+                      color: value == null ? TEXT_SOFT : VALUE_SOFT,
                       opacity: value == null ? 0.3 : 1,
                       fontFamily: "var(--font-mono, monospace)",
                       background: value != null ? metricBg(value, scale.max, scale.top3) : "transparent",
