@@ -3969,35 +3969,6 @@ function RegimeEngineTab() {
             </Card>
           </div>
 
-          {backtests && (
-            <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
-              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={16}>
-                <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em", color: HOME_THEME.text, textTransform: "uppercase" }}>
-                  Same Strategy · No Regime Gate
-                </div>
-                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>20-bar Donchian breakout, always on</div>
-                <div style={{ fontSize: 22, fontWeight: 900, color: backtests.naive.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
-                  {backtests.naive.returnPct >= 0 ? "+" : ""}{backtests.naive.returnPct.toFixed(2)}%
-                </div>
-                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>
-                  Max drawdown {backtests.naive.maxDrawdownPct.toFixed(1)}% · {backtests.naive.bars} bars
-                </div>
-              </Card>
-              <div style={{ display: "flex", alignItems: "center", fontSize: 15, fontWeight: 800, color: HOME_THEME.text, padding: "0 4px" }}>VS</div>
-              <Card variant="budget" accent={LIGHT_BLUE} style={{ flex: 1 }} padding={16}>
-                <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em", color: HOME_THEME.text, textTransform: "uppercase" }}>
-                  Same Strategy · Gated to Trend
-                </div>
-                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>Same rule, flat unless decoded state = Trend</div>
-                <div style={{ fontSize: 22, fontWeight: 900, color: backtests.gated.returnPct >= 0 ? HOME_THEME.green : SOFT_RED, marginTop: 4 }}>
-                  {backtests.gated.returnPct >= 0 ? "+" : ""}{backtests.gated.returnPct.toFixed(2)}%
-                </div>
-                <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>
-                  Max drawdown {backtests.gated.maxDrawdownPct.toFixed(1)}% · {backtests.gated.bars} bars
-                </div>
-              </Card>
-            </div>
-          )}
 
           <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", letterSpacing: "0.04em" }}>
             HMM-3 · Baum-Welch fit · in-sample decode (no walk-forward yet) · prototype backtest, not a trading recommendation
