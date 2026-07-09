@@ -2254,12 +2254,6 @@ class TastytradeProxy {
     marketState.setStatus({ chartReady: alreadyWarm });
     this.firstSubAt = Date.now();
     this._resubscribe();
-    // Zero all volumes for the new expiry so strikes without fresh trades don't
-    // fall back to stale REST dayVolume (e.g., at session roll or startup).
-    this.volumes.clear();
-    for (const c of this._activeContracts()) {
-      this.volumes.set(c.streamerSymbol, 0);
-    }
     // Backfill the new expiry's OI immediately, and resume fast polling until the
     // new expiry's coverage is ready again.
     this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
