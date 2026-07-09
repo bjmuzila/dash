@@ -2487,29 +2487,28 @@ function useWallsFlows() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
 
+      // baselines: { [strike]: { [age]: net_gex } } — the net GEX at that strike as of
+      // N minutes ago. The call wall is the strike with the largest positive net GEX
+      // (dealers long gamma, resistance); the put wall is the strike with the most
+      // negative net GEX (dealers short gamma, support/acceleration).
       const baselines: Record<string, Record<string, number>> = json?.baselines ?? {};
-
-      // Find strikes with biggest GEX swings (highest positive = calls, lowest negative = puts)
-      // For simplicity, showing the aggregate swing across key strikes
       const ages = ["5", "15", "30", "60"];
-      const swings: Record<string, number | null> = {};
 
-      for (const age of ages) {
-        const values = Object.values(baselines).map((b: any) => Number(b[age]) || 0);
-        const maxPositive = Math.max(0, ...values);
-        const maxNegative = Math.min(0, ...values);
-        swings[age] = Math.max(Math.abs(maxPositive), Math.abs(maxNegative)) > 0 ? (maxPositive + maxNegative) / 2 : 0;
-      }
+      const windows: WallsFlowsWindow[] = ages.map((age) => {
+        let callWall: WallLevel = null;
+        let putWall: WallLevel = null;
+        for (const [strikeStr, byAge] of Object.entries(baselines)) {
+          const v = Number((byAge as Record<string, number>)[age]);
+          if (!Number.isFinite(v)) continue;
+          const strike = Number(strikeStr);
+          if (v > 0 && (!callWall || v > callWall.value)) callWall = { strike, value: v };
+          if (v < 0 && (!putWall || v < putWall.value)) putWall = { strike, value: v };
+        }
+        return { age, callWall, putWall };
+      });
 
       const bySymbol: Record<string, WallsFlowsRow> = {
-        SPX: {
-          symbol: "SPX",
-          gexSwing5m: Number(swings["5"]) || 0,
-          gexSwing15m: Number(swings["15"]) || 0,
-          gexSwing30m: Number(swings["30"]) || 0,
-          gexSwing60m: Number(swings["60"]) || 0,
-          ts: Date.now(),
-        },
+        SPX: { symbol: "SPX", windows, ts: Date.now() },
       };
 
       setData(bySymbol);
@@ -2530,26 +2529,40 @@ function useWallsFlows() {
 }
 
 function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow }) {
-  const { gexSwing5m, gexSwing15m, gexSwing30m, gexSwing60m } = row;
+  const { windows } = row;
 
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* GEX Swings by Timeframe */}
+        {/* Call/Put Walls by Timeframe */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-            {[
-              { label: "5m Swing", value: gexSwing5m },
-              { label: "15m Swing", value: gexSwing15m },
-              { label: "30m Swing", value: gexSwing30m },
-              { label: "60m Swing", value: gexSwing60m },
-            ].map(({ label, value }) => (
-              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${windows.length}, 1fr)`, gap: 12 }}>
+            {windows.map(({ age, callWall, putWall }) => (
+              <div key={age} style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>
-                  {label}
+                  {age}m
                 </div>
-                <div style={{ fontSize: 16, fontWeight: 900, color: (value ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                  {value != null ? `${value > 0 ? "+" : ""}${(value / 1e6).toFixed(1)}M` : "—"}
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Call Wall</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.green }}>
+                    {callWall ? `${callWall.strike}` : "—"}
+                  </div>
+                  {callWall && (
+                    <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                      {`+${(callWall.value / 1e6).toFixed(1)}M`}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Put Wall</div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.red }}>
+                    {putWall ? `${putWall.strike}` : "—"}
+                  </div>
+                  {putWall && (
+                    <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                      {`${(putWall.value / 1e6).toFixed(1)}M`}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -2582,7 +2595,7 @@ function WallsFlowsTab() {
           About This Tab
         </div>
         <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          Live GEX change over 5m, 15m, 30m, and 60m windows from the 0DTE options chain. Positive = dealers becoming long gamma (supportive), Negative = dealers becoming short gamma (volatile).
+          Top call/put GEX wall strikes over 5m, 15m, 30m, and 60m windows from the 0DTE options chain. Call wall = strike with the largest positive net GEX (resistance), Put wall = strike with the largest negative net GEX (support/acceleration).
           Runs continuously all day and all night, no market-hours gating.
         </div>
       </div>
@@ -2601,7 +2614,7 @@ function WallsFlowsTab() {
       )}
 
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
-        GEX swings sourced from 0DTE option chain history (option_strike_gex_history). Positive swing = dealers long gamma, Negative = short gamma.
+        Walls sourced from 0DTE option chain history (option_strike_gex_history). Call wall = dealers long gamma, Put wall = dealers short gamma.
       </div>
     </>
   );
