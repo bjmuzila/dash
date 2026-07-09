@@ -10,18 +10,17 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { PageShell } from "@/components/shared/PageCard";
-import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle, statTileStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsCandlesCard from "@/components/dashboard/EsCandlesCard";
 import ChainStatsBar from "@/components/dashboard/ChainStatsBar";
-// The exact same option chain component used on the standalone /options-chain
-// route — own toolbar, ticker input, GO, mode toggles, everything. Rendered
-// here as-is (not wrapped in DCard — it already has its own themed shell), so
-// it's pixel-identical to the dashboard page, just embedded in this grid cell.
-import OptionsChainPage from "@/app/options-chain/page";
-// The exact same greeks page used on the standalone /greeks route (GEX/DEX/
-// CHEX/VEX gauges + trend graphs, own toolbar/basis toggle) — same embed
-// pattern as OptionsChainPage above.
-import GreeksPage from "@/app/greeks/page";
+// Trimmed option chain: same GEX math + data source as /options-chain, but
+// fixed to 4 columns (0DTE/1DTE/closest weekly/closest monthly) with none of
+// that page's own toolbar/ticker input/mode toggles — this page's
+// TickerSwitcher drives it.
+import CompactOptionChain from "@/components/dashboard/CompactOptionChain";
+// Just the 4 live gauges from /greeks (GEX/DEX/CHEX/VEX) — always-on WS feed,
+// no toolbar/graphs/basis toggle/idle timeout like the full page has.
+import LiveGreeksGauges from "@/components/dashboard/LiveGreeksGauges";
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -82,9 +81,6 @@ function saveFavoriteTickers(list: string[]) {
     /* ignore */
   }
 }
-
-// ── static placeholder data (UI only) ───────────────────────────────────────
-const STAT_CARDS = ["GEX", "DEX", "FLIP", "IV"];
 
 // ── ticker switcher: click the chip to type any ticker (uppercased, Enter/blur
 // commits, Escape cancels); the whole page re-keys off `ticker`, so every
@@ -383,56 +379,26 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
   );
 }
 
-// ── stat cards row (left column, top) — statTileStyle, no border ───────────
-// First tile shows the active ticker (from TickerSwitcher) so switching
-// tickers visibly re-labels the page, even though values stay static "--".
-function StatCardsRow({ ticker }: { ticker: string }) {
-  const labels = [ticker, ...STAT_CARDS];
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${labels.length}, minmax(0,1fr))`, gap: 8 }}>
-      {labels.map((label) => (
-        <div
-          key={label}
-          style={{
-            ...statTileStyle,
-            padding: "12px 8px",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 5,
-          }}
-        >
-          <div style={{ fontSize: 15, letterSpacing: "0.12em", color: HOME_THEME.text, textTransform: "uppercase" }}>{label}</div>
-          <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono, monospace)" }}>--</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // ── option chain (left column, main) ────────────────────────────────────────
-// The real /options-chain page component, embedded as-is — its own toolbar,
-// ticker input/GO, intensity slider, greek/data/change-mode toggles, all of
-// it. It manages its own ticker state independently of this page's
-// TickerSwitcher (it has no ticker prop to accept), same as opening the
-// standalone route. Rounded so it doesn't run edge-to-edge in this grid cell.
-function OptionChainPanel() {
+// CompactOptionChain fixed to 0DTE/1DTE/closest weekly/closest monthly for the
+// active ticker (from TickerSwitcher). Same GEX math + data source as the
+// full /options-chain page, no toolbar.
+function OptionChainPanel({ ticker }: { ticker: string }) {
   return (
-    <div style={{ flex: 1, minHeight: 0, borderRadius: 20, overflow: "hidden" }}>
-      <OptionsChainPage />
-    </div>
+    <DCard title="Option chain" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <CompactOptionChain ticker={ticker} rows={9} />
+    </DCard>
   );
 }
 
 // ── greeks (right column) ───────────────────────────────────────────────────
-// The real /greeks page component, embedded as-is — GEX/DEX/CHEX/VEX gauges,
-// trend graphs, basis toggle, its own toolbar. Same pattern as
-// OptionChainPanel: not wrapped in DCard since it has its own themed shell.
+// Just the 4 live gauges from /greeks — always-on data (no on/off toggle, no
+// idle timeout like the full page), OI+Vol basis.
 function GreeksPanel() {
   return (
-    <div style={{ flex: 1, minHeight: 320, borderRadius: 20, overflow: "hidden" }}>
-      <GreeksPage />
-    </div>
+    <DCard title="Greeks gauges">
+      <LiveGreeksGauges />
+    </DCard>
   );
 }
 
@@ -464,10 +430,9 @@ function EsCandlesPanel() {
 
 export default function NewHomePage() {
   // Active ticker lives here — switching it (via TickerSwitcher) re-labels the
-  // page and drives the live option chain + stats bar below. The embedded
-  // OptionsChainPage and GreeksPage manage their own ticker/basis state
-  // independently (same as opening those routes directly). Stat cards row and
-  // the Stats panel are still static "--" placeholders.
+  // page and drives the stats bar + option chain below. LiveGreeksGauges is
+  // ticker-agnostic (same /ws/gex totals feed as /greeks). The Stats panel is
+  // still a static "--" placeholder.
   const [ticker, setTicker] = useState("SPX");
 
   return (
@@ -476,9 +441,8 @@ export default function NewHomePage() {
       <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: 16, flex: 1, minHeight: 0 }}>
         {/* left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-          <StatCardsRow ticker={ticker} />
           <ChainStatsBar ticker={ticker} />
-          <OptionChainPanel />
+          <OptionChainPanel ticker={ticker} />
         </div>
 
         {/* right column */}

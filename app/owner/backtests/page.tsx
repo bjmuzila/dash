@@ -14,7 +14,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 const LIGHT_BLUE = "#7dd3fc";
 const SOFT_RED = HOME_THEME.red;
 
-type FieldType = "number" | "select" | "checkbox";
+type FieldType = "number" | "select" | "checkbox" | "text";
 type Field = { key: string; label: string; type: FieldType; def: string | number | boolean; options?: string[] };
 
 // Column titles are a neutral muted white so they read distinctly from the
@@ -89,6 +89,8 @@ function Panel({ title, subtitle, test, fields }: { title: string; subtitle: str
               />
             ) : f.type === "checkbox" ? (
               <input type="checkbox" checked={!!params[f.key]} onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.checked }))} style={{ width: 18, height: 18, accentColor: HOME_THEME.cyan }} />
+            ) : f.type === "text" ? (
+              <input type="text" style={{ ...homeInputStyle, width: 120 }} value={String(params[f.key])} onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))} />
             ) : (
               <input type="number" style={{ ...homeInputStyle, width: 90 }} value={String(params[f.key])} onChange={(e) => setParams((p) => ({ ...p, [f.key]: e.target.value }))} />
             )}
@@ -162,6 +164,15 @@ export default function BacktestsPage() {
           { key: "near", label: "wall ≤ pt from spot", type: "number", def: 150 },
           { key: "tol", label: "reach tol (pt)", type: "number", def: 5 },
           { key: "minRange", label: "min day range", type: "number", def: 5 },
+        ]}
+      />
+
+      <Panel
+        title="Normalized GEX per strike" test="normalized-gex"
+        subtitle="Live chain: |strike net GEX| / Σ|net GEX| × 100 for one ticker + expiration."
+        fields={[
+          { key: "ticker", label: "ticker", type: "text", def: "SPX" },
+          { key: "expiration", label: "expiration (YYYY-MM-DD)", type: "text", def: "" },
         ]}
       />
     </PageShell>

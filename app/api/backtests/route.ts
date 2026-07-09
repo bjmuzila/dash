@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
 import { queryAll } from "@/lib/db";
+import { proxyBase } from "@/lib/proxyForward";
 
 // Owner-only research endpoint. Runs the edge backtests we built in chat as
 // re-runnable panels for /owner/backtests. Read-only SELECTs against Postgres.
@@ -233,6 +234,60 @@ async function gammaWall(tol: number, near: number, minRange: number) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 5. Normalized GEX per strike   (live chain, one ticker + expiration)
+// Normalized GEX (%) = |strike net GEX| / Σ|net GEX across all strikes| × 100.
+// Same OI+Vol GEX formula as parseExpiration() in app/options-chain/page.tsx:
+//   gex = (callGamma·callCount − putGamma·putCount) · spot² · 0.01 · 100
+//   count = open-interest + volume
+// ══════════════════════════════════════════════════════════════════════════════
+async function normalizedGex(ticker: string, expiration: string) {
+  const url = `${proxyBase()}/proxy/api/tt/chains/${encodeURIComponent(ticker)}?expiration=${encodeURIComponent(expiration)}&range=all`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`chain fetch failed: HTTP ${res.status}`);
+  const json = await res.json();
+  const data = (json?.data ?? {}) as { underlyingPrice?: unknown; items?: unknown[] };
+  const spot = num(data.underlyingPrice);
+  if (!spot) throw new Error(`no live spot for ${ticker} — check ticker`);
+
+  const allGroups = (data.items ?? []) as { "expiration-date"?: string; strikes?: unknown[] }[];
+  const groups = allGroups.filter((g) => String(g["expiration-date"] ?? "").slice(0, 10) === expiration.slice(0, 10));
+  const target = groups.length ? groups : allGroups; // fall back if TT already scoped to one expiry
+  if (!target.length) throw new Error(`no chain data for ${ticker} ${expiration} — check the expiration date`);
+
+  const S = spot;
+  const rows: { strike: number; gex: number }[] = [];
+  for (const g of target) {
+    for (const item of (g.strikes ?? []) as Record<string, unknown>[]) {
+      const strike = num(item["strike-price"]);
+      if (!strike) continue;
+      const c = item.call as Record<string, unknown> | undefined;
+      const p = item.put as Record<string, unknown> | undefined;
+      const cnt = (o: Record<string, unknown> | undefined) =>
+        o ? (num(o["open-interest"] ?? o.openInterest) + num(o.volume)) : 0;
+      const cc = cnt(c), pc = cnt(p);
+      if (!cc && !pc) continue;
+      const gex = (num(c?.gamma) * cc - num(p?.gamma) * pc) * S * S * 0.01 * 100;
+      rows.push({ strike, gex });
+    }
+  }
+  if (!rows.length) throw new Error(`no strikes with OI/volume for ${ticker} ${expiration}`);
+
+  const totalAbs = rows.reduce((s, r) => s + Math.abs(r.gex), 0);
+  const detail = rows
+    .map((r) => ({
+      strike: r.strike,
+      "net GEX": Math.round(r.gex),
+      "normalized %": totalAbs > 0 ? round((Math.abs(r.gex) / totalAbs) * 100, 2) : 0,
+    }))
+    .sort((a, b) => b.strike - a.strike);
+
+  return {
+    detail,
+    note: `${ticker.toUpperCase()} · ${expiration} · spot ${round(spot, 2)} · ${detail.length} strikes. Normalized GEX (%) = |strike net GEX| / Σ|net GEX| × 100.`,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 export async function GET(req: NextRequest) {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -248,6 +303,7 @@ export async function GET(req: NextRequest) {
     else if (test === "dex-preflip")
       body = await dexPreflip((q.get("greek") === "gex" ? "gex" : "dex"), n("hitAbs", 50), n("lookMin", 20), n("minPRange", 5), q.get("edges") === "1");
     else if (test === "gamma-wall") body = await gammaWall(n("tol", 5), n("near", 150), n("minRange", 5));
+    else if (test === "normalized-gex") body = await normalizedGex((q.get("ticker") || "SPX").trim().toUpperCase(), (q.get("expiration") || "").trim());
     else return NextResponse.json({ error: "unknown test" }, { status: 400 });
     return NextResponse.json({ ok: true, test, ...(body as object) });
   } catch (e) {

@@ -7,6 +7,12 @@
 // that page's own chrome: no ticker input, no GO button, no mode toggles.
 // Driven entirely by props — `ticker` is expected to come from a page-level
 // ticker switcher. Always GEX / OI+Vol / live (no flow, no Δ-vs-time).
+//
+// Fixed 4-column set instead of "front N sequential expirations": 0DTE, 1DTE,
+// closest weekly (nearest Friday listing), closest monthly (nearest 3rd-Friday
+// standard monthly listing). Each picked independently from the real listed
+// expirations so e.g. a Friday 0DTE doesn't collapse the weekly column into a
+// duplicate of it — the picker skips dates already claimed by an earlier slot.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME as HT, LIGHT_BLUE } from "@/components/shared/homeTheme";
@@ -95,7 +101,47 @@ function metricBg(value: number, maxValue: number, topValues: number[]) {
 }
 
 type GreekCell = { gex: number };
-type ExpColumn = { expiration: string; cells: Map<number, GreekCell>; underlying: number };
+type ExpColumn = { expiration: string; label: string; cells: Map<number, GreekCell>; underlying: number };
+
+// Picks 0DTE / 1DTE / closest weekly / closest monthly out of a sorted list of
+// real listed expiration dates (YYYY-MM-DD). Each slot is claimed independently
+// and later slots skip dates already taken, so a Friday 0DTE doesn't also eat
+// the weekly slot.
+type KeyExpiry = { label: string; value: string };
+function pickKeyExpirations(dates: string[]): KeyExpiry[] {
+  const todayKey = etDateKey(etToday());
+  const future = dates.filter((d) => d >= todayKey).sort();
+  if (!future.length) return [];
+
+  const claimed = new Set<string>();
+  const out: KeyExpiry[] = [];
+
+  const zeroDte = future[0];
+  claimed.add(zeroDte);
+  out.push({ label: "0DTE", value: zeroDte });
+
+  const oneDte = future.find((d) => !claimed.has(d));
+  if (oneDte) { claimed.add(oneDte); out.push({ label: "1DTE", value: oneDte }); }
+
+  const isFriday = (iso: string) => new Date(iso + "T12:00:00").getDay() === 5;
+  const weekly = future.find((d) => !claimed.has(d) && isFriday(d)) ?? future.find((d) => !claimed.has(d));
+  if (weekly) { claimed.add(weekly); out.push({ label: "WEEKLY", value: weekly }); }
+
+  // Standard monthly options expire on the 3rd Friday of the month (day 15-21).
+  const isThirdFriday = (iso: string) => {
+    const d = new Date(iso + "T12:00:00");
+    if (d.getDay() !== 5) return false;
+    const day = d.getDate();
+    return day >= 15 && day <= 21;
+  };
+  const monthly =
+    future.find((d) => !claimed.has(d) && isThirdFriday(d)) ??
+    future.find((d) => !claimed.has(d) && isFriday(d)) ??
+    future.find((d) => !claimed.has(d));
+  if (monthly) { claimed.add(monthly); out.push({ label: "MONTHLY", value: monthly }); }
+
+  return out;
+}
 
 // Parse one expiration's raw chain payload into strike→GEX. Same formula as
 // /options-chain's parseExpiration (OI+Vol contracts, live formula only).
@@ -133,14 +179,12 @@ function parseExpiration(items: unknown[], expDate: string, spot: number): Map<n
 
 export default function CompactOptionChain({
   ticker,
-  maxExpirations = 5,
   rows = 9,
 }: {
   ticker: string;
-  maxExpirations?: number;
   rows?: number;
 }) {
-  const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>([]);
+  const [keyExpiries, setKeyExpiries] = useState<KeyExpiry[]>([]);
   const [columns, setColumns] = useState<ExpColumn[]>([]);
   const [underlying, setUnderlying] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -148,7 +192,7 @@ export default function CompactOptionChain({
   const [refreshSeed, setRefreshSeed] = useState(0);
   const loadTokenRef = useRef(0);
 
-  // Real listed expirations for this ticker.
+  // Real listed expirations for this ticker → pick 0DTE/1DTE/weekly/monthly.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -158,48 +202,33 @@ export default function CompactOptionChain({
           .catch(() => null);
         const items: Array<Record<string, unknown>> = json?.data?.items ?? [];
         if (cancelled) return;
-        if (!items.length) { setExpiries([]); return; }
-        const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        const seen = new Set<string>();
-        const list = items
-          .map((it) => String(it["expiration-date"] ?? ""))
-          .filter((d) => d && !seen.has(d) && (seen.add(d), true))
-          .sort()
-          .map((value) => {
-            const dt = new Date(value + "T12:00:00");
-            const mm = String(dt.getMonth() + 1).padStart(2, "0");
-            const dd = String(dt.getDate()).padStart(2, "0");
-            return { value, label: `${dayNames[dt.getDay()]}, ${mm}-${dd}-${dt.getFullYear()}` };
-          });
-        setExpiries(list);
+        const dates = Array.from(new Set(items.map((it) => String(it["expiration-date"] ?? "").slice(0, 10)).filter(Boolean)));
+        setKeyExpiries(pickKeyExpirations(dates));
       } catch {
-        if (!cancelled) setExpiries([]);
+        if (!cancelled) setKeyExpiries([]);
       }
     })();
     return () => { cancelled = true; };
   }, [ticker]);
 
-  // Load the front N expirations' chains once we know the real listings.
+  // Load the 4 key expirations' chains once we know the real listings.
   useEffect(() => {
-    if (!expiries.length) return;
+    if (!keyExpiries.length) return;
     let cancelled = false;
     const token = ++loadTokenRef.current;
 
     (async () => {
       setLoading(true);
       setError(null);
-      const today = etDateKey(etToday());
-      const startIdx = Math.max(0, expiries.findIndex((e) => e.value === today));
-      const targets = expiries.slice(startIdx, startIdx + maxExpirations);
       try {
         const results = await Promise.all(
-          targets.map(async (t) => {
+          keyExpiries.map(async (t) => {
             const res = await fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(t.value)}&range=all`);
             const json = await res.json().catch(() => null);
             const data = (json?.data as Record<string, unknown> | undefined) ?? undefined;
             const items = (data?.items as unknown[]) ?? [];
             const spot = parseFloat(String(data?.underlyingPrice ?? 0)) || 0;
-            return { expiration: t.value, underlying: spot, cells: parseExpiration(items, t.value, spot) } as ExpColumn;
+            return { expiration: t.value, label: t.label, underlying: spot, cells: parseExpiration(items, t.value, spot) } as ExpColumn;
           }),
         );
         if (cancelled || token !== loadTokenRef.current) return;
@@ -221,7 +250,7 @@ export default function CompactOptionChain({
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expiries, ticker, maxExpirations, refreshSeed]);
+  }, [keyExpiries, ticker, refreshSeed]);
 
   // Poll every 60s while the relevant feed is live — bumps refreshSeed, which
   // is in the load effect's deps above, so it actually refetches.
@@ -229,10 +258,10 @@ export default function CompactOptionChain({
     const id = setInterval(() => {
       const isSpx = ticker.toUpperCase() === "SPX";
       const live = isSpx ? isSpxFeedLive() : isSessionLive();
-      if (live && expiries.length) setRefreshSeed((s) => s + 1);
+      if (live && keyExpiries.length) setRefreshSeed((s) => s + 1);
     }, 60000);
     return () => clearInterval(id);
-  }, [ticker, expiries.length]);
+  }, [ticker, keyExpiries.length]);
 
   const allStrikes = useMemo(() => {
     const set = new Set<number>();
@@ -277,7 +306,7 @@ export default function CompactOptionChain({
     });
   }, [columns, visibleStrikes]);
 
-  const gridCols = Math.max(columns.length, maxExpirations);
+  const gridCols = Math.max(columns.length, keyExpiries.length, 4);
 
   if (loading && !columns.length) {
     return (
@@ -311,8 +340,11 @@ export default function CompactOptionChain({
       >
         <div />
         {Array.from({ length: gridCols }).map((_, i) => (
-          <div key={i} style={{ textAlign: "center", fontWeight: 800 }}>
-            {columns[i] ? fmtExpHeader(columns[i].expiration) : "—"}
+          <div key={i} style={{ textAlign: "center" }}>
+            <div style={{ fontWeight: 800, color: LIGHT_BLUE, fontSize: 13, letterSpacing: "0.08em" }}>
+              {columns[i]?.label ?? keyExpiries[i]?.label ?? "—"}
+            </div>
+            <div style={{ fontWeight: 700 }}>{columns[i] ? fmtExpHeader(columns[i].expiration) : ""}</div>
           </div>
         ))}
       </div>
