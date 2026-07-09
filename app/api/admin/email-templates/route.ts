@@ -5,6 +5,7 @@ import { maintenanceEmail, maintenanceEmailText, MAINTENANCE_SUBJECT } from "@/l
 import { launchEmail, launchEmailText, LAUNCH_SUBJECT } from "@/lib/emails/launch";
 import { launchPromoEmail, launchPromoText, LAUNCH_PROMO_SUBJECT } from "@/lib/emails/launch-promo";
 import { subscriberThankYouEmail, subscriberThankYouText, SUBSCRIBER_THANKYOU_SUBJECT } from "@/lib/emails/subscriber-thankyou";
+import { pricingApologyEmail, pricingApologyText, PRICING_APOLOGY_SUBJECT } from "@/lib/emails/pricing-apology";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -23,6 +24,13 @@ function buildTemplates(): Template[] {
       subject: SUBSCRIBER_THANKYOU_SUBJECT,
       html: subscriberThankYouEmail(),
       text: subscriberThankYouText(),
+    },
+    {
+      id: "pricing-apology",
+      label: "Pricing apology — refund/credit for current members",
+      subject: PRICING_APOLOGY_SUBJECT,
+      html: pricingApologyEmail(),
+      text: pricingApologyText(),
     },
     {
       id: "founder-thankyou",

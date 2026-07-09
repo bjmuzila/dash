@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ColorType, CrosshairMode, LineSeries, createChart } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, LineData, UTCTimestamp } from "lightweight-charts";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
@@ -509,6 +511,117 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
   return cells;
 }
 
+// ── contract flow sparkline popup ──────────────────────────────────────────
+// Clicking a 0DTE SPX cell opens this: the same per-strike Flow GEX time
+// series as the Flow GEX History tab/page (components/dashboard/
+// FlowGexHistoryPanel.tsx), filtered to just the clicked strike. The
+// /proxy/flow-gex-history endpoint returns a combined call+put flowGex per
+// strike (gamma isn't tracked per print, only from ~60s snapshots — same
+// approximation noted on that panel), so this shows "this 0DTE strike's flow
+// GEX today," not a single call-only or put-only leg.
+interface FlowGexPoint { ts: number; timeEt: string; callNet: number; putNet: number; flowGex: number | null }
+interface FlowGexHistoryResponse { date: string; expiration: string; spot: number; strikes: number[]; seriesByStrike: Record<string, FlowGexPoint[]> }
+
+function fmtFlowMoney(v: number): string {
+  const sign = v >= 0 ? "+" : "-";
+  const abs = Math.abs(v);
+  return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+}
+
+function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; expiration: string; onClose: () => void }) {
+  const [data, setData] = useState<FlowGexHistoryResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setError(null);
+    fetch(`/proxy/flow-gex-history?expiration=${encodeURIComponent(expiration)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json: FlowGexHistoryResponse) => {
+        if (cancelled) return;
+        if (!json || !Array.isArray(json.strikes)) { setError("No response from /proxy/flow-gex-history"); return; }
+        setData(json);
+      })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Fetch failed"); });
+    return () => { cancelled = true; };
+  }, [expiration]);
+
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+    const chart = createChart(container, {
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "rgba(255,255,255,.70)", fontFamily: "Inter, system-ui, sans-serif" },
+      grid: { vertLines: { color: "rgba(255,255,255,.06)" }, horzLines: { color: "rgba(255,255,255,.06)" } },
+      rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
+      leftPriceScale: { visible: false },
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false,
+        tickMarkFormatter: (t: unknown) => (typeof t !== "number" ? "" : new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })),
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      localization: {
+        priceFormatter: (price: number) => fmtFlowMoney(price),
+        timeFormatter: (time: unknown) => (typeof time !== "number" ? "" : new Date(time * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })),
+      },
+    });
+    chartRef.current = chart;
+    seriesRef.current = chart.addSeries(LineSeries, { color: HT.cyan, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+
+    const ro = new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth, height: container.clientHeight }));
+    ro.observe(container);
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !data) return;
+    const points = (data.seriesByStrike[String(strike)] ?? [])
+      .filter((p) => p.flowGex != null)
+      .map((p): LineData => ({ time: p.ts as UTCTimestamp, value: p.flowGex as number }));
+    series.setData(points);
+    chartRef.current?.timeScale().fitContent();
+  }, [data, strike]);
+
+  const latest = data ? [...(data.seriesByStrike[String(strike)] ?? [])].reverse().find((p) => p.flowGex != null) ?? null : null;
+
+  return createPortal(
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center" }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 520, maxWidth: "92vw", background: HT.panelBgStrong, border: `1px solid ${HT.border}`, borderRadius: 14, padding: 16 }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: HT.text }}>
+            SPX {strike} · {expiration} · Flow GEX
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: HT.text, opacity: 0.7, fontSize: 15 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 15, color: HT.muted, marginBottom: 10 }}>
+          {data ? `spot ${data.spot ? data.spot.toFixed(2) : "--"}` : "Loading…"}
+          {latest != null && (
+            <span style={{ marginLeft: 10, fontFamily: "var(--font-mono)", fontWeight: 800, color: (latest.flowGex ?? 0) >= 0 ? HT.green : HT.red }}>
+              {fmtFlowMoney(latest.flowGex ?? 0)}
+            </span>
+          )}
+        </div>
+        {error && <div style={{ fontSize: 15, color: HT.red, marginBottom: 8 }}>{error}</div>}
+        <div ref={chartContainerRef} style={{ width: "100%", height: 260, position: "relative" }} />
+        <div style={{ fontSize: 11, color: HT.muted, opacity: 0.6, marginTop: 8 }}>
+          Combined call+put flow GEX for this strike (approximation: latest known gamma, not gamma-at-that-instant).
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function OptionsChainPage({
   expirySelection = "sequential",
   ticker: externalTicker,
@@ -532,6 +645,9 @@ export default function OptionsChainPage({
   const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>(fallbackExpiries);
   const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
+  // Clicking a 0DTE SPX cell opens the ContractFlowPopup (that strike's Flow
+  // GEX history sparkline) — see the component above for details.
+  const [contractPopup, setContractPopup] = useState<{ strike: number; expiration: string } | null>(null);
   const [recentTickers, setRecentTickers] = useState<string[]>([]);
   // Hydrate recents from browser cache after mount (avoids SSR mismatch).
   useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
@@ -1335,7 +1451,7 @@ export default function OptionsChainPage({
                 : null;
               return (
                 <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
+                  <div style={{ fontSize: 15, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
                   <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
                   </div>
@@ -1384,7 +1500,7 @@ export default function OptionsChainPage({
                   {/* Shared strike label (sticky left) */}
                   <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
                     position: "sticky", left: 0, zIndex: 2,
-                    padding: "2px 8px", fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right",
+                    padding: "2px 8px", fontSize: 15, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
                     background: isATM ? "#ffb300" : HT.panelBgStrong,
                     borderRight: `1px solid ${HT.border}`,
@@ -1438,18 +1554,25 @@ export default function OptionsChainPage({
                           ...(isLast ? ["inset -2px 0 0 #ffffff"] : []),
                         ].join(", ")
                       : undefined;
+                    // Contract flow sparkline only makes sense for SPX 0DTE (that's
+                    // what /proxy/flow-gex-history tracks — the live 0DTE tape).
+                    const isZeroDteCol = !isChangeCol && col != null && col.expiration === etDateKey(etToday());
+                    const isClickable = isZeroDteCol && activeTicker.toUpperCase() === "SPX" && value != null;
                     return (
                       <div
                         key={`${strike}-${colIdx}`}
                         className={isMvc ? "mvc-peak-cell" : undefined}
+                        onClick={isClickable ? () => setContractPopup({ strike, expiration: col!.expiration }) : undefined}
+                        title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
                         style={{
-                          padding: "2px 8px", fontSize: 15, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
+                          padding: "2px 8px", fontSize: 15, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                           color: value == null ? "#3a4a5e" : "#ffffff",
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
                           boxShadow: atmShadow,
                           whiteSpace: "nowrap", overflow: "hidden",
                           display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 5,
+                          cursor: isClickable ? "pointer" : undefined,
                           ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                         }}
                       >
@@ -1463,7 +1586,7 @@ export default function OptionsChainPage({
                           </span>
                         )}
                         {normalizedGexPct != null && (
-                          <span style={{ fontSize: 11, fontWeight: 600, opacity: 0.75, color: "#cfe8ff" }}>
+                          <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.75, color: "#cfe8ff" }}>
                             {normalizedGexPct.toFixed(1)}%
                           </span>
                         )}
@@ -1478,6 +1601,14 @@ export default function OptionsChainPage({
           );
           })()}
         </div>
+      )}
+
+      {contractPopup && (
+        <ContractFlowPopup
+          strike={contractPopup.strike}
+          expiration={contractPopup.expiration}
+          onClose={() => setContractPopup(null)}
+        />
       )}
     </div>
   );
