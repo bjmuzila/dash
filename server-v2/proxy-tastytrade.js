@@ -2789,14 +2789,10 @@ class TastytradeProxy {
       //   • liveVol  — dayVolume from the Trade stream (dxLink legacy path)
       //   • restVol  — Theta OHLC snapshot day-volume (the authoritative source
       //                under DATA_SOURCE=theta; see fetchVolumeTheta)
-      // Prefer Trade stream dayVolume (this.volumes) as the authoritative source.
-      // Once the stream has declared a value for this symbol (even 0), trust it and
-      // ignore REST — REST can be stale at session roll. Only use REST as a startup
-      // bootstrap before Trade events arrive. After session roll, Trade stream owns
-      // the session's dayVolume; REST still carries the prior session's stale total.
-      const liveVol = this.volumes.get(c.streamerSymbol);
-      const restVol = Number(rest?.volume ?? 0);
-      const vol = liveVol != null ? Number(liveVol) : restVol;
+      // Use ONLY Trade stream dayVolume (this.volumes). REST volume is stale for
+      // all expirations (current session reset at 6pm, future sessions haven't
+      // started yet). Trade stream is the single source of truth — 0 if no trades.
+      const vol = Number(this.volumes.get(c.streamerSymbol) ?? 0);
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.
