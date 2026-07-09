@@ -47,6 +47,7 @@ const { startDarkpoolRecorder } = require('./darkpool-recorder');
 const { handleDarkpoolHistory, handleDarkpoolAccum, handleDarkpoolLevels } = require('./darkpool-routes');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, getLatestFit: getRegimeLatestFit, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
+const { startRegimeTrainer, getLatestStoredFit: getRegimeStoredFit, forceRetrainAll: forceRegimeRetrain } = require('./regime-trainer');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -1511,6 +1512,31 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // GET /proxy/regime-fit?ticker=ESU — the PERSISTENT-LEARNING fit
+      // (server-v2/regime-trainer.js): daily 05:00 ET 30D refit + validation
+      // log, stored in Postgres. Distinct from /proxy/regime-state above
+      // (that one is the continuous 60s live fit used for the Alert Log).
+      // The Regime Engine tab's "Persistent Learning" card reads THIS one.
+      if (pathname === '/proxy/regime-fit' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const ticker = u.searchParams.get('ticker') || 'ESU';
+            const data = await getRegimeStoredFit(ticker);
+            sendJson(res, 200, { ok: true, ticker, ...(data || { fit: null, validation: [] }) });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // POST /proxy/regime-retrain — admin manual trigger: force the daily
+      // 30D trainer to run now for both tickers, ignoring the 05:00 ET window
+      // and the once-per-day guard.
+      if (pathname === '/proxy/regime-retrain' && req.method === 'POST') {
+        forceRegimeRetrain(`http://localhost:${PORT}`)
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
 
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
@@ -1929,6 +1955,12 @@ async function main() {
     // flips away. Read via /proxy/regime-alerts; force a pass via POST
     // /proxy/regime-alerts-run.
     startRegimeAlertRecorder(PORT);
+    // Regime Engine persistent-learning trainer: daily 05:00-05:10 ET, refits
+    // the same HMM on a 30D window, decodes+validates each day's regime call
+    // against the actual next-day return, and stores fit + accuracy metrics
+    // in Postgres (regime_fits / regime_validation_log). Additive to the
+    // recorder above — read via /proxy/regime-fit; force via POST /proxy/regime-retrain.
+    startRegimeTrainer(PORT);
     // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.

@@ -6,6 +6,7 @@ import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle, homeI
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { FlowGexHistoryPanel } from "@/components/dashboard/FlowGexHistoryPanel";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
@@ -19,6 +20,7 @@ import {
   layoutProbabilityTree,
   mostLikelyPath,
   pathEvEstimate,
+  REGIME_LABELS,
   type RegimeLabel,
   type HmmResult,
   type ProbTreeNode,
@@ -2337,6 +2339,18 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
       "Distance-from-spot % for every wall level",
     ],
   },
+  {
+    key: "flowgex",
+    label: "Flow GEX History",
+    accent: HOME_THEME.cyan,
+    blurb: "Per-minute Flow GEX reconstructed from the tape for a window of strikes around spot.",
+    points: [
+      "Auto-tracks the ±20 strikes around ATM as spot moves",
+      "Per-strike line chart + a vertical Flow GEX rail underneath",
+      "Click any strike to toggle its line on/off — the rail bar stays visible either way",
+      "Covers the full Cboe Global Trading Hours session, not just 9:30-4:15 ET",
+    ],
+  },
 ];
 
 function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: TestTab) => void }) {
@@ -2417,56 +2431,12 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
         {OVERVIEW_CARDS.map((def) => (
           <OverviewCard key={def.key} def={def} onOpen={onOpen} />
         ))}
-        {/* Flow GEX History lives at its own route (/flow-gex-history), not as
-            a tab in this page's switch — plain link card instead of onOpen. */}
-        <Card variant="classic" accent={HOME_THEME.cyan} padding={24}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-            <FlaskIcon color={HOME_THEME.cyan} />
-            <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>Flow GEX History</div>
-          </div>
-          <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
-            Per-minute Flow GEX reconstructed from the tape for a window of strikes around spot.
-          </div>
-          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
-            {[
-              "Auto-tracks the ±20 strikes around ATM as spot moves",
-              "Per-strike line chart + a vertical Flow GEX rail underneath",
-              "Click any strike to toggle its line on/off — the rail bar stays visible either way",
-            ].map((p) => (
-              <li key={p} style={{ display: "flex", gap: 8, fontSize: 15, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
-                <span style={{ color: HOME_THEME.cyan, flexShrink: 0 }}>›</span>
-                <span>{p}</span>
-              </li>
-            ))}
-          </ul>
-          <a
-            href="/flow-gex-history"
-            style={{
-              display: "block",
-              width: "100%",
-              boxSizing: "border-box",
-              padding: "10px 0",
-              borderRadius: 8,
-              border: `1px solid ${HOME_THEME.cyan}`,
-              background: `${HOME_THEME.cyan}1a`,
-              color: HOME_THEME.cyan,
-              fontSize: 15,
-              fontWeight: 800,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              textAlign: "center",
-              textDecoration: "none",
-            }}
-          >
-            Open Flow GEX History →
-          </a>
-        </Card>
       </div>
     </>
   );
 }
 
-type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "walls-flows";
+type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "walls-flows" | "flowgex";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Walls & Flows tab — top call/put walls by GEX timeframe, GEX swing detection,
@@ -2490,12 +2460,28 @@ function useWallsFlows() {
 
   const load = useCallback(async () => {
     try {
-      // Get 0DTE expiry
-      const expiryRes = await fetch(`/api/chains?ticker=SPX&range=0dte`);
-      if (!expiryRes.ok) throw new Error(`Failed to get expiry: HTTP ${expiryRes.status}`);
-      const expiryJson = await expiryRes.json();
-      const expirations = Array.isArray(expiryJson?.data?.expirations) ? expiryJson.data.expirations : [];
-      const expiry = expirations[0];
+      // Get 0DTE expiry — /api/expirations returns { data: { items: [{ "expiration-date" }] } }.
+      // Fall back to /api/chains?range=all (chain items carry expiration-date too) if the
+      // expirations endpoint is cold.
+      const collectDates = (items: Record<string, unknown>[]): string[] => {
+        const seen = new Set<string>();
+        items.forEach((item) => {
+          const d = String(item["expiration-date"] ?? "").slice(0, 10);
+          if (d) seen.add(d);
+        });
+        return Array.from(seen).sort();
+      };
+
+      let dates: string[] = [];
+      const expiryJson = await fetch(`/api/expirations?ticker=SPX`).then((r) => r.json()).catch(() => null);
+      if (Array.isArray(expiryJson?.data?.items) && expiryJson.data.items.length) {
+        dates = collectDates(expiryJson.data.items);
+      }
+      if (!dates.length) {
+        const chainJson = await fetch(`/api/chains?ticker=SPX&range=all`).then((r) => r.json()).catch(() => null);
+        if (Array.isArray(chainJson?.data?.items)) dates = collectDates(chainJson.data.items);
+      }
+      const expiry = dates[0];
       if (!expiry) throw new Error("No 0DTE expiry found");
 
       // Fetch GEX history for 5m, 15m, 30m, 60m windows
@@ -2674,6 +2660,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
     { key: "positioning", label: "Options Positioning" },
     { key: "walls-flows", label: "Walls & Flows" },
     { key: "regime", label: "Regime Engine" },
+    { key: "flowgex", label: "Flow GEX History" },
   ];
   return (
     <div style={{ display: "flex", gap: 10 }}>
@@ -3554,6 +3541,123 @@ interface RegimeStateResponse {
   hmm: HmmResult | null;
 }
 
+// ── Persistent-learning fit (server-v2/regime-trainer.js), distinct from the
+// continuous 60s live fit above — this is the daily 30D refit + validation
+// loop from REGIME_LEARNING_DESIGN.md, read via GET /proxy/regime-fit.
+interface RegimeStoredFitRow {
+  ticker: string;
+  fit_timestamp: string;
+  hmm_params: { means: number[]; stds: number[]; transition: number[][]; labels: RegimeLabel[]; logLik: number; iterations: number };
+  decoded_path: RegimeLabel[];
+  stationary_dist: Record<RegimeLabel, number>;
+  accuracy_metrics: { hit_rate: number | null; trend_hit_rate: number | null; chop_hit_rate: number | null; panic_hit_rate: number | null; n: number };
+  version: number;
+}
+interface RegimeValidationRow {
+  refit_date: string;
+  regime_label: RegimeLabel;
+  actual_return_pct: number | null;
+  predicted_correctly: boolean | null;
+  confidence: number | null;
+}
+interface RegimeFitApiResponse {
+  ok: boolean;
+  ticker: string;
+  fit: RegimeStoredFitRow | null;
+  validation: RegimeValidationRow[];
+}
+
+const ACCURACY_ALERT_THRESHOLD = 0.65;
+
+/** "Persistent Learning" card — daily 30D refit + validation hit-rate, per REGIME_LEARNING_DESIGN.md. */
+function RegimePersistentLearningCard({ ticker }: { ticker: RegimeTicker }) {
+  const [data, setData] = useState<RegimeFitApiResponse | null>(null);
+  const [retraining, setRetraining] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/proxy/regime-fit?ticker=${ticker}`, { cache: "no-store" });
+        if (res.ok) { const j = (await res.json()) as RegimeFitApiResponse; if (!cancelled) setData(j); }
+      } catch { /* keep last */ }
+    };
+    void load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [ticker]);
+
+  const fit = data?.fit ?? null;
+  const hitRate = fit?.accuracy_metrics?.hit_rate ?? null;
+  const flagged = hitRate != null && hitRate < ACCURACY_ALERT_THRESHOLD;
+
+  const forceRetrain = async () => {
+    setRetraining(true);
+    try {
+      await fetch("/proxy/regime-retrain", { method: "POST" });
+      const res = await fetch(`/proxy/regime-fit?ticker=${ticker}`, { cache: "no-store" });
+      if (res.ok) setData((await res.json()) as RegimeFitApiResponse);
+    } finally {
+      setRetraining(false);
+    }
+  };
+
+  return (
+    <Card
+      variant="budget"
+      accent={LIGHT_BLUE}
+      padding={16}
+      title={<span style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em" }}>Persistent Learning · Daily 30D Refit</span>}
+      subtitle="server-v2/regime-trainer.js — refits once/day (05:00 ET) on a 30D window and validates each day's call vs the actual next-day return"
+    >
+      {!fit ? (
+        <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+          No stored refit yet for {ticker} — first daily run happens at 05:00 ET, or trigger one manually below.
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Last refit</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, marginTop: 2 }}>
+              {new Date(fit.fit_timestamp).toLocaleString("en-US", { timeZone: "America/New_York" })} ET · v{fit.version}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Stationary dist</div>
+            <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+              {REGIME_LABELS.map((l) => (
+                <span key={l} style={{ fontSize: 15, fontWeight: 800, color: REGIME_COLOR[l] }}>
+                  {l} {Math.round((fit.stationary_dist[l] ?? 0) * 100)}%
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Validation hit-rate</div>
+            <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: flagged ? SOFT_RED : HOME_THEME.text }}>
+              {hitRate != null ? `${Math.round(hitRate * 100)}%` : "n/a"} over {fit.accuracy_metrics.n} validated days
+              {flagged ? " · below 65% threshold" : ""}
+            </div>
+          </div>
+          <div style={{ marginLeft: "auto" }}>
+            <button
+              onClick={forceRetrain}
+              disabled={retraining}
+              style={{
+                padding: "8px 16px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`,
+                background: "rgba(255,255,255,0.04)", color: HOME_THEME.text, fontSize: 14, fontWeight: 700,
+                cursor: retraining ? "default" : "pointer", opacity: retraining ? 0.6 : 1,
+              }}
+            >
+              {retraining ? "Retraining…" : "Force retrain now"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // Must match REGIME_ALERT_CONFIRM_BARS's default in server-v2/regime-alert-recorder.js —
 // the Alert Log only opens/closes an alert once a flip holds for this many
 // consecutive bars (filters HMM-refit noise). The price chart used to shade
@@ -3882,6 +3986,8 @@ function RegimeEngineTab() {
             <RegimeAlertLog ticker={ticker} />
           </Card>
 
+          <RegimePersistentLearningCard ticker={ticker} />
+
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <Card variant="budget" accent={LIGHT_BLUE} padding={16} title={<span style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em" }}>Switching</span>} style={{ flex: "1 1 220px" }}>
               <div style={{ fontSize: 15, color: HOME_THEME.text }}>Layer 01</div>
@@ -3959,6 +4065,8 @@ export default function TestPage() {
         <WallsFlowsTab />
       ) : tab === "regime" ? (
         <RegimeEngineTab />
+      ) : tab === "flowgex" ? (
+        <FlowGexHistoryPanel />
       ) : (
         <OptionsPositioningTab />
       )}
