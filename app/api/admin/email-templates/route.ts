@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
-import { welcomeEmail, welcomeEmailText, WELCOME_SUBJECT } from "@/lib/emails/welcome";
-import {
-  comingSoonEmail, comingSoonText, COMING_SOON_SUBJECT,
-  betaLiveEmail, betaLiveText, BETA_LIVE_SUBJECT,
-} from "@/lib/emails/announce";
-import { betaLaunchEmail, betaLaunchEmailText, BETA_LAUNCH_SUBJECT } from "@/lib/emails/beta-launch";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 import { maintenanceEmail, maintenanceEmailText, MAINTENANCE_SUBJECT } from "@/lib/emails/maintenance";
 import { launchEmail, launchEmailText, LAUNCH_SUBJECT } from "@/lib/emails/launch";
 import { launchPromoEmail, launchPromoText, LAUNCH_PROMO_SUBJECT } from "@/lib/emails/launch-promo";
+import { subscriberThankYouEmail, subscriberThankYouText, SUBSCRIBER_THANKYOU_SUBJECT } from "@/lib/emails/subscriber-thankyou";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -23,32 +18,11 @@ type Template = { id: string; label: string; subject: string; html: string; text
 function buildTemplates(): Template[] {
   return [
     {
-      id: "welcome",
-      label: "Beta welcome",
-      subject: WELCOME_SUBJECT,
-      html: welcomeEmail(),
-      text: welcomeEmailText(),
-    },
-    {
-      id: "coming-soon",
-      label: "Beta coming soon",
-      subject: COMING_SOON_SUBJECT,
-      html: comingSoonEmail(),
-      text: comingSoonText(),
-    },
-    {
-      id: "beta-live",
-      label: "Beta is live — join",
-      subject: BETA_LIVE_SUBJECT,
-      html: betaLiveEmail(),
-      text: betaLiveText(),
-    },
-    {
-      id: "beta-launch",
-      label: "Launch update — pushed to July 1",
-      subject: BETA_LAUNCH_SUBJECT,
-      html: betaLaunchEmail(),
-      text: betaLaunchEmailText(),
+      id: "subscriber-thankyou",
+      label: "Subscriber thank-you + weekend dashboard",
+      subject: SUBSCRIBER_THANKYOU_SUBJECT,
+      html: subscriberThankYouEmail(),
+      text: subscriberThankYouText(),
     },
     {
       id: "founder-thankyou",

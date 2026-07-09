@@ -1026,6 +1026,38 @@ function dailyVisitSeries(visits: PageVisit[], days = 12): { counts: number[]; l
 }
 
 /**
+ * Bucket page-visit timestamps into a 7×24 grid of counts — weekday (Mon..Sun,
+ * ET) × hour-of-day (ET, 0-23). Powers the Overview tab's "Hourly load
+ * heatmap" from real page_visits rows instead of the placeholder sample.
+ * Returns { grid, max } where grid[weekdayIdx][hour] = visit count.
+ */
+const HEATMAP_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+const heatmapPartsFmt = new Intl.DateTimeFormat("en-US", {
+  timeZone: ET_TZ,
+  weekday: "short",
+  hour: "numeric",
+  hour12: false,
+});
+function hourlyHeatmap(visits: PageVisit[]): { grid: number[][]; max: number } {
+  const grid: number[][] = HEATMAP_WEEKDAYS.map(() => Array(24).fill(0));
+  const weekdayIdx: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  for (const v of visits) {
+    if (!v.createdAt) continue;
+    const t = new Date(v.createdAt);
+    if (isNaN(t.getTime())) continue;
+    const parts = heatmapPartsFmt.formatToParts(t);
+    const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+    let hour = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
+    if (hour === 24) hour = 0; // some locales format midnight as "24"
+    const di = weekdayIdx[weekday];
+    if (di == null || isNaN(hour) || hour < 0 || hour > 23) continue;
+    grid[di][hour] += 1;
+  }
+  const max = Math.max(1, ...grid.flat());
+  return { grid, max };
+}
+
+/**
  * Bucket signups (Clerk recent users, by createdAt ms) into the last `days`
  * calendar days (ET), oldest → newest. Same shape as dailyVisitSeries so the
  * rolling-7-day cumulative-users chart can share its rendering.
@@ -1088,6 +1120,7 @@ function weeklySignupSeries(
 function OverviewSection({ metrics }: {
   metrics: {
     daily: { counts: number[]; labels: string[] };
+    heatmap: { grid: number[][]; max: number };
     dailySignups: { counts: number[]; labels: string[] };
     weekly: { counts: number[]; labels: string[] };
     totalVisits: number;
@@ -1117,7 +1150,7 @@ function OverviewSection({ metrics }: {
     };
   };
 }) {
-  const { daily, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, infra, ops } = metrics;
+  const { daily, heatmap, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, infra, ops } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1265,11 +1298,13 @@ function OverviewSection({ metrics }: {
         </div>
       </div>
 
-      {/* Hourly heatmap — sample shape until hourly buckets are wired. */}
+      {/* Hourly heatmap — real page_visits rows, bucketed by hour × weekday (ET). */}
       <div style={cardStyle}>
         <div style={{ ...titleStyle, display: "flex", justifyContent: "space-between" }}>
           <span>Hourly load heatmap · visits by hour × weekday (ET)</span>
-          <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>sample</span>
+          <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
+            {heatmap.grid.flat().reduce((a, b) => a + b, 0)} visits · last 5000
+          </span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "32px repeat(24, 1fr)", gap: 2 }}>
           <div />
@@ -1279,9 +1314,15 @@ function OverviewSection({ metrics }: {
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, di) => (
             <Fragment key={d}>
               <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 1, lineHeight: "30px" }}>{d}</div>
-              {Array.from({ length: 24 }, (_, h) => {
-                const v = (h >= 13 && h <= 21 && di < 5) ? 0.28 + ((h * 7 + di * 13) % 10) / 14 : 0.06 + ((h * 3 + di * 5) % 6) / 36;
-                return <div key={d + h} style={{ height: 30, borderRadius: 2, background: `rgba(91,155,213,${v.toFixed(2)})` }} />;
+              {heatmap.grid[di].map((count, h) => {
+                const v = count > 0 ? 0.06 + (count / heatmap.max) * 0.85 : 0.03;
+                return (
+                  <div
+                    key={d + h}
+                    title={`${d} ${h}:00 ET · ${count} visit${count === 1 ? "" : "s"}`}
+                    style={{ height: 30, borderRadius: 2, background: `rgba(91,155,213,${v.toFixed(2)})` }}
+                  />
+                );
               })}
             </Fragment>
           ))}
@@ -1705,7 +1746,7 @@ export default function OwnerDashboard() {
       // Page-visit log (per-load rows w/ timestamps) — powers the Overview tab's
       // Daily Activity (last 12 days) + recent-activity agenda from real data.
       try {
-        const pv = await fetch("/api/page-visits?limit=500", { cache: "no-store" });
+        const pv = await fetch("/api/page-visits?limit=5000", { cache: "no-store" });
         if (pv.ok) { const j = await pv.json(); setVisits((j?.visits ?? []) as PageVisit[]); }
       } catch { /* non-fatal */ }
 
@@ -2161,6 +2202,7 @@ export default function OwnerDashboard() {
 
     return {
       daily: dailyVisitSeries(visits, 7),
+      heatmap: hourlyHeatmap(visits),
       dailySignups: dailySignupSeries(signups, 7),
       weekly: weeklySignupSeries(signups, 7),
       totalVisits,

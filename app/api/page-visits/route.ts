@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const limit = Math.min(Number(searchParams.get("limit") ?? 100), 500);
+    const limit = Math.min(Number(searchParams.get("limit") ?? 100), 5000);
     const rows = await getRecentPageVisits(limit);
     const visits = rows.map((r) => ({
       id: r.id,
