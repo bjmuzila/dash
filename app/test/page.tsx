@@ -2439,79 +2439,165 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
 type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "walls-flows" | "flowgex";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Walls & Flows tab — top call/put walls by GEX timeframe and GEX swing
-// detection. Runs continuously, all day and all night — no session gating.
+// Walls & Flows tab — top call/put GEX wall strikes per timeframe, across
+// SPX/NDX/SPY/QQQ. Runs continuously, no timing-window gating.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type WallLevel = { strike: number; value: number } | null;
 type WallsFlowsWindow = { age: string; callWall: WallLevel; putWall: WallLevel };
+type WallsFlowsLive = { spot: number | null; callWall: WallLevel; putWall: WallLevel };
 type WallsFlowsRow = {
   symbol: string;
-  windows: WallsFlowsWindow[];
+  mode: "history" | "live";
+  windows?: WallsFlowsWindow[];
+  live?: WallsFlowsLive;
   ts: number;
 };
+
+// SPX keeps the full 5/15/30/60m historical windows (backed by
+// option_strike_gex_history, which today only ever gets written by the single
+// shared live SPX feed). SPY/QQQ/NDX don't have that history, so they get a
+// live-only snapshot fetched fresh each poll from that ticker's own 0DTE
+// chain. SPX and NDX run all day and all night; SPY/QQQ are RTH-only (their
+// 0DTE chains aren't meaningfully tradable outside 9:30–16:00 ET).
+const WALLS_FLOWS_SYMBOLS = ["SPX", "NDX", "SPY", "QQQ"] as const;
+const WALLS_FLOWS_RTH_ONLY: Record<string, boolean> = { SPX: false, NDX: false, SPY: true, QQQ: true };
+
+function isRthNowET(): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  if (get("weekday") === "Sat" || get("weekday") === "Sun") return false;
+  const mins = Number(get("hour")) * 60 + Number(get("minute"));
+  return mins >= 570 && mins < 960; // 9:30–16:00 ET
+}
+
+// Resolve the nearest 0DTE expiry for any ticker. Primary: /api/expirations
+// (data.items[].expiration-date). Fallback: /api/chains?range=all, whose chain
+// items also carry expiration-date, for when the expirations endpoint is cold.
+async function resolveZeroDteExpiry(ticker: string): Promise<string | null> {
+  const collectDates = (items: Record<string, unknown>[]): string[] => {
+    const seen = new Set<string>();
+    items.forEach((item) => {
+      const d = String(item["expiration-date"] ?? "").slice(0, 10);
+      if (d) seen.add(d);
+    });
+    return Array.from(seen).sort();
+  };
+  let dates: string[] = [];
+  const expiryJson = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`).then((r) => r.json()).catch(() => null);
+  if (Array.isArray(expiryJson?.data?.items) && expiryJson.data.items.length) {
+    dates = collectDates(expiryJson.data.items);
+  }
+  if (!dates.length) {
+    const chainJson = await fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&range=all`).then((r) => r.json()).catch(() => null);
+    if (Array.isArray(chainJson?.data?.items)) dates = collectDates(chainJson.data.items);
+  }
+  return dates[0] ?? null;
+}
+
+// Live-only wall for a ticker with no stored history: pulls that ticker's 0DTE
+// chain right now and computes net GEX per strike the same way options-chain
+// does — (callGamma·callOI − putGamma·putOI)·spot²·0.01·100 — then takes the
+// strike with the largest positive value (call wall) and largest negative
+// value (put wall). No time-ago comparison; this is a single "now" snapshot.
+async function fetchLiveWall(ticker: string): Promise<WallsFlowsLive | null> {
+  const expiry = await resolveZeroDteExpiry(ticker);
+  if (!expiry) return null;
+
+  const chainJson = await fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expiry)}`)
+    .then((r) => r.json()).catch(() => null);
+  const items = Array.isArray(chainJson?.data?.items) ? (chainJson.data.items as Record<string, unknown>[]) : [];
+  const spot = Number(chainJson?.data?.underlyingPrice) || null;
+  if (!items.length || !(spot && spot > 0)) return { spot, callWall: null, putWall: null };
+
+  const num = (o: Record<string, unknown> | undefined, k: string) => (o ? parseFloat(String(o[k])) || 0 : 0);
+  const oi = (o: Record<string, unknown> | undefined) =>
+    o ? (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0) : 0;
+
+  let callWall: WallLevel = null;
+  let putWall: WallLevel = null;
+
+  items.forEach((group) => {
+    const groupExp = String(group["expiration-date"] ?? "").slice(0, 10);
+    if (groupExp && groupExp !== expiry) return;
+    (group.strikes as unknown[] | undefined ?? []).forEach((raw) => {
+      const it = raw as Record<string, unknown>;
+      const strike = parseFloat(String(it["strike-price"] ?? 0));
+      if (!strike) return;
+      const c = it.call as Record<string, unknown> | undefined;
+      const p = it.put as Record<string, unknown> | undefined;
+      const cc = oi(c), pc = oi(p);
+      if (!cc && !pc) return;
+      const gex = (num(c, "gamma") * cc - num(p, "gamma") * pc) * spot * spot * 0.01 * 100;
+      if (gex > 0 && (!callWall || gex > callWall.value)) callWall = { strike, value: gex };
+      if (gex < 0 && (!putWall || gex < putWall.value)) putWall = { strike, value: gex };
+    });
+  });
+
+  return { spot, callWall, putWall };
+}
 
 function useWallsFlows() {
   const [data, setData] = useState<Record<string, WallsFlowsRow> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
 
+  const [rthSkipped, setRthSkipped] = useState<string[]>([]);
+
   const load = useCallback(async () => {
     try {
-      // Get 0DTE expiry — /api/expirations returns { data: { items: [{ "expiration-date" }] } }.
-      // Fall back to /api/chains?range=all (chain items carry expiration-date too) if the
-      // expirations endpoint is cold.
-      const collectDates = (items: Record<string, unknown>[]): string[] => {
-        const seen = new Set<string>();
-        items.forEach((item) => {
-          const d = String(item["expiration-date"] ?? "").slice(0, 10);
-          if (d) seen.add(d);
+      const bySymbol: Record<string, WallsFlowsRow> = {};
+      const skipped: string[] = [];
+      const rthOpen = isRthNowET();
+
+      // SPX — full historical 5/15/30/60m windows from option_strike_gex_history
+      // (the only ticker that table has ever recorded). Runs 24/7.
+      const spxExpiry = await resolveZeroDteExpiry("SPX").catch(() => null);
+      if (spxExpiry) {
+        const res = await fetch(`/proxy/gex-history?expiry=${encodeURIComponent(spxExpiry)}&ages=5,15,30,60`);
+        const json = res.ok ? await res.json().catch(() => null) : null;
+        // baselines: { [strike]: { [age]: net_gex } } — the net GEX at that strike as of
+        // N minutes ago. The call wall is the strike with the largest positive net GEX
+        // (dealers long gamma, resistance); the put wall is the strike with the most
+        // negative net GEX (dealers short gamma, support/acceleration).
+        const baselines: Record<string, Record<string, number>> = json?.baselines ?? {};
+        const ages = ["5", "15", "30", "60"];
+        const windows: WallsFlowsWindow[] = ages.map((age) => {
+          let callWall: WallLevel = null;
+          let putWall: WallLevel = null;
+          for (const [strikeStr, byAge] of Object.entries(baselines)) {
+            const v = Number((byAge as Record<string, number>)[age]);
+            if (!Number.isFinite(v)) continue;
+            const strike = Number(strikeStr);
+            if (v > 0 && (!callWall || v > callWall.value)) callWall = { strike, value: v };
+            if (v < 0 && (!putWall || v < putWall.value)) putWall = { strike, value: v };
+          }
+          return { age, callWall, putWall };
         });
-        return Array.from(seen).sort();
-      };
-
-      let dates: string[] = [];
-      const expiryJson = await fetch(`/api/expirations?ticker=SPX`).then((r) => r.json()).catch(() => null);
-      if (Array.isArray(expiryJson?.data?.items) && expiryJson.data.items.length) {
-        dates = collectDates(expiryJson.data.items);
+        bySymbol.SPX = { symbol: "SPX", mode: "history", windows, ts: Date.now() };
       }
-      if (!dates.length) {
-        const chainJson = await fetch(`/api/chains?ticker=SPX&range=all`).then((r) => r.json()).catch(() => null);
-        if (Array.isArray(chainJson?.data?.items)) dates = collectDates(chainJson.data.items);
-      }
-      const expiry = dates[0];
-      if (!expiry) throw new Error("No 0DTE expiry found");
 
-      // Fetch GEX history for 5m, 15m, 30m, 60m windows
-      const res = await fetch(`/proxy/gex-history?expiry=${encodeURIComponent(expiry)}&ages=5,15,30,60`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-
-      // baselines: { [strike]: { [age]: net_gex } } — the net GEX at that strike as of
-      // N minutes ago. The call wall is the strike with the largest positive net GEX
-      // (dealers long gamma, resistance); the put wall is the strike with the most
-      // negative net GEX (dealers short gamma, support/acceleration).
-      const baselines: Record<string, Record<string, number>> = json?.baselines ?? {};
-      const ages = ["5", "15", "30", "60"];
-
-      const windows: WallsFlowsWindow[] = ages.map((age) => {
-        let callWall: WallLevel = null;
-        let putWall: WallLevel = null;
-        for (const [strikeStr, byAge] of Object.entries(baselines)) {
-          const v = Number((byAge as Record<string, number>)[age]);
-          if (!Number.isFinite(v)) continue;
-          const strike = Number(strikeStr);
-          if (v > 0 && (!callWall || v > callWall.value)) callWall = { strike, value: v };
-          if (v < 0 && (!putWall || v < putWall.value)) putWall = { strike, value: v };
+      // NDX/SPY/QQQ — live-only single "now" snapshot (no stored history for these
+      // tickers). NDX runs 24/7; SPY/QQQ only fetch during RTH.
+      for (const sym of ["NDX", "SPY", "QQQ"] as const) {
+        if (WALLS_FLOWS_RTH_ONLY[sym] && !rthOpen) {
+          skipped.push(sym);
+          continue;
         }
-        return { age, callWall, putWall };
-      });
+        const live = await fetchLiveWall(sym).catch(() => null);
+        bySymbol[sym] = { symbol: sym, mode: "live", live: live ?? { spot: null, callWall: null, putWall: null }, ts: Date.now() };
+      }
 
-      const bySymbol: Record<string, WallsFlowsRow> = {
-        SPX: { symbol: "SPX", windows, ts: Date.now() },
-      };
+      if (!Object.keys(bySymbol).length) throw new Error("No 0DTE expiry found");
 
       setData(bySymbol);
+      setRthSkipped(skipped);
       setError(null);
       setLoadedAt(Date.now());
     } catch (e) {
@@ -2525,11 +2611,61 @@ function useWallsFlows() {
     return () => clearInterval(id);
   }, [load]);
 
-  return { data, error, loadedAt, reload: load };
+  return { data, error, loadedAt, rthSkipped, reload: load };
+}
+
+function WallsFlowsLiveCard({ symbol, live }: { symbol: string; live: WallsFlowsLive }) {
+  return (
+    <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
+          {`Live 0DTE snapshot${live.spot ? ` · spot ${live.spot.toFixed(2)}` : ""}`}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Call Wall</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: HOME_THEME.green }}>
+              {live.callWall ? `${live.callWall.strike}` : "—"}
+            </div>
+            {live.callWall && (
+              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                {`+${(live.callWall.value / 1e6).toFixed(1)}M`}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Put Wall</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: HOME_THEME.red }}>
+              {live.putWall ? `${live.putWall.strike}` : "—"}
+            </div>
+            {live.putWall && (
+              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                {`${(live.putWall.value / 1e6).toFixed(1)}M`}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function WallsFlowsClosedCard({ symbol }: { symbol: string }) {
+  return (
+    <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+        {`Market closed — ${symbol} 0DTE walls only run during RTH (9:30–16:00 ET).`}
+      </div>
+    </Card>
+  );
 }
 
 function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow }) {
-  const { windows } = row;
+  if (row.mode === "live") {
+    return <WallsFlowsLiveCard symbol={symbol} live={row.live ?? { spot: null, callWall: null, putWall: null }} />;
+  }
+
+  const windows = row.windows ?? [];
 
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
@@ -2574,8 +2710,7 @@ function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow })
 }
 
 function WallsFlowsTab() {
-  const { data, error, loadedAt, reload } = useWallsFlows();
-  const topSymbols = ["SPX"];
+  const { data, error, loadedAt, rthSkipped, reload } = useWallsFlows();
 
   return (
     <>
@@ -2595,8 +2730,8 @@ function WallsFlowsTab() {
           About This Tab
         </div>
         <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          Top call/put GEX wall strikes over 5m, 15m, 30m, and 60m windows from the 0DTE options chain. Call wall = strike with the largest positive net GEX (resistance), Put wall = strike with the largest negative net GEX (support/acceleration).
-          Runs continuously all day and all night, no market-hours gating.
+          SPX shows top call/put GEX wall strikes over 5m, 15m, 30m, and 60m windows from stored 0DTE history — runs all day and all night. NDX is a live-only snapshot (no stored history), also all day and all night.
+          SPY and QQQ are live-only and RTH-gated (9:30–16:00 ET) since their 0DTE chains only matter during market hours. Call wall = largest positive net GEX (resistance), Put wall = largest negative net GEX (support/acceleration).
         </div>
       </div>
 
@@ -2606,15 +2741,17 @@ function WallsFlowsTab() {
         </Card>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 20 }}>
-          {topSymbols.map((sym) => {
+          {WALLS_FLOWS_SYMBOLS.map((sym) => {
             const row = data[sym];
-            return row ? <WallsFlowsCard key={sym} symbol={sym} row={row} /> : null;
+            if (row) return <WallsFlowsCard key={sym} symbol={sym} row={row} />;
+            if (rthSkipped.includes(sym)) return <WallsFlowsClosedCard key={sym} symbol={sym} />;
+            return null;
           })}
         </div>
       )}
 
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
-        Walls sourced from 0DTE option chain history (option_strike_gex_history). Call wall = dealers long gamma, Put wall = dealers short gamma.
+        SPX walls sourced from 0DTE option chain history (option_strike_gex_history). NDX/SPY/QQQ walls computed live from each ticker's own 0DTE chain. Call wall = dealers long gamma, Put wall = dealers short gamma.
       </div>
     </>
   );
