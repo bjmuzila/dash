@@ -286,7 +286,7 @@ export function FlowGexHistoryPanel() {
                 title={`${strike}${isAtm ? " (ATM)" : ""} — ${latest == null ? "no data" : fmtMoney(latest)}${on ? "" : " (line hidden)"}`}
                 style={{
                   flex: 1,
-                  minWidth: 16,
+                  minWidth: 20,
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
@@ -329,16 +329,16 @@ export function FlowGexHistoryPanel() {
               key={strike}
               style={{
                 flex: 1,
-                minWidth: 16,
+                minWidth: 20,
                 textAlign: "center",
-                fontSize: 12,
+                fontSize: 16,
                 fontFamily: "var(--font-mono)",
                 color: isAtm ? HOME_THEME.cyan : HOME_THEME.text,
                 fontWeight: isAtm ? 800 : 600,
                 opacity: isAtm ? 1 : 0.85,
                 writingMode: "vertical-rl",
                 transform: "rotate(180deg)",
-                height: 58,
+                height: 72,
                 overflow: "hidden",
               }}
             >

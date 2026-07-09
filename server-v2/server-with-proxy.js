@@ -88,8 +88,8 @@ function applySecurityHeaders(req, res) {
   // hydrates -- every button/click handler goes dead, even though the page
   // renders fine (SSR markup isn't affected). Production never sets this.
   const scriptSrc = process.env.NODE_ENV === 'production'
-    ? "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "
-    : "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; ";
+    ? "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://static.ads-twitter.com; "
+    : "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://static.ads-twitter.com; ";
   res.setHeader(
     cspHeader,
     "default-src 'self'; " +
