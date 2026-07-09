@@ -53,6 +53,8 @@ const LOOKMIN = Number(process.env.LOOKMIN ?? 60);
 const WIN     = Number(process.env.WIN ?? 5);
 const STOP    = Number(process.env.STOP ?? 3);
 const LOOKBARS = Math.max(1, Math.round(LOOKMIN / 5));
+const REGIME_ENABLED = process.env.REGIME_HMM === "1";
+const VITERBI_PERSIST = Number(process.env.VITERBI_PERSIST ?? 2);
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
@@ -131,6 +133,89 @@ console.log(`mvc_snapshots: ${cbTimeline.length} usable rows`);
 
 await pool.end();
 
+// ── HMM regime inference (CALM/TRANSITIONAL/CRISIS) ────────────────────────
+// States: 0=CALM, 1=TRANSITIONAL, 2=CRISIS
+// Fixed HMM parameters tuned empirically from typical distributions
+const STATES = ["CALM", "TRANSITIONAL", "CRISIS"];
+const STATE_IDX = { CALM: 0, TRANSITIONAL: 1, CRISIS: 2 };
+
+// Transition matrix: P(next_state | current_state)
+// Calm→Calm high, Crisis→Crisis high, middle state flexible
+const transitionMatrix = [
+  [0.80, 0.15, 0.05],  // CALM → [CALM, TRANS, CRISIS]
+  [0.20, 0.50, 0.30],  // TRANS → [CALM, TRANS, CRISIS]
+  [0.10, 0.30, 0.60],  // CRISIS → [CALM, TRANS, CRISIS]
+];
+
+// Emission matrix: P(return | state) — Gaussian likelihood (simplified to buckets)
+// return in [-0.04, 0.04]; buckets: tight=CALM, wide=CRISIS
+function emissionProb(dailyReturn, state) {
+  const absRet = Math.abs(dailyReturn);
+  const sigma = [0.0063, 0.0137, 0.0289][state]; // std from your diagram
+  // Gaussian: exp(-(x²/2σ²)) / √(2πσ²)
+  const exponent = -(dailyReturn * dailyReturn) / (2 * sigma * sigma);
+  return Math.exp(exponent) / (sigma * Math.sqrt(2 * Math.PI));
+}
+
+// Viterbi decoder: returns most likely state sequence + log-likelihood
+function viterbi(dailyReturns) {
+  const T = dailyReturns.length;
+  const N = STATES.length;
+  const path = Array(T).fill(0).map(() => Array(N));
+  const prob = Array(T).fill(0).map(() => Array(N));
+
+  // t=0: uniform prior
+  for (let s = 0; s < N; s++) {
+    prob[0][s] = (1 / N) * emissionProb(dailyReturns[0], s);
+    path[0][s] = [s];
+  }
+
+  // forward pass
+  for (let t = 1; t < T; t++) {
+    for (let s = 0; s < N; s++) {
+      let maxProb = -Infinity;
+      let bestPrev = 0;
+      for (let prevS = 0; prevS < N; prevS++) {
+        const p = prob[t - 1][prevS] * transitionMatrix[prevS][s] * emissionProb(dailyReturns[t], s);
+        if (p > maxProb) { maxProb = p; bestPrev = prevS; }
+      }
+      prob[t][s] = maxProb;
+      path[t][s] = [...path[t - 1][bestPrev], s];
+    }
+  }
+
+  // best final state
+  let bestState = 0, bestProb = prob[T - 1][0];
+  for (let s = 1; s < N; s++) {
+    if (prob[T - 1][s] > bestProb) { bestProb = prob[T - 1][s]; bestState = s; }
+  }
+
+  return path[T - 1][bestState];
+}
+
+// Calculate daily returns and run Viterbi
+const dailyReturns = [];
+const uniqueDates = [];
+for (let i = 1; i < bars.length; i++) {
+  const curr = Number(bars[i].close);
+  const prev = Number(bars[i - 1].close);
+  if (String(bars[i].date) !== String(bars[i - 1].date)) {
+    // Day boundary: take RTH close-to-close if available, else intra-day
+    dailyReturns.push((curr - prev) / prev);
+    uniqueDates.push(String(bars[i].date));
+  }
+}
+
+let viterbiPath = [];
+let stateByDate = new Map();
+if (REGIME_ENABLED && dailyReturns.length > 0) {
+  viterbiPath = viterbi(dailyReturns);
+  for (let i = 0; i < viterbiPath.length; i++) {
+    stateByDate.set(uniqueDates[i], viterbiPath[i]);
+  }
+  console.log(`HMM Viterbi path (last 10): ${viterbiPath.slice(-10).map((s) => STATES[s]).join(" → ")}`);
+}
+
 // ── group candle bars by session date, for same-day forward grading ────────
 const barsByDate = new Map();
 for (const b of bars) {
@@ -152,6 +237,10 @@ const CTX_WINDOW = 800; // ~2-3 trading sessions of 5m bars — plenty for PDH/P
 const mem = { prev: null, levels: {}, cooldowns: new Map() };
 let gi = -1, ci = -1;
 const fired = [];
+
+// Track regime persistence: count consecutive bars in current state
+let currentState = 0, statePersistence = 0, lastStateChange = -1;
+
 for (let i = 0; i < bars.length; i++) {
   const bar = bars[i];
   const ts = Number(bar.ts);
@@ -159,6 +248,18 @@ for (let i = 0; i < bars.length; i++) {
   while (ci + 1 < cbTimeline.length && cbTimeline[ci + 1].ts <= ts) ci++;
   if (gi < 0 || ci < 0) continue; // no snapshot yet to forward-fill from
   const gs = gexTimeline[gi], cs = cbTimeline[ci];
+
+  // Update regime persistence tracker
+  if (REGIME_ENABLED && stateByDate.has(String(bar.date))) {
+    const state = stateByDate.get(String(bar.date));
+    if (state !== currentState) {
+      currentState = state;
+      statePersistence = 1;
+      lastStateChange = i;
+    } else {
+      statePersistence++;
+    }
+  }
 
   const frame = {
     ts,
@@ -175,6 +276,13 @@ for (let i = 0; i < bars.length; i++) {
   for (const sig of evaluateFrame(frame, mem)) {
     sig.sessionDate = bar.date;
     sig.barIndex = i;
+    if (REGIME_ENABLED) {
+      sig.regime = STATES[currentState];
+      sig.regimeState = currentState;
+      sig.regimePersistence = statePersistence;
+      // Filter: only fire if regime persistence >= threshold
+      if (statePersistence < VITERBI_PERSIST) continue;
+    }
     fired.push(sig);
   }
 }
@@ -220,11 +328,13 @@ function summarize(rows, keyFn) {
 const byKind = summarize(graded, (r) => r.kind);
 const scoreBucket = (s) => (s.score <= 2 ? "score 1-2" : s.score === 3 ? "score 3" : "score 4-5");
 const byScore = summarize(graded, scoreBucket);
+const byRegime = REGIME_ENABLED ? summarize(graded, (r) => r.regime) : null;
 
 const totalResolved = graded.filter((r) => r.result !== "unresolved").length;
 const totalWin = graded.filter((r) => r.result === "win").length;
 
-console.log(`Signals backtest — ${bars.length} bars (${barsByDate.size} sessions), ${DAYS}d lookback, ${LOOKMIN}m window, win=${WIN}pt stop=${STOP}pt\n`);
+const hmmMsg = REGIME_ENABLED ? ` [HMM regime enabled, viterbi-persist=${VITERBI_PERSIST}]` : "";
+console.log(`Signals backtest — ${bars.length} bars (${barsByDate.size} sessions), ${DAYS}d lookback, ${LOOKMIN}m window, win=${WIN}pt stop=${STOP}pt${hmmMsg}\n`);
 console.log(`${fired.length} signals fired, ${totalResolved} resolved, overall win% ${totalResolved ? Math.round((100 * totalWin) / totalResolved) : "-"}%\n`);
 
 console.log("=== By setup (kind) ===");
@@ -232,10 +342,15 @@ console.table(byKind);
 console.log("\n=== By score bucket ===");
 console.table(byScore);
 
+if (byRegime) {
+  console.log("\n=== By regime (HMM) ===");
+  console.table(byRegime);
+}
+
 console.log("\n=== Last 25 signals ===");
 console.table(
   graded.slice(-25).map((s) => ({
     date: s.sessionDate, kind: s.kind, dir: s.direction, level: s.levelName ?? "-",
-    price: s.priceEs, score: s.score, result: s.result,
+    price: s.priceEs, score: s.score, regime: s.regime ?? "-", result: s.result,
   })),
 );

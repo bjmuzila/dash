@@ -1951,6 +1951,10 @@ class TastytradeProxy {
         if (this.optSessionKey && key !== this.optSessionKey) {
           console.log(`[SESSION] SPX rollover ${this.optSessionKey} → ${key}: clearing stale volume + re-arming OI`);
           this.volumes.clear();
+          // Zero all active contracts so low-volume strikes don't fall back to stale REST volume
+          for (const c of this._activeContracts()) {
+            this.volumes.set(c.streamerSymbol, 0);
+          }
           this.sessionCallPremium = 0;
           this.sessionPutPremium  = 0;
           thetaAdapter.resetCalendarCache(); // force re-check tomorrow's market open status
