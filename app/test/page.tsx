@@ -2443,12 +2443,11 @@ type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "w
 // detection. Runs continuously, all day and all night — no session gating.
 // ─────────────────────────────────────────────────────────────────────────────
 
+type WallLevel = { strike: number; value: number } | null;
+type WallsFlowsWindow = { age: string; callWall: WallLevel; putWall: WallLevel };
 type WallsFlowsRow = {
   symbol: string;
-  gexSwing5m: number | null;
-  gexSwing15m: number | null;
-  gexSwing30m: number | null;
-  gexSwing60m: number | null;
+  windows: WallsFlowsWindow[];
   ts: number;
 };
 
