@@ -128,7 +128,23 @@ function isRthNow() {
 }
 
 function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
-  const wss = new WebSocket.Server({ noServer: true });
+  const wss = new WebSocket.Server({
+    noServer: true,
+    // Compress WS frames. Payloads are pure JSON (repeated keys, numeric arrays)
+    // and deflate cuts them ~80-90% — the single biggest lever on /ws/gex egress,
+    // which is uncacheable and 100% counts as Cloudflare "bandwidth served".
+    // threshold:1024 skips tiny frames (spot/aux) so we only pay CPU on the big
+    // gex/flow/snapshot frames; level 6 balances ratio vs CPU given the box's
+    // prior heap/OOM sensitivity. Browsers negotiate permessage-deflate for free.
+    perMessageDeflate: {
+      threshold: 1024,
+      zlibDeflateOptions: { level: 6, memLevel: 7 },
+      // Don't hold a compression context open per idle socket — reclaim memory
+      // between bursts (matters with many concurrent subscribers).
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+    },
+  });
   // GEX broadcast throttle state.
   let lastGexSentAt = 0;
   let lastGexPayload = null;
