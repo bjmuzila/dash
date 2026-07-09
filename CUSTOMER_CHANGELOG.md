@@ -2,6 +2,17 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 7/9/2026
+
+* Added new Flow, Greeks, Scanner, and ES Candles tabs right on the Home page next to the Economic Calendar — check them without leaving Home.
+* Fixed the SPX Flow view loading slowly.
+* Continued building the new homepage design — the option chain now follows the ticker switcher at the top, and sizing/scrolling is fixed so everything fits your window properly.
+* Greek gauges on the new homepage are now simple trend-line sparklines (green when positive, red when negative) instead of dial gauges.
+* Top stat cards on the new homepage now show 5 and 15 minute call/put wall history alongside live bull/bear and in-the-money/out-of-the-money percentages.
+* The floating menu button on the new homepage now opens real popups — Economic Calendar, Option Flow (with an adjustable minimum premium setting), Notes, and quick links to Trader Dashboard and Analytics.
+* On the Option Chain page, you can now click any 0DTE SPX price to pull up that specific contract's flow history chart — and fixed that chart getting stuck loading.
+* Option Chain page: the price you're centered on now stays in the middle of the table when it loads, and the "% strikes shown" dropdown is back.
+
 ## Wednesday 7/8/2026
 
 * Fixed font sizing on the Walls & Flows test tab — text is now consistently readable at 15px with 16px titles for better hierarchy and scannability.

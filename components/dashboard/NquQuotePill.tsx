@@ -343,9 +343,10 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
   }, []);
 
   const sorted = useMemo(() => {
-    // Exclude the index futures (ESU/NQU) and VIX from the dropdown list; NQU
-    // still drives the main toolbar pill.
-    return quoteList.filter((q) => q.sym !== "/ESU26" && q.sym !== "/NQU26" && q.sym !== "VIX")
+    // Exclude only the index futures (ESU/NQU) — those stay inline in the top
+    // toolbar. VIX and SPX now live here in the dropdown. NQU still drives the
+    // main toolbar pill.
+    return quoteList.filter((q) => q.sym !== "/ESU26" && q.sym !== "/NQU26")
       .map((q) => recs[q.sym] ?? { sym: q.sym, label: q.label, name: q.name, last: null, prev: null, pct: null, spark: [], session: "REG" as const })
       .sort((a, b) => {
         if (a.pct == null && b.pct == null) return 0;

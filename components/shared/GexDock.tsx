@@ -16,13 +16,12 @@ import { useAuth } from "@/components/auth/AuthProvider";
  */
 
 const CYAN = HOME_THEME.cyan;
-function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 
 // Every non-owner-gated page from the nav dropdown, EXCLUDING Options Chain and
 // the not-yet-live "coming soon" routes (ICT, Journal, Order Flow). Each renders
 // inside the drawer via its `embed` route (?embed=1 = full-bleed, no chrome).
 export type GexGroup = { id: string; emoji: string; title: string; embed?: string };
-const GROUPS: GexGroup[] = [
+export const GROUPS: GexGroup[] = [
   { id: "home",              emoji: "🏠", title: "Home",         embed: "/home?embed=1" },
   { id: "mult-greek",        emoji: "∇",  title: "Multi Greek",  embed: "/mult-greek?embed=1" },
   { id: "traders-dashboard", emoji: "🗓️", title: "Traders Dash", embed: "/traders-dashboard?embed=1" },
@@ -153,61 +152,8 @@ export default function GexDock() {
           </button>
         </div>
 
-        {/* Page selector — single row, one column per page */}
-        <div
-          style={{
-            flexShrink: 0,
-            display: "grid",
-            gridTemplateColumns: `repeat(${GROUPS.length}, 1fr)`,
-            gap: 6,
-            marginBottom: 16,
-          }}
-        >
-          {GROUPS.map((g) => {
-            const active = g.id === selectedId;
-            const locked = !hasFullAccess && !FREE_GROUP_IDS.has(g.id);
-            return (
-              <button
-                key={g.id}
-                onClick={() => setSelectedId(g.id)}
-                title={locked ? `${g.title} — requires a subscription` : g.title}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  textAlign: "center",
-                  gap: 4,
-                  padding: "8px 3px",
-                  borderRadius: 10,
-                  border: `1px solid ${active ? cyanA(0.6) : cyanA(0.28)}`,
-                  background: active ? cyanA(0.14) : "rgba(255,255,255,0.04)",
-                  color: HOME_THEME.text,
-                  cursor: "pointer",
-                  minWidth: 0,
-                  minHeight: 62,
-                  opacity: locked ? 0.4 : 1,
-                  boxShadow: active ? `0 8px 22px -6px ${cyanA(0.5)}` : "none",
-                  transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s, opacity 0.14s",
-                }}
-                onMouseEnter={(e) => {
-                  if (active) return;
-                  e.currentTarget.style.background = cyanA(0.12);
-                  e.currentTarget.style.borderColor = cyanA(0.55);
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                }}
-                onMouseLeave={(e) => {
-                  if (active) return;
-                  e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-                  e.currentTarget.style.borderColor = cyanA(0.28);
-                  e.currentTarget.style.transform = "none";
-                }}
-              >
-                <span aria-hidden style={{ fontSize: 18, lineHeight: 1, fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>{locked ? "🔒" : g.emoji}</span>
-                <span style={{ fontSize: 9, fontWeight: 700, color: CYAN, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{g.title}</span>
-              </button>
-            );
-          })}
-        </div>
+        {/* Page selector retired — group selection now comes from the emoji
+            buttons in the GlobalToolbar (openGroup → requestedGroup). */}
 
         {/* Content area — selected group fills the rest of the drawer */}
         <div

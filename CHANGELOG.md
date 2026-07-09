@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-07-09 — `/new-home` iteration + options-chain contract sparkline fix (`app/new-home/page.tsx`, `components/dashboard/LiveGreeksGauges.tsx`, `components/dashboard/ChainStatsBar.tsx`, `app/options-chain/page.tsx`, `server-v2/state/flow-gex-history.js`, `server-v2/server-with-proxy.js`)
+
+Iterated `/new-home`: wired `OptionChainPanel` to the page-level ticker, rebuilt `LiveGreeksGauges` as label+value+zero-crossing sparkline (arc gauge removed), redesigned `ChainStatsBar` to 5m/15m wall tiles + Bull/Bear% + ITM/OTM% (dropped 30m), added an "Alerts" placeholder panel, fixed page-scroll-on-short-window and oversized-chain layout bugs (`minHeight:0` flex fixes), replaced the FAB's numeric sub-buttons with real popups (Economic Calendar, Option Flow settings+sparkline, Notes, Trader Dashboard/Analytics links) labeled by name, and removed the Overview/Chain/Flow tab switcher. On `app/options-chain/page.tsx`: restored the standalone `%` strikes dropdown while hiding the ticker input when embedded, auto-centered the ATM row on load, tightened cell padding/lightened font weight, made relative-GEX% render inline (one line per cell), and added a click-to-open Flow GEX history sparkline (`ContractFlowPopup`, via `lightweight-charts`) for 0DTE SPX cells; fixed that popup timing out by adding a single-strike fast path to `flow-gex-history.js` + the `/proxy/flow-gex-history` route in `server-with-proxy.js`, plus a 15s client timeout/retry.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-09 — Home page tabs (Flow/Greeks/Scanner/ES Candles) + SPX flow query perf (`app/home/HomeClient.tsx`, `components/dashboard/FlowNetPremPanel.tsx`, `GreeksHomePanel.tsx`, `ScannerHomePanel.tsx`, `EsCandlesFullPanel.tsx`, `server-v2/server-with-proxy.js`, `server-v2/state/flow-history-writer.js`)
+
+Added 4 new tabs (Flow, Greeks, Scanner, ES Candles) to the Economic Calendar section on `/home`, each a new self-contained component extracted from its source page and wired into `HomeClient.tsx`'s tab bar; not build-verified (sandbox unavailable all session). Fixed slow SPX flow loading by adding a covering index (`flow_prints_netprem_covering_idx`) for the `/proxy/flow-netprem` query and correcting a cache-TTL bug (4000ms→6000ms) that never actually cached solo-viewer polls, in `server-v2/server-with-proxy.js` (+ mirrored index in `flow-history-writer.js`).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-08 — Walls & Flows tab font sizing + ES Candles sidebar removal (`app/test/page.tsx`, `components/shared/GlobalToolbar.tsx`)
 
 Updated font sizing on Walls & Flows test page to 15px text and 16px titles across WallsFlowsCard, WallsFlowsTab, and TimingWindowChip components for consistency. Removed ES Candles from Quick Pages sidebar pin menu (deleted `/es-candles` entry from QUICK_META in GlobalToolbar.tsx line 94).

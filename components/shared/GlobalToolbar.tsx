@@ -11,6 +11,7 @@ import { useGexPanel } from "./GexPanelContext";
 import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
+import { GROUPS } from "./GexDock";
 
 /**
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
@@ -60,8 +61,8 @@ function EtClock() {
       title="Eastern Time"
       style={{
         flexShrink: 0,
-        fontSize: 13,
-        fontWeight: 700,
+        fontSize: 19,
+        fontWeight: 800,
         color: "#e8edf5",
         fontVariantNumeric: "tabular-nums",
         letterSpacing: ".05em",
@@ -69,7 +70,7 @@ function EtClock() {
       }}
     >
       {time}
-      <span style={{ fontSize: 10, opacity: 0.55, marginLeft: 4 }}>ET</span>
+      <span style={{ fontSize: 12, opacity: 0.55, marginLeft: 5 }}>ET</span>
     </span>
   );
 }
@@ -367,46 +368,36 @@ function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 
 /**
- * NumberedQuickButtons — 5 small numbered circles (1-5), each a direct
- * deep-link into one popup instead of opening the GEX-groups tile picker and
- * clicking a tile: 1 Econ Calendar, 2 Flow (option-flow sparkline for the
- * active ticker), 3 Notes, 4 Traders Dashboard, 5 Analytics. Reuses the same
- * GexDock drawer (via openGroup) for 1/2/4/5; 3 toggles the existing Notes
- * panel so there's only one notes implementation.
+ * GexGroupButtons — one round emoji button per GEX group (sourced from
+ * GexDock's exported GROUPS). Clicking a button opens that group directly in
+ * the GexDock drawer via openGroup(id). Replaces both the old numbered 1-5
+ * shortcuts and the in-drawer tile picker — the emoji buttons ARE the picker now.
  */
-function NumberedQuickButtons({
-  onOpenGroup, onNotes,
-}: { onOpenGroup: (id: string) => void; onNotes: () => void }) {
-  const items: { n: number; title: string; onClick: () => void }[] = [
-    { n: 1, title: "Economic Calendar", onClick: () => onOpenGroup("economic-calendar") },
-    { n: 2, title: "Option Flow (sparkline)", onClick: () => onOpenGroup("flow") },
-    { n: 3, title: "Notes", onClick: onNotes },
-    { n: 4, title: "Traders Dashboard", onClick: () => onOpenGroup("traders-dashboard") },
-    { n: 5, title: "Analytics", onClick: () => onOpenGroup("analytics") },
-  ];
+function GexGroupButtons({ onOpenGroup }: { onOpenGroup: (id: string) => void }) {
   return (
     <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-      {items.map((item) => (
+      {GROUPS.map((g) => (
         <button
-          key={item.n}
+          key={g.id}
           type="button"
-          onClick={item.onClick}
-          title={item.title}
-          aria-label={item.title}
+          onClick={() => onOpenGroup(g.id)}
+          title={g.title}
+          aria-label={g.title}
           style={{
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 26,
-            height: 26,
+            width: 30,
+            height: 30,
             flexShrink: 0,
             borderRadius: "50%",
             border: `1px solid ${cyanA(0.35)}`,
             background: "rgba(255,255,255,0.04)",
             color: HOME_THEME.text,
-            fontSize: 12,
-            fontWeight: 700,
+            fontSize: 15,
+            lineHeight: 1,
             cursor: "pointer",
+            fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
             transition: "background 0.14s, border-color 0.14s, transform 0.14s",
           }}
           onMouseEnter={(e) => {
@@ -420,7 +411,7 @@ function NumberedQuickButtons({
             e.currentTarget.style.transform = "none";
           }}
         >
-          {item.n}
+          <span aria-hidden>{g.emoji}</span>
         </button>
       ))}
     </div>
@@ -669,10 +660,9 @@ export default function GlobalToolbar() {
           {/* ── Maintenance alert ── */}
           <MaintenanceAlert />
 
-          {/* ── Numbered quick-launch (1-5): direct deep-links into GexDock
-              tiles / Notes, skipping the tile picker ── */}
+          {/* ── GEX-group emoji buttons: one per group, opens it in the dock ── */}
           {isSignedIn && (
-            <NumberedQuickButtons onOpenGroup={openGroup} onNotes={togglePanel} />
+            <GexGroupButtons onOpenGroup={openGroup} />
           )}
 
           {/* ── GEX groups — round pop-out button (opens GexDock) ── */}

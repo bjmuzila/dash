@@ -123,8 +123,9 @@ export default function ToolbarTicker() {
   shouldConnectRef.current = shouldConnect;
 
   const [es, setEs] = useState<Quote>({ price: 0, prev: 0 });
-  const [spx, setSpx] = useState<Quote>({ price: 0, prev: 0 });
-  const [vix, setVix] = useState<Quote>({ price: 0, prev: 0 });
+  // SPX/VIX are no longer rendered inline (they live in the quotes dropdown now),
+  // but their live values are still tracked in `live.current` below so
+  // window.__gexAppState.spotPrice stays populated for other pages.
 
   // Mutable live cache — avoids a render on every socket tick.
   // spxDisplay = server `spotDisplay`: live broker spot during RTH, esFut+cashBasis
@@ -144,9 +145,6 @@ export default function ToolbarTicker() {
       if (L.spxPrice > 0) window.__gexAppState.spotPrice = L.spxPrice;
       window.__gexAppState.esPrice = esP;
     }
-    // Prefer server spotDisplay (live RTH / ES-derived off-hours); fall back to raw spot.
-    setSpx({ price: L.spxDisplay > 0 ? L.spxDisplay : L.spxPrice, prev: L.spxPrev });
-    setVix({ price: L.vixPrice, prev: L.vixPrev });
   };
 
   // ── seed from quotes-batch once ──
@@ -261,19 +259,15 @@ export default function ToolbarTicker() {
           transformOrigin: "center center",
         }}
       >
-        {/* VIX / ESU / SPX — clicking any of these opens the quotes dropdown
-            (same panel the NQU pill owns). */}
+        {/* ESU — clicking opens the quotes dropdown (same panel the NQU pill
+            owns); VIX / SPX now live inside that dropdown. */}
         <div
           data-quotes-trigger
           onClick={openQuotes}
           title="Click to see all quotes"
           style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
         >
-          <Pill label="VIX" price={vix.price} prev={vix.prev} color="#e8c060" />
-          <Divider />
           <Pill label="ESU" price={es.price} prev={es.prev} quarter />
-          <Divider />
-          <Pill label="SPX" price={spx.price} prev={spx.prev} />
         </div>
         <Divider />
         {/* NQU pill + 16-symbol "all quotes" dropdown */}
