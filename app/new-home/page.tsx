@@ -381,17 +381,16 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
 }
 
 // ── option chain (left column, main) ────────────────────────────────────────
-// The real /options-chain page, embedded as-is (own toolbar, ticker input/GO,
-// intensity slider, greek/data-mode toggles) — expirySelection="key" swaps
-// its column selection to 0DTE/1DTE/closest weekly/closest monthly instead of
-// the standalone route's next-14-sequential default, and fixedStrikeWindow=10
-// locks the strike window to exactly 10 above spot + 10 below (the "% strikes"
-// toolbar control is hidden in this mode). It manages its own ticker state
-// independently of this page's TickerSwitcher (no ticker prop).
-function OptionChainPanel() {
+// The real /options-chain page, embedded as-is (its own toolbar, intensity
+// slider, "% strikes" dropdown, greek/data-mode toggles) — expirySelection=
+// "key" swaps its column selection to 0DTE/1DTE/closest weekly/closest
+// monthly instead of the standalone route's next-14-sequential default.
+// ticker={ticker} hides the page's own ticker input/GO/Recent controls and
+// follows this page's TickerSwitcher instead — "it switches with the toolbar."
+function OptionChainPanel({ ticker }: { ticker: string }) {
   return (
     <div style={{ flex: 1, minHeight: 0, borderRadius: 20, overflow: "hidden" }}>
-      <OptionsChainPage expirySelection="key" fixedStrikeWindow={10} />
+      <OptionsChainPage expirySelection="key" ticker={ticker} />
     </div>
   );
 }
@@ -407,17 +406,15 @@ function GreeksPanel() {
   );
 }
 
+// Right-column "Alerts" panel — will become a live scrolling alert feed
+// (wiring planned for the weekend). Placeholder only for now.
 function StatsPlaceholderPanel() {
-  const rows = ["Net prem", "Call vol", "Put vol", "OI total"];
   return (
-    <DCard title="Stats">
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {rows.map((r) => (
-          <div key={r} style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
-            <span style={{ color: HOME_THEME.text }}>{r}</span>
-            <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>--</span>
-          </div>
-        ))}
+    <DCard title="Alerts" style={{ flex: 1, minHeight: 160, display: "flex", flexDirection: "column" }}>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.5, letterSpacing: "0.04em" }}>
+          Coming soon
+        </span>
       </div>
     </DCard>
   );
@@ -448,7 +445,7 @@ export default function NewHomePage() {
         {/* left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <ChainStatsBar ticker={ticker} />
-          <OptionChainPanel />
+          <OptionChainPanel ticker={ticker} />
         </div>
 
         {/* right column */}

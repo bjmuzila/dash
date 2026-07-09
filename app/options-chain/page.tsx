@@ -511,19 +511,18 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
 
 export default function OptionsChainPage({
   expirySelection = "sequential",
-  fixedStrikeWindow,
+  ticker: externalTicker,
 }: {
   // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
   // expirations starting at the user's selected date. "key" (/new-home embed):
   // fixed 0DTE/1DTE/weekly/monthly set via pickKeyExpirations, ignoring
   // selectedExpiry/displayPercent's usual windowing role for column selection.
   expirySelection?: "sequential" | "key";
-  // When set, the visible strike window is always exactly this many strikes
-  // above spot + the same number below (+ the ATM row), ignoring the "%
-  // strikes" toolbar control entirely — used by the /new-home embed for a
-  // literal "10 above / 10 below" default instead of the standalone route's
-  // percentage-of-total-strikes windowing.
-  fixedStrikeWindow?: number;
+  // When set, the page's own ticker input/GO/Recent controls are hidden and
+  // the chain follows this ticker instead — used by the /new-home embed so
+  // the page-level TickerSwitcher drives it. Uncontrolled (own ticker input)
+  // when omitted, same as the standalone route.
+  ticker?: string;
 } = {}) {
   // Fallback calendar list (used only until/if the per-ticker expirations
   // fetch resolves). Real listings come from /api/expirations so we never
@@ -744,6 +743,20 @@ export default function OptionsChainPage({
     }
   }, [activeTicker, loadChain]);
 
+  // Follow an externally-driven ticker (the /new-home embed's page-level
+  // TickerSwitcher) — same ticker-changed path as selectTicker/doGo, just
+  // triggered by a prop change instead of a click. No-op when uncontrolled.
+  useEffect(() => {
+    if (externalTicker == null) return;
+    const t = externalTicker.toUpperCase();
+    setTickerInput(t);
+    if (t !== activeTicker) {
+      pendingGoRef.current = true;
+      setActiveTicker(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalTicker]);
+
   // Re-fetch + re-parse when the OI+Vol / Vol-only toggle changes (skip mount).
   const dataModeMountRef = useRef(true);
   useEffect(() => {
@@ -894,20 +907,15 @@ export default function OptionsChainPage({
   // we pad that side with nulls so ATM stays centered no matter the window size.
   const visibleStrikes = useMemo(() => {
     if (!allStrikes.length) return [] as (number | null)[];
+    if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a) as (number | null)[];
+
     const ascending = [...allStrikes].sort((a, b) => a - b);
     const atmIndex = ascending.findIndex(s => s === nearestStrike);
     if (atmIndex < 0) return [...ascending].sort((a, b) => b - a) as (number | null)[];
 
-    let wing: number;
-    if (fixedStrikeWindow != null) {
-      // Literal N above / N below, ignoring the % control entirely.
-      wing = fixedStrikeWindow;
-    } else {
-      if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a) as (number | null)[];
-      let targetCount = Math.max(11, Math.round(ascending.length * (autoDisplayPercent / 100)));
-      if (targetCount % 2 === 0) targetCount += 1; // force odd → real center row
-      wing = (targetCount - 1) / 2; // strikes on each side of ATM
-    }
+    let targetCount = Math.max(11, Math.round(ascending.length * (autoDisplayPercent / 100)));
+    if (targetCount % 2 === 0) targetCount += 1; // force odd → real center row
+    const wing = (targetCount - 1) / 2; // strikes on each side of ATM
 
     const out: (number | null)[] = [];
     // High → low: above ATM (descending), then ATM, then below ATM.
@@ -921,7 +929,7 @@ export default function OptionsChainPage({
       out.push(idx >= 0 ? ascending[idx] : null);
     }
     return out;
-  }, [allStrikes, autoDisplayPercent, nearestStrike, fixedStrikeWindow]);
+  }, [allStrikes, autoDisplayPercent, nearestStrike]);
 
   // Active-greek value lookup: column index → strike → number.
   const valueAt = useCallback(
@@ -1095,7 +1103,7 @@ export default function OptionsChainPage({
   );
   const anyCurrentWeek = colIsCurrentWeek.some(Boolean);
 
-  const autoPercentNote = fixedStrikeWindow == null && autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
+  const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -1137,70 +1145,73 @@ export default function OptionsChainPage({
           Options Chain
         </span>
 
-        <input
-          list="options-chain-tickers"
-          value={tickerInput}
-          onChange={(event) => setTickerInput(event.target.value.toUpperCase())}
-          onBlur={() => setActiveTicker((tickerInput || "SPX").toUpperCase())}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") setActiveTicker((tickerInput || "SPX").toUpperCase());
-          }}
-          autoComplete="off"
-          spellCheck={false}
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            padding: "5px 10px",
-            border: `1px solid rgba(33,158,188,.25)`,
-            borderRadius: 6,
-            background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
-            color: HT.cyan,
-            outline: "none",
-            width: 80,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-          }}
+        {externalTicker == null && (
+          <>
+            <input
+              list="options-chain-tickers"
+              value={tickerInput}
+              onChange={(event) => setTickerInput(event.target.value.toUpperCase())}
+              onBlur={() => setActiveTicker((tickerInput || "SPX").toUpperCase())}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") setActiveTicker((tickerInput || "SPX").toUpperCase());
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "5px 10px",
+                border: `1px solid rgba(33,158,188,.25)`,
+                borderRadius: 6,
+                background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
+                color: HT.cyan,
+                outline: "none",
+                width: 80,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+              }}
+            />
+            <datalist id="options-chain-tickers">
+              {QUOTE_PANEL_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
+            </datalist>
+          </>
+        )}
+
+        <CustomDropdown
+          value={displayPercent}
+          options={DISPLAY_PERCENTS}
+          onChange={setDisplayPercent}
+          formatLabel={v => `${v}% strikes`}
         />
-        <datalist id="options-chain-tickers">
-          {QUOTE_PANEL_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
-        </datalist>
 
-        {fixedStrikeWindow == null && (
-          <CustomDropdown
-            value={displayPercent}
-            options={DISPLAY_PERCENTS}
-            onChange={setDisplayPercent}
-            formatLabel={v => `${v}% strikes`}
-          />
+        {externalTicker == null && (
+          <>
+            <button
+              onClick={doGo}
+              disabled={!tickerInput}
+              style={{ ...segBtnStyle(false), opacity: tickerInput ? 1 : 0.45, cursor: tickerInput ? "pointer" : "not-allowed" }}
+            >
+              GO
+            </button>
+
+            {recentTickers.length > 0 && (
+              <CustomDropdown
+                value={activeTicker}
+                options={recentTickers as string[]}
+                onChange={(t) => selectTicker(t as string)}
+                triggerLabel="Recent"
+                accentCyan={false}
+              />
+            )}
+          </>
         )}
-
-        <button
-          onClick={doGo}
-          disabled={!tickerInput}
-          style={{ ...segBtnStyle(false), opacity: tickerInput ? 1 : 0.45, cursor: tickerInput ? "pointer" : "not-allowed" }}
-        >
-          GO
-        </button>
-
-        {recentTickers.length > 0 && (
-          <CustomDropdown
-            value={activeTicker}
-            options={recentTickers as string[]}
-            onChange={(t) => selectTicker(t as string)}
-            triggerLabel="Recent"
-            accentCyan={false}
-          />
-        )}
-
-        {autoPercentNote ? (
-          <span style={{ fontSize: 9, fontWeight: 800, color: HT.orange, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-            {autoPercentNote}
-          </span>
-        ) : null}
 
         <span style={{ color: HT.border }}>|</span>
         <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
           Total {greekMode}: {fmtMoney(grandTotal)}
+          {autoPercentNote && (
+            <span style={{ color: "#fff", marginLeft: 8 }}>{autoPercentNote}</span>
+          )}
         </span>
 
         <div style={{ flex: 1 }} />

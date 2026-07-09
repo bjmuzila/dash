@@ -210,19 +210,25 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
               borderRadius: 12,
               padding: "8px 10px",
               display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
+              flexDirection: "column",
+              gap: 3,
               fontSize: 15,
             }}
           >
-            <span style={{ color: HT.text, opacity: 0.6, fontWeight: 700 }}>{w.age}m</span>
-            <span style={{ color: HT.green, fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>
-              {fmtStrike(w.callWall?.strike ?? null)}
-            </span>
-            <span style={{ color: HT.text, opacity: 0.3 }}>/</span>
-            <span style={{ color: HT.red, fontFamily: "var(--font-mono, monospace)", fontWeight: 700 }}>
-              {fmtStrike(w.putWall?.strike ?? null)}
-            </span>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ color: HT.text, opacity: 0.55, fontWeight: 700, fontSize: 11, minWidth: 26 }}>{w.age}m</span>
+              <span style={{ color: HT.text, opacity: 0.6, fontSize: 11 }}>Call</span>
+              <span style={{ color: HT.green, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, marginLeft: "auto" }}>
+                {fmtStrike(w.callWall?.strike ?? null)}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ color: "transparent", fontWeight: 700, fontSize: 11, minWidth: 26 }}>{w.age}m</span>
+              <span style={{ color: HT.text, opacity: 0.6, fontSize: 11 }}>Put</span>
+              <span style={{ color: HT.red, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, marginLeft: "auto" }}>
+                {fmtStrike(w.putWall?.strike ?? null)}
+              </span>
+            </div>
           </div>
         ))}
       </div>
