@@ -1480,6 +1480,7 @@ class TastytradeProxy {
     this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
     this.volumes = new Map(); // streamerSymbol -> dayVolume (from Trade events)
     this.restOI = new Map(); // streamerSymbol -> { oi, volume } from REST backfill
+    this.restOISessionKey = null; // session key when restOI was last fetched (for staleness check)
     this.optSessionKey = null; // SPX session key (~6PM ET rollover) the OI/volume maps belong to
     this.sessionRollTimer = null; // self-rescheduling watcher that re-arms OI + clears volume at rollover
     this.oiCoverage = 0;      // 0..1 fraction of active strikes that have OI (last backfill)
@@ -2052,6 +2053,9 @@ class TastytradeProxy {
       }
     }
     console.log(`[OI] REST backfill: ${filled}/${active.length} strikes with OI`);
+    // Mark the session this REST data belongs to so we don't use stale volume
+    // across session boundaries.
+    this.restOISessionKey = this.optSessionKey;
   }
 
   /**
@@ -2789,10 +2793,11 @@ class TastytradeProxy {
       //   • liveVol  — dayVolume from the Trade stream (dxLink legacy path)
       //   • restVol  — Theta OHLC snapshot day-volume (the authoritative source
       //                under DATA_SOURCE=theta; see fetchVolumeTheta)
-      // Use ONLY Trade stream dayVolume (this.volumes). REST volume is stale for
-      // all expirations (current session reset at 6pm, future sessions haven't
-      // started yet). Trade stream is the single source of truth — 0 if no trades.
-      const vol = Number(this.volumes.get(c.streamerSymbol) ?? 0);
+      // Prefer Trade stream (this.volumes). Use REST volume only if it's from the
+      // current session (same optSessionKey). This avoids stale prior-session volume.
+      const liveVol = this.volumes.get(c.streamerSymbol);
+      const restVol = this.restOISessionKey === this.optSessionKey ? Number(rest?.volume ?? 0) : 0;
+      const vol = liveVol != null ? Number(liveVol) : restVol;
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.
