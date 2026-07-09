@@ -2439,11 +2439,10 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
 type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "walls-flows" | "flowgex";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Walls & Flows tab — top call/put walls by GEX timeframe, GEX swing detection,
-// and timing window alerts for 9:30, 2pm, 3:30 ET.
+// Walls & Flows tab — top call/put walls by GEX timeframe and GEX swing
+// detection. Runs continuously, all day and all night — no session gating.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type WallTimingWindow = "9:30" | "2pm" | "3:30";
 type WallsFlowsRow = {
   symbol: string;
   gexSwing5m: number | null;
@@ -2531,55 +2530,12 @@ function useWallsFlows() {
   return { data, error, loadedAt, reload: load };
 }
 
-function TimingWindowChip({ window, isActive }: { window: WallTimingWindow; isActive: boolean }) {
-  return (
-    <div
-      style={{
-        padding: "8px 14px",
-        borderRadius: 8,
-        border: `1px solid ${isActive ? HOME_THEME.cyan : HOME_THEME.border}`,
-        background: isActive ? `${HOME_THEME.cyan}1a` : "rgba(255,255,255,0.04)",
-        color: isActive ? HOME_THEME.cyan : HOME_THEME.text,
-        fontSize: 15,
-        fontWeight: 800,
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-        textAlign: "center",
-      }}
-    >
-      {window} {isActive && "▶"}
-    </div>
-  );
-}
-
 function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow }) {
   const { gexSwing5m, gexSwing15m, gexSwing30m, gexSwing60m } = row;
-
-  // Determine which timing window is active
-  const now = new Date();
-  const etHour = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", hour12: false }).format(now);
-  const etMin = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", minute: "2-digit" }).format(now);
-  const etTime = `${etHour}:${etMin}`;
-  let activeWindow: WallTimingWindow | null = null;
-  if (etTime >= "09:30" && etTime < "10:00") activeWindow = "9:30";
-  else if (etTime >= "14:00" && etTime < "14:30") activeWindow = "2pm";
-  else if (etTime >= "15:30" && etTime < "16:00") activeWindow = "3:30";
 
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* Timing Windows */}
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 10 }}>
-            Timing Windows
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {(["9:30", "2pm", "3:30"] as WallTimingWindow[]).map((w) => (
-              <TimingWindowChip key={w} window={w} isActive={activeWindow === w} />
-            ))}
-          </div>
-        </div>
-
         {/* GEX Swings by Timeframe */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
@@ -2627,8 +2583,8 @@ function WallsFlowsTab() {
           About This Tab
         </div>
         <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          Live GEX change over 5m, 15m, 30m, and 60m windows from the 0DTE options chain. Positive = dealers becoming long gamma (supportive), Negative = dealers becoming short gamma (volatile) ·
-          Timing Windows highlight market hours that historically show gamma acceleration (9:30 open, 2pm churn, 3:30 close).
+          Live GEX change over 5m, 15m, 30m, and 60m windows from the 0DTE options chain. Positive = dealers becoming long gamma (supportive), Negative = dealers becoming short gamma (volatile).
+          Runs continuously all day and all night, no market-hours gating.
         </div>
       </div>
 
