@@ -8,7 +8,7 @@
 // this page's own pill row sits just below it and owns the new ticker/tab
 // switchers + FAB.
 
-import type { CSSProperties, ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { PageShell } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE, dissolveCardStyle, statTileStyle } from "@/components/shared/homeTheme";
 import EsCandlesCard from "@/components/dashboard/EsCandlesCard";
@@ -46,8 +46,33 @@ function DCard({
   );
 }
 
+// ── favorite tickers — persisted in the browser, same pattern as the recent-
+// tickers cache on /options-chain. Star toggles membership; no server call.
+const FAVORITE_TICKERS_KEY = "new-home-favorite-tickers-v1";
+const FAVORITE_TICKERS_MAX = 8;
+
+function loadFavoriteTickers(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FAVORITE_TICKERS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFavoriteTickers(list: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(FAVORITE_TICKERS_KEY, JSON.stringify(list));
+  } catch {
+    /* ignore */
+  }
+}
+
 // ── static placeholder data (UI only) ───────────────────────────────────────
-const STAT_CARDS = ["SPX", "GEX", "DEX", "FLIP", "IV"];
+const STAT_CARDS = ["GEX", "DEX", "FLIP", "IV"];
 const GAUGES = ["GEX", "DEX", "CHEX", "VEX"];
 
 // Option chain placeholder shape — mirrors the real /options-chain matrix:
@@ -58,8 +83,254 @@ const CHAIN_EXPIRY_COUNT = 5;
 const CHAIN_EXPIRY_LABELS = Array.from({ length: CHAIN_EXPIRY_COUNT }, (_, i) => `EXP ${i + 1}`);
 const CHAIN_STRIKE_ROWS = 9;
 
+// ── ticker switcher: click the chip to type any ticker (uppercased, Enter/blur
+// commits, Escape cancels); the whole page re-keys off `ticker`, so every
+// switch effectively "brings up its own page" for that symbol. Star toggles
+// the active ticker into a localStorage-backed favorites list; the dropdown
+// lists favorites for one-click switching. Still no data fetch — this only
+// changes which symbol the (currently static) panels are labeled for.
+function TickerSwitcher({ ticker, onChange }: { ticker: string; onChange: (t: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(ticker);
+  const [favOpen, setFavOpen] = useState(false);
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setFavorites(loadFavoriteTickers()); }, []);
+  useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
+  useEffect(() => { setDraft(ticker); }, [ticker]);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setFavOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const commit = useCallback(() => {
+    const next = draft.trim().toUpperCase();
+    setEditing(false);
+    if (next && next !== ticker) onChange(next);
+    else setDraft(ticker);
+  }, [draft, ticker, onChange]);
+
+  const toggleFavorite = useCallback((t: string) => {
+    setFavorites((prev) => {
+      const upper = t.toUpperCase();
+      const next = prev.includes(upper)
+        ? prev.filter((x) => x !== upper)
+        : [upper, ...prev].slice(0, FAVORITE_TICKERS_MAX);
+      saveFavoriteTickers(next);
+      return next;
+    });
+  }, []);
+
+  const isFav = favorites.includes(ticker);
+
+  return (
+    <div ref={rootRef} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 800, letterSpacing: "0.08em", position: "relative" }}>
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.toUpperCase())}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") { setDraft(ticker); setEditing(false); }
+          }}
+          spellCheck={false}
+          autoComplete="off"
+          style={{
+            width: 70,
+            padding: "4px 10px",
+            borderRadius: 999,
+            border: `1px solid ${rgba(LIGHT_BLUE, 0.5)}`,
+            background: rgba(LIGHT_BLUE, 0.12),
+            color: LIGHT_BLUE,
+            fontSize: 13,
+            fontWeight: 800,
+            letterSpacing: "0.08em",
+            outline: "none",
+            textTransform: "uppercase",
+          }}
+        />
+      ) : (
+        <span
+          onClick={() => setEditing(true)}
+          title="Click to switch ticker"
+          style={{
+            padding: "4px 12px",
+            borderRadius: 999,
+            border: `1px solid ${rgba(LIGHT_BLUE, 0.35)}`,
+            background: rgba(LIGHT_BLUE, 0.12),
+            color: LIGHT_BLUE,
+            cursor: "pointer",
+          }}
+        >
+          {ticker}
+        </span>
+      )}
+
+      <button
+        onClick={() => toggleFavorite(ticker)}
+        title={isFav ? "Remove from favorites" : "Add to favorites"}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          fontSize: 15,
+          lineHeight: 1,
+          color: isFav ? "#fbbf24" : "#5c6b7a",
+        }}
+      >
+        {isFav ? "★" : "☆"}
+      </button>
+
+      {favorites.length > 0 && (
+        <button
+          onClick={() => setFavOpen((o) => !o)}
+          title="Favorite tickers"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 10, color: "#5c6b7a", opacity: 0.7 }}
+        >
+          ▾
+        </button>
+      )}
+
+      {favOpen && favorites.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            minWidth: 100,
+            background: "rgba(10,13,20,0.98)",
+            backdropFilter: "blur(20px)",
+            borderRadius: 10,
+            padding: "4px 0",
+            boxShadow: "0 20px 44px -14px rgba(0,0,0,0.75)",
+            zIndex: 20,
+          }}
+        >
+          {favorites.map((t) => (
+            <div
+              key={t}
+              onClick={() => { onChange(t); setFavOpen(false); }}
+              style={{
+                padding: "6px 14px",
+                fontSize: 11,
+                fontWeight: t === ticker ? 800 : 600,
+                color: t === ticker ? LIGHT_BLUE : HOME_THEME.text,
+                background: t === ticker ? rgba(LIGHT_BLUE, 0.1) : "transparent",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── floating FAB menu — mock only, no real destinations yet. Main round button
+// toggles 5 sub-buttons that fan out in a quarter-circle above/left of it (arc
+// layout), with a rotate animation on the "+" and click-outside-to-close —
+// same behavior as the vanilla mainBtn/subButtons pattern, ported to React
+// state instead of classList.toggle("hidden").
+const FAB_MOCK_ITEMS = ["1", "2", "3", "4", "5"];
+const FAB_RADIUS = 64;
+
+function FabMenu() {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    window.addEventListener("click", onDocClick);
+    return () => window.removeEventListener("click", onDocClick);
+  }, []);
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", width: 28, height: 28 }}>
+      {FAB_MOCK_ITEMS.map((label, i) => {
+        // Fan across a quarter-circle from 180° (left) to 270° (up), so the
+        // sub-buttons sweep up-and-left away from the top-right corner FAB.
+        const angle = 180 + (i / (FAB_MOCK_ITEMS.length - 1)) * 90;
+        const rad = (angle * Math.PI) / 180;
+        const x = Math.cos(rad) * FAB_RADIUS;
+        const y = Math.sin(rad) * FAB_RADIUS;
+        return (
+          <button
+            key={label}
+            onClick={() => setOpen(false)}
+            title={`Sub-button ${label} (mock)`}
+            style={{
+              position: "absolute",
+              top: 14,
+              left: 14,
+              width: 26,
+              height: 26,
+              marginTop: -13,
+              marginLeft: -13,
+              borderRadius: "50%",
+              border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
+              background: "rgba(13,17,25,0.92)",
+              backdropFilter: "blur(16px)",
+              color: LIGHT_BLUE,
+              fontSize: 10,
+              fontWeight: 800,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              opacity: open ? 1 : 0,
+              pointerEvents: open ? "auto" : "none",
+              transform: open ? `translate(${x}px, ${y}px)` : "translate(0px, 0px)",
+              transition: `transform 0.22s ease ${open ? i * 0.03 : 0}s, opacity 0.18s ease ${open ? i * 0.03 : 0}s`,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        title="Floating FAB menu"
+        style={{
+          position: "relative",
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
+          background: `linear-gradient(180deg, ${rgba(LIGHT_BLUE, 0.20)}, ${rgba(LIGHT_BLUE, 0.06)})`,
+          color: LIGHT_BLUE,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 15,
+          fontWeight: 800,
+          cursor: "pointer",
+          transform: open ? "rotate(45deg)" : "rotate(0deg)",
+          transition: "transform 0.22s ease",
+        }}
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 // ── pill top row: new ticker switcher (left) + new tab switcher/FAB (right) ─
-function NewHomeTopPill() {
+function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerChange: (t: string) => void }) {
   return (
     <div
       style={{
@@ -75,21 +346,7 @@ function NewHomeTopPill() {
         flexShrink: 0,
       }}
     >
-      {/* New ticker switcher */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 800, letterSpacing: "0.08em" }}>
-        <span
-          style={{
-            padding: "4px 12px",
-            borderRadius: 999,
-            border: `1px solid ${rgba(LIGHT_BLUE, 0.35)}`,
-            background: rgba(LIGHT_BLUE, 0.12),
-            color: LIGHT_BLUE,
-          }}
-        >
-          SPX
-        </span>
-        <span style={{ opacity: 0.4, fontSize: 11 }}>▾ ticker switcher</span>
-      </div>
+      <TickerSwitcher ticker={ticker} onChange={onTickerChange} />
 
       <div style={{ fontSize: 10, letterSpacing: "0.16em", color: "#5c6b7a", textTransform: "uppercase" }}>
         new-home
@@ -114,35 +371,20 @@ function NewHomeTopPill() {
             </span>
           ))}
         </div>
-        <div
-          title="Floating FAB menu"
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: "50%",
-            border: `1px solid ${rgba(LIGHT_BLUE, 0.4)}`,
-            background: `linear-gradient(180deg, ${rgba(LIGHT_BLUE, 0.20)}, ${rgba(LIGHT_BLUE, 0.06)})`,
-            color: LIGHT_BLUE,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 15,
-            fontWeight: 800,
-            flexShrink: 0,
-          }}
-        >
-          +
-        </div>
+        <FabMenu />
       </div>
     </div>
   );
 }
 
 // ── stat cards row (left column, top) — statTileStyle, no border ───────────
-function StatCardsRow() {
+// First tile shows the active ticker (from TickerSwitcher) so switching
+// tickers visibly re-labels the page, even though values stay static "--".
+function StatCardsRow({ ticker }: { ticker: string }) {
+  const labels = [ticker, ...STAT_CARDS];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAT_CARDS.length}, minmax(0,1fr))`, gap: 8 }}>
-      {STAT_CARDS.map((label) => (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${labels.length}, minmax(0,1fr))`, gap: 8 }}>
+      {labels.map((label) => (
         <div
           key={label}
           style={{
@@ -297,13 +539,18 @@ function EsCandlesPanel() {
 }
 
 export default function NewHomePage() {
+  // Active ticker lives here — switching it (via TickerSwitcher) re-labels the
+  // whole page. Panels are still static "--" values; wiring real per-ticker
+  // data is the next step once this layout + interaction is approved.
+  const [ticker, setTicker] = useState("SPX");
+
   return (
     <PageShell>
-      <NewHomeTopPill />
+      <NewHomeTopPill ticker={ticker} onTickerChange={setTicker} />
       <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: 16, flex: 1, minHeight: 0 }}>
         {/* left column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-          <StatCardsRow />
+          <StatCardsRow ticker={ticker} />
           <OptionChainPlaceholder />
         </div>
 
