@@ -105,41 +105,20 @@ function Sparkline({ points, fullScale, width = 76, height = 18 }: { points: num
   );
 }
 
-// Same gauge visual as /greeks' GreeksGauge — 0 pinned at 12 o'clock,
-// positive green / negative red, self-scaling arc. Sparkline underneath
-// tracks the same series that scales the gauge, colored per the zero-cross
-// rule above.
+// No more arc gauge — just the label, live value, and a zero-cross sparkline
+// (green above zero / red below, colored exactly as it crosses).
 function Gauge({ label, value, fmt, fullScale, spark }: { label: string; value: number | null; fmt: (v: number | null) => string; fullScale: number; spark: number[] }) {
-  const cx = 66, cy = 70, r = 32;
-  const GREEN = "#00e676", RED = "#ff5252";
-  const pt = (deg: number) => ({ x: cx + r * Math.sin((deg * Math.PI) / 180), y: cy - r * Math.cos((deg * Math.PI) / 180) });
-  const arc = (d0: number, d1: number) => {
-    const a = pt(d0), b = pt(d1);
-    const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
-    const sweep = d1 > d0 ? 1 : 0;
-    return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
-  };
-  const v = value ?? 0;
-  const f = fullScale > 0 ? Math.max(-1, Math.min(1, v / fullScale)) : 0;
-  const valDeg = f * 135;
-  const col = v > 0 ? GREEN : v < 0 ? RED : "#9fb3c8";
-  const valuePath = f >= 0 ? arc(0, valDeg) : arc(valDeg, 0);
   const has = value != null && isFinite(value);
+  const v = value ?? 0;
+  const col = v > 0 ? GREEN : v < 0 ? RED : "#9fb3c8";
 
   return (
-    <div className="card-hover" style={{ ...statTileStyle, padding: "6px 4px 5px", display: "flex", flexDirection: "column", alignItems: "center" }}>
-      <svg viewBox="0 0 132 108" width="100%" style={{ display: "block", maxWidth: 84 }}>
-        <path d={arc(-135, 0)} fill="none" stroke="#2a1a20" strokeWidth={6} strokeLinecap="round" />
-        <path d={arc(0, 135)} fill="none" stroke="#15242b" strokeWidth={6} strokeLinecap="round" />
-        {has && Math.abs(valDeg) > 0.5 && <path d={valuePath} fill="none" stroke={col} strokeWidth={6} strokeLinecap="round" />}
-        <line x1={cx} y1={cy - r - 6} x2={cx} y2={cy - r + 1} stroke="#fff" strokeWidth={1.2} />
-        <circle cx={cx} cy={cy - r} r={1.8} fill="#fff" />
-        <text x={cx} y={cy + 2} textAnchor="middle" fontSize={15} fontWeight={800} fill="#fff" fontFamily="monospace">
-          {has ? fmt(value) : "--"}
-        </text>
-        <text x={cx} y={cy + 17} textAnchor="middle" fontSize={11} letterSpacing="2" fill="#fff">{label}</text>
-      </svg>
-      <Sparkline points={spark} fullScale={fullScale} />
+    <div className="card-hover" style={{ ...statTileStyle, padding: "8px 6px 7px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+      <div style={{ fontSize: 11, letterSpacing: "2px", color: "#fff" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: has ? col : "#9fb3c8", fontFamily: "monospace" }}>
+        {has ? fmt(value) : "--"}
+      </div>
+      <Sparkline points={spark} fullScale={fullScale} width={84} height={26} />
     </div>
   );
 }

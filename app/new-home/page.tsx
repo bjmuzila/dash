@@ -387,14 +387,22 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
 // monthly instead of the standalone route's next-14-sequential default.
 // ticker={ticker} hides the page's own ticker input/GO/Recent controls and
 // follows this page's TickerSwitcher instead — "it switches with the toolbar."
-// minHeight: 460 (not 0) so on a short window this panel keeps a usable size
+// minHeight: 230 (not 0) so on a short window this panel keeps a usable size
 // instead of getting squeezed to nothing — once every panel hits its floor,
 // the page itself scrolls (see PageShell's `main`, overflow: auto) rather
 // than compressing content further.
+// Rendered at half size overall: the inner page is laid out at 200% width/
+// height then CSS-scaled down by 0.5 (transform-origin top-left) inside an
+// absolutely-positioned wrapper matching the outer box — shrinks everything
+// (fonts, padding, columns) uniformly instead of just cropping it.
 function OptionChainPanel({ ticker }: { ticker: string }) {
   return (
-    <div style={{ flex: 1, minHeight: 460, borderRadius: 20, overflow: "hidden" }}>
-      <OptionsChainPage expirySelection="key" ticker={ticker} />
+    <div style={{ flex: 1, minHeight: 230, borderRadius: 20, overflow: "hidden", position: "relative" }}>
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+        <div style={{ width: "200%", height: "200%", transform: "scale(0.5)", transformOrigin: "top left" }}>
+          <OptionsChainPage expirySelection="key" ticker={ticker} />
+        </div>
+      </div>
     </div>
   );
 }
