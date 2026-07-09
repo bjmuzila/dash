@@ -1,0 +1,108 @@
+<svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>CB Edge pricing announcement with feature list</title>
+  <desc>CB Edge is $45 a month (code MONTH) or $500 a year (code YEAR), versus others charging $99, $199, or $699. Right side lists what's included: live GEX and options flow, dark pool tape, ICT setup tracker, HMM regime engine, estimated moves, confidence score, ES candles with GEX heatmap, and real-time scanner and alerts.</desc>
+  <defs>
+    <radialGradient id="glow1" cx="15%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#219EBC" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#219EBC" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="90%" cy="80%" r="60%">
+      <stop offset="0%" stop-color="#126783" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#126783" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f4f6f8"/>
+      <stop offset="45%" stop-color="#aeb8c2"/>
+      <stop offset="55%" stop-color="#8a94a0"/>
+      <stop offset="100%" stop-color="#e7eaee"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="675" fill="#05060A"/>
+  <rect width="1200" height="675" fill="url(#glow1)"/>
+  <rect width="1200" height="675" fill="url(#glow2)"/>
+
+  <!-- logo top right -->
+  <text x="1120" y="52" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-style="italic" font-weight="800" fill="url(#chrome)">CB Edge</text>
+  <text x="1120" y="72" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="11" letter-spacing="1" fill="#FFFFFF" opacity="0.5">&#8220;Real Edge &#8226; Real Orderflow&#8221;</text>
+
+  <!-- left: headline -->
+  <rect x="80" y="86" width="56" height="3" fill="#FB8501"/>
+  <text x="80" y="150" font-family="Arial, Helvetica, sans-serif" font-size="34" fill="#FFFFFF" font-weight="700">What&#8217;s the right price</text>
+  <text x="80" y="192" font-family="Arial, Helvetica, sans-serif" font-size="34" fill="#8ECAE6" font-weight="700">to charge a trader?</text>
+  <text x="80" y="224" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#FFFFFF" font-weight="400">Not trying to overcharge. Here for the</text>
+  <text x="80" y="246" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#FFFFFF" font-weight="400">trader, not to profit off them.</text>
+
+  <text x="80" y="288" font-family="Arial, Helvetica, sans-serif" font-size="13" letter-spacing="2" fill="#FB8501" font-weight="700">OTHERS CHARGE / MONTH</text>
+
+  <g>
+    <rect x="80" y="304" width="150" height="80" rx="12" fill="rgba(13,17,25,0.72)" stroke="rgba(255,255,255,0.10)"/>
+    <text x="155" y="352" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" fill="#EF4444" font-weight="700" text-decoration="line-through">$99</text>
+  </g>
+  <g>
+    <rect x="246" y="304" width="150" height="80" rx="12" fill="rgba(13,17,25,0.72)" stroke="rgba(255,255,255,0.10)"/>
+    <text x="321" y="352" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" fill="#EF4444" font-weight="700" text-decoration="line-through">$199</text>
+  </g>
+  <g>
+    <rect x="412" y="304" width="150" height="80" rx="12" fill="rgba(13,17,25,0.72)" stroke="rgba(255,255,255,0.10)"/>
+    <text x="487" y="352" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" fill="#EF4444" font-weight="700" text-decoration="line-through">$699</text>
+  </g>
+
+  <!-- right: what's included -->
+  <g>
+    <rect x="638" y="96" width="482" height="320" rx="18" fill="rgba(13,17,25,0.72)" stroke="rgba(255,255,255,0.10)" stroke-width="1.5"/>
+    <rect x="638" y="96" width="482" height="4" rx="2" fill="#219EBC"/>
+    <text x="666" y="136" font-family="Arial, Helvetica, sans-serif" font-size="15" letter-spacing="2" fill="#219EBC" font-weight="700">WHAT&#8217;S INCLUDED</text>
+
+    <g font-family="Arial, Helvetica, sans-serif" font-size="17" fill="#FFFFFF" font-weight="500">
+      <circle cx="672" cy="167" r="4" fill="#8ECAE6"/>
+      <text x="688" y="173">Live GEX &amp; Options Flow</text>
+
+      <circle cx="672" cy="199" r="4" fill="#8ECAE6"/>
+      <text x="688" y="205">Dark Pool / TRF Tape</text>
+
+      <circle cx="672" cy="231" r="4" fill="#8ECAE6"/>
+      <text x="688" y="237">ICT Setup Tracker</text>
+
+      <circle cx="672" cy="263" r="4" fill="#8ECAE6"/>
+      <text x="688" y="269">HMM Regime Engine</text>
+
+      <circle cx="672" cy="295" r="4" fill="#8ECAE6"/>
+      <text x="688" y="301">Estimated Moves (EM)</text>
+
+      <circle cx="672" cy="327" r="4" fill="#8ECAE6"/>
+      <text x="688" y="333">Confidence Score</text>
+
+      <circle cx="672" cy="359" r="4" fill="#8ECAE6"/>
+      <text x="688" y="365">ES Candles + GEX Heatmap</text>
+
+      <circle cx="672" cy="391" r="4" fill="#8ECAE6"/>
+      <text x="688" y="397">Real-Time Scanner &amp; Alerts</text>
+    </g>
+  </g>
+
+  <!-- pricing cards -->
+  <g>
+    <rect x="80" y="452" width="500" height="168" rx="18" fill="rgba(13,17,25,0.72)" stroke="rgba(33,158,188,0.35)" stroke-width="1.5"/>
+    <rect x="80" y="452" width="500" height="4" rx="2" fill="#219EBC"/>
+    <text x="112" y="496" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="2" fill="#219EBC" font-weight="700">CB EDGE &#8226; MONTHLY</text>
+    <text x="112" y="562" font-family="Arial, Helvetica, sans-serif" font-size="52" fill="#FFFFFF" font-weight="800">$45</text>
+    <text x="112" y="588" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#FFFFFF" font-weight="400">per month</text>
+    <rect x="360" y="540" width="196" height="46" rx="8" fill="rgba(33,158,188,0.12)" stroke="#219EBC" stroke-width="1.5"/>
+    <text x="458" y="562" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="1.5" fill="#219EBC" font-weight="700">CODE</text>
+    <text x="458" y="580" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="15" letter-spacing="2" fill="#FFFFFF" font-weight="800">MONTH</text>
+  </g>
+
+  <g>
+    <rect x="608" y="452" width="512" height="168" rx="18" fill="rgba(13,17,25,0.72)" stroke="rgba(142,202,230,0.4)" stroke-width="1.5"/>
+    <rect x="608" y="452" width="512" height="4" rx="2" fill="#8ECAE6"/>
+    <text x="640" y="496" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="2" fill="#8ECAE6" font-weight="700">CB EDGE &#8226; ANNUAL &#8226; BEST VALUE</text>
+    <text x="640" y="562" font-family="Arial, Helvetica, sans-serif" font-size="52" fill="#FFFFFF" font-weight="800">$500</text>
+    <text x="640" y="588" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#FFFFFF" font-weight="400">per year</text>
+    <rect x="892" y="540" width="196" height="46" rx="8" fill="rgba(142,202,230,0.12)" stroke="#8ECAE6" stroke-width="1.5"/>
+    <text x="990" y="562" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="1.5" fill="#8ECAE6" font-weight="700">CODE</text>
+    <text x="990" y="580" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="15" letter-spacing="2" fill="#FFFFFF" font-weight="800">YEAR</text>
+  </g>
+
+  <text x="80" y="650" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#FB8501" font-weight="600">Built by a trader, for traders.</text>
+</svg>

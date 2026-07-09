@@ -387,22 +387,18 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
 // monthly instead of the standalone route's next-14-sequential default.
 // ticker={ticker} hides the page's own ticker input/GO/Recent controls and
 // follows this page's TickerSwitcher instead — "it switches with the toolbar."
-// minHeight: 230 (not 0) so on a short window this panel keeps a usable size
-// instead of getting squeezed to nothing — once every panel hits its floor,
-// the page itself scrolls (see PageShell's `main`, overflow: auto) rather
-// than compressing content further.
-// Rendered at half size overall: the inner page is laid out at 200% width/
-// height then CSS-scaled down by 0.5 (transform-origin top-left) inside an
-// absolutely-positioned wrapper matching the outer box — shrinks everything
-// (fonts, padding, columns) uniformly instead of just cropping it.
+// minHeight: 230 (half the old 460) keeps the panel's footprint compact on a
+// short window without squeezing it to nothing — the chain's own internal
+// scroll (its "flex:1, overflow:auto" strike-table container) handles the
+// rest. NOTE: a CSS transform:scale(0.5) wrapper was tried here for "half
+// size overall" but that shrinks the table's font along with everything
+// else (down to ~5-6px, unreadable) — reverted per Brandon: font must stay
+// 15px. Compactness instead comes from the page's own tight padding
+// (2px cell padding) plus this smaller container height.
 function OptionChainPanel({ ticker }: { ticker: string }) {
   return (
-    <div style={{ flex: 1, minHeight: 230, borderRadius: 20, overflow: "hidden", position: "relative" }}>
-      <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
-        <div style={{ width: "200%", height: "200%", transform: "scale(0.5)", transformOrigin: "top left" }}>
-          <OptionsChainPage expirySelection="key" ticker={ticker} />
-        </div>
-      </div>
+    <div style={{ flex: 1, minHeight: 230, borderRadius: 20, overflow: "hidden" }}>
+      <OptionsChainPage expirySelection="key" ticker={ticker} />
     </div>
   );
 }

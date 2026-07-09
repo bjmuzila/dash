@@ -1309,7 +1309,7 @@ export default function OptionsChainPage({
             });
           // Shared strike axis: ONE strike column on the left, then one
           // value-only column per expiration. Row N = same strike everywhere.
-          const STRIKE_COL = 64;
+          const STRIKE_COL = 76;
           return (
           <div style={{
             display: "grid",
@@ -1335,7 +1335,7 @@ export default function OptionsChainPage({
                 : null;
               return (
                 <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
                   <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
                   </div>
@@ -1350,9 +1350,9 @@ export default function OptionsChainPage({
               if (strike == null) {
                 return (
                   <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 11, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
+                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 15, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
                     {renderIdx.map((i) => (
-                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 11 }} />
+                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 15 }} />
                     ))}
                   </div>
                 );
@@ -1384,7 +1384,7 @@ export default function OptionsChainPage({
                   {/* Shared strike label (sticky left) */}
                   <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
                     position: "sticky", left: 0, zIndex: 2,
-                    padding: "2px 8px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right",
+                    padding: "2px 8px", fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
                     background: isATM ? "#ffb300" : HT.panelBgStrong,
                     borderRight: `1px solid ${HT.border}`,
@@ -1443,7 +1443,7 @@ export default function OptionsChainPage({
                         key={`${strike}-${colIdx}`}
                         className={isMvc ? "mvc-peak-cell" : undefined}
                         style={{
-                          padding: "2px 8px", fontSize: 11, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
+                          padding: "2px 8px", fontSize: 15, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                           color: value == null ? "#3a4a5e" : "#ffffff",
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
