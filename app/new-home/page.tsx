@@ -387,9 +387,13 @@ function NewHomeTopPill({ ticker, onTickerChange }: { ticker: string; onTickerCh
 // monthly instead of the standalone route's next-14-sequential default.
 // ticker={ticker} hides the page's own ticker input/GO/Recent controls and
 // follows this page's TickerSwitcher instead — "it switches with the toolbar."
+// minHeight: 460 (not 0) so on a short window this panel keeps a usable size
+// instead of getting squeezed to nothing — once every panel hits its floor,
+// the page itself scrolls (see PageShell's `main`, overflow: auto) rather
+// than compressing content further.
 function OptionChainPanel({ ticker }: { ticker: string }) {
   return (
-    <div style={{ flex: 1, minHeight: 0, borderRadius: 20, overflow: "hidden" }}>
+    <div style={{ flex: 1, minHeight: 460, borderRadius: 20, overflow: "hidden" }}>
       <OptionsChainPage expirySelection="key" ticker={ticker} />
     </div>
   );
@@ -400,7 +404,7 @@ function OptionChainPanel({ ticker }: { ticker: string }) {
 // idle timeout like the full page), OI+Vol basis.
 function GreeksPanel() {
   return (
-    <DCard title="Greeks gauges">
+    <DCard title="Greeks gauges" style={{ minHeight: 150 }}>
       <LiveGreeksGauges />
     </DCard>
   );
@@ -441,15 +445,20 @@ export default function NewHomePage() {
   return (
     <PageShell>
       <NewHomeTopPill ticker={ticker} onTickerChange={setTicker} />
-      <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: 16, flex: 1, minHeight: 0 }}>
+      {/* flex:1 lets this row fill a tall viewport as before; minHeight is left
+          at its default (auto, not 0) so on a short window the row keeps its
+          content's natural height instead of being crushed to fit — PageShell's
+          <main> (overflow: auto) then scrolls the page rather than every panel
+          getting squeezed unreadably small. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: 16, flex: 1 }}>
         {/* left column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <ChainStatsBar ticker={ticker} />
           <OptionChainPanel ticker={ticker} />
         </div>
 
         {/* right column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <GreeksPanel />
           <StatsPlaceholderPanel />
           <EsCandlesPanel />

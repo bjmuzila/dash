@@ -68,9 +68,48 @@ function pointFromTotals(
   return snap.gex || snap.dex || snap.chex || snap.vex ? snap : null;
 }
 
+// Small trend line under the gauge — zero line pinned at the vertical middle,
+// each segment colored by the sign of its endpoints (green above zero, red
+// below), so a line crossing zero visibly flips color right at the crossing.
+const GREEN = "#00e676", RED = "#ff5252";
+function Sparkline({ points, fullScale, width = 76, height = 18 }: { points: number[]; fullScale: number; width?: number; height?: number }) {
+  if (points.length < 2) {
+    return <svg width={width} height={height} style={{ display: "block", marginTop: 2 }} />;
+  }
+  const scale = fullScale > 0 ? fullScale : 1;
+  const zeroY = height / 2;
+  const xs = points.map((_, i) => (i / (points.length - 1)) * width);
+  const ys = points.map((v) => {
+    const f = Math.max(-1, Math.min(1, v / scale));
+    return zeroY - f * (zeroY - 1.5);
+  });
+  const segs: JSX.Element[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const v0 = points[i - 1], v1 = points[i];
+    if ((v0 >= 0) === (v1 >= 0)) {
+      const col = v1 >= 0 ? GREEN : RED;
+      segs.push(<line key={i} x1={xs[i - 1]} y1={ys[i - 1]} x2={xs[i]} y2={ys[i]} stroke={col} strokeWidth={1.4} strokeLinecap="round" />);
+    } else {
+      // Interpolate the zero crossing so the color flips exactly at zero.
+      const t = v0 / (v0 - v1);
+      const xz = xs[i - 1] + t * (xs[i] - xs[i - 1]);
+      segs.push(<line key={`${i}a`} x1={xs[i - 1]} y1={ys[i - 1]} x2={xz} y2={zeroY} stroke={v0 >= 0 ? GREEN : RED} strokeWidth={1.4} strokeLinecap="round" />);
+      segs.push(<line key={`${i}b`} x1={xz} y1={zeroY} x2={xs[i]} y2={ys[i]} stroke={v1 >= 0 ? GREEN : RED} strokeWidth={1.4} strokeLinecap="round" />);
+    }
+  }
+  return (
+    <svg width={width} height={height} style={{ display: "block", marginTop: 2, overflow: "visible" }}>
+      <line x1={0} y1={zeroY} x2={width} y2={zeroY} stroke="rgba(255,255,255,0.15)" strokeWidth={1} />
+      {segs}
+    </svg>
+  );
+}
+
 // Same gauge visual as /greeks' GreeksGauge — 0 pinned at 12 o'clock,
-// positive green / negative red, self-scaling arc.
-function Gauge({ label, value, fmt, fullScale }: { label: string; value: number | null; fmt: (v: number | null) => string; fullScale: number }) {
+// positive green / negative red, self-scaling arc. Sparkline underneath
+// tracks the same series that scales the gauge, colored per the zero-cross
+// rule above.
+function Gauge({ label, value, fmt, fullScale, spark }: { label: string; value: number | null; fmt: (v: number | null) => string; fullScale: number; spark: number[] }) {
   const cx = 66, cy = 70, r = 32;
   const GREEN = "#00e676", RED = "#ff5252";
   const pt = (deg: number) => ({ x: cx + r * Math.sin((deg * Math.PI) / 180), y: cy - r * Math.cos((deg * Math.PI) / 180) });
@@ -100,6 +139,7 @@ function Gauge({ label, value, fmt, fullScale }: { label: string; value: number 
         </text>
         <text x={cx} y={cy + 17} textAnchor="middle" fontSize={11} letterSpacing="2" fill="#fff">{label}</text>
       </svg>
+      <Sparkline points={spark} fullScale={fullScale} />
     </div>
   );
 }
@@ -200,12 +240,21 @@ export default function LiveGreeksGauges() {
   const chexScale = scaleOf(history, (p) => p.chex, chexVal);
   const vexScale = scaleOf(history, (p) => p.vex, vexVal);
 
+  // Recent-N series per greek for the sparklines (kept short so a crossing
+  // is easy to read at this tile size).
+  const SPARK_N = 30;
+  const tail = history.slice(-SPARK_N);
+  const gexSpark = tail.map((p) => p.gex);
+  const dexSpark = tail.map((p) => p.dex);
+  const chexSpark = tail.map((p) => p.chex);
+  const vexSpark = tail.map((p) => p.vex);
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
-      <Gauge label="GEX" value={gexVal} fmt={fmtB} fullScale={gexScale} />
-      <Gauge label="DEX" value={dexVal} fmt={fmtB} fullScale={dexScale} />
-      <Gauge label="CHEX" value={chexVal} fmt={fmtM} fullScale={chexScale} />
-      <Gauge label="VEX" value={vexVal} fmt={fmtM} fullScale={vexScale} />
+      <Gauge label="GEX" value={gexVal} fmt={fmtB} fullScale={gexScale} spark={gexSpark} />
+      <Gauge label="DEX" value={dexVal} fmt={fmtB} fullScale={dexScale} spark={dexSpark} />
+      <Gauge label="CHEX" value={chexVal} fmt={fmtM} fullScale={chexScale} spark={chexSpark} />
+      <Gauge label="VEX" value={vexVal} fmt={fmtM} fullScale={vexScale} spark={vexSpark} />
     </div>
   );
 }

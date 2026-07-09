@@ -563,6 +563,12 @@ export default function OptionsChainPage({
   const dataModeRef = useRef<DataMode>("oi-vol");
   useEffect(() => { dataModeRef.current = dataMode; }, [dataMode]);
   const pageRef = useRef<HTMLDivElement>(null);
+  // Scroll container + ATM row refs — used to vertically center the ATM strike
+  // in the visible table area on first load / ticker or expiry change (rather
+  // than leaving the view scrolled to the top of the strike list).
+  const chainScrollRef = useRef<HTMLDivElement>(null);
+  const atmRowRef = useRef<HTMLDivElement>(null);
+  const centeredForRef = useRef<string>("");
   const [chainError, setChainError] = useState<string | null>(null);
   // Weekly EM (from /api/levels, DB-backed). close ± em = 1× band, ± 2·em = 2×.
   const [emLevels, setEmLevels] = useState<{ close: number; em: number } | null>(null);
@@ -931,6 +937,26 @@ export default function OptionsChainPage({
     return out;
   }, [allStrikes, autoDisplayPercent, nearestStrike]);
 
+  // Center the ATM row vertically in the scroll viewport on load / whenever the
+  // ticker or expiry set changes (visibleStrikes always places ATM at the exact
+  // middle index, but the scroll container itself defaults to scrolled-to-top —
+  // this nudges it so the ATM strike is what's actually on screen at load).
+  useEffect(() => {
+    if (!visibleStrikes.length) return;
+    const key = `${activeTicker}|${selectedExpiryRef.current}|${visibleStrikes.length}`;
+    if (centeredForRef.current === key) return;
+    const id = requestAnimationFrame(() => {
+      const el = atmRowRef.current;
+      const container = chainScrollRef.current;
+      if (!el || !container) return;
+      const elTop = el.offsetTop;
+      const target = elTop - container.clientHeight / 2 + el.clientHeight / 2;
+      container.scrollTop = Math.max(0, target);
+      centeredForRef.current = key;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [visibleStrikes, activeTicker]);
+
   // Active-greek value lookup: column index → strike → number.
   const valueAt = useCallback(
     (col: ExpColumn, strike: number): number | null => {
@@ -1271,7 +1297,7 @@ export default function OptionsChainPage({
       ) : (
         /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
            inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
-        <div style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
+        <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
           {(() => {
           // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
           const renderIdx = Array.from({ length: gridCols })
@@ -1324,9 +1350,9 @@ export default function OptionsChainPage({
               if (strike == null) {
                 return (
                   <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "4px 8px", fontSize: 11, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
+                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 11, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
                     {renderIdx.map((i) => (
-                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "4px 8px", fontSize: 11 }} />
+                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 11 }} />
                     ))}
                   </div>
                 );
@@ -1356,9 +1382,9 @@ export default function OptionsChainPage({
               return (
                 <div key={strike} style={{ display: "contents" }}>
                   {/* Shared strike label (sticky left) */}
-                  <div title={emTip || undefined} style={{
+                  <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
                     position: "sticky", left: 0, zIndex: 2,
-                    padding: "4px 8px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right",
+                    padding: "2px 8px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
                     background: isATM ? "#ffb300" : HT.panelBgStrong,
                     borderRight: `1px solid ${HT.border}`,
@@ -1417,7 +1443,7 @@ export default function OptionsChainPage({
                         key={`${strike}-${colIdx}`}
                         className={isMvc ? "mvc-peak-cell" : undefined}
                         style={{
-                          padding: "4px 8px", fontSize: 11, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
+                          padding: "2px 8px", fontSize: 11, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                           color: value == null ? "#3a4a5e" : "#ffffff",
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
