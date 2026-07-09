@@ -2445,23 +2445,88 @@ type TestTab = "overview" | "flow" | "positioning" | "gexlevels" | "regime" | "w
 
 type WallLevel = { strike: number; value: number } | null;
 type WallsFlowsWindow = { age: string; callWall: WallLevel; putWall: WallLevel };
-type WallsFlowsLive = { spot: number | null; callWall: WallLevel; putWall: WallLevel };
 type WallsFlowsRow = {
   symbol: string;
-  mode: "history" | "live";
-  windows?: WallsFlowsWindow[];
-  live?: WallsFlowsLive;
+  spot: number | null;
+  windows: WallsFlowsWindow[];
+  // true for NDX/SPY/QQQ: their 5/15/30/60m windows come from a rolling
+  // buffer this browser builds client-side (see WF_BUFFER_* below), not from
+  // Postgres like SPX. Windows show "—" until enough time has passed since
+  // this browser started polling that ticker.
+  buffered: boolean;
   ts: number;
 };
 
 // SPX keeps the full 5/15/30/60m historical windows (backed by
 // option_strike_gex_history, which today only ever gets written by the single
-// shared live SPX feed). SPY/QQQ/NDX don't have that history, so they get a
-// live-only snapshot fetched fresh each poll from that ticker's own 0DTE
-// chain. SPX and NDX run all day and all night; SPY/QQQ are RTH-only (their
-// 0DTE chains aren't meaningfully tradable outside 9:30–16:00 ET).
+// shared live SPX feed). SPY/QQQ/NDX don't have that server-side history, so
+// each browser builds its own rolling buffer client-side (localStorage) from
+// repeated live snapshots instead — a real 5/15/30/60m-ago comparison, just
+// warmed up locally rather than backed by the DB. SPX and NDX run all day and
+// all night; SPY/QQQ are RTH-only (their 0DTE chains aren't meaningfully
+// tradable outside 9:30–16:00 ET).
 const WALLS_FLOWS_SYMBOLS = ["SPX", "NDX", "SPY", "QQQ"] as const;
 const WALLS_FLOWS_RTH_ONLY: Record<string, boolean> = { SPX: false, NDX: false, SPY: true, QQQ: true };
+const WALLS_FLOWS_AGES = ["5", "15", "30", "60"] as const;
+
+// ── Client-side rolling buffer for NDX/SPY/QQQ (no server-side history) ──────
+type WfBufEntry = { ts: number; callWall: WallLevel; putWall: WallLevel };
+const WF_BUFFER_MAX_AGE_MS = 65 * 60 * 1000; // keep ~65 min of snapshots
+const WF_BUFFER_TOLERANCE_MS = 4 * 60 * 1000; // "N min ago" must match within 4 min
+
+function wfBufferKey(ticker: string): string {
+  return `cbedge_walls_flows_buffer_${ticker}`;
+}
+
+function loadWfBuffer(ticker: string): WfBufEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(wfBufferKey(ticker));
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveWfBuffer(ticker: string, buf: WfBufEntry[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(wfBufferKey(ticker), JSON.stringify(buf));
+  } catch {
+    // localStorage full/unavailable — buffer just won't persist across reloads.
+  }
+}
+
+// Append this poll's snapshot, prune anything older than WF_BUFFER_MAX_AGE_MS,
+// persist, and return the pruned buffer for immediate use.
+function recordWfSnapshot(ticker: string, callWall: WallLevel, putWall: WallLevel): WfBufEntry[] {
+  const now = Date.now();
+  const buf = loadWfBuffer(ticker);
+  buf.push({ ts: now, callWall, putWall });
+  const pruned = buf.filter((e) => now - e.ts <= WF_BUFFER_MAX_AGE_MS);
+  saveWfBuffer(ticker, pruned);
+  return pruned;
+}
+
+// Nearest buffered snapshot to (now − ageMin), within tolerance. Returns nulls
+// when the buffer doesn't reach back that far yet (first ~N minutes after this
+// browser starts polling this ticker).
+function wallAtAge(buf: WfBufEntry[], ageMin: number): { callWall: WallLevel; putWall: WallLevel } {
+  if (!buf.length) return { callWall: null, putWall: null };
+  const target = Date.now() - ageMin * 60_000;
+  let best = buf[0];
+  let bestDiff = Math.abs(buf[0].ts - target);
+  for (const e of buf) {
+    const diff = Math.abs(e.ts - target);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = e;
+    }
+  }
+  if (bestDiff > WF_BUFFER_TOLERANCE_MS) return { callWall: null, putWall: null };
+  return { callWall: best.callWall, putWall: best.putWall };
+}
 
 function isRthNowET(): boolean {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -2506,7 +2571,8 @@ async function resolveZeroDteExpiry(ticker: string): Promise<string | null> {
 // does — (callGamma·callOI − putGamma·putOI)·spot²·0.01·100 — then takes the
 // strike with the largest positive value (call wall) and largest negative
 // value (put wall). No time-ago comparison; this is a single "now" snapshot.
-async function fetchLiveWall(ticker: string): Promise<WallsFlowsLive | null> {
+type LiveWallSnapshot = { spot: number | null; callWall: WallLevel; putWall: WallLevel };
+async function fetchLiveWall(ticker: string): Promise<LiveWallSnapshot | null> {
   const expiry = await resolveZeroDteExpiry(ticker);
   if (!expiry) return null;
 
@@ -2567,8 +2633,7 @@ function useWallsFlows() {
         // (dealers long gamma, resistance); the put wall is the strike with the most
         // negative net GEX (dealers short gamma, support/acceleration).
         const baselines: Record<string, Record<string, number>> = json?.baselines ?? {};
-        const ages = ["5", "15", "30", "60"];
-        const windows: WallsFlowsWindow[] = ages.map((age) => {
+        const windows: WallsFlowsWindow[] = WALLS_FLOWS_AGES.map((age) => {
           let callWall: WallLevel = null;
           let putWall: WallLevel = null;
           for (const [strikeStr, byAge] of Object.entries(baselines)) {
@@ -2580,18 +2645,26 @@ function useWallsFlows() {
           }
           return { age, callWall, putWall };
         });
-        bySymbol.SPX = { symbol: "SPX", mode: "history", windows, ts: Date.now() };
+        bySymbol.SPX = { symbol: "SPX", spot: null, windows, buffered: false, ts: Date.now() };
       }
 
-      // NDX/SPY/QQQ — live-only single "now" snapshot (no stored history for these
-      // tickers). NDX runs 24/7; SPY/QQQ only fetch during RTH.
+      // NDX/SPY/QQQ — 5/15/30/60m windows from each browser's own rolling
+      // buffer (no server-side history for these tickers). Every poll fetches
+      // the current wall and records it into the buffer, then each age window
+      // is filled from whichever buffered snapshot lands closest to that time
+      // ago. NDX runs 24/7; SPY/QQQ only fetch/buffer during RTH.
       for (const sym of ["NDX", "SPY", "QQQ"] as const) {
         if (WALLS_FLOWS_RTH_ONLY[sym] && !rthOpen) {
           skipped.push(sym);
           continue;
         }
         const live = await fetchLiveWall(sym).catch(() => null);
-        bySymbol[sym] = { symbol: sym, mode: "live", live: live ?? { spot: null, callWall: null, putWall: null }, ts: Date.now() };
+        const buf = recordWfSnapshot(sym, live?.callWall ?? null, live?.putWall ?? null);
+        const windows: WallsFlowsWindow[] = WALLS_FLOWS_AGES.map((age) => {
+          const { callWall, putWall } = wallAtAge(buf, Number(age));
+          return { age, callWall, putWall };
+        });
+        bySymbol[sym] = { symbol: sym, spot: live?.spot ?? null, windows, buffered: true, ts: Date.now() };
       }
 
       if (!Object.keys(bySymbol).length) throw new Error("No 0DTE expiry found");
@@ -2614,46 +2687,10 @@ function useWallsFlows() {
   return { data, error, loadedAt, rthSkipped, reload: load };
 }
 
-function WallsFlowsLiveCard({ symbol, live }: { symbol: string; live: WallsFlowsLive }) {
-  return (
-    <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
-          {`Live 0DTE snapshot${live.spot ? ` · spot ${live.spot.toFixed(2)}` : ""}`}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Call Wall</div>
-            <div style={{ fontSize: 18, fontWeight: 900, color: HOME_THEME.green }}>
-              {live.callWall ? `${live.callWall.strike}` : "—"}
-            </div>
-            {live.callWall && (
-              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
-                {`+${(live.callWall.value / 1e6).toFixed(1)}M`}
-              </div>
-            )}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Put Wall</div>
-            <div style={{ fontSize: 18, fontWeight: 900, color: HOME_THEME.red }}>
-              {live.putWall ? `${live.putWall.strike}` : "—"}
-            </div>
-            {live.putWall && (
-              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
-                {`${(live.putWall.value / 1e6).toFixed(1)}M`}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
 function WallsFlowsClosedCard({ symbol }: { symbol: string }) {
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
-      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+      <div style={{ fontSize: 15, color: HOME_THEME.text }}>
         {`Market closed — ${symbol} 0DTE walls only run during RTH (9:30–16:00 ET).`}
       </div>
     </Card>
@@ -2661,41 +2698,42 @@ function WallsFlowsClosedCard({ symbol }: { symbol: string }) {
 }
 
 function WallsFlowsCard({ symbol, row }: { symbol: string; row: WallsFlowsRow }) {
-  if (row.mode === "live") {
-    return <WallsFlowsLiveCard symbol={symbol} live={row.live ?? { spot: null, callWall: null, putWall: null }} />;
-  }
-
-  const windows = row.windows ?? [];
+  const { windows, spot, buffered } = row;
 
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={symbol} padding={20}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {buffered && (
+          <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+            {`Browser-buffered${spot ? ` · spot ${spot.toFixed(2)}` : ""} — windows fill in as history accumulates`}
+          </div>
+        )}
         {/* Call/Put Walls by Timeframe */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${windows.length}, 1fr)`, gap: 12 }}>
             {windows.map(({ age, callWall, putWall }) => (
               <div key={age} style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12, borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.text }}>
                   {age}m
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Call Wall</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, textTransform: "uppercase" }}>Call Wall</div>
                   <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.green }}>
                     {callWall ? `${callWall.strike}` : "—"}
                   </div>
                   {callWall && (
-                    <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                    <div style={{ fontSize: 15, color: HOME_THEME.text }}>
                       {`+${(callWall.value / 1e6).toFixed(1)}M`}
                     </div>
                   )}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, opacity: 0.6, textTransform: "uppercase" }}>Put Wall</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, textTransform: "uppercase" }}>Put Wall</div>
                   <div style={{ fontSize: 16, fontWeight: 900, color: HOME_THEME.red }}>
                     {putWall ? `${putWall.strike}` : "—"}
                   </div>
                   {putWall && (
-                    <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                    <div style={{ fontSize: 15, color: HOME_THEME.text }}>
                       {`${(putWall.value / 1e6).toFixed(1)}M`}
                     </div>
                   )}
@@ -2715,7 +2753,7 @@ function WallsFlowsTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text }}>
           {loadedAt
             ? `Live walls & flows · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
             : "Loading walls & flows…"}
@@ -2730,8 +2768,8 @@ function WallsFlowsTab() {
           About This Tab
         </div>
         <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          SPX shows top call/put GEX wall strikes over 5m, 15m, 30m, and 60m windows from stored 0DTE history — runs all day and all night. NDX is a live-only snapshot (no stored history), also all day and all night.
-          SPY and QQQ are live-only and RTH-gated (9:30–16:00 ET) since their 0DTE chains only matter during market hours. Call wall = largest positive net GEX (resistance), Put wall = largest negative net GEX (support/acceleration).
+          All four tickers show 5m, 15m, 30m, and 60m call/put GEX wall windows. SPX is backed by stored 0DTE history in Postgres. NDX, SPY, and QQQ have no stored history, so each browser builds its own rolling buffer from repeated live snapshots — those windows show "—" until enough time has passed since this browser started polling, then fill in for real.
+          SPX and NDX run all day and all night; SPY and QQQ are RTH-gated (9:30–16:00 ET) since their 0DTE chains only matter during market hours. Call wall = largest positive net GEX (resistance), Put wall = largest negative net GEX (support/acceleration).
         </div>
       </div>
 
@@ -2751,7 +2789,7 @@ function WallsFlowsTab() {
       )}
 
       <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
-        SPX walls sourced from 0DTE option chain history (option_strike_gex_history). NDX/SPY/QQQ walls computed live from each ticker's own 0DTE chain. Call wall = dealers long gamma, Put wall = dealers short gamma.
+        SPX walls sourced from 0DTE option chain history (option_strike_gex_history). NDX/SPY/QQQ walls sourced from a rolling browser-local buffer of each ticker's own live 0DTE chain. Call wall = dealers long gamma, Put wall = dealers short gamma.
       </div>
     </>
   );
