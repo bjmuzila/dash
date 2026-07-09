@@ -75,7 +75,7 @@ function prevYmd(ymd) {
  * @param {number} [opts.windowSize] - strikes above/below spot to include (default 20)
  * @returns {Promise<{date:string, expiration:string, spot:number, strikes:number[], seriesByStrike: Object<string, Array<{timeEt:string, callNet:number, putNet:number, flowGex:number|null}>>}>}
  */
-async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20 }) {
+async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20, strike: singleStrike } = {}) {
   const day = date || todayYmdET();
   // SPX/SPXW trade Cboe Global Trading Hours (~6-8pm ET through 4:15pm ET the
   // next day), not just the 9:30-16:15 cash session — so the "current
@@ -88,6 +88,62 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
   const empty = { date: day, dateWindow, expiration: expiration || '', spot: spot || 0, strikes: [], seriesByStrike: {} };
   const p = getPool();
   if (!p || !expiration || !(spot > 0)) return empty;
+
+  // Single-strike fast path (the contract-flow popup only ever needs one
+  // strike's series): skip the "every strike this expiration has tape for"
+  // scan entirely and skip straight to that one strike's tape/gamma queries.
+  // The full-window query below partitions the running-net window function
+  // over up to ~41 strikes worth of prints; narrowing to 1 strike up front
+  // cuts that scan by the same factor and was timing out the popup at scale.
+  if (singleStrike != null && Number.isFinite(Number(singleStrike))) {
+    const strikes = [Number(singleStrike)];
+    try {
+      const { rows: gammaRows } = await p.query(
+        `SELECT DISTINCT ON (strike) strike, call_gamma, put_gamma
+           FROM option_strike_gex_history
+          WHERE date = ANY($1::text[]) AND strike = ANY($2::real[]) AND call_gamma IS NOT NULL
+          ORDER BY strike, timestamp DESC`,
+        [dateWindow, strikes]
+      );
+      const gammaByStrike = new Map(gammaRows.map((r) => [Number(r.strike), { callGamma: Number(r.call_gamma), putGamma: Number(r.put_gamma) }]));
+
+      const { rows: tapeRows } = await p.query(
+        `WITH tape AS (
+           SELECT strike, ts, spot,
+             date_trunc('minute', to_timestamp(ts/1000) AT TIME ZONE 'America/New_York') AS minute_et,
+             SUM(CASE WHEN type='C' AND side='sell' THEN size WHEN type='C' AND side='buy' THEN -size ELSE 0 END)
+               OVER (PARTITION BY strike ORDER BY ts) AS call_net,
+             SUM(CASE WHEN type='P' AND side='sell' THEN size WHEN type='P' AND side='buy' THEN -size ELSE 0 END)
+               OVER (PARTITION BY strike ORDER BY ts) AS put_net
+           FROM flow_prints
+          WHERE date = ANY($1::text[]) AND expiration = $2 AND strike = ANY($3::real[])
+         )
+         SELECT DISTINCT ON (strike, minute_et) strike,
+                to_char(minute_et, 'HH24:MI') AS time_et,
+                extract(epoch FROM (minute_et AT TIME ZONE 'America/New_York'))::bigint AS ts_epoch,
+                call_net, put_net, spot
+           FROM tape
+          ORDER BY strike, minute_et, ts DESC`,
+        [dateWindow, expiration, strikes]
+      );
+      if (!tapeRows.length) return empty;
+
+      const seriesByStrike = { [strikes[0]]: [] };
+      for (const r of tapeRows) {
+        const s = Number(r.strike);
+        const g = gammaByStrike.get(s);
+        const callNet = Number(r.call_net);
+        const putNet = Number(r.put_net);
+        const rowSpot = Number(r.spot) || 0;
+        const flowGex = g && rowSpot > 0 ? (g.callGamma * callNet + g.putGamma * putNet) * rowSpot * rowSpot : null;
+        seriesByStrike[s].push({ ts: Number(r.ts_epoch), timeEt: r.time_et, callNet, putNet, flowGex });
+      }
+      return { date: day, dateWindow, expiration, spot, strikes, seriesByStrike };
+    } catch (e) {
+      console.warn('[flow-gex-history] single-strike query failed:', e.message);
+      return empty;
+    }
+  }
 
   try {
     // 1. Which strikes actually have tape in the overnight+today window for

@@ -9,10 +9,10 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 export default function BetaGate() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Link href="/sign-up" style={{ textDecoration: "none" }}>
+      <Link href="/sign-up?next=/pricing" style={{ textDecoration: "none" }}>
         <button style={joinBtn}>Join now — create account</button>
       </Link>
-      <Link href="/sign-in" style={{ textDecoration: "none" }}>
+      <Link href="/sign-in?next=/pricing" style={{ textDecoration: "none" }}>
         <button style={secondaryBtn}>I already have an account</button>
       </Link>
       <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 11.5, margin: "4px 0 0", lineHeight: 1.4, textAlign: "center" }}>

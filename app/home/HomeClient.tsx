@@ -3,6 +3,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
+import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
+import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
+import EsCandlesFullPanel from "@/components/dashboard/EsCandlesFullPanel";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
@@ -323,6 +327,27 @@ const CalendarIcon = () => (
     <rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
   </svg>
 );
+const FlowIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 12h4l3 8 4-16 3 8h4" />
+  </svg>
+);
+const GreeksIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 19h16" /><path d="M6 15c2-6 4-10 6-10s2 6 4 10" />
+  </svg>
+);
+const ScannerIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+);
+const CandlesIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="6" y1="3" x2="6" y2="8" /><rect x="3.5" y="8" width="5" height="8" rx="1" /><line x1="6" y1="16" x2="6" y2="21" />
+    <line x1="18" y1="2" x2="18" y2="10" /><rect x="15.5" y="10" width="5" height="6" rx="1" /><line x1="18" y1="16" x2="18" y2="22" />
+  </svg>
+);
 const LayersIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" />
@@ -382,7 +407,7 @@ export function HomeClient({
   const gexFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastGexAppliedRef = useRef(0);
 
-  const [activeTab, setActiveTab] = useState<"calendar" | "signals">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "greeks" | "scanner" | "escandles">("calendar");
   const [econCollapsed, setEconCollapsed] = useState(false);
   const [gexMode, setGexMode] = useState<GexMode>("net");
 
@@ -1096,6 +1121,10 @@ export function HomeClient({
               <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
+                  { id: "flow", label: "Flow", icon: <FlowIcon /> },
+                  { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
+                  { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
+                  { id: "escandles", label: "ES Candles", icon: <CandlesIcon /> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
@@ -1114,6 +1143,26 @@ export function HomeClient({
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel controlsPortalEl={econControlsSlotEl} />
+                  </div>
+                )}
+                {activeTab === "flow" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <FlowNetPremPanel />
+                  </div>
+                )}
+                {activeTab === "greeks" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <GreeksHomePanel />
+                  </div>
+                )}
+                {activeTab === "scanner" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <ScannerHomePanel />
+                  </div>
+                )}
+                {activeTab === "escandles" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <EsCandlesFullPanel />
                   </div>
                 )}
               </div>

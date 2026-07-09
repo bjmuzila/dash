@@ -187,8 +187,13 @@ async function handleProxyRest(req, res) {
       const expiration = url.searchParams.get('expiration') || state.expiry;
       const date = url.searchParams.get('date') || undefined;
       const windowSize = Math.max(1, Math.min(50, Number(url.searchParams.get('window')) || 20));
+      // Optional single-strike fast path — see flow-gex-history.js for why
+      // this matters (the contract-flow popup only needs one strike and the
+      // full ±20-strike window query was timing out).
+      const strikeParam = url.searchParams.get('strike');
+      const strike = strikeParam != null && strikeParam !== '' ? Number(strikeParam) : undefined;
       const spot = state.spot;
-      const result = await getFlowGexHistoryWindow({ spot, expiration, date, windowSize });
+      const result = await getFlowGexHistoryWindow({ spot, expiration, date, windowSize, strike });
       sendJson(res, 200, result);
       return true;
     }

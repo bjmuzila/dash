@@ -546,13 +546,16 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
     setError(null);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
-    fetch(`/proxy/flow-gex-history?expiration=${encodeURIComponent(expiration)}`, { cache: "no-store", signal: controller.signal })
+    // strike= narrows the server query to just this one strike (fast path —
+    // see flow-gex-history.js) instead of reconstructing all ~41 strikes in
+    // the default spot-centered window, which was timing out.
+    fetch(`/proxy/flow-gex-history?expiration=${encodeURIComponent(expiration)}&strike=${encodeURIComponent(strike)}`, { cache: "no-store", signal: controller.signal })
       .then((r) => r.json())
       .then((json: FlowGexHistoryResponse) => {
         if (cancelled) return;
         if (!json || !Array.isArray(json.strikes)) { setError("No response from /proxy/flow-gex-history"); return; }
         if (!json.strikes.includes(strike)) {
-          setError(`No tape recorded for strike ${strike} in today's ±20-strike window around spot.`);
+          setError(`No tape recorded for strike ${strike} today.`);
           return;
         }
         setData(json);

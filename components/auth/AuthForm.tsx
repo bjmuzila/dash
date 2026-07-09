@@ -35,7 +35,16 @@ declare global {
   }
 }
 
-export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
+export default function AuthForm({
+  mode,
+  next = "/home",
+}: {
+  mode: "signin" | "signup";
+  /** Where to land after a successful sign-in/sign-up. Defaults to /home;
+   *  pass e.g. "/pricing" when the user arrived here to subscribe so they
+   *  return to the plan/checkout step instead of the dashboard preview. */
+  next?: string;
+}) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -127,7 +136,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
 
   function withGoogle() {
     setError(null);
-    window.location.assign("/api/auth/google/start?next=/home");
+    window.location.assign(`/api/auth/google/start?next=${encodeURIComponent(next)}`);
   }
 
   async function withEmail(e: React.FormEvent) {
@@ -150,7 +159,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
             email,
             password,
             turnstileToken: captchaToken,
-            emailRedirectTo: `${window.location.origin}/auth/callback?next=/home`,
+            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -160,7 +169,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
           return;
         }
         if (data.session) {
-          window.location.assign("/home");
+          window.location.assign(next);
         } else {
           setNotice("Check your email to confirm your account, then sign in.");
           resetCaptcha();
@@ -178,7 +187,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
           return;
         }
         // Hard navigation so middleware + browser client pick up the new session.
-        window.location.assign("/home");
+        window.location.assign(next);
       }
     } catch {
       setError("Network error. Please try again.");
@@ -328,7 +337,7 @@ export default function AuthForm({ mode }: { mode: "signin" | "signup" }) {
 
       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 20, textAlign: "center" }}>
         {isSignup ? (
-          <>Already have an account? <Link href="/sign-in" style={{ color: T.cyan }}>Sign in</Link></>
+          <>Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link></>
         ) : (
           <>No account? <Link href="/pricing" style={{ color: T.cyan }}>Join the beta</Link></>
         )}
