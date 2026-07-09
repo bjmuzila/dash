@@ -2789,16 +2789,14 @@ class TastytradeProxy {
       //   • liveVol  — dayVolume from the Trade stream (dxLink legacy path)
       //   • restVol  — Theta OHLC snapshot day-volume (the authoritative source
       //                under DATA_SOURCE=theta; see fetchVolumeTheta)
-      // Day-volume only grows within a session, so take the MAX. This fixes 0DTE
-      // showing blank Volume Net GEX: under Theta the live stream often holds a
-      // small/zero partial that previously SHADOWED the accurate REST cumulative
-      // (the old `liveVol != null ? liveVol : rest` preferred a 0 live print over
-      // a real REST value). Max also avoids stale prior-session REST spikes on
-      // untraded future expiries, since the live stream there is 0/absent and the
-      // REST value for an untraded current-session strike is also 0.
-      const liveVol = Number(this.volumes.get(c.streamerSymbol) ?? 0);
+      // Prefer Trade stream dayVolume (this.volumes) as the authoritative source.
+      // Once the stream has declared a value for this symbol (even 0), trust it and
+      // ignore REST — REST can be stale at session roll. Only use REST as a startup
+      // bootstrap before Trade events arrive. After session roll, Trade stream owns
+      // the session's dayVolume; REST still carries the prior session's stale total.
+      const liveVol = this.volumes.get(c.streamerSymbol);
       const restVol = Number(rest?.volume ?? 0);
-      const vol = Math.max(liveVol, restVol);
+      const vol = liveVol != null ? Number(liveVol) : restVol;
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.
