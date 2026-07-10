@@ -2368,10 +2368,13 @@ function ProbeChart({ history, metric }: { history: ProbeHistSnap[]; metric: Pro
   let minY = Math.min(...ys), maxY = Math.max(...ys);
   if (minY === maxY) { minY -= 1; maxY += 1; }
   const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
-  const sx = (t: number) => PADL + ((t - minX) / (maxX - minX || 1)) * (W - PADL - PADR);
+  // RTH-only time: x is the point INDEX, not clock time, so overnight/weekend
+  // gaps compress out and consecutive RTH sessions sit adjacent.
+  const n = pts.length;
+  const sx = (i: number) => PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - PADL - PADR);
   const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
-  const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(p.ts).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
-  const area = `${path} L${sx(pts[pts.length - 1].ts).toFixed(1)},${H - PADB} L${sx(pts[0].ts).toFixed(1)},${H - PADB} Z`;
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
+  const area = `${path} L${sx(n - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
   const dec = PROBE_METRICS.find((m) => m.key === metric)!.d;
   const fmtY = (v: number) => (metric === "net_gex" ? opFmtGEX(v) : v.toFixed(dec));
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
@@ -2397,7 +2400,7 @@ function ProbeChart({ history, metric }: { history: ProbeHistSnap[]; metric: Pro
       <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={9} fill="#9aa4b2" fontFamily="var(--sm-mono)">{fmtT(maxX)}</text>
       <path d={area} fill="url(#opwg)" />
       <path d={path} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={sx(pts[pts.length - 1].ts)} cy={sy(pts[pts.length - 1].v)} r={3} fill="#219EBC" />
+      <circle cx={sx(n - 1)} cy={sy(pts[pts.length - 1].v)} r={3} fill="#219EBC" />
     </svg>
   );
 }
@@ -2410,18 +2413,18 @@ function ProbeSpark({ points, entry }: { points: { ts: number; mark: number }[];
   if (points.length < 1) {
     return <div className="op-sparkempty">building history — snapshots accrue every refresh</div>;
   }
-  const xs = points.map((p) => p.ts);
   const ys = points.map((p) => p.mark);
   const dom = entry != null && Number.isFinite(entry) ? [...ys, entry] : ys;
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
   let minY = Math.min(...dom), maxY = Math.max(...dom);
   if (minY === maxY) { minY -= 0.5; maxY += 0.5; }
   const padY = (maxY - minY) * 0.14; minY -= padY; maxY += padY;
-  const sx = (t: number) => PAD + ((t - minX) / (maxX - minX || 1)) * (W - PAD * 2);
+  // RTH-only time: index-based x (points are already RTH-filtered at the call site).
+  const n = points.length;
+  const sx = (i: number) => PAD + (n <= 1 ? 0 : i / (n - 1)) * (W - PAD * 2);
   const sy = (v: number) => H - PAD - ((v - minY) / (maxY - minY || 1)) * (H - PAD * 2);
-  const line = points.map((p, i) => `${i ? "L" : "M"}${sx(p.ts).toFixed(1)},${sy(p.mark).toFixed(1)}`).join(" ");
-  const first = points[0], last = points[points.length - 1];
-  const area = `${line} L${sx(last.ts).toFixed(1)},${(H - PAD).toFixed(1)} L${sx(first.ts).toFixed(1)},${(H - PAD).toFixed(1)} Z`;
+  const line = points.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.mark).toFixed(1)}`).join(" ");
+  const last = points[points.length - 1];
+  const area = `${line} L${sx(n - 1).toFixed(1)},${(H - PAD).toFixed(1)} L${sx(0).toFixed(1)},${(H - PAD).toFixed(1)} Z`;
   const up = entry != null ? last.mark - entry : 0;
   const nowColor = entry == null ? "#219EBC" : up > 0 ? "#8ECAE6" : up < 0 ? "#EF4444" : "#9aa4b2";
   return (
@@ -2432,9 +2435,9 @@ function ProbeSpark({ points, entry }: { points: { ts: number; mark: number }[];
       <path d={area} fill="rgba(33,158,188,0.10)" />
       <path d={line} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
       {entry != null && Number.isFinite(entry) && (
-        <circle cx={sx(minX)} cy={sy(entry)} r={3.5} fill="#0d1119" stroke="#ffffff" strokeWidth={1.5} />
+        <circle cx={sx(0)} cy={sy(entry)} r={3.5} fill="#0d1119" stroke="#ffffff" strokeWidth={1.5} />
       )}
-      <circle cx={sx(last.ts)} cy={sy(last.mark)} r={4} fill={nowColor} stroke="#05060a" strokeWidth={1} />
+      <circle cx={sx(n - 1)} cy={sy(last.mark)} r={4} fill={nowColor} stroke="#05060a" strokeWidth={1} />
     </svg>
   );
 }
@@ -2743,11 +2746,11 @@ function OptionsProbe() {
                 const mark = r.snapshot?.mark ?? r.snapshot?.last ?? null;
                 const pct = entry != null && mark != null && entry !== 0 ? ((mark - entry) / entry) * 100 : null;
                 const dollars = entry != null && mark != null ? (mark - entry) * 100 : null;
-                // Line = recorded history + the live latest mark appended, so the
-                // "now" dot tracks the 20s poll even between history refetches.
-                const hist = historyById[r.id] ?? [];
+                // Line = RTH-only recorded history + the live latest mark appended
+                // (only during RTH), so the "now" dot tracks the 20s poll.
+                const hist = (historyById[r.id] ?? []).filter((h) => opIsRth(h.ts));
                 const liveTs = Number(r.snapshot?.ts);
-                const pts = mark != null && Number.isFinite(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
+                const pts = mark != null && Number.isFinite(liveTs) && opIsRth(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
                   ? [...hist, { ts: liveTs, mark }]
                   : hist;
                 const isOpen = expandedId === r.id;

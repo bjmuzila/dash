@@ -287,7 +287,7 @@ function GexScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>GEX Change Scanner</span>}
-      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${dir !== "all" ? ` · strike ${dir === "pos" ? "> spot" : "< spot"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · refreshing…" : ""}`}>
+      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${dir !== "all" ? ` · ${dir === "pos" ? "above spot · Δ↑" : "below spot · Δ↓"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 6 }}>
@@ -304,7 +304,7 @@ function GexScanner() {
           <button onClick={() => setSort("score")} style={seg(sort === "score")}>Best overall</button>
         </div>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }} title="Positive = strike above spot · Negative = strike below spot">
+        <div style={{ display: "flex", gap: 6 }} title="Positive = OTM strikes above spot with rising GEX (Δ↑) · Negative = OTM strikes below spot with falling GEX (Δ↓)">
           <button onClick={() => setDir("all")} style={seg(dir === "all")}>All</button>
           <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Positive</button>
           <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Negative</button>
@@ -1098,8 +1098,13 @@ function StrikeQueryScanner() {
 
   const otmDist = (r: SqRow) => (r.spot && r.spot > 0 ? Math.abs(r.strike - r.spot) / r.spot : 0);
 
-  // Direction filter: Positive = strike above spot, Negative = strike below spot.
-  const dirPass = (r: SqRow) => (r.spot && r.spot > 0) ? (dir === "pos" ? r.strike > r.spot : r.strike < r.spot) : false;
+  // Direction filter combining side + growth (sign of the active sort metric):
+  //   Positive = strike above spot AND metric rising · Negative = below spot AND metric falling.
+  const dirPass = (r: SqRow) => {
+    if (!r.spot || r.spot <= 0) return false;
+    const v = sqVal(r, colSort.col);
+    return dir === "pos" ? (r.strike > r.spot && v > 0) : (r.strike < r.spot && v < 0);
+  };
 
   const displayRows = (() => {
     let f = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
@@ -1153,7 +1158,7 @@ function StrikeQueryScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>Strike GEX Query</span>}
-      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${dir !== "all" ? ` · strike ${dir === "pos" ? "> spot" : "< spot"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · loading…" : ""}`}>
+      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${dir !== "all" ? ` · ${dir === "pos" ? "above spot · Δ↑" : "below spot · Δ↓"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · loading…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1172,7 +1177,7 @@ function StrikeQueryScanner() {
             options={[10, 25, 50, 100].map((l) => ({ value: String(l), label: String(l) }))} />
         </div>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }} title="Positive = strike above spot · Negative = strike below spot">
+        <div style={{ display: "flex", gap: 6 }} title="Positive = OTM strikes above spot with rising GEX (Δ↑) · Negative = OTM strikes below spot with falling GEX (Δ↓)">
           <button onClick={() => setDir("all")} style={seg(dir === "all")}>All</button>
           <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Positive</button>
           <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Negative</button>
