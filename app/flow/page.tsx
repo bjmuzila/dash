@@ -650,6 +650,15 @@ export default function FlowPage() {
     setExpiry("all"); setDteMin(0); setDteMax(null); setOtmOnly(true);
   }
 
+  // Preset: Combined view, 0–7 DTE, ≥$500K premium, OTM only.
+  function applyBigOtmPreset() {
+    setView("combined"); setScope("all");
+    setSide("all"); setOptType("all"); setMinSize(0); setExpiry("all");
+    setMinPremium(500_000); setDteMin(0); setDteMax(7); setOtmOnly(true);
+  }
+  const bigOtmActive =
+    view === "combined" && minPremium === 500_000 && dteMin === 0 && dteMax === 7 && otmOnly;
+
   function addTicker() {
     const t = tickerInput.trim().toUpperCase();
     if (!t) return;
@@ -737,6 +746,21 @@ export default function FlowPage() {
           <button className="flow-chip" style={segBtn(view === "ticker")} onClick={() => setView("ticker")}>By Ticker</button>
           <button className="flow-chip" style={segBtn(view === "combined")} onClick={() => setView("combined")}>Combined</button>
         </div>
+        <button
+          className="flow-chip"
+          onClick={applyBigOtmPreset}
+          title="Combined · 0–7 DTE · ≥$500K premium · OTM only"
+          style={{
+            padding: "8px 14px", fontSize: 14, fontWeight: 800,
+            textTransform: "uppercase", letterSpacing: "0.05em", cursor: "pointer",
+            whiteSpace: "nowrap", borderRadius: 6,
+            border: `1px solid ${bigOtmActive ? C.cyan : C.border}`,
+            background: bigOtmActive ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
+            color: bigOtmActive ? C.cyan : C.text,
+          }}
+        >
+          0–7DTE ≥$500K OTM
+        </button>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <label style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
           <ThemedDatePicker

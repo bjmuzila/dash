@@ -1479,7 +1479,7 @@ export default function OptionsChainPage({
                 : null;
               return (
                 <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
-                  <div style={{ fontSize: 15, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
                   <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
                   </div>
@@ -1494,9 +1494,9 @@ export default function OptionsChainPage({
               if (strike == null) {
                 return (
                   <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 15, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
+                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
                     {renderIdx.map((i) => (
-                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 15 }} />
+                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
                     ))}
                   </div>
                 );
@@ -1528,7 +1528,7 @@ export default function OptionsChainPage({
                   {/* Shared strike label (sticky left) */}
                   <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
                     position: "sticky", left: 0, zIndex: 2,
-                    padding: "2px 8px", fontSize: 15, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
+                    padding: "2px 8px", fontSize: 12, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
                     background: isATM ? "#ffb300" : HT.panelBgStrong,
                     borderRight: `1px solid ${HT.border}`,
@@ -1593,8 +1593,8 @@ export default function OptionsChainPage({
                         onClick={isClickable ? () => setContractPopup({ strike, expiration: col!.expiration }) : undefined}
                         title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
                         style={{
-                          padding: "2px 8px", fontSize: 15, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
-                          color: value == null ? "#3a4a5e" : "#ffffff",
+                          padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
+                          color: value == null ? "#3a4a5e" : "rgba(255,255,255,0.62)",
                           background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                           borderTop: rowEmBorder,
                           boxShadow: atmShadow,

@@ -207,81 +207,6 @@ function PencilIcon({ size = 18 }: { size?: number }) {
   );
 }
 
-// ── Maintenance alert (hardcoded window: 2026-07-01 16:00–18:00 ET) ──
-function MaintenanceAlert() {
-  const [open, setOpen] = useState(false);
-  const [flash, setFlash] = useState(true);
-
-  useEffect(() => {
-    const id = setInterval(() => setFlash(f => !f), 800);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <div style={{ position: "relative", zIndex: 100, display: "flex", flexShrink: 0 }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        title="Maintenance window"
-        aria-label="Maintenance alert"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 38,
-          height: 38,
-          borderRadius: "50%",
-          border: "1px solid rgba(239,68,68,0.6)",
-          background: "rgba(239,68,68,0.12)",
-          cursor: "pointer",
-          fontSize: 20,
-          fontWeight: 900,
-          transition: "opacity 0.2s",
-        }}
-      >
-        <span style={{ opacity: flash ? 1 : 0.15, color: "#ef4444", transition: "opacity 0.15s" }}>!</span>
-      </button>
-
-      {open && (
-        <>
-          {/* backdrop */}
-          <div
-            onClick={() => setOpen(false)}
-            style={{ position: "fixed", inset: 0, zIndex: 99 }}
-          />
-          <div style={{
-            position: "absolute",
-            top: "calc(100% + 10px)",
-            right: 0,
-            zIndex: 100,
-            background: "rgba(15,18,28,0.97)",
-            border: "1px solid rgba(239,68,68,0.45)",
-            borderRadius: 12,
-            padding: "14px 18px",
-            width: 280,
-            boxShadow: "0 8px 32px -4px rgba(0,0,0,0.7), 0 0 18px -4px rgba(239,68,68,0.35)",
-            backdropFilter: "blur(16px)",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 18 }}>🔴</span>
-              <span style={{ fontWeight: 700, color: "#EF4444", fontSize: 14 }}>Heads up</span>
-            </div>
-            <p style={{ margin: 0, color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
-              Check out{" "}
-              <Link href="/whats-new" prefetch={false} style={{ color: CYAN, fontWeight: 700, textDecoration: "underline" }}>
-                What&apos;s New
-              </Link>{" "}
-              for the latest updates.
-            </p>
-            <p style={{ margin: "8px 0 0", color: "#c8d4e8", fontSize: 13, lineHeight: 1.55 }}>
-              Seeing a bad gateway error? That&apos;s just an update deploying — give it 1–2 minutes and refresh!
-            </p>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 export default function GlobalToolbar() {
   const { isSignedIn, user } = useAuth();
   const { notes } = useNotes(user?.id);
@@ -422,11 +347,13 @@ export default function GlobalToolbar() {
               the whole page to that group's route ── */}
           <GexGroupNav />
 
-          <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />
+          {/* flexible gap — opens the center and pushes the quotes + clock
+              cluster to the right ── */}
+          <div style={{ flex: 1, minWidth: 8 }} />
 
-          {/* ── Live ticker (ESU / NQU + dropdown) — grows to fill,
-              centered, clips on narrow screens. ── */}
-          <div style={{ position: "relative", zIndex: 1, flex: 1, minWidth: 0, display: "flex", justifyContent: "center", overflow: "hidden" }}>
+          {/* ── Live ticker (ESU / NQU + dropdown) — now sits just left of the
+              clock; shrinks/clips on narrow screens ── */}
+          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: "48vw", display: "flex", alignItems: "center", overflow: "hidden" }}>
             <ToolbarTicker />
           </div>
 
@@ -436,9 +363,6 @@ export default function GlobalToolbar() {
           <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
             <EtClock />
           </div>
-
-          {/* ── Maintenance alert ── */}
-          <MaintenanceAlert />
 
           {/* ── GEX groups — round pop-out button (opens GexDock) ── */}
           {isSignedIn && (
