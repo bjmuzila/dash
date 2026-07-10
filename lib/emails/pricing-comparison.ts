@@ -45,13 +45,13 @@ const FEATURES = [
 export function pricingComparisonText(opts: PricingComparisonOpts = {}): string {
   const cta = opts.ctaUrl || PRICING_URL;
   return [
-    "WHAT'S THE RIGHT PRICE TO CHARGE A TRADER?",
+    "WHY PAY EXTRA FOR THE SAME DATA?",
     "",
     "Not trying to overcharge. Here for the trader, not to profit off them.",
     "",
     "Others charge $99, $199, or $699 a month for this kind of data.",
     "",
-    "Why pay extra for the same data?",
+    "CB Edge starts at $45/month.",
     "",
     "What's included:",
     ...FEATURES.map((f) => `  • ${f}`),
@@ -116,7 +116,7 @@ export function pricingComparisonEmail(opts: PricingComparisonOpts = {}): string
           <!-- HEADLINE -->
           <tr>
             <td align="center" style="padding:22px 28px 0 28px;">
-              <div style="font:800 30px/1.25 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">What's the right price<br><span style="color:#8ECAE6;">to charge a trader?</span></div>
+              <div style="font:800 30px/1.25 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Why pay extra<br><span style="color:#8ECAE6;">for the same data?</span></div>
               <div style="font:400 14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:12px;max-width:440px;">
                 Not trying to overcharge. Here for the trader, not to profit off them.
               </div>
@@ -147,10 +147,10 @@ export function pricingComparisonEmail(opts: PricingComparisonOpts = {}): string
             </td>
           </tr>
 
-          <!-- why pay extra line -->
+          <!-- punchline -->
           <tr>
             <td align="center" style="padding:20px 28px 4px 28px;">
-              <div style="font:800 19px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Why pay extra for the same data?</div>
+              <div style="font:800 19px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">CB Edge starts at <span style="color:#219EBC;">$45/month.</span></div>
             </td>
           </tr>
 
