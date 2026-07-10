@@ -417,6 +417,12 @@ export function HomeClient({
   const pendingGexRef = useRef<Record<string, unknown> | null>(null);
   const gexFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastGexAppliedRef = useRef(0);
+  // Flow frames arrive per-order (many/sec); coalesce to the latest and commit at
+  // most once per FLOW_FRAME_MS so the tape/line updates ~every 15s instead of
+  // re-rendering the whole page on every order.
+  const pendingFlowRef = useRef<Record<string, unknown> | null>(null);
+  const flowFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFlowAppliedRef = useRef(0);
 
   const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner" | "escandles">("calendar");
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
@@ -597,6 +603,28 @@ export function HomeClient({
       }
     };
 
+    // Flow throttle — same leading+trailing coalesce as GEX, at 15s.
+    const FLOW_FRAME_MS = 15000;
+    const flushFlow = () => {
+      flowFlushTimerRef.current = null;
+      const data = pendingFlowRef.current;
+      pendingFlowRef.current = null;
+      if (!data) return;
+      lastFlowAppliedRef.current = Date.now();
+      const tape = data.tape as FlowOrder[] | undefined;
+      if (Array.isArray(tape)) setFlowOrders(tape);
+      setFlowBucket(data);
+    };
+    const queueFlow = (data: Record<string, unknown>) => {
+      pendingFlowRef.current = data;
+      const since = Date.now() - lastFlowAppliedRef.current;
+      if (since >= FLOW_FRAME_MS) {
+        flushFlow(); // leading edge
+      } else if (!flowFlushTimerRef.current) {
+        flowFlushTimerRef.current = setTimeout(flushFlow, FLOW_FRAME_MS - since);
+      }
+    };
+
     const handleMessage = (raw: string) => {
       let msg: Record<string, unknown>;
       try { msg = JSON.parse(raw); } catch { return; }
@@ -633,9 +661,8 @@ export function HomeClient({
         }
         case "flow": {
           // Server sends the full capped tape (oldest-first) each message.
-          const tape = data.tape as FlowOrder[] | undefined;
-          if (Array.isArray(tape)) setFlowOrders(tape);
-          setFlowBucket(data);
+          // Throttled: coalesce per-order frames, commit ~every 15s (see queueFlow).
+          queueFlow(data);
           break;
         }
         case "EXPIRATIONS":
@@ -695,6 +722,7 @@ export function HomeClient({
       unmountedRef.current = true;
       if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
       if (gexFlushTimerRef.current) { clearTimeout(gexFlushTimerRef.current); gexFlushTimerRef.current = null; }
+      if (flowFlushTimerRef.current) { clearTimeout(flowFlushTimerRef.current); flowFlushTimerRef.current = null; }
       pendingGexRef.current = null;
       const ws = gexWsRef.current;
       gexWsRef.current = null;

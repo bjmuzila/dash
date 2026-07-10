@@ -71,13 +71,13 @@ export default function GexHeatmap({
     ? allStrikes.reduce((best, s) => Math.abs(s - spotPrice) < Math.abs(best - spotPrice) ? s : best, allStrikes[0] ?? spotPrice)
     : (allStrikes[0] ?? 0);
 
-  // Hysteresis anchor: only re-center the window once spot moves >1 strike from the
+  // Hysteresis anchor: only re-center the window once spot moves 5 strikes from the
   // current anchor. Prevents add-one/drop-one window flashing on every tick. (See [[heatmap]] note.)
   const strikeStep = allStrikes.length > 1 ? Math.abs(allStrikes[0] - allStrikes[1]) : 1;
   if (
     anchorStrikeRef.current == null ||
     !allStrikes.includes(anchorStrikeRef.current) ||
-    Math.abs(nearestStrike - anchorStrikeRef.current) > strikeStep * 1.5
+    Math.abs(nearestStrike - anchorStrikeRef.current) > strikeStep * 4.5
   ) {
     anchorStrikeRef.current = nearestStrike;
   }

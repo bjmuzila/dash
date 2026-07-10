@@ -108,7 +108,7 @@ export default function FlowNetPremPanel() {
         })
         .catch(() => { if (!cancelled) setLoading(false); });
     load();
-    const id = setInterval(load, 5000);
+    const id = setInterval(load, 15000);
     return () => { cancelled = true; clearInterval(id); };
   }, [active, date, side, optType, minPremium, minSize, dteMin, dteMax, otmOnly, shouldConnect]);
 

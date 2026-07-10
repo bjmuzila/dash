@@ -204,19 +204,15 @@ function Steps({ items }: { items: React.ReactNode[] }) {
   );
 }
 
-function Card({ children, accent = C.cyan }: { children: React.ReactNode; accent?: string }) {
+/** Article card — delegates to the shared dashboard <Card> (PageCard.tsx) so it
+ *  always tracks the app theme (gloss surface, 2px accent strip, .card-hover lift).
+ *  Compact padding/margin keep the dense legend + definition lists tight inside
+ *  articles. Accent accepts a HOME_THEME hex (C.cyan/green/orange/purple). */
+function Card({ children, accent = C.cyan, style }: { children: React.ReactNode; accent?: string; style?: React.CSSProperties }) {
   return (
-    <div style={{
-      background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 60%), ${C.panel}`,
-      border: `1px solid ${C.border}`,
-      borderTop: `2px solid ${accent}d9`,
-      borderRadius: 12,
-      padding: "4px 16px",
-      margin: "12px 0",
-      backdropFilter: "blur(16px)",
-    }}>
+    <ThemeCard accent={accent} padding="4px 16px" style={{ margin: "12px 0", ...style }}>
       {children}
-    </div>
+    </ThemeCard>
   );
 }
 
