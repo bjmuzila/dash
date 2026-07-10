@@ -60,6 +60,14 @@
  *        while relying on that regime; DEX AND flow both opposing the
  *        direction; a Flip reaction firing without supportive GEX momentum.
  *
+ *   6) FLOW GEX DIVERGENCE  (kind='flow_divergence')
+ *        aggregate Flow GEX (Σ per-strike flowGEX) opposes the short-term price
+ *        move — price up while ΣflowGEX < −FD_THRESHOLD, or price down while it's
+ *        > +FD_THRESHOLD — AND one strike dominates that aggregate (|maxFlow| >
+ *        FD_OUTLIER_MIN and |maxFlow|/|Σflow| > FD_OUTLIER_RATIO). The monster bar
+ *        is flagged as the likely catalyst; direction = price direction. Own
+ *        prev-price state (mem.fdPrev), independent of the detectors above.
+ *
  * Dedup: per (kind,direction,rounded-level) cooldown = COOLDOWN_MS.
  * Gates:  futures session + a real basis + chartReady (skips warmup/off-hours).
  *
@@ -88,6 +96,10 @@ const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000)
 const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || ''; // NOTE: no longer falls back to DISCORD_WEBHOOK_URL — that's shared w/ calendar/GEX buttons
 const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
 const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
+// Flow GEX divergence (detector #6): aggregate flow opposing price + one strike dominating.
+const FD_THRESHOLD       = Number(process.env.SIGNALS_FD_THRESHOLD       || 2e9); // |Σ flowGEX| for a directional aggregate ($)
+const FD_OUTLIER_RATIO   = Number(process.env.SIGNALS_FD_OUTLIER_RATIO   || 1.5); // |maxFlow| / |Σ flowGEX| to be "concentrated"
+const FD_OUTLIER_MIN     = Number(process.env.SIGNALS_FD_OUTLIER_MIN     || 3e9); // min |maxFlow| for a "monster" bar ($)
 
 // ── PG pool (same lazy, no-DB-safe pattern as gex-history-writer / play-recorder) ──
 let pool = null;
@@ -619,6 +631,73 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   return out;
 }
 
+// ── pure detector #6: Flow GEX divergence (kind='flow_divergence') ──
+// The aggregate flow (Σ per-strike flowGEX) points AGAINST the short-term price
+// move, while a single strike dominates that aggregate — the "monster" bar is
+// flagged as the likely catalyst, direction = price direction. Ported from
+// Brandon's detect_flow_divergence snippet. Own prev-price state (mem.fdPrev) so
+// it never shares cooldown/prev with the other detectors. cur adds: totalFlowGex,
+// maxFlow, maxFlowStrike (all from gexRows[].flowGEX, in $).
+function evaluateFlowDivergence(cur, mem, cfg = {}) {
+  const C = { FD_THRESHOLD, FD_OUTLIER_RATIO, FD_OUTLIER_MIN, COOLDOWN_MS, ...cfg };
+  const out = [];
+  const { ts, priceEs, basis } = cur;
+
+  const prev = mem.fdPrev;
+  mem.fdPrev = { priceEs, ts };                 // carry forward for next frame's direction
+  if (!(priceEs > 0) || !prev || !(prev.priceEs > 0)) return out;
+
+  const totalFlow = Number(cur.totalFlowGex) || 0;
+  const maxFlow   = Number(cur.maxFlow) || 0;
+  const maxStrike = Number(cur.maxFlowStrike);
+  if (!(Math.abs(maxFlow) > 0) || !Number.isFinite(maxStrike) || maxStrike <= 0) return out;
+
+  // 1) Aggregate flow vs short-term price direction (price vs the prior frame; a
+  //    vs-open / vs-VWAP baseline could swap in here later).
+  const priceUp = priceEs > prev.priceEs;
+  const aggDivergence =
+    (priceUp && totalFlow < -C.FD_THRESHOLD) || (!priceUp && totalFlow > C.FD_THRESHOLD);
+
+  // 2) One strike dominates the aggregate (concentrated outlier).
+  const outlierRatio = Math.abs(maxFlow) / (Math.abs(totalFlow) + 1e6);
+  const strongOutlier = outlierRatio > C.FD_OUTLIER_RATIO && Math.abs(maxFlow) > C.FD_OUTLIER_MIN;
+
+  if (!(aggDivergence && strongOutlier)) return out;
+
+  const direction = priceUp ? 'long' : 'short';
+  const key = `flow_divergence:${direction}:${Math.round(maxStrike)}`;
+  const last = mem.cooldowns.get(key) || 0;
+  if (ts - last < C.COOLDOWN_MS) return out;
+  mem.cooldowns.set(key, ts);
+
+  const levelEs = Number.isFinite(maxStrike) ? maxStrike + (basis || 0) : null;
+  const score = Math.max(1, Math.min(5,
+    3 + (Math.abs(maxFlow) > 2 * C.FD_OUTLIER_MIN ? 1 : 0) + (outlierRatio > 2.5 ? 1 : 0)));
+
+  out.push({
+    ts,
+    kind: 'flow_divergence',
+    direction,
+    setup: 'Flow GEX divergence',
+    levelName: `Flow ${Math.round(maxStrike)}`,
+    levelEs: levelEs != null ? +levelEs.toFixed(2) : null,
+    levelSpx: +maxStrike.toFixed(2),
+    priceEs: +priceEs.toFixed(2),
+    priceSpx: +(priceEs - (basis || 0)).toFixed(2),
+    score,
+    confluence: null,
+    reason: `Aggregate Flow GEX ${(totalFlow / 1e9).toFixed(1)}B but monster ${(maxFlow / 1e9).toFixed(1)}B at ${Math.round(maxStrike)} → ${priceUp ? 'bullish' : 'bearish'} catalyst likely`,
+    meta: {
+      basis: +(basis || 0).toFixed(2),
+      totalFlowGex: Math.round(totalFlow),
+      maxFlow: Math.round(maxFlow),
+      maxStrike: Math.round(maxStrike),
+      outlierRatio: +outlierRatio.toFixed(2),
+    },
+  });
+  return out;
+}
+
 // ── engine loop ───────────────────────────────────────────────────────────────
 let cbCache = { spx: null, size: null, at: 0 };
 async function refreshCb(base) {
@@ -694,7 +773,7 @@ async function sendDiscord(sig) {
   } catch { /* alerts are best-effort */ }
 }
 
-const mem = { prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {} };
+const mem = { prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {}, fdPrev: null };
 
 function readFrame() {
   const s = marketState.getState();
@@ -705,6 +784,17 @@ function readFrame() {
   const flow = s.flow || {};
   const callNet = Number(flow.callBuyVol || 0) - Number(flow.callSellVol || 0);
   const putNet  = Number(flow.putBuyVol  || 0) - Number(flow.putSellVol  || 0);
+  // Flow GEX aggregates for the divergence detector: Σ flowGEX and the single
+  // strike carrying the biggest |flowGEX| (the "monster" bar). Same per-strike
+  // flowGEX the /home heatmap + options-chain read off gexRows.
+  const rows = Array.isArray(s.gexRows) ? s.gexRows : [];
+  let totalFlowGex = 0, maxFlow = 0, maxFlowStrike = null;
+  for (const r of rows) {
+    const f = Number(r && r.flowGEX || 0);
+    if (!Number.isFinite(f)) continue;
+    totalFlowGex += f;
+    if (Math.abs(f) > Math.abs(maxFlow)) { maxFlow = f; maxFlowStrike = Number(r.strike); }
+  }
   return {
     ts: Date.now(),
     priceEs,
@@ -723,6 +813,10 @@ function readFrame() {
     flowScore: callNet - putNet, // bullish = net call-buy + net put-sell
     ictBias: ictCache.bias,
     confidence: confCache.value,
+    // ── Flow GEX divergence inputs (detector #6) ──
+    totalFlowGex,
+    maxFlow,
+    maxFlowStrike,
   };
 }
 
@@ -732,7 +826,7 @@ async function runOnce(base, { force = false } = {}) {
   const frame = readFrame();
   if (!force && !frame.chartReady) return { skipped: 'warming' };
   if (!(frame.priceEs > 0) || !(frame.basis !== 0)) return { skipped: 'no-price-or-basis' };
-  const sigs = [...evaluateFrame(frame, mem), ...evaluateBzilaConfluence(frame, mem)];
+  const sigs = [...evaluateFrame(frame, mem), ...evaluateBzilaConfluence(frame, mem), ...evaluateFlowDivergence(frame, mem)];
   for (const sig of sigs) {
     sig.sessionDate = etDateStr(new Date(sig.ts));
     await insertSignal(sig);
@@ -763,6 +857,7 @@ module.exports = {
   runOnce,
   evaluateFrame,   // pure — used by signals-engine.selftest.js
   evaluateBzilaConfluence, // pure — used by signals-engine.selftest.js
+  evaluateFlowDivergence,  // pure — flow-vs-price divergence detector (#6)
   computeContextLevels,
   inSession,
   _mem: mem,

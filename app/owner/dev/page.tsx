@@ -305,6 +305,79 @@ function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record
   );
 }
 
+// ── Flow GEX raw calc ──────────────────────────────────────────────────────
+// Shows the volume-basis (flow) GEX formula with the live inputs plugged in so
+// the per-strike number can be eyeballed — the same product the server does in
+// gex-calculator: |γ| · Volume · Spot² (calls +, puts −). OI-basis GEX is in the
+// Greeks panels above; the dealer-inventory flowGEX needs aggregate inventory
+// not available in a single-strike probe, so "flow" here is the vol basis.
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function fmtGamma(v: number | null): string {
+  if (v == null) return "—";
+  const a = Math.abs(v);
+  if (a === 0) return "0";
+  return a < 1e-4 ? v.toExponential(3) : v.toFixed(6);
+}
+function fmtInt(v: number | null): string {
+  return v == null ? "—" : Math.round(v).toLocaleString("en-US");
+}
+function fmtSpot(v: number | null): string {
+  return v == null ? "—" : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function FlowGexCalcPanel({ call, put }: { call: ProbeResult | null; put: ProbeResult | null }) {
+  const cEx = call?.exposures as Record<string, unknown> | undefined;
+  const pEx = put?.exposures as Record<string, unknown> | undefined;
+  const cGamma = num((call?.feeds?.Greeks as Record<string, unknown> | undefined)?.gamma);
+  const pGamma = num((put?.feeds?.Greeks as Record<string, unknown> | undefined)?.gamma);
+  const spot = num(cEx?.spot) ?? num(pEx?.spot);
+  const s2 = spot != null ? spot * spot : null;
+  const cFlow = num(cEx?.gexVol); // already signed + (call)
+  const pFlow = num(pEx?.gexVol); // already signed − (put)
+  const netFlow = cFlow == null && pFlow == null ? null : (cFlow ?? 0) + (pFlow ?? 0);
+  const cols = "48px 1fr 1fr 1.1fr 1.25fr";
+  const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 13, fontWeight: 400, textAlign: "right" };
+  const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 15, textAlign: "right" };
+  const legs = [
+    { tag: "Call", tagColor: CALLS, gamma: cGamma, vol: num(cEx?.volume), flow: cFlow },
+    { tag: "Put", tagColor: PUTS, gamma: pGamma, vol: num(pEx?.volume), flow: pFlow },
+  ];
+  return (
+    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${WARN}`, borderRadius: 8, padding: "14px 18px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow GEX · raw calc</span>
+        <span style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>|γ| · Volume · Spot²  (call +, put −)</span>
+      </div>
+      <div style={{ fontSize: 13, color: HOME_THEME.muted, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
+        vol (flow) basis · Spot {fmtSpot(spot)} · Spot² {fmtInt(s2)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>
+        <span style={{ ...head, textAlign: "left" }}> </span>
+        <span style={head}>|γ|</span>
+        <span style={head}>× Vol</span>
+        <span style={head}>× S²</span>
+        <span style={head}>= Flow GEX</span>
+      </div>
+      {legs.map((r) => (
+        <div key={r.tag} style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "5px 0" }}>
+          <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 15 }}>{r.tag}</span>
+          <span style={{ ...cell, color: r.gamma == null ? NA : VAL }}>{fmtGamma(r.gamma == null ? null : Math.abs(r.gamma))}</span>
+          <span style={{ ...cell, color: r.vol == null ? NA : VAL }}>{fmtInt(r.vol)}</span>
+          <span style={{ ...cell, color: s2 == null ? NA : VAL }}>{fmtInt(s2)}</span>
+          <span style={{ ...cell, color: r.flow == null ? NA : r.flow < 0 ? NEG : POS, fontWeight: 700 }}>{r.flow == null ? "n/a" : fmtExp(r.flow)}</span>
+        </div>
+      ))}
+      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 2 }}>
+        <span style={{ color: NET, fontWeight: 700, fontSize: 15 }}>Net</span>
+        <span /><span /><span />
+        <span style={{ ...cell, color: netFlow == null ? NA : netFlow < 0 ? NEG : POS, fontWeight: 800 }}>{netFlow == null ? "n/a" : fmtExp(netFlow)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function DevPage() {
   const [ticker, setTicker] = useState("SPXW");
   const [strike, setStrike] = useState("");
@@ -546,6 +619,12 @@ export default function DevPage() {
       <RowLabel text="Net · Calls + Puts" color={NET} />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
         <NetExposurePanel data={combineExposures(callResult?.exposures, putResult?.exposures)} ticker={tkr} strike={strike} />
+      </div>
+
+      {/* Flow GEX raw calculation (volume basis) */}
+      <RowLabel text="Flow GEX · raw calc" color={WARN} />
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
+        <FlowGexCalcPanel call={callResult} put={putResult} />
       </div>
 
       {/* Raw market-data items — every field, nothing dropped */}

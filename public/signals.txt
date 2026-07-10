@@ -1,15 +1,30 @@
 # CB Edge — home signals feed
-# One signal per line. The NEWEST time shows LEFTMOST in the feed.
+# One signal per line. The NEWEST time shows LEFTMOST. Re-polls every 15s.
 #
-# Format:  <time>  <signal text>
-#   time can be: 9:32   9:32am   09:32   2026-07-09 09:32   (a "|" or "-" after the time is optional)
+# Format:  <time>  [<page>]  <signal text>  {<link>}
+#   <time>    9:32   9:32am   09:32   2026-07-09 09:32   (drives ordering; a "|" or "-" after it is optional)
+#   [<page>]  optional source tag, shown as a colored label
+#   {<link>}  optional route opened on click  (internal "/flow" = in-app; full URL = new tab)
 #   lines starting with "#" are ignored; blank lines are ignored
-#   direction tint: text starting LONG/BUY/BULL -> green, SHORT/SELL/BEAR -> red, else cyan
 #
-# Edit this file and push to update the feed (it re-polls every 15s).
-# Replace the examples below with your own signals:
+# ── Alert vocabulary (source page -> alerts) ────────────────────────────────
+#  [CB]          new CB (moved)  ·  CB hit within 5 pts
+#  [Econ]        5 minutes to event  ·  1 minute to event
+#  [Traders]     overnight overview ready  ·  bzila update  ·  1 min to open  ·  1 min to close
+#  [EM]          ESU/NQU crossed estimated move  (1x per week)
+#  [Flow]        new whale option
+#  [Analytics]   GEX crossed 0  ·  initial balance formed (stats in play)  ·  levels hit/failed
+#  [Strategy]    new strategy available (click to see)
+#  [Scanner]     —
+#  [Watch This]  new watch-this — ticker / strike / expiration (links to page)
+#  [Balance]     today's quadrant transition
+#
+# Replace the examples below with your live signals:
 
-9:32   Net GEX flipped positive — long bias into 7400
-9:41   Call wall rolled 7400 → 7410
-10:05  SHORT CB 7380 rejected from below
-10:22  Flip reclaimed at 7365
+9:32   [CB] new CB 7400 — moved up from 7380
+9:38   [Econ] 5 minutes to CPI
+9:45   [Flow] new whale — SPX 7400C $1.2M {/flow}
+9:58   [Traders] 1 minute to market open
+10:05  [Watch This] TSLA 250C 07-18 {/scanner}
+10:10  [Analytics] GEX crossed 0 {/analytics}
+10:18  [Balance] quadrant flipped to balanced {/scanner}

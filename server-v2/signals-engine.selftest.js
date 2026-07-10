@@ -12,7 +12,7 @@
  * Frames are built in ES space with basis=0 so SPX-level inputs map 1:1 to ES.
  */
 
-const { evaluateFrame } = require('./signals-engine');
+const { evaluateFrame, evaluateFlowDivergence } = require('./signals-engine');
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -27,6 +27,11 @@ function frame(ts, priceEs, extra = {}) {
 function run(mem, frames) {
   const all = [];
   for (const f of frames) for (const s of evaluateFrame(f, mem)) all.push(s);
+  return all;
+}
+function runFd(mem, frames) {
+  const all = [];
+  for (const f of frames) for (const s of evaluateFlowDivergence(f, mem)) all.push(s);
   return all;
 }
 const T = 1_700_000_000_000; // arbitrary base epoch ms
@@ -143,6 +148,29 @@ const step = 4000;
     frame(T + 3 * step, 5002, { flipSpx: 5000 }), // within cooldown → suppressed
   ]);
   check('only one flip_cross', sigs.filter((x) => x.kind === 'flip_cross').length === 1);
+})();
+
+// 10) FLOW GEX DIVERGENCE — price up, aggregate flow bearish, one strike dominates → LONG
+(() => {
+  console.log('10) flow divergence → long catalyst');
+  const sigs = runFd(freshMem(), [
+    frame(T,        5000, { totalFlowGex: -2.5e9, maxFlow: -4.5e9, maxFlowStrike: 5075 }), // seed prev
+    frame(T + step, 5005, { totalFlowGex: -2.5e9, maxFlow: -4.5e9, maxFlowStrike: 5075 }), // price up → fire
+  ]);
+  const s = sigs.find((x) => x.kind === 'flow_divergence');
+  check('flow_divergence fired', !!s);
+  check('direction long', !!s && s.direction === 'long');
+  check('level Flow 5075', !!s && s.levelName === 'Flow 5075' && Math.round(s.levelSpx) === 5075);
+})();
+
+// 11) NO DIVERGENCE — aggregate flow agrees with price (both bullish) → no fire
+(() => {
+  console.log('11) flow aligned with price → no signal');
+  const sigs = runFd(freshMem(), [
+    frame(T,        5000, { totalFlowGex: 3e9, maxFlow: 4.5e9, maxFlowStrike: 5075 }),
+    frame(T + step, 5005, { totalFlowGex: 3e9, maxFlow: 4.5e9, maxFlowStrike: 5075 }),
+  ]);
+  check('no flow_divergence', sigs.filter((x) => x.kind === 'flow_divergence').length === 0);
 })();
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} passed, ${fail} failed`);

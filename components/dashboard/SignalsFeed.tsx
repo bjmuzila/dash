@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 
 /**
@@ -10,38 +11,63 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
  *
  * Reads plain-text signals the user authors in public/signals.txt (served at
  * /signals.txt). One signal per line. The NEWEST signal renders LEFTMOST and
- * each chip shows its timestamp. Polls every 15s so edits to the file appear
- * without a page reload.
+ * each chip shows its timestamp. Polls every 15s so file edits appear without a
+ * page reload.
  *
- * Line format (see public/signals.txt for the live template):
- *     9:32   Net GEX flipped positive — long bias
- *     9:41   Call wall 7400 → 7410
- *     10:05  SHORT CB 7380 rejected
- * - A leading time token (9:32, 9:32am, 09:32, or 2026-07-09 09:32) becomes the
- *   timestamp; the remainder of the line is the signal text. An optional "|" or
- *   "-" between the time and the text is stripped.
- * - Lines are ordered newest-time-first (leftmost). Lines without a parseable
- *   time keep their file order and trail the timed ones.
- * - Blank lines and lines starting with "#" are ignored (comments).
- * - Direction tint: text starting LONG/BUY/BULL → green, SHORT/SELL/BEAR → red,
- *   otherwise cyan.
+ * Line format (see public/signals.txt for the live template + alert vocabulary):
+ *     <time>  [<page>]  <signal text>  {<link>}
+ *   e.g.  9:45  [Flow] new whale — SPX 7400C $1.2M {/flow}
+ *
+ * - <time>   leading time token (9:32, 9:32am, 09:32, or 2026-07-09 09:32);
+ *            becomes the timestamp and drives ordering. An optional "|"/"-" after
+ *            it is stripped.
+ * - [<page>] optional source-page tag (CB, Econ, Traders, EM, Flow, Analytics,
+ *            Strategy, Scanner, Watch This, Balance) — rendered as an icon-badge
+ *            card: a category glyph in a colored tile + a colored time·PAGE line.
+ * - {<link>} optional route opened on click (internal "/flow" → client nav;
+ *            anything else → new tab).
+ * - Ordering: newest time first (leftmost). Untimed lines keep file order and
+ *   trail the timed ones. Blank lines and lines starting with "#" are ignored.
  */
 
-type Signal = { time: string; minutes: number | null; text: string; key: string };
+type Signal = {
+  time: string;
+  minutes: number | null;
+  page: string;
+  text: string;
+  link: string;
+  key: string;
+};
 
 // Optional leading date, required HH:MM, optional am/pm, optional "ET", optional
-// "|" / dash separator before the signal text.
+// "|"/dash separator before the rest of the line.
 const TIME_RE = /^\s*(?:\d{4}-\d{2}-\d{2}[ T])?(\d{1,2}):(\d{2})\s*([ap]\.?m?\.?)?\s*(?:ET)?\s*(?:[|\-–—]\s*)?/i;
 
+// Source-page → accent color for the little label chip. Matched on a normalized
+// (lowercased) prefix so "Options Flow", "flow" and "FLOW" all hit the same key.
+function pageAccent(page: string): string {
+  const p = page.trim().toLowerCase();
+  if (p.startsWith("cb") || p.includes("bullseye")) return HT.purple;
+  if (p.startsWith("econ")) return HT.orange;
+  if (p.startsWith("trad")) return HT.cyan;
+  if (p.startsWith("em") || p.includes("estimated")) return HT.green;
+  if (p.startsWith("flow") || p.includes("option")) return HT.cyan;
+  if (p.startsWith("anal")) return HT.cyan;
+  if (p.startsWith("strat")) return HT.orange;
+  if (p.startsWith("scan")) return HT.green;
+  if (p.includes("watch")) return HT.green;
+  if (p.includes("balance") || p.includes("imbalance")) return HT.purple;
+  return HT.cyan;
+}
+
 function parseLine(raw: string, idx: number): Signal | null {
-  const line = raw.trim();
+  let line = raw.trim();
   if (!line || line.startsWith("#")) return null;
 
+  // 1) leading time token
   const m = line.match(TIME_RE);
   let time = "";
   let minutes: number | null = null;
-  let text = line;
-
   if (m) {
     let h = Number(m[1]);
     const min = Number(m[2]);
@@ -50,10 +76,21 @@ function parseLine(raw: string, idx: number): Signal | null {
     if (ap.startsWith("a") && h === 12) h = 0;
     minutes = h * 60 + min;
     time = `${m[1]}:${m[2]}${ap ? " " + ap.replace(/\./g, "").toUpperCase() : ""}`;
-    text = line.slice(m[0].length).trim() || line;
+    line = line.slice(m[0].length).trim();
   }
 
-  return { time, minutes, text, key: `${idx}:${line}` };
+  // 2) optional [page] tag at the start
+  let page = "";
+  const pm = line.match(/^\[([^\]]+)\]\s*/);
+  if (pm) { page = pm[1].trim(); line = line.slice(pm[0].length).trim(); }
+
+  // 3) optional {link} at the end
+  let link = "";
+  const lm = line.match(/\s*\{([^}]+)\}\s*$/);
+  if (lm) { link = lm[1].trim(); line = line.slice(0, lm.index).trim(); }
+
+  const text = line || raw.trim();
+  return { time, minutes, page, text, link, key: `${idx}:${raw}` };
 }
 
 function parseSignals(txt: string): Signal[] {
@@ -67,11 +104,87 @@ function parseSignals(txt: string): Signal[] {
   return [...timed, ...untimed];
 }
 
-function tint(text: string): string {
-  const t = text.trim().toUpperCase();
-  if (t.startsWith("LONG") || t.startsWith("BUY") || t.startsWith("BULL")) return HT.green;
-  if (t.startsWith("SHORT") || t.startsWith("SELL") || t.startsWith("BEAR")) return HT.red;
-  return HT.cyan;
+// Per-category glyph (stroke SVG, inherits the page accent color). Matched on the
+// same normalized page prefix as pageAccent(); falls back to a bell.
+function CatGlyph({ page, color }: { page: string; color: string }) {
+  const p = page.trim().toLowerCase();
+  const props = {
+    width: 17, height: 17, viewBox: "0 0 24 24", fill: "none",
+    stroke: color, strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const,
+  };
+  if (p.startsWith("cb") || p.includes("bullseye"))
+    return (<svg {...props}><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /></svg>);
+  if (p.startsWith("econ"))
+    return (<svg {...props}><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>);
+  if (p.startsWith("trad"))
+    return (<svg {...props}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>);
+  if (p.startsWith("em") || p.includes("estimated"))
+    return (<svg {...props}><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4" /></svg>);
+  if (p.startsWith("flow") || p.includes("option"))
+    return (<svg {...props}><path d="M3 12h4l3 8 4-16 3 8h4" /></svg>);
+  if (p.startsWith("anal"))
+    return (<svg {...props}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>);
+  if (p.startsWith("strat"))
+    return (<svg {...props}><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12c1 1 1 2 1 3h6c0-1 0-2 1-3a7 7 0 0 0-4-12z" /></svg>);
+  if (p.startsWith("scan"))
+    return (<svg {...props}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>);
+  if (p.includes("watch"))
+    return (<svg {...props}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>);
+  if (p.includes("balance"))
+    return (<svg {...props}><path d="M12 3v18M5 7h14M7 7l-3 6a3 3 0 0 0 6 0zM17 7l-3 6a3 3 0 0 0 6 0z" /></svg>);
+  return (<svg {...props}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" /></svg>);
+}
+
+function Chip({ s }: { s: Signal }) {
+  const accent = s.page ? pageAccent(s.page) : HT.cyan;
+  const inner = (
+    <>
+      <span
+        style={{
+          width: 28, height: 28, borderRadius: 8, background: `${accent}22`, color: accent,
+          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+        }}
+      >
+        <CatGlyph page={s.page} color={accent} />
+      </span>
+      <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+        {(s.time || s.page) && (
+          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "#8da8c2", whiteSpace: "nowrap" }}>
+            {s.time}
+            {s.time && s.page ? " · " : ""}
+            {s.page && <span style={{ color: accent, fontWeight: 700 }}>{s.page.toUpperCase()}</span>}
+          </span>
+        )}
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf5", whiteSpace: "nowrap" }}>
+          {s.text}
+          {s.link && <span style={{ marginLeft: 5, color: accent, fontWeight: 400 }}>↗</span>}
+        </span>
+      </span>
+    </>
+  );
+
+  const chipStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 9,
+    flexShrink: 0,
+    padding: "7px 13px 7px 10px",
+    borderRadius: 10,
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderLeft: `3px solid ${accent}`,
+    textDecoration: "none",
+    cursor: s.link ? "pointer" : "default",
+  };
+
+  if (s.link) {
+    // Internal route → client-side nav; external URL → new tab.
+    if (s.link.startsWith("/")) {
+      return <Link href={s.link} title={s.text} style={chipStyle}>{inner}</Link>;
+    }
+    return <a href={s.link} target="_blank" rel="noreferrer" title={s.text} style={chipStyle}>{inner}</a>;
+  }
+  return <span title={s.text} style={chipStyle}>{inner}</span>;
 }
 
 export default function SignalsFeed({
@@ -145,32 +258,7 @@ export default function SignalsFeed({
           {!loaded ? "Loading…" : missingRef.current ? "signals.txt not found" : "No signals yet"}
         </span>
       ) : (
-        signals.map((s) => {
-          const c = tint(s.text);
-          return (
-            <span
-              key={s.key}
-              title={s.text}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 7,
-                flexShrink: 0,
-                padding: "4px 11px",
-                borderRadius: 999,
-                background: "rgba(13,17,25,0.55)",
-                border: `1px solid ${c}44`,
-              }}
-            >
-              {s.time && (
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, color: "#8da8c2" }}>
-                  {s.time}
-                </span>
-              )}
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: c }}>{s.text}</span>
-            </span>
-          );
-        })
+        signals.map((s) => <Chip key={s.key} s={s} />)
       )}
     </div>
   );
