@@ -1,6 +1,7 @@
 "use client";
 
-// ChainStatsBar — sits above CompactOptionChain on /new-home. Two rows:
+// ChainStatsBar — sits above the option chain matrix on /new-home (that matrix
+// is the embedded /options-chain page, app/options-chain/page.tsx). Two rows:
 //   1. "Now" tiles: Call Wall, Put Wall, Flip, CB, Max Pain — derived from the
 //      ticker's nearest (0DTE-style) expiry chain, same math /gex2 and /test's
 //      Positioning tab use (net GEX per strike, zero-crossing flip, payout-
@@ -14,7 +15,7 @@
 //      (option_strike_gex_history, same source /test's Walls & Flows tab
 //      uses for SPX); every other ticker reads /proxy/wall-history
 //      (ticker-wall-recorder), same as /test uses for NDX/SPY/QQQ.
-// Independent fetch from CompactOptionChain (small extra /api/chains call for
+// Independent fetch from the option chain matrix (small extra /api/chains call for
 // one expiry) — kept separate so this bar doesn't couple to the matrix's
 // internal multi-expiry state.
 

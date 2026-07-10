@@ -34,13 +34,21 @@ WHERE t.date = f.date
        NOT BETWEEN '09:30' AND '16:00'
   );
 
--- flow_prints: once a contract's expiration date has passed it's dead —
--- no feature re-reads an expired contract's tape, so drop those rows
--- immediately regardless of the age cutoff. Rows with no expiration
--- (underlying-level prints, if any) still fall back to the date cutoff.
+-- flow_prints: big prints (premium >= $500K) are kept 5 session days so the
+-- /flow Combined preset (0–7DTE, ≥$500K, OTM) can replay the last several days,
+-- even for 0DTE contracts that already expired. Small prints keep the old
+-- aggressive purge (dead the moment the contract expires, else a 1-day cutoff)
+-- so the table doesn't balloon back toward the 3.6GB disk incident.
+-- (retention-cleanup.js runs the same logic nightly; env-overridable there.)
 DELETE FROM flow_prints
-WHERE (expiration IS NOT NULL AND expiration::date < CURRENT_DATE)
-   OR (expiration IS NULL AND date::date < CURRENT_DATE - INTERVAL '10 days');
+WHERE date::date < CURRENT_DATE - INTERVAL '5 days'
+   OR (
+     COALESCE(premium, 0) < 500000
+     AND (
+       (expiration IS NOT NULL AND expiration::date < CURRENT_DATE)
+       OR date::date < CURRENT_DATE - INTERVAL '1 days'
+     )
+   );
 
 -- JSONB full-chain blobs every 30 min — likely biggest single offender ------
 DELETE FROM home_static_snapshots      WHERE created_at < NOW() - INTERVAL '5 days';

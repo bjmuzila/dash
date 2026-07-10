@@ -10,6 +10,10 @@ import EsCandlesFullPanel from "@/components/dashboard/EsCandlesFullPanel";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
+// Reuse the exact standalone /options-chain component for the heatmap panel's
+// "Chain" tab. expirySelection="key" = compact 0DTE/1DTE/weekly/monthly columns
+// (same embed the /new-home page uses); ticker hides its own ticker input.
+import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
@@ -514,8 +518,10 @@ export function HomeClient({
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
   // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
   const [intensity, setIntensity] = useState(1.75);
-  // Heatmap panel view: "heatmap" = colored cell backgrounds; "table" = divergent bars.
-  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table">("heatmap");
+  // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
+  // option chain. ("table" divergent-bars view retired from the switcher; kept in
+  // the union so its now-unreachable render branch stays valid without a refactor.)
+  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
 
@@ -1256,7 +1262,8 @@ export function HomeClient({
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    Live GEX Heatmap
+                    {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
+                    {heatmapView !== "chain" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
@@ -1267,10 +1274,11 @@ export function HomeClient({
                       />
                       <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
                     </div>
+                    )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{ display: "flex", gap: 2, marginRight: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                      {(["heatmap", "table"] as const).map((v) => (
+                      {(["heatmap", "chain"] as const).map((v) => (
                         <button
                           key={v}
                           onClick={() => setHeatmapView(v)}
@@ -1291,16 +1299,23 @@ export function HomeClient({
                         </button>
                       ))}
                     </div>
+                    {heatmapView !== "chain" && (
+                    <>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
+                    </>
+                    )}
                   </div>
                 </div>
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
+                {heatmapView === "chain" ? (
+                  <OptionsChainPage expirySelection="key" ticker="SPX" />
+                ) : (
                 <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "10%" }} />
@@ -1433,6 +1448,7 @@ export function HomeClient({
                     })}
                   </tbody>
                 </table>
+                )}
               </div>
             </div>
           </div>

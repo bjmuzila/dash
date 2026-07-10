@@ -35,7 +35,9 @@ const WINDOW_END_MINS   = Number(process.env.RETENTION_WINDOW_END_MINS || 40);  
 const RETENTION = {
   strike_growth:              Number(process.env.RETENTION_STRIKE_GROWTH_DAYS || 5),
   option_strike_gex_history:  Number(process.env.RETENTION_GEX_HISTORY_DAYS || 10),
-  flow_prints:                Number(process.env.RETENTION_FLOW_PRINTS_DAYS || 10),
+  flow_prints:                Number(process.env.RETENTION_FLOW_PRINTS_DAYS || 5),    // ≥ big-premium prints kept this many session days (0–7DTE Combined lookback)
+  flow_prints_big_premium:    Number(process.env.RETENTION_FLOW_BIG_PREMIUM || 500_000), // "big" = survives the full window regardless of expiry
+  flow_prints_small_days:     Number(process.env.RETENTION_FLOW_SMALL_DAYS || 1),     // < big-premium prints: purged on expiry or after this many days (disk guard)
   darkpool_prints:            Number(process.env.RETENTION_DARKPOOL_DAYS || 10), // 7D toggle needs >=10
   greek_snapshots:            Number(process.env.RETENTION_GREEK_SNAPSHOTS_DAYS || 10),
   ticker_wall_snapshots:      Number(process.env.RETENTION_TICKER_WALL_DAYS || 10),
@@ -135,12 +137,22 @@ async function runDeletes(p) {
       )
   `);
 
-  // flow_prints: an expired contract is dead the moment it expires, regardless
-  // of the age cutoff (0DTE-style products expire same day).
+  // flow_prints: big prints (premium >= flow_prints_big_premium) are kept the
+  // full flow_prints-day window by session date so the /flow Combined preset
+  // (0–7DTE, ≥$500K, OTM) can replay the last several days — even for 0DTE
+  // contracts that already expired. Small prints keep the old aggressive purge
+  // (dead the moment the contract expires, else a short date cutoff) so the
+  // table doesn't balloon back toward the 3.6GB disk-exhaustion incident.
   await run('flow_prints', `
     DELETE FROM flow_prints
-    WHERE (expiration IS NOT NULL AND expiration::date < CURRENT_DATE)
-       OR (expiration IS NULL AND date::date < CURRENT_DATE - INTERVAL '${RETENTION.flow_prints} days')
+    WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.flow_prints} days'
+       OR (
+         COALESCE(premium, 0) < ${RETENTION.flow_prints_big_premium}
+         AND (
+           (expiration IS NOT NULL AND expiration::date < CURRENT_DATE)
+           OR date::date < CURRENT_DATE - INTERVAL '${RETENTION.flow_prints_small_days} days'
+         )
+       )
   `);
 
   await run('ticker_wall_snapshots',
