@@ -1927,6 +1927,388 @@ function PostGenerator({ form }: { form: FormState }) {
   );
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * Day Posts — the "posts throughout the day" workflow. Pick a slot (Premarket
+ * Analysis / Midday Update / EOD Summary / Custom), hit Retrieve to pull a live
+ * visual (Option Flow, GEX chart, Option Chain, Multi Greeks — the non-GEX ones
+ * render the real page in a same-origin ?embed=1 iframe and get captured with
+ * html2canvas; the GEX chart grabs the mounted GexChart canvas directly),
+ * optionally stamp the CB Edge logo/CTA into a corner (same drawBrandStamp the
+ * Brander uses), optionally attach a strike+expiration trade idea, then let
+ * /api/social-media/day-post (Anthropic) write the CB Edge-promoting caption.
+ * Caption is editable in the tweet mockup; Copy / Open X from there.
+ * ════════════════════════════════════════════════════════════════════════════ */
+const DP_CSS = `
+  .dp-wrap { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
+  .dp-panel { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .dp-label { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); }
+  .dp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dp-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 14px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--sm-muted); transition: all 0.12s; }
+  .dp-btn:hover { color: var(--text1); border-color: var(--cyan); }
+  .dp-btn:disabled { opacity: 0.5; cursor: default; }
+  .dp-btn.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(33,158,188,0.35); }
+  .dp-btn.gen { border-color: var(--cyan); background: var(--cyan); color: #05060a; padding: 10px 18px; font-size: 12px; align-self: flex-start; }
+  .dp-row label { font-size: 12px; color: var(--sm-muted); display: flex; gap: 7px; align-items: center; }
+  .dp-row select, .dp-row input { font-family: var(--sm-mono); font-size: 12px; padding: 6px 9px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg0); color: var(--text1); }
+  .dp-row input { width: 110px; }
+  .dp-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.5; }
+  .dp-hint b { color: var(--text1); }
+  .dp-err { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-red); padding: 10px 14px; border: 1px solid rgba(239,68,68,0.4); border-radius: 6px; background: rgba(239,68,68,0.07); }
+  .dp-notes { width: 100%; box-sizing: border-box; resize: vertical; min-height: 48px; font-family: inherit; font-size: 13px; line-height: 1.45; color: var(--text1); background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 8px 10px; }
+  .dp-embed { position: relative; border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; background: var(--bg0); }
+  .dp-chart-host { width: 100%; height: 360px; background: var(--bg0); border-radius: 8px; overflow: hidden; }
+  .dp-cap { border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; background: var(--bg0); }
+  .dp-cap img { display: block; width: 100%; height: auto; }
+`;
+
+type DaySlot = "premarket" | "midday" | "eod" | "custom";
+const DAY_SLOTS: { v: DaySlot; label: string }[] = [
+  { v: "premarket", label: "Premarket Analysis" },
+  { v: "midday", label: "Midday Update" },
+  { v: "eod", label: "EOD Summary" },
+  { v: "custom", label: "Custom" },
+];
+
+type DayVisual = "gex" | "flow" | "chain" | "greeks";
+const DAY_VISUALS: { v: DayVisual; label: string; embed?: string }[] = [
+  { v: "gex", label: "GEX Chart" },
+  { v: "flow", label: "Option Flow", embed: "/flow?embed=1" },
+  { v: "chain", label: "Option Chain", embed: "/options-chain?embed=1" },
+  { v: "greeks", label: "Multi Greeks", embed: "/mult-greek?embed=1" },
+];
+// Iframe logical size — desktop layout, scaled down to fit the column.
+const DP_EMB_W = 1280;
+const DP_EMB_H = 800;
+
+interface DayPost { id: string; ts: string; slot: DaySlot; tweet: string }
+const DAY_POSTS_KEY = "cb-edge-day-posts";
+
+function DayPosts({ form }: { form: FormState }) {
+  const [slot, setSlot] = useState<DaySlot>("premarket");
+  const [visual, setVisual] = useState<DayVisual>("gex");
+  const [notes, setNotes] = useState("");
+  const [caption, setCaption] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+
+  // Branding — optional logo/CTA stamp, movable per corner.
+  const [brandOn, setBrandOn] = useState(true);
+  const [logoCorner, setLogoCorner] = useState<BrCorner>("tl");
+  const [ctaCorner, setCtaCorner] = useState<BrCorner>("br");
+
+  // Trade idea.
+  const [ideaOn, setIdeaOn] = useState(false);
+  const [ideaTicker, setIdeaTicker] = useState("SPX");
+  const [ideaStrike, setIdeaStrike] = useState("");
+  const [ideaRight, setIdeaRight] = useState<"C" | "P">("C");
+  const [ideaExp, setIdeaExp] = useState("");
+  const [ideaNote, setIdeaNote] = useState("");
+
+  // Captured raw visual (unbranded) — frozen copy so live updates don't shift it.
+  const rawRef = useRef<HTMLCanvasElement | null>(null);
+  const [capturedAt, setCapturedAt] = useState(0);
+  const [capturing, setCapturing] = useState(false);
+
+  // GEX chart source (same /api/gex feed PostGenerator uses).
+  const [gexChain, setGexChain] = useState<ChainRow[]>([]);
+  const [gexSpot, setGexSpot] = useState(0);
+  const [gexFlip, setGexFlip] = useState<number | null>(null);
+  const [gexLoading, setGexLoading] = useState(false);
+  const chartHostRef = useRef<HTMLDivElement>(null);
+
+  // Iframe source (flow / chain / greeks) — measured + scaled like GexDock.
+  const [iframeOn, setIframeOn] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const embedBoxRef = useRef<HTMLDivElement>(null);
+  const [embedW, setEmbedW] = useState(0);
+  useEffect(() => {
+    const el = embedBoxRef.current;
+    if (!el) return;
+    const measure = () => setEmbedW(el.clientWidth);
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  }, [iframeOn, visual]);
+  const embScale = embedW > 0 ? Math.min(1, embedW / DP_EMB_W) : 1;
+
+  const visualDef = DAY_VISUALS.find((v) => v.v === visual)!;
+
+  // Switching source resets the live view (keeps any frozen capture).
+  useEffect(() => { setIframeOn(false); }, [visual]);
+
+  const retrieve = useCallback(async () => {
+    setError("");
+    if (visual === "gex") {
+      setGexLoading(true);
+      try {
+        const res = await fetch("/api/gex", { cache: "no-store" });
+        if (!res.ok) throw new Error(`gex ${res.status}`);
+        const data = await res.json();
+        const chain = Array.isArray(data.chain) ? data.chain : [];
+        if (!chain.length) throw new Error("empty chain");
+        setGexChain(chain);
+        setGexSpot(Number(data.spotPrice ?? 0));
+        setGexFlip(data.gexFlip ?? null);
+      } catch (e) {
+        console.error("[day-posts gex]", e);
+        setError("No live GEX data — needs the live dashboard feed.");
+      } finally {
+        setGexLoading(false);
+      }
+    } else {
+      setIframeOn(true);
+    }
+  }, [visual]);
+
+  // Freeze the current live view into rawRef.
+  const capture = useCallback(async () => {
+    setCapturing(true);
+    setError("");
+    try {
+      if (visual === "gex") {
+        const raw = chartHostRef.current?.querySelector<HTMLCanvasElement>("canvas");
+        if (!raw) throw new Error("chart canvas not found — hit Retrieve first");
+        const out = document.createElement("canvas");
+        out.width = raw.width; out.height = raw.height;
+        out.getContext("2d")?.drawImage(raw, 0, 0);
+        rawRef.current = out;
+      } else {
+        const doc = iframeRef.current?.contentDocument;
+        if (!doc?.body) throw new Error("view not loaded — hit Retrieve and wait for it to render");
+        const html2canvas = await getHtml2Canvas();
+        const canvas = await html2canvas(doc.body, {
+          backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
+          width: DP_EMB_W, height: DP_EMB_H, windowWidth: DP_EMB_W, windowHeight: DP_EMB_H,
+        });
+        rawRef.current = canvas;
+      }
+      setCapturedAt(Date.now());
+    } catch (e) {
+      console.error("[day-posts capture]", e);
+      setError(String((e as Error)?.message || "capture failed"));
+    } finally {
+      setCapturing(false);
+    }
+  }, [visual]);
+
+  // Branded blob for the tweet mockup — re-stamps corners on every render call.
+  const renderBrandedBlob = useCallback(async (): Promise<Blob | null> => {
+    const src = rawRef.current;
+    if (!src) return null;
+    const out = document.createElement("canvas");
+    out.width = src.width; out.height = src.height;
+    const ctx = out.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(src, 0, 0);
+    if (brandOn) drawBrandStamp(ctx, out.width, out.height, logoCorner, ctaCorner);
+    return await new Promise((r) => out.toBlob((b) => r(b), "image/png"));
+  }, [brandOn, logoCorner, ctaCorner]);
+
+  const band = emBand(form);
+  const regime = regimeOf(form);
+  const n = (v: string | undefined): number | null => {
+    if (!v) return null;
+    const p = Number(String(v).replace(/[, ]/g, ""));
+    return Number.isFinite(p) ? p : null;
+  };
+
+  const [posts, setPosts] = useState<DayPost[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(DAY_POSTS_KEY);
+      return raw ? (JSON.parse(raw) as DayPost[]) : [];
+    } catch { return []; }
+  });
+  const savePosts = (next: DayPost[]) => {
+    setPosts(next);
+    try { window.localStorage.setItem(DAY_POSTS_KEY, JSON.stringify(next)); } catch { /* full */ }
+  };
+
+  const generate = async () => {
+    setGenerating(true);
+    setError("");
+    try {
+      const res = await fetch("/api/social-media/day-post", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slot,
+          notes: notes || null,
+          visual: rawRef.current ? visual : null,
+          tradeIdea: ideaOn && (ideaStrike || ideaTicker) ? {
+            ticker: ideaTicker || "SPX", strike: ideaStrike || null,
+            right: ideaRight, expiration: ideaExp || null, note: ideaNote || null,
+          } : null,
+          spxSpot: n(form.spot),
+          spxPrevClose: n(form.prevClose),
+          gammaFlip: n(form.flip),
+          callWall: n(form.call),
+          putWall: n(form.put),
+          expectedMove: n(form.em),
+          emUpper: band ? band.upper : null,
+          emLower: band ? band.lower : null,
+          netGex: n(form.gex),
+          gammaRegime: regime.label,
+          bias: form.bias || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.data?.xPost) throw new Error(json.error || `request failed (${res.status})`);
+      const tweet = json.data.xPost as string;
+      setCaption(tweet);
+      savePosts([{
+        id: Date.now().toString(),
+        ts: new Date().toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+        slot, tweet,
+      }, ...posts.slice(0, 9)]);
+    } catch (e) {
+      console.error("[day-posts gen]", e);
+      setError("Generation failed — check data and try again.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return (
+    <div className="dp-wrap">
+      <style>{DP_CSS}</style>
+
+      {/* 1 · slot */}
+      <div className="dp-panel">
+        <span className="dp-label">1 · Post slot</span>
+        <div className="dp-row">
+          {DAY_SLOTS.map((s) => (
+            <button key={s.v} type="button" className={`dp-btn${slot === s.v ? " on" : ""}`} onClick={() => setSlot(s.v)}>{s.label}</button>
+          ))}
+        </div>
+        <div className="dp-hint">
+          {!form.spot
+            ? <span style={{ color: "var(--amber)" }}>⚠ No data loaded — hit "Load data" up top so the AI has real levels.</span>
+            : <span>Using: <b>Spot {form.spot}</b> · Flip {form.flip || "—"} · Call {form.call || "—"} · Put {form.put || "—"} · EM ±{form.em || "—"} · GEX {form.gex || "—"}</span>}
+        </div>
+        <textarea className="dp-notes" placeholder="Optional notes / angle for the AI (e.g. 'focus on the failed breakout at the call wall')…" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </div>
+
+      {/* 2 · visual */}
+      <div className="dp-panel">
+        <span className="dp-label">2 · Visual · retrieve, then capture</span>
+        <div className="dp-row">
+          {DAY_VISUALS.map((v) => (
+            <button key={v.v} type="button" className={`dp-btn${visual === v.v ? " on" : ""}`} onClick={() => setVisual(v.v)}>{v.label}</button>
+          ))}
+          <span style={{ flex: 1 }} />
+          <button type="button" className="dp-btn" onClick={retrieve} disabled={gexLoading}>
+            {gexLoading ? "Loading…" : "⤓ Retrieve"}
+          </button>
+          <button type="button" className="dp-btn on" onClick={capture} disabled={capturing || (visual === "gex" ? !gexChain.length : !iframeOn)}>
+            {capturing ? "Capturing…" : "📸 Capture"}
+          </button>
+        </div>
+
+        {visual === "gex" && gexChain.length > 0 && (
+          <div ref={chartHostRef} className="dp-chart-host">
+            <GexChart chain={gexChain} spotPrice={gexSpot} flipPoint={gexFlip} />
+          </div>
+        )}
+        {visual !== "gex" && iframeOn && (
+          <div ref={embedBoxRef} className="dp-embed" style={{ height: DP_EMB_H * embScale }}>
+            <iframe
+              ref={iframeRef}
+              src={visualDef.embed}
+              title={visualDef.label}
+              style={{
+                width: DP_EMB_W, height: DP_EMB_H, border: "none", display: "block",
+                transform: `scale(${embScale})`, transformOrigin: "top left",
+              }}
+            />
+          </div>
+        )}
+        {visual !== "gex" && !iframeOn && (
+          <div className="dp-hint">Hit <b>Retrieve</b> to load the live {visualDef.label} view, let it render, then <b>Capture</b> freezes it to the post image.</div>
+        )}
+
+        <div className="dp-row">
+          <label>
+            <input type="checkbox" style={{ width: "auto" }} checked={brandOn} onChange={(e) => setBrandOn(e.target.checked)} />
+            CB Edge logo on image
+          </label>
+          {brandOn && (
+            <>
+              <label>Logo corner
+                <select value={logoCorner} onChange={(e) => setLogoCorner(e.target.value as BrCorner)}>
+                  {BR_CORNERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
+                </select>
+              </label>
+              <label>cbedge.net corner
+                <select value={ctaCorner} onChange={(e) => setCtaCorner(e.target.value as BrCorner)}>
+                  {BR_CORNERS.map((c) => <option key={c.v} value={c.v}>{c.label}</option>)}
+                </select>
+              </label>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* 3 · trade idea */}
+      <div className="dp-panel">
+        <span className="dp-label">3 · Trade idea · optional</span>
+        <div className="dp-row">
+          <label>
+            <input type="checkbox" style={{ width: "auto" }} checked={ideaOn} onChange={(e) => setIdeaOn(e.target.checked)} />
+            Include trade idea
+          </label>
+          {ideaOn && (
+            <>
+              <label>Ticker <input value={ideaTicker} onChange={(e) => setIdeaTicker(e.target.value.toUpperCase())} style={{ width: 70 }} /></label>
+              <label>Strike <input value={ideaStrike} onChange={(e) => setIdeaStrike(e.target.value)} style={{ width: 70 }} placeholder="6400" /></label>
+              <label>C/P
+                <select value={ideaRight} onChange={(e) => setIdeaRight(e.target.value as "C" | "P")}>
+                  <option value="C">Call</option><option value="P">Put</option>
+                </select>
+              </label>
+              <label>Exp <input value={ideaExp} onChange={(e) => setIdeaExp(e.target.value)} style={{ width: 90 }} placeholder="7/17" /></label>
+              <label>Note <input value={ideaNote} onChange={(e) => setIdeaNote(e.target.value)} style={{ width: 200 }} placeholder="watching over the flip" /></label>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* 4 · generate + preview */}
+      <div className="dp-panel">
+        <span className="dp-label">4 · Generate & post</span>
+        <button type="button" className="dp-btn gen" onClick={generate} disabled={generating || !form.spot}>
+          {generating ? "Generating…" : "✨ Generate post (AI)"}
+        </button>
+        {error && <div className="dp-err">{error}</div>}
+        <TweetMockup
+          title={`Tweet preview — ${DAY_SLOTS.find((s) => s.v === slot)?.label}`}
+          getBlob={renderBrandedBlob}
+          caption={caption || "Generate a post above, or type your own caption here…"}
+          onCaptionChange={setCaption}
+          refreshKey={`${capturedAt}-${brandOn}-${logoCorner}-${ctaCorner}`}
+        />
+        <div className="dp-hint"><b>Copy</b> puts the branded image on the clipboard; <b>Open X</b> pre-fills the caption — paste the image into the composer.</div>
+      </div>
+
+      {/* history */}
+      {posts.length > 0 && (
+        <div className="dp-panel">
+          <span className="dp-label">Recent day posts</span>
+          {posts.map((p) => (
+            <div key={p.id} className="dp-row" style={{ alignItems: "flex-start", borderBottom: "1px solid var(--sm-border)", paddingBottom: 8 }}>
+              <span className="dp-label" style={{ color: "var(--cyan)", minWidth: 86 }}>{DAY_SLOTS.find((s) => s.v === p.slot)?.label ?? p.slot}</span>
+              <span style={{ flex: 1, fontSize: 12, color: "var(--text1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{p.tweet}</span>
+              <button type="button" className="dp-btn" onClick={() => setCaption(p.tweet)}>Use</button>
+              <button type="button" className="dp-btn" onClick={() => savePosts(posts.filter((x) => x.id !== p.id))}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GexImageCards({ updated, today, form }: { updated: string; today: string; form: FormState }) {
   const reg = regimeOf(form);
   const neg = reg.neg;
@@ -2826,7 +3208,7 @@ function OptionsProbe() {
 }
 
 export default function SocialMediaPage() {
-  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen" | "brander" | "probe">("levels");
+  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen" | "brander" | "probe" | "dayposts">("levels");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   // Live per-strike GEX ladder (netGex in $millions) for the Explainer tab.
   // Kept out of FormState (which is string-only) and refreshed alongside it.
@@ -3291,6 +3673,7 @@ export default function SocialMediaPage() {
         <SegGroup
           options={[
             { label: "Probe", value: "probe" },
+            { label: "Day Posts", value: "dayposts" },
             { label: "Daily Levels", value: "levels" },
             { label: "GEX Image Cards", value: "cards" },
             { label: "Explainer Mockup", value: "explainer" },
@@ -3298,7 +3681,7 @@ export default function SocialMediaPage() {
             { label: "Screenshot Brander", value: "brander" },
           ]}
           active={tab}
-          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen" | "brander" | "probe")}
+          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen" | "brander" | "probe" | "dayposts")}
         />
         <span className="sm-live"><i />{refreshing ? "Loading…" : hydrated ? "Loaded" : "Not loaded · on demand"}</span>
         <span className="sm-date">{today}</span>
@@ -3353,6 +3736,7 @@ export default function SocialMediaPage() {
       {tab === "postgen" && <PostGenerator form={form} />}
       {tab === "brander" && <ScreenshotBrander />}
       {tab === "probe" && <OptionsProbe />}
+      {tab === "dayposts" && <DayPosts form={form} />}
 
       <div className="sm-grid" style={tab !== "levels" ? { display: "none" } : undefined}>
         {/* LEFT: dashboard-derived input */}
