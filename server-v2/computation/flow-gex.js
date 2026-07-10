@@ -50,6 +50,12 @@ class FlowGexAccumulator {
     for (const order of tape) {
       const { type, side, strike, size } = order;
       if (!(strike > 0) || !(size > 0)) continue;
+      // Skip prints we couldn't classify as buy/sell from the bid/ask (inferSide
+      // returned mid/unknown, or no fresh quote existed). FlowProcessor coerces
+      // those to side:'buy' for the display tape but tags them bucket:'neutral';
+      // without this guard they'd leak into dealer inventory as taker BUYS and
+      // bias it short. Only genuine bid/ask-classified flow moves inventory.
+      if (order.bucket === 'neutral' || (side !== 'buy' && side !== 'sell')) continue;
 
       // Only count what's new since the last tick for this order (see
       // _seenSize comment in the constructor).

@@ -69,6 +69,33 @@ function computeGexRows(rows, spot, flowInventory = null) {
     const netVolGEX =
       callGamma * callVolume * spot * spot - putGamma * putVolume * spot * spot;
 
+    // Directional Vol GEX. netVolGEX above assumes ALL volume is dealer-long
+    // calls / short puts (the OI-sign convention) — it never checks whether a
+    // trade lifted the ask (buy) or hit the bid (sell). Here we sign the day's
+    // REST volume by the buy/sell ratio actually observed on the classified tape
+    // (inferSide's bid/ask → buy/sell). flowInventory carries the dealer-mirrored
+    // buy/sell split per strike; (dealerBuy − dealerSell)/total is the net
+    // dealer-direction fraction, which scales the full REST volume into a signed
+    // dealer quantity → GEX = γ × qty × spot². Dealer polarity means BOTH legs
+    // use +gamma (dealer long = positive), same as flowGEX — no separate put
+    // flip. A strike/side with no classified flow can't be signed, so it falls
+    // back to the raw netVolGEX term (call side) or contributes 0 (missing side).
+    let netVolGexDir = netVolGEX;
+    if (flowInventory && flowInventory.has(strike)) {
+      const fi = flowInventory.get(strike);
+      const callTot = (fi.callBuyVol ?? 0) + (fi.callSellVol ?? 0);
+      const putTot = (fi.putBuyVol ?? 0) + (fi.putSellVol ?? 0);
+      if (callTot > 0 || putTot > 0) {
+        const callDealerVol =
+          callTot > 0 ? ((fi.callBuyVol - fi.callSellVol) / callTot) * callVolume : 0;
+        const putDealerVol =
+          putTot > 0 ? ((fi.putBuyVol - fi.putSellVol) / putTot) * putVolume : 0;
+        netVolGexDir =
+          callGamma * callDealerVol * spot * spot +
+          putGamma * putDealerVol * spot * spot;
+      }
+    }
+
     // DEX = delta × OI × spot × 100
     const netDEX = callDelta * callOI * spot * 100 - putDelta * putOI * spot * 100;
     const volNetDEX =
@@ -111,6 +138,7 @@ function computeGexRows(rows, spot, flowInventory = null) {
       putGEX,
       netGEX,
       netVolGEX,
+      netVolGexDir,
       flowGEX,
       netDEX,
       volNetDEX,

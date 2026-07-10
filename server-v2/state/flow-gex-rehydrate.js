@@ -70,6 +70,7 @@ async function rebuildInventoryFromFlowPrints(expiration) {
       `SELECT strike, type, side, SUM(size) AS vol
          FROM flow_prints
         WHERE date = $1 AND expiration = $2 AND strike IS NOT NULL AND size IS NOT NULL
+          AND (bucket IS NULL OR bucket <> 'neutral')
         GROUP BY strike, type, side`,
       [date, expiration]
     );

@@ -175,17 +175,27 @@ export async function POST(req: NextRequest) {
       const strike = Number(body.strike);
       const side = String(body.side || "").trim().toUpperCase() === "C" ? "C" : "P";
       const note = body.note ? String(body.note).slice(0, 240) : null;
+      // Optional user-typed fill price. When present it becomes the permanent
+      // "added @" entry (the P&L basis) instead of the auto-captured live mark.
+      const entryPrice = Number(body.addedPrice ?? body.entryPrice);
+      const hasEntry = Number.isFinite(entryPrice) && entryPrice > 0;
       if (!ticker || !expiration || !Number.isFinite(strike)) {
         return NextResponse.json({ error: "ticker, expiry and strike required" }, { status: 400 });
       }
       const created = await insertWatchOption({ ticker, expiration, strike, side, note });
       // Best-effort immediate snapshot so the row isn't blank until the next poll.
-      // Its mark also becomes the permanent "added @" price for this contract.
+      // The entry price (typed, else the live mark) becomes the permanent "added @".
       if (created) {
+        // A typed fill wins as the entry basis — set it first so the mark-based
+        // set below no-ops (setWatchAddedPrice only writes when added_price IS NULL).
+        if (hasEntry) {
+          await setWatchAddedPrice(created.id, entryPrice);
+          created.added_price = entryPrice;
+        }
         const snap = await probe(created);
         if (snap) {
           await insertWatchSnapshot(snap);
-          if (snap.mark != null) {
+          if (snap.mark != null && !hasEntry) {
             await setWatchAddedPrice(created.id, snap.mark);
             created.added_price = snap.mark;
           }

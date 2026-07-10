@@ -75,11 +75,15 @@ const pctSinceAdded = (mark: number | null | undefined, entry: number | null | u
   return ((mark - entry) / entry) * 100;
 };
 // RTH gate for the chart: keep only points inside 09:30–16:00 ET, Mon–Fri.
-const isRthEt = (ts: number) => {
+// ts can arrive as a numeric string (BIGINT from pg) — coerce, and guard bad
+// values so formatToParts never sees an Invalid Date (it throws; toLocale* don't).
+const isRthEt = (ts: number | string | null | undefined) => {
+  const t = Number(ts);
+  if (!Number.isFinite(t)) return false;
   const p = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false,
-  }).formatToParts(new Date(ts));
-  const get = (t: string) => p.find((x) => x.type === t)?.value;
+  }).formatToParts(new Date(t));
+  const get = (k: string) => p.find((x) => x.type === k)?.value;
   const wd = get("weekday");
   if (wd === "Sat" || wd === "Sun") return false;
   const mins = Number(get("hour")) * 60 + Number(get("minute"));
@@ -194,7 +198,9 @@ export default function WatchPage() {
     try {
       const res = await fetch(`/api/watch?history=${id}&range=${r}`, { cache: "no-store" });
       const j = await res.json();
-      setHistoryById((m) => ({ ...m, [id]: j.history || [] }));
+      // BIGINT ts arrives as a string — coerce so downstream new Date()/charts are valid.
+      const hist: Snapshot[] = (j.history || []).map((s: Snapshot) => ({ ...s, ts: Number(s.ts) }));
+      setHistoryById((m) => ({ ...m, [id]: hist }));
     } catch { /* keep prior */ } finally {
       setHistoryLoading(false);
     }

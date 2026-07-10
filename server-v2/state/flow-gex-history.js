@@ -117,6 +117,7 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
                OVER (PARTITION BY strike ORDER BY ts) AS put_net
            FROM flow_prints
           WHERE date = ANY($1::text[]) AND expiration = $2 AND strike = ANY($3::real[])
+            AND (bucket IS NULL OR bucket <> 'neutral')
          )
          SELECT DISTINCT ON (strike, minute_et) strike,
                 to_char(minute_et, 'HH24:MI') AS time_et,
@@ -194,6 +195,7 @@ async function getFlowGexHistoryWindow({ spot, expiration, date, windowSize = 20
              OVER (PARTITION BY strike ORDER BY ts) AS put_net
          FROM flow_prints
         WHERE date = ANY($1::text[]) AND expiration = $2 AND strike = ANY($3::real[])
+          AND (bucket IS NULL OR bucket <> 'neutral')
        )
        SELECT DISTINCT ON (strike, minute_et) strike,
               to_char(minute_et, 'HH24:MI') AS time_et,

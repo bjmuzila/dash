@@ -946,7 +946,8 @@ async function main() {
       // Cross-ticker SCANNER: top movers by Δ over a window, stocks-only, with a
       // vs-today z-score so abnormally-large moves surface (not just big numbers).
       //   GET /proxy/strike-growth/scanner?window=15&limit=10&sort=z&minZ=0
-      //   window=15|30|60  sort=z|abs  (z = anomaly rank, abs = raw size)
+      //   window=15|30|60  sort=z|abs|otm|pct|score
+      //   (z=anomaly, abs=raw Δ, pct=%vsopen, score=0.6·|Δ|+0.4·|%| blend)
       if (pathname === '/proxy/strike-growth/scanner' && req.method === 'GET') {
         (async () => {
           try {
@@ -970,9 +971,13 @@ async function main() {
             const EXCLUDE = ['SPX','NDX','VIX','RUT','XSP','SPY','QQQ','IWM','DIA'];
             // changes: every snapshot's Δ-vs-(window)-min-ago, per symbol/expiry/strike.
             // Then per strike: latest Δ + mean/stddev of today's Δ series → z-score.
-            const orderCol = sort === 'abs' ? 'ABS(latest_chg)'
-                           : sort === 'otm' ? 'ABS(weighted_chg)'
-                           : sort === 'pct' ? 'ABS(pct_open)'
+            // Combined-score weights (image spec: 0.6·|Δ| + 0.4·|%|), overridable via query.
+            const wAbs = Math.max(0, Math.min(1, Number(u.searchParams.get('wAbs') || 0.6)));
+            const wPct = Math.max(0, Math.min(1, Number(u.searchParams.get('wPct') || 0.4)));
+            const orderCol = sort === 'abs'   ? 'ABS(latest_chg)'
+                           : sort === 'otm'   ? 'ABS(weighted_chg)'
+                           : sort === 'pct'   ? 'ABS(pct_open)'
+                           : sort === 'score' ? 'score'
                            : 'ABS(z_score)';
             const sql = `
               WITH changes AS (
@@ -1012,7 +1017,12 @@ async function main() {
                   AND (CASE WHEN s.sd_chg > 0 THEN ABS((s.latest_chg - s.mean_chg)/s.sd_chg) ELSE 0 END) >= $3
               )
               SELECT symbol, expiry, strike, latest_chg, mean_chg, sd_chg, n, spot,
-                     z_score AS z, otm_dist, weighted_chg, pct_open
+                     z_score AS z, otm_dist, weighted_chg, pct_open,
+                     -- Combined score: min-max normalize |Δ| and |%| across the
+                     -- candidate set, blend (image: 0.6·|Δ| + 0.4·|%|), scaled 0..100.
+                     -- Each term COALESCE→0 so a null/zero denominator can't null the score.
+                     (${wAbs} * COALESCE(ABS(latest_chg) / NULLIF(MAX(ABS(latest_chg)) OVER (), 0), 0)
+                    + ${wPct} * COALESCE(ABS(pct_open)  / NULLIF(MAX(ABS(pct_open))  OVER (), 0), 0)) * 100 AS score
               FROM scored
               WHERE otm_dist >= $6
               ORDER BY ${orderCol} DESC NULLS LAST

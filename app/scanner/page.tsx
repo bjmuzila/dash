@@ -178,10 +178,20 @@ type GexRow = {
   otm_dist: number;
   weighted_chg: number;
   pct_open: number | null;
+  score?: number;   // combined 0.6·|Δ|+0.4·|%| blend (0..100), from backend when present
 };
 type Win = 5 | 15 | 30 | 60;
-type GexSort = "z" | "abs" | "otm" | "pct";
-type ColSort = { col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open"; dir: "desc" | "asc" } | null;
+type GexSort = "z" | "abs" | "otm" | "pct" | "score";
+type ColSort = { col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open" | "score"; dir: "desc" | "asc" } | null;
+type GexSignal = "very" | "strong" | "relative" | null;
+
+// Threshold badge (image spec: Strong = big $ Δ, Big relative = big %, Very strong = both).
+function SignalBadge({ s }: { s: GexSignal }) {
+  if (s === "very")     return <span style={{ color: "#FFD166", fontWeight: 800, fontSize: 14, whiteSpace: "nowrap" }}>★ Very strong</span>;
+  if (s === "strong")   return <span style={{ color: HOME_THEME.cyan, fontWeight: 700, fontSize: 14 }}>Strong</span>;
+  if (s === "relative") return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 14 }}>Big %</span>;
+  return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 14 }}>—</span>;
+}
 
 function GexScanner() {
   const [rows, setRows] = useState<GexRow[]>([]);
@@ -195,8 +205,29 @@ function GexScanner() {
   const [minOtm, setMinOtm] = useState(0.02);
   const [minExpiry, setMinExpiry] = useState("");
   const [maxExpiry, setMaxExpiry] = useState("");
+  // Adjustable signal thresholds (user settings, persisted). Image defaults:
+  // Strong ≥ $500k Δ, Big-relative ≥ 30% vs open.
+  const [minDollar, setMinDollar] = useState<number>(() =>
+    typeof window !== "undefined" ? Number(localStorage.getItem("scanner.minDollar")) || 500_000 : 500_000);
+  const [minPct, setMinPct] = useState<number>(() =>
+    typeof window !== "undefined" ? Number(localStorage.getItem("scanner.minPct")) || 30 : 30);
+  useEffect(() => { try { localStorage.setItem("scanner.minDollar", String(minDollar)); } catch {} }, [minDollar]);
+  useEffect(() => { try { localStorage.setItem("scanner.minPct", String(minPct)); } catch {} }, [minPct]);
 
-  const toggleColSort = (col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open") => {
+  // Combined score: use backend value when present, else min-max normalize the
+  // visible rows and blend 0.6·|Δ| + 0.4·|%| → 0..100 (image spec).
+  const maxAbs = Math.max(1, ...rows.map(r => Math.abs(r.latest_chg || 0)));
+  const maxPct = Math.max(1, ...rows.map(r => Math.abs(r.pct_open || 0)));
+  const scoreOf = (r: GexRow) =>
+    r.score != null ? r.score
+    : (0.6 * (Math.abs(r.latest_chg || 0) / maxAbs) + 0.4 * (Math.abs(r.pct_open || 0) / maxPct)) * 100;
+  const classify = (r: GexRow): GexSignal => {
+    const bigAbs = Math.abs(r.latest_chg) >= minDollar;
+    const bigPct = r.pct_open != null && Math.abs(r.pct_open) >= minPct;
+    return bigAbs && bigPct ? "very" : bigAbs ? "strong" : bigPct ? "relative" : null;
+  };
+
+  const toggleColSort = (col: NonNullable<ColSort>["col"]) => {
     setColSort(prev =>
       prev?.col === col
         ? { col, dir: prev.dir === "desc" ? "asc" : "desc" }
@@ -211,6 +242,7 @@ function GexScanner() {
       case "mean_chg": return r.mean_chg;
       case "otm_dist": return r.otm_dist ?? 0;
       case "pct_open": return r.pct_open ?? -Infinity;
+      case "score": return scoreOf(r);
     }
   };
 
@@ -226,7 +258,9 @@ function GexScanner() {
         const bv = colSortValue(b, colSort.col);
         return colSort.dir === "desc" ? bv - av : av - bv;
       })
-    : expiryFilteredRows;
+    : sort === "score"
+      ? [...expiryFilteredRows].sort((a, b) => scoreOf(b) - scoreOf(a))
+      : expiryFilteredRows;
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -252,7 +286,7 @@ function GexScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>GEX Change Scanner</span>}
-      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : " by size"}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · refreshing…" : ""}`}>
+      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 6 }}>
@@ -266,6 +300,7 @@ function GexScanner() {
           <button onClick={() => setSort("abs")} style={seg(sort === "abs")}>Biggest (size)</button>
           <button onClick={() => setSort("otm")} style={seg(sort === "otm")}>OTM-weighted</button>
           <button onClick={() => setSort("pct")} style={seg(sort === "pct")}>% vs open</button>
+          <button onClick={() => setSort("score")} style={seg(sort === "score")}>Best overall</button>
         </div>
         <span style={{ color: HOME_THEME.border }}>|</span>
         <div style={{ display: "flex", gap: 6 }}>
@@ -293,6 +328,27 @@ function GexScanner() {
             <option value={1.5}>1.5+</option>
             <option value={2}>2.0+</option>
             <option value={3}>3.0+</option>
+          </select>
+        </label>
+        <span style={{ color: HOME_THEME.border }}>|</span>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.cyan }} title="Strong signal: |Δ GEX| at or above this — real money moving">
+          strong ≥ $
+          <select value={minDollar} onChange={(e) => setMinDollar(Number(e.target.value))}
+            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            <option value={250_000}>250K</option>
+            <option value={500_000}>500K</option>
+            <option value={1_000_000}>1M</option>
+            <option value={2_000_000}>2M</option>
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }} title="Big relative: |% vs open| at or above this — big % jump even on smaller strikes">
+          big % ≥
+          <select value={minPct} onChange={(e) => setMinPct(Number(e.target.value))}
+            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            <option value={20}>20%</option>
+            <option value={30}>30%</option>
+            <option value={50}>50%</option>
+            <option value={75}>75%</option>
           </select>
         </label>
         <span style={{ color: HOME_THEME.border }}>|</span>
@@ -342,6 +398,7 @@ function GexScanner() {
               {([
                 { col: "otm_dist" as const, label: "OTM%" },
                 { col: "pct_open" as const, label: "%vsOpen" },
+                { col: "score" as const, label: "Score" },
               ]).map(({ col, label }) => {
                 const active = colSort?.col === col;
                 const arrow = active ? (colSort!.dir === "desc" ? " ↓" : " ↑") : " ⇅";
@@ -357,6 +414,7 @@ function GexScanner() {
                   </th>
                 );
               })}
+              <th style={{ ...th, textAlign: "center" }}>Signal</th>
             </tr>
           </thead>
           <tbody>
@@ -364,9 +422,10 @@ function GexScanner() {
               const up = r.latest_chg >= 0;
               const col = up ? HOME_THEME.green : HOME_THEME.red;
               const otmPct = (r.otm_dist ?? 0) * 100;
+              const sig = classify(r);
               return (
                 <tr key={`${r.symbol}-${r.expiry}-${r.strike}`}
-                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: sig === "very" ? "rgba(255,209,102,0.10)" : i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>
                   <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot > 0 ? r.spot.toFixed(2) : "—"}</td>
@@ -383,16 +442,26 @@ function GexScanner() {
                   <td style={{ ...td, color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                     {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}%`}
                   </td>
+                  <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 800 }}>{scoreOf(r).toFixed(0)}</td>
+                  <td style={{ ...td, textAlign: "center" }}><SignalBadge s={sig} /></td>
                 </tr>
               );
             })}
             {!rows.length && !loading && (
-              <tr><td colSpan={10} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+              <tr><td colSpan={12} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                 No qualifying moves yet. Needs ≥3 snapshots spanning the window — give the recorder ~{win + 10} min of history.
               </td></tr>
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Legend */}
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
+        <span>Score = 0.6·|Δ| + 0.4·|% vs open|, normalized 0–100</span>
+        <span><span style={{ color: HOME_THEME.cyan }}>Strong</span> = |Δ| ≥ {fmtB(minDollar).replace("+", "")}</span>
+        <span><span style={{ color: HOME_THEME.orange }}>Big %</span> = |% vs open| ≥ {minPct}%</span>
+        <span><span style={{ color: "#FFD166" }}>★ Very strong</span> = both (highest conviction)</span>
       </div>
     </Card>
   );
