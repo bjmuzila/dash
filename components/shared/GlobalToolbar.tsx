@@ -11,6 +11,7 @@ import { useGexPanel } from "./GexPanelContext";
 import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
+import BzilaAlerts from "./BzilaAlerts";
 import { GROUPS } from "./GexDock";
 
 /**
@@ -342,6 +343,10 @@ export default function GlobalToolbar() {
           <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
             <LogoMenu />
           </div>
+
+          {/* ── Bzila alerts bell — owner broadcasts to paid subscribers; pulses
+              when a new alert lands, click for the last 5 ── */}
+          <BzilaAlerts />
 
           {/* ── GEX-group nav — left-side icon+label shortcuts; each navigates
               the whole page to that group's route ── */}

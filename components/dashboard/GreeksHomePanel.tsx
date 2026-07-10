@@ -1,20 +1,23 @@
 "use client";
 
 // GreeksHomePanel — self-contained home-dashboard tab panel distilled from
-// app/greeks/page.tsx. Two pieces from the full Greeks page:
-//   1. "Behavior Demonstration" detail card (BehaviorDemo, detailOnly) — the
+// app/greeks/page.tsx. Three pieces from the full Greeks page:
+//   1. The 4 live greek gauges (GEX/DEX/CHEX/VEX) with zero-cross sparklines
+//      (LiveGreeksGauges) — always-on OI+Vol basis, self-connecting.
+//   2. "Behavior Demonstration" detail card (BehaviorDemo, detailOnly) — the
 //      live GEX/VEX/DEX/CEX regime the market is in, with core behavior, expected
 //      price action, and 0DTE trading implications. No simulated-price sketch.
 //      Refreshes on a 30s cadence so the regime label doesn't flip every tick.
-//   2. "Skew Band" — the live SPX 0DTE skew regime (LiveSkewBand).
+//   3. "Skew Band" — the live SPX 0DTE skew regime (LiveSkewBand).
 //
-// No toolbar/nav, no basis toggle, no signals feed, no gauges/sparklines, no vol
-// outcome card. Zero required props; fills its container.
+// No toolbar/nav, no basis toggle, no signals feed, no vol outcome card. Zero
+// required props; fills its container.
 
 import { useEffect, useRef, useState } from "react";
 import { queryGreeksToday } from "@/lib/snapdb";
 import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
 import LiveSkewBand from "@/components/greeks/LiveSkewBand";
+import LiveGreeksGauges from "@/components/dashboard/LiveGreeksGauges";
 
 // Behavior card samples the live feed on this cadence rather than every tick.
 const REFRESH_MS = 30_000;
@@ -144,7 +147,12 @@ export default function GreeksHomePanel() {
 
   return (
     <div style={{ width: "100%", height: "100%", overflowY: "auto", overflowX: "hidden", padding: 4 }}>
-      {/* ── 1. Live regime behavior card (no simulated-price sketch) ── */}
+      {/* ── 1. The 4 live greek gauges (GEX/DEX/CHEX/VEX) ── */}
+      <div style={{ marginBottom: 14 }}>
+        <LiveGreeksGauges />
+      </div>
+
+      {/* ── 2. Live regime behavior card (no simulated-price sketch) ── */}
       <BehaviorDemo
         detailOnly
         gex={snap?.gex ?? null}
@@ -154,7 +162,7 @@ export default function GreeksHomePanel() {
         hasData={!!snap}
       />
 
-      {/* ── 2. Live skew band (the SPX 0DTE regime we're currently in) ── */}
+      {/* ── 3. Live skew band (the SPX 0DTE regime we're currently in) ── */}
       <div style={{ marginTop: 14 }}>
         <LiveSkewBand />
       </div>

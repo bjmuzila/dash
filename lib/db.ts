@@ -688,6 +688,17 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       CONSTRAINT bzila_note_singleton CHECK (id = 1)
     );
 
+    -- Owner "Bzila alerts" broadcast, shown in the toolbar bell dropdown (latest
+    -- 5). Any signed-in paid user reads; only the owner can insert/edit/delete
+    -- (enforced server-side via getServerIsOwner in the API route).
+    CREATE TABLE IF NOT EXISTS bzila_alerts (
+      id         SERIAL PRIMARY KEY,
+      title      TEXT NOT NULL DEFAULT '',
+      body       TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Traders Dashboard overnight AI overview. One row per ET date, written once
     -- by the 7am cron (overview-generator.js). summary is the narrative; drivers
     -- is a JSON array of {when,title,body} econ/news items.
@@ -1076,6 +1087,48 @@ export async function upsertBzilaNote(content: string): Promise<void> {
      ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = CURRENT_TIMESTAMP`,
     [content]
   );
+}
+
+// ── Bzila alerts (owner broadcast → toolbar bell) ───────────────────────────
+
+export interface BzilaAlert {
+  id: number;
+  title: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Latest N alerts, newest first (default 5, capped 50). */
+export async function getBzilaAlerts(limit = 5): Promise<BzilaAlert[]> {
+  await getDb();
+  const n = Math.min(Math.max(1, Math.floor(limit) || 5), 50);
+  return queryAll<BzilaAlert>(
+    `SELECT id, title, body, created_at, updated_at
+       FROM bzila_alerts ORDER BY id DESC LIMIT ${n}`
+  );
+}
+
+export async function insertBzilaAlert(title: string, body: string): Promise<number> {
+  await getDb();
+  const row = await queryOne<{ id: number }>(
+    `INSERT INTO bzila_alerts (title, body) VALUES (?, ?) RETURNING id`,
+    [title, body]
+  );
+  return row?.id ?? 0;
+}
+
+export async function updateBzilaAlert(id: number, title: string, body: string): Promise<void> {
+  await getDb();
+  await queryAll(
+    `UPDATE bzila_alerts SET title = ?, body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [title, body, id]
+  );
+}
+
+export async function deleteBzilaAlert(id: number): Promise<void> {
+  await getDb();
+  await queryAll(`DELETE FROM bzila_alerts WHERE id = ?`, [id]);
 }
 
 // ── Traders Dashboard: overnight overview ───────────────────────────────────
