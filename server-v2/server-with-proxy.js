@@ -966,7 +966,8 @@ async function main() {
             // *weighting* above, this actually excludes near-the-money strikes
             // from the candidate pool so far-OTM strikes aren't drowned out.
             const minOtm = Math.max(0, Number(u.searchParams.get('minOtm') || 0));
-            // Direction filter on the Δ (latest_chg): all | pos | neg.
+            // Direction filter by strike vs spot: pos = strike above spot,
+            // neg = strike below spot (all = both sides).
             const dir = ['pos', 'neg'].includes((u.searchParams.get('dir') || '').toLowerCase())
               ? u.searchParams.get('dir').toLowerCase() : 'all';
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
@@ -1028,7 +1029,7 @@ async function main() {
                     + ${wPct} * COALESCE(ABS(pct_open)  / NULLIF(MAX(ABS(pct_open))  OVER (), 0), 0)) * 100 AS score
               FROM scored
               WHERE otm_dist >= $6
-                AND ($7 = 'all' OR ($7 = 'pos' AND latest_chg > 0) OR ($7 = 'neg' AND latest_chg < 0))
+                AND ($7 = 'all' OR ($7 = 'pos' AND spot > 0 AND strike > spot) OR ($7 = 'neg' AND spot > 0 AND strike < spot))
               ORDER BY ${orderCol} DESC NULLS LAST
               LIMIT $4`;
             const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit, otmK, minOtm, dir]);

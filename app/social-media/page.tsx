@@ -2304,7 +2304,103 @@ const OP_CSS = `
   .op-legend .dot.now { background: var(--cyan); }
   .op-legend-ago { margin-left: auto; }
   .op-sparkempty { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); padding: 16px 0; text-align: center; }
+  .op-tcard { cursor: pointer; transition: border-color 0.12s; }
+  .op-tcard:hover { border-color: rgba(33,158,188,0.4); }
+  .op-tcard.open { border-color: rgba(33,158,188,0.5); }
+  .op-chev { color: var(--sm-muted); font-size: 10px; margin-left: 6px; }
+  .op-chartwrap { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--sm-border); cursor: default; }
+  .op-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .op-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+  .op-tgl { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; cursor: pointer; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--sm-border); background: transparent; color: var(--sm-muted); }
+  .op-tgl:hover { color: var(--text1); }
+  .op-tgl.on { color: var(--text1); background: rgba(255,255,255,0.08); }
+  .op-tgl.on.cyan { color: #219EBC; background: rgba(33,158,188,0.12); border-color: rgba(33,158,188,0.4); }
+  .op-chartempty { padding: 40px 0; text-align: center; color: var(--sm-muted); font-size: 12px; font-family: var(--sm-mono); }
+  .op-charthint { margin-top: 8px; font-family: var(--sm-mono); font-size: 10px; color: var(--sm-muted); letter-spacing: 0.04em; }
 `;
+
+type ProbeMetricKey = "mark" | "net_gex" | "delta" | "theta" | "vega" | "iv";
+interface ProbeHistSnap { ts: number; mark: number | null; net_gex: number | null; delta: number | null; theta: number | null; vega: number | null; iv: number | null }
+const PROBE_METRICS: { key: ProbeMetricKey; label: string; d: number }[] = [
+  { key: "mark", label: "Price", d: 2 },
+  { key: "net_gex", label: "Net GEX", d: 0 },
+  { key: "delta", label: "Δ", d: 3 },
+  { key: "theta", label: "Θ", d: 3 },
+  { key: "vega", label: "V", d: 3 },
+  { key: "iv", label: "IV", d: 4 },
+];
+const PROBE_RANGES: { key: string; label: string }[] = [
+  { key: "1d", label: "1D" }, { key: "3d", label: "3D" }, { key: "1w", label: "1W" }, { key: "1m", label: "1M" },
+];
+
+function opFmtGEX(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const a = Math.abs(v), sign = v >= 0 ? "+" : "−";
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+  return `${sign}$${(a / 1e3).toFixed(2)}K`;
+}
+// RTH gate for the chart: keep only 09:30–16:00 ET, Mon–Fri (options don't trade
+// overnight, so overnight gaps just add flat dead space).
+function opIsRth(ts: number | string | null | undefined): boolean {
+  const t = Number(ts);
+  if (!Number.isFinite(t)) return false;
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false }).formatToParts(new Date(t));
+  const get = (k: string) => p.find((x) => x.type === k)?.value;
+  const wd = get("weekday");
+  if (wd === "Sat" || wd === "Sun") return false;
+  const mins = Number(get("hour")) * 60 + Number(get("minute"));
+  return mins >= 9 * 60 + 30 && mins < 16 * 60;
+}
+
+// Full option price-over-time chart — the /owner/watch HistoryChart, ported to
+// this page's palette. Plots the chosen metric (Price/Net GEX/greeks/IV).
+function ProbeChart({ history, metric }: { history: ProbeHistSnap[]; metric: ProbeMetricKey }) {
+  const W = 960, H = 340, PADL = 56, PADR = 16, PADT = 16, PADB = 28;
+  const pts = history
+    .map((s) => ({ ts: s.ts, v: s[metric] as number | null }))
+    .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
+  if (pts.length < 2) {
+    return <div className="op-chartempty">Not enough history yet — snapshots accrue every refresh (and through RTH server-side).</div>;
+  }
+  const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  let minY = Math.min(...ys), maxY = Math.max(...ys);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
+  const sx = (t: number) => PADL + ((t - minX) / (maxX - minX || 1)) * (W - PADL - PADR);
+  const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(p.ts).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
+  const area = `${path} L${sx(pts[pts.length - 1].ts).toFixed(1)},${H - PADB} L${sx(pts[0].ts).toFixed(1)},${H - PADB} Z`;
+  const dec = PROBE_METRICS.find((m) => m.key === metric)!.d;
+  const fmtY = (v: number) => (metric === "net_gex" ? opFmtGEX(v) : v.toFixed(dec));
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
+  const multiDay = maxX - minX > 20 * 3600_000;
+  const fmtT = (ts: number) => multiDay
+    ? new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
+      <defs>
+        <linearGradient id="opwg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(33,158,188,0.28)" />
+          <stop offset="100%" stopColor="rgba(33,158,188,0)" />
+        </linearGradient>
+      </defs>
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={9} fill="#9aa4b2" fontFamily="var(--sm-mono)">{fmtY(v)}</text>
+        </g>
+      ))}
+      <text x={PADL} y={H - 6} textAnchor="start" fontSize={9} fill="#9aa4b2" fontFamily="var(--sm-mono)">{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={9} fill="#9aa4b2" fontFamily="var(--sm-mono)">{fmtT(maxX)}</text>
+      <path d={area} fill="url(#opwg)" />
+      <path d={path} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={sx(pts[pts.length - 1].ts)} cy={sy(pts[pts.length - 1].v)} r={3} fill="#219EBC" />
+    </svg>
+  );
+}
 
 // Compact price-over-time sparkline for a tracked contract. The dashed line marks
 // the entry (added_price); the hollow dot is where you got IN, the filled dot is
@@ -2353,6 +2449,11 @@ function OptionsProbe() {
   const [note, setNote] = useState("");
   const [rows, setRows] = useState<ProbeRow[]>([]);
   const [historyById, setHistoryById] = useState<Record<number, { ts: number; mark: number }[]>>({});
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [histFull, setHistFull] = useState<Record<number, ProbeHistSnap[]>>({});
+  const [histLoading, setHistLoading] = useState(false);
+  const [metric, setMetric] = useState<ProbeMetricKey>("mark");
+  const [range, setRange] = useState<string>("1d");
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -2431,6 +2532,53 @@ function OptionsProbe() {
     if (ids.length) loadHistories(ids);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idKey]);
+
+  // Full snapshot history (all metrics) for the expanded chart, by range — the
+  // /owner/watch fetch. RTH-filtered; ts coerced from the BIGINT string.
+  const loadFullHistory = useCallback(async (id: number, r: string) => {
+    setHistLoading(true);
+    try {
+      const res = await fetch(`/api/watch?history=${id}&range=${r}`, { cache: "no-store" });
+      const j = await res.json();
+      const snaps: ProbeHistSnap[] = (Array.isArray(j.history) ? j.history : [])
+        .map((s: Record<string, unknown>) => ({
+          ts: Number(s.ts),
+          mark: s.mark == null ? null : Number(s.mark),
+          net_gex: s.net_gex == null ? null : Number(s.net_gex),
+          delta: s.delta == null ? null : Number(s.delta),
+          theta: s.theta == null ? null : Number(s.theta),
+          vega: s.vega == null ? null : Number(s.vega),
+          iv: s.iv == null ? null : Number(s.iv),
+        }))
+        .filter((s: ProbeHistSnap) => Number.isFinite(s.ts) && opIsRth(s.ts))
+        .sort((a: ProbeHistSnap, b: ProbeHistSnap) => a.ts - b.ts);
+      setHistFull((m) => ({ ...m, [id]: snaps }));
+    } catch {
+      /* keep prior */
+    } finally {
+      setHistLoading(false);
+    }
+  }, []);
+
+  const toggleCard = useCallback((id: number) => {
+    setExpandedId((cur) => {
+      const next = cur === id ? null : id;
+      if (next != null) loadFullHistory(next, range);
+      return next;
+    });
+  }, [loadFullHistory, range]);
+
+  const changeRange = useCallback((r: string) => {
+    setRange(r);
+    if (expandedId != null) loadFullHistory(expandedId, r);
+  }, [expandedId, loadFullHistory]);
+
+  // While a card is expanded, keep its chart current on the same 20s cadence.
+  useEffect(() => {
+    if (expandedId == null) return;
+    const t = setInterval(() => loadFullHistory(expandedId, range), 20_000);
+    return () => clearInterval(t);
+  }, [expandedId, range, loadFullHistory]);
 
   const probeAndTrack = useCallback(async () => {
     if (!canAdd) { setErr("Enter ticker, expiry and strike"); return; }
@@ -2579,7 +2727,7 @@ function OptionsProbe() {
         <div className="op-card-h">
           Tracked <span className="sub">{rows.length} contract{rows.length === 1 ? "" : "s"}{lastLoad ? ` · updated ${ago(lastLoad)}` : ""}</span>
           <span style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
-            <a className="op-link" href="/owner/watch" target="_blank" rel="noopener noreferrer">full greeks + charts ↗</a>
+            <span style={{ fontFamily: "var(--sm-mono)", fontSize: 11, color: "var(--sm-muted)" }}>click a card for the full chart</span>
             <button type="button" className="op-btn" onClick={refreshPrices} disabled={refreshing}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>
           </span>
         </div>
@@ -2602,14 +2750,21 @@ function OptionsProbe() {
                 const pts = mark != null && Number.isFinite(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
                   ? [...hist, { ts: liveTs, mark }]
                   : hist;
+                const isOpen = expandedId === r.id;
                 return (
-                  <div key={r.id} className="op-tcard">
+                  <div
+                    key={r.id}
+                    className={`op-tcard${isOpen ? " open" : ""}`}
+                    onClick={() => toggleCard(r.id)}
+                    style={isOpen ? { gridColumn: "1 / -1" } : undefined}
+                  >
                     <div className="op-tcard-h">
                       <div>
                         <span className="op-tick">{r.ticker}</span>
                         <span className={`op-badge ${r.side === "C" ? "c" : "p"}`}>{r.strike % 1 ? r.strike : Math.round(r.strike)}{r.side}</span>
+                        <span className="op-chev">{isOpen ? "▾" : "▸"}</span>
                       </div>
-                      <button type="button" className="op-x" title="Remove" onClick={() => remove(r.id)}>×</button>
+                      <button type="button" className="op-x" title="Remove" onClick={(e) => { e.stopPropagation(); remove(r.id); }}>×</button>
                     </div>
                     <div className="op-rowsub">{fmtExp(r.expiration)}{r.note ? ` · ${r.note}` : ""}</div>
                     <div className="op-bigrow">
@@ -2623,12 +2778,36 @@ function OptionsProbe() {
                         </span>
                       </div>
                     </div>
-                    <ProbeSpark points={pts} entry={entry} />
-                    <div className="op-legend">
-                      <span><i className="dot in" /> in {px(entry)}</span>
-                      <span><i className="dot now" style={{ background: upDown(pct) }} /> now {px(mark)}</span>
-                      <span className="op-legend-ago">{ago(r.snapshot?.ts)}</span>
-                    </div>
+                    {!isOpen && <ProbeSpark points={pts} entry={entry} />}
+                    {!isOpen && (
+                      <div className="op-legend">
+                        <span><i className="dot in" /> in {px(entry)}</span>
+                        <span><i className="dot now" style={{ background: upDown(pct) }} /> now {px(mark)}</span>
+                        <span className="op-legend-ago">{ago(r.snapshot?.ts)}</span>
+                      </div>
+                    )}
+                    {isOpen && (
+                      <div className="op-chartwrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="op-toolbar">
+                          <div className="op-toggles">
+                            {PROBE_RANGES.map((rg) => (
+                              <button key={rg.key} type="button" className={`op-tgl${range === rg.key ? " on" : ""}`} onClick={() => changeRange(rg.key)}>{rg.label}</button>
+                            ))}
+                          </div>
+                          <div className="op-toggles">
+                            {PROBE_METRICS.map((m) => (
+                              <button key={m.key} type="button" className={`op-tgl${metric === m.key ? " on cyan" : ""}`} onClick={() => setMetric(m.key)}>{m.label}</button>
+                            ))}
+                          </div>
+                        </div>
+                        {histLoading && !(histFull[r.id]?.length)
+                          ? <div className="op-chartempty">Loading history…</div>
+                          : <ProbeChart history={histFull[r.id] ?? []} metric={metric} />}
+                        <div className="op-charthint">
+                          {metric === "mark" ? "Option price (mark)" : PROBE_METRICS.find((m) => m.key === metric)?.label} · RTH only · entry @ {px(entry)} · {ago(r.snapshot?.ts)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2643,275 +2822,8 @@ function OptionsProbe() {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
- * Growth Playbook — the conversion turnaround for the CB Edge X presence. Unlike
- * the other tabs (which generate daily content), this is a persistent operating
- * checklist: the profile / funnel trust fixes, the rewritten bio, a bank of
- * copy-ready proof posts, and a manual follower tracker. State is localStorage-
- * backed (single-admin page). To make it cross-device, promote the three keys
- * (cbedge_growth_done / _used / _followers) to a Postgres row behind
- * /api/social-media/* — the UI stays exactly as-is.
- * ════════════════════════════════════════════════════════════════════════════ */
-
-async function gpCopyText(s: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(s); return true; }
-  } catch { /* fall through */ }
-  return false;
-}
-
-interface GrowthFix { id: string; text: string; detail: string }
-const GROWTH_FIXES: GrowthFix[] = [
-  { id: "avatar", text: "Add a profile photo", detail: "A blank avatar on a finance account reads as 'scam/skip' to the most skeptical audience online. Use the CB Edge logo (public/cb-edge-logo.png) or your face. Highest-leverage 2-minute fix." },
-  { id: "banner", text: "Add a banner = the dashboard", detail: "Make the header image a clean screenshot of the live Daily Levels card or the GEX heatmap. Show the product in the first glance." },
-  { id: "bio", text: "Rewrite the bio (below)", detail: "Say what CB Edge does, who it's for, and the free trial. The current bio describes you, not what a visitor gets in 3 seconds." },
-  { id: "pin", text: "Pin a proof post, not the price post", detail: "Unpin the 'not trying to squeeze traders / fair price' tweet. Pin the levels-proof post from the bank below instead." },
-  { id: "kill-price", text: "Kill the 'cheap / not greedy' angle", detail: "'Best priced around' and 'priced to be fair' signal low value and invite a price objection nobody had. Lead with the read, never the price." },
-  { id: "no-bare-links", text: "Stop bare cbedge.net link posts", detail: "X throttles reach on link-only posts. Put the value in the tweet body; drop the link in the first reply." },
-  { id: "daily-proof", text: "Post the level AM, the result at close", detail: "Every session: morning gamma flip + walls, then what price actually did at them by 4pm. Two weeks of this builds the track record that converts." },
-  { id: "free-trial", text: "Offer a free trial / sample", detail: "Options traders won't pay blind. A 2-day trial or a free daily-levels post removes the single biggest objection." },
-  { id: "one-dest", text: "One destination", detail: "The bio links to beacons.ai while posts link to cbedge.net. Pick one so you aren't leaking clicks across two hops." },
-  { id: "typos", text: "Proof every post before sending", detail: "Recent posts shipped 'startegies' and 'detemrines'. On a paid tool, sloppy copy quietly erodes trust." },
-];
-
-interface GrowthPost { id: string; kind: "PINNED" | "LEVEL" | "RESULT" | "PROOF" | "TEACH" | "TRUST" | "CARD" | "ASK"; text: string }
-const GROWTH_POSTS: GrowthPost[] = [
-  { id: "p-pin", kind: "PINNED", text: `If you trade $SPX 0DTE, this lands before the bell every morning:\n\n• gamma flip\n• call + put walls\n• net GEX\n• expected-move range\n\nThe exact levels dealers hedge around — structure, not signals.\n\nFree for 2 days, link below.` },
-  { id: "p-level", kind: "LEVEL", text: `$SPX pre-market read:\n\nGamma flip 6,012 — above it dealers dampen, fade extremes toward the 6,050 call wall. Lose it and gamma flips negative with the 5,975 put wall in play.\n\nEM range 5,975–6,049. Where the hedging sits, not a prediction.` },
-  { id: "p-result", kind: "RESULT", text: `$SPX flip sat at 6,012 in this morning's read. Spot tested it twice, rejected, faded to the 5,975 put wall, bounced.\n\nThat's the session if you had the map. Tomorrow's read posts at 8am ET.` },
-  { id: "p-proof", kind: "PROOF", text: `5 sessions running, the $SPX gamma flip has been the pivot — mean-reversion above it, momentum below.\n\nDealer positioning, not a hunch. I post the level every morning, free.` },
-  { id: "p-teach", kind: "TEACH", text: `Why $SPX keeps stalling at the same strike all day:\n\nthat's the call wall — the largest positive-gamma strike, where dealers sell into strength to stay hedged.\n\nLooks random until you map it. I map it every morning.` },
-  { id: "p-trust", kind: "TRUST", text: `CB Edge isn't a signal group or a guru room.\n\nIt shows you the dealer-positioning levels the desks watch — gamma flip, walls, net GEX — and you trade your own plan around them.\n\nTwo days free, decide for yourself.` },
-  { id: "p-card", kind: "CARD", text: `This morning's $SPX Daily Levels:\n\nflip, walls, net GEX, expected-move range — one glance, then go trade. Generated fresh every session.\n\n[attach the Daily Levels card]` },
-  { id: "p-ask", kind: "ASK", text: `If you traded $SPX off the morning levels this week — which one paid the most? Drop it below.\n\nNew here: the read is free for 2 days.` },
-];
-
-const GROWTH_BIO = `CB Edge — real-time SPX gamma, dealer positioning & expected-move levels for 0DTE traders. The edge I built for my own trading. → free 2-day trial`;
-
-const GP_CSS = `
-  .gp-wrap { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-bottom: 44px; }
-  .gp-card { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
-  .gp-card-h { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text1); padding: 13px 16px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .gp-card-h .sub { font-size: 11px; font-weight: 600; letter-spacing: 0.01em; text-transform: none; color: var(--sm-muted); }
-  .gp-card-b { padding: 16px; }
-  .gp-lead { font-size: 13px; color: var(--text1); line-height: 1.6; }
-  .gp-lead b { color: var(--cyan); }
-  .gp-funnel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 14px; font-family: var(--sm-mono); font-size: 11px; }
-  .gp-funnel span { padding: 5px 9px; border: 1px solid var(--sm-border); border-radius: 6px; color: var(--sm-muted); }
-  .gp-funnel span.leak { border-color: rgba(239,68,68,0.5); color: var(--sm-red); }
-  .gp-funnel i { color: var(--sm-muted); font-style: normal; }
-  .gp-prog { height: 6px; border-radius: 3px; background: var(--bg4); overflow: hidden; margin-bottom: 14px; }
-  .gp-prog i { display: block; height: 100%; background: var(--cyan); box-shadow: 0 0 10px rgba(33,158,188,0.5); transition: width 0.2s; }
-  .gp-item { display: flex; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--sm-border); cursor: pointer; }
-  .gp-item:last-child { border-bottom: none; }
-  .gp-item > span { flex: 1; }
-  .gp-item input { margin-top: 2px; width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; accent-color: var(--cyan); }
-  .gp-item .txt { display: block; font-size: 13px; color: var(--text1); font-weight: 700; line-height: 1.4; }
-  .gp-item .det { display: block; font-size: 12px; color: var(--sm-muted); line-height: 1.5; margin-top: 3px; }
-  .gp-item.on .txt { color: var(--sm-muted); text-decoration: line-through; }
-  .gp-row { display: flex; align-items: flex-start; gap: 12px; }
-  .gp-copybox { background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 12px 14px; font-size: 13px; color: var(--text1); line-height: 1.55; white-space: pre-wrap; }
-  .gp-post { padding: 14px 0; border-bottom: 1px solid var(--sm-border); }
-  .gp-post:last-child { border-bottom: none; }
-  .gp-post-h { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .gp-tag { font-family: var(--sm-mono); font-size: 9px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--sm-border); color: var(--sm-muted); }
-  .gp-tag.pin { color: var(--amber); border-color: rgba(251,133,1,0.5); }
-  .gp-tag.proof { color: var(--sm-green); border-color: rgba(142,202,230,0.5); }
-  .gp-count { font-family: var(--sm-mono); font-size: 10px; color: var(--sm-muted); }
-  .gp-copytext { flex: 1; font-size: 13px; color: var(--text1); line-height: 1.5; white-space: pre-wrap; }
-  .gp-post.used .gp-copytext { opacity: 0.45; }
-  .gp-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; cursor: pointer; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; flex-shrink: 0; white-space: nowrap; }
-  .gp-btn:hover { border-color: var(--cyan); }
-  .gp-btn.on { border-color: var(--sm-green); color: var(--sm-green); }
-  .gp-stat { display: flex; gap: 22px; margin-bottom: 12px; }
-  .gp-stat .n { font-size: 22px; font-weight: 800; color: var(--text1); line-height: 1.1; }
-  .gp-stat .n.d.up { color: var(--sm-green); }
-  .gp-stat .n.d.down { color: var(--sm-red); }
-  .gp-stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--sm-muted); margin-top: 4px; }
-  .gp-track { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .gp-track input { width: 140px; background: var(--bg0); color: var(--text1); border: 1px solid var(--sm-border); border-radius: 6px; padding: 8px 10px; font-family: var(--sm-mono); font-size: 13px; }
-  .gp-track input:focus { outline: none; border-color: var(--cyan); }
-  .gp-note { font-size: 11px; color: var(--sm-muted); line-height: 1.55; margin-top: 12px; }
-`;
-
-function GrowthPlaybook() {
-  const [done, setDone] = useState<Record<string, boolean>>({});
-  const [used, setUsed] = useState<Record<string, boolean>>({});
-  const [followers, setFollowers] = useState<{ date: string; count: number }[]>([]);
-  const [countInput, setCountInput] = useState("");
-  const [hydrated, setHydrated] = useState(false);
-  const [copied, setCopied] = useState("");
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    try {
-      const d = localStorage.getItem("cbedge_growth_done");
-      const u = localStorage.getItem("cbedge_growth_used");
-      const f = localStorage.getItem("cbedge_growth_followers");
-      if (d) setDone(JSON.parse(d));
-      if (u) setUsed(JSON.parse(u));
-      const parsed = f ? JSON.parse(f) : [];
-      setFollowers(Array.isArray(parsed) && parsed.length ? parsed : [{ date: todayETStr(), count: 3007 }]);
-    } catch { /* first run / storage unavailable */ }
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    try {
-      localStorage.setItem("cbedge_growth_done", JSON.stringify(done));
-      localStorage.setItem("cbedge_growth_used", JSON.stringify(used));
-      localStorage.setItem("cbedge_growth_followers", JSON.stringify(followers));
-    } catch { /* storage unavailable */ }
-  }, [hydrated, done, used, followers]);
-
-  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
-
-  const flash = (id: string) => {
-    setCopied(id);
-    if (copyTimer.current) clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(""), 1400);
-  };
-  const onCopy = async (id: string, text: string) => { await gpCopyText(text); flash(id); };
-
-  const doneCount = GROWTH_FIXES.filter((f) => done[f.id]).length;
-  const pct = Math.round((doneCount / GROWTH_FIXES.length) * 100);
-
-  const addCount = () => {
-    const n = parseInt(countInput.replace(/[^0-9]/g, ""), 10);
-    if (!Number.isFinite(n)) return;
-    const date = todayETStr();
-    setFollowers((prev) =>
-      [...prev.filter((p) => p.date !== date), { date, count: n }].sort((a, b) => a.date.localeCompare(b.date))
-    );
-    setCountInput("");
-  };
-
-  const latest = followers.length ? followers[followers.length - 1].count : 0;
-  const first = followers.length ? followers[0].count : 0;
-  const delta = latest - first;
-
-  const spark = useMemo(() => {
-    if (followers.length < 2) return null;
-    const w = 260, h = 44, pad = 4;
-    const counts = followers.map((f) => f.count);
-    const min = Math.min(...counts), max = Math.max(...counts);
-    const span = max - min || 1;
-    const x = (i: number) => pad + ((w - pad * 2) * i) / (followers.length - 1);
-    const y = (v: number) => pad + (h - pad * 2) * (1 - (v - min) / span);
-    return followers.map((f, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(f.count).toFixed(1)}`).join(" ");
-  }, [followers]);
-
-  return (
-    <div className="gp-wrap">
-      <style>{GP_CSS}</style>
-
-      {/* Diagnosis */}
-      <div className="gp-card">
-        <div className="gp-card-h">The problem isn&apos;t reach <span className="sub">it&apos;s where the funnel leaks</span></div>
-        <div className="gp-card-b">
-          <div className="gp-lead">
-            3,000 real followers and heavy posting means the audience is already there — sales are breaking <b>lower</b> in the funnel. More posting only widens the top; fix the trust + proof leaks below.
-          </div>
-          <div className="gp-funnel">
-            <span>impression</span><i>→</i>
-            <span className="leak">profile</span><i>→</i>
-            <span className="leak">landing</span><i>→</i>
-            <span>signup</span><i>→</i>
-            <span>paid</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Profile & funnel fixes */}
-      <div className="gp-card">
-        <div className="gp-card-h">Profile &amp; funnel fixes <span className="sub">{doneCount}/{GROWTH_FIXES.length} done</span></div>
-        <div className="gp-card-b">
-          <div className="gp-prog"><i style={{ width: `${pct}%` }} /></div>
-          {GROWTH_FIXES.map((f) => (
-            <label key={f.id} className={`gp-item${done[f.id] ? " on" : ""}`}>
-              <input type="checkbox" checked={!!done[f.id]} onChange={() => setDone((d) => ({ ...d, [f.id]: !d[f.id] }))} />
-              <span>
-                <span className="txt">{f.text}</span>
-                <span className="det">{f.detail}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* New bio */}
-      <div className="gp-card">
-        <div className="gp-card-h">New bio <span className="sub">says what they get, ends on the offer</span></div>
-        <div className="gp-card-b">
-          <div className="gp-row">
-            <div className="gp-copybox" style={{ flex: 1 }}>{GROWTH_BIO}</div>
-            <button type="button" className={`gp-btn${copied === "bio" ? " on" : ""}`} onClick={() => onCopy("bio", GROWTH_BIO)}>
-              {copied === "bio" ? "✓ Copied" : "Copy"}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Proof-post bank */}
-      <div className="gp-card">
-        <div className="gp-card-h">Proof-post bank <span className="sub">lead with the read · link in the first reply</span></div>
-        <div className="gp-card-b">
-          {GROWTH_POSTS.map((p) => (
-            <div key={p.id} className={`gp-post${used[p.id] ? " used" : ""}`}>
-              <div className="gp-post-h">
-                <span className={`gp-tag ${p.kind === "PINNED" ? "pin" : p.kind === "PROOF" || p.kind === "RESULT" ? "proof" : ""}`}>{p.kind}</span>
-                <span className="gp-count">{p.text.length} chars</span>
-              </div>
-              <div className="gp-row">
-                <div className="gp-copytext">{p.text}</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <button type="button" className={`gp-btn${copied === p.id ? " on" : ""}`} onClick={() => onCopy(p.id, p.text)}>
-                    {copied === p.id ? "✓ Copied" : "Copy"}
-                  </button>
-                  <button type="button" className={`gp-btn${used[p.id] ? " on" : ""}`} onClick={() => setUsed((u) => ({ ...u, [p.id]: !u[p.id] }))}>
-                    {used[p.id] ? "✓ Used" : "Mark used"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Follower tracker */}
-      <div className="gp-card">
-        <div className="gp-card-h">Follower tracker <span className="sub">log it daily — watch the trend</span></div>
-        <div className="gp-card-b">
-          <div className="gp-stat">
-            <div><div className="n">{latest.toLocaleString("en-US")}</div><div className="k">followers</div></div>
-            <div><div className={`n d ${delta >= 0 ? "up" : "down"}`}>{delta >= 0 ? "+" : ""}{delta.toLocaleString("en-US")}</div><div className="k">since first log</div></div>
-          </div>
-          {spark && (
-            <svg viewBox="0 0 260 44" style={{ width: "100%", maxWidth: 260, height: 44, marginBottom: 12, display: "block" }}>
-              <path d={spark} fill="none" stroke="var(--cyan)" strokeWidth={2} />
-            </svg>
-          )}
-          <div className="gp-track">
-            <input
-              value={countInput}
-              onChange={(e) => setCountInput(e.target.value)}
-              placeholder="today's count"
-              onKeyDown={(e) => { if (e.key === "Enter") addCount(); }}
-            />
-            <button type="button" className="gp-btn" onClick={addCount}>Log count</button>
-          </div>
-          <div className="gp-note">
-            X&apos;s follower API is paid and rate-limited, so this is a 15-second manual log rather than a live pull. Enter today&apos;s count from your profile; it dedupes per day and charts the trend. Want it automated + cross-device? Say the word and I&apos;ll wire it to a Postgres route once the build env is back.
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function SocialMediaPage() {
-  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen" | "brander" | "growth" | "probe">("levels");
+  const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen" | "brander" | "probe">("levels");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   // Live per-strike GEX ladder (netGex in $millions) for the Explainer tab.
   // Kept out of FormState (which is string-only) and refreshed alongside it.
@@ -3375,7 +3287,6 @@ export default function SocialMediaPage() {
         <span className="sm-tag">Admin</span>
         <SegGroup
           options={[
-            { label: "Growth", value: "growth" },
             { label: "Probe", value: "probe" },
             { label: "Daily Levels", value: "levels" },
             { label: "GEX Image Cards", value: "cards" },
@@ -3384,7 +3295,7 @@ export default function SocialMediaPage() {
             { label: "Screenshot Brander", value: "brander" },
           ]}
           active={tab}
-          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen" | "brander" | "growth" | "probe")}
+          onChange={(v) => setTab(v as "levels" | "cards" | "explainer" | "postgen" | "brander" | "probe")}
         />
         <span className="sm-live"><i />{refreshing ? "Loading…" : hydrated ? "Loaded" : "Not loaded · on demand"}</span>
         <span className="sm-date">{today}</span>
@@ -3438,7 +3349,6 @@ export default function SocialMediaPage() {
       )}
       {tab === "postgen" && <PostGenerator form={form} />}
       {tab === "brander" && <ScreenshotBrander />}
-      {tab === "growth" && <GrowthPlaybook />}
       {tab === "probe" && <OptionsProbe />}
 
       <div className="sm-grid" style={tab !== "levels" ? { display: "none" } : undefined}>
