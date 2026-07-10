@@ -57,7 +57,7 @@ function ago(iso: string): string {
 }
 
 export default function BzilaAlerts() {
-  const { isSignedIn, user, isPaid, isOwnerClaim } = useAuth();
+  const { user, isPaid, isOwnerClaim } = useAuth();
 
   // Owner detection mirrors NavMenu: prefer the build-time owner id, fall back to
   // the JWT claim. Middleware + the API route are the real write gate.
