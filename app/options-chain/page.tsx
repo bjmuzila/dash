@@ -654,6 +654,7 @@ export default function OptionsChainPage({
   expirySelection = "sequential",
   expiryCount,
   ticker: externalTicker,
+  showGrandTotal = true,
 }: {
   // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
   // expirations starting at the user's selected date. "key" (/new-home embed):
@@ -668,6 +669,9 @@ export default function OptionsChainPage({
   // the page-level TickerSwitcher drives it. Uncontrolled (own ticker input)
   // when omitted, same as the standalone route.
   ticker?: string;
+  // Hide the toolbar's "Total <greek>" readout. The /home embed passes false so
+  // the compact chain panel doesn't show a per-ticker grand-total GEX.
+  showGrandTotal?: boolean;
 } = {}) {
   // Number of sequential columns to render (default 14; embeds may narrow it).
   const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
@@ -1382,13 +1386,17 @@ export default function OptionsChainPage({
           </>
         )}
 
-        <span style={{ color: HT.border }}>|</span>
-        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
-          Total {greekMode}: {fmtMoney(grandTotal)}
-          {autoPercentNote && (
-            <span style={{ color: "#fff", marginLeft: 8 }}>{autoPercentNote}</span>
-          )}
-        </span>
+        {showGrandTotal && (
+          <>
+            <span style={{ color: HT.border }}>|</span>
+            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
+              Total {greekMode}: {fmtMoney(grandTotal)}
+              {autoPercentNote && (
+                <span style={{ color: "#fff", marginLeft: 8 }}>{autoPercentNote}</span>
+              )}
+            </span>
+          </>
+        )}
 
         <div style={{ flex: 1 }} />
 

@@ -61,7 +61,7 @@ function todayYmdET(): string {
   return `${g("year")}-${g("month")}-${g("day")}`;
 }
 
-const GRID = "70px 52px 46px 34px 66px 58px 92px 78px 66px";
+const GRID = "70px 52px 46px 34px 66px 60px 58px 92px 78px 66px";
 
 export default function WhaleOrdersPanel() {
   const shouldConnect = useWsLifecycle();
@@ -149,6 +149,50 @@ export default function WhaleOrdersPanel() {
     return merged;
   }, [history, orders]);
 
+  // ── Live spot per ticker for the % OTM column. Sourced from Theta /proxy/quotes
+  //    (Yahoo /api/quotes-batch fallback), polled every 15s, so % OTM reflects the
+  //    LIVE underlying — not FlowOrder.spot, which is frozen at print time. ──
+  const [spotByTicker, setSpotByTicker] = useState<Record<string, number>>({});
+  const tickerKey = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of rows) { const t = normTicker(o.underlying); if (t) set.add(t); }
+    return [...set].sort().join(",");
+  }, [rows]);
+  useEffect(() => {
+    if (!shouldConnect || !tickerKey) return;
+    let cancelled = false;
+    const apply = (map: Record<string, number>) => {
+      if (!cancelled && Object.keys(map).length) setSpotByTicker((prev) => ({ ...prev, ...map }));
+    };
+    const parse = (items: Array<Record<string, unknown>>) => {
+      const map: Record<string, number> = {};
+      for (const q of items) {
+        const last = Number(q.last);
+        const sym = String(q.symbol ?? "").toUpperCase();
+        if (sym && last > 0) map[sym] = last;
+      }
+      return map;
+    };
+    const load = async () => {
+      try {
+        const r = await fetch(`/proxy/quotes?symbols=${encodeURIComponent(tickerKey)}`);
+        if (!r.ok) throw new Error("proxy/quotes failed");
+        const d = await r.json();
+        apply(parse(d?.data?.items ?? []));
+      } catch {
+        try {
+          const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(tickerKey)}`);
+          if (!r.ok) return;
+          const d = await r.json();
+          apply(parse(d?.data?.items ?? []));
+        } catch { /* leave prior spots in place */ }
+      }
+    };
+    const kick = setTimeout(load, 200);
+    const id = setInterval(load, 15_000);
+    return () => { cancelled = true; clearTimeout(kick); clearInterval(id); };
+  }, [tickerKey, shouldConnect]);
+
   const totals = useMemo(() => {
     let prem = 0, callPrem = 0, putPrem = 0;
     for (const o of rows) {
@@ -183,13 +227,14 @@ export default function WhaleOrdersPanel() {
 
       {/* ── Column headers ── */}
       <div style={{ overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ minWidth: 620 }}>
+        <div style={{ minWidth: 690 }}>
           <div style={{ display: "grid", gridTemplateColumns: GRID, gap: 6, padding: "6px 10px", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: "rgba(10,13,20,0.96)", zIndex: 1 }}>
             <span style={headerCell}>Time</span>
             <span style={headerCell}>Ticker</span>
             <span style={headerCell}>Side</span>
             <span style={{ ...headerCell, textAlign: "center" }}>Type</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Strike</span>
+            <span style={{ ...headerCell, textAlign: "right" }}>% OTM</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Size</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Premium</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Expiry</span>
@@ -206,6 +251,12 @@ export default function WhaleOrdersPanel() {
               const sideColor = o.side === "buy" ? BULLISH : BEARISH;
               const bull = isBullish(o.side, o.type);
               const d = dteOf(o);
+              // Live moneyness: prefer the polled live spot, fall back to the
+              // print-time spot until quotes load. + = OTM, − = now ITM.
+              const liveSpot = spotByTicker[normTicker(o.underlying)] ?? o.spot ?? 0;
+              const otmPct = liveSpot > 0 && o.strike
+                ? ((o.type === "C" ? o.strike - liveSpot : liveSpot - o.strike) / liveSpot) * 100
+                : null;
               return (
                 <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: GRID, gap: 6, padding: "6px 10px", borderBottom: `1px solid ${C.border}`, fontSize: 12, fontFamily: "var(--font-mono)", alignItems: "center" }}>
                   <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
@@ -213,6 +264,12 @@ export default function WhaleOrdersPanel() {
                   <span style={{ color: sideColor, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
                   <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
                   <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
+                  <span
+                    style={{ textAlign: "right", fontWeight: 700, color: otmPct == null ? C.muted : otmPct >= 0 ? C.cyan : BEARISH }}
+                    title={liveSpot > 0 ? `Strike ${o.strike} vs live spot ${liveSpot.toFixed(2)} — ${otmPct != null && otmPct < 0 ? "now ITM" : "OTM"}` : "No live spot yet"}
+                  >
+                    {otmPct == null ? "—" : `${otmPct.toFixed(1)}%`}
+                  </span>
                   <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
                     {o.size.toLocaleString()}{o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 10 }}> ×{o.fills}</span> : null}
                   </span>

@@ -498,8 +498,19 @@ export function HomeClient({
   // option chain. ("table" divergent-bars view retired from the switcher; kept in
   // the union so its now-unreachable render branch stays valid without a refactor.)
   const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
+  // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
+  // is the raw text field. Both revert to SPX on any tab change (see effect below).
+  const [chainTicker, setChainTicker] = useState("SPX");
+  const [chainTickerInput, setChainTickerInput] = useState("SPX");
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
+
+  // Always defer the home option chain back to SPX whenever a tab changes
+  // (heatmap/chain switch or the left-column tab).
+  useEffect(() => {
+    setChainTicker("SPX");
+    setChainTickerInput("SPX");
+  }, [heatmapView, activeTab]);
 
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
@@ -1238,6 +1249,25 @@ export function HomeClient({
                   <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
+                    {heatmapView === "chain" && (
+                    <>
+                      <input
+                        value={chainTickerInput}
+                        onChange={(e) => setChainTickerInput(e.target.value.toUpperCase())}
+                        onBlur={() => setChainTicker((chainTickerInput || "SPX").toUpperCase())}
+                        onKeyDown={(e) => { if (e.key === "Enter") setChainTicker((chainTickerInput || "SPX").toUpperCase()); }}
+                        list="home-chain-tickers"
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="SPX"
+                        title="Type a ticker + Enter. Reverts to SPX when you switch tabs."
+                        style={{ marginLeft: 10, width: 70, fontSize: 11, fontWeight: 700, padding: "3px 8px", border: "1px solid rgba(33,158,188,0.35)", borderRadius: 6, background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))", color: C.cyan, outline: "none", textTransform: "uppercase", letterSpacing: "0.08em" }}
+                      />
+                      <datalist id="home-chain-tickers">
+                        {["SPX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD", "NDX"].map((t) => <option key={t} value={t} />)}
+                      </datalist>
+                    </>
+                    )}
                     {heatmapView !== "chain" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
@@ -1292,7 +1322,7 @@ export function HomeClient({
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
                 {heatmapView === "chain" ? (
-                  <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker="SPX" />
+                  <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
                 ) : (
                 <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>

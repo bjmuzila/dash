@@ -76,6 +76,8 @@ function GexScannerPanel() {
   const [sort, setSort] = useState<GexSort>("z");
   const [minZ, setMinZ] = useState(0);
   const [colSort, setColSort] = useState<ColSort>(null);
+  const [moneyness, setMoneyness] = useState<"all" | "otm">("all");
+  const [minOtm, setMinOtm] = useState(0.02);
 
   const toggleColSort = (col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open") => {
     setColSort(prev =>
@@ -111,6 +113,7 @@ function GexScannerPanel() {
       u.searchParams.set("sort", sort);
       u.searchParams.set("minZ", String(minZ));
       u.searchParams.set("limit", "25");
+      if (moneyness === "otm") u.searchParams.set("minOtm", String(minOtm));
       const res = await fetch(u.toString(), { cache: "no-store" });
       const text = await res.text();
       let j: any;
@@ -119,14 +122,14 @@ function GexScannerPanel() {
       setRows(j.rows || []);
     } catch (e: any) { setErr(String(e?.message || e)); }
     finally { setLoading(false); }
-  }, [win, sort, minZ]);
+  }, [win, sort, minZ, moneyness, minOtm]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
 
   return (
     <Card variant="budget" padding={12}
-      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : " by size"}${loading ? " · refreshing…" : ""}`}>
+      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : " by size"}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · refreshing…" : ""}`}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 4 }}>
           {([5, 15, 30, 60] as Win[]).map((w) => (
@@ -140,6 +143,24 @@ function GexScannerPanel() {
           <button onClick={() => setSort("otm")} style={seg(sort === "otm")}>OTM-wt</button>
           <button onClick={() => setSort("pct")} style={seg(sort === "pct")}>%vs open</button>
         </div>
+        <span style={{ color: HOME_THEME.border }}>|</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => setMoneyness("all")} style={seg(moneyness === "all")}>All</button>
+          <button onClick={() => setMoneyness("otm")} style={seg(moneyness === "otm")}>OTM</button>
+        </div>
+        {moneyness === "otm" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.orange }}>
+            min OTM
+            <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
+              style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+              <option value={0.02}>2%+</option>
+              <option value={0.05}>5%+</option>
+              <option value={0.10}>10%+</option>
+              <option value={0.15}>15%+</option>
+              <option value={0.20}>20%+</option>
+            </select>
+          </label>
+        )}
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
           min z
           <select value={minZ} onChange={(e) => setMinZ(Number(e.target.value))}
