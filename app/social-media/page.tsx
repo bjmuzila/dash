@@ -2279,13 +2279,80 @@ const OP_CSS = `
   .op-x:hover { color: var(--sm-red); }
   .op-empty { padding: 26px; text-align: center; color: var(--sm-muted); font-size: 13px; }
   .op-note { font-size: 11px; color: var(--sm-muted); line-height: 1.55; margin-top: 12px; }
+  .op-shorthand { display: flex; gap: 10px; margin-bottom: 12px; }
+  .op-shorthand .op-input { flex: 1; }
+  .op-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .op-f { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 92px; }
+  .op-flab { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sm-muted); font-family: var(--sm-mono); }
+  .op-flab i { text-transform: none; letter-spacing: 0; opacity: 0.7; font-style: normal; }
+  .op-side { display: flex; gap: 6px; }
+  .op-sidebtn { flex: 1; font-family: var(--sm-mono); font-size: 12px; font-weight: 700; cursor: pointer; padding: 10px 8px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg0); color: var(--sm-muted); }
+  .op-sidebtn.on.c { border-color: rgba(142,202,230,0.6); color: var(--sm-green); background: rgba(142,202,230,0.10); }
+  .op-sidebtn.on.p { border-color: rgba(251,133,1,0.6); color: var(--amber); background: rgba(251,133,1,0.10); }
+  .op-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .op-tcard { background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 10px; padding: 14px; }
+  .op-tcard-h { display: flex; align-items: center; justify-content: space-between; }
+  .op-bigrow { margin: 10px 0 8px; }
+  .op-big { font-family: var(--sm-mono); font-size: 22px; font-weight: 800; line-height: 1; }
+  .op-bigsub { font-family: var(--sm-mono); font-size: 12px; color: var(--text1); margin-top: 6px; }
+  .op-bigsub .lbl { color: var(--sm-muted); font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 3px; }
+  .op-bigsub .arrow { color: var(--sm-muted); margin: 0 6px; }
+  .op-dollars { font-weight: 700; }
+  .op-legend { display: flex; align-items: center; gap: 14px; margin-top: 8px; font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); }
+  .op-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .op-legend .dot.in { background: transparent; border: 1.5px solid var(--text1); }
+  .op-legend .dot.now { background: var(--cyan); }
+  .op-legend-ago { margin-left: auto; }
+  .op-sparkempty { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); padding: 16px 0; text-align: center; }
 `;
 
+// Compact price-over-time sparkline for a tracked contract. The dashed line marks
+// the entry (added_price); the hollow dot is where you got IN, the filled dot is
+// the current mark (green/red vs entry). Mirrors the /owner/watch history chart.
+function ProbeSpark({ points, entry }: { points: { ts: number; mark: number }[]; entry: number | null }) {
+  const W = 300, H = 60, PAD = 7;
+  if (points.length < 1) {
+    return <div className="op-sparkempty">building history — snapshots accrue every refresh</div>;
+  }
+  const xs = points.map((p) => p.ts);
+  const ys = points.map((p) => p.mark);
+  const dom = entry != null && Number.isFinite(entry) ? [...ys, entry] : ys;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  let minY = Math.min(...dom), maxY = Math.max(...dom);
+  if (minY === maxY) { minY -= 0.5; maxY += 0.5; }
+  const padY = (maxY - minY) * 0.14; minY -= padY; maxY += padY;
+  const sx = (t: number) => PAD + ((t - minX) / (maxX - minX || 1)) * (W - PAD * 2);
+  const sy = (v: number) => H - PAD - ((v - minY) / (maxY - minY || 1)) * (H - PAD * 2);
+  const line = points.map((p, i) => `${i ? "L" : "M"}${sx(p.ts).toFixed(1)},${sy(p.mark).toFixed(1)}`).join(" ");
+  const first = points[0], last = points[points.length - 1];
+  const area = `${line} L${sx(last.ts).toFixed(1)},${(H - PAD).toFixed(1)} L${sx(first.ts).toFixed(1)},${(H - PAD).toFixed(1)} Z`;
+  const up = entry != null ? last.mark - entry : 0;
+  const nowColor = entry == null ? "#219EBC" : up > 0 ? "#8ECAE6" : up < 0 ? "#EF4444" : "#9aa4b2";
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {entry != null && Number.isFinite(entry) && (
+        <line x1={PAD} y1={sy(entry)} x2={W - PAD} y2={sy(entry)} stroke="#9aa4b2" strokeWidth={1} strokeDasharray="4 4" opacity={0.55} />
+      )}
+      <path d={area} fill="rgba(33,158,188,0.10)" />
+      <path d={line} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      {entry != null && Number.isFinite(entry) && (
+        <circle cx={sx(minX)} cy={sy(entry)} r={3.5} fill="#0d1119" stroke="#ffffff" strokeWidth={1.5} />
+      )}
+      <circle cx={sx(last.ts)} cy={sy(last.mark)} r={4} fill={nowColor} stroke="#05060a" strokeWidth={1} />
+    </svg>
+  );
+}
+
 function OptionsProbe() {
-  const [raw, setRaw] = useState("");
-  const [entryInput, setEntryInput] = useState("");
+  const [shorthand, setShorthand] = useState("");
+  const [ticker, setTicker] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [strike, setStrike] = useState("");
+  const [side, setSide] = useState<"C" | "P">("C");
+  const [fill, setFill] = useState("");
   const [note, setNote] = useState("");
   const [rows, setRows] = useState<ProbeRow[]>([]);
+  const [historyById, setHistoryById] = useState<Record<number, { ts: number; mark: number }[]>>({});
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -2293,12 +2360,24 @@ function OptionsProbe() {
   const [lastLoad, setLastLoad] = useState<number | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const parsed = useMemo(() => parseContract(raw), [raw]);
   const entryVal = useMemo(() => {
-    const n = parseFloat(entryInput.replace(/[^0-9.]/g, ""));
-    if (Number.isFinite(n) && n > 0) return n;
-    return parsed?.atPrice ?? null;
-  }, [entryInput, parsed]);
+    const n = parseFloat(fill.replace(/[^0-9.]/g, ""));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [fill]);
+  // Ready to add once ticker + a valid ISO expiry + a positive strike are present.
+  const canAdd = ticker.trim().length > 0 && /^\d{4}-\d{2}-\d{2}$/.test(expiry) && parseFloat(strike) > 0;
+
+  // Shorthand → fields: "TSLA 420c 7/17" fills the structured inputs below.
+  const applyShorthand = useCallback((str: string) => {
+    const p = parseContract(str);
+    if (!p) { setErr("Couldn't parse — try: TSLA 420c 7/17"); return; }
+    setErr(null);
+    setTicker(p.ticker);
+    setStrike(String(p.strike));
+    setSide(p.side);
+    setExpiry(p.expiry);
+    if (p.atPrice != null) setFill(String(p.atPrice));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -2321,8 +2400,40 @@ function OptionsProbe() {
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [load]);
 
+  // Per-contract mark history for the sparklines. GET ?history=<id> (no range) →
+  // the full recorded series; coerce the BIGINT ts (arrives as string) and sort.
+  const loadHistories = useCallback(async (ids: number[]) => {
+    const entries = await Promise.all(ids.map(async (id) => {
+      try {
+        const res = await fetch(`/api/watch?history=${id}`, { cache: "no-store" });
+        const j = await res.json();
+        const pts = (Array.isArray(j.history) ? j.history : [])
+          .map((s: { ts: number | string; mark: number | null }) => ({ ts: Number(s.ts), mark: Number(s.mark) }))
+          .filter((p: { ts: number; mark: number }) => Number.isFinite(p.ts) && Number.isFinite(p.mark))
+          .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
+        return [id, pts] as const;
+      } catch {
+        return [id, [] as { ts: number; mark: number }[]] as const;
+      }
+    }));
+    setHistoryById((prev) => {
+      const next = { ...prev };
+      for (const [id, pts] of entries) next[id] = pts;
+      return next;
+    });
+  }, []);
+
+  // Refetch histories only when the SET of tracked ids changes (add/remove) —
+  // not on every 20s price poll.
+  const idKey = rows.map((r) => r.id).join(",");
+  useEffect(() => {
+    const ids = idKey ? idKey.split(",").map(Number) : [];
+    if (ids.length) loadHistories(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idKey]);
+
   const probeAndTrack = useCallback(async () => {
-    if (!parsed) { setErr("Couldn't parse that — try: TSLA 420c 7/17"); return; }
+    if (!canAdd) { setErr("Enter ticker, expiry and strike"); return; }
     setAdding(true);
     try {
       const res = await fetch("/api/watch", {
@@ -2330,24 +2441,25 @@ function OptionsProbe() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "add",
-          ticker: parsed.ticker,
-          expiry: parsed.expiry,
-          strike: parsed.strike,
-          side: parsed.side,
+          ticker: ticker.trim().toUpperCase(),
+          expiry,
+          strike: Number(strike),
+          side,
           note: note || null,
           addedPrice: entryVal,
         }),
       });
       const j = await res.json();
       if (j.error) throw new Error(j.error);
-      setRaw(""); setEntryInput(""); setNote("");
+      // Keep expiry + side so adding several strikes on the same expiry is quick.
+      setShorthand(""); setTicker(""); setStrike(""); setFill(""); setNote("");
       await load();
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
       setAdding(false);
     }
-  }, [parsed, entryVal, note, load]);
+  }, [canAdd, ticker, expiry, strike, side, note, entryVal, load]);
 
   const refreshPrices = useCallback(async () => {
     setRefreshing(true);
@@ -2359,7 +2471,10 @@ function OptionsProbe() {
       });
       const j = await res.json();
       if (j.error) throw new Error(j.error);
-      if (Array.isArray(j.rows)) setRows(j.rows);
+      if (Array.isArray(j.rows)) {
+        setRows(j.rows);
+        void loadHistories((j.rows as ProbeRow[]).map((x) => x.id));
+      }
       setErr(null);
       setLastLoad(Date.now());
     } catch (e) {
@@ -2367,7 +2482,7 @@ function OptionsProbe() {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [loadHistories]);
 
   const remove = useCallback(async (id: number) => {
     setRows((r) => r.filter((x) => x.id !== id));
@@ -2403,40 +2518,56 @@ function OptionsProbe() {
       <div className="op-card">
         <div className="op-card-h">Probe a contract <span className="sub">records your entry, then tracks the result live</span></div>
         <div className="op-card-b">
-          <div className="op-entry">
+          {/* Optional shorthand → fills the fields below */}
+          <div className="op-shorthand">
             <input
-              className="op-input contract"
-              value={raw}
-              onChange={(e) => setRaw(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && parsed && !adding) probeAndTrack(); }}
-              placeholder="TSLA 420c 7/17"
-              autoFocus
+              className="op-input"
+              value={shorthand}
+              onChange={(e) => setShorthand(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") applyShorthand(shorthand); }}
+              placeholder="shortcut: TSLA 420c 7/17  →  Enter to fill"
             />
-            <input
-              className="op-input price"
-              value={entryInput}
-              onChange={(e) => setEntryInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && parsed && !adding) probeAndTrack(); }}
-              placeholder="fill price (opt)"
-              inputMode="decimal"
-            />
-            <button type="button" className="op-go" onClick={probeAndTrack} disabled={!parsed || adding}>
+            <button type="button" className="op-btn" onClick={() => applyShorthand(shorthand)} disabled={!shorthand.trim()}>Fill ↓</button>
+          </div>
+
+          <div className="op-form">
+            <label className="op-f"><span className="op-flab">Ticker</span>
+              <input className="op-input" value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="TSLA" />
+            </label>
+            <label className="op-f"><span className="op-flab">Expiration</span>
+              <input className="op-input" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={{ colorScheme: "dark" }} />
+            </label>
+            <label className="op-f"><span className="op-flab">Strike</span>
+              <input className="op-input" type="number" step="any" value={strike} onChange={(e) => setStrike(e.target.value)} placeholder="420" />
+            </label>
+            <div className="op-f"><span className="op-flab">Side</span>
+              <div className="op-side">
+                <button type="button" className={`op-sidebtn${side === "C" ? " on c" : ""}`} onClick={() => setSide("C")}>Call</button>
+                <button type="button" className={`op-sidebtn${side === "P" ? " on p" : ""}`} onClick={() => setSide("P")}>Put</button>
+              </div>
+            </div>
+            <label className="op-f"><span className="op-flab">Fill price <i>(opt)</i></span>
+              <input className="op-input" value={fill} onChange={(e) => setFill(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && canAdd && !adding) probeAndTrack(); }} placeholder="live mark" inputMode="decimal" />
+            </label>
+            <button type="button" className="op-go" onClick={probeAndTrack} disabled={!canAdd || adding}>
               {adding ? "Probing…" : "Probe & Track"}
             </button>
           </div>
+
           <div className="op-note-row">
             <input className="op-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="note / thesis (optional)" />
           </div>
+
           <div className="op-preview">
-            {parsed ? (
+            {canAdd ? (
               <>
-                <span className={`op-chip${parsed.side === "P" ? " side-p" : ""}`}>
-                  {parsed.ticker} {parsed.strike % 1 ? parsed.strike : Math.round(parsed.strike)}{parsed.side} · {fmtExp(parsed.expiry)}
+                <span className={`op-chip${side === "P" ? " side-p" : ""}`}>
+                  {ticker} {parseFloat(strike) % 1 ? strike : Math.round(parseFloat(strike))}{side} · {fmtExp(expiry)}
                 </span>
                 <span className="op-hint">entry {entryVal != null ? `@ ${entryVal.toFixed(2)}` : "= live mark on add"}</span>
               </>
             ) : (
-              <span className="op-hint">format: TICKER STRIKE+C/P EXPIRY — e.g. <b>TSLA 420c 7/17</b> · optional <b>@ 4.20</b></span>
+              <span className="op-hint">fill ticker, expiry &amp; strike — or paste a shortcut like <b>TSLA 420c 7/17</b> above</span>
             )}
           </div>
           {err && <div className="op-err">{err}</div>}
@@ -2458,38 +2589,53 @@ function OptionsProbe() {
           ) : rows.length === 0 ? (
             <div className="op-empty">No contracts yet — probe one above.</div>
           ) : (
-            rows.map((r) => {
-              const entry = r.added_price;
-              const mark = r.snapshot?.mark ?? r.snapshot?.last ?? null;
-              const pct = entry != null && mark != null && entry !== 0 ? ((mark - entry) / entry) * 100 : null;
-              const dollars = entry != null && mark != null ? (mark - entry) * 100 : null;
-              const sideCls = r.side === "C" ? "c" : "p";
-              return (
-                <div key={r.id} className="op-row">
-                  <div>
-                    <span className="op-tick">{r.ticker}</span>
-                    <span className={`op-badge ${sideCls}`}>{r.strike % 1 ? r.strike : Math.round(r.strike)}{r.side}</span>
+            <div className="op-grid">
+              {rows.map((r) => {
+                const entry = r.added_price;
+                const mark = r.snapshot?.mark ?? r.snapshot?.last ?? null;
+                const pct = entry != null && mark != null && entry !== 0 ? ((mark - entry) / entry) * 100 : null;
+                const dollars = entry != null && mark != null ? (mark - entry) * 100 : null;
+                // Line = recorded history + the live latest mark appended, so the
+                // "now" dot tracks the 20s poll even between history refetches.
+                const hist = historyById[r.id] ?? [];
+                const liveTs = Number(r.snapshot?.ts);
+                const pts = mark != null && Number.isFinite(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
+                  ? [...hist, { ts: liveTs, mark }]
+                  : hist;
+                return (
+                  <div key={r.id} className="op-tcard">
+                    <div className="op-tcard-h">
+                      <div>
+                        <span className="op-tick">{r.ticker}</span>
+                        <span className={`op-badge ${r.side === "C" ? "c" : "p"}`}>{r.strike % 1 ? r.strike : Math.round(r.strike)}{r.side}</span>
+                      </div>
+                      <button type="button" className="op-x" title="Remove" onClick={() => remove(r.id)}>×</button>
+                    </div>
                     <div className="op-rowsub">{fmtExp(r.expiration)}{r.note ? ` · ${r.note}` : ""}</div>
+                    <div className="op-bigrow">
+                      <div className="op-big" style={{ color: upDown(pct) }}>
+                        {pct == null ? "—" : `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`}
+                      </div>
+                      <div className="op-bigsub">
+                        <span className="lbl">in</span>{px(entry)}<span className="arrow">→</span><span className="lbl">now</span>{px(mark)}
+                        <span className="op-dollars" style={{ color: upDown(dollars) }}>
+                          {dollars == null ? "" : ` · ${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toFixed(0)}/ct`}
+                        </span>
+                      </div>
+                    </div>
+                    <ProbeSpark points={pts} entry={entry} />
+                    <div className="op-legend">
+                      <span><i className="dot in" /> in {px(entry)}</span>
+                      <span><i className="dot now" style={{ background: upDown(pct) }} /> now {px(mark)}</span>
+                      <span className="op-legend-ago">{ago(r.snapshot?.ts)}</span>
+                    </div>
                   </div>
-                  <div className="op-px">
-                    <span className="lbl">in</span>{px(entry)}
-                    <span className="arrow">→</span>
-                    <span className="lbl">now</span>{px(mark)}
-                    <div className="op-rowsub">{ago(r.snapshot?.ts)}</div>
-                  </div>
-                  <div className="op-pnl" style={{ color: upDown(pct) }}>
-                    {pct == null ? "—" : `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`}
-                    <span className="d" style={{ color: upDown(dollars) }}>
-                      {dollars == null ? "" : `${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toFixed(0)} / contract`}
-                    </span>
-                  </div>
-                  <button type="button" className="op-x" title="Remove" onClick={() => remove(r.id)}>×</button>
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
           <div className="op-note">
-            Entry is the fill price you type, or the live mark at the moment you add it if you leave it blank. Prices, greeks and OI come from Theta + Tastytrade through <b>/proxy/probe-rest</b> — the same pipeline the GEX tabs use — and a server-side recorder keeps snapshotting through the session, so results fill in even with this tab closed. Any ticker works. P&amp;L is per single contract (×100).
+            Entry is the fill price you type, or the live mark at the moment you add it if you leave it blank. Prices, greeks and OI come from Theta + Tastytrade through <b>/proxy/probe-rest</b> — the same pipeline the GEX tabs use — and a server-side recorder keeps snapshotting through the session, so the sparkline keeps filling even with this tab closed. Any ticker works. P&amp;L is per single contract (×100).
           </div>
         </div>
       </div>
@@ -2523,24 +2669,24 @@ const GROWTH_FIXES: GrowthFix[] = [
   { id: "kill-price", text: "Kill the 'cheap / not greedy' angle", detail: "'Best priced around' and 'priced to be fair' signal low value and invite a price objection nobody had. Lead with the read, never the price." },
   { id: "no-bare-links", text: "Stop bare cbedge.net link posts", detail: "X throttles reach on link-only posts. Put the value in the tweet body; drop the link in the first reply." },
   { id: "daily-proof", text: "Post the level AM, the result at close", detail: "Every session: morning gamma flip + walls, then what price actually did at them by 4pm. Two weeks of this builds the track record that converts." },
-  { id: "free-trial", text: "Offer a free trial / sample", detail: "Options traders won't pay blind. A 7-day trial or a free daily-levels post removes the single biggest objection." },
+  { id: "free-trial", text: "Offer a free trial / sample", detail: "Options traders won't pay blind. A 2-day trial or a free daily-levels post removes the single biggest objection." },
   { id: "one-dest", text: "One destination", detail: "The bio links to beacons.ai while posts link to cbedge.net. Pick one so you aren't leaking clicks across two hops." },
   { id: "typos", text: "Proof every post before sending", detail: "Recent posts shipped 'startegies' and 'detemrines'. On a paid tool, sloppy copy quietly erodes trust." },
 ];
 
 interface GrowthPost { id: string; kind: "PINNED" | "LEVEL" | "RESULT" | "PROOF" | "TEACH" | "TRUST" | "CARD" | "ASK"; text: string }
 const GROWTH_POSTS: GrowthPost[] = [
-  { id: "p-pin", kind: "PINNED", text: `If you trade $SPX 0DTE, this lands before the bell every morning:\n\n• gamma flip\n• call + put walls\n• net GEX\n• expected-move range\n\nThe exact levels dealers hedge around — structure, not signals.\n\nFree for 7 days, link below.` },
+  { id: "p-pin", kind: "PINNED", text: `If you trade $SPX 0DTE, this lands before the bell every morning:\n\n• gamma flip\n• call + put walls\n• net GEX\n• expected-move range\n\nThe exact levels dealers hedge around — structure, not signals.\n\nFree for 2 days, link below.` },
   { id: "p-level", kind: "LEVEL", text: `$SPX pre-market read:\n\nGamma flip 6,012 — above it dealers dampen, fade extremes toward the 6,050 call wall. Lose it and gamma flips negative with the 5,975 put wall in play.\n\nEM range 5,975–6,049. Where the hedging sits, not a prediction.` },
   { id: "p-result", kind: "RESULT", text: `$SPX flip sat at 6,012 in this morning's read. Spot tested it twice, rejected, faded to the 5,975 put wall, bounced.\n\nThat's the session if you had the map. Tomorrow's read posts at 8am ET.` },
   { id: "p-proof", kind: "PROOF", text: `5 sessions running, the $SPX gamma flip has been the pivot — mean-reversion above it, momentum below.\n\nDealer positioning, not a hunch. I post the level every morning, free.` },
   { id: "p-teach", kind: "TEACH", text: `Why $SPX keeps stalling at the same strike all day:\n\nthat's the call wall — the largest positive-gamma strike, where dealers sell into strength to stay hedged.\n\nLooks random until you map it. I map it every morning.` },
-  { id: "p-trust", kind: "TRUST", text: `CB Edge isn't a signal group or a guru room.\n\nIt shows you the dealer-positioning levels the desks watch — gamma flip, walls, net GEX — and you trade your own plan around them.\n\nA week free, decide for yourself.` },
+  { id: "p-trust", kind: "TRUST", text: `CB Edge isn't a signal group or a guru room.\n\nIt shows you the dealer-positioning levels the desks watch — gamma flip, walls, net GEX — and you trade your own plan around them.\n\nTwo days free, decide for yourself.` },
   { id: "p-card", kind: "CARD", text: `This morning's $SPX Daily Levels:\n\nflip, walls, net GEX, expected-move range — one glance, then go trade. Generated fresh every session.\n\n[attach the Daily Levels card]` },
-  { id: "p-ask", kind: "ASK", text: `If you traded $SPX off the morning levels this week — which one paid the most? Drop it below.\n\nNew here: the read is free for 7 days.` },
+  { id: "p-ask", kind: "ASK", text: `If you traded $SPX off the morning levels this week — which one paid the most? Drop it below.\n\nNew here: the read is free for 2 days.` },
 ];
 
-const GROWTH_BIO = `CB Edge — real-time SPX gamma, dealer positioning & expected-move levels for 0DTE traders. The edge I built for my own trading. → free 7-day trial`;
+const GROWTH_BIO = `CB Edge — real-time SPX gamma, dealer positioning & expected-move levels for 0DTE traders. The edge I built for my own trading. → free 2-day trial`;
 
 const GP_CSS = `
   .gp-wrap { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-bottom: 44px; }

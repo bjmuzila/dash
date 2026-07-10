@@ -201,8 +201,7 @@ function GexScanner() {
   const [sort, setSort] = useState<GexSort>("z");
   const [minZ, setMinZ] = useState(0);
   const [colSort, setColSort] = useState<ColSort>(null);
-  const [moneyness, setMoneyness] = useState<"all" | "otm">("all");
-  const [minOtm, setMinOtm] = useState(0.02);
+  const [dir, setDir] = useState<"all" | "pos" | "neg">("all");
   const [minExpiry, setMinExpiry] = useState("");
   const [maxExpiry, setMaxExpiry] = useState("");
   // Adjustable signal thresholds (user settings, persisted). Image defaults:
@@ -270,7 +269,7 @@ function GexScanner() {
       u.searchParams.set("sort", sort);
       u.searchParams.set("minZ", String(minZ));
       u.searchParams.set("limit", "25");
-      if (moneyness === "otm") u.searchParams.set("minOtm", String(minOtm));
+      if (dir !== "all") u.searchParams.set("dir", dir);
       const res = await fetch(u.toString(), { cache: "no-store" });
       const text = await res.text();
       let j: any;
@@ -279,14 +278,14 @@ function GexScanner() {
       setRows(j.rows || []);
     } catch (e: any) { setErr(String(e?.message || e)); }
     finally { setLoading(false); }
-  }, [win, sort, minZ, moneyness, minOtm]);
+  }, [win, sort, minZ, dir]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>GEX Change Scanner</span>}
-      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · refreshing…" : ""}`}>
+      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${dir !== "all" ? ` · ${dir === "pos" ? "positive" : "negative"} Δ only` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 6 }}>
@@ -303,23 +302,11 @@ function GexScanner() {
           <button onClick={() => setSort("score")} style={seg(sort === "score")}>Best overall</button>
         </div>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setMoneyness("all")} style={seg(moneyness === "all")}>All</button>
-          <button onClick={() => setMoneyness("otm")} style={seg(moneyness === "otm")}>OTM</button>
+        <div style={{ display: "flex", gap: 6 }} title="Filter by the sign of the Δ (change in GEX)">
+          <button onClick={() => setDir("all")} style={seg(dir === "all")}>All</button>
+          <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Positive Δ</button>
+          <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Negative Δ</button>
         </div>
-        {moneyness === "otm" && (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }}>
-            min OTM
-            <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
-              style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
-              <option value={0.02}>2%+</option>
-              <option value={0.05}>5%+</option>
-              <option value={0.10}>10%+</option>
-              <option value={0.15}>15%+</option>
-              <option value={0.20}>20%+</option>
-            </select>
-          </label>
-        )}
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.green }}>
           min z
           <select value={minZ} onChange={(e) => setMinZ(Number(e.target.value))}
@@ -1045,8 +1032,7 @@ function StrikeQueryScanner() {
   const [limit, setLimit] = useState(25);
   const [colSort, setColSort] = useState<{ col: SqCol; dir: "desc" | "asc" }>({ col: "gex_now", dir: "desc" });
   const [cardScope, setCardScope] = useState<"all" | "exidx">("all");
-  const [moneyness, setMoneyness] = useState<"all" | "otm">("all");
-  const [minOtm, setMinOtm] = useState(0.02);
+  const [dir, setDir] = useState<"all" | "pos" | "neg">("all");
 
   const symbolList = watchlist.length > 0 ? watchlist : SQ_FALLBACK;
 
@@ -1097,10 +1083,13 @@ function StrikeQueryScanner() {
 
   const otmDist = (r: SqRow) => (r.spot && r.spot > 0 ? Math.abs(r.strike - r.spot) / r.spot : 0);
 
+  // Direction filter on the active sort metric (sign of the sorted Δ column).
+  const dirPass = (r: SqRow) => { const v = sqVal(r, colSort.col); return dir === "pos" ? v > 0 : v < 0; };
+
   const displayRows = (() => {
     let f = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
     if (cardScope === "exidx") f = f.filter((r) => !INDICES.has(r.symbol));
-    if (moneyness === "otm") f = f.filter((r) => otmDist(r) >= minOtm);
+    if (dir !== "all") f = f.filter(dirPass);
     f = [...f].sort((a, b) => {
       const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
       const cmp = colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
@@ -1116,7 +1105,7 @@ function StrikeQueryScanner() {
   const topCards = (() => {
     let base = expiry === "ALL" ? rows : rows.filter((r) => r.expiry === expiry);
     if (cardScope === "exidx") base = base.filter((r) => !INDICES.has(r.symbol));
-    if (moneyness === "otm") base = base.filter((r) => otmDist(r) >= minOtm);
+    if (dir !== "all") base = base.filter(dirPass);
     const ranked = [...base].sort((a, b) => {
       const av = sqVal(a, colSort.col), bv = sqVal(b, colSort.col);
       return colSort.col === "strike" ? bv - av : Math.abs(bv) - Math.abs(av);
@@ -1147,7 +1136,7 @@ function StrikeQueryScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>Strike GEX Query</span>}
-      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · loading…" : ""}`}>
+      subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${dir !== "all" ? ` · ${dir === "pos" ? "positive" : "negative"} Δ only` : ""}${loading ? " · loading…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1166,23 +1155,11 @@ function StrikeQueryScanner() {
             options={[10, 25, 50, 100].map((l) => ({ value: String(l), label: String(l) }))} />
         </div>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setMoneyness("all")} style={seg(moneyness === "all")}>ITM/All</button>
-          <button onClick={() => setMoneyness("otm")} style={seg(moneyness === "otm")}>OTM</button>
+        <div style={{ display: "flex", gap: 6 }} title="Filter by the sign of the active sort metric (the sorted Δ column)">
+          <button onClick={() => setDir("all")} style={seg(dir === "all")}>All</button>
+          <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Positive Δ</button>
+          <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Negative Δ</button>
         </div>
-        {moneyness === "otm" && (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }}>
-            min OTM
-            <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
-              style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
-              <option value={0.02}>2%+</option>
-              <option value={0.05}>5%+</option>
-              <option value={0.10}>10%+</option>
-              <option value={0.15}>15%+</option>
-              <option value={0.20}>20%+</option>
-            </select>
-          </label>
-        )}
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
         <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
       </div>

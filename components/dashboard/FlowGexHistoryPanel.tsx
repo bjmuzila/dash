@@ -49,6 +49,16 @@ function fmtMoney(v: number): string {
   return `${sign}$${(abs / 1e6).toFixed(1)}M`;
 }
 
+// NY regular session bounds, ET wall-clock minutes: 09:30–16:30. p.timeEt is
+// already ET "HH:MM" (server to_char), so no timezone math is needed here.
+const SESSION_START_MIN = 9 * 60 + 30;
+const SESSION_END_MIN = 16 * 60 + 30;
+function inNySession(timeEt: string): boolean {
+  const [h, m] = timeEt.split(":").map(Number);
+  const mins = h * 60 + m;
+  return mins >= SESSION_START_MIN && mins <= SESSION_END_MIN;
+}
+
 export function FlowGexHistoryPanel() {
   const [data, setData] = useState<FlowGexHistoryResponse | null>(null);
   // Strikes the user has explicitly turned OFF. Kept separate from the fetched
@@ -75,6 +85,12 @@ export function FlowGexHistoryPanel() {
       }
       if (!json.strikes.length) {
         setError("No tape recorded for any strike today yet.");
+      }
+      // NY session only (09:30–16:30 ET) — drop overnight/Globex tape so the
+      // chart + rail read as the cash session. Cumulative call/put net still
+      // carries overnight inventory into the first in-session point.
+      for (const k of Object.keys(json.seriesByStrike ?? {})) {
+        json.seriesByStrike[k] = json.seriesByStrike[k].filter((p) => inNySession(p.timeEt));
       }
       setData(json);
     } catch (e) {

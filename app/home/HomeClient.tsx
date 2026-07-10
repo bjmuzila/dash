@@ -1334,7 +1334,7 @@ export function HomeClient({
                   </colgroup>
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Net VEX"].map((header, index) => (
+                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Flow Gex"].map((header, index) => (
                         <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 || heatmapView === "table" ? "left" : "right", color: "#fff" }}>{header}</th>
                       ))}
                     </tr>
