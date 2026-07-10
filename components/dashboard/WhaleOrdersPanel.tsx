@@ -61,7 +61,7 @@ function todayYmdET(): string {
   return `${g("year")}-${g("month")}-${g("day")}`;
 }
 
-const GRID = "70px 52px 46px 34px 66px 60px 58px 92px 78px 66px";
+const GRID = "70px 52px 46px 34px 66px 60px 58px 62px 92px 78px 66px";
 
 export default function WhaleOrdersPanel() {
   const shouldConnect = useWsLifecycle();
@@ -227,7 +227,7 @@ export default function WhaleOrdersPanel() {
 
       {/* ── Column headers ── */}
       <div style={{ overflowX: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ minWidth: 690 }}>
+        <div style={{ minWidth: 758 }}>
           <div style={{ display: "grid", gridTemplateColumns: GRID, gap: 6, padding: "6px 10px", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: "rgba(10,13,20,0.96)", zIndex: 1 }}>
             <span style={headerCell}>Time</span>
             <span style={headerCell}>Ticker</span>
@@ -236,6 +236,7 @@ export default function WhaleOrdersPanel() {
             <span style={{ ...headerCell, textAlign: "right" }}>Strike</span>
             <span style={{ ...headerCell, textAlign: "right" }}>% OTM</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Size</span>
+            <span style={{ ...headerCell, textAlign: "right" }}>Price</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Premium</span>
             <span style={{ ...headerCell, textAlign: "right" }}>Expiry</span>
             <span style={{ ...headerCell, textAlign: "center" }}>Bias</span>
@@ -273,6 +274,7 @@ export default function WhaleOrdersPanel() {
                   <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
                     {o.size.toLocaleString()}{o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 10 }}> ×{o.fills}</span> : null}
                   </span>
+                  <span style={{ textAlign: "right", color: C.text }}>{Number.isFinite(o.price) ? `$${o.price.toFixed(2)}` : "—"}</span>
                   <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
                   <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}{d != null ? <span style={{ color: "rgba(255,255,255,0.35)" }}> · {d}d</span> : null}</span>
                   <span style={{ textAlign: "center", fontWeight: 800, color: bull ? BULLISH : BEARISH }}>{bull ? "▲" : "▼"}</span>

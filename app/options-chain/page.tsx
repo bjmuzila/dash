@@ -1473,13 +1473,13 @@ export default function OptionsChainPage({
             display: "grid",
             gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
             borderRadius: 12,
-            overflow: "hidden",
+            overflow: "clip",
             border: `1px solid ${HT.border}`,
             borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
             background: HT.panelBg,
           }}>
             {/* ── Header row: empty strike corner + one expiry header per column ── */}
-            <div style={{ position: "sticky", left: 0, zIndex: 3, padding: "7px 8px", background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
+            <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
               Strike
             </div>
             {renderIdx.map((i) => {
@@ -1492,7 +1492,7 @@ export default function OptionsChainPage({
                     : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
                 : null;
               return (
-                <div key={`hdr-${col?.expiration ?? i}`} style={{ textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
+                <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
                   <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
                   <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}

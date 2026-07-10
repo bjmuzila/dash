@@ -26,7 +26,9 @@ function frame(ts, priceEs, extra = {}) {
 // Run a list of frames through one mem, return all signals emitted.
 function run(mem, frames) {
   const all = [];
-  for (const f of frames) for (const s of evaluateFrame(f, mem)) all.push(s);
+  // flip_cross is production-disabled by default; enable it here so the pure
+  // flip-cross logic (tests 1/2/8/9) stays covered.
+  for (const f of frames) for (const s of evaluateFrame(f, mem, { FLIP_CROSS_ENABLED: true })) all.push(s);
   return all;
 }
 function runFd(mem, frames) {

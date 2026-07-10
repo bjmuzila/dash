@@ -1199,7 +1199,7 @@ export function HomeClient({
                   })}
                 </div>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: 24, display: econSize === "min" ? "none" : "block" }}>
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: 24, display: econSize === "min" ? "none" : "block" }}>
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel controlsPortalEl={econControlsSlotEl} />

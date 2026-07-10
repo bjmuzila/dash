@@ -83,6 +83,11 @@ const marketState = require('./state/market-state');
 // ── tunables (ES points unless noted) ───────────────────────────────────────
 const EVAL_MS        = Number(process.env.SIGNALS_EVAL_MS        || 3000);   // detection cadence
 const CROSS_BUFFER   = Number(process.env.SIGNALS_CROSS_BUFFER   || 1.0);    // flip penetration
+// flip_cross is OFF by default: the GEX flip level jitters frame-to-frame, so a
+// price sitting near it re-crosses every eval and the per-level cooldown key
+// keeps changing → spam. Set SIGNALS_FLIP_CROSS=1 to re-enable (only after the
+// cross is de-duped with hysteresis).
+const FLIP_CROSS_ENABLED = process.env.SIGNALS_FLIP_CROSS === '1';
 const WALL_TOUCH     = Number(process.env.SIGNALS_WALL_TOUCH     || 1.5);    // "at the wall"
 const WALL_REJECT    = Number(process.env.SIGNALS_WALL_REJECT    || 1.5);    // push-back = fade
 const WALL_BREAK     = Number(process.env.SIGNALS_WALL_BREAK     || 2.0);    // close-through = break
@@ -330,7 +335,7 @@ function computeContextLevels(esCandles, asOf = Date.now()) {
 function evaluateFrame(cur, mem, cfg = {}) {
   const C = {
     CROSS_BUFFER, WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
-    CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS, ...cfg,
+    CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS, FLIP_CROSS_ENABLED, ...cfg,
   };
   const out = [];
   const { ts, priceEs, basis } = cur;
@@ -380,8 +385,8 @@ function evaluateFrame(cur, mem, cfg = {}) {
     });
   };
 
-  // ── 1) FLIP CROSS ──
-  if (prev && flipEs != null && prev.flipEs != null) {
+  // ── 1) FLIP CROSS ── (disabled by default — see FLIP_CROSS_ENABLED)
+  if (C.FLIP_CROSS_ENABLED && prev && flipEs != null && prev.flipEs != null) {
     const upCross   = prev.priceEs <= prev.flipEs && priceEs >= flipEs + C.CROSS_BUFFER;
     const downCross = prev.priceEs >= prev.flipEs && priceEs <= flipEs - C.CROSS_BUFFER;
     if (upCross) fire({ kind: 'flip_cross', direction: 'long', setup: 'GEX flip cross ↑', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `ES ${priceEs.toFixed(2)} crossed above the GEX flip → positive-gamma regime` });
