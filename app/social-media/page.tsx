@@ -2002,11 +2002,39 @@ function DayPosts({ form }: { form: FormState }) {
   const [ideaStrike, setIdeaStrike] = useState("");
   const [ideaRight, setIdeaRight] = useState<"C" | "P">("C");
   const [ideaExp, setIdeaExp] = useState("");
+  const [ideaPrice, setIdeaPrice] = useState("");
   const [ideaNote, setIdeaNote] = useState("");
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  // Live contract price via /api/watch?quote= (same /proxy/probe-rest pipeline
+  // the Probe tab uses). parseContract normalizes "7/17" → ISO expiry.
+  const fetchIdeaPrice = useCallback(async () => {
+    const parsed = parseContract(`${ideaTicker} ${ideaStrike}${ideaRight} ${ideaExp}`);
+    if (!parsed) { setError("Need ticker, strike and expiration to pull the price."); return; }
+    setPriceLoading(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `/api/watch?quote=${encodeURIComponent(parsed.ticker)}&expiry=${encodeURIComponent(parsed.expiry)}` +
+        `&side=${parsed.side}&strike=${encodeURIComponent(parsed.strike)}`,
+        { cache: "no-store" },
+      );
+      const json = await res.json();
+      const px = json?.mark ?? json?.last ?? null;
+      if (!res.ok || !json?.found || px == null) throw new Error(json?.error || "contract not found");
+      setIdeaPrice(Number(px).toFixed(2));
+    } catch (e) {
+      console.error("[day-posts price]", e);
+      setError("Couldn't pull the contract price — check ticker/strike/exp.");
+    } finally {
+      setPriceLoading(false);
+    }
+  }, [ideaTicker, ideaStrike, ideaRight, ideaExp]);
 
   // Captured raw visual (unbranded) — frozen copy so live updates don't shift it.
   const rawRef = useRef<HTMLCanvasElement | null>(null);
   const [capturedAt, setCapturedAt] = useState(0);
+  const [capUrl, setCapUrl] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
 
   // GEX chart source (same /api/gex feed PostGenerator uses).
@@ -2036,6 +2064,19 @@ function DayPosts({ form }: { form: FormState }) {
 
   // Switching source resets the live view (keeps any frozen capture).
   useEffect(() => { setIframeOn(false); }, [visual]);
+
+  // Auto-capture the GEX chart once the chain lands and the chart has painted
+  // (double-rAF, same trick GexCard uses) — Retrieve alone is enough for GEX.
+  const captureRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (visual !== "gex" || !gexChain.length) return;
+    let cancelled = false;
+    const r1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => { if (!cancelled) captureRef.current(); });
+    });
+    return () => { cancelled = true; cancelAnimationFrame(r1); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gexChain]);
 
   const retrieve = useCallback(async () => {
     setError("");
@@ -2083,6 +2124,7 @@ function DayPosts({ form }: { form: FormState }) {
         });
         rawRef.current = canvas;
       }
+      setCapUrl(rawRef.current ? rawRef.current.toDataURL("image/png") : null);
       setCapturedAt(Date.now());
     } catch (e) {
       console.error("[day-posts capture]", e);
@@ -2091,6 +2133,7 @@ function DayPosts({ form }: { form: FormState }) {
       setCapturing(false);
     }
   }, [visual]);
+  useEffect(() => { captureRef.current = capture; }, [capture]);
 
   // Branded blob for the tweet mockup — re-stamps corners on every render call.
   const renderBrandedBlob = useCallback(async (): Promise<Blob | null> => {
@@ -2138,7 +2181,8 @@ function DayPosts({ form }: { form: FormState }) {
           visual: rawRef.current ? visual : null,
           tradeIdea: ideaOn && (ideaStrike || ideaTicker) ? {
             ticker: ideaTicker || "SPX", strike: ideaStrike || null,
-            right: ideaRight, expiration: ideaExp || null, note: ideaNote || null,
+            right: ideaRight, expiration: ideaExp || null,
+            price: ideaPrice || null, note: ideaNote || null,
           } : null,
           spxSpot: n(form.spot),
           spxPrevClose: n(form.prevClose),
@@ -2228,6 +2272,16 @@ function DayPosts({ form }: { form: FormState }) {
           <div className="dp-hint">Hit <b>Retrieve</b> to load the live {visualDef.label} view, let it render, then <b>Capture</b> freezes it to the post image.</div>
         )}
 
+        {capUrl && (
+          <>
+            <span className="dp-label" style={{ color: "var(--sm-green, #8ECAE6)" }}>✓ Captured — attached to the tweet preview below</span>
+            <div className="dp-cap">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={capUrl} alt="captured visual" />
+            </div>
+          </>
+        )}
+
         <div className="dp-row">
           <label>
             <input type="checkbox" style={{ width: "auto" }} checked={brandOn} onChange={(e) => setBrandOn(e.target.checked)} />
@@ -2268,6 +2322,10 @@ function DayPosts({ form }: { form: FormState }) {
                 </select>
               </label>
               <label>Exp <input value={ideaExp} onChange={(e) => setIdeaExp(e.target.value)} style={{ width: 90 }} placeholder="7/17" /></label>
+              <label>Price <input value={ideaPrice} onChange={(e) => setIdeaPrice(e.target.value)} style={{ width: 70 }} placeholder="3.10" /></label>
+              <button type="button" className="dp-btn" onClick={fetchIdeaPrice} disabled={priceLoading}>
+                {priceLoading ? "Pulling…" : "$ Get price"}
+              </button>
               <label>Note <input value={ideaNote} onChange={(e) => setIdeaNote(e.target.value)} style={{ width: 200 }} placeholder="watching over the flip" /></label>
             </>
           )}
@@ -2281,6 +2339,11 @@ function DayPosts({ form }: { form: FormState }) {
           {generating ? "Generating…" : "✨ Generate post (AI)"}
         </button>
         {error && <div className="dp-err">{error}</div>}
+        {!capturedAt && (
+          <div className="dp-hint" style={{ color: "var(--amber)" }}>
+            ⚠ No visual attached yet — in section 2 pick a source, hit <b>Retrieve</b> (GEX chart attaches automatically; the others need <b>📸 Capture</b> once rendered).
+          </div>
+        )}
         <TweetMockup
           title={`Tweet preview — ${DAY_SLOTS.find((s) => s.v === slot)?.label}`}
           getBlob={renderBrandedBlob}

@@ -142,6 +142,27 @@ async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
 
 export async function GET(req: NextRequest) {
   try {
+    // One-off live quote for a contract (no DB write) — used by the Day Posts
+    // trade-idea "Get price": /api/watch?quote=TSLA&expiry=2026-07-17&side=C&strike=420
+    const quoteTicker = req.nextUrl.searchParams.get("quote");
+    if (quoteTicker) {
+      const expiry = String(req.nextUrl.searchParams.get("expiry") || "").trim();
+      const side = String(req.nextUrl.searchParams.get("side") || "C").toUpperCase() === "P" ? "P" : "C";
+      const strike = Number(req.nextUrl.searchParams.get("strike"));
+      if (!expiry || !Number.isFinite(strike)) {
+        return NextResponse.json({ error: "expiry and strike required" }, { status: 400 });
+      }
+      const j = await fetchProbe(quoteTicker.trim().toUpperCase(), expiry, side, strike);
+      if (!j?.found || !j.result) return NextResponse.json({ found: false });
+      const q = j.result.feeds?.Quote ?? {};
+      const tr = j.result.feeds?.Trade ?? {};
+      return NextResponse.json({
+        found: true,
+        bid: num(q.bid), ask: num(q.ask),
+        mark: num(q.mark) ?? num(q.mid), last: num(tr.last),
+      });
+    }
+
     const historyId = req.nextUrl.searchParams.get("history");
     if (historyId) {
       const range = req.nextUrl.searchParams.get("range") || "";

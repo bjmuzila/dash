@@ -33,14 +33,14 @@ POST TYPES
 
 TRADE IDEA (when provided)
 - Fold the contract (e.g. $TSLA 420C 7/17) into the post as a LEVELS-BASED watch — "on the radar", "watching", conditional on the structure. NEVER say buy/sell/enter, no targets-as-promises, no PT guarantees.
-- End a trade-idea post with "Idea, not advice." placed before the link.
+- When a contract price is given, include it in the post (e.g. "$TSLA 420C 7/17 @ $3.10").
 
 HARD RULES
 - Output ONE tweet only, at or under 280 characters INCLUDING cashtags, hashtags, and link. Be ruthless about length.
 - Lead with the primary cashtag ($SPX, or the trade-idea ticker when one is given).
 - Include 1-3 relevant hashtags (#SPX #0DTE #gamma #options #trading) where natural — do not stuff.
 - End the tweet with the link: https://www.cbedge.net/
-- Except for the trade-idea line above, do NOT include any disclaimer.
+- Do NOT include any disclaimer. No "not financial advice", no "educational only", no "idea, not advice".
 - Use the provided bias as the directional lean, kept conditional on the levels.
 
 OUTPUT FORMAT
@@ -56,6 +56,7 @@ interface TradeIdea {
   strike?: string | null;
   right?: string | null; // "C" | "P"
   expiration?: string | null;
+  price?: number | string | null;
   note?: string | null;
 }
 
@@ -120,7 +121,7 @@ function formatUserMessage(d: DayPostPayload): string {
     const right = (t.right || "C").toUpperCase() === "P" ? "P" : "C";
     lines.push(
       ``,
-      `TRADE IDEA to fold in: $${(t.ticker || "SPX").toUpperCase()} ${t.strike || "?"}${right}${t.expiration ? ` exp ${t.expiration}` : ""}${t.note ? ` — ${t.note}` : ""}`,
+      `TRADE IDEA to fold in: $${(t.ticker || "SPX").toUpperCase()} ${t.strike || "?"}${right}${t.expiration ? ` exp ${t.expiration}` : ""}${t.price ? ` @ $${t.price}` : ""}${t.note ? ` — ${t.note}` : ""}`,
     );
   }
   if (d.notes) lines.push(``, `User notes / angle: ${d.notes}`);
