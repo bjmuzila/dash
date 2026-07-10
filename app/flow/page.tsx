@@ -163,8 +163,18 @@ const DEFAULT_TICKERS = [
   "SPX", "SPY", "QQQ", "META", "TSLA", "AMZN", "AAPL", "NVDA", "MSFT", "GOOGL", "AMD", "NDX",
 ] as const;
 
+// URL params (used by the Day Posts capture embed):
+//   ?chartonly=1  → render ONLY the Net Drift chart card (no filters/tape/dark pool)
+//   ?ticker=SPX   → preset the active ticker
+//   ?dteMax=0     → preset Max DTE (0 = 0DTE). OTM-only is already the default.
+function urlParam(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get(name);
+}
+
 export default function FlowPage() {
   const shouldConnect = useWsLifecycle();
+  const [chartOnly] = useState(() => urlParam("chartonly") === "1");
   const [orders, setOrders] = useState<FlowOrder[]>([]);
   const [status, setStatus] = useState<"LIVE" | "RECONNECTING" | "WAITING">("WAITING");
 
@@ -179,7 +189,10 @@ export default function FlowPage() {
 
   // ── Watchlist + active (chart-focused) ticker ──
   const [tickerList, setTickerList] = useState<string[]>([...DEFAULT_TICKERS]);
-  const [active, setActive] = useState<string>(DEFAULT_TICKERS[0]);
+  const [active, setActive] = useState<string>(() => {
+    const t = urlParam("ticker");
+    return t ? t.toUpperCase() : DEFAULT_TICKERS[0];
+  });
   const [tickerInput, setTickerInput] = useState("");
 
   // ── Other filters ──
@@ -189,7 +202,10 @@ export default function FlowPage() {
   const [minSize, setMinSize] = useState<number>(0);
   const [expiry, setExpiry] = useState<string>("all");
   const [dteMin, setDteMin] = useState<number>(0);
-  const [dteMax, setDteMax] = useState<number | null>(null);
+  const [dteMax, setDteMax] = useState<number | null>(() => {
+    const v = urlParam("dteMax");
+    return v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v);
+  });
   const [otmOnly, setOtmOnly] = useState(true);
 
   const [history, setHistory] = useState<FlowOrder[]>([]);
@@ -741,6 +757,7 @@ export default function FlowPage() {
   return (
     <PageShell className="no-card-lift">
       {/* ── View tabs + session date (lookback) ─────────────────────── */}
+      {!chartOnly && (
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
         <div style={{ ...segWrapStyle, maxWidth: 320 }}>
           <button className="flow-chip" style={segBtn(view === "ticker")} onClick={() => setView("ticker")}>By Ticker</button>
@@ -784,8 +801,10 @@ export default function FlowPage() {
           )}
         </div>
       </div>
+      )}
 
       {/* ── Filters + Dark Pool bars, side by side, full window width, above the chart. ── */}
+      {!chartOnly && (
       <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", flexShrink: 0 }}>
       <div style={{ flex: "1 1 480px", minWidth: 0 }}>
       <Card variant="budget" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0, height: "100%" }}>
@@ -961,10 +980,13 @@ export default function FlowPage() {
         </div>
       )}
       </div>
+      )}
 
       {/* ── Net Premium chart (per-ticker). Kept mounted but hidden in the
-           Combined view so the once-created lightweight-chart keeps its ref. ── */}
-      <div style={{ display: view === "ticker" ? "contents" : "none" }}>
+           Combined view so the once-created lightweight-chart keeps its ref.
+           chartonly mode uses display:block (html2canvas can't walk
+           display:contents) and tags the node for the Day Posts capture. ── */}
+      <div id="flow-chart-capture" style={{ display: view !== "ticker" ? "none" : chartOnly ? "block" : "contents" }}>
         <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
           <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
@@ -983,7 +1005,7 @@ export default function FlowPage() {
               {!isToday ? `No ${active} flow recorded for ${date}.` : status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
             </p>
           )}
-          {view === "ticker" && renderPremiumSplit()}
+          {view === "ticker" && !chartOnly && renderPremiumSplit()}
         </Card>
       </div>
 
@@ -999,6 +1021,7 @@ export default function FlowPage() {
       )}
 
       {/* ── Tape ────────────────────────────────────────────────────── */}
+      {!chartOnly && (
       <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -1067,6 +1090,7 @@ export default function FlowPage() {
           )}
         </div>
       </Card>
+      )}
     </PageShell>
   );
 }

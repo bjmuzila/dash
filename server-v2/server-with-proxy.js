@@ -1963,6 +1963,10 @@ async function main() {
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);
+    // Day-post writer: auto-generates the premarket/midday/EOD X posts
+    // (Anthropic via /api/social-media/day-post) into day_posts at their slot
+    // times, so the Social Media → Day Posts tab has a ready copy/paste list.
+    require('./day-post-writer').startDayPostWriter(PORT);
     // Per-strike GEX growth recorder: sweeps the watchlist every 30m during RTH
     // and stores delta-vs-open per strike (feeds /strike-growth tracker page).
     startStrikeGrowthRecorder(PORT);

@@ -36,7 +36,8 @@ TRADE IDEA (when provided)
 - When a contract price is given, include it in the post (e.g. "$TSLA 420C 7/17 @ $3.10").
 
 HARD RULES
-- Output ONE tweet only, at or under 280 characters INCLUDING cashtags, hashtags, and link. Be ruthless about length.
+- Output ONE tweet only, at or under 280 characters INCLUDING cashtags, hashtags, link, and newlines. Be ruthless about length.
+- Do NOT write one solid paragraph. Break the tweet into 2-4 short lines with "\n" (blank line between thoughts is fine): lead line, level/positioning line(s), then hashtags + link on the final line.
 - Lead with the primary cashtag ($SPX, or the trade-idea ticker when one is given).
 - Include 1-3 relevant hashtags (#SPX #0DTE #gamma #options #trading) where natural — do not stuff.
 - End the tweet with the link: https://www.cbedge.net/

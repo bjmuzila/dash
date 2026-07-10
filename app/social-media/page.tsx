@@ -1941,20 +1941,20 @@ function PostGenerator({ form }: { form: FormState }) {
 const DP_CSS = `
   .dp-wrap { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-bottom: 40px; }
   .dp-panel { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .dp-label { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); }
+  .dp-label { font-family: var(--sm-mono); font-size: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); }
   .dp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .dp-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 14px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--sm-muted); transition: all 0.12s; }
+  .dp-btn { font-family: var(--sm-mono); font-size: 15px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 7px 14px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--sm-muted); transition: all 0.12s; }
   .dp-btn:hover { color: var(--text1); border-color: var(--cyan); }
   .dp-btn:disabled { opacity: 0.5; cursor: default; }
   .dp-btn.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(33,158,188,0.35); }
-  .dp-btn.gen { border-color: var(--cyan); background: var(--cyan); color: #05060a; padding: 10px 18px; font-size: 12px; align-self: flex-start; }
-  .dp-row label { font-size: 12px; color: var(--sm-muted); display: flex; gap: 7px; align-items: center; }
-  .dp-row select, .dp-row input { font-family: var(--sm-mono); font-size: 12px; padding: 6px 9px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg0); color: var(--text1); }
+  .dp-btn.gen { border-color: var(--cyan); background: var(--cyan); color: #05060a; padding: 10px 18px; font-size: 15px; align-self: flex-start; }
+  .dp-row label { font-size: 15px; color: var(--sm-muted); display: flex; gap: 7px; align-items: center; }
+  .dp-row select, .dp-row input { font-family: var(--sm-mono); font-size: 15px; padding: 6px 9px; border-radius: 5px; border: 1px solid var(--sm-border); background: var(--bg0); color: var(--text1); }
   .dp-row input { width: 110px; }
-  .dp-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.5; }
+  .dp-hint { font-size: 15px; color: var(--sm-muted); line-height: 1.5; }
   .dp-hint b { color: var(--text1); }
-  .dp-err { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-red); padding: 10px 14px; border: 1px solid rgba(239,68,68,0.4); border-radius: 6px; background: rgba(239,68,68,0.07); }
-  .dp-notes { width: 100%; box-sizing: border-box; resize: vertical; min-height: 48px; font-family: inherit; font-size: 13px; line-height: 1.45; color: var(--text1); background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 8px 10px; }
+  .dp-err { font-family: var(--sm-mono); font-size: 15px; color: var(--sm-red); padding: 10px 14px; border: 1px solid rgba(239,68,68,0.4); border-radius: 6px; background: rgba(239,68,68,0.07); }
+  .dp-notes { width: 100%; box-sizing: border-box; resize: vertical; min-height: 48px; font-family: inherit; font-size: 15px; line-height: 1.45; color: var(--text1); background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 8px; padding: 8px 10px; }
   .dp-embed { position: relative; border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; background: var(--bg0); }
   .dp-chart-host { width: 100%; height: 360px; background: var(--bg0); border-radius: 8px; overflow: hidden; }
   .dp-cap { border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; background: var(--bg0); }
@@ -1972,7 +1972,7 @@ const DAY_SLOTS: { v: DaySlot; label: string }[] = [
 type DayVisual = "gex" | "flow" | "chain" | "greeks";
 const DAY_VISUALS: { v: DayVisual; label: string; embed?: string }[] = [
   { v: "gex", label: "GEX Chart" },
-  { v: "flow", label: "Option Flow", embed: "/flow?embed=1" },
+  { v: "flow", label: "Option Flow (SPX 0DTE OTM)", embed: "/flow?embed=1&chartonly=1&ticker=SPX&dteMax=0" },
   { v: "chain", label: "Option Chain", embed: "/options-chain?embed=1" },
   { v: "greeks", label: "Multi Greeks", embed: "/mult-greek?embed=1" },
 ];
@@ -1982,6 +1982,10 @@ const DP_EMB_H = 800;
 
 interface DayPost { id: string; ts: string; slot: DaySlot; tweet: string }
 const DAY_POSTS_KEY = "cb-edge-day-posts";
+
+// Auto-generated rows written server-side by day-post-writer at slot times.
+interface AutoDayPost { date: string; slot: string; tweet: string; created_at: string }
+const AUTO_SLOT_TIMES: Record<string, string> = { premarket: "~8:40 AM", midday: "~12:25 PM", eod: "~4:03 PM" };
 
 function DayPosts({ form }: { form: FormState }) {
   const [slot, setSlot] = useState<DaySlot>("premarket");
@@ -2118,10 +2122,15 @@ function DayPosts({ form }: { form: FormState }) {
         const doc = iframeRef.current?.contentDocument;
         if (!doc?.body) throw new Error("view not loaded — hit Retrieve and wait for it to render");
         const html2canvas = await getHtml2Canvas();
-        const canvas = await html2canvas(doc.body, {
-          backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
-          width: DP_EMB_W, height: DP_EMB_H, windowWidth: DP_EMB_W, windowHeight: DP_EMB_H,
-        });
+        // Chart-only pages tag the exact node to grab (#flow-chart-capture);
+        // otherwise fall back to the whole embed body.
+        const target = doc.querySelector<HTMLElement>("#flow-chart-capture");
+        const canvas = target
+          ? await html2canvas(target, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false })
+          : await html2canvas(doc.body, {
+              backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
+              width: DP_EMB_W, height: DP_EMB_H, windowWidth: DP_EMB_W, windowHeight: DP_EMB_H,
+            });
         rawRef.current = canvas;
       }
       setCapUrl(rawRef.current ? rawRef.current.toDataURL("image/png") : null);
@@ -2214,9 +2223,69 @@ function DayPosts({ form }: { form: FormState }) {
     }
   };
 
+  // ── Auto list (server-generated at slot times) ──
+  const [autoPosts, setAutoPosts] = useState<AutoDayPost[]>([]);
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [autoCopied, setAutoCopied] = useState("");
+  const loadAutoList = useCallback(async () => {
+    setAutoLoading(true);
+    try {
+      const res = await fetch("/api/social-media/day-list", { cache: "no-store" });
+      const json = await res.json();
+      if (res.ok && Array.isArray(json.rows)) setAutoPosts(json.rows as AutoDayPost[]);
+    } catch (e) {
+      console.error("[day-posts auto-list]", e);
+    } finally {
+      setAutoLoading(false);
+    }
+  }, []);
+  useEffect(() => { loadAutoList(); }, [loadAutoList]);
+  const copyAuto = (tweet: string, key: string) => {
+    navigator.clipboard.writeText(tweet).then(() => {
+      setAutoCopied(key);
+      setTimeout(() => setAutoCopied(""), 1500);
+    });
+  };
+
   return (
     <div className="dp-wrap">
       <style>{DP_CSS}</style>
+
+      {/* 0 · today's auto posts — written server-side at slot times */}
+      <div className="dp-panel">
+        <div className="dp-row" style={{ justifyContent: "space-between" }}>
+          <span className="dp-label">Today's auto posts · generated on schedule, just copy &amp; paste</span>
+          <button type="button" className="dp-btn" onClick={loadAutoList} disabled={autoLoading}>
+            {autoLoading ? "Loading…" : "↻ Refresh"}
+          </button>
+        </div>
+        {(["premarket", "midday", "eod"] as const).map((s) => {
+          const row = autoPosts.find((r) => r.slot === s);
+          const label = DAY_SLOTS.find((d) => d.v === s)?.label ?? s;
+          return (
+            <div key={s} className="dp-row" style={{ alignItems: "flex-start", borderBottom: "1px solid var(--sm-border)", paddingBottom: 10 }}>
+              <span className="dp-label" style={{ color: "var(--cyan)", minWidth: 130, paddingTop: 2 }}>{label}</span>
+              {row ? (
+                <>
+                  <span style={{ flex: 1, fontSize: 15, color: "var(--text1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{row.tweet}</span>
+                  <button type="button" className={`dp-btn${autoCopied === s ? " on" : ""}`} onClick={() => copyAuto(row.tweet, s)}>
+                    {autoCopied === s ? "✓ Copied" : "Copy"}
+                  </button>
+                  <a
+                    className="dp-btn"
+                    style={{ textDecoration: "none" }}
+                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(row.tweet)}`}
+                    target="_blank" rel="noopener noreferrer"
+                  >Open X</a>
+                  <button type="button" className="dp-btn" onClick={() => setCaption(row.tweet)} title="Load into the editor below to tweak / attach an image">Use</button>
+                </>
+              ) : (
+                <span className="dp-hint" style={{ flex: 1 }}>Not generated yet — auto-writes {AUTO_SLOT_TIMES[s]} ET.</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       {/* 1 · slot */}
       <div className="dp-panel">
@@ -2361,7 +2430,7 @@ function DayPosts({ form }: { form: FormState }) {
           {posts.map((p) => (
             <div key={p.id} className="dp-row" style={{ alignItems: "flex-start", borderBottom: "1px solid var(--sm-border)", paddingBottom: 8 }}>
               <span className="dp-label" style={{ color: "var(--cyan)", minWidth: 86 }}>{DAY_SLOTS.find((s) => s.v === p.slot)?.label ?? p.slot}</span>
-              <span style={{ flex: 1, fontSize: 12, color: "var(--text1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{p.tweet}</span>
+              <span style={{ flex: 1, fontSize: 15, color: "var(--text1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{p.tweet}</span>
               <button type="button" className="dp-btn" onClick={() => setCaption(p.tweet)}>Use</button>
               <button type="button" className="dp-btn" onClick={() => savePosts(posts.filter((x) => x.id !== p.id))}>✕</button>
             </div>
@@ -3631,18 +3700,18 @@ export default function SocialMediaPage() {
         @media (max-width: 820px) { .sm-grid { grid-template-columns: 1fr; } }
 
         .sm-panel { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
-        .sm-panel-h { font-family: var(--sm-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); padding: 11px 14px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); display: flex; align-items: center; gap: 8px; }
+        .sm-panel-h { font-family: var(--sm-mono); font-size: 16px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sm-muted); padding: 11px 14px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); display: flex; align-items: center; gap: 8px; }
         .sm-panel-b { padding: 16px; }
 
         .sm-regime { font-family: var(--sm-mono); border-radius: 6px; padding: 12px 14px; margin-bottom: 16px; border: 1px solid var(--sm-border); }
         .sm-regime.neg { border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.07); }
         .sm-regime.pos { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.07); }
-        .sm-regime-label { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+        .sm-regime-label { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; }
         .sm-regime.neg .sm-regime-label { color: var(--sm-red); }
         .sm-regime.pos .sm-regime-label { color: var(--sm-green); }
-        .sm-regime-sub { font-size: 11px; color: var(--sm-muted); margin-top: 4px; }
+        .sm-regime-sub { font-size: 15px; color: var(--sm-muted); margin-top: 4px; }
 
-        .sm-ladder { margin: 4px 0 16px; font-family: var(--sm-mono); font-size: 11px; }
+        .sm-ladder { margin: 4px 0 16px; font-family: var(--sm-mono); font-size: 15px; }
         .sm-ladder-row { display: grid; grid-template-columns: 92px 1fr 72px; align-items: center; gap: 8px; padding: 3px 0; }
         .sm-ladder-row .lab { color: var(--sm-muted); }
         .sm-ladder-row .bar { height: 2px; background: var(--bg4); position: relative; border-radius: 2px; }
@@ -3654,15 +3723,15 @@ export default function SocialMediaPage() {
         .dot-put i { background: var(--sm-green); }
 
         .sm-field { margin-bottom: 11px; }
-        .sm-field label { display: block; font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sm-muted); margin-bottom: 4px; }
-        .sm-field input, .sm-field textarea { width: 100%; background: var(--bg0); color: var(--text1); border: 1px solid var(--sm-border); border-radius: 5px; padding: 8px 10px; font-family: var(--sm-mono); font-size: 13px; transition: border-color 0.15s; }
+        .sm-field label { display: block; font-family: var(--sm-mono); font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sm-muted); margin-bottom: 4px; }
+        .sm-field input, .sm-field textarea { width: 100%; background: var(--bg0); color: var(--text1); border: 1px solid var(--sm-border); border-radius: 5px; padding: 8px 10px; font-family: var(--sm-mono); font-size: 15px; transition: border-color 0.15s; }
         .sm-field input:focus, .sm-field textarea:focus { outline: none; border-color: var(--cyan); }
         .sm-field textarea { resize: vertical; min-height: 56px; line-height: 1.4; }
-        .sm-field .hint { font-size: 10px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
-        .sm-emrange { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: 6px; font-family: var(--sm-mono); font-size: 12px; }
+        .sm-field .hint { font-size: 15px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
+        .sm-emrange { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin-top: 6px; font-family: var(--sm-mono); font-size: 15px; }
         .sm-emrange .lo { color: var(--sm-green); font-weight: 700; }
         .sm-emrange .hi { color: var(--sm-red); font-weight: 700; }
-        .sm-emrange .mid { text-align: center; color: var(--sm-muted); font-size: 10px; letter-spacing: 0.04em; }
+        .sm-emrange .mid { text-align: center; color: var(--sm-muted); font-size: 15px; letter-spacing: 0.04em; }
         .sm-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 
@@ -3670,7 +3739,7 @@ export default function SocialMediaPage() {
 
         /* ── action buttons under the card ── */
         .sm-share-acts { display: flex; gap: 10px; }
-        .sm-btn { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
+        .sm-btn { font-family: var(--sm-mono); font-size: 15px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); transition: all 0.12s; }
         .sm-btn:hover { background: var(--bg4); }
         .sm-btn.lg { flex: 1; }
         .sm-btn.x { background: var(--cyan); color: #05060a; border-color: var(--cyan); }
@@ -3678,7 +3747,7 @@ export default function SocialMediaPage() {
         .sm-btn.discord { background: #5865f2; color: #fff; border-color: #5865f2; }
         .sm-btn.discord:hover { opacity: 0.9; }
         .sm-btn.discord:disabled { opacity: 0.6; cursor: default; }
-        .sm-share-hint { font-size: 11px; color: var(--sm-muted); line-height: 1.4; }
+        .sm-share-hint { font-size: 15px; color: var(--sm-muted); line-height: 1.4; }
 
         /* ── share card (the exported image) ── */
         .sc-card { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 14px; padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; }
