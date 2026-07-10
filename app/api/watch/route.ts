@@ -52,19 +52,45 @@ interface ProbeResult {
   };
 }
 
-/** Fetch one contract's live data and shape it into a snapshot (unsaved). */
-async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
+/** Fetch one side of a strike from /proxy/probe-rest. */
+async function fetchProbe(
+  ticker: string, expiry: string, side: string, strike: number
+): Promise<ProbeResult | null> {
   const url =
-    `${proxyBase()}/proxy/probe-rest?ticker=${encodeURIComponent(row.ticker)}` +
-    `&expiry=${encodeURIComponent(row.expiration)}&type=${row.side}` +
-    `&strike=${encodeURIComponent(row.strike)}`;
-  let j: ProbeResult;
+    `${proxyBase()}/proxy/probe-rest?ticker=${encodeURIComponent(ticker)}` +
+    `&expiry=${encodeURIComponent(expiry)}&type=${side}` +
+    `&strike=${encodeURIComponent(strike)}`;
   try {
     const res = await fetch(url, { cache: "no-store" });
-    j = (await res.json()) as ProbeResult;
+    return (await res.json()) as ProbeResult;
   } catch {
     return null;
   }
+}
+
+/** Gamma + position (OI+Vol) + spot for one side, for the net-GEX calc. */
+function sideExposure(j: ProbeResult | null): { gamma: number | null; pos: number; spot: number | null } {
+  if (!j?.found || !j.result) return { gamma: null, pos: 0, spot: null };
+  const g = j.result.feeds?.Greeks ?? {};
+  const su = j.result.feeds?.Summary ?? {};
+  const tr = j.result.feeds?.Trade ?? {};
+  const ex = j.result.exposures ?? {};
+  const oi = num(su.openInterest) ?? num(ex.oi) ?? 0;
+  const vol = num(tr.volume) ?? num(ex.volume) ?? 0;
+  return { gamma: num(g.bsGamma), pos: oi + vol, spot: num(ex.spot) };
+}
+
+/**
+ * Fetch a contract's live data and shape it into a snapshot (unsaved). Probes
+ * BOTH sides of the strike so net_gex reflects the whole strike (call+put),
+ * matching lib/calculations: netGEX = |Γc|·(OIc+Volc)·S² − |Γp|·(OIp+Volp)·S².
+ */
+async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
+  const oppSide = row.side === "C" ? "P" : "C";
+  const [j, oppJ] = await Promise.all([
+    fetchProbe(row.ticker, row.expiration, row.side, row.strike),
+    fetchProbe(row.ticker, row.expiration, oppSide, row.strike),
+  ]);
   if (!j?.found || !j.result) return null;
 
   const q = j.result.feeds?.Quote ?? {};
@@ -76,6 +102,19 @@ async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
   const mark = num(q.mark) ?? num(q.mid);
   const volume = num(tr.volume) ?? num(ex.volume);
   const netPrem = mark != null && volume != null ? mark * volume * 100 : null;
+
+  // Net GEX of the whole strike: dealers long calls (+), short puts (−).
+  const watched = sideExposure(j);
+  const opp = sideExposure(oppJ);
+  const call = row.side === "C" ? watched : opp;
+  const put = row.side === "C" ? opp : watched;
+  const spot = watched.spot ?? opp.spot;
+  let netGex: number | null = null;
+  if (spot != null && spot > 0) {
+    const callGex = Math.abs(call.gamma ?? 0) * call.pos * spot * spot;
+    const putGex = -Math.abs(put.gamma ?? 0) * put.pos * spot * spot;
+    netGex = callGex + putGex;
+  }
 
   return {
     watch_id: row.id,
@@ -97,6 +136,7 @@ async function probe(row: WatchOption): Promise<WatchSnapshot | null> {
     volume,
     net_prem: netPrem,
     prev_close: num(su.prevClose),
+    net_gex: netGex,
   };
 }
 

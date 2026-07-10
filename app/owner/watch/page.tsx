@@ -31,11 +31,11 @@ interface Snapshot {
   iv: number | null; delta: number | null; gamma: number | null;
   theta: number | null; vega: number | null;
   open_interest: number | null; volume: number | null; net_prem: number | null;
-  prev_close: number | null;
+  prev_close: number | null; net_gex: number | null;
 }
 interface Row {
   id: number; ticker: string; expiration: string; strike: number;
-  side: string; note: string | null; snapshot: Snapshot | null;
+  side: string; note: string | null; added_price: number | null; snapshot: Snapshot | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -61,10 +61,29 @@ const REAL_BLUE = "#3B82F6";
 const REAL_RED = "#EF4444";
 const signColor = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) || v === 0 ? HOME_THEME.text : v > 0 ? REAL_BLUE : REAL_RED;
-/** Option-price day-change %, from the latest mark vs. the prior session's close. */
-const dayChgPct = (mark: number | null | undefined, prevClose: number | null | undefined) => {
-  if (mark == null || prevClose == null || !Number.isFinite(mark) || !Number.isFinite(prevClose) || prevClose === 0) return null;
-  return ((mark - prevClose) / prevClose) * 100;
+// GEX magnitudes run to the billions — format like the rest of the app.
+const fmtGEX = (v: number | null | undefined) => {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const a = Math.abs(v), sign = v >= 0 ? "+" : "−";
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+  return `${sign}$${(a / 1e3).toFixed(2)}K`;
+};
+/** Option P&L %: latest mark vs. the mark captured when the contract was added. */
+const pctSinceAdded = (mark: number | null | undefined, entry: number | null | undefined) => {
+  if (mark == null || entry == null || !Number.isFinite(mark) || !Number.isFinite(entry) || entry === 0) return null;
+  return ((mark - entry) / entry) * 100;
+};
+// RTH gate for the chart: keep only points inside 09:30–16:00 ET, Mon–Fri.
+const isRthEt = (ts: number) => {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false,
+  }).formatToParts(new Date(ts));
+  const get = (t: string) => p.find((x) => x.type === t)?.value;
+  const wd = get("weekday");
+  if (wd === "Sat" || wd === "Sun") return false;
+  const mins = Number(get("hour")) * 60 + Number(get("minute"));
+  return mins >= 9 * 60 + 30 && mins < 16 * 60;
 };
 const timeAgo = (ts: number | null | undefined) => {
   if (!ts) return "—";
@@ -77,8 +96,8 @@ const timeAgo = (ts: number | null | undefined) => {
 // ── Price-over-time chart ────────────────────────────────────────────────────
 const METRICS = [
   { key: "mark", label: "Price (mark)", d: 2 },
+  { key: "net_gex", label: "Net GEX", d: 0 },
   { key: "delta", label: "Δ Delta", d: 3 },
-  { key: "gamma", label: "Γ Gamma", d: 4 },
   { key: "theta", label: "Θ Theta", d: 3 },
   { key: "vega", label: "V Vega", d: 3 },
   { key: "iv", label: "IV", d: 4 },
@@ -113,6 +132,7 @@ function HistoryChart({ history, metric }: { history: Snapshot[]; metric: Metric
   const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(p.ts).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
   const area = `${path} L${sx(pts[pts.length - 1].ts).toFixed(1)},${H - PADB} L${sx(pts[0].ts).toFixed(1)},${H - PADB} Z`;
   const dec = METRICS.find((m) => m.key === metric)!.d;
+  const fmtY = (v: number) => (metric === "net_gex" ? fmtGEX(v) : v.toFixed(dec));
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
   // Spans over ~a day: show the date alongside the time so multi-day ranges are legible.
   const multiDay = maxX - minX > 20 * 3600_000;
@@ -131,7 +151,7 @@ function HistoryChart({ history, metric }: { history: Snapshot[]; metric: Metric
       {yTicks.map((v, i) => (
         <g key={i}>
           <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke={rgba(HOME_THEME.border, 0.6)} strokeWidth={1} />
-          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={9} fill={HOME_THEME.muted} fontFamily="var(--font-mono)">{v.toFixed(dec)}</text>
+          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={9} fill={HOME_THEME.muted} fontFamily="var(--font-mono)">{fmtY(v)}</text>
         </g>
       ))}
       <text x={PADL} y={H - 6} textAnchor="start" fontSize={9} fill={HOME_THEME.muted} fontFamily="var(--font-mono)">{fmtT(minX)}</text>
@@ -352,8 +372,8 @@ export default function WatchPage() {
               const sideCol = r.side === "C" ? HOME_THEME.green : HOME_THEME.orange;
               const npCol = s?.net_prem == null ? HOME_THEME.text : s.net_prem >= 0 ? REAL_BLUE : REAL_RED;
               const isOpen = expandedId === r.id;
-              const hist = historyById[r.id] || [];
-              const chg = dayChgPct(s?.mark, s?.prev_close);
+              const hist = (historyById[r.id] || []).filter((h) => isRthEt(h.ts));
+              const chg = pctSinceAdded(s?.mark, r.added_price);
               const chgCol = chg == null ? HOME_THEME.muted : chg >= 0 ? REAL_BLUE : REAL_RED;
               return (
                 <div
@@ -398,15 +418,15 @@ export default function WatchPage() {
                         <div><div style={statLabel}>Spot</div><div style={statValue}>{fmt(s?.spot, 2)}</div></div>
                         <div><div style={statLabel}>Bid</div><div style={statValue}>{fmt(s?.bid)}</div></div>
                         <div><div style={statLabel}>Ask</div><div style={statValue}>{fmt(s?.ask)}</div></div>
+                        <div><div style={statLabel}>Net GEX</div><div style={{ ...statValue, color: signColor(s?.net_gex) }}>{fmtGEX(s?.net_gex)}</div></div>
                         <div><div style={statLabel}>Δ Delta</div><div style={{ ...statValue, color: signColor(s?.delta) }}>{fmt(s?.delta, 3)}</div></div>
-                        <div><div style={statLabel}>Γ Gamma</div><div style={{ ...statValue, color: signColor(s?.gamma) }}>{fmt(s?.gamma, 4)}</div></div>
                         <div><div style={statLabel}>Θ Theta</div><div style={{ ...statValue, color: signColor(s?.theta) }}>{fmt(s?.theta, 3)}</div></div>
                         <div><div style={statLabel}>V Vega</div><div style={{ ...statValue, color: signColor(s?.vega) }}>{fmt(s?.vega, 3)}</div></div>
                         <div><div style={statLabel}>IV</div><div style={statValue}>{s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`}</div></div>
                         <div><div style={statLabel}>OI</div><div style={statValue}>{fmtInt(s?.open_interest)}</div></div>
                         <div><div style={statLabel}>Volume</div><div style={statValue}>{fmtInt(s?.volume)}</div></div>
                         <div><div style={statLabel}>Net Prem</div><div style={{ ...statValue, color: npCol }}>{fmtMoney(s?.net_prem)}</div></div>
-                        <div><div style={statLabel}>Prev Close</div><div style={statValue}>{fmt(s?.prev_close)}</div></div>
+                        <div><div style={statLabel}>Added @</div><div style={statValue}>{fmt(r.added_price)}</div></div>
                       </div>
 
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
@@ -455,7 +475,7 @@ export default function WatchPage() {
         )}
 
         <div style={{ fontSize: 15, color: HOME_THEME.muted, padding: "0 2px" }}>
-          Day-chg % = mark vs. prior session close. Net Prem = mark × volume × 100 (a directional flow proxy from today&apos;s traded volume). Greeks/OI from Theta, quote from Tastytrade. Auto-refreshes every {REFRESH_MS / 1000}s.
+% = mark vs. your add price (entry P&amp;L). Net GEX = whole-strike dealer gamma (call+put, OI+Vol). Chart is RTH-only (9:30–4:00 ET). Net Prem = mark × volume × 100 (a directional flow proxy from today&apos;s traded volume). Greeks/OI from Theta, quote from Tastytrade. Auto-refreshes every {REFRESH_MS / 1000}s.
         </div>
       </div>
     </div>

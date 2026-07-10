@@ -78,7 +78,7 @@ export default function FlowNetPremPanel() {
   const [minSize, setMinSize] = useState<number>(0);
   const [otmOnly, setOtmOnly] = useState(true);
   const [dteMin, setDteMin] = useState<number>(0);
-  const [dteMax, setDteMax] = useState<number | null>(null);
+  const [dteMax, setDteMax] = useState<number | null>(0); // default: 0DTE only
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const date = todayYmdET();
@@ -240,7 +240,7 @@ export default function FlowNetPremPanel() {
 
   function resetFilters() {
     setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0); setOtmOnly(true);
-    setDteMin(0); setDteMax(null);
+    setDteMin(0); setDteMax(0);
   }
 
   // ── Styles ──
@@ -265,7 +265,7 @@ export default function FlowNetPremPanel() {
 
   const filterActiveCount =
     (side !== "all" ? 1 : 0) + (optType !== "all" ? 1 : 0) + (minPremium !== 50_000 ? 1 : 0) +
-    (minSize > 0 ? 1 : 0) + (!otmOnly ? 1 : 0) + (dteMin > 0 ? 1 : 0) + (dteMax !== null ? 1 : 0);
+    (minSize > 0 ? 1 : 0) + (!otmOnly ? 1 : 0) + (dteMin > 0 ? 1 : 0) + (dteMax !== 0 ? 1 : 0);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
