@@ -1,8 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
+
+// Legal / help pages surfaced at the bottom of the account menu.
+const INFO_LINKS: { href: string; label: string }[] = [
+  { href: "/docs", label: "Help & Docs" },
+  { href: "/disclaimer", label: "Disclaimer" },
+  { href: "/risk-disclosure", label: "Risk Disclosure" },
+  { href: "/terms", label: "Terms of Service" },
+  { href: "/privacy", label: "Privacy Policy" },
+];
 
 const STRIPE_PORTAL = "https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg";
 
@@ -127,6 +137,28 @@ export default function UserMenu() {
           >
             Manage subscription ↗
           </a>
+
+          <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
+
+          {INFO_LINKS.map((it) => (
+            <Link
+              key={it.href}
+              href={it.href}
+              prefetch={false}
+              onClick={() => setOpen(false)}
+              style={{
+                display: "block",
+                padding: "8px 10px",
+                borderRadius: 6,
+                color: HOME_THEME.text,
+                fontSize: 13,
+                fontWeight: 500,
+                textDecoration: "none",
+              }}
+            >
+              {it.label}
+            </Link>
+          ))}
 
           <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
 

@@ -12,14 +12,13 @@
 // plus a 1-day front-expiry history backfill so the band is populated on load.
 // Zero required props; fills whatever box it's placed in (ResizeObserver).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { HOME_THEME } from "@/components/shared/homeTheme";
-import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
@@ -58,11 +57,6 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
   return pos ? `rgba(41,182,246,${alpha.toFixed(3)})` : `rgba(255,71,87,${alpha.toFixed(3)})`;
 }
 
-// Auto-collapse the fixed-width rail when the panel gets too narrow, same
-// threshold the full page uses (app/es-candles/page.tsx RAIL_MIN_WIDTH).
-const RAIL_MIN_WIDTH = 560;
-const RAIL_WIDTH = 230;
-
 export default function EsCandlesFullPanel() {
   const esShouldConnect = useWsLifecycle();
   const esShouldConnectRef = useRef(esShouldConnect);
@@ -78,7 +72,6 @@ export default function EsCandlesFullPanel() {
   const didFitRef = useRef(false);
   const lastFitDayRef = useRef("");
 
-  const [railFits, setRailFits] = useState(true);
   const railDrawRef = useRef<() => void>(() => {});
 
   // ── Heatmap state (front/current expiry only) ──
@@ -100,16 +93,8 @@ export default function EsCandlesFullPanel() {
     basis: number | null;
   }>({ callWall: null, putWall: null, gexFlip: null, spx: null, esFut: null, basis: null });
   const basisRef = useRef(0);
-  const [railRows, setRailRows] = useState<RailRow[]>([]);
 
   const effectiveBasis = useCallback(() => basisRef.current, []);
-
-  const priceToY = useCallback((esPrice: number): number | null => {
-    const s = candleSeriesRef.current;
-    if (!s) return null;
-    const y = s.priceToCoordinate(esPrice);
-    return y == null ? null : (y as number);
-  }, []);
 
   // ── Chart setup (once) ──────────────────────────────────────────────────
   useEffect(() => {
@@ -284,7 +269,6 @@ export default function EsCandlesFullPanel() {
 
       const gexRows = d.gexRows;
       if (Array.isArray(gexRows) && gexRows.length) {
-        const nextRail: RailRow[] = [];
         const cells: GexCell[] = [];
         for (const r of gexRows as Array<Record<string, unknown>>) {
           const strike = Number(r.strike ?? 0);
@@ -292,10 +276,8 @@ export default function EsCandlesFullPanel() {
           const netVol = Number(r.netVolGEX ?? 0);
           if (!(strike > 0)) continue;
           const net = (Number.isFinite(netOi) ? netOi : 0) + (Number.isFinite(netVol) ? netVol : 0);
-          nextRail.push({ strike, net });
           cells.push({ strike, netOiVol: net });
         }
-        if (nextRail.length) setRailRows(nextRail);
         // Snapshot the front-expiry per-strike net into the current 5-min column.
         if (cells.length) {
           const slotTs = slotFloorMs(Date.now());
@@ -558,18 +540,6 @@ export default function EsCandlesFullPanel() {
     };
   }, [showHeatmap]);
 
-  // Auto-collapse the rail when the panel is too narrow for both it and a
-  // usable candle chart (mirrors app/es-candles/page.tsx RAIL_MIN_WIDTH gate).
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setRailFits(el.clientWidth >= RAIL_MIN_WIDTH));
-    ro.observe(el);
-    setRailFits(el.clientWidth >= RAIL_MIN_WIDTH);
-    return () => ro.disconnect();
-  }, []);
-
-  const showRail = useMemo(() => railFits, [railFits]);
   const last = rows.length ? rows[rows.length - 1] : null;
 
   return (
@@ -612,20 +582,6 @@ export default function EsCandlesFullPanel() {
           </div>
         )}
       </div>
-      {showRail && (
-        <div style={{ width: RAIL_WIDTH, flexShrink: 0, marginLeft: 8, minHeight: 0 }}>
-          <EsGexRail
-            rows={railRows}
-            callWall={levels.callWall}
-            putWall={levels.putWall}
-            gexFlip={levels.gexFlip}
-            spot={levels.spx}
-            basis={effectiveBasis()}
-            priceToY={priceToY}
-            drawRef={railDrawRef}
-          />
-        </div>
-      )}
     </div>
   );
 }

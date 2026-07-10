@@ -96,13 +96,14 @@ function LogoMenu() {
  * button when `onClick` is set. Used by GexGroupNav for the left-side nav strip.
  */
 function QuickCircle({
-  href, label, emoji, onClick,
+  href, label, emoji, onClick, comingSoon,
   draggable, dragging, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   href?: string;
   label: string;
   emoji: string;
   onClick?: () => void;
+  comingSoon?: boolean;
   draggable?: boolean;
   dragging?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
@@ -160,14 +161,22 @@ function QuickCircle({
     gap: 3,
     flexShrink: 0,
     textDecoration: "none",
-    cursor: draggable ? "grab" : "pointer",
+    cursor: comingSoon ? "not-allowed" : draggable ? "grab" : "pointer",
     background: "none",
     border: "none",
     padding: 0,
-    opacity: dragging ? 0.4 : 1,
+    opacity: comingSoon ? 0.4 : dragging ? 0.4 : 1,
     transition: "opacity 0.14s",
   };
   const dragProps = { draggable, onDragStart, onDragOver, onDrop, onDragEnd };
+  // Coming-soon: dimmed, non-navigating, non-interactive (no hover, no click).
+  if (comingSoon) {
+    return (
+      <div title="Coming soon" aria-disabled="true" style={wrapStyle}>
+        {inner}
+      </div>
+    );
+  }
   const hoverOn = (e: React.MouseEvent) => {
     const c = (e.currentTarget as HTMLElement).querySelector("span") as HTMLElement | null;
     if (c) { c.style.background = cyanA(0.14); c.style.borderColor = cyanA(0.55); c.style.transform = "translateY(-1px)"; c.style.boxShadow = `0 4px 12px -2px ${cyanA(0.45)}`; }
@@ -196,7 +205,7 @@ function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 
 // Left-side nav strip contents. `href` doubles as the stable id used for the
 // saved drag order. `ownerOnly` items only render for the owner.
-type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean };
+type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean; comingSoon?: boolean };
 const NAV_ITEMS: NavItem[] = [
   { href: "/home",              label: "Home",          emoji: "🏠" },
   { href: "/mult-greek",        label: "Multi Greek",   emoji: "🧮" },
@@ -211,7 +220,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/test",              label: "Test Lab",      emoji: "⚗️" },
   { href: "/owner",             label: "Owner",         emoji: "🛡️", ownerOnly: true },
   { href: "/whats-new",         label: "What's New",    emoji: "✨" },
-  { href: "/disclaimer",        label: "Disclaimer",    emoji: "⚖️" },
+  { href: "/journal",           label: "Journal",       emoji: "📓", comingSoon: true },
+  { href: "/order-flow",        label: "Order Flow",    emoji: "🧾", comingSoon: true },
 ];
 
 // Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).

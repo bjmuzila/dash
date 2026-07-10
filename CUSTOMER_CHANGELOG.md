@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 7/10/2026
+
+* The Signals feed on the Home page now updates itself — live CB, options-flow, and GEX wall & flip alerts appear automatically during market hours, on top of any you write in by hand.
+
 ## Thursday 7/9/2026
 
 * Added new Flow, Greeks, Scanner, and ES Candles tabs right on the Home page next to the Economic Calendar — check them without leaving Home.

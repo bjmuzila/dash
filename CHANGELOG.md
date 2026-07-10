@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-10 — Home signals feed wired to the live engine (`components/dashboard/SignalsFeed.tsx`)
+
+Repointed the `/home` `SignalsFeed` to fetch the live GEX/CB/Flow engine (`GET /proxy/signals` → `server-v2/signals-engine.js`'s `trade_signals`) alongside the hand-authored `public/signals.txt` via `Promise.allSettled`, merging them newest-first, and added `mapApiRows`/`KIND_PAGE`/`etTime`/`etDateStr` helpers that map each engine row (flip_cross, wall_reject/break, cb_reject/break, confluence, bzila_confluence, flow_divergence) to a page-tagged chip filtered to today's ET. So CB/Flow/GEX-wall/flip alerts now auto-populate during the futures session while the other vocabulary tags stay txt-only until they get emitters — NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-09 — `/new-home` iteration + options-chain contract sparkline fix (`app/new-home/page.tsx`, `components/dashboard/LiveGreeksGauges.tsx`, `components/dashboard/ChainStatsBar.tsx`, `app/options-chain/page.tsx`, `server-v2/state/flow-gex-history.js`, `server-v2/server-with-proxy.js`)
 
 Iterated `/new-home`: wired `OptionChainPanel` to the page-level ticker, rebuilt `LiveGreeksGauges` as label+value+zero-crossing sparkline (arc gauge removed), redesigned `ChainStatsBar` to 5m/15m wall tiles + Bull/Bear% + ITM/OTM% (dropped 30m), added an "Alerts" placeholder panel, fixed page-scroll-on-short-window and oversized-chain layout bugs (`minHeight:0` flex fixes), replaced the FAB's numeric sub-buttons with real popups (Economic Calendar, Option Flow settings+sparkline, Notes, Trader Dashboard/Analytics links) labeled by name, and removed the Overview/Chain/Flow tab switcher. On `app/options-chain/page.tsx`: restored the standalone `%` strikes dropdown while hiding the ticker input when embedded, auto-centered the ATM row on load, tightened cell padding/lightened font weight, made relative-GEX% render inline (one line per cell), and added a click-to-open Flow GEX history sparkline (`ContractFlowPopup`, via `lightweight-charts`) for 0DTE SPX cells; fixed that popup timing out by adding a single-strike fast path to `flow-gex-history.js` + the `/proxy/flow-gex-history` route in `server-with-proxy.js`, plus a 15s client timeout/retry.
