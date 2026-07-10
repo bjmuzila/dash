@@ -368,6 +368,7 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
+  const [showGexLines, setShowGexLines] = useState(false); // horizontal per-strike GEX lines, line weight ∝ |GEX|
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.
@@ -1238,6 +1239,39 @@ export default function EsCandlesPage() {
         }
       }
 
+      // ── 1b) Per-strike GEX lines — one horizontal line at each strike of the
+      // CURRENT (latest) GEX column, line weight + opacity ∝ |net GEX| for the
+      // active metric. Same data the heatmap/rail use; cyan = +GEX (calls),
+      // red = −GEX (puts). Thicker = larger gamma at that strike.
+      if (showGexLines) {
+        const gexCols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+        const latest = gexCols.length ? gexCols[gexCols.length - 1] : null;
+        if (latest && latest.cells.length) {
+          const metric = gexMetricRef.current;
+          const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
+          let scaleW = 0;
+          try { scaleW = chart.priceScale("right").width(); } catch {}
+          const plotRight = Math.max(0, w - scaleW - 1);
+          const absVals = latest.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
+          const maxAbs = absVals.length ? Math.max(...absVals) : 1;
+          ctx.save();
+          ctx.lineCap = "butt";
+          for (const cell of latest.cells) {
+            const v = valOf(cell);
+            if (!v) continue;
+            const y = series.priceToCoordinate(cell.strike + basis);
+            if (y == null) continue;
+            const ratio = Math.min(Math.abs(v) / maxAbs, 1);
+            const lw = 1.1 + Math.pow(ratio, 0.82) * 14;         // ~1px … ~15px
+            const alpha = Math.min(0.92, 0.14 + Math.pow(ratio, 0.9) * 0.72);
+            ctx.strokeStyle = `rgba(${v >= 0 ? "41,182,246" : "255,71,87"},${alpha.toFixed(3)})`;
+            ctx.lineWidth = lw;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotRight, y); ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
       // ── 2) Right-edge volume profile + value-area lines ──
       if (showProfile && profile.bins.length) {
         // Anchor bars at the plot-area's right edge — NOT the canvas edge — so
@@ -1417,7 +1451,7 @@ export default function EsCandlesPage() {
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
+  }, [showHeatmap, showGexLines, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1526,6 +1560,7 @@ export default function EsCandlesPage() {
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
+          <ToggleTile label="GEX Lines" on={showGexLines} onClick={() => setShowGexLines((v) => !v)} accent={LIGHT_BLUE} />
 
           <DockGap />
 

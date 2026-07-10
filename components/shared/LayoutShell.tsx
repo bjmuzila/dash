@@ -30,6 +30,17 @@ function pageMetaFromPath(pathname: string): { key: string; label: string } {
   return { key: trimmed, label };
 }
 
+// Fires the page_visits beacon for a route. Used on BARE public routes (landing,
+// sign-up, pricing, …) which skip ShellInner and were therefore untracked — i.e.
+// ALL logged-out funnel traffic was invisible in analytics. Chrome routes keep
+// tracking via ShellInner, so the two paths never double-report (mutually exclusive).
+function VisitTracker() {
+  const pathname = usePathname();
+  const { key, label } = pageMetaFromPath(pathname);
+  usePageLoadStatus({ pageKey: key, pageLabel: label, path: pathname });
+  return null;
+}
+
 function ShellInner({ children }: { children: React.ReactNode }) {
   // Report this route's load/unload to page_load_status. The hook re-runs on every
   // pathname change (pageKey is in its dep array), so client-side nav is tracked too.
@@ -101,6 +112,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
           background: HOME_THEME.bg,
         }}
       >
+        {!isEmbed && <VisitTracker />}
         {children}
       </div>
     );

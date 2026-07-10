@@ -12,7 +12,6 @@ import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
-import { GROUPS } from "./GexDock";
 
 /**
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
@@ -98,7 +97,19 @@ function LogoMenu() {
  */
 function QuickCircle({
   href, label, emoji, onClick,
-}: { href?: string; label: string; emoji: string; onClick?: () => void }) {
+  draggable, dragging, onDragStart, onDragOver, onDrop, onDragEnd,
+}: {
+  href?: string;
+  label: string;
+  emoji: string;
+  onClick?: () => void;
+  draggable?: boolean;
+  dragging?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
+}) {
   const circle = (
     <span
       aria-hidden
@@ -126,7 +137,7 @@ function QuickCircle({
       {circle}
       <span
         style={{
-          maxWidth: 64,
+          maxWidth: 74,
           fontSize: 9,
           fontWeight: 600,
           color: HOME_THEME.text,
@@ -149,11 +160,14 @@ function QuickCircle({
     gap: 3,
     flexShrink: 0,
     textDecoration: "none",
-    cursor: "pointer",
+    cursor: draggable ? "grab" : "pointer",
     background: "none",
     border: "none",
     padding: 0,
+    opacity: dragging ? 0.4 : 1,
+    transition: "opacity 0.14s",
   };
+  const dragProps = { draggable, onDragStart, onDragOver, onDrop, onDragEnd };
   const hoverOn = (e: React.MouseEvent) => {
     const c = (e.currentTarget as HTMLElement).querySelector("span") as HTMLElement | null;
     if (c) { c.style.background = cyanA(0.14); c.style.borderColor = cyanA(0.55); c.style.transform = "translateY(-1px)"; c.style.boxShadow = `0 4px 12px -2px ${cyanA(0.45)}`; }
@@ -164,13 +178,13 @@ function QuickCircle({
   };
   if (href) {
     return (
-      <Link href={href} prefetch={false} title={label} aria-label={label} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+      <Link href={href} prefetch={false} title={label} aria-label={label} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff} {...dragProps}>
         {inner}
       </Link>
     );
   }
   return (
-    <button type="button" title={label} aria-label={label} onClick={onClick} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
+    <button type="button" title={label} aria-label={label} onClick={onClick} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff} {...dragProps}>
       {inner}
     </button>
   );
@@ -180,20 +194,102 @@ const CYAN = HOME_THEME.cyan; // #219EBC
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 
+// Left-side nav strip contents. `href` doubles as the stable id used for the
+// saved drag order. `ownerOnly` items only render for the owner.
+type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean };
+const NAV_ITEMS: NavItem[] = [
+  { href: "/home",              label: "Home",          emoji: "🏠" },
+  { href: "/mult-greek",        label: "Multi Greek",   emoji: "🧮" },
+  { href: "/traders-dashboard", label: "Traders Dash",  emoji: "📊" },
+  { href: "/options-chain",     label: "Options Chain", emoji: "⛓️" },
+  { href: "/em",                label: "Est. Moves",    emoji: "↔️" },
+  { href: "/analytics",         label: "Analytics",     emoji: "📈" },
+  { href: "/flow",              label: "Flow",          emoji: "🌊" },
+  { href: "/es-candles",        label: "ES Candles",    emoji: "🕯️" },
+  { href: "/scanner",           label: "Scanner",       emoji: "🔍" },
+  { href: "/ict",               label: "ICT",           emoji: "🎯" },
+  { href: "/test",              label: "Test Lab",      emoji: "⚗️" },
+  { href: "/owner",             label: "Owner",         emoji: "🛡️", ownerOnly: true },
+  { href: "/whats-new",         label: "What's New",    emoji: "✨" },
+  { href: "/disclaimer",        label: "Disclaimer",    emoji: "⚖️" },
+];
+
+// Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).
+const NAV_ORDER_KEY = "cb-toolbar-nav-order-v1";
+
 /**
- * GexGroupNav — the left-side nav strip. One icon+label button per GEX group
- * (sourced from GexDock's exported GROUPS); clicking navigates the whole page to
- * that group's route. Replaces the old user-pinned Quick Pages bar and the
- * in-drawer tile picker.
+ * GexGroupNav — the left-side nav strip. One icon+label button per NAV_ITEMS
+ * entry; clicking navigates the whole page to that route. Buttons are
+ * drag-to-reorder and the arrangement is saved per-customer in localStorage
+ * (NAV_ORDER_KEY) so it survives reloads. The owner-only entry is hidden for
+ * non-owners but keeps its slot in the saved order.
  */
-function GexGroupNav() {
+function GexGroupNav({ isOwner }: { isOwner: boolean }) {
+  // Ordered hrefs. Default = NAV_ITEMS order; hydrated from localStorage AFTER
+  // mount so the server render and first client render both use the default
+  // order (no hydration mismatch), then reorder to the saved arrangement.
+  const [order, setOrder] = useState<string[]>(() => NAV_ITEMS.map((it) => it.href));
+  const [dragId, setDragId] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(NAV_ORDER_KEY);
+      const saved: unknown = raw ? JSON.parse(raw) : null;
+      if (!Array.isArray(saved)) return;
+      const known = new Set(NAV_ITEMS.map((it) => it.href));
+      // Keep saved hrefs that still exist, then append any pages added since so
+      // new items don't silently disappear from a saved arrangement.
+      const kept = saved.filter((h): h is string => typeof h === "string" && known.has(h));
+      const missing = NAV_ITEMS.map((it) => it.href).filter((h) => !kept.includes(h));
+      const next = [...kept, ...missing];
+      if (next.join() !== NAV_ITEMS.map((it) => it.href).join()) setOrder(next);
+    } catch { /* ignore — keep default order */ }
+  }, []);
+
+  const persist = (next: string[]) => {
+    setOrder(next);
+    try { localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+
+  const handleDrop = (targetHref: string) => {
+    const src = dragId;
+    setDragId(null);
+    if (!src || src === targetHref) return;
+    const from = order.indexOf(src);
+    const to = order.indexOf(targetHref);
+    if (from < 0 || to < 0) return;
+    const next = [...order];
+    next.splice(from, 1);
+    next.splice(to, 0, src);
+    persist(next);
+  };
+
+  // Render in saved order, resolving to items and dropping the owner entry for
+  // non-owners (it still occupies its slot in `order`, just isn't shown).
+  const items = order
+    .map((h) => NAV_ITEMS.find((it) => it.href === h))
+    .filter((it): it is NavItem => !!it && (!it.ownerOnly || isOwner));
+
   return (
     <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-      {GROUPS.map((g) => {
-        // Full-page route = the group's embed path minus the ?embed=1 query.
-        const href = (g.embed ?? `/${g.id}`).split("?")[0];
-        return <QuickCircle key={g.id} href={href} label={g.title} emoji={g.emoji} />;
-      })}
+      {items.map((it) => (
+        <QuickCircle
+          key={it.href}
+          href={it.href}
+          label={it.label}
+          emoji={it.emoji}
+          draggable
+          dragging={dragId === it.href}
+          onDragStart={(e) => {
+            setDragId(it.href);
+            e.dataTransfer.effectAllowed = "move";
+            try { e.dataTransfer.setData("text/plain", it.href); } catch { /* ignore */ }
+          }}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+          onDrop={(e) => { e.preventDefault(); handleDrop(it.href); }}
+          onDragEnd={() => setDragId(null)}
+        />
+      ))}
     </div>
   );
 }
@@ -209,11 +305,15 @@ function PencilIcon({ size = 18 }: { size?: number }) {
 }
 
 export default function GlobalToolbar() {
-  const { isSignedIn, user } = useAuth();
+  const { isSignedIn, user, isOwnerClaim } = useAuth();
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
   const { open: gexOpen, togglePanel: toggleGex } = useGexPanel();
   const { menuOpen, toggleMenu, isMobile } = useMobileNav();
+
+  // Owner gate for the owner-only nav item (matches GexDock's check).
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = isOwnerClaim || (!!ownerId && user?.id === ownerId);
 
   // ── hover state for the menu/notes round buttons ──
   const [hoverMenu, setHoverMenu] = useState(false);
@@ -348,9 +448,9 @@ export default function GlobalToolbar() {
               when a new alert lands, click for the last 5 ── */}
           <BzilaAlerts />
 
-          {/* ── GEX-group nav — left-side icon+label shortcuts; each navigates
-              the whole page to that group's route ── */}
-          <GexGroupNav />
+          {/* ── Left-side nav — icon+label shortcuts; each navigates the whole
+              page to that route (drag-to-reorder, saved per browser) ── */}
+          <GexGroupNav isOwner={isOwner} />
 
           {/* flexible gap — opens the center and pushes the quotes + clock
               cluster to the right ── */}
