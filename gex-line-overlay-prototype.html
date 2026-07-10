@@ -1,0 +1,165 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GEX Line Overlay — prototype</title>
+<style>
+  :root{
+    --bg:#0b1018; --panel:rgba(255,255,255,.03); --border:rgba(255,255,255,.09);
+    --text:#e6edf5; --muted:#8aa0b4; --cyan:41,182,246; --red:255,71,87;
+  }
+  html,body{margin:0;height:100%;background:linear-gradient(180deg,#06080d,#0b1018);
+    color:var(--text);font:14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  #app{max-width:1120px;margin:0 auto;padding:18px}
+  h1{font-size:15px;font-weight:600;margin:0 0 2px}
+  .sub{color:var(--muted);font-size:12px;margin:0 0 14px}
+  #bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:10px 12px;background:var(--panel);border:1px solid var(--border);
+    border-radius:12px;margin-bottom:12px}
+  .toggle{cursor:pointer;user-select:none;border:1px solid rgba(var(--cyan),.5);
+    background:rgba(var(--cyan),.10);color:#dff2ff;padding:7px 14px;border-radius:999px;
+    font-weight:600;letter-spacing:.2px;transition:.15s}
+  .toggle.off{border-color:var(--border);background:rgba(255,255,255,.02);color:var(--muted)}
+  .toggle .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:rgb(var(--cyan));margin-right:8px;vertical-align:middle;box-shadow:0 0 8px rgba(var(--cyan),.8)}
+  .toggle.off .dot{background:#4a5a6a;box-shadow:none}
+  .ctl{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+  input[type=range]{accent-color:rgb(var(--cyan))}
+  .legend{margin-left:auto;display:flex;gap:14px;font-size:12px;color:var(--muted)}
+  .legend b{font-weight:600}
+  .sw{display:inline-block;width:22px;height:0;border-top-style:solid;border-radius:2px;
+    vertical-align:middle;margin-right:6px}
+  #host{position:relative;height:520px;border:1px solid var(--border);border-radius:12px;
+    overflow:hidden;background:#0b1018}
+  #chart{position:absolute;inset:0;z-index:1}
+  #ov{position:absolute;inset:0;z-index:0;pointer-events:none}
+  .note{color:var(--muted);font-size:11.5px;margin-top:10px}
+</style>
+
+<div id="app">
+  <h1>GEX Line Overlay — thickness = |GEX| at strike</h1>
+  <p class="sub">Prototype on lightweight-charts v5 · synthetic ES 5m session &amp; strike GEX · same canvas/coordinate approach used on <code>/es-candles</code></p>
+
+  <div id="bar">
+    <div id="tg" class="toggle"><span class="dot"></span>GEX Lines: ON</div>
+    <div class="ctl">Intensity <input id="int" type="range" min="0.4" max="1.8" step="0.05" value="1"></div>
+    <div class="legend">
+      <span><span class="sw" style="border-top-width:9px;border-color:rgb(var(--cyan))"></span><b>+ GEX</b> (calls)</span>
+      <span><span class="sw" style="border-top-width:9px;border-color:rgb(var(--red))"></span><b>− GEX</b> (puts)</span>
+      <span>thicker = larger</span>
+    </div>
+  </div>
+
+  <div id="host">
+    <canvas id="ov"></canvas>
+    <div id="chart"></div>
+  </div>
+  <p class="note">Toggle the pill to compare against a clean chart. In your page this same loop goes on the existing overlay canvas — swap the synthetic <code>STRIKES</code> for your per-column GEX and <code>series.priceToCoordinate(strike)</code> stays identical.</p>
+</div>
+
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function(){
+  const LC = window.LightweightCharts;
+  const host = document.getElementById('host');
+  const chartEl = document.getElementById('chart');
+  const canvas = document.getElementById('ov');
+  const ctx = canvas.getContext('2d');
+
+  // ---- deterministic pseudo-random so it looks the same each open ----
+  let seed = 42; const rnd = () => (seed = (seed*1664525+1013904223) & 0x7fffffff) / 0x7fffffff;
+
+  // ---- synthetic ES 5m RTH session (78 bars) ----
+  const start = Math.floor(Date.UTC(2026,6,9,13,30,0)/1000); // 9:30 ET
+  const candles = []; let px = 6250;
+  for(let i=0;i<78;i++){
+    const drift = Math.sin(i/9)*1.4 + (rnd()-0.5)*3.2;
+    const o = px, c = px + drift;
+    const hi = Math.max(o,c) + rnd()*2.4, lo = Math.min(o,c) - rnd()*2.4;
+    candles.push({time:start+i*300, open:+o.toFixed(2), high:+hi.toFixed(2), low:+lo.toFixed(2), close:+c.toFixed(2)});
+    px = c;
+    if(px>6316) px-=4; if(px<6184) px+=4;
+  }
+
+  // ---- synthetic strike GEX (cyan +, red −) with named walls ----
+  const FLIP=6245, CALL_WALL=6300, PUT_WALL=6200;
+  const g=(p,mu,s)=>Math.exp(-((p-mu)**2)/(2*s*s));
+  const STRIKES=[];
+  for(let p=6160;p<=6340;p+=10){
+    let v = 0.95*g(p,CALL_WALL,14) + 0.42*g(p,6275,20)   // positive clusters
+          - 1.00*g(p,PUT_WALL,14) - 0.34*g(p,6225,20);    // negative clusters
+    v += (p>FLIP?1:-1) * (0.05 + rnd()*0.09);             // side bias + noise
+    STRIKES.push({price:p, gex:v});
+  }
+  const LABELS=[{price:CALL_WALL,t:'Call Wall'},{price:FLIP,t:'Flip'},{price:PUT_WALL,t:'Put Wall'}];
+
+  // ---- chart (transparent bg so overlay shows behind candles, like /es-candles) ----
+  const chart = LC.createChart(chartEl,{
+    layout:{background:{color:'transparent'}, textColor:'#8aa0b4', fontSize:11},
+    grid:{vertLines:{color:'rgba(255,255,255,.03)'}, horzLines:{color:'rgba(255,255,255,.03)'}},
+    rightPriceScale:{borderColor:'rgba(255,255,255,.10)'},
+    timeScale:{borderColor:'rgba(255,255,255,.10)', timeVisible:true, secondsVisible:false},
+    crosshair:{mode:0},
+    autoSize:true
+  });
+  const cOpts={upColor:'#26c281',downColor:'#ef5b6b',wickUpColor:'#26c281',wickDownColor:'#ef5b6b',borderVisible:false};
+  const series = (typeof chart.addSeries==='function' && LC.CandlestickSeries)
+      ? chart.addSeries(LC.CandlestickSeries,cOpts)
+      : chart.addCandlestickSeries(cOpts);
+  series.setData(candles);
+  chart.timeScale().fitContent();
+
+  // ---- overlay ----
+  let showGex=true, intensity=1;
+  function resize(){
+    const r=host.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+    canvas.width=r.width*dpr; canvas.height=r.height*dpr;
+    canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    draw();
+  }
+  function draw(){
+    ctx.clearRect(0,0,host.clientWidth,host.clientHeight);
+    if(!showGex) return;
+    const w = chart.timeScale().width();
+    let maxAbs=0; for(const s of STRIKES) maxAbs=Math.max(maxAbs,Math.abs(s.gex));
+    maxAbs=maxAbs||1;
+    for(const s of STRIKES){
+      const y=series.priceToCoordinate(s.price);
+      if(y==null) continue;
+      const ratio=Math.abs(s.gex)/maxAbs;
+      const lw=(1.2 + Math.pow(ratio,0.82)*15) * intensity;
+      const a=Math.min(0.9, 0.13 + Math.pow(ratio,0.9)*0.72);
+      const rgb = s.gex>=0 ? '41,182,246' : '255,71,87';
+      ctx.strokeStyle=`rgba(${rgb},${a})`;
+      ctx.lineWidth=lw; ctx.lineCap='butt';
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+    }
+    // named-wall labels in the right gutter
+    ctx.font='600 11px -apple-system,Segoe UI,Roboto,sans-serif'; ctx.textBaseline='middle';
+    for(const L of LABELS){
+      const y=series.priceToCoordinate(L.price); if(y==null) continue;
+      const isPut = L.price<=PUT_WALL;
+      ctx.fillStyle = isPut ? 'rgba(255,71,87,.95)' : 'rgba(41,182,246,.95)';
+      ctx.fillText(L.t+' '+L.price, w+8, y);
+    }
+  }
+
+  // repaint on pan/zoom + resize (mirrors subscribeVisibleTimeRangeChange on the real page)
+  chart.timeScale().subscribeVisibleTimeRangeChange(draw);
+  chart.timeScale().subscribeVisibleLogicalRangeChange(draw);
+  new ResizeObserver(resize).observe(host);
+  window.addEventListener('resize',resize);
+
+  // controls
+  const tg=document.getElementById('tg');
+  tg.addEventListener('click',()=>{
+    showGex=!showGex;
+    tg.classList.toggle('off',!showGex);
+    tg.innerHTML='<span class="dot"></span>GEX Lines: '+(showGex?'ON':'OFF');
+    draw();
+  });
+  document.getElementById('int').addEventListener('input',e=>{intensity=+e.target.value;draw();});
+
+  setTimeout(resize,60);
+})();
+</script>

@@ -628,9 +628,10 @@ function PriceSketch({ curve, color }: { curve: number[]; color: string }) {
  * same GRID/helpers as RegimeMatrix so it always matches the /greeks read.
  * Used on the social-media Explainer card (on demand). */
 export function BehaviorDemo({
-  gex, dex, chex, vex, hasData,
+  gex, dex, chex, vex, hasData, detailOnly = false,
 }: {
   gex: number | null; dex: number | null; chex: number | null; vex: number | null; hasData: boolean;
+  detailOnly?: boolean;
 }) {
   const liveRow = ROW_DEFS.findIndex(r => r.gex === signOf(gex) && r.vex === signOf(vex));
   const liveCol = COL_DEFS.findIndex(c => c.dex === signOf(dex) && c.cex === signOf(chex));
@@ -641,20 +642,24 @@ export function BehaviorDemo({
 
   return (
     <div style={{ minWidth: 0 }}>
-      <div style={{
-        fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
-        textTransform: "uppercase", marginBottom: 8,
-      }}>Behavior Demonstration</div>
+      {!detailOnly && (
+        <>
+          <div style={{
+            fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+            textTransform: "uppercase", marginBottom: 8,
+          }}>Behavior Demonstration</div>
 
-      <div style={{
-        border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: 10, marginBottom: 10,
-        background: "linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92))",
-      }}>
-        <PriceSketch curve={detail.curve} color={detailColor} />
-        <div style={{ fontSize: 8.5, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
-          SIMULATED PRICE ACTION
-        </div>
-      </div>
+          <div style={{
+            border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: 10, marginBottom: 10,
+            background: "linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92))",
+          }}>
+            <PriceSketch curve={detail.curve} color={detailColor} />
+            <div style={{ fontSize: 8.5, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
+              SIMULATED PRICE ACTION
+            </div>
+          </div>
+        </>
+      )}
 
       <div style={{
         border: `1px solid ${detailColor}55`, borderRadius: 10, padding: 14,

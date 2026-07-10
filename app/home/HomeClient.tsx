@@ -1214,7 +1214,7 @@ export function HomeClient({
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
-                        type="range" min={0.5} max={3} step={0.01}
+                        type="range" min={0.5} max={5} step={0.01}
                         value={intensity}
                         onChange={(e) => setIntensity(Number(e.target.value))}
                         style={{ width: 80, height: 3, accentColor: "#219EBC" }}
@@ -1224,7 +1224,19 @@ export function HomeClient({
                     )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{ display: "flex", gap: 2, marginRight: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                    {heatmapView !== "chain" && (
+                    <>
+                    <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
+                    <button onClick={heatmapRefresh} title="Refresh heatmap"
+                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
+                    <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
+                    <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
+                    </>
+                    )}
+                    {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
+                        panel's right edge and never shifts when the heatmap-only controls
+                        above it hide in Chain view. */}
+                    <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
                       {(["heatmap", "chain"] as const).map((v) => (
                         <button
                           key={v}
@@ -1246,22 +1258,13 @@ export function HomeClient({
                         </button>
                       ))}
                     </div>
-                    {heatmapView !== "chain" && (
-                    <>
-                    <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
-                    <button onClick={heatmapRefresh} title="Refresh heatmap"
-                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
-                    <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
-                    <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
-                    </>
-                    )}
                   </div>
                 </div>
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
                 {heatmapView === "chain" ? (
-                  <OptionsChainPage expirySelection="key" ticker="SPX" />
+                  <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker="SPX" />
                 ) : (
                 <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>

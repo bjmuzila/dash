@@ -652,6 +652,7 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
 
 export default function OptionsChainPage({
   expirySelection = "sequential",
+  expiryCount,
   ticker: externalTicker,
 }: {
   // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
@@ -659,12 +660,17 @@ export default function OptionsChainPage({
   // fixed 0DTE/1DTE/weekly/monthly set via pickKeyExpirations, ignoring
   // selectedExpiry/displayPercent's usual windowing role for column selection.
   expirySelection?: "sequential" | "key";
+  // Sequential-mode column count override (defaults to EXP_COLUMNS = 14). The
+  // /home heatmap-panel embed passes 5 to show the 5 closest expirations.
+  expiryCount?: number;
   // When set, the page's own ticker input/GO/Recent controls are hidden and
   // the chain follows this ticker instead — used by the /new-home embed so
   // the page-level TickerSwitcher drives it. Uncontrolled (own ticker input)
   // when omitted, same as the standalone route.
   ticker?: string;
 } = {}) {
+  // Number of sequential columns to render (default 14; embeds may narrow it).
+  const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
   // Fallback calendar list (used only until/if the per-ticker expirations
   // fetch resolves). Real listings come from /api/expirations so we never
   // offer a date the ticker doesn't actually trade (e.g. NVDA has no Monday
@@ -761,7 +767,7 @@ export default function OptionsChainPage({
       targets = pickKeyExpirations(all);
     } else {
       const startIdx = Math.max(0, all.findIndex(e => e.value === startExp));
-      targets = all.slice(startIdx, startIdx + EXP_COLUMNS);
+      targets = all.slice(startIdx, startIdx + seqColumns);
     }
     if (!targets.length) targets.push({ value: startExp, label: startExp });
 
@@ -1260,7 +1266,7 @@ export default function OptionsChainPage({
   // Always render the target slot count so the grid keeps a stable width even
   // before all expirations resolve — EXP_COLUMNS (14) in sequential mode, 4 in
   // key mode (0DTE/1DTE/weekly/monthly).
-  const gridCols = Math.max(columns.length, expirySelection === "key" ? 4 : EXP_COLUMNS);
+  const gridCols = Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
 
   // EM bands only apply to current-week expirations. Mark which visible columns
   // qualify so the band draws across only those columns.

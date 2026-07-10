@@ -9,10 +9,12 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
  * (replaced the old NET GEX / CALL WALL / … stat box — those same levels still
  * live on the left "Levels strip" above the GEX chart).
  *
- * Reads plain-text signals the user authors in public/signals.txt (served at
- * /signals.txt). One signal per line. The NEWEST signal renders LEFTMOST and
- * each chip shows its timestamp. Polls every 15s so file edits appear without a
- * page reload.
+ * Sources, merged newest-first (LEFTMOST = newest), polled every 15s:
+ *   1) the live GEX/CB/Flow engine — GET /proxy/signals (server-v2/signals-engine
+ *      → trade_signals). Today's (ET) rows are mapped to chips automatically.
+ *   2) plain-text signals the user authors in public/signals.txt (served at
+ *      /signals.txt) — manual overrides / the alert vocabulary below.
+ * Either source can be absent; whatever returns is shown.
  *
  * Line format (see public/signals.txt for the live template + alert vocabulary):
  *     <time>  [<page>]  <signal text>  {<link>}
@@ -102,6 +104,62 @@ function parseSignals(txt: string): Signal[] {
   const timed = parsed.filter((s) => s.minutes != null).sort((a, b) => b.minutes! - a.minutes!);
   const untimed = parsed.filter((s) => s.minutes == null);
   return [...timed, ...untimed];
+}
+
+// ── Live engine signals (server-v2/signals-engine.js → GET /proxy/signals) ───
+// The GEX/CB/Flow signal engine writes discrete trade_signals rows during the
+// futures session. Map each to a feed chip so the home feed shows real,
+// page-sourced alerts — merged with the hand-authored signals.txt below, which
+// still works as manual overrides. Only today's (ET) rows are kept so the
+// time-of-day ordering never wraps across sessions.
+type ApiRow = {
+  id: number; ts: number; kind: string; direction: string; setup: string;
+  level_name: string | null; level_spx: number | null; price_spx: number | null;
+};
+
+// kind → source-page tag (drives color/glyph via pageAccent) + click route.
+const KIND_PAGE: Record<string, { page: string; link: string }> = {
+  flow_divergence:  { page: "Flow",      link: "/flow" },
+  cb_reject:        { page: "CB",        link: "/es-candles" },
+  cb_break:         { page: "CB",        link: "/es-candles" },
+  flip_cross:       { page: "Analytics", link: "/es-candles" },
+  wall_reject:      { page: "Analytics", link: "/es-candles" },
+  wall_break:       { page: "Analytics", link: "/es-candles" },
+  bzila_confluence: { page: "Strategy",  link: "/es-candles" },
+  confluence:       { page: "Analytics", link: "/es-candles" },
+};
+
+function etDateStr(ts: number): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+}
+function etTime(ts: number): { time: string; minutes: number } {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date(ts));
+  const h = Number(p.find((x) => x.type === "hour")?.value ?? 0);
+  const m = Number(p.find((x) => x.type === "minute")?.value ?? 0);
+  const disp = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: true,
+  }).format(new Date(ts)).replace(/\s?[AP]M$/i, (s) => " " + s.trim().toUpperCase());
+  return { time: disp, minutes: h * 60 + m };
+}
+
+function mapApiRows(rows: ApiRow[]): Signal[] {
+  const today = etDateStr(Date.now());
+  return rows
+    .filter((r) => r && Number.isFinite(Number(r.ts)) && etDateStr(Number(r.ts)) === today)
+    .map((r) => {
+      const meta = KIND_PAGE[r.kind] || { page: "Analytics", link: "/es-candles" };
+      const arrow = r.direction === "long" ? "↑" : r.direction === "short" ? "↓" : "";
+      const lvl = r.level_spx != null ? ` @ ${Math.round(Number(r.level_spx))}` : "";
+      const { time, minutes } = etTime(Number(r.ts));
+      return {
+        time, minutes, page: meta.page,
+        text: `${arrow} ${r.setup}${lvl}`.trim(),
+        link: meta.link,
+        key: `sig-${r.id}`,
+      };
+    });
 }
 
 // Per-category glyph (stroke SVG, inherits the page accent color). Matched on the
@@ -198,20 +256,41 @@ export default function SignalsFeed({
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      try {
-        const r = await fetch(`${src}?t=${Date.now()}`, { cache: "no-store" });
-        if (!r.ok) {
-          if (!cancelled) { missingRef.current = true; setLoaded(true); }
-          return;
-        }
-        const txt = await r.text();
-        if (cancelled) return;
-        missingRef.current = false;
-        setSignals(parseSignals(txt));
-        setLoaded(true);
-      } catch {
-        if (!cancelled) setLoaded(true);
+      // Live engine signals + the hand-authored file, fetched in parallel. Either
+      // source may fail independently (engine off-session, file absent) — merge
+      // whatever came back rather than blanking the feed.
+      const [apiRes, txtRes] = await Promise.allSettled([
+        fetch(`/proxy/signals?limit=40&t=${Date.now()}`, { cache: "no-store" }),
+        fetch(`${src}?t=${Date.now()}`, { cache: "no-store" }),
+      ]);
+      if (cancelled) return;
+
+      let api: Signal[] = [];
+      if (apiRes.status === "fulfilled" && apiRes.value.ok) {
+        try {
+          const j = await apiRes.value.json();
+          if (Array.isArray(j?.rows)) api = mapApiRows(j.rows as ApiRow[]);
+        } catch { /* ignore malformed engine payload */ }
       }
+
+      let txt: Signal[] = [];
+      let txtMissing = false;
+      if (txtRes.status === "fulfilled") {
+        if (txtRes.value.ok) {
+          try { txt = parseSignals(await txtRes.value.text()); } catch { /* ignore */ }
+        } else {
+          txtMissing = true;
+        }
+      }
+      if (cancelled) return;
+
+      // Merge newest-first (leftmost); untimed manual lines trail the timed ones.
+      const merged = [...api, ...txt];
+      const timed = merged.filter((s) => s.minutes != null).sort((a, b) => b.minutes! - a.minutes!);
+      const untimed = merged.filter((s) => s.minutes == null);
+      missingRef.current = txtMissing && api.length === 0;
+      setSignals([...timed, ...untimed]);
+      setLoaded(true);
     };
     load();
     const id = setInterval(load, pollMs);
