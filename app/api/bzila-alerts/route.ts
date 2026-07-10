@@ -5,6 +5,8 @@ import {
   insertBzilaAlert,
   updateBzilaAlert,
   deleteBzilaAlert,
+  getBzilaAlertCounts,
+  getUserBzilaReactions,
 } from "@/lib/db";
 
 // "Bzila alerts" — owner-authored broadcasts surfaced in the toolbar bell.
@@ -23,8 +25,19 @@ export async function GET() {
     return NextResponse.json({ alerts: [] });
   }
   try {
-    const alerts = await getBzilaAlerts(5);
-    return NextResponse.json({ alerts });
+    const [alerts, counts, mine] = await Promise.all([
+      getBzilaAlerts(5),
+      getBzilaAlertCounts(),
+      getUserBzilaReactions(session.userId),
+    ]);
+    const countMap = new Map(counts.map((c) => [c.alert_id, c]));
+    const merged = alerts.map((a) => ({
+      ...a,
+      up: countMap.get(a.id)?.up ?? 0,
+      down: countMap.get(a.id)?.down ?? 0,
+      mine: mine[a.id] ?? "",
+    }));
+    return NextResponse.json({ alerts: merged });
   } catch (err) {
     return NextResponse.json({ error: "Load failed", detail: String(err) }, { status: 500 });
   }

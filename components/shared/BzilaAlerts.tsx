@@ -19,12 +19,16 @@ import { HOME_THEME, DOCK_THEME } from "./homeTheme";
  *     The API route is the real gate; these controls are cosmetic.
  */
 
+type Reaction = "up" | "down" | "";
 type Alert = {
   id: number;
   title: string;
   body: string;
   created_at: string;
   updated_at: string;
+  up?: number;
+  down?: number;
+  mine?: Reaction;
 };
 
 const SEEN_KEY = "bzila:alerts:seen";
@@ -54,6 +58,39 @@ function ago(iso: string): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
   return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const GREEN = "#1FD98A";
+
+/** One 👍 / 👎 pill with a live count; filled when it's the caller's pick. */
+function ThumbBtn({ dir, active, count, onClick }: { dir: "up" | "down"; active: boolean; count: number; onClick: () => void }) {
+  const color = active ? (dir === "up" ? GREEN : HOME_THEME.red) : "rgba(255,255,255,0.55)";
+  const tint = dir === "up" ? "rgba(31,217,138,0.12)" : "rgba(239,68,68,0.12)";
+  return (
+    <button
+      onClick={onClick}
+      title={dir === "up" ? "Helpful" : "Not helpful"}
+      aria-label={dir === "up" ? "Thumbs up" : "Thumbs down"}
+      aria-pressed={active}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "3px 9px",
+        borderRadius: 999,
+        border: `1px solid ${active ? color : "rgba(255,255,255,0.14)"}`,
+        background: active ? tint : "transparent",
+        color,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: "pointer",
+        lineHeight: 1,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 13 }}>{dir === "up" ? "👍" : "👎"}</span>
+      {count > 0 && <span style={{ fontVariantNumeric: "tabular-nums" }}>{count}</span>}
+    </button>
+  );
 }
 
 export default function BzilaAlerts() {
@@ -201,6 +238,31 @@ export default function BzilaAlerts() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Toggle 👍/👎 — optimistic, then reconcile with the server's authoritative
+  // count. Re-clicking the same thumb clears it.
+  const react = async (alertId: number, reaction: "up" | "down") => {
+    setAlerts((prev) => prev.map((a) => {
+      if (a.id !== alertId) return a;
+      const was = a.mine ?? "";
+      const now: Reaction = was === reaction ? "" : reaction;
+      let up = a.up ?? 0, down = a.down ?? 0;
+      if (was === "up") up--; else if (was === "down") down--;
+      if (now === "up") up++; else if (now === "down") down++;
+      return { ...a, mine: now, up: Math.max(0, up), down: Math.max(0, down) };
+    }));
+    try {
+      const r = await fetch("/api/bzila-alerts/react", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alertId, reaction }),
+      });
+      const d = await r.json();
+      if (d?.ok) {
+        setAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, mine: d.mine as Reaction, up: d.up, down: d.down } : a)));
+      }
+    } catch { /* keep optimistic state */ }
   };
 
   if (!canSee) return null;
@@ -433,10 +495,13 @@ export default function BzilaAlerts() {
                         <div style={{ fontSize: 13, lineHeight: 1.5, color: "rgba(255,255,255,0.9)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                           {a.body}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                          <ThumbBtn dir="up" active={a.mine === "up"} count={a.up ?? 0} onClick={() => react(a.id, "up")} />
+                          <ThumbBtn dir="down" active={a.mine === "down"} count={a.down ?? 0} onClick={() => react(a.id, "down")} />
+                          <span style={{ flex: 1 }} />
                           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", fontWeight: 600 }}>{ago(a.created_at)}</span>
                           {isOwner && (
-                            <span style={{ display: "flex", gap: 12 }}>
+                            <span style={{ display: "flex", gap: 12, marginLeft: 4 }}>
                               <button
                                 onClick={() => { setEditingId(a.id); setEditTitle(a.title); setEditBody(a.body); }}
                                 style={{ background: "none", border: "none", padding: 0, color: CYAN, fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.04em" }}
@@ -458,6 +523,31 @@ export default function BzilaAlerts() {
                 );
               })}
             </div>
+          )}
+
+          {isOwner && (
+            <a
+              href="/owner/dev/bzila-alerts"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                marginTop: 2,
+                padding: "9px",
+                borderRadius: 10,
+                border: `1px solid ${cyanA(0.25)}`,
+                background: cyanA(0.06),
+                color: CYAN,
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                textDecoration: "none",
+              }}
+            >
+              View reactions →
+            </a>
           )}
         </div>,
         document.body

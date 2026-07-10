@@ -3,74 +3,85 @@
 // Radial data-flow: backend sources ring the center; the pages that consume
 // each source fan outward from it. Styled to match RadialNav.
 
-type Src = { id: string; label: string; color: string; pages: { label: string; href: string }[] };
+type Src = { id: string; label: string; cadence: string; color: string; pages: { label: string; href: string }[] };
 
 // Grouped by primary backend source. Traced from each page's actual fetch calls
-// (see components/hooks for pages that fetch via hooks). Keep in sync with routes.
+// and the server broadcast / poll cadence (see the `cadence` field). Keep in sync
+// with routes AND timings — cadence values verified against source, Jul 2026.
 const SOURCES: Src[] = [
   {
     // Home/HomeClient, es-candles+fails (useEsCandles), greeks — all live off the socket.
-    id: "ws", label: "WS /ws/gex", color: "#22d3ee",
+    // /ws/gex: GEX frame throttled 15s RTH / 30s off-hours; flow pushed live (~0.5s
+    // server aggregate, skip-if-unchanged) / 30s off-hours; ES candles flush 10s;
+    // server ping 30s. Client gate (useWsLifecycle): pause when backgrounded +
+    // 15 min idle (owner exempt).
+    id: "ws", label: "WS /ws/gex", cadence: "push · GEX 15s · flow live", color: "#22d3ee",
     pages: [
       { label: "Home", href: "/home" }, { label: "ES Candles", href: "/es-candles" },
       { label: "Fails", href: "/fails" }, { label: "Greeks", href: "/greeks" },
     ],
   },
   {
-    // /api/chains + /api/expirations — chain-build endpoints.
-    id: "chains", label: "api/chains · expirations", color: "#2dd4bf",
+    // /api/chains + /api/expirations — chain-build endpoints. options-chain re-polls
+    // the chain every 60s when live; mult-greek flow polls 15s.
+    id: "chains", label: "api/chains · expirations", cadence: "on-demand · 60s poll", color: "#2dd4bf",
     pages: [
       { label: "Multi Greek", href: "/mult-greek" }, { label: "Options Chain", href: "/options-chain" },
       { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    // /api/insights/gex + /api/insights/vix.
-    id: "insights", label: "api/insights", color: "#38bdf8",
+    // /api/insights/gex + /api/insights/vix (+ em, market-quality, greeks-intraday).
+    // greeks page refreshes on a 60s timer.
+    id: "insights", label: "api/insights", cadence: "60s poll", color: "#38bdf8",
     pages: [{ label: "Greeks", href: "/greeks" }, { label: "Home", href: "/home" }],
   },
   {
-    // /api/snapshots/* (option-strike-gex-history, mvc, greeks).
-    id: "snap", label: "api/snapshots · mvc", color: "#60a5fa",
+    // /api/snapshots/* (option-strike-gex-history, mvc, greeks, premium). MVC recorder
+    // writes every 5m; premium posted server-side every 30s; pages poll 60s.
+    id: "snap", label: "api/snapshots · mvc", cadence: "60s poll · 5m rec", color: "#60a5fa",
     pages: [
       { label: "Home", href: "/home" }, { label: "ES Candles", href: "/es-candles" },
       { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    // /api/levels + /api/em* + /api/ref-levels + /api/eod-gex.
-    id: "levels", label: "api/levels · em · ref-levels", color: "#0ea5e9",
+    // /api/levels + /api/em* + /api/ref-levels + /api/eod-gex. Mostly session-static;
+    // ref-levels recorder refreshes every 5m; EM auto-publishes weekly.
+    id: "levels", label: "api/levels · em · ref-levels", cadence: "session · 5m ref", color: "#0ea5e9",
     pages: [
       { label: "EM Front End", href: "/em" }, { label: "Multi Greek", href: "/mult-greek" },
       { label: "Options Chain", href: "/options-chain" }, { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    // /api/confidence + /api/confidence/calibration.
-    id: "conf", label: "api/confidence", color: "#5eead4",
+    // /api/confidence + /api/confidence/calibration. Auto-refreshes every 5m (matches MVC).
+    id: "conf", label: "api/confidence", cadence: "5m poll", color: "#5eead4",
     pages: [
       { label: "Confidence", href: "/confidence-score" }, { label: "EM Front End", href: "/em" },
       { label: "Analytics", href: "/analytics" },
     ],
   },
   {
-    // /proxy/strike-growth/{by-expiry,watchlist}.
-    id: "strike", label: "proxy/strike-growth", color: "#a5b4fc",
+    // /proxy/strike-growth/{by-expiry,watchlist}. Recorder sweeps every 5m.
+    id: "strike", label: "proxy/strike-growth", cadence: "5m sweep", color: "#a5b4fc",
     pages: [
       { label: "Options Chain", href: "/options-chain" },
     ],
   },
   {
-    // /api/calendar(-quote), /api/earnings-today, /api/yahoo-quotes, /api/traders-dashboard*, /api/weather, /api/premarket-movers.
-    id: "td", label: "api/calendar · yahoo · traders-dash", color: "#7dd3fc",
+    // /api/calendar(-quote), /api/earnings-today, /api/yahoo-quotes, /api/traders-dashboard*,
+    // /api/weather, /api/premarket-movers. Quote cards poll 60s; overview loads every 5m.
+    id: "td", label: "api/calendar · yahoo · traders-dash", cadence: "60s quotes · 5m", color: "#7dd3fc",
     pages: [
       { label: "Traders Dashboard", href: "/traders-dashboard" }, { label: "Premarket", href: "/premarket" },
       { label: "Econ Calendar", href: "/economic-calendar" },
     ],
   },
   {
-    // /api/db, /api/budget, /proxy/status + owner control routes.
-    id: "ctrl", label: "api/db · budget · proxy-ctrl", color: "#818cf8",
+    // /api/db, /api/budget, /api/page-status + /proxy status/control. Owner console
+    // polls proxy status every 5s; results tables refresh 60s; budget is on-demand.
+    id: "ctrl", label: "api/db · budget · proxy-ctrl", cadence: "5s owner · on-demand", color: "#818cf8",
     pages: [
       { label: "Budget", href: "/owner/budget" }, { label: "Database", href: "/database" },
       { label: "Owner", href: "/owner/dev/owner" },
@@ -78,7 +89,7 @@ const SOURCES: Src[] = [
   },
   {
     // Chat = Supabase Realtime (direct, no route). ICT = /api/ict-prefs. Journal = localStorage.
-    id: "client", label: "Supabase · ict-prefs · local", color: "#c4b5fd",
+    id: "client", label: "Supabase · ict-prefs · local", cadence: "realtime · local", color: "#c4b5fd",
     pages: [
       { label: "Chat", href: "/chat" }, { label: "ICT", href: "/ict" },
       { label: "Journal", href: "/trading" },
@@ -109,7 +120,7 @@ export default function RadialData() {
     const ox = Math.cos(rad), oy = Math.sin(rad);
     const rowH = 58;
     // source box half-extent the pages must clear before they start
-    const srcHalfW = Math.max(150, SOURCES[si].label.length * 11 + 30) / 2;
+    const srcHalfW = Math.max(150, Math.max(SOURCES[si].label.length * 11, SOURCES[si].cadence.length * 8) + 30) / 2;
     const horizontal = Math.abs(ox) > Math.abs(oy);
 
     if (horizontal) {
@@ -192,17 +203,18 @@ export default function RadialData() {
         })
       )}
 
-      {/* source nodes */}
+      {/* source nodes (label + traced cadence) */}
       {SOURCES.map((s, i) => {
         const sp = pt(CX, CY, SRC_R, angles[i]);
-        const w = Math.max(150, s.label.length * 11 + 30);
+        const w = Math.max(150, Math.max(s.label.length * 11, s.cadence.length * 8) + 30);
         return (
           <g key={"sn" + i} className="dv-src" transform={`translate(${sp.x},${sp.y})`}>
-            <rect x={-w / 2} y={-26} width={w} height={52} rx={13} fill="#0a1018" />
-            <rect x={-w / 2} y={-26} width={w} height={52} rx={13}
+            <rect x={-w / 2} y={-30} width={w} height={60} rx={13} fill="#0a1018" />
+            <rect x={-w / 2} y={-30} width={w} height={60} rx={13}
               fill={s.color} fillOpacity={0.18} stroke={s.color} strokeWidth={2.4}
               style={{ filter: `drop-shadow(0 0 10px ${s.color}66)` }} />
-            <text textAnchor="middle" dy={6} fontSize={16} fontWeight={700} fill={s.color}>{s.label}</text>
+            <text textAnchor="middle" dy={-4} fontSize={16} fontWeight={700} fill={s.color}>{s.label}</text>
+            <text textAnchor="middle" dy={15} fontSize={12} fontWeight={600} fill={s.color} fillOpacity={0.72}>{s.cadence}</text>
           </g>
         );
       })}

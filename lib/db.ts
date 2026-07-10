@@ -699,6 +699,21 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 👍/👎 reactions on Bzila alerts. One row per (alert, user) — reaction holds
+    -- the current pick ('' | 'up' | 'down', toggles off when re-clicked); clicks
+    -- counts every tap so the owner report can show engagement, not just final
+    -- state. email is denormalized for the owner "who reacted" list.
+    CREATE TABLE IF NOT EXISTS bzila_alert_reactions (
+      alert_id   INTEGER NOT NULL,
+      user_id    TEXT NOT NULL,
+      email      TEXT NOT NULL DEFAULT '',
+      reaction   TEXT NOT NULL DEFAULT '',
+      clicks     INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (alert_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS bzila_alert_reactions_alert_idx ON bzila_alert_reactions (alert_id);
+
     -- Traders Dashboard overnight AI overview. One row per ET date, written once
     -- by the 7am cron (overview-generator.js). summary is the narrative; drivers
     -- is a JSON array of {when,title,body} econ/news items.
@@ -1128,7 +1143,95 @@ export async function updateBzilaAlert(id: number, title: string, body: string):
 
 export async function deleteBzilaAlert(id: number): Promise<void> {
   await getDb();
+  await queryAll(`DELETE FROM bzila_alert_reactions WHERE alert_id = ?`, [id]);
   await queryAll(`DELETE FROM bzila_alerts WHERE id = ?`, [id]);
+}
+
+// ── Bzila alert reactions (👍/👎) ───────────────────────────────────────────
+
+export type BzilaReaction = "" | "up" | "down";
+
+export interface BzilaAlertCounts { alert_id: number; up: number; down: number; }
+
+/** Toggle a user's reaction on an alert. Re-clicking the same thumb clears it.
+ *  Every tap increments `clicks`. Returns the resulting reaction ('' if cleared). */
+export async function reactBzilaAlert(
+  alertId: number, userId: string, email: string, reaction: "up" | "down"
+): Promise<BzilaReaction> {
+  await getDb();
+  const row = await queryOne<{ reaction: BzilaReaction }>(
+    `INSERT INTO bzila_alert_reactions (alert_id, user_id, email, reaction, clicks, updated_at)
+     VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+     ON CONFLICT (alert_id, user_id) DO UPDATE SET
+       reaction = CASE WHEN bzila_alert_reactions.reaction = EXCLUDED.reaction THEN '' ELSE EXCLUDED.reaction END,
+       email = EXCLUDED.email,
+       clicks = bzila_alert_reactions.clicks + 1,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING reaction`,
+    [alertId, userId, email, reaction]
+  );
+  return row?.reaction ?? "";
+}
+
+/** Up/down tallies per alert (only alerts that have at least one reaction). */
+export async function getBzilaAlertCounts(): Promise<BzilaAlertCounts[]> {
+  await getDb();
+  return queryAll<BzilaAlertCounts>(
+    `SELECT alert_id,
+            SUM(CASE WHEN reaction = 'up'   THEN 1 ELSE 0 END)::int AS up,
+            SUM(CASE WHEN reaction = 'down' THEN 1 ELSE 0 END)::int AS down
+       FROM bzila_alert_reactions
+      GROUP BY alert_id`
+  );
+}
+
+/** The signed-in user's current reaction per alert (non-empty only). */
+export async function getUserBzilaReactions(userId: string): Promise<Record<number, BzilaReaction>> {
+  await getDb();
+  const rows = await queryAll<{ alert_id: number; reaction: BzilaReaction }>(
+    `SELECT alert_id, reaction FROM bzila_alert_reactions WHERE user_id = ? AND reaction <> ''`,
+    [userId]
+  );
+  const out: Record<number, BzilaReaction> = {};
+  for (const r of rows) out[r.alert_id] = r.reaction;
+  return out;
+}
+
+export interface BzilaReactor { email: string; reaction: BzilaReaction; clicks: number; updated_at: string; }
+export interface BzilaAlertReportRow extends BzilaAlert {
+  up: number; down: number; clicks: number; reactors: BzilaReactor[];
+}
+
+/** Owner analytics: latest alerts with per-alert tallies + who reacted. */
+export async function getBzilaAlertReport(limit = 50): Promise<BzilaAlertReportRow[]> {
+  await getDb();
+  const alerts = await getBzilaAlerts(limit);
+  if (alerts.length === 0) return [];
+  const ids = alerts.map((a) => a.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const reactions = await queryAll<{ alert_id: number } & BzilaReactor>(
+    `SELECT alert_id, email, reaction, clicks, updated_at
+       FROM bzila_alert_reactions
+      WHERE alert_id IN (${placeholders})
+      ORDER BY updated_at DESC`,
+    ids
+  );
+  const byAlert = new Map<number, BzilaReactor[]>();
+  for (const r of reactions) {
+    const list = byAlert.get(r.alert_id) ?? [];
+    list.push({ email: r.email, reaction: r.reaction, clicks: r.clicks, updated_at: r.updated_at });
+    byAlert.set(r.alert_id, list);
+  }
+  return alerts.map((a) => {
+    const reactors = byAlert.get(a.id) ?? [];
+    return {
+      ...a,
+      up: reactors.filter((r) => r.reaction === "up").length,
+      down: reactors.filter((r) => r.reaction === "down").length,
+      clicks: reactors.reduce((s, r) => s + (r.clicks || 0), 0),
+      reactors,
+    };
+  });
 }
 
 // ── Traders Dashboard: overnight overview ───────────────────────────────────
