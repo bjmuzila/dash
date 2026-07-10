@@ -68,15 +68,20 @@ function todayYmdET(): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-export default function FlowNetPremPanel() {
+// `preset="whale"` seeds the whale defaults (≥$500K premium, OTM, 0–7 DTE) so
+// the home "Whale" tab is just this same panel pre-filtered to big prints.
+export default function FlowNetPremPanel({ preset }: { preset?: "whale" } = {}) {
   const shouldConnect = useWsLifecycle();
+  const isWhale = preset === "whale";
 
   const [active, setActive] = useState<string>(TICKERS[0]);
   const [side, setSide] = useState<SideFilter>("all");
   const [optType, setOptType] = useState<TypeFilter>("all");
-  const [minPremium, setMinPremium] = useState<number>(50_000);
+  const [minPremium, setMinPremium] = useState<number>(isWhale ? 500_000 : 50_000);
   const [minSize, setMinSize] = useState<number>(0);
   const [otmOnly, setOtmOnly] = useState(true);
+  const [dteMin, setDteMin] = useState<number>(0);
+  const [dteMax, setDteMax] = useState<number | null>(isWhale ? 7 : null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const date = todayYmdET();
@@ -93,6 +98,8 @@ export default function FlowNetPremPanel() {
     if (optType !== "all") qp.set("type", optType);
     if (minPremium > 0) qp.set("minPremium", String(minPremium));
     if (minSize > 0) qp.set("minSize", String(minSize));
+    if (dteMin > 0) qp.set("dteMin", String(dteMin));
+    if (dteMax != null) qp.set("dteMax", String(dteMax));
     if (otmOnly) qp.set("otmOnly", "1");
     const load = () =>
       fetch(`/proxy/flow-netprem?${qp.toString()}`)
@@ -106,7 +113,7 @@ export default function FlowNetPremPanel() {
     load();
     const id = setInterval(load, 5000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [active, date, side, optType, minPremium, minSize, otmOnly, shouldConnect]);
+  }, [active, date, side, optType, minPremium, minSize, dteMin, dteMax, otmOnly, shouldConnect]);
 
   const netSeries = useMemo(() => {
     const { openSec, closeSec } = rthBoundsToday();
@@ -235,7 +242,10 @@ export default function FlowNetPremPanel() {
   }, [netSeries]);
 
   function resetFilters() {
-    setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0); setOtmOnly(true);
+    setSide("all"); setOptType("all");
+    setMinPremium(isWhale ? 500_000 : 50_000);
+    setMinSize(0); setOtmOnly(true);
+    setDteMin(0); setDteMax(isWhale ? 7 : null);
   }
 
   // ── Styles ──
@@ -258,9 +268,11 @@ export default function FlowNetPremPanel() {
     };
   }
 
+  const basePremium = isWhale ? 500_000 : 50_000;
+  const baseDteMax = isWhale ? 7 : null;
   const filterActiveCount =
-    (side !== "all" ? 1 : 0) + (optType !== "all" ? 1 : 0) + (minPremium !== 50_000 ? 1 : 0) +
-    (minSize > 0 ? 1 : 0) + (!otmOnly ? 1 : 0);
+    (side !== "all" ? 1 : 0) + (optType !== "all" ? 1 : 0) + (minPremium !== basePremium ? 1 : 0) +
+    (minSize > 0 ? 1 : 0) + (!otmOnly ? 1 : 0) + (dteMin > 0 ? 1 : 0) + (dteMax !== baseDteMax ? 1 : 0);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -355,6 +367,14 @@ export default function FlowNetPremPanel() {
             <div>
               <label style={labelStyle}>Min Size</label>
               <input style={fieldStyle} type="number" min={0} placeholder="contracts" value={minSize || ""} onChange={(e) => setMinSize(Number(e.target.value) || 0)} />
+            </div>
+
+            <div>
+              <label style={labelStyle}>DTE Range</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={fieldStyle} type="number" min={0} placeholder="min" value={dteMin || ""} onChange={(e) => setDteMin(Number(e.target.value) || 0)} />
+                <input style={fieldStyle} type="number" min={0} placeholder="max" value={dteMax ?? ""} onChange={(e) => setDteMax(e.target.value === "" ? null : Number(e.target.value))} />
+              </div>
             </div>
 
             <div>

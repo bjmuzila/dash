@@ -1,0 +1,15 @@
+# CB Edge — home signals feed
+# One signal per line. The NEWEST time shows LEFTMOST in the feed.
+#
+# Format:  <time>  <signal text>
+#   time can be: 9:32   9:32am   09:32   2026-07-09 09:32   (a "|" or "-" after the time is optional)
+#   lines starting with "#" are ignored; blank lines are ignored
+#   direction tint: text starting LONG/BUY/BULL -> green, SHORT/SELL/BEAR -> red, else cyan
+#
+# Edit this file and push to update the feed (it re-polls every 15s).
+# Replace the examples below with your own signals:
+
+9:32   Net GEX flipped positive — long bias into 7400
+9:41   Call wall rolled 7400 → 7410
+10:05  SHORT CB 7380 rejected from below
+10:22  Flip reclaimed at 7365

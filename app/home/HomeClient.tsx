@@ -7,6 +7,7 @@ import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
 import EsCandlesFullPanel from "@/components/dashboard/EsCandlesFullPanel";
+import SignalsFeed from "@/components/dashboard/SignalsFeed";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
@@ -336,6 +337,11 @@ const FlowIcon = () => (
     <path d="M3 12h4l3 8 4-16 3 8h4" />
   </svg>
 );
+const WhaleIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 14c4 4 8 4 9 1 1 3 5 3 9-1" /><path d="M12 15V4" />
+  </svg>
+);
 const GreeksIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 19h16" /><path d="M6 15c2-6 4-10 6-10s2 6 4 10" />
@@ -411,52 +417,15 @@ export function HomeClient({
   const gexFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastGexAppliedRef = useRef(0);
 
-  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "greeks" | "scanner" | "escandles">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner" | "escandles">("calendar");
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
   // the column with the GEX chart above it, "full" = fills the whole left column
   // (chart hidden). Replaces the old econCollapsed boolean.
   const [econSize, setEconSize] = useState<"min" | "half" | "full">("half");
   const [gexMode, setGexMode] = useState<GexMode>("net");
 
-  // ── Ticker auto-fit: scale the whole ticker box down so it always fits its
-  // column, measuring real widths so NQU never clips at any window size. ──
-  const tickerCqRef = useRef<HTMLDivElement | null>(null);   // the column-width container
-  const tickerBoxRef = useRef<HTMLDivElement | null>(null);  // the natural-width ticker
-  const tickerScaleRef = useRef(1);
-  const [tickerScale, setTickerScale] = useState(1);
-  const [tickerBoxH, setTickerBoxH] = useState(0); // natural (unscaled) box height, px
-  useEffect(() => {
-    const cq = tickerCqRef.current, box = tickerBoxRef.current;
-    if (!cq || !box) return;
-    const fit = () => {
-      const s = tickerScaleRef.current || 1;
-      // Measure the box's TRUE natural width by momentarily neutralizing the
-      // transform and letting it size to its content (max-content). Reading
-      // scrollWidth while scaled/width:100% can't tell us the unscaled need —
-      // which is why it shrank but never grew back. We restore immediately, so
-      // nothing flickers. Comparing natural vs the untransformed container
-      // (cq.clientWidth) yields an absolute scale with no feedback loop.
-      const prevT = box.style.transform;
-      const prevW = box.style.width;
-      box.style.transform = "none";
-      box.style.width = "max-content";
-      const natural = box.scrollWidth;
-      const naturalH = box.offsetHeight;
-      box.style.transform = prevT;
-      box.style.width = prevW;
-
-      const avail = cq.clientWidth;
-      const next = natural > avail + 1 ? Math.max(0.5, avail / natural) : 1;
-      if (Math.abs(next - s) > 0.005) { tickerScaleRef.current = next; setTickerScale(next); }
-      setTickerBoxH(naturalH);
-    };
-    const ro = new ResizeObserver(fit);
-    ro.observe(cq);
-    ro.observe(box);
-    fit();
-    return () => ro.disconnect();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // (Ticker auto-fit removed: the right-column stat box it scaled was replaced by
+  //  the horizontal <SignalsFeed/>, which scrolls instead of scaling to fit.)
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
   const [showOI, setShowOI] = useState(false);
   const [showDex, setShowDex] = useState(false);
@@ -1150,6 +1119,7 @@ export function HomeClient({
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "flow", label: "Flow", icon: <FlowIcon /> },
+                  { id: "whale", label: "Whale", icon: <WhaleIcon /> },
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
                   { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
                   { id: "escandles", label: "ES Candles", icon: <CandlesIcon /> },
@@ -1200,6 +1170,11 @@ export function HomeClient({
                     <FlowNetPremPanel />
                   </div>
                 )}
+                {activeTab === "whale" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <FlowNetPremPanel preset="whale" />
+                  </div>
+                )}
                 {activeTab === "greeks" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <GreeksHomePanel />
@@ -1220,41 +1195,12 @@ export function HomeClient({
           </div>
 
           <div className="home-col home-col-right" style={{ width: "45%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
-            <div ref={tickerCqRef} className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, position: "relative", overflow: "hidden" }}>
-             <div ref={tickerBoxRef} style={{ display: "block", width: "100%", whiteSpace: "nowrap", transformOrigin: "top left", transform: `scale(${tickerScale})`, marginBottom: tickerBoxH ? -(tickerBoxH * (1 - tickerScale)) : 0 }}>
-              {/* VIX / ESU / SPX / NQU quotes moved to the global top toolbar (ToolbarTicker). */}
-              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "nowrap", justifyContent: "space-between", width: "100%", minWidth: 0, paddingLeft: 13 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>NET GEX</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: netGex >= 0 ? C.green : C.red }}>{fmtMoneyB(netGex)}</span>
-                  </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CALL WALL</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.green }}>{(callWallOiVol ?? callWall) ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—"}</span>
-                  </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PUT WALL</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.red }}>{(putWallOiVol ?? putWall) ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—"}</span>
-                  </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>FLIP</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: "#FB8501" }}>{flipPoint ? formatStrikeValue(flipPoint) : "—"}</span>
-                  </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>CB</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.purple }}>{mvcStrike ? formatStrikeValue(mvcStrike) : "—"}</span>
-                  </div>
-                  <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 16, fontWeight: 300, lineHeight: 1, flexShrink: 0 }}>│</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>MAX PAIN</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: C.cyan }}>{maxPainStrike ? formatStrikeValue(maxPainStrike) : "—"}</span>
-                  </div>
-              </div>
-             </div>
+            {/* Signals feed — one horizontal row, newest signal leftmost, each with
+                a timestamp. Sourced from user-authored public/signals.txt (polled).
+                Replaced the NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN
+                readout, which still lives on the left Levels strip above the chart. */}
+            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16 }}>
+              <SignalsFeed />
             </div>
 
             <div ref={heatmapContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
