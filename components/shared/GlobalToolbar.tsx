@@ -285,10 +285,11 @@ function GexGroupNav({ isOwner }: { isOwner: boolean }) {
       {items.map((it) => (
         <QuickCircle
           key={it.href}
-          href={it.href}
+          href={it.comingSoon ? undefined : it.href}
           label={it.label}
           emoji={it.emoji}
-          draggable
+          comingSoon={it.comingSoon}
+          draggable={!it.comingSoon}
           dragging={dragId === it.href}
           onDragStart={(e) => {
             setDragId(it.href);
