@@ -23,21 +23,21 @@ import { HOME_THEME, LIGHT_BLUE, homeInputStyle } from "@/components/shared/home
  *   • ATM IV      = strike nearest spot (avg of call/put IV)
  * IV fields arrive as decimals (0.15) → shown as percent (15.0).
  * ──────────────────────────────────────────────────────────────────────────── */
-interface ChainRow {
+export interface ChainRow {
   strike: number;
   callIV?: number;
   putIV?: number;
   callDelta?: number;
   putDelta?: number;
 }
-interface SkewPick {
+export interface SkewPick {
   put: number; call: number; atm: number;        // IVs as percent
   putK: number; callK: number; atmK: number;      // source strikes
   spot: number; expiry: string | null; ts: number;
 }
 const TARGET_DELTA = 0.25;
 
-function derivePick(rows: ChainRow[], spot: number, expiry: string | null): SkewPick | null {
+export function derivePick(rows: ChainRow[], spot: number, expiry: string | null): SkewPick | null {
   if (!rows.length || !(spot > 0)) return null;
   const valid = rows.filter(r => Number.isFinite(r.strike));
   if (!valid.length) return null;
@@ -76,7 +76,7 @@ function derivePick(rows: ChainRow[], spot: number, expiry: string | null): Skew
 }
 
 // Skew regime bands (skew expressed as a percentage: 100 * (Pput−Pcall)/ATM).
-interface Band {
+export interface Band {
   id: string;
   lo: number;              // inclusive lower bound (%)
   hi: number;              // exclusive upper bound (%)
@@ -86,7 +86,7 @@ interface Band {
   thenThat: string;
 }
 
-const COLORS = {
+export const COLORS = {
   bear: "#ff5252",
   neutral: "#9fb3c8",
   bull: "#00e676",
@@ -94,7 +94,7 @@ const COLORS = {
 } as const;
 
 // Ordered low→high. Bounds in percent.
-const BANDS: Band[] = [
+export const BANDS: Band[] = [
   {
     id: "inverted", lo: -Infinity, hi: 0, tone: "bull",
     label: "Inverted / Call Skew",
@@ -127,7 +127,7 @@ const BANDS: Band[] = [
   },
 ];
 
-function bandFor(skewPct: number): Band {
+export function bandFor(skewPct: number): Band {
   return BANDS.find(b => skewPct >= b.lo && skewPct < b.hi) ?? BANDS[2];
 }
 
