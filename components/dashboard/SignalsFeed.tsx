@@ -219,7 +219,19 @@ export default function SignalsFeed({
   }, [src, pollMs]);
 
   return (
+    <>
+      <style>{`
+        .signals-feed-scroll::-webkit-scrollbar { height: 6px; }
+        .signals-feed-scroll::-webkit-scrollbar-track { background: transparent; }
+        .signals-feed-scroll::-webkit-scrollbar-thumb {
+          background: rgba(33,158,188,0.18);
+          border-radius: 999px;
+        }
+        .signals-feed-scroll:hover::-webkit-scrollbar-thumb { background: rgba(33,158,188,0.35); }
+        .signals-feed-scroll::-webkit-scrollbar-thumb:hover { background: rgba(33,158,188,0.5); }
+      `}</style>
     <div
+      className="signals-feed-scroll"
       style={{
         display: "flex",
         alignItems: "center",
@@ -229,8 +241,9 @@ export default function SignalsFeed({
         overflowY: "hidden",
         whiteSpace: "nowrap",
         paddingLeft: 13,
-        paddingBottom: 2,
+        paddingBottom: 6,
         scrollbarWidth: "thin",
+        scrollbarColor: "rgba(33,158,188,0.28) transparent",
       }}
     >
       <span
@@ -261,5 +274,6 @@ export default function SignalsFeed({
         signals.map((s) => <Chip key={s.key} s={s} />)
       )}
     </div>
+    </>
   );
 }

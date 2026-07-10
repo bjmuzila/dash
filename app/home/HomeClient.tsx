@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
+import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
 import EsCandlesFullPanel from "@/components/dashboard/EsCandlesFullPanel";
@@ -1172,7 +1173,7 @@ export function HomeClient({
                 )}
                 {activeTab === "whale" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <FlowNetPremPanel preset="whale" />
+                    <WhaleOrdersPanel />
                   </div>
                 )}
                 {activeTab === "greeks" && (

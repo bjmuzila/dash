@@ -1,0 +1,139 @@
+<div id="page-quotes-bubble" style="display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg0);color:var(--text2);font-family:Arial,sans-serif;padding:10px">
+  <style>
+    #qb-board { flex:1; min-height:0; display:flex; }
+    #qb-board .highcharts-dashboards-row { flex:1; }
+    #qb-col-chart, #qb-col-grid { min-height:340px; }
+    /* dark grid overrides for grid-pro default (light) theme */
+    #qb-col-grid .hcg-table, #qb-col-grid .highcharts-datagrid-table { background:#0a0f16; color:#cfe3f2; }
+    #qb-col-grid .hcg-header-cell, #qb-col-grid .hcg-row:nth-child(even) { background:#0d1622; }
+    #qb-col-grid .hcg-cell, #qb-col-grid .hcg-header-cell { border-color:#1a2a3a !important; }
+    .qb-loading { padding:40px 20px; text-align:center; color:#7fa3bf; }
+  </style>
+
+  <div id="qb-board"><div class="qb-loading">Loading quotes…</div></div>
+</div>
+
+<script>
+window.QuotesBubble = {
+  // same universe + data path as the Quotes panel (public/quotes.html)
+  symbols: ['/ES','/NQ','SPX','SPCX','VIX','SPY','QQQ','SMH','AAPL','AMD','AMZN','GOOGL','META','MSFT','NVDA','TSLA'],
+  prevCloses: {},
+  board: null,
+  conn: null,
+  ASSETS: {
+    css: [
+      'https://code.highcharts.com/dashboards/css/dashboards.css',
+      'https://cdn.jsdelivr.net/npm/@highcharts/grid-pro/css/grid-pro.css'
+    ],
+    // order matters: Highcharts + more, then grid-pro, then dashboards last
+    js: [
+      'https://code.highcharts.com/highcharts.js',
+      'https://code.highcharts.com/highcharts-more.js',
+      'https://code.highcharts.com/modules/accessibility.js',
+      'https://cdn.jsdelivr.net/npm/@highcharts/grid-pro/grid-pro.js',
+      'https://code.highcharts.com/dashboards/dashboards.js'
+    ]
+  },
+
+  loadCss(href){ if(document.querySelector('link[href="'+href+'"]'))return; const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; document.head.appendChild(l); },
+  loadJs(src){ return new Promise((res,rej)=>{ const ex=document.querySelector('script[src="'+src+'"]'); if(ex){ ex.dataset.ok?res():ex.addEventListener('load',res); return;} const s=document.createElement('script'); s.src=src; s.onload=()=>{s.dataset.ok='1';res();}; s.onerror=()=>rej(new Error('load '+src)); document.head.appendChild(s); }); },
+  async ensureAssets(){ this.ASSETS.css.forEach(h=>this.loadCss(h)); for(const j of this.ASSETS.js){ await this.loadJs(j); } },
+
+  async loadPrevCloses(){
+    try{
+      const r=await fetch('/proxy/api/spx-prevclose');
+      if(r.ok){ const d=await r.json();
+        if(d&&typeof d==='object') this.prevCloses = d.prevClose!==undefined ? {'/ES':d.prevClose,'/NQ':d.prevClose} : d; }
+    }catch(e){ console.error('[QuotesBubble] prevclose load failed:',e.message); }
+  },
+
+  async fetchQuotes(){
+    try{
+      const r=await fetch('/proxy/api/tt/quotes-batch?symbols='+this.symbols.join(','));
+      if(!r.ok) return [];
+      const d=await r.json();
+      return Array.isArray(d)?d:[];
+    }catch(e){ console.error('[QuotesBubble] fetch failed:',e.message); return []; }
+  },
+
+  // identical rule to the Quotes panel: pct = (last - prevClose)/prevClose*100
+  computeRows(quotes){
+    const rows=[];
+    quotes.forEach(q=>{
+      if(!q||!q.symbol) return;
+      const prev=this.prevCloses[q.symbol];
+      if(!prev||prev===0) return;
+      const pct=((q.last-prev)/prev)*100;
+      if(!isFinite(pct)) return;
+      rows.push({symbol:q.symbol, pct:+pct.toFixed(2)});
+    });
+    rows.sort((a,b)=>b.pct-a.pct); // gainers first
+    return rows;
+  },
+
+  // packed bubble can't size negatives -> size by |pct|, color by direction, label=symbol, tooltip=signed %
+  toSeries(rows){
+    const pt=r=>({name:r.symbol, value:Math.abs(r.pct)||0.001, custom:{txt:(r.pct>0?'+':'')+r.pct.toFixed(2)+'%'}});
+    return [
+      {name:'Gainers', color:'#00d876', data:rows.filter(r=>r.pct>0).map(pt)},
+      {name:'Losers',  color:'#ff4444', data:rows.filter(r=>r.pct<0).map(pt)},
+      {name:'Flat',    color:'#7fa3bf', data:rows.filter(r=>r.pct===0).map(pt)}
+    ];
+  },
+
+  chartOptions(rows){
+    return {
+      chart:{ type:'packedbubble', backgroundColor:'transparent', animation:false },
+      title:{ text:'Daily % Move — Quotes', align:'left', style:{color:'#cfe3f2',fontSize:'14px'} },
+      credits:{enabled:false},
+      legend:{ itemStyle:{color:'#9fb8cc'}, itemHoverStyle:{color:'#fff'} },
+      tooltip:{ stickOnContact:true, headerFormat:'<b>{point.key}</b><br>', pointFormat:'{point.custom.txt}' },
+      accessibility:{ typeDescription:'Packed bubble chart of daily percent moves.',
+        point:{ descriptionFormat:'Daily move for {name}: {point.custom.txt}' } },
+      plotOptions:{ packedbubble:{
+        minSize:'30%', maxSize:'120%',
+        layoutAlgorithm:{ splitSeries:false, gravitationalConstant:0.02 },
+        dataLabels:{ enabled:true, format:'{point.name}', style:{color:'#fff', textOutline:'1px contrast', fontSize:'11px'} }
+      }},
+      series:this.toSeries(rows)
+    };
+  },
+
+  buildBoard(rows){
+    const host=document.getElementById('qb-board'); if(!host) return;
+    host.innerHTML='';
+    this.board=Dashboards.board('qb-board',{
+      dataPool:{ connectors:[{ id:'quotes', type:'JSON',
+        options:{ firstRowAsNames:true, data:[['Symbol','Change %'], ...rows.map(r=>[r.symbol,r.pct])] } }] },
+      gui:{ layouts:[{ id:'qb-layout', rows:[{ cells:[{id:'qb-col-chart'},{id:'qb-col-grid'}] }] }] },
+      components:[
+        { renderTo:'qb-col-chart', type:'Highcharts', sync:{highlight:true}, chartOptions:this.chartOptions(rows) },
+        { renderTo:'qb-col-grid', type:'Grid', connector:{id:'quotes'}, sync:{highlight:true},
+          gridOptions:{ credits:{enabled:false},
+            columns:[{ id:'Change %', header:{format:'Change %'}, cells:{format:'{value}%'} }] } }
+      ]
+    }, true);
+  },
+
+  async refresh(){
+    const rows=this.computeRows(await this.fetchQuotes());
+    if(!rows.length){ if(!this.board){ const h=document.getElementById('qb-board'); if(h) h.innerHTML='<div class="qb-loading">No data</div>'; } return; }
+    if(!this.board){ this.buildBoard(rows); this.conn=await this.board.dataPool.getConnector('quotes'); return; }
+    // live update in place (no rebuild/flicker)
+    try{ this.conn && this.conn.table.setColumns({ 'Symbol':rows.map(r=>r.symbol), 'Change %':rows.map(r=>r.pct) }); }catch(e){}
+    const hc=(this.board.mountedComponents||[]).map(m=>m.component).find(c=>c&&c.chart);
+    if(hc&&hc.chart){ const s=this.toSeries(rows); hc.chart.series.forEach((ser,i)=> s[i]&&ser.setData(s[i].data,false)); hc.chart.redraw(); }
+  },
+
+  async init(){
+    if(this._init) return; this._init=true;
+    try{ await this.ensureAssets(); }catch(e){ const h=document.getElementById('qb-board'); if(h) h.innerHTML='<div class="qb-loading">Chart assets blocked (CSP?). Self-host Highcharts/Grid to fix.</div>'; return; }
+    await this.loadPrevCloses();
+    await this.refresh();
+    setInterval(()=>this.refresh(), 30000);
+  }
+};
+
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',()=>window.QuotesBubble.init());
+else window.QuotesBubble.init();
+</script>

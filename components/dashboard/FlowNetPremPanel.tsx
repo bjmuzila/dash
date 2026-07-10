@@ -68,20 +68,17 @@ function todayYmdET(): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-// `preset="whale"` seeds the whale defaults (≥$500K premium, OTM, 0–7 DTE) so
-// the home "Whale" tab is just this same panel pre-filtered to big prints.
-export default function FlowNetPremPanel({ preset }: { preset?: "whale" } = {}) {
+export default function FlowNetPremPanel() {
   const shouldConnect = useWsLifecycle();
-  const isWhale = preset === "whale";
 
   const [active, setActive] = useState<string>(TICKERS[0]);
   const [side, setSide] = useState<SideFilter>("all");
   const [optType, setOptType] = useState<TypeFilter>("all");
-  const [minPremium, setMinPremium] = useState<number>(isWhale ? 500_000 : 50_000);
+  const [minPremium, setMinPremium] = useState<number>(50_000);
   const [minSize, setMinSize] = useState<number>(0);
   const [otmOnly, setOtmOnly] = useState(true);
   const [dteMin, setDteMin] = useState<number>(0);
-  const [dteMax, setDteMax] = useState<number | null>(isWhale ? 7 : null);
+  const [dteMax, setDteMax] = useState<number | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const date = todayYmdET();
@@ -242,10 +239,8 @@ export default function FlowNetPremPanel({ preset }: { preset?: "whale" } = {}) 
   }, [netSeries]);
 
   function resetFilters() {
-    setSide("all"); setOptType("all");
-    setMinPremium(isWhale ? 500_000 : 50_000);
-    setMinSize(0); setOtmOnly(true);
-    setDteMin(0); setDteMax(isWhale ? 7 : null);
+    setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0); setOtmOnly(true);
+    setDteMin(0); setDteMax(null);
   }
 
   // ── Styles ──
@@ -268,11 +263,9 @@ export default function FlowNetPremPanel({ preset }: { preset?: "whale" } = {}) 
     };
   }
 
-  const basePremium = isWhale ? 500_000 : 50_000;
-  const baseDteMax = isWhale ? 7 : null;
   const filterActiveCount =
-    (side !== "all" ? 1 : 0) + (optType !== "all" ? 1 : 0) + (minPremium !== basePremium ? 1 : 0) +
-    (minSize > 0 ? 1 : 0) + (!otmOnly ? 1 : 0) + (dteMin > 0 ? 1 : 0) + (dteMax !== baseDteMax ? 1 : 0);
+    (side !== "all" ? 1 : 0) + (optType !== "all" ? 1 : 0) + (minPremium !== 50_000 ? 1 : 0) +
+    (minSize > 0 ? 1 : 0) + (!otmOnly ? 1 : 0) + (dteMin > 0 ? 1 : 0) + (dteMax !== null ? 1 : 0);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
