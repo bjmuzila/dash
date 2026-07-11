@@ -492,7 +492,7 @@ async function fetchWeeklyHistoryTheta(ticker, daysBack = 140) {
   const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
   let daily;
   if (ticker === 'SPX' || ticker === 'NDX') {
-    daily = await theta.fetchIndexDailyHistoryTheta(ticker === 'SPX' ? '$SPX' : '$NDX', start, end);
+    daily = await theta.fetchIndexDailyHistoryTheta(ticker, start, end);
   } else {
     daily = await theta.fetchStockDailyHistoryTheta(ticker, start, end);
   }
@@ -717,7 +717,9 @@ async function evaluateCompletedWeek(base) {
   // Pull the rows seeded for that week that still need a result.
   let pending = [];
   try {
-    const r = await ifetch(`${base}/api/em-tracker?week_start=${completedWeek}&status=pending`);
+    const r = await ifetch(`${base}/api/em-tracker?week_start=${completedWeek}&status=pending`, {
+      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+    });
     if (r.ok) pending = (await r.json()).rows || [];
   } catch (e) {
     console.log('[em-eval] fetch pending failed:', e.message);
