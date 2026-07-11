@@ -1271,7 +1271,7 @@ function MetricsTabSection({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {/* Tab buttons */}
       <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div className="tab-strip" style={{ display: "flex", gap: 6 }}>
           <TabButton p="daily" label="Daily" />
           <TabButton p="weekly" label="Weekly" />
           <TabButton p="monthly" label="Monthly" />

@@ -3,15 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import PublicNav from "@/components/landing/PublicNav";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
-
-const NAV = [
-  { label: "Overview", href: "#overview" },
-  { label: "Features", href: "#features" },
-  { label: "Pricing", href: "/pricing?from=landing" },
-  { label: "Docs", href: "/docs" },
-];
 
 // The four "see it live" cards. Order matters — this is the row on the landing
 // page. Each links to /explore/<slug>, which fronts a REAL page in demo mode.
@@ -45,7 +39,7 @@ const STATS = [
   { k: "24/5", v: "Streaming data" },
 ];
 
-const SOURCES = ["ThetaData", "OPRA", "CBOE", "dxFeed", "Tastytrade"];
+const SOURCES = ["ThetaData", "OPRA", "CBOE", "dxFeed"];
 
 export default function LandingClient() {
   const [email, setEmail] = useState("");
@@ -111,30 +105,8 @@ export default function LandingClient() {
         }
       `}</style>
 
-      {/* ── Nav ─────────────────────────────────────────────── */}
-      <header style={nav} className="lp">
-        <Link href="/" style={brand}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt={APP_NAME} style={{ height: 34, width: "auto", objectFit: "contain" }} />
-        </Link>
-
-        <nav style={navPill} className="lp-nav-links">
-          {NAV.map((n) => (
-            <Link key={n.label} href={n.href} style={navLink} className="lp-nav-link">
-              {n.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Link href="/pricing?from=landing&trial=1" style={navSignup} className="lp-btn-solid lp-pulse">
-            START FREE TRIAL <span style={{ opacity: 0.8 }}>›</span>
-          </Link>
-          <Link href="/sign-in" style={navLogin} className="lp-btn-ghost">
-            LOGIN
-          </Link>
-        </div>
-      </header>
+      {/* ── Nav (shared with /explore/*) ─────────────────────── */}
+      <PublicNav variant="fixed" active="Overview" />
 
       {/* ── Hero ────────────────────────────────────────────── */}
       <section style={hero} className="lp-hero" id="overview">
@@ -171,20 +143,20 @@ export default function LandingClient() {
             </Link>
           </div>
 
-          <div style={{ marginTop: 14, fontSize: 13.5, color: "rgba(255,255,255,0.6)" }}>
+          <div style={{ marginTop: 14, fontSize: 14, color: T.text }}>
             Cancel anytime · then <b style={{ color: T.green }}>$45/mo</b> with code{" "}
             <b style={{ color: T.cyan, letterSpacing: "0.06em" }}>MONTH</b>
           </div>
 
           <div style={sourcesWrap}>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 6, letterSpacing: "0.04em" }}>
+            <div style={{ fontSize: 12, color: T.text, marginBottom: 6, letterSpacing: "0.04em" }}>
               Powered by
             </div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
               {SOURCES.map((s, i) => (
                 <span key={s} style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 600, color: "rgba(255,255,255,0.9)" }}>{s}</span>
-                  {i < SOURCES.length - 1 && <span style={{ color: "rgba(255,255,255,0.25)" }}>/</span>}
+                  <span style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{s}</span>
+                  {i < SOURCES.length - 1 && <span style={{ color: "rgba(255,255,255,0.35)" }}>/</span>}
                 </span>
               ))}
             </div>
@@ -199,14 +171,14 @@ export default function LandingClient() {
         </div>
 
         <h2 style={h2} className="lp-h2">
-          Experience the power <span style={{ color: "rgba(255,255,255,0.38)" }}>of a market that stops guessing.</span>
+          Experience the power of a market that stops guessing.
         </h2>
 
         <div style={grid} className="lp-grid">
           {FEATURES.map((f) => (
             <Link key={f.slug} href={`/explore/${f.slug}`} style={cardStyle} className="lp-card">
               <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{f.t}</div>
-              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 15, lineHeight: 1.55 }}>{f.d}</div>
+              <div style={{ color: T.text, fontSize: 15, lineHeight: 1.55 }}>{f.d}</div>
               <div style={{ marginTop: 16, fontSize: 13, fontWeight: 700, color: T.cyan, letterSpacing: "0.06em" }}>
                 EXPLORE ›
               </div>
@@ -218,7 +190,7 @@ export default function LandingClient() {
           {STATS.map((s) => (
             <div key={s.k} style={statTile}>
               <div style={{ fontSize: 24, fontWeight: 800, color: T.cyan }}>{s.k}</div>
-              <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>{s.v}</div>
+              <div style={{ fontSize: 13.5, color: T.text, marginTop: 4 }}>{s.v}</div>
             </div>
           ))}
         </div>
@@ -234,7 +206,7 @@ export default function LandingClient() {
           </div>
 
           <h2 style={{ ...h2, fontSize: 40, marginBottom: 12 }}>
-            Trade the next session <span style={{ color: "rgba(255,255,255,0.38)" }}>with the whole board in front of you.</span>
+            Trade the next session with the whole board in front of you.
           </h2>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 26 }}>
@@ -246,7 +218,7 @@ export default function LandingClient() {
             </Link>
           </div>
 
-          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 15, margin: "0 0 14px", maxWidth: 520, lineHeight: 1.55 }}>
+          <p style={{ color: T.text, fontSize: 15, margin: "0 0 14px", maxWidth: 520, lineHeight: 1.55 }}>
             Not ready? Get the newsletter — new levels, tools and results as they drop.
           </p>
 
@@ -271,11 +243,11 @@ export default function LandingClient() {
           </form>
 
           <div style={promo}>
-            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.62)" }}>Use code </span>
+            <span style={{ fontSize: 14, color: T.text }}>Use code </span>
             <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
-            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.62)" }}> or </span>
+            <span style={{ fontSize: 14, color: T.text }}> or </span>
             <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
-            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.62)" }}> for </span>
+            <span style={{ fontSize: 14, color: T.text }}> for </span>
             <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>$45/mo or $500/yr</span>
           </div>
 
@@ -285,7 +257,7 @@ export default function LandingClient() {
       {/* ── Footer ──────────────────────────────────────────── */}
       <footer style={footer}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12.5, color: "rgba(255,255,255,0.45)" }}>
+          <span style={{ fontSize: 13, color: T.text }}>
             © {new Date().getFullYear()} {APP_NAME}
           </span>
           <a
@@ -394,70 +366,12 @@ const ctaHuge: React.CSSProperties = {
   boxShadow: "0 14px 40px rgba(33,158,188,0.35)",
 };
 
-const nav: React.CSSProperties = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  zIndex: 10,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 16,
-  padding: "14px clamp(16px, 4vw, 40px)",
-};
-
-const brand: React.CSSProperties = { display: "flex", alignItems: "center", flexShrink: 0 };
-
-const navPill: React.CSSProperties = {
-  display: "flex",
-  gap: 4,
-  padding: 4,
-  borderRadius: 10,
-  background: "rgba(13,17,25,0.62)",
-  backdropFilter: "blur(14px)",
-  WebkitBackdropFilter: "blur(14px)",
-  border: `1px solid ${T.border}`,
-};
-
-const navLink: React.CSSProperties = {
-  padding: "8px 15px",
-  borderRadius: 7,
-  fontSize: 13,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-  color: "rgba(255,255,255,0.7)",
-};
-
-const navSignup: React.CSSProperties = {
-  padding: "8px 16px",
-  borderRadius: 8,
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  color: T.text,
-  background: "linear-gradient(180deg, rgba(33,158,188,0.55), rgba(33,158,188,0.22))",
-  border: "1px solid rgba(33,158,188,0.6)",
-};
-
-const navLogin: React.CSSProperties = {
-  padding: "8px 16px",
-  borderRadius: 8,
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: "0.06em",
-  color: T.text,
-  background: "rgba(13,17,25,0.7)",
-  backdropFilter: "blur(10px)",
-  border: `1px solid ${T.border}`,
-};
-
 const hero: React.CSSProperties = {
   position: "relative",
   minHeight: "92vh",
   display: "flex",
   alignItems: "flex-end",
-  padding: "140px clamp(20px, 5vw, 64px) 56px",
+  padding: "160px clamp(20px, 5vw, 64px) 56px",
   overflow: "hidden",
 };
 
@@ -481,7 +395,7 @@ const eyebrow: React.CSSProperties = {
   fontWeight: 700,
   letterSpacing: "0.14em",
   textTransform: "uppercase",
-  color: "rgba(255,255,255,0.72)",
+  color: T.text,
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   marginBottom: 18,
 };
@@ -508,7 +422,7 @@ const heroSub: React.CSSProperties = {
   maxWidth: 520,
   fontSize: 16.5,
   lineHeight: 1.6,
-  color: "rgba(255,255,255,0.72)",
+  color: T.text,
 };
 
 const sourcesWrap: React.CSSProperties = { marginTop: 44 };
@@ -653,13 +567,13 @@ const footer: React.CSSProperties = {
 };
 
 const legalLink: React.CSSProperties = {
-  color: "rgba(255,255,255,0.55)",
-  fontSize: 12,
+  color: T.text,
+  fontSize: 13,
   fontWeight: 600,
   letterSpacing: "0.02em",
 };
 
-const legalDot: React.CSSProperties = { color: "rgba(255,255,255,0.25)" };
+const legalDot: React.CSSProperties = { color: "rgba(255,255,255,0.35)" };
 
 const xFollow: React.CSSProperties = {
   display: "inline-flex",

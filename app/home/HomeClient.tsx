@@ -1155,7 +1155,7 @@ export function HomeClient({
             </div>
 
             <div style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 24 }}>
-              <div className="grad-divider-b" style={{ display: "flex", flexShrink: 0 }}>
+              <div className="grad-divider-b tab-strip" style={{ display: "flex", flexShrink: 0 }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "flow", label: "Flow", icon: <FlowIcon /> },

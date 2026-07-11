@@ -520,6 +520,63 @@ input.dte-range::-moz-range-track {
     flex-wrap: wrap !important;
   }
 
+  /* ────────────────────────────────────────────────────────────────────────
+     TAB STRIPS (app-wide)
+     Tab rows are inline-styled `display:flex` with no flexWrap, so on a phone
+     the 4th+ tab is pushed off-screen and unreachable (the page wrapper is
+     overflow-x:hidden). Opt a tab row in with className="tab-strip" and it
+     becomes one horizontally-swipeable strip — every tab stays reachable.
+     ──────────────────────────────────────────────────────────────────────── */
+  main .tab-strip,
+  main .sm-tabs {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    padding-bottom: 4px;
+    justify-content: flex-start !important;
+    scrollbar-width: none;
+  }
+  main .tab-strip::-webkit-scrollbar,
+  main .sm-tabs::-webkit-scrollbar { display: none; }
+  main .tab-strip > *,
+  main .sm-tabs > * { flex: 0 0 auto !important; }
+
+  /* /social-media header: title + tabs + date on one baseline row → wrap. */
+  main .sm-head { flex-wrap: wrap; }
+
+  /* Generic escape hatch: any wide/dense block (matrix, table, chart legend)
+     that must keep its width gets its own sideways scroll instead of pushing
+     the whole page wide. */
+  main .wide-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  /* Hard pixel min-widths on layout columns force horizontal overflow on a
+     ~390px screen. Release them — the flex-wrap rule above already stacks
+     these columns, they just need permission to shrink. (Wide *content*
+     blocks keep their min-width and scroll via .wide-scroll / overflowX.) */
+  main [style*="min-width: 300px"],
+  main [style*="min-width: 320px"],
+  main [style*="min-width: 380px"],
+  main [style*="min-width: 400px"],
+  main [style*="min-width: 420px"],
+  main [style*="min-width: 480px"] {
+    min-width: 0 !important;
+  }
+
+  /* Two-col minmax splits missed by the collapse list above (Regime Matrix). */
+  main [style*="grid-template-columns: minmax(0, 1.55fr) minmax"],
+  main [style*="grid-template-columns: minmax(0, 1.5fr) minmax"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Last line of defence: nothing may hand the viewport a horizontal scrollbar. */
+  html, body { overflow-x: hidden; }
+
   /* Analytics: force a clean single-column stack on phones. The generic 4-col
      collapse above only takes it to 2 columns, which crushes these dense cards
      and lets stretched grid rows overlap. Top-align so rows never stretch into

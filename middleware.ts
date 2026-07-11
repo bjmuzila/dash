@@ -8,6 +8,9 @@ const PUBLIC_PATTERNS: RegExp[] = [
   /^\/$/,
   /^\/coming-soon$/,
   /^\/explore(\/.*)?$/,
+  // Public marketing toolbar links Docs — the KB is end-user help, not paid
+  // content, so it must resolve for signed-out visitors instead of bouncing to /.
+  /^\/docs(\/.*)?$/,
   /^\/pricing$/,
   /^\/checkout\/success$/,
   /^\/sign-in(\/.*)?$/,

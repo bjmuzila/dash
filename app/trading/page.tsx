@@ -273,7 +273,7 @@ export default function TradingPage() {
         </div>
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 0, borderBottom: `1px solid ${HT.border}` }}>
+        <div className="tab-strip" style={{ display: "flex", gap: 0, borderBottom: `1px solid ${HT.border}` }}>
           {["journal", "comparison", "analysis"].map((t) => (
             <div key={t} onClick={() => setTab(t)} style={{
               padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer",

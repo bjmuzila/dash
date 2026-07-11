@@ -387,7 +387,7 @@ export default function ResultsPage() {
   return (
     <PageShell>
       {/* Tab bar */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+      <div className="tab-strip" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
         <button onClick={() => setTab("ict")} style={tabBtn("ict", "ICT Results")}>ICT Results</button>
         <button onClick={() => setTab("fails")} style={tabBtn("fails", "Fail Rate")}>Fail Rate</button>
         <button onClick={() => setTab("checkpoints")} style={tabBtn("checkpoints", "Confidence")}>Confidence</button>

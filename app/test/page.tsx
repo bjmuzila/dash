@@ -2013,7 +2013,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
     { key: "flowgex", label: "Flow GEX History" },
   ];
   return (
-    <div style={{ display: "flex", gap: 10 }}>
+    <div className="tab-strip" style={{ display: "flex", gap: 10 }}>
       {tabs.map((t) => {
         const isActive = t.key === active;
         return (

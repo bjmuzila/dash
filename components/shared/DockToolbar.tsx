@@ -134,6 +134,7 @@ export function SegGroup({
 }) {
   return (
     <div
+      className="tab-strip"
       style={{
         display: "flex",
         alignItems: "center",

@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
 import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
+import PublicNav from "@/components/landing/PublicNav";
+import NetDriftExample from "@/components/explore/NetDriftExample";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
 // Sells the feature with copy + a frozen static teaser, then drives to
@@ -43,23 +45,8 @@ export default async function ExplorePage({
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
       }}
     >
-      {/* Top bar */}
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "16px clamp(16px,4vw,40px)",
-          borderBottom: `1px solid ${T.border}`,
-        }}
-      >
-        <Link href="/" style={{ color: T.muted, textDecoration: "none", fontSize: 13, fontWeight: 700 }}>
-          ← Back
-        </Link>
-        <Link href="/sign-in" style={{ ...topSignInBtn, display: "inline-block", textDecoration: "none" }}>
-          Sign in
-        </Link>
-      </header>
+      {/* Shared public toolbar — same one the landing page uses. */}
+      <PublicNav variant="static" active="Features" />
 
       <main
         style={{
@@ -135,7 +122,10 @@ export default async function ExplorePage({
           </section>
         </div>
 
-        {/* Full ICT concept glossary (ict only) */}
+        {/* Worked Net Drift chart (flow only) */}
+        {slug === "flow" && <NetDriftExample />}
+
+        {/* Auto-charted & auto-graded concept list (ict only) */}
         {slug === "ict" && <IctGlossary />}
 
         {/* Join Now CTA → single pricing hub */}
@@ -191,21 +181,25 @@ function IctGlossary() {
   return (
     <section style={{ marginTop: "clamp(36px,6vw,56px)" }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
-        <h2 style={{ fontSize: "clamp(20px,3.5vw,28px)", fontWeight: 800, margin: 0 }}>The ICT playbook</h2>
-        <span style={{ fontSize: 12.5, color: T.muted }}>{liveCount} of {ICT_CONCEPTS.length} detected live</span>
+        <h2 style={{ fontSize: "clamp(20px,3.5vw,28px)", fontWeight: 800, margin: 0 }}>
+          Auto-charted &amp; auto-graded concepts
+        </h2>
+        <span style={{ fontSize: 13, color: T.text }}>{liveCount} of {ICT_CONCEPTS.length} auto-charted</span>
       </div>
-      <p style={{ color: T.muted, fontSize: 14.5, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 640 }}>
-        Every concept the live page detects and labels on the chart. A{" "}
-        <span style={{ color: T.green, fontWeight: 700 }}>Live</span> tag means it&apos;s auto-detected on ES &amp; NQ in real time.
+      <p style={{ color: T.text, fontSize: 15, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 700 }}>
+        You draw nothing. Every concept below is detected and <strong>auto-charted</strong> on the live ES &amp; NQ 5-minute
+        feed as it forms, then <strong>auto-graded</strong> once the session resolves it — so each setup carries its own
+        outcome instead of a hindsight mark-up. An{" "}
+        <span style={{ color: T.green, fontWeight: 700 }}>Auto</span> tag means it&apos;s charted and graded for you in real time.
       </p>
       <div style={glossaryGrid}>
         {ICT_CONCEPTS.map((c) => (
           <div key={c.id} style={glossaryCard}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
               <span style={{ fontSize: 14.5, fontWeight: 800, color: T.text }}>{c.name}</span>
-              {c.live && <span style={liveChip}>Live</span>}
+              {c.live && <span style={liveChip}>Auto</span>}
             </div>
-            <p style={{ color: T.muted, fontSize: 13, lineHeight: 1.55, margin: 0 }}>{c.body}</p>
+            <p style={{ color: T.text, fontSize: 14, lineHeight: 1.55, margin: 0 }}>{c.body}</p>
             <a href={c.href} target="_blank" rel="noopener noreferrer" style={glossaryLink}>Learn more ↗</a>
           </div>
         ))}
@@ -344,17 +338,6 @@ const otherLink: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
   textDecoration: "none",
-};
-
-const topSignInBtn: React.CSSProperties = {
-  padding: "9px 18px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(13,17,25,0.7)",
-  color: T.text,
-  fontSize: 13,
-  fontWeight: 700,
-  cursor: "pointer",
 };
 
 const legalFooter: React.CSSProperties = {
