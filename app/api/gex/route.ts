@@ -24,7 +24,11 @@ export async function GET(req: NextRequest) {
   const expiry = new URL(req.url).searchParams.get("expiry") || "";
 
   try {
-    const res = await fetch(`${proxyBase()}/proxy/gex`, { cache: "no-store" });
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const res = await fetch(`${proxyBase()}/proxy/gex`, {
+      cache: "no-store",
+      headers: internalToken ? { "x-internal-token": internalToken } : {},
+    });
     if (!res.ok) {
       return NextResponse.json(
         { error: `proxy /proxy/gex returned ${res.status}`, chain: [] },

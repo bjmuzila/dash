@@ -107,7 +107,10 @@ export async function GET(req: NextRequest) {
   let memBytes: number | null = null;
   try {
     const port = process.env.PORT || "3001";
-    const mr = await fetch(`http://127.0.0.1:${port}/proxy/self-metrics`, { cache: "no-store" });
+    const mr = await fetch(`http://127.0.0.1:${port}/proxy/self-metrics`, {
+      cache: "no-store",
+      headers: process.env.INTERNAL_API_TOKEN ? { "x-internal-token": process.env.INTERNAL_API_TOKEN } : {},
+    });
     if (mr.ok) memBytes = Number((await mr.json())?.rss ?? 0) || null;
   } catch { /* leave null */ }
 

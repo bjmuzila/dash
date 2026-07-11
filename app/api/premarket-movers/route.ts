@@ -62,7 +62,11 @@ function isExtendedHours(): boolean {
 export async function GET() {
   try {
     const url = `${proxyBase()}/proxy/quotes?symbols=${encodeURIComponent(WATCHLIST.join(","))}`;
-    const res = await fetch(url, { cache: "no-store" });
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: internalToken ? { "x-internal-token": internalToken } : {},
+    });
     if (!res.ok) {
       return NextResponse.json({ error: `quotes proxy returned ${res.status}` }, { status: 502 });
     }

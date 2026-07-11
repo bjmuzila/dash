@@ -267,7 +267,10 @@ function computeExpiryGex(legs: Leg[], spot: number, basis: GexBasis = "oivol"):
 // Returns the expiration date string (YYYY-MM-DD) or "" if unavailable.
 async function resolveExpiry(base: string, dte: 0 | 1): Promise<string> {
   try {
-    const r = await fetch(`${base}/proxy/api/tt/expirations/SPX`, { cache: "no-store" });
+    const r = await fetch(`${base}/proxy/api/tt/expirations/SPX`, {
+      cache: "no-store",
+      headers: process.env.INTERNAL_API_TOKEN ? { "x-internal-token": process.env.INTERNAL_API_TOKEN } : {},
+    });
     if (!r.ok) return "";
     const json = (await r.json()) as { data?: unknown };
     // The adapter returns { data: { items: [{ "expiration-date" }] } }; also
@@ -296,7 +299,10 @@ async function resolveExpiry(base: string, dte: 0 | 1): Promise<string> {
 async function fetchExpiryChain(base: string, expiration: string): Promise<{ legs: Leg[]; underlying: number }> {
   try {
     const q = expiration ? `?expiration=${encodeURIComponent(expiration)}` : "";
-    const r = await fetch(`${base}/proxy/api/tt/chains/SPX${q}`, { cache: "no-store" });
+    const r = await fetch(`${base}/proxy/api/tt/chains/SPX${q}`, {
+      cache: "no-store",
+      headers: process.env.INTERNAL_API_TOKEN ? { "x-internal-token": process.env.INTERNAL_API_TOKEN } : {},
+    });
     if (!r.ok) return { legs: [], underlying: 0 };
     const { legs, underlying } = flattenChain(await r.json());
     // The adapter may return all expirations — keep only the requested one.
@@ -314,7 +320,10 @@ async function computeExpectedMove(
   spot: number
 ): Promise<{ em: number | null; expiry: string | null }> {
   try {
-    const r = await fetch(`${base}/proxy/api/tt/chains/SPX`, { cache: "no-store" });
+    const r = await fetch(`${base}/proxy/api/tt/chains/SPX`, {
+      cache: "no-store",
+      headers: process.env.INTERNAL_API_TOKEN ? { "x-internal-token": process.env.INTERNAL_API_TOKEN } : {},
+    });
     if (!r.ok) return { em: null, expiry: null };
     const { legs, underlying } = flattenChain(await r.json());
     if (!legs.length) return { em: null, expiry: null };
@@ -383,6 +392,7 @@ async function computeEsOvernight(
     // now) is always covered regardless of when this runs pre-market.
     const r = await fetch(`${base}/api/snapshots/candles?daysBack=2&limit=2000`, {
       cache: "no-store",
+      headers: process.env.INTERNAL_API_TOKEN ? { "x-internal-token": process.env.INTERNAL_API_TOKEN } : {},
     });
     if (!r.ok) return { high: null, low: null };
     const json = (await r.json()) as { rows?: Record<string, unknown>[] };
@@ -444,7 +454,10 @@ export async function GET(req: Request) {
   // heatmap uses; prevClose = yesterday's 4pm SPX cash close.
   let spotForEm = 0;
   try {
-    const r = await fetch(`${base}/proxy/gex`, { cache: "no-store" });
+    const r = await fetch(`${base}/proxy/gex`, {
+      cache: "no-store",
+      headers: process.env.INTERNAL_API_TOKEN ? { "x-internal-token": process.env.INTERNAL_API_TOKEN } : {},
+    });
     if (r.ok) {
       const p = (await r.json()) as Record<string, unknown>;
       const spot = Number(p.spot ?? 0);

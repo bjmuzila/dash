@@ -242,7 +242,11 @@ async function gammaWall(tol: number, near: number, minRange: number) {
 // ══════════════════════════════════════════════════════════════════════════════
 async function normalizedGex(ticker: string, expiration: string) {
   const url = `${proxyBase()}/proxy/api/tt/chains/${encodeURIComponent(ticker)}?expiration=${encodeURIComponent(expiration)}&range=all`;
-  const res = await fetch(url, { cache: "no-store" });
+  const internalToken = process.env.INTERNAL_API_TOKEN;
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers: internalToken ? { "x-internal-token": internalToken } : {},
+  });
   if (!res.ok) throw new Error(`chain fetch failed: HTTP ${res.status}`);
   const json = await res.json();
   const data = (json?.data ?? {}) as { underlyingPrice?: unknown; items?: unknown[] };

@@ -27,7 +27,11 @@ export async function GET(req: NextRequest) {
   } | null = null;
   try {
     const url = `${proxyBase()}/proxy/api/tt/em-zones?ticker=${encodeURIComponent(ticker)}`;
-    const res = await fetch(url, { cache: "no-store" });
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: internalToken ? { "x-internal-token": internalToken } : {},
+    });
     const json = await res.json();
     if (!res.ok || !json?.data) {
       return NextResponse.json({ error: json?.error || "zone compute failed" }, { status: 502 });

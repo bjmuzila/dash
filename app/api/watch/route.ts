@@ -61,7 +61,11 @@ async function fetchProbe(
     `&expiry=${encodeURIComponent(expiry)}&type=${side}` +
     `&strike=${encodeURIComponent(strike)}`;
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: internalToken ? { "x-internal-token": internalToken } : {},
+    });
     return (await res.json()) as ProbeResult;
   } catch {
     return null;

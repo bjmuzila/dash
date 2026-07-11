@@ -191,7 +191,11 @@ async function fetchGexSnap(): Promise<GexSnap> {
   try {
     // Call proxy/gex directly (same loopback as other server-side routes — avoids
     // round-tripping through the public domain like the old `${origin}/api/gex` did).
-    const res = await fetch(`${proxyBase()}/proxy/gex`, { cache: "no-store" });
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const res = await fetch(`${proxyBase()}/proxy/gex`, {
+      cache: "no-store",
+      headers: internalToken ? { "x-internal-token": internalToken } : {},
+    });
     if (!res.ok) return empty;
     const v = await res.json();
     // proxy/gex returns { gexRows, spot, expiry, callWall, putWall, gexFlip, totalNetGex, totals }

@@ -25,7 +25,17 @@ export function proxyBase(): string {
 export async function forwardGet(proxyPath: string): Promise<NextResponse> {
   const url = `${proxyBase()}${proxyPath.startsWith("/") ? "" : "/"}${proxyPath}`;
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    // Same-process server-to-server forward — treat it like the other in-process
+    // callers (levels-engine, cron jobs) and attach the shared secret so
+    // proxy-auth's PROXY_AUTH_REQUIRED gate doesn't reject it as anonymous.
+    // Without this, every /api/* route that forwards to /proxy/* 401'd with
+    // {"error":"no-token"} once that gate was enforced (broke /api/expirations,
+    // /api/chains, and anything using this helper — silently, for weeks).
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: internalToken ? { "x-internal-token": internalToken } : {},
+    });
     const text = await res.text();
     let body: unknown;
     try { body = JSON.parse(text); } catch { body = { raw: text }; }
