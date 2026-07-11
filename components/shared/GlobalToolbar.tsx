@@ -38,7 +38,7 @@ function MenuIcon({ size = 24 }: { size?: number }) {
 }
 
 // ── ET clock (top-right) — ticks every second, ET timezone ──
-function EtClock() {
+function EtClock({ compact = false }: { compact?: boolean }) {
   const [time, setTime] = useState("--:--:--");
   useEffect(() => {
     const tick = () =>
@@ -61,7 +61,7 @@ function EtClock() {
       title="Eastern Time"
       style={{
         flexShrink: 0,
-        fontSize: 19,
+        fontSize: compact ? 13 : 19,
         fontWeight: 800,
         color: "#e8edf5",
         fontVariantNumeric: "tabular-nums",
@@ -69,13 +69,14 @@ function EtClock() {
         whiteSpace: "nowrap",
       }}
     >
-      {time}
-      <span style={{ fontSize: 12, opacity: 0.55, marginLeft: 5 }}>ET</span>
+      {/* On phones drop the seconds — HH:MM is enough and saves ~30px. */}
+      {compact ? time.slice(0, 5) : time}
+      {!compact && <span style={{ fontSize: 12, opacity: 0.55, marginLeft: 5 }}>ET</span>}
     </span>
   );
 }
 
-function LogoMenu() {
+function LogoMenu({ compact = false }: { compact?: boolean }) {
   return (
     <div style={{ position: "relative", flexShrink: 0, display: "flex" }}>
       <Link href="/feedback" prefetch={false} title="Send feedback" aria-label="Send feedback">
@@ -83,7 +84,7 @@ function LogoMenu() {
         <img
           src="/cb-edge-logo.png"
           alt="CB Edge"
-          style={{ height: 48, width: "auto", display: "block", cursor: "pointer" }}
+          style={{ height: compact ? 32 : 48, width: "auto", display: "block", cursor: "pointer" }}
         />
       </Link>
     </div>
@@ -357,7 +358,7 @@ export default function GlobalToolbar() {
         display: "flex",
         justifyContent: "center",
         flexShrink: 0,
-        padding: "8px 14px",
+        padding: isMobile ? "6px 8px" : "8px 14px",
         paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
         boxSizing: "border-box",
         position: "relative",
@@ -382,10 +383,11 @@ export default function GlobalToolbar() {
             position: "relative",
             display: "flex",
             alignItems: "center",
-            gap: "clamp(8px, 1.2vw, 16px)",
-            height: 56,
-            padding: "0 16px",
+            gap: isMobile ? 6 : "clamp(8px, 1.2vw, 16px)",
+            height: isMobile ? 48 : 56,
+            padding: isMobile ? "0 8px" : "0 16px",
             borderRadius: 998,
+            minWidth: 0,
             background: "rgba(10,13,20,0.96)",
             backdropFilter: "blur(16px)",
             boxSizing: "border-box",
@@ -452,7 +454,7 @@ export default function GlobalToolbar() {
 
           {/* ── CB Edge logo → dropdown (Feedback, etc.) ── */}
           <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
-            <LogoMenu />
+            <LogoMenu compact={isMobile} />
           </div>
 
           {/* ── Bzila alerts bell — owner broadcasts to paid subscribers; pulses
@@ -460,28 +462,33 @@ export default function GlobalToolbar() {
           <BzilaAlerts />
 
           {/* ── Left-side nav — icon+label shortcuts; each navigates the whole
-              page to that route (drag-to-reorder, saved per browser) ── */}
-          <GexGroupNav isOwner={isOwner} />
+              page to that route (drag-to-reorder, saved per browser).
+              Desktop only: it's ~15 × 42px of flexShrink:0 circles, which on a
+              phone blows the pill far past the viewport and pushes the ticker,
+              clock and user menu off-screen. Every one of these routes is
+              already in the hamburger (NavMenu), so nothing is lost. ── */}
+          {!isMobile && <GexGroupNav isOwner={isOwner} />}
 
           {/* flexible gap — opens the center and pushes the quotes + clock
               cluster to the right ── */}
-          <div style={{ flex: 1, minWidth: 8 }} />
+          <div style={{ flex: 1, minWidth: isMobile ? 0 : 8 }} />
 
           {/* ── Live ticker (ESU / NQU + dropdown) — now sits just left of the
               clock; shrinks/clips on narrow screens ── */}
-          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: "48vw", display: "flex", alignItems: "center", overflow: "hidden" }}>
+          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: isMobile ? "40vw" : "48vw", display: "flex", alignItems: "center", overflow: "hidden" }}>
             <ToolbarTicker />
           </div>
 
-          <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />
+          {!isMobile && <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />}
 
           {/* ── ET clock ── */}
           <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
-            <EtClock />
+            <EtClock compact={isMobile} />
           </div>
 
-          {/* ── GEX groups — round pop-out button (opens GexDock) ── */}
-          {isSignedIn && (
+          {/* ── GEX groups — round pop-out button (opens GexDock). Desktop only:
+              GexDock is a right-side push panel with no mobile layout. ── */}
+          {isSignedIn && !isMobile && (
             <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
               <button
                 onClick={toggleGex}

@@ -93,9 +93,6 @@ export default function LandingClient() {
         .lp-card { transition: border-color .18s, box-shadow .18s, transform .18s; }
         .lp-card:hover { border-color: rgba(33,158,188,0.45); box-shadow: 0 0 26px rgba(33,158,188,0.18); transform: translateY(-3px); }
         .lp-x:hover { color: ${T.cyan}; border-color: rgba(33,158,188,0.5); box-shadow: 0 0 14px rgba(33,158,188,0.45); }
-        @media (max-width: 1080px) {
-          .lp-grid { grid-template-columns: 1fr 1fr !important; }
-        }
         @media (max-width: 820px) {
           .lp-nav-links { display: none !important; }
           .lp-h1 { font-size: 42px !important; }
@@ -106,8 +103,8 @@ export default function LandingClient() {
         }
       `}</style>
 
-      {/* ── Nav (shared with /explore/*) ─────────────────────── */}
-      <PublicNav variant="fixed" active="Overview" />
+      {/* ── Nav (shared with /explore/* and /pricing) ────────── */}
+      <PublicNav active="Overview" />
 
       {/* ── Hero ────────────────────────────────────────────── */}
       <section style={hero} className="lp-hero" id="overview">
@@ -183,9 +180,11 @@ export default function LandingClient() {
         <div style={grid} className="lp-grid">
           {FEATURES.map((f) => (
             <Link key={f.slug} href={`/explore/${f.slug}`} style={cardStyle} className="lp-card">
-              <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{f.t}</div>
-              <div style={{ color: T.text, fontSize: 15, lineHeight: 1.55 }}>{f.d}</div>
-              <div style={{ marginTop: 16, fontSize: 13, fontWeight: 700, color: T.cyan, letterSpacing: "0.06em" }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 24, letterSpacing: "-0.01em", marginBottom: 10 }}>{f.t}</div>
+                <div style={{ color: T.text, fontSize: 16.5, lineHeight: 1.6 }}>{f.d}</div>
+              </div>
+              <div style={{ marginTop: 22, fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>
                 EXPLORE ›
               </div>
             </Link>
@@ -432,20 +431,22 @@ const h2: React.CSSProperties = {
   maxWidth: 800,
 };
 
-// Four features, ONE horizontal row. Collapses to 2×2, then 1-up on mobile
-// (see .lp-grid media queries).
+// Four features, 2×2. Collapses to 1-up on mobile (see .lp-grid media query).
 const grid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  gap: 16,
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 20,
   alignItems: "stretch",
 };
 
 const cardStyle: React.CSSProperties = {
-  display: "block",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "space-between",
   color: "inherit",
-  padding: 22,
-  borderRadius: 16,
+  minHeight: 230,
+  padding: "32px 30px",
+  borderRadius: 20,
   border: `1px solid ${T.border}`,
   background: `radial-gradient(circle at 50% 0%, rgba(33,158,188,0.09) 0%, transparent 60%), ${T.panelBg}`,
   backdropFilter: "blur(16px)",

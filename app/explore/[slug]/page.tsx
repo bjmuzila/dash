@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
 import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
-import PublicNav from "@/components/landing/PublicNav";
+import PublicNav, { PUBLIC_NAV_HEIGHT } from "@/components/landing/PublicNav";
 import NetDriftExample from "@/components/explore/NetDriftExample";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
@@ -45,14 +45,15 @@ export default async function ExplorePage({
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
       }}
     >
-      {/* Shared public toolbar — same one the landing page uses. */}
-      <PublicNav variant="static" active="Features" />
+      {/* Shared public toolbar — fixed, same spot on every public page. */}
+      <PublicNav active="Features" />
 
       <main
         style={{
           maxWidth: 920,
           margin: "0 auto",
-          padding: "clamp(28px,5vw,64px) clamp(16px,4vw,40px) 80px",
+          // Top pad = fixed toolbar height + breathing room (see PUBLIC_NAV_HEIGHT).
+          padding: `calc(${PUBLIC_NAV_HEIGHT}px + clamp(28px,5vw,64px)) clamp(16px,4vw,40px) 80px`,
         }}
       >
         <div style={badge}>{entry.title}</div>

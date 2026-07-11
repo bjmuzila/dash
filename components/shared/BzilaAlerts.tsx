@@ -375,6 +375,9 @@ export default function BzilaAlerts() {
             top,
             left,
             width: 348,
+            // On a phone a fixed 348px panel anchored to the bell runs off the
+            // right edge — cap it to the viewport (minus the bar's 8px gutters).
+            maxWidth: "calc(100vw - 16px)",
             maxHeight: "calc(100vh - 90px)",
             overflowY: "auto",
             display: "flex",

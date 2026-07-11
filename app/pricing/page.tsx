@@ -5,7 +5,7 @@ import { getSubscription } from "@/lib/db";
 import PricingActions from "@/components/pricing/PricingActions";
 import BetaGate from "@/components/pricing/BetaGate";
 import UserMenu from "@/components/shared/UserMenu";
-import PublicNav from "@/components/landing/PublicNav";
+import PublicNav, { PUBLIC_NAV_HEIGHT } from "@/components/landing/PublicNav";
 import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 import { EXPLORE } from "@/components/explore/exploreContent";
 
@@ -57,7 +57,6 @@ export default async function PricingPage({
       {/* Same public toolbar as the landing + explore pages. Signed-in users get
           their UserMenu instead of a "start free trial" CTA on the buy page. */}
       <PublicNav
-        variant="static"
         active="Pricing"
         right={
           userId ? (
@@ -74,7 +73,8 @@ export default async function PricingPage({
         style={{
           maxWidth: 980,
           margin: "0 auto",
-          padding: "clamp(28px,5vw,56px) clamp(16px,4vw,40px) 80px",
+          // Top pad = fixed toolbar height + breathing room (see PUBLIC_NAV_HEIGHT).
+          padding: `calc(${PUBLIC_NAV_HEIGHT}px + clamp(28px,5vw,56px)) clamp(16px,4vw,40px) 80px`,
         }}
       >
         {fromEntry && (

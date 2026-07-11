@@ -25,15 +25,20 @@ export const PUBLIC_NAV = [
   { label: "Docs", href: "/docs" },
 ];
 
+/**
+ * Total height the toolbar occupies (band padding + pill + gradient border).
+ * The bar is ALWAYS fixed so it doesn't shift by a pixel when you navigate
+ * between /, /explore/* and /pricing — every page that mounts PublicNav must
+ * reserve exactly this much space at the top of its content.
+ */
+export const PUBLIC_NAV_HEIGHT = 95;
+
 export default function PublicNav({
-  /** Floats over the hero (landing) vs sits at the top of a content page. */
-  variant = "fixed",
   /** Which pill reads as current. */
   active,
   /** Replaces the default trial + login buttons (e.g. /pricing passes UserMenu). */
   right,
 }: {
-  variant?: "fixed" | "static";
   active?: string;
   right?: React.ReactNode;
 }) {
@@ -69,19 +74,21 @@ export default function PublicNav({
         @media (max-width: 960px) { .pnav-links { display: none !important; } }
       `}</style>
 
-      {/* Outer band — gives the pill breathing room so it floats over content. */}
+      {/* Outer band — gives the pill breathing room so it floats over content.
+          Always fixed: identical position on every public page, no jump on nav. */}
       <div
         style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
           display: "flex",
           justifyContent: "center",
           flexShrink: 0,
+          height: PUBLIC_NAV_HEIGHT,
           padding: "10px clamp(12px, 2vw, 20px)",
-          paddingTop: "max(10px, env(safe-area-inset-top, 0px))",
           boxSizing: "border-box",
           zIndex: 50,
-          ...(variant === "fixed"
-            ? { position: "fixed" as const, top: 0, left: 0, right: 0 }
-            : { position: "relative" as const }),
         }}
       >
         {/* Gradient-border frame (blue → teal) */}
@@ -140,10 +147,22 @@ export default function PublicNav({
               />
             </Link>
 
-            {/* Center nav */}
+            {/* Center nav — absolutely centered on the PILL, not on the leftover
+                space between the logo and the right cluster. Otherwise the pills
+                slide whenever the right cluster changes width (e.g. /pricing
+                swaps the trial CTA for a UserMenu). */}
             <nav
               className="pnav-links"
-              style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 6, margin: "0 auto" }}
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "50%",
+                transform: "translate(-50%, -50%)",
+                zIndex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
             >
               {PUBLIC_NAV.map((n) => {
                 const on = active === n.label;
@@ -174,10 +193,8 @@ export default function PublicNav({
               })}
             </nav>
 
-            <span style={{ width: 1, height: 26, background: T.border, flexShrink: 0, zIndex: 1 }} />
-
-            {/* Right cluster */}
-            <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {/* Right cluster — pinned to the right edge of the pill. */}
+            <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
               {right ?? (
                 <>
                   <Link href="/pricing?from=nav&trial=1" className="pnav-cta pnav-pulse" style={ctaBtn}>

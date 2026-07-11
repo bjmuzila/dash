@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import GlobalToolbar from "./GlobalToolbar";
+import PublicNav, { PUBLIC_NAV_HEIGHT } from "@/components/landing/PublicNav";
+import { useAuth } from "@/components/auth/AuthProvider";
 import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
 import NotesDock from "./NotesDock";
 import GexDock from "./GexDock";
@@ -96,7 +98,15 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
     setIsEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
   }, [pathname]);
 
-  const isBare = isEmbed || BARE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));
+  // /docs is dual-audience: in-app help for members (full dashboard chrome) AND
+  // a public KB linked from the marketing toolbar. For signed-out visitors it
+  // must NOT show the app's GlobalToolbar/sidebar — it gets the public toolbar
+  // instead. Wait for isLoaded so we don't flash the wrong chrome.
+  const { isSignedIn, isLoaded } = useAuth();
+  const isPublicDocs = isLoaded && !isSignedIn && (pathname === "/docs" || pathname.startsWith("/docs/"));
+
+  const isBare =
+    isEmbed || isPublicDocs || BARE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));
 
   if (isBare) {
     return (
@@ -106,13 +116,19 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          overflow: "hidden",
+          overflow: isPublicDocs ? "auto" : "hidden",
           position: "relative",
           isolation: "isolate",
           background: HOME_THEME.bg,
         }}
       >
         {!isEmbed && <VisitTracker />}
+        {isPublicDocs && (
+          <>
+            <PublicNav active="Docs" />
+            <div style={{ height: PUBLIC_NAV_HEIGHT, flexShrink: 0 }} />
+          </>
+        )}
         {children}
       </div>
     );
