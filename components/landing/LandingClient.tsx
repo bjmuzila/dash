@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import PublicNav from "@/components/landing/PublicNav";
 
@@ -110,11 +111,16 @@ export default function LandingClient() {
 
       {/* ── Hero ────────────────────────────────────────────── */}
       <section style={hero} className="lp-hero" id="overview">
-        {/* Gamma Grid Horizon — CSS only, no image asset */}
+        {/* Hero photo — sunset terrace w/ CB Edge dashboard on screen */}
         <div style={heroBg} aria-hidden>
-          <div style={gridSun} />
-          <div style={gridFloor} />
-          <div style={gridHorizon} />
+          <Image
+            src="/hero.png"
+            alt=""
+            fill
+            priority
+            sizes="100vw"
+            style={{ objectFit: "cover", objectPosition: "center 35%" }}
+          />
         </div>
         <div style={heroScrim} aria-hidden />
 
@@ -124,9 +130,9 @@ export default function LandingClient() {
           </div>
 
           <h1 style={h1} className="lp-h1">
-            The Complete Stack for
+            Your Unfair Edge
             <br />
-            Smarter 0DTE Traders
+            in the Market is Here
           </h1>
 
           <p style={heroSub}>
@@ -302,39 +308,6 @@ const root: React.CSSProperties = {
 };
 
 /* Gamma Grid Horizon background layers */
-const gridSun: React.CSSProperties = {
-  position: "absolute",
-  left: "50%",
-  top: "42%",
-  width: "min(900px, 90vw)",
-  height: "min(900px, 90vw)",
-  transform: "translate(-50%, -50%)",
-  background:
-    "radial-gradient(circle, rgba(33,158,188,0.38) 0%, rgba(18,103,131,0.14) 38%, transparent 66%)",
-  filter: "blur(10px)",
-};
-
-const gridFloor: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  background:
-    "repeating-linear-gradient(90deg, rgba(33,158,188,0.14) 0 1px, transparent 1px 64px), repeating-linear-gradient(0deg, rgba(33,158,188,0.10) 0 1px, transparent 1px 64px)",
-  transform: "perspective(620px) rotateX(64deg) scale(2.2)",
-  transformOrigin: "50% 100%",
-  maskImage: "linear-gradient(180deg, transparent 30%, #000 70%, transparent 100%)",
-  WebkitMaskImage: "linear-gradient(180deg, transparent 30%, #000 70%, transparent 100%)",
-};
-
-const gridHorizon: React.CSSProperties = {
-  position: "absolute",
-  left: 0,
-  right: 0,
-  top: "42%",
-  height: 1,
-  background: "linear-gradient(90deg, transparent, rgba(33,158,188,0.95), transparent)",
-  boxShadow: "0 0 22px rgba(33,158,188,0.75)",
-};
-
 const trialBadge: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -382,7 +355,7 @@ const heroScrim: React.CSSProperties = {
   inset: 0,
   zIndex: 1,
   background:
-    "linear-gradient(180deg, rgba(5,6,10,0.55) 0%, rgba(5,6,10,0.35) 35%, rgba(5,6,10,0.88) 82%, #05060A 100%), radial-gradient(circle at 20% 60%, rgba(5,6,10,0.75) 0%, transparent 60%)",
+    "linear-gradient(180deg, rgba(5,6,10,0.30) 0%, rgba(5,6,10,0.22) 30%, rgba(5,6,10,0.86) 78%, #05060A 100%), radial-gradient(circle at 22% 62%, rgba(5,6,10,0.70) 0%, transparent 62%)",
 };
 
 const heroInner: React.CSSProperties = { position: "relative", zIndex: 2, width: "100%", maxWidth: 1200 };

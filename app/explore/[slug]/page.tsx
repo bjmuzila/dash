@@ -70,9 +70,6 @@ export default async function ExplorePage({
             <Link href={`/pricing?from=${entry.slug}&trial=1`} style={demoBtn}>
               START MY 2-DAY FREE TRIAL ›
             </Link>
-            <Link href="/sign-in" style={trialBtn}>
-              ALREADY A MEMBER ›
-            </Link>
           </div>
           <p style={{ margin: "12px 0 0", fontSize: 13.5, color: T.muted, opacity: 0.75 }}>
             Two days of the full live dashboard — every ticker, every tool. Cancel anytime.
@@ -137,11 +134,8 @@ export default async function ExplorePage({
             Join CB Edge for live {entry.title.toLowerCase()} plus the full dashboard — GEX, flow, estimated moves and more.
           </p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <Link href={`/pricing?from=${entry.slug}`} style={joinBtn}>
-              Join now
-            </Link>
-            <Link href="/sign-in" style={{ ...memberBtn, display: "inline-block", textDecoration: "none" }}>
-              Already a member? Sign in
+            <Link href={`/pricing?from=${entry.slug}&trial=1`} style={joinBtn}>
+              Start my 2-day free trial ›
             </Link>
           </div>
         </div>
@@ -247,21 +241,6 @@ const demoBtn: React.CSSProperties = {
   boxShadow: "0 12px 32px rgba(33,158,188,0.32)",
 };
 
-const trialBtn: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "14px 22px",
-  borderRadius: 10,
-  fontSize: 13,
-  fontWeight: 800,
-  letterSpacing: "0.07em",
-  color: T.text,
-  textDecoration: "none",
-  background: "rgba(255,255,255,0.05)",
-  border: `1px solid ${T.border}`,
-};
-
 const teaserCard: React.CSSProperties = {
   background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
   border: "1px solid rgba(33,158,188,0.12)",
@@ -314,17 +293,6 @@ const joinBtn: React.CSSProperties = {
   fontSize: 15,
   fontWeight: 800,
   textDecoration: "none",
-  cursor: "pointer",
-};
-
-const memberBtn: React.CSSProperties = {
-  padding: "14px 22px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(255,255,255,0.03)",
-  color: T.text,
-  fontSize: 14,
-  fontWeight: 700,
   cursor: "pointer",
 };
 

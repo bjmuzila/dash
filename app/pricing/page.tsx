@@ -5,7 +5,8 @@ import { getSubscription } from "@/lib/db";
 import PricingActions from "@/components/pricing/PricingActions";
 import BetaGate from "@/components/pricing/BetaGate";
 import UserMenu from "@/components/shared/UserMenu";
-import { HOME_THEME as T, homeGlossPanelStyle, homeHeaderStyle } from "@/components/shared/homeTheme";
+import PublicNav from "@/components/landing/PublicNav";
+import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 import { EXPLORE } from "@/components/explore/exploreContent";
 
 export const dynamic = "force-dynamic";
@@ -53,17 +54,21 @@ export default async function PricingPage({
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
       }}
     >
-      <header style={{ ...homeHeaderStyle, padding: "16px clamp(16px,4vw,40px)" }}>
-        <Link href="/" style={{ color: T.muted, textDecoration: "none", fontSize: 14, fontWeight: 700 }}>
-          ← Back
-        </Link>
-        {!userId && (
-          <Link href="/sign-in" style={{ ...topBtn, display: "inline-block", textDecoration: "none" }}>
-            Sign in
-          </Link>
-        )}
-        {userId && <UserMenu />}
-      </header>
+      {/* Same public toolbar as the landing + explore pages. Signed-in users get
+          their UserMenu instead of a "start free trial" CTA on the buy page. */}
+      <PublicNav
+        variant="static"
+        active="Pricing"
+        right={
+          userId ? (
+            <UserMenu />
+          ) : (
+            <Link href="/sign-in" style={{ ...topBtn, display: "inline-block", textDecoration: "none" }}>
+              Sign in
+            </Link>
+          )
+        }
+      />
 
       <main
         style={{
