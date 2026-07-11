@@ -43,6 +43,28 @@ export const EXPLORE: Record<string, ExploreEntry> = {
       { label: "Put Wall", value: "5,900", tone: "red" },
     ],
   },
+  "confidence-score": {
+    slug: "confidence-score",
+    title: "Confidence Score",
+    tagline: "Every key level scored 0–100 for Hit, Pivot or Chop.",
+    body: [
+      "A level is only as useful as your conviction in it. The Confidence Score grades each key level from 0 to 100 and classifies the likely outcome — a clean Hit, a Pivot/reaction, or Chop — by blending live dealer positioning with historical analogs from 2+ years of sessions.",
+      "Instead of staring at a wall of numbers, you get a single, honest read on which levels actually matter today.",
+    ],
+    highlights: [
+      "0–100 score on each key level",
+      "Hit / Pivot / Chop outcome classification",
+      "Live positioning blended with historical analogs",
+      "Per-level outcome timeline as the day plays out",
+    ],
+    teaserLabel: "Sample level scores",
+    teaserStats: [
+      { label: "5,985 (Flip)", value: "82 · Pivot", tone: "cyan" },
+      { label: "6,050 (Call Wall)", value: "74 · Hit", tone: "green" },
+      { label: "5,900 (Put Wall)", value: "61 · Chop", tone: "purple" },
+      { label: "6,000 (Round)", value: "48 · Chop", tone: "red" },
+    ],
+  },
   flow: {
     slug: "flow",
     title: "Option Flow & Premium Flow",
