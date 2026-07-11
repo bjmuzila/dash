@@ -240,6 +240,15 @@ export default function IbStatsTab() {
   const byNoon = fcb.filter((d) => B(d).breakMin < 720);
   const cont = days.filter((d) => d.containedAt2);
 
+  /* day of week — parsed at noon UTC so no timezone can shift the date */
+  const DOW = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const dowOf = (d: SlimDay) => new Date(`${d.date}T12:00:00Z`).getUTCDay(); // 1=Mon … 5=Fri
+  const byDow = DOW.map((name, i) => {
+    const g = days.filter((d) => dowOf(d) === i + 1);
+    const gb = g.filter((d) => d.fcb);
+    return { name, g, gb };
+  }).filter((x) => x.g.length > 0);
+
   const ranked = ([
     ["Midpoint close bias", wb.length, wb.filter((d) => d.firstTouchSide === d.bias).length],
     ["Formation order + midpoint (confluent)", conf.length, conf.filter((d) => d.firstTouchSide === d.bias).length],
@@ -315,6 +324,54 @@ export default function IbStatsTab() {
               <Row key={l} label={l} n={closeMins.length} hits={closeMins.filter((x) => x <= m).length} detail="cumulative" />
             ))}
           </Tbl>
+        </Card>
+
+        <Card title="0c · Day of the Week" subtitle="Same rules, sliced by weekday — where the trend days and the chop days actually live">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {["Day", "Sessions", "Avg IB width", "Single break", "Both sides (rotation)", "Never broke", "Break ≥1× ext", "Fail rate", "Avg break time", "High breaks first"]
+                  .map((h, i) => <th key={h} style={i === 0 ? thL : th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {byDow.map(({ name, g, gb }) => {
+                const sb = rateNum(g.filter((d) => d.singleBreak).length, g.length);
+                const bb = rateNum(g.filter((d) => d.bothBroke).length, g.length);
+                const ext = rateNum(gb.filter((d) => B(d).hit["1"]).length, gb.length);
+                return (
+                  <tr key={name}>
+                    <td style={tdL}>{name}</td>
+                    <td style={td}>{g.length}</td>
+                    <td style={td}>{f2(avg(g.map((d) => d.width)))}</td>
+                    <td style={{ ...td, color: rateColor(sb), fontWeight: 800 }}>{sb == null ? "—" : `${sb.toFixed(1)}%`}</td>
+                    <td style={{ ...td, color: rateColor(bb), fontWeight: 800 }}>{bb == null ? "—" : `${bb.toFixed(1)}%`}</td>
+                    <td style={td}>{pct(g.filter((d) => d.neitherBroke).length, g.length)}</td>
+                    <td style={{ ...td, color: rateColor(ext), fontWeight: 800 }}>{ext == null ? "—" : `${ext.toFixed(1)}%`}</td>
+                    <td style={td}>{pct(gb.filter((d) => B(d).failed).length, gb.length)}</td>
+                    <td style={td}>{clock(avg(gb.map((d) => B(d).breakMin)))}</td>
+                    <td style={td}>{pct(g.filter((d) => d.firstTouchSide === "H").length, g.filter((d) => d.firstTouchSide).length)}</td>
+                  </tr>
+                );
+              })}
+              <tr>
+                <td style={{ ...tdL, fontWeight: 800 }}>ALL DAYS</td>
+                <td style={{ ...td, fontWeight: 800 }}>{N}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{f2(avg(widths))}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.singleBreak).length, N)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.bothBroke).length, N)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.neitherBroke).length, N)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(fcb.filter((d) => B(d).hit["1"]).length, fcb.length)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(fcb.filter((d) => B(d).failed).length, fcb.length)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{clock(avg(closeMins))}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.firstTouchSide === "H").length, days.filter((d) => d.firstTouchSide).length)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={note}>
+            Read each weekday against the ALL DAYS row, not against 50%. A day only matters if it deviates from the sample&rsquo;s own baseline
+            by more than a few points — with ~450 sessions per weekday, a 3–4 point gap is still inside the noise band.
+          </div>
         </Card>
 
         <Card title="1 · Midpoint Close Bias" subtitle="IB closes above mid → high breaks first. Below mid → low breaks first.">
