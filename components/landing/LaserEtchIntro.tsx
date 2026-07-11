@@ -31,11 +31,12 @@ const LINE: Array<[number, number]> = [
   [0.897, 0.156],
 ];
 
-const FONT = "800 110px Inter, Arial, sans-serif";
-const LOGO_BASE = DH / 2 + 40;
+// Rect the real logo is drawn into — the traced outline is built from the SAME
+// pixels at the SAME position, so the etch matches what it turns into.
+const LOGO_W = 620;
 
 // Phase durations (ms)
-const T_ETCH = 7000;
+const T_ETCH = 10000;
 const T_FADE = 1200;
 const T_LOGO = 4500;
 const T_XFADE = 1000;
@@ -107,57 +108,57 @@ export default function LaserEtchIntro() {
       ];
     };
 
-    // ── letter outline points ("CB Edge", nearest-neighbor trace order) ──
+    // ── logo outline points — edge pixels of the REAL logo png, traced at the
+    //    exact rect it is later drawn into, so the outline matches the logo ──
     type Tp = { p: [number, number]; jump: boolean };
     const letterPaths: Tp[][] = [];
     let logoTotalPts = 0;
-    {
+    const logoImg = new window.Image();
+    logoImg.onload = () => {
+      const w = LOGO_W;
+      const h = (logoImg.naturalHeight / logoImg.naturalWidth) * w;
+      const x0 = DW / 2 - w / 2, y0 = DH / 2 - h / 2;
       const mc = document.createElement("canvas");
       mc.width = DW; mc.height = DH;
       const m = mc.getContext("2d")!;
-      m.font = FONT;
-      const word = "CB Edge";
-      const tw = m.measureText(word).width;
-      let x = DW / 2 - tw / 2;
-      for (const ch of word) {
-        const cw = m.measureText(ch).width;
-        if (ch !== " ") {
-          m.clearRect(0, 0, DW, DH);
-          m.font = FONT;
-          m.lineWidth = 2;
-          m.strokeStyle = "#fff";
-          m.strokeText(ch, x, LOGO_BASE);
-          const d = m.getImageData(0, 0, DW, DH).data;
-          const raw: Array<[number, number]> = [];
-          for (let yy = 0; yy < DH; yy += 3)
-            for (let xx = 0; xx < DW; xx += 3)
-              if (d[(yy * DW + xx) * 4 + 3] > 60) raw.push([xx, yy]);
-          if (raw.length) {
-            let cur = 0;
-            for (let i = 1; i < raw.length; i++) if (raw[i][1] < raw[cur][1]) cur = i;
-            const used = new Array(raw.length).fill(false);
-            used[cur] = true;
-            const ord: Tp[] = [{ p: raw[cur], jump: true }];
-            for (let k = 1; k < raw.length; k++) {
-              let best = -1, bd = Infinity;
-              const c = raw[cur];
-              for (let i = 0; i < raw.length; i++) {
-                if (used[i]) continue;
-                const dx = raw[i][0] - c[0], dy = raw[i][1] - c[1];
-                const dist = dx * dx + dy * dy;
-                if (dist < bd) { bd = dist; best = i; }
-              }
-              used[best] = true;
-              ord.push({ p: raw[best], jump: bd > 400 });
-              cur = best;
-            }
-            letterPaths.push(ord);
-            logoTotalPts += ord.length;
-          }
+      m.drawImage(logoImg, x0, y0, w, h);
+      const d = m.getImageData(0, 0, DW, DH).data;
+      const a = (xx: number, yy: number) =>
+        xx < 0 || yy < 0 || xx >= DW || yy >= DH ? 0 : d[(yy * DW + xx) * 4 + 3];
+      const raw: Array<[number, number]> = [];
+      const STEP = 2, TH = 40;
+      for (let yy = Math.floor(y0); yy < y0 + h; yy += STEP)
+        for (let xx = Math.floor(x0); xx < x0 + w; xx += STEP) {
+          if (a(xx, yy) <= TH) continue;
+          // edge = opaque pixel with a transparent neighbor
+          if (a(xx - STEP, yy) <= TH || a(xx + STEP, yy) <= TH || a(xx, yy - STEP) <= TH || a(xx, yy + STEP) <= TH)
+            raw.push([xx, yy]);
         }
-        x += cw;
+      if (!raw.length) return;
+      // nearest-neighbor trace order
+      let cur = 0;
+      for (let i = 1; i < raw.length; i++)
+        if (raw[i][0] < raw[cur][0] || (raw[i][0] === raw[cur][0] && raw[i][1] < raw[cur][1])) cur = i;
+      const used = new Array(raw.length).fill(false);
+      used[cur] = true;
+      const ord: Tp[] = [{ p: raw[cur], jump: true }];
+      for (let k = 1; k < raw.length; k++) {
+        let best = -1, bd = Infinity;
+        const c = raw[cur];
+        for (let i = 0; i < raw.length; i++) {
+          if (used[i]) continue;
+          const dx = raw[i][0] - c[0], dy = raw[i][1] - c[1];
+          const dist = dx * dx + dy * dy;
+          if (dist < bd) { bd = dist; best = i; }
+        }
+        used[best] = true;
+        ord.push({ p: raw[best], jump: bd > 400 });
+        cur = best;
       }
-    }
+      letterPaths.push(ord);
+      logoTotalPts = ord.length;
+    };
+    logoImg.src = "/cb-edge-logo.png";
 
     // ── persistent etched-outline layer ──
     const layer = document.createElement("canvas");
@@ -191,10 +192,6 @@ export default function LaserEtchIntro() {
       const lp = letterPaths[letterPaths.length - 1];
       return lp[lp.length - 1].p;
     };
-
-    // ── real logo image for the crossfade ──
-    const logoImg = new window.Image();
-    logoImg.src = "/cb-edge-logo.png";
 
     // ── particles ──
     let particles: Particle[] = [];
@@ -277,17 +274,20 @@ export default function LaserEtchIntro() {
       ctx.beginPath(); ctx.arc(x, y, 3.4, 0, 7); ctx.fill();
       ctx.restore();
     };
-    const bg = () => {
+    // gridAlpha 0 = clean backdrop (chart-etch part), 1 = grid visible (logo part)
+    const bg = (gridAlpha: number) => {
       const ex = DW + (2 * offX) / scale, ey = DH + (2 * offY) / scale;
       const g = ctx.createLinearGradient(0, -offY / scale, 0, ey);
       g.addColorStop(0, "#0a1218");
       g.addColorStop(1, "#0c161e");
       ctx.fillStyle = g;
       ctx.fillRect(-offX / scale - 2, -offY / scale - 2, ex + 4, ey + 4);
-      ctx.strokeStyle = "rgba(90,140,160,.08)";
-      ctx.lineWidth = 1;
-      for (let x = -64; x <= DW + 64; x += 64) { ctx.beginPath(); ctx.moveTo(x, -offY / scale); ctx.lineTo(x, ey); ctx.stroke(); }
-      for (let y = -54; y <= DH + 54; y += 54) { ctx.beginPath(); ctx.moveTo(-offX / scale, y); ctx.lineTo(ex, y); ctx.stroke(); }
+      if (gridAlpha > 0) {
+        ctx.strokeStyle = `rgba(90,140,160,${0.08 * gridAlpha})`;
+        ctx.lineWidth = 1;
+        for (let x = -64; x <= DW + 64; x += 64) { ctx.beginPath(); ctx.moveTo(x, -offY / scale); ctx.lineTo(x, ey); ctx.stroke(); }
+        for (let y = -54; y <= DH + 54; y += 54) { ctx.beginPath(); ctx.moveTo(-offX / scale, y); ctx.lineTo(ex, y); ctx.stroke(); }
+      }
     };
     const drawLine = (len: number, alpha: number) => {
       ctx.save();
@@ -312,7 +312,7 @@ export default function LaserEtchIntro() {
     };
     const drawRealLogo = (alpha: number) => {
       if (!logoImg.complete || !logoImg.naturalWidth) return;
-      const w = 620;
+      const w = LOGO_W;
       const h = (logoImg.naturalHeight / logoImg.naturalWidth) * w;
       ctx.save();
       ctx.globalAlpha = alpha;
@@ -328,9 +328,10 @@ export default function LaserEtchIntro() {
       if (t0 === null) t0 = ts;
       const t = ts - t0;
       ctx.setTransform(scale, 0, 0, scale, offX, offY);
-      bg();
 
       const A = T_ETCH, B = A + T_FADE, C = B + T_LOGO, D = C + T_XFADE, E = D + T_HOLD, F = E + T_BLACK;
+      // grid hidden during the chart etch, fades in with the logo phase
+      bg(t < A ? 0 : t < B ? (t - A) / T_FADE : 1);
 
       if (t < A) {
         const len = total * ease(Math.min(t / A, 1));
@@ -342,12 +343,13 @@ export default function LaserEtchIntro() {
       } else if (t < B) {
         const f = (t - A) / T_FADE;
         drawLine(total, 1 - f);
-        const end = pts[pts.length - 1], s = letterPaths[0][0].p;
+        const end = pts[pts.length - 1];
+        const s = letterPaths.length ? letterPaths[0][0].p : [DW / 2 - LOGO_W / 2, DH / 2];
         const x = end[0] + (s[0] - end[0]) * ease(f);
         const y = end[1] + (s[1] - end[1]) * ease(f);
         drawParticles();
         laser(x, y);
-      } else if (t < C) {
+      } else if (t < C && logoTotalPts > 0) {
         const pr = Math.min((t - B) / T_LOGO, 1);
         const target = Math.floor(logoTotalPts * pr);
         burnTo(target);
