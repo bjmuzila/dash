@@ -9,7 +9,7 @@
 #
 # ── Alert vocabulary (source page -> alerts) ────────────────────────────────
 #  [CB]          new CB (moved)  ·  CB hit within 5 pts
-#  [Econ]        AUTO: 5 min to event  ·  1 min to event (wired from EconCalendarPanel)
+#  [Econ]        AUTO: 5 min to event  ·  1 min to event (server-v2/econ-alert-recorder.js, High/Medium impact)
 #  [Traders]     overnight overview ready  ·  bzila update  ·  1 min to open  ·  1 min to close
 #  [EM]          ESU/NQU crossed estimated move  (1x per week)
 #  [Flow]        new whale option

@@ -2100,6 +2100,10 @@ async function main() {
     // flips away. Read via /proxy/regime-alerts; force a pass via POST
     // /proxy/regime-alerts-run.
     startRegimeAlertRecorder(PORT);
+    // Econ-calendar countdown alerts: polls /api/calendar every 20s and appends
+    // "5 minutes to <event>" / "1 minute to <event>" lines to public/signals.txt
+    // for High/Medium impact events, read by the home SignalsFeed as [Econ] chips.
+    require('./econ-alert-recorder').startEconAlertRecorder(PORT);
     // Regime Engine persistent-learning trainer: daily 05:00-05:10 ET, refits
     // the same HMM on a 30D window, decodes+validates each day's regime call
     // against the actual next-day return, and stores fit + accuracy metrics

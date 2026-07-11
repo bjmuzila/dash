@@ -43,7 +43,7 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
   if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
   if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
   const ratio = Math.min(Math.abs(n) / m, 1);
-  const eased = Math.pow(ratio * (intensity || 0.1), 1.4);
+  const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
   const alpha = Math.min(0.18, 0.02 + eased * 0.16);
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }

@@ -27,8 +27,17 @@ const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
 type Sym = (typeof SYMBOLS)[number];
 
-/** Card titles — the one non-white font on the page. Change here, nowhere else. */
-const TITLE_COLOR = LIGHT_BLUE;
+/** Card titles are the only non-white font on the page — colored per card via
+ *  the `accent` prop. The card SURFACE stays accent-free (no top strip); this
+ *  only tints the title text. */
+const TITLE_COLORS: Record<string, string> = {
+  cyan: HOME_THEME.cyan,
+  green: HOME_THEME.green,
+  orange: HOME_THEME.orange,
+  red: HOME_THEME.red,
+  purple: HOME_THEME.purple,
+  blue: LIGHT_BLUE,
+};
 
 /* ── panel ────────────────────────────────────────────────────────────────────
  * Dashboard card look: variant="budget" (no top accent strip), 16px titles,
@@ -36,15 +45,15 @@ const TITLE_COLOR = LIGHT_BLUE;
  * Call sites still pass `accent`; it's accepted and ignored so the tab can
  * never drift back to colored top bars.
  */
-function Card({ title, subtitle, children }: {
-  accent?: string; title?: React.ReactNode; subtitle?: React.ReactNode; children?: React.ReactNode;
+function Card({ title, subtitle, children, accent = "cyan" }: {
+  accent?: keyof typeof TITLE_COLORS; title?: React.ReactNode; subtitle?: React.ReactNode; children?: React.ReactNode;
 }) {
   return (
     <ThemeCard variant="budget">
       {(title != null || subtitle != null) && (
         <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 3 }}>
           {title != null && (
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: TITLE_COLOR }}>{title}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: TITLE_COLORS[accent] ?? HOME_THEME.cyan }}>{title}</div>
           )}
           {subtitle != null && (
             <div style={{ fontSize: 15, color: HOME_THEME.text }}>{subtitle}</div>
@@ -279,6 +288,7 @@ function LiveToday({ sym, ds, days, hist }: {
   return (
     <>
       <Card
+        accent="cyan"
         title={`Today — ${sym} · ${dowName}`}
         subtitle={`${live.ibComplete ? "IB complete" : "IB STILL FORMING — levels not final until 10:30 ET"} · ${clock(live.nowMin)} ET${connected ? "" : " · feed disconnected"}`}
       >
@@ -482,6 +492,7 @@ function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName
 
   return (
     <Card
+      accent="green"
       title="In Play Right Now — what today's IB is setting up"
       subtitle={live.ibComplete
         ? "Every % below is today's live condition, scored against every past session that looked the same"
@@ -683,7 +694,7 @@ export default function IbStatsTab() {
           }}
         />
 
-        <Card title={`Initial Balance Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`Last updated ${LAST_UPDATED}`}>
+        <Card accent="blue" title={`Initial Balance Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`Last updated ${LAST_UPDATED}`}>
           <div style={statGrid}>
             <Stat k="Sessions" v={String(N)} sub={`${yearsSpan.toFixed(1)} years of data`} />
             <Stat k="Date range" v={`${ds.from} → ${ds.to}`} sub={`${ds.barMinutes}m bars, RTH`} />
@@ -697,14 +708,14 @@ export default function IbStatsTab() {
           </div>
         </Card>
 
-        <Card title="★ Rule Ranking — highest hit rate first" subtitle="Rules with ≥8 sample days only">
+        <Card accent="green" title="★ Rule Ranking — highest hit rate first" subtitle="Rules with ≥8 sample days only">
           <Tbl head={["Rule", "Sample (days)", "Hit", "Hit rate", "Verdict"]}
             footNote="Sample size is the first thing to check — a 90% hit rate on 9 days is nothing. A rule at 50±5% is a coin flip.">
             {ranked.map(([l, n, w]) => <Row key={l} label={l} n={n} hits={w} detail={verdict(n, (100 * w) / n)} />)}
           </Tbl>
         </Card>
 
-        <Card title="0 · Baseline — IB break behavior" subtitle="The benchmark every rule must beat">
+        <Card accent="cyan" title="0 · Baseline — IB break behavior" subtitle="The benchmark every rule must beat">
           <Tbl head={["Outcome", "Days", "Hit", "Rate", "Note"]}>
             <Row label="IB high broken (any wick)" n={N} hits={days.filter((d) => d.touchedH).length} />
             <Row label="IB low broken (any wick)" n={N} hits={days.filter((d) => d.touchedL).length} />
@@ -715,7 +726,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="0b · Time of IB Break" subtitle="When the first break actually happens">
+        <Card accent="purple" title="0b · Time of IB Break" subtitle="When the first break actually happens">
           <div style={statGrid}>
             <Stat k="Avg · first TOUCH" v={clock(avg(touchMins))} sub={`${f2((avg(touchMins) ?? 0) - 570)} min after IB open`} />
             <Stat k="Avg · CLOSE break" v={clock(avg(closeMins))} sub={`${f2((avg(closeMins) ?? 0) - 570)} min after IB open`} />
@@ -732,7 +743,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="0c · Day of the Week" subtitle="Same rules, sliced by weekday — where the trend days and the chop days actually live">
+        <Card accent="blue" title="0c · Day of the Week" subtitle="Same rules, sliced by weekday — where the trend days and the chop days actually live">
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -780,7 +791,7 @@ export default function IbStatsTab() {
           </div>
         </Card>
 
-        <Card title="1 · Midpoint Close Bias" subtitle="IB closes above mid → high breaks first. Below mid → low breaks first.">
+        <Card accent="cyan" title="1 · Midpoint Close Bias" subtitle="IB closes above mid → high breaks first. Below mid → low breaks first.">
           <Tbl head={["Signal", "Days", "Correct", "Hit rate", "Detail"]}>
             <Row label="All midpoint-bias days" n={wb.length} hits={wb.filter((d) => d.firstTouchSide === d.bias).length} />
             <Row indent label="Bias LONG (close > mid)" n={wbL.length} hits={wbL.filter((d) => d.firstTouchSide === "H").length} detail="predicted high breaks first" />
@@ -789,7 +800,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="2 · Formation Order + Midpoint" subtitle="Low forms first + close above mid → long. High first + close below mid → short.">
+        <Card accent="green" title="2 · Formation Order + Midpoint" subtitle="Low forms first + close above mid → long. High first + close below mid → short.">
           <Tbl head={["Setup", "Days", "Correct", "Hit rate", "Detail"]}
             footNote="Compare CONFLUENT against the raw midpoint bias in Rule 1 — the delta is the entire value of the formation-order filter.">
             <Row label="CONFLUENT (order agrees with bias)" n={conf.length} hits={conf.filter((d) => d.firstTouchSide === d.bias).length} detail="the A+ filter" />
@@ -799,7 +810,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="3 · Single Break Continuation" subtitle="The claimed 70–85% edge, tested on close-confirmed breaks">
+        <Card accent="orange" title="3 · Single Break Continuation" subtitle="The claimed 70–85% edge, tested on close-confirmed breaks">
           <Tbl head={["Test", "Days", "Hit", "Rate", "Detail"]}>
             <Row label="Opposite IB side NEVER breaks" n={fcb.length} hits={sbWin} detail="true single-break day after entry" />
             <Row label="Break extends ≥ 0.5× IB width" n={fcb.length} hits={fcb.filter((d) => B(d).hit["0.5"]).length} />
@@ -808,7 +819,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="4 · IB Width → Day Type" subtitle="Narrow → trend/break. Wide → rotation, fade the breaks.">
+        <Card accent="red" title="4 · IB Width → Day Type" subtitle="Narrow → trend/break. Wide → rotation, fade the breaks.">
           <div style={statGrid}>
             <Stat k="NARROW = width <" v="0.5× ATR14  or  0.75× avgIB20" sub={`≈ under ${f2(Math.min(0.5 * avgAtr, 0.75 * avgAvgIb))} pts at current vol`} />
             <Stat k="WIDE = width >" v="1.5× ATR14  or  1.25× avgIB20" sub={`≈ over ${f2(Math.min(1.5 * avgAtr, 1.25 * avgAvgIb))} pts at current vol`} />
@@ -838,7 +849,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="5 · Breakout Entry — close beyond IB + volume" subtitle="Volume filter = break-bar volume > average IB bar volume">
+        <Card accent="green" title="5 · Breakout Entry — close beyond IB + volume" subtitle="Volume filter = break-bar volume > average IB bar volume">
           <Tbl head={["Entry filter", "Days", "≥1× IB ext", "Rate", "Avg MFE / MAE (× IB width)"]}
             footNote="MAE is your stop-distance requirement — it's the heat the average winner still made you sit through.">
             <Row label="Close break + VOLUME surge" n={volYes.length} hits={volYes.filter((d) => B(d).hit["1"]).length}
@@ -849,7 +860,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="6 · Failed Breakout Fade" subtitle="Break closes outside, then closes back inside within 30 min">
+        <Card accent="red" title="6 · Failed Breakout Fade" subtitle="Break closes outside, then closes back inside within 30 min">
           <Tbl head={["Outcome", "Days", "Hit", "Rate", "Detail"]}
             footNote={`Avg excursion before the fail: <b>${f2(avg(failed.map((d) => B(d).peakBeforeFail)))} pts</b> — that is roughly the stop a breakout entry has to survive.`}>
             <Row label="Break FAILS (closes back inside ≤30m)" n={fcb.length} hits={failed.length} detail="base rate of the trap" />
@@ -858,7 +869,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="7 · 15m FVG inside the IB" subtitle="15m fair-value gap, rebuilt from the raw bars">
+        <Card accent="purple" title="7 · 15m FVG inside the IB" subtitle="15m fair-value gap, rebuilt from the raw bars">
           <Tbl head={["FVG", "Days", "Reaches IB extreme in FVG dir", "Rate", "Reaches midpoint"]}>
             <Row label="BULLISH FVG in IB" n={fvB.length} hits={fvB.filter(hitExt).length} detail={`mid: ${pct(fvB.filter((d) => d.fvgHitMid).length, fvB.length)}`} />
             <Row label="BEARISH FVG in IB" n={fvS.length} hits={fvS.filter(hitExt).length} detail={`mid: ${pct(fvS.filter((d) => d.fvgHitMid).length, fvS.length)}`} />
@@ -867,7 +878,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="8 · Retest Continuation" subtitle="Returns to within 2 ticks of the broken level, close holds outside">
+        <Card accent="cyan" title="8 · Retest Continuation" subtitle="Returns to within 2 ticks of the broken level, close holds outside">
           <Tbl head={["Path", "Days", "Continues to new extreme", "Rate", "Avg MFE (× IB width)"]}
             footNote="If retest MFE ≥ no-retest MFE, waiting costs nothing and improves the entry. If it's materially lower, the best days never retest — take the break.">
             <Row label="Break → clean RETEST → continue" n={rt.length} hits={rt.filter((d) => B(d).retestCont).length} detail={`${f2(avg(rt.map((d) => B(d).rExt)))}×`} />
@@ -875,7 +886,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="B · 0.25 Fib Pullback → Continuation" subtitle="Two readings of &quot;the 0.25 level&quot; — they are very different trades">
+        <Card accent="green" title="B · 0.25 Fib Pullback → Continuation" subtitle="Two readings of &quot;the 0.25 level&quot; — they are very different trades">
           <Tbl head={["Test", "Days", "Hit", "Rate", "Detail"]}
             footNote={`Variant A avg MFE measured <i>from the 0.25 entry</i>: <b>${f2(avg(fA.map((d) => B(d).fibA.mfe ?? 0)))}× IB width</b>. Watch the "no pullback" row — if the runaway days carry the fattest MFE, waiting for 0.25 filters you out of the best sessions.`}>
             {sectionRow("Variant A — 0.25 of the IB RANGE, measured back into the IB (high break → IBH − 0.25×width). A deep pullback that re-enters the IB.")}
@@ -889,7 +900,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="9 · Extension Targets" subtitle="Scale-out probabilities, measured from the broken level">
+        <Card accent="orange" title="9 · Extension Targets" subtitle="Scale-out probabilities, measured from the broken level">
           <Tbl head={["Target", "Breaks", "Reached", "Hit rate", "Sizing"]}
             footNote={`Avg MFE on all close-breaks: <b>${f2(avg(fcb.map((d) => B(d).rExt)))}× IB width</b> · avg MAE (heat taken): <b>${f2(avg(fcb.map((d) => B(d).rAdv)))}× IB width</b>.`}>
             {[0.5, 1, 1.5, 2].map((t) => (
@@ -899,7 +910,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="10 · Close Location in IB Range" subtitle="Top 25% + low first → strong long. Bottom 25% + high first → strong short.">
+        <Card accent="green" title="10 · Close Location in IB Range" subtitle="Top 25% + low first → strong long. Bottom 25% + high first → strong short.">
           <Tbl head={["Zone", "Days", "Breaks as predicted", "Rate", "Detail"]}>
             <Row label="TOP 25% close" n={top.length} hits={top.filter((d) => d.firstTouchSide === "H").length} detail="plain zone" />
             <Row indent label="+ LOW formed first (STRONG LONG)" n={topStrong.length} hits={topStrong.filter((d) => d.firstTouchSide === "H").length}
@@ -911,7 +922,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="11 · Open Type + IB Width" subtitle="OAR = open outside the prior RTH range · HIR/LIR = open inside it">
+        <Card accent="purple" title="11 · Open Type + IB Width" subtitle="OAR = open outside the prior RTH range · HIR/LIR = open inside it">
           <Tbl head={["Open type", "Days", "Hit", "Rate", "What 'hit' means"]}
             footNote="OAR-H / OAR-L = opened above / below the prior RTH range. HIR / LIR = opened inside the prior range, in the upper / lower half.">
             {openTypes.flatMap((ot) => {
@@ -927,7 +938,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="12 · ORB + IB Alignment" subtitle="09:30–09:45 opening range breaks the same way as the IB midpoint bias">
+        <Card accent="cyan" title="12 · ORB + IB Alignment" subtitle="09:30–09:45 opening range breaks the same way as the IB midpoint bias">
           <Tbl head={["Setup", "Days", "Bias side breaks first", "Rate", "Single-break rate"]}
             footNote="Aligned should beat conflicted on BOTH columns for this filter to earn its keep.">
             <Row label="ALIGNED (ORB dir = IB bias)" n={align.length} hits={align.filter((d) => d.firstTouchSide === d.bias).length}
@@ -937,7 +948,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="13 · Time Filter — when the break happens" subtitle="Hit = extension ≥ 1× IB width">
+        <Card accent="orange" title="13 · Time Filter — when the break happens" subtitle="Hit = extension ≥ 1× IB width">
           <Tbl head={["Break window", "Breaks", "≥1× ext", "Rate", "Detail"]}
             footNote="Late breaks have less session left — expect decaying extension rates. If they don't decay, the break is time-agnostic.">
             {tf.map(([a, b, l]) => {
@@ -949,7 +960,7 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
 
-        <Card title="14 · Contained Day (rare)" subtitle="Price still entirely inside the IB at 14:00 ET">
+        <Card accent="red" title="14 · Contained Day (rare)" subtitle="Price still entirely inside the IB at 14:00 ET">
           <Tbl head={["Outcome", "Days", "Hit", "Rate", "Detail"]}>
             <Row label="Contained at 14:00" n={N} hits={cont.length} detail="base rate of the setup" />
             <Row indent label="STAYS inside through the close (fade works)" n={cont.length} hits={cont.filter((d) => !d.containedBrokeLate).length} detail="fade the extremes" />
