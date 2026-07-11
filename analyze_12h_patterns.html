@@ -115,9 +115,21 @@
         .outcome-broke-low { color: #f87171; }
         .outcome-broke-both { color: #fbbf24; }
         .outcome-broke-none { color: #94a3b8; }
-        .outcome-still-none--1-candles- { color: #94a3b8; }
-        .outcome-still-none--2-candles- { color: #64748b; }
-        .outcome-still-none--3-candles- { color: #475569; }
+        /* After 1 candle */
+        .outcome-broke-high--after-1-candle- { color: #4ade80; }
+        .outcome-broke-low--after-1-candle- { color: #f87171; }
+        .outcome-broke-both--after-1-candle- { color: #fbbf24; }
+        .outcome-broke-none--after-1-candle- { color: #cbd5e1; }
+        /* After 2 candles */
+        .outcome-broke-high--after-2-candles- { color: #22c55e; }
+        .outcome-broke-low--after-2-candles- { color: #ef4444; }
+        .outcome-broke-both--after-2-candles- { color: #eab308; }
+        .outcome-broke-none--after-2-candles- { color: #64748b; }
+        /* After 3 candles */
+        .outcome-broke-high--after-3-candles- { color: #16a34a; }
+        .outcome-broke-low--after-3-candles- { color: #dc2626; }
+        .outcome-broke-both--after-3-candles- { color: #ca8a04; }
+        .outcome-broke-none--after-3-candles- { color: #475569; }
 
         .crosstab-section {
             display: grid;
@@ -226,6 +238,9 @@
         </div>
 
         <div id="results" style="display: none;">
+            <div style="text-align: right; margin-bottom: 15px;">
+                <button onclick="downloadCSV()" style="background: #10b981;">Download Results CSV</button>
+            </div>
             <div class="stats-grid">
                 <div class="stats-card">
                     <h2>6AM Start (6am-6pm, 6pm-6am)</h2>
@@ -261,6 +276,68 @@
     </div>
 
     <script>
+        let currentResults6am = [];
+        let currentResults6pm = [];
+
+        function downloadCSV() {
+            let csv = 'Start Time,Pattern,C1,C2,C3,Pattern High,Pattern Low,Next High,Next Low,Outcome,Follow-Up Candles\n';
+
+            // 6AM Start
+            csv += '\n6AM START\n';
+            currentResults6am.forEach(r => {
+                const followUp = r.followUpOutcomes ? r.followUpOutcomes.join(' → ') : '';
+                csv += `"6AM","${r.pattern}","${r.c1}","${r.c2}","${r.c3}","${r.pHigh}","${r.pLow}","${r.nHigh}","${r.nLow}","${r.outcome}","${followUp}"\n`;
+            });
+
+            // 6PM Start
+            csv += '\n6PM START\n';
+            currentResults6pm.forEach(r => {
+                const followUp = r.followUpOutcomes ? r.followUpOutcomes.join(' → ') : '';
+                csv += `"6PM","${r.pattern}","${r.c1}","${r.c2}","${r.c3}","${r.pHigh}","${r.pLow}","${r.nHigh}","${r.nLow}","${r.outcome}","${followUp}"\n`;
+            });
+
+            // Add summary stats
+            csv += '\n\n=== 6AM START - SUMMARY ===\nOutcome,Count,Percentage\n';
+            csv = addStatsToCSV(csv, currentResults6am);
+
+            csv += '\n\n=== 6PM START - SUMMARY ===\nOutcome,Count,Percentage\n';
+            csv = addStatsToCSV(csv, currentResults6pm);
+
+            // Download
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', `12h-candle-patterns-${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function addStatsToCSV(csv, results) {
+            const outcomes = {};
+            results.forEach(r => {
+                outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
+            });
+
+            const outcomeOrder = [
+                'Broke High', 'Broke Low', 'Broke Both', 'Broke None',
+                'Still None (1 candle)', 'Still None (2 candles)', 'Still None (3 candles)'
+            ];
+
+            outcomeOrder.forEach(o => {
+                const count = outcomes[o] || 0;
+                if (count > 0) {
+                    const pct = (100 * count / results.length).toFixed(1);
+                    csv += `"${o}",${count},${pct}%\n`;
+                }
+            });
+
+            csv += `"Total Patterns",${results.length},100%\n`;
+            return csv;
+        }
+
         function showError(msg) {
             const err = document.getElementById('error');
             err.textContent = msg;
@@ -406,24 +483,26 @@
                 const pHigh = Math.max(c1.high, c2.high, c3.high);
                 const pLow = Math.min(c1.low, c2.low, c3.low);
 
-                const brokeHigh = c4.high > pHigh;
-                const brokeLow = c4.low < pLow;
+                const brokeHigh4 = c4.high > pHigh;
+                const brokeLow4 = c4.low < pLow;
 
                 let outcome;
-                if (brokeHigh && brokeLow) outcome = 'Broke Both';
-                else if (brokeHigh) outcome = 'Broke High';
-                else if (brokeLow) outcome = 'Broke Low';
+                if (brokeHigh4 && brokeLow4) outcome = 'Broke Both';
+                else if (brokeHigh4) outcome = 'Broke High';
+                else if (brokeLow4) outcome = 'Broke Low';
                 else outcome = 'Broke None';
 
-                // If "Broke None", track next candles and resolve final outcome
+                // If "Broke None" on c4, track next 3 candles
                 let followUpOutcomes = [];
                 let finalOutcome = outcome;
 
                 if (outcome === 'Broke None') {
-                    // Check up to 3 more candles
+                    // Check candles 5, 6, 7
                     for (let j = 1; j <= 3; j++) {
                         if (i + 3 + j >= candles.length) {
-                            finalOutcome = `Still None (${j} candles)`;
+                            if (j === 1) finalOutcome = 'Broke None (after 1 candle)';
+                            else if (j === 2) finalOutcome = 'Broke None (after 2 candles)';
+                            else finalOutcome = 'Broke None (after 3 candles)';
                             break;
                         }
 
@@ -432,15 +511,20 @@
                         const brokeLn = cn.low < pLow;
 
                         let cnOutcome;
-                        if (brokeHn && brokeLn) cnOutcome = 'Broke Both';
-                        else if (brokeHn) cnOutcome = 'Broke High';
-                        else if (brokeLn) cnOutcome = 'Broke Low';
-                        else cnOutcome = `Still None (${j} candle${j > 1 ? 's' : ''})`;
+                        if (brokeHn && brokeLn) {
+                            cnOutcome = `Broke Both (after ${j-1} candle${j-1 > 1 ? 's' : ''})`;
+                        } else if (brokeHn) {
+                            cnOutcome = `Broke High (after ${j-1} candle${j-1 > 1 ? 's' : ''})`;
+                        } else if (brokeLn) {
+                            cnOutcome = `Broke Low (after ${j-1} candle${j-1 > 1 ? 's' : ''})`;
+                        } else {
+                            cnOutcome = `Broke None (after ${j} candle${j > 1 ? 's' : ''})`;
+                        }
 
                         followUpOutcomes.push(cnOutcome);
 
-                        // Stop if broke one side or both
-                        if (cnOutcome !== `Still None (${j} candle${j > 1 ? 's' : ''})`) {
+                        // Stop if broke
+                        if (!cnOutcome.includes('Broke None')) {
                             finalOutcome = cnOutcome;
                             break;
                         }
@@ -477,8 +561,24 @@
 
             // Sort outcomes in order
             const outcomeOrder = [
-                'Broke High', 'Broke Low', 'Broke Both', 'Broke None',
-                'Still None (1 candles)', 'Still None (2 candles)', 'Still None (3 candles)'
+                'Broke High',
+                'Broke Low',
+                'Broke Both',
+                'Broke None',
+                'Broke High (after 0 candles)',
+                'Broke Low (after 0 candles)',
+                'Broke High (after 1 candle)',
+                'Broke Low (after 1 candle)',
+                'Broke Both (after 1 candle)',
+                'Broke None (after 1 candle)',
+                'Broke High (after 2 candles)',
+                'Broke Low (after 2 candles)',
+                'Broke Both (after 2 candles)',
+                'Broke None (after 2 candles)',
+                'Broke High (after 3 candles)',
+                'Broke Low (after 3 candles)',
+                'Broke Both (after 3 candles)',
+                'Broke None (after 3 candles)'
             ];
 
             let html = '';
@@ -511,13 +611,15 @@
 
             const outcomes = [
                 'Broke High', 'Broke Low', 'Broke Both', 'Broke None',
-                'Still None (1 candles)', 'Still None (2 candles)', 'Still None (3 candles)'
+                'Broke High (after 1 candle)', 'Broke Low (after 1 candle)', 'Broke Both (after 1 candle)', 'Broke None (after 1 candle)',
+                'Broke High (after 2 candles)', 'Broke Low (after 2 candles)', 'Broke Both (after 2 candles)', 'Broke None (after 2 candles)',
+                'Broke High (after 3 candles)', 'Broke Low (after 3 candles)', 'Broke Both (after 3 candles)', 'Broke None (after 3 candles)'
             ];
 
             const totalPatterns = results.length;
 
-            let html = '<table><tr><th>Pattern</th>';
-            outcomes.forEach(o => html += `<th>${o}</th>`);
+            let html = '<table style="font-size: 11px;"><tr><th>Pattern</th>';
+            outcomes.forEach(o => html += `<th style="font-size: 11px;">${o}</th>`);
             html += '<th>Total</th></tr>';
 
             Object.keys(patterns).sort().forEach(p => {
@@ -529,14 +631,14 @@
                     total += count;
                 });
 
-                html += `<tr><td>${p}</td>`;
+                html += `<tr><td style="font-size: 11px;">${p}</td>`;
                 counts.forEach(count => {
                     // % of overall patterns
                     const pct = totalPatterns > 0 ? ((100 * count / totalPatterns).toFixed(1)) : 0;
-                    html += `<td>${count} (${pct}%)</td>`;
+                    html += `<td style="font-size: 11px;">${count} (${pct}%)</td>`;
                 });
                 const totalPct = totalPatterns > 0 ? ((100 * total / totalPatterns).toFixed(1)) : 0;
-                html += `<td><strong>${total} (${totalPct}%)</strong></td></tr>`;
+                html += `<td style="font-size: 11px;"><strong>${total} (${totalPct}%)</strong></td></tr>`;
             });
 
             html += '</table>';
@@ -614,6 +716,10 @@
 
             const results6am = analyzePatterns(candles6am);
             const results6pm = analyzePatterns(candles6pm);
+
+            // Store globally for download
+            currentResults6am = results6am;
+            currentResults6pm = results6pm;
 
             document.getElementById('stats-6am').innerHTML = buildStatsTable(results6am);
             document.getElementById('stats-6pm').innerHTML = buildStatsTable(results6pm);

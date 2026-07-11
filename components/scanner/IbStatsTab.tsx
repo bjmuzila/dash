@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
-import { Card } from "@/components/shared/PageCard";
+import { Card as ThemeCard } from "@/components/shared/PageCard";
 import {
   parseCsv, buildDays, avg, med, clock,
   type Day,
@@ -21,6 +21,34 @@ import {
 
 const CSV_URL = "/data/es-5m-rth.csv";
 const LAST_UPDATED = "7/11/2026";
+
+/* ── panel ────────────────────────────────────────────────────────────────────
+ * Dashboard card look: variant="budget" (no top accent strip), 16px titles,
+ * 15px body, white text throughout — no gray, no per-card accent color.
+ * Call sites still pass `accent`; it is accepted and ignored so the tab can
+ * never drift back to colored top bars.
+ */
+function Card({ title, subtitle, children }: {
+  accent?: string; title?: React.ReactNode; subtitle?: React.ReactNode; children?: React.ReactNode;
+}) {
+  return (
+    <ThemeCard variant="budget">
+      {(title != null || subtitle != null) && (
+        <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 3 }}>
+          {title != null && (
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text }}>
+              {title}
+            </div>
+          )}
+          {subtitle != null && (
+            <div style={{ fontSize: 15, color: HOME_THEME.text }}>{subtitle}</div>
+          )}
+        </div>
+      )}
+      {children}
+    </ThemeCard>
+  );
+}
 
 /* ── formatting ───────────────────────────────────────────────────────────── */
 
@@ -30,15 +58,14 @@ const pct = (n: number, d: number) => (d ? `${((100 * n) / d).toFixed(1)}%` : "�
 const rateNum = (n: number, d: number) => (d ? (100 * n) / d : null);
 
 const rateColor = (p: number | null) =>
-  p == null ? "rgba(255,255,255,0.4)"
+  p == null ? HOME_THEME.text
   : p >= 60 ? HOME_THEME.green
   : p <= 40 ? HOME_THEME.red
   : HOME_THEME.orange;
 
 const th: React.CSSProperties = {
-  padding: "7px 10px", textAlign: "right", fontWeight: 700, fontSize: 12,
-  letterSpacing: "0.05em", textTransform: "uppercase",
-  color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap",
+  padding: "7px 10px", textAlign: "right", fontWeight: 700, fontSize: 15,
+  letterSpacing: "0.03em", color: HOME_THEME.text, whiteSpace: "nowrap",
 };
 const thL: React.CSSProperties = { ...th, textAlign: "left" };
 const td: React.CSSProperties = {
@@ -46,9 +73,9 @@ const td: React.CSSProperties = {
   fontSize: 15, borderTop: "1px solid rgba(255,255,255,0.06)", whiteSpace: "nowrap",
 };
 const tdL: React.CSSProperties = { ...td, textAlign: "left" };
-const tdDim: React.CSSProperties = { ...td, color: "rgba(255,255,255,0.55)", fontSize: 13 };
+const tdDim: React.CSSProperties = { ...td, color: HOME_THEME.text, fontSize: 15 };
 const note: React.CSSProperties = {
-  marginTop: 10, fontSize: 13, fontStyle: "italic", color: "rgba(255,255,255,0.5)",
+  marginTop: 10, fontSize: 15, fontStyle: "italic", color: HOME_THEME.text,
 };
 
 /* one stat row: label · n · hits · rate · detail */
@@ -58,7 +85,7 @@ function Row({ label, n, hits, detail, indent }: {
   const p = rateNum(hits, n);
   return (
     <tr>
-      <td style={{ ...tdL, paddingLeft: indent ? 26 : 10, color: indent ? "rgba(255,255,255,0.8)" : HOME_THEME.text }}>{label}</td>
+      <td style={{ ...tdL, paddingLeft: indent ? 26 : 10 }}>{label}</td>
       <td style={td}>{n}</td>
       <td style={td}>{hits}</td>
       <td style={{ ...td, color: rateColor(p), fontWeight: 800 }}>{p == null ? "—" : `${p.toFixed(1)}%`}</td>
@@ -89,9 +116,9 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
       background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)",
       borderRadius: 12, padding: 12,
     }}>
-      <div style={{ fontSize: 11, letterSpacing: "0.05em", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>{k}</div>
+      <div style={{ fontSize: 15, letterSpacing: "0.03em", color: HOME_THEME.text }}>{k}</div>
       <div style={{ fontSize: 20, fontWeight: 800, marginTop: 3, color: HOME_THEME.text }}>{v}</div>
-      {sub && <div style={{ fontSize: 11, marginTop: 3, color: "rgba(255,255,255,0.45)" }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 15, marginTop: 3, color: HOME_THEME.text }}>{sub}</div>}
     </div>
   );
 }
@@ -103,7 +130,7 @@ const statGrid: React.CSSProperties = {
 
 const sectionRow = (text: string) => (
   <tr>
-    <td colSpan={5} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 13, paddingTop: 14 }}>
+    <td colSpan={5} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 15, paddingTop: 14 }}>
       {text}
     </td>
   </tr>
@@ -137,7 +164,7 @@ export default function IbStatsTab() {
     );
   }
   if (!csv) {
-    return <Card accent="cyan" title="IB Stats"><div style={{ color: "rgba(255,255,255,0.6)" }}>Loading dataset…</div></Card>;
+    return <Card accent="cyan" title="IB Stats"><div style={{ color: HOME_THEME.text, fontSize: 15 }}>Loading dataset…</div></Card>;
   }
   if (!days.length) {
     return <Card accent="red" title="IB Stats"><div style={{ color: HOME_THEME.red }}>No complete RTH sessions parsed from the CSV.</div></Card>;
@@ -291,7 +318,7 @@ export default function IbStatsTab() {
           <Stat k="Median IB width" v={`${f2(med(widths))} pts`} />
           <Stat k="IB as % of day range" v={`${f2((avg(days.map((d) => d.width / (d.dayHigh - d.dayLow))) ?? 0) * 100)}%`} />
         </div>
-        <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.55 }}>
           IB = 09:30–10:30 ET high/low. A <b>break</b> means a 5m <b>close</b> outside the IB — wick-only touches are tracked separately as the trap set.
           Extensions, MFE and MAE are quoted in multiples of IB width, measured from the broken level.
         </div>
