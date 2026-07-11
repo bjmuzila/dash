@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import PublicNav from "@/components/landing/PublicNav";
+import LaserEtchIntro from "@/components/landing/LaserEtchIntro";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
@@ -106,22 +106,15 @@ export default function LandingClient() {
       {/* ── Nav (shared with /explore/* and /pricing) ────────── */}
       <PublicNav active="Overview" />
 
+      {/* ── Laser-etch intro (replaces the hero photo) — collapses after it
+             fades to black ─────────────────────────────────── */}
+      <LaserEtchIntro />
+
       {/* ── Hero ────────────────────────────────────────────── */}
       <section style={hero} className="lp-hero" id="overview">
-        {/* Hero photo — sunset terrace w/ CB Edge dashboard on screen */}
-        <div style={heroBg} aria-hidden>
-          <Image
-            src="/hero.png"
-            alt=""
-            fill
-            priority
-            sizes="100vw"
-            style={{ objectFit: "cover", objectPosition: "center 35%" }}
-          />
-        </div>
         <div style={heroScrim} aria-hidden />
 
-        <div style={heroInner}>
+        <div style={heroInner} id="hero-content">
           <div style={trialBadge} className="lp-pulse">
             <span style={dot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
           </div>
@@ -346,8 +339,6 @@ const hero: React.CSSProperties = {
   padding: "160px clamp(20px, 5vw, 64px) 56px",
   overflow: "hidden",
 };
-
-const heroBg: React.CSSProperties = { position: "absolute", inset: 0, zIndex: 0 };
 
 const heroScrim: React.CSSProperties = {
   position: "absolute",
