@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-11 — IB Stats scanner tab (`lib/ibStats.ts`, `components/scanner/IbStatsTab.tsx`, `app/scanner/page.tsx`, `ib-backtest-esu6.html`, `public/data/ib-ES.json`, `ib-NQ.json`)
+
+Added an Initial Balance (09:30–10:30 ET) rule backtest as a new `/scanner` tab: 14 IB rules + a 0.25-fib-pullback rule (two variants: 0.25 of the IB range vs 0.25 retrace of the post-break impulse), break-time distribution, day-of-week slice, IB width buckets (narrow `<0.5×ATR14` or `<0.75×avgIB20` / wide `>1.5×ATR14` or `>1.25×avgIB20`), and a hit-rate ranking with sample-size verdicts — engine in `lib/ibStats.ts` (pure, interval-agnostic; break = bar CLOSE outside IB, failed break = back inside within 30 min). Heavy compute runs offline in the standalone `ib-backtest-esu6.html` (now auto-detects bar interval and exports a slim per-session JSON), so the tab just fetches `public/data/ib-{ES,NQ}.json` (~1.8MB each, 1m data since 2017) and aggregates client-side behind an ES/NQ switcher; themed with `variant="budget"` cards (no top accent strip), white 15px body, 16px LIGHT_BLUE titles. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-10 — Flow GEX buy/sell accuracy + directional Vol GEX (`server-v2/computation/flow-gex.js`, `gex-calculator.js`, `server-v2/state/flow-gex-rehydrate.js`, `flow-gex-history.js`)
 
 Excluded `bucket:'neutral'` prints — trades `inferSide` couldn't classify as buy/sell from the bid/ask (mid/unknown or no fresh quote, which FlowProcessor coerces to `side:'buy'`) — from dealer inventory via a guard in `flow-gex.js` `ingestTape` plus an `AND (bucket IS NULL OR bucket <> 'neutral')` filter on the `flow-gex-rehydrate.js` rebuild query and both `flow-gex-history.js` tape CTEs, so unclassifiable volume stops leaking in as taker buys across live + restart + the persisted vol-history heatmap. Added a directional `netVolGexDir` field in `gex-calculator.js` that signs the day's REST volume by the observed `(dealerBuy−dealerSell)/total` buy/sell ratio (dealer polarity, same as `flowGEX`), falling back to raw `netVolGEX` on strikes with no classified flow — left additive (not yet wired to the client Vol toggle); NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).

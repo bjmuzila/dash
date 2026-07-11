@@ -348,15 +348,18 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
   );
 }
 
-function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
+const SUB_TABLE_COLS = "1fr 90px 80px 90px 90px 80px 90px";
+
+function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[]; discordByEmail: Map<string, string> }) {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: 16, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px 80px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: SUB_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
+        <span>Discord</span>
         <span>Amount</span>
         <span>Status</span>
         <span>Renews</span>
@@ -368,13 +371,15 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
           <div style={{ padding: "32px 16px", textAlign: "center", color: T.muted, fontSize: 15 }}>
             No active subscriptions found
           </div>
-        ) : subs.map((s) => (
+        ) : subs.map((s) => {
+          const discordName = discordByEmail.get(s.customer_email.toLowerCase());
+          return (
           <div
             key={s.id}
-            title={`${s.customer_email} · ${fmtMoney(s.amount)}/${s.interval === "year" ? "yr" : "mo"} · ${s.status} · renews ${fmtDateShort(s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
+            title={`${s.customer_email} · ${discordName ? `Discord: ${discordName} · ` : ""}${fmtMoney(s.amount)}/${s.interval === "year" ? "yr" : "mo"} · ${s.status} · renews ${fmtDateShort(s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 80px 90px 90px 80px 90px",
+              gridTemplateColumns: SUB_TABLE_COLS,
               gap: 8,
               padding: "9px 16px",
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
@@ -390,6 +395,9 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
                 </div>
               )}
             </div>
+            <span style={{ color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {discordName ?? "—"}
+            </span>
             <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>
               {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
             </span>
@@ -407,7 +415,8 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
             <span style={{ color: T.text, fontSize: 15 }}>{fmtDateShort(s.joined)}</span>
             <span style={{ color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>{fmtMoney(s.total_spent)}</span>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -598,6 +607,10 @@ export default function SalesDashboard() {
   const [expensesLoading, setExpensesLoading] = useState(true);
   const [expensesBusy, setExpensesBusy] = useState(false);
 
+  // email (lowercase) -> Discord username, for the Active Subscriptions table's
+  // Discord column. Best-effort — a failed fetch just leaves the column blank.
+  const [discordByEmail, setDiscordByEmail] = useState<Map<string, string>>(new Map());
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -634,7 +647,20 @@ export default function SalesDashboard() {
     }
   }, []);
 
-  useEffect(() => { load(); loadExpenses(); }, [load, loadExpenses]);
+  const loadDiscord = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/discord-connections");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      const map = new Map<string, string>();
+      for (const r of (j.rows as { email: string; discord_username: string }[]) ?? []) {
+        if (r.email && r.discord_username) map.set(r.email.toLowerCase(), r.discord_username);
+      }
+      setDiscordByEmail(map);
+    } catch { /* best-effort — Discord column just stays blank */ }
+  }, []);
+
+  useEffect(() => { load(); loadExpenses(); loadDiscord(); }, [load, loadExpenses, loadDiscord]);
 
   const addExpense = async (name: string, category: string, amountDollars: number, cadence: "monthly" | "yearly" | "once") => {
     setExpensesBusy(true);
@@ -719,7 +745,7 @@ export default function SalesDashboard() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
-            onClick={() => { load(); loadExpenses(); }}
+            onClick={() => { load(); loadExpenses(); loadDiscord(); }}
             disabled={loading}
             style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 15, opacity: loading ? 0.5 : 1 }}
           >
@@ -786,7 +812,7 @@ export default function SalesDashboard() {
             {/* Active Subscriptions + Recent Customers — above Expenses */}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
               <div style={{ minHeight: 320 }}>
-                <SubscriptionTable subs={data.subscriptions} />
+                <SubscriptionTable subs={data.subscriptions} discordByEmail={discordByEmail} />
               </div>
               <RecentCustomers customers={data.recentCustomers} />
             </div>

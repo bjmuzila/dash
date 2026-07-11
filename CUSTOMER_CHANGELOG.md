@@ -2,6 +2,11 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Saturday 7/11/2026
+
+* New "IB Stats" tab in the Scanner — every Initial Balance (9:30–10:30) trading rule backtested over nine years of ES and NQ data, ranked by hit rate so you can see at a glance which ones actually have an edge and which are coin flips.
+* IB Stats also shows when the initial balance typically breaks, how the day of the week changes the odds, what counts as a narrow vs wide opening range, and how far breakouts usually run — with an ES / NQ switcher.
+
 ## Friday 7/10/2026
 
 * The Signals feed on the Home page now updates itself — live CB, options-flow, and GEX wall & flip alerts appear automatically during market hours, on top of any you write in by hand.

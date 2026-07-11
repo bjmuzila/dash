@@ -1567,6 +1567,27 @@ export async function listUsersWithLastLogin(): Promise<UserWithLastLogin[]> {
   `);
 }
 
+export interface DiscordConnectionRow {
+  id: string;
+  email: string;
+  discord_id: string;
+  discord_username: string;
+  discord_avatar: string | null;
+  discord_connected_at: string | null;
+  is_owner: boolean;
+}
+
+/** Every account with a linked Discord — feeds the admin "Discord Connections"
+ *  card and the Sales table's Discord column (joined there by email). */
+export async function listDiscordConnections(): Promise<DiscordConnectionRow[]> {
+  return queryAll<DiscordConnectionRow>(`
+    SELECT id, email, discord_id, discord_username, discord_avatar, discord_connected_at, is_owner
+      FROM users
+     WHERE discord_id IS NOT NULL
+     ORDER BY discord_connected_at DESC NULLS LAST
+  `);
+}
+
 export async function countActiveSessions(): Promise<number> {
   const row = await queryOne<{ count: string }>(`SELECT COUNT(*)::text AS count FROM sessions WHERE expires_at > NOW()`);
   return Number(row?.count ?? 0);

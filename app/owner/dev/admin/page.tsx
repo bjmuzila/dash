@@ -422,6 +422,88 @@ function UnsubscribePanel() {
   );
 }
 
+// ─── Discord Connections — who linked their Discord account ──────────────────
+
+interface DiscordConnectionRow {
+  email: string;
+  discord_username: string;
+  avatar_url: string | null;
+  connected_at: string | null;
+  is_owner: boolean;
+}
+
+function DiscordConnectionsPanel() {
+  const [rows, setRows] = useState<DiscordConnectionRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/discord-connections");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows((j.rows as DiscordConnectionRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const COLS = "1.6fr 1.2fr 1fr";
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 16, fontWeight: 700, color: T.cyan }}>Discord Connections</span>
+        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
+          {rows ? rows.length : "—"}
+        </span>
+        <span style={{ fontSize: 15, color: T.textSecondary }}>accounts that linked a Discord account</span>
+        <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 15, opacity: loading ? 0.5 : 1, marginLeft: "auto" }}>
+          {loading ? "…" : "↻"}
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 9, fontWeight: 500, color: T.muted, letterSpacing: "0.01em" }}>
+        <span>Customer</span>
+        <span>Discord</span>
+        <span>Connected</span>
+      </div>
+
+      <div style={{ maxHeight: 320, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 15 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 15 }}>Loading…</div>
+        ) : !rows || rows.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 15 }}>No one has connected Discord yet</div>
+        ) : (
+          rows.map((r) => (
+            <div key={r.email} style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "8px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 15, alignItems: "center" }}>
+              <div style={{ minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+                {r.is_owner && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 8, background: `${T.gold}18`, border: `1px solid ${T.gold}44`, color: T.gold, flexShrink: 0 }}>owner</span>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                {r.avatar_url && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={r.avatar_url} alt="" width={18} height={18} style={{ borderRadius: "50%", flexShrink: 0 }} />
+                )}
+                <span style={{ color: T.cyan, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.discord_username}</span>
+              </div>
+              <span style={{ color: T.textSecondary, fontSize: 15 }}>{fmtRelative(r.connected_at)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -459,6 +541,9 @@ export default function AdminDashboard() {
 
         {/* Customer engagement — last login, ~time on site, pages visited. */}
         <CustomerActivityPanel />
+
+        {/* Who's linked their Discord account. */}
+        <DiscordConnectionsPanel />
 
         {/* Far CB Watch — which customers added which tickers to the roster. */}
         <FarCbTickersPanel />

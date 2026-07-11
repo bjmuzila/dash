@@ -9,12 +9,12 @@
 #
 # ── Alert vocabulary (source page -> alerts) ────────────────────────────────
 #  [CB]          new CB (moved)  ·  CB hit within 5 pts
-#  [Econ]        5 minutes to event  ·  1 minute to event
+#  [Econ]        AUTO: 5 min to event  ·  1 min to event (wired from EconCalendarPanel)
 #  [Traders]     overnight overview ready  ·  bzila update  ·  1 min to open  ·  1 min to close
 #  [EM]          ESU/NQU crossed estimated move  (1x per week)
 #  [Flow]        new whale option
 #  [Analytics]   GEX crossed 0  ·  initial balance formed (stats in play)  ·  levels hit/failed
-#  [Strategy]    new strategy available (click to see)
+#  [Greeks]      vanna-charm melt up  ·  theta bleed event  ·  gamma pin risk
 #  [Scanner]     —
 #  [Watch This]  new watch-this — ticker / strike / expiration (links to page)
 #  [Balance]     today's quadrant transition
@@ -25,6 +25,6 @@
 9:38   [Econ] 5 minutes to CPI
 9:45   [Flow] new whale — SPX 7400C $1.2M {/flow}
 9:58   [Traders] 1 minute to market open
-10:05  [Watch This] TSLA 250C 07-18 {/scanner}
-10:10  [Analytics] GEX crossed 0 {/analytics}
+10:05  [Greeks] vanna-charm melt up {/greeks}
+10:10  [Analytics] GEX crossed 0 {/es-candles}
 10:18  [Balance] quadrant flipped to balanced {/scanner}

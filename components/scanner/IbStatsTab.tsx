@@ -19,6 +19,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { Card as ThemeCard } from "@/components/shared/PageCard";
+import { useEsCandles } from "@/hooks/useEsCandles";
+import { useNqCandles } from "@/hooks/useNqCandles";
 import { avg, med, clock, type IbDataset, type SlimDay } from "@/lib/ibStats";
 
 const LAST_UPDATED = "7/11/2026";
@@ -123,6 +125,397 @@ function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
 const sectionRow = (text: string) => (
   <tr><td colSpan={5} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 15, paddingTop: 14 }}>{text}</td></tr>
 );
+
+/* ── LIVE TODAY ───────────────────────────────────────────────────────────────
+ * Everything the stats below need in order to be applied to the session that's
+ * actually running: today's IB high/low/mid/width, live price, where price sits
+ * relative to those levels, and the historical odds for THIS day's weekday and
+ * width bucket. Fed by the same ES/NQ candle sockets the rest of the app uses.
+ */
+
+/** minute-of-day in ET, straight off the bar timestamp — never trust local tz */
+function etMin(ts: number): number {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date(ts));
+  const h = +(p.find((x) => x.type === "hour")?.value ?? 0);
+  const m = +(p.find((x) => x.type === "minute")?.value ?? 0);
+  return (h % 24) * 60 + m;
+}
+
+const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function LiveToday({ sym, ds, days, hist }: {
+  sym: Sym;
+  ds: IbDataset;
+  days: SlimDay[];
+  hist: { dowStats: { name: string; sb: number | null; n: number }[]; avgIb: number; avgAtr: number };
+}) {
+  const es = useEsCandles(sym === "ES", 2);
+  const nq = useNqCandles(sym === "NQ", 2);
+  const candles = sym === "ES" ? es.candles : nq.candles;
+  const connected = sym === "ES" ? es.connected : nq.connected;
+
+  const live = useMemo(() => {
+    if (!candles?.length) return null;
+    const bars = candles
+      .map((c) => ({ min: etMin(c.timestamp), h: c.high, l: c.low, c: c.close, o: c.open }))
+      .filter((b) => b.min >= 570 && b.min <= 960)
+      .sort((a, b) => a.min - b.min);
+    if (!bars.length) return null;
+
+    const ibBars = bars.filter((b) => b.min >= 570 && b.min < 630);
+    const post = bars.filter((b) => b.min >= 630);
+    const last = bars[bars.length - 1];
+    const nowMin = last.min;
+    const ibComplete = nowMin >= 630;
+
+    if (!ibBars.length) return { pending: true, nowMin, price: last.c } as const;
+
+    const ibh = Math.max(...ibBars.map((b) => b.h));
+    const ibl = Math.min(...ibBars.map((b) => b.l));
+    const width = ibh - ibl;
+    const mid = (ibh + ibl) / 2;
+    const ibClose = ibBars[ibBars.length - 1].c;
+
+    // which extreme printed first
+    let hiIdx = Infinity, loIdx = Infinity;
+    ibBars.forEach((b, i) => {
+      if (b.h === ibh) hiIdx = Math.min(hiIdx, i);
+      if (b.l === ibl) loIdx = Math.min(loIdx, i);
+    });
+    const first: "H" | "L" = hiIdx < loIdx ? "H" : "L";
+    const bias: "H" | "L" | null = ibClose > mid ? "H" : ibClose < mid ? "L" : null;
+    const loc = width > 0 ? (ibClose - ibl) / width : 0.5;
+    const closeZone = loc >= 0.75 ? "top 25%" : loc <= 0.25 ? "bottom 25%" : "middle 50%";
+
+    const brokeH = post.some((b) => b.c > ibh);
+    const brokeL = post.some((b) => b.c < ibl);
+    const touchH = post.some((b) => b.h > ibh);
+    const touchL = post.some((b) => b.l < ibl);
+
+    let breakSide: "H" | "L" | null = null, breakMin: number | null = null;
+    for (const b of post) {
+      if (b.c > ibh) { breakSide = "H"; breakMin = b.min; break; }
+      if (b.c < ibl) { breakSide = "L"; breakMin = b.min; break; }
+    }
+
+    const price = last.c;
+    const dayHigh = Math.max(...bars.map((b) => b.h));
+    const dayLow = Math.min(...bars.map((b) => b.l));
+
+    const status =
+      !ibComplete ? "IB still forming"
+      : brokeH && brokeL ? "BOTH sides broken — rotation"
+      : brokeH ? "Broken HIGH"
+      : brokeL ? "Broken LOW"
+      : touchH || touchL ? "Wicked out, no close outside"
+      : "Inside IB";
+
+    const bucket =
+      hist.avgAtr && hist.avgIb
+        ? width < 0.5 * hist.avgAtr || width < 0.75 * hist.avgIb ? "NARROW"
+          : width > 1.5 * hist.avgAtr || width > 1.25 * hist.avgIb ? "WIDE"
+          : "NORMAL"
+        : "—";
+
+    // extension targets from the broken level
+    const lvl = breakSide === "H" ? ibh : breakSide === "L" ? ibl : null;
+    const targets = lvl != null && breakSide
+      ? [0.5, 1, 1.5, 2].map((t) => ({
+          t, px: breakSide === "H" ? lvl + t * width : lvl - t * width,
+          hit: breakSide === "H" ? dayHigh >= lvl + t * width : dayLow <= lvl - t * width,
+        }))
+      : [];
+
+    // live ORB — first close outside the 09:30–09:45 range, inside the IB
+    const orb = ibBars.filter((b) => b.min < 585);
+    let orbDir: "H" | "L" | null = null;
+    if (orb.length) {
+      const orbH = Math.max(...orb.map((b) => b.h));
+      const orbL = Math.min(...orb.map((b) => b.l));
+      for (const b of ibBars.filter((x) => x.min >= 585)) {
+        if (b.c > orbH) { orbDir = "H"; break; }
+        if (b.c < orbL) { orbDir = "L"; break; }
+      }
+    }
+
+    const zone: SlimDay["closeZone"] = loc >= 0.75 ? "top25" : loc <= 0.25 ? "bot25" : "mid50";
+
+    return {
+      pending: false as const, nowMin, price, ibh, ibl, mid, width, ibComplete,
+      first, bias, closeZone, zone, orbDir, status, bucket, breakSide, breakMin, targets, dayHigh, dayLow,
+      brokeH, brokeL,
+    };
+  }, [candles, hist]);
+
+  const dowName = DOW_NAMES[new Date().getDay()];
+  const dowRow = hist.dowStats.find((d) => d.name === dowName);
+
+  if (!live) {
+    return (
+      <Card title={`Today — ${sym}`} subtitle={connected ? "Waiting for today's bars…" : "Candle feed disconnected"}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+          No RTH bars yet for the current session. This card fills in from 09:30 ET.
+        </div>
+      </Card>
+    );
+  }
+
+  if (live.pending) {
+    return (
+      <Card title={`Today — ${sym} · ${dowName}`} subtitle="Pre-IB — levels set at 10:30 ET">
+        <div style={statGrid}>
+          <Stat k="Live price" v={f2(live.price)} />
+          <Stat k="Clock (ET)" v={clock(live.nowMin)} />
+        </div>
+      </Card>
+    );
+  }
+
+  const distH = live.ibh - live.price;
+  const distL = live.price - live.ibl;
+
+  return (
+    <>
+      <Card
+        title={`Today — ${sym} · ${dowName}`}
+        subtitle={`${live.ibComplete ? "IB complete" : "IB STILL FORMING — levels not final until 10:30 ET"} · ${clock(live.nowMin)} ET${connected ? "" : " · feed disconnected"}`}
+      >
+      <div style={statGrid}>
+        <Stat k="Live price" v={f2(live.price)} sub={`day range ${f2(live.dayLow)} – ${f2(live.dayHigh)}`} />
+        <Stat k="IB High" v={f2(live.ibh)} sub={distH > 0 ? `${f2(distH)} pts above price` : `broken — ${f2(-distH)} pts below price`} />
+        <Stat k="IB Low" v={f2(live.ibl)} sub={distL > 0 ? `${f2(distL)} pts below price` : `broken — ${f2(-distL)} pts above price`} />
+        <Stat k="IB Mid" v={f2(live.mid)} sub={live.price >= live.mid ? "price above mid" : "price below mid"} />
+        <Stat k="IB Width" v={`${f2(live.width)} pts`} sub={`${live.bucket} · sample avg ${f2(hist.avgIb)}`} />
+        <Stat k="Status" v={live.status} sub={live.breakMin != null ? `broke ${live.breakSide === "H" ? "high" : "low"} at ${clock(live.breakMin)}` : "no close outside yet"} />
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr>{["Today's read", "Value", "What the history says"].map((h, i) => <th key={h} style={i === 0 ? thL : th}>{h}</th>)}</tr></thead>
+        <tbody>
+          <tr>
+            <td style={tdL}>Midpoint bias</td>
+            <td style={td}>{live.bias === "H" ? "LONG (close > mid)" : live.bias === "L" ? "SHORT (close < mid)" : "flat"}</td>
+            <td style={tdDim}>Expects the {live.bias === "H" ? "HIGH" : "LOW"} to break first — see Rule 1 for the hit rate</td>
+          </tr>
+          <tr>
+            <td style={tdL}>Formation order</td>
+            <td style={td}>{live.first === "H" ? "HIGH formed first" : "LOW formed first"}</td>
+            <td style={tdDim}>
+              {live.bias && ((live.first === "L" && live.bias === "H") || (live.first === "H" && live.bias === "L"))
+                ? "CONFLUENT with the bias — the A+ filter (Rule 2)"
+                : "DISCORDANT — order fights the bias (Rule 2 says skip)"}
+            </td>
+          </tr>
+          <tr>
+            <td style={tdL}>IB close location</td>
+            <td style={td}>{live.closeZone} of the IB</td>
+            <td style={tdDim}>Rule 10 — strong only when the zone agrees with the formation order</td>
+          </tr>
+          <tr>
+            <td style={tdL}>Width bucket</td>
+            <td style={td}>{live.bucket}</td>
+            <td style={tdDim}>{live.bucket === "NARROW" ? "breakout/trend lean" : live.bucket === "WIDE" ? "rotation lean — fade the breaks" : "no width edge"}</td>
+          </tr>
+          <tr>
+            <td style={tdL}>Day of week</td>
+            <td style={td}>{dowName}</td>
+            <td style={tdDim}>{dowRow && dowRow.sb != null ? `single-break rate on ${dowName}s: ${dowRow.sb.toFixed(1)}% (n=${dowRow.n})` : "—"}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {live.targets.length > 0 && (
+        <>
+          <div style={{ height: 14 }} />
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Extension target", "Price", "Status"].map((h, i) => <th key={h} style={i === 0 ? thL : th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {live.targets.map((t) => (
+                <tr key={t.t}>
+                  <td style={tdL}>{t.t}× IB width from the broken level</td>
+                  <td style={td}>{f2(t.px)}</td>
+                  <td style={{ ...td, color: t.hit ? HOME_THEME.green : HOME_THEME.text, fontWeight: 800 }}>{t.hit ? "REACHED" : "not yet"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <div style={note}>
+        Live levels are computed from the same {sym} candle feed the rest of the dashboard uses. The historical odds below are from{" "}
+        {ds.sessions.toLocaleString()} sessions ({ds.from} → {ds.to}) — they describe the base rate, not a prediction for today.
+      </div>
+      </Card>
+
+      <Playbook live={live} days={days} dowName={dowName} />
+    </>
+  );
+}
+
+/* ── PLAYBOOK ─────────────────────────────────────────────────────────────────
+ * Today's live conditions, each turned into a historical conditional: of all
+ * past sessions that looked like this one, how often did the rule pay?
+ * Every % here is computed live off the dataset — nothing is hardcoded.
+ */
+
+type Setup = {
+  label: string;      // the condition that is true right now
+  question: string;   // what we're measuring on those matching days
+  cond: (d: SlimDay) => boolean;
+  outcome: (d: SlimDay) => boolean;
+  side?: "H" | "L";
+};
+
+function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
+  const bias = live.bias as "H" | "L" | null;
+  const first = live.first as "H" | "L";
+  const zone = live.zone as SlimDay["closeZone"];
+  const bucket = live.bucket as string;
+  const orbDir = live.orbDir as "H" | "L" | null;
+  const dowIdx = DOW_NAMES.indexOf(dowName);
+  const bucketKey = bucket.toLowerCase() as SlimDay["widthBucket"];
+  const dirWord = (s: "H" | "L") => (s === "H" ? "HIGH" : "LOW");
+
+  const setups: Setup[] = [];
+
+  if (bias) {
+    setups.push({
+      label: `IB closed ${bias === "H" ? "ABOVE" : "BELOW"} the midpoint`,
+      question: `${dirWord(bias)} breaks first`,
+      cond: (d) => d.bias === bias,
+      outcome: (d) => d.firstTouchSide === bias,
+      side: bias,
+    });
+    setups.push({
+      label: `Midpoint bias = ${bias === "H" ? "LONG" : "SHORT"}`,
+      question: `IB ${dirWord(bias)} breaks at all today`,
+      cond: (d) => d.bias === bias,
+      outcome: (d) => (bias === "H" ? d.touchedH : d.touchedL),
+      side: bias,
+    });
+    setups.push({
+      label: `${dirWord(first)} formed first + close ${bias === "H" ? "above" : "below"} mid`,
+      question: `${dirWord(bias)} breaks first`,
+      cond: (d) => d.bias === bias && d.first === first,
+      outcome: (d) => d.firstTouchSide === bias,
+      side: bias,
+    });
+    setups.push({
+      label: `IB close in the ${zone === "top25" ? "TOP 25%" : zone === "bot25" ? "BOTTOM 25%" : "MIDDLE 50%"} + ${dirWord(first)} first`,
+      question: `${dirWord(bias)} breaks first`,
+      cond: (d) => d.closeZone === zone && d.first === first,
+      outcome: (d) => d.firstTouchSide === bias,
+      side: bias,
+    });
+  }
+
+  if (bucketKey === "narrow" || bucketKey === "wide" || bucketKey === "normal") {
+    setups.push({
+      label: `${bucket} IB width`,
+      question: "only ONE side breaks (single-break day)",
+      cond: (d) => d.widthBucket === bucketKey,
+      outcome: (d) => d.singleBreak,
+    });
+    setups.push({
+      label: `${bucket} IB width`,
+      question: "BOTH sides break (rotation — fade the break)",
+      cond: (d) => d.widthBucket === bucketKey,
+      outcome: (d) => d.bothBroke,
+    });
+    setups.push({
+      label: `${bucket} IB width`,
+      question: "the break runs ≥ 1× IB width",
+      cond: (d) => d.widthBucket === bucketKey && !!d.fcb,
+      outcome: (d) => !!d.fcb?.hit["1"],
+    });
+  }
+
+  if (orbDir && bias) {
+    setups.push({
+      label: orbDir === bias
+        ? `ORB broke ${dirWord(orbDir)} — ALIGNED with the IB bias`
+        : `ORB broke ${dirWord(orbDir)} — CONFLICTS with the IB bias`,
+      question: `${dirWord(bias)} breaks first`,
+      cond: (d) => d.bias === bias && d.orbDir === orbDir,
+      outcome: (d) => d.firstTouchSide === bias,
+      side: bias,
+    });
+  }
+
+  if (dowIdx >= 1 && dowIdx <= 5) {
+    setups.push({
+      label: `It's ${dowName}`,
+      question: "only ONE side breaks",
+      cond: (d) => new Date(`${d.date}T12:00:00Z`).getUTCDay() === dowIdx,
+      outcome: (d) => d.singleBreak,
+    });
+  }
+
+  // the full stack — every live condition at once
+  if (bias && bucketKey) {
+    setups.push({
+      label: `ALL OF IT: ${dirWord(first)} first + ${bias === "H" ? "above" : "below"} mid + ${bucket} IB`,
+      question: `${dirWord(bias)} breaks first`,
+      cond: (d) => d.bias === bias && d.first === first && d.widthBucket === bucketKey,
+      outcome: (d) => d.firstTouchSide === bias,
+      side: bias,
+    });
+    setups.push({
+      label: `ALL OF IT: ${dirWord(first)} first + ${bias === "H" ? "above" : "below"} mid + ${bucket} IB`,
+      question: "the break fails and closes back inside within 30m",
+      cond: (d) => d.bias === bias && d.first === first && d.widthBucket === bucketKey && !!d.fcb,
+      outcome: (d) => !!d.fcb?.failed,
+    });
+  }
+
+  const scored = setups
+    .map((s) => {
+      const g = days.filter(s.cond);
+      const hits = g.filter(s.outcome).length;
+      return { ...s, n: g.length, hits, p: g.length ? (100 * hits) / g.length : null };
+    })
+    .filter((s) => s.n >= 15)
+    .sort((a, b) => (b.p ?? 0) - (a.p ?? 0));
+
+  return (
+    <Card
+      title="In Play Right Now — what today's IB is setting up"
+      subtitle={live.ibComplete
+        ? "Every % below is today's live condition, scored against every past session that looked the same"
+        : "IB STILL FORMING — these conditions can still flip before 10:30 ET"}
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 12 }}>
+        {scored.map((s, i) => (
+          <div key={i} style={{
+            background: "rgba(255,255,255,0.03)",
+            border: `1px solid ${s.p != null && s.p >= 60 ? HOME_THEME.green : s.p != null && s.p <= 40 ? HOME_THEME.red : "rgba(255,255,255,0.08)"}`,
+            borderRadius: 12, padding: 14,
+          }}>
+            <div style={{ fontSize: 15, color: HOME_THEME.text, fontWeight: 700 }}>{s.label}</div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "8px 0 4px" }}>
+              <span style={{ fontSize: 28, fontWeight: 800, color: rateColor(s.p) }}>
+                {s.p == null ? "—" : `${s.p.toFixed(0)}%`}
+              </span>
+              <span style={{ fontSize: 15, color: HOME_THEME.text }}>chance {s.question}</span>
+            </div>
+            <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+              {s.hits} of {s.n} matching sessions
+              {s.n < 40 ? " · thin sample" : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={note}>
+        These are conditional base rates, not predictions — each card asks &ldquo;on the days that looked exactly like today, how often
+        did this happen?&rdquo; Cards with fewer than 40 matching sessions are flagged thin; the tighter the condition stack, the smaller
+        the sample, so the &ldquo;ALL OF IT&rdquo; cards are the most specific and the least reliable at once.
+      </div>
+    </Card>
+  );
+}
 
 /* ── component ────────────────────────────────────────────────────────────── */
 
@@ -276,6 +669,19 @@ export default function IbStatsTab() {
     <div>
       {symTabs}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+        <LiveToday
+          sym={sym}
+          ds={ds}
+          days={days}
+          hist={{
+            avgIb: avg(days.slice(-20).map((d) => d.width)) ?? 0,
+            avgAtr: avg(days.slice(-20).map((d) => d.atr ?? d.dayRange)) ?? 0,
+            dowStats: byDow.map(({ name, g }) => ({
+              name, n: g.length, sb: rateNum(g.filter((d) => d.singleBreak).length, g.length),
+            })),
+          }}
+        />
 
         <Card title={`Initial Balance Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`Last updated ${LAST_UPDATED}`}>
           <div style={statGrid}>

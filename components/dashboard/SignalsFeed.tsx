@@ -55,7 +55,7 @@ function pageAccent(page: string): string {
   if (p.startsWith("em") || p.includes("estimated")) return HT.green;
   if (p.startsWith("flow") || p.includes("option")) return HT.cyan;
   if (p.startsWith("anal")) return HT.cyan;
-  if (p.startsWith("strat")) return HT.orange;
+  if (p.startsWith("greek")) return HT.green;
   if (p.startsWith("scan")) return HT.green;
   if (p.includes("watch")) return HT.green;
   if (p.includes("balance") || p.includes("imbalance")) return HT.purple;
@@ -182,8 +182,8 @@ function CatGlyph({ page, color }: { page: string; color: string }) {
     return (<svg {...props}><path d="M3 12h4l3 8 4-16 3 8h4" /></svg>);
   if (p.startsWith("anal"))
     return (<svg {...props}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>);
-  if (p.startsWith("strat"))
-    return (<svg {...props}><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12c1 1 1 2 1 3h6c0-1 0-2 1-3a7 7 0 0 0-4-12z" /></svg>);
+  if (p.startsWith("greek"))
+    return (<svg {...props}><path d="M12 2c5.5 0 10 4 10 9s-4.5 9-10 9S2 16 2 11 6.5 2 12 2M8 11h8M12 7v8" /></svg>);
   if (p.startsWith("scan"))
     return (<svg {...props}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>);
   if (p.includes("watch"))
