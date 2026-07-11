@@ -4,9 +4,10 @@ import { getServerSession } from "@/lib/supabase/server";
 import { buildAuthorizeUrl, discordConfigured } from "@/lib/discord";
 
 // GET /api/discord/connect -> redirects to Discord's OAuth consent screen.
-// Paid-gated: signed-out or free users are bounced back to /home rather than
-// erroring, since this is only ever reached via the UserMenu button, which is
-// itself paid-gated (belt & suspenders against a stale client / direct hit).
+// Paid-or-owner-gated: signed-out or free/non-owner users are bounced back to
+// /home rather than erroring, since this is only ever reached via the
+// UserMenu button, which applies the same gate (belt & suspenders against a
+// stale client / direct hit).
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -23,7 +24,7 @@ function publicOrigin(req: NextRequest): string {
 export async function GET(req: NextRequest) {
   const session = await getServerSession();
   if (!session) return NextResponse.redirect(new URL("/login", req.url));
-  if (!session.isPaid) return NextResponse.redirect(new URL("/home", req.url));
+  if (!session.isPaid && !session.isOwner) return NextResponse.redirect(new URL("/home", req.url));
   if (!discordConfigured()) {
     return NextResponse.json({ error: "Discord is not configured" }, { status: 500 });
   }

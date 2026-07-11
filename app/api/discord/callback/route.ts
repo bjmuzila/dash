@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
 
   if (!code) return fail("no code");
   if (!returnedState || !cookieState || returnedState !== cookieState) return fail("state mismatch");
-  if (!session.isPaid) return NextResponse.redirect(new URL("/home", req.url));
+  if (!session.isPaid && !session.isOwner) return NextResponse.redirect(new URL("/home", req.url));
 
   try {
     const origin = publicOrigin(req);

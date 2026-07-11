@@ -25,7 +25,8 @@ const STRIPE_PORTAL = "https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg";
 type DiscordStatus = { connected: boolean; username?: string | null; avatarUrl?: string | null };
 
 export default function UserMenu() {
-  const { user, displayName, isPaid, signOut } = useAuth();
+  const { user, displayName, isPaid, isOwnerClaim, signOut } = useAuth();
+  const canUseDiscord = isPaid || isOwnerClaim;
   const [open, setOpen] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [discord, setDiscord] = useState<DiscordStatus>({ connected: false });
@@ -151,7 +152,7 @@ export default function UserMenu() {
             Manage subscription ↗
           </a>
 
-          {isPaid && (
+          {canUseDiscord && (
             <>
               <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
               {discord.connected ? (
