@@ -1286,14 +1286,19 @@ function MetricsTabSection({
         {/* Traffic card */}
         <div style={{ ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 }}>Traffic · {period}</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 110, marginBottom: 0, position: "relative" }}>
             {traffic.counts.map((v, i) => (
-              <div key={i} style={{ flex: 1, background: HOME_THEME.orange, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / trafficMax) * 82))}px` }} />
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.text, marginBottom: 2, height: 14, minWidth: 0 }}>
+                  {v > 0 ? v : ""}
+                </div>
+                <div style={{ width: "100%", background: HOME_THEME.orange, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / trafficMax) * 82))}px` }} />
+              </div>
             ))}
           </div>
           <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
             {traffic.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+              <div key={i} style={{ flex: 1, fontSize: 11, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
@@ -1305,14 +1310,19 @@ function MetricsTabSection({
         {/* Signups card */}
         <div style={{ ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 }}>Signups · {period}</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 110, marginBottom: 0 }}>
             {signupsSeries.counts.map((v, i) => (
-              <div key={i} style={{ flex: 1, background: HOME_THEME.green, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / signupsMax) * 82))}px` }} />
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.text, marginBottom: 2, height: 14, minWidth: 0 }}>
+                  {v > 0 ? v : ""}
+                </div>
+                <div style={{ width: "100%", background: HOME_THEME.green, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / signupsMax) * 82))}px` }} />
+              </div>
             ))}
           </div>
           <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
             {signupsSeries.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+              <div key={i} style={{ flex: 1, fontSize: 11, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
@@ -1324,14 +1334,19 @@ function MetricsTabSection({
         {/* Cumulative Users card */}
         <div style={{ ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 }}>Cumulative users · {period}</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 110, marginBottom: 0 }}>
             {cumulativeSeries.map((v, i) => (
-              <div key={i} style={{ flex: 1, background: HOME_THEME.purple, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / cumulativeMax) * 82))}px` }} />
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.text, marginBottom: 2, height: 14, minWidth: 0 }}>
+                  {v > 0 ? v.toLocaleString() : ""}
+                </div>
+                <div style={{ width: "100%", background: HOME_THEME.purple, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / cumulativeMax) * 82))}px` }} />
+              </div>
             ))}
           </div>
           <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
             {signupsSeries.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+              <div key={i} style={{ flex: 1, fontSize: 11, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
@@ -1457,8 +1472,8 @@ function OverviewSection({ metrics }: {
           { l: "WS out/hr", v: infra.wsPerHr },
         ].map((k, i) => (
           <div key={k.l} style={{ ...homePanelStyle, padding: "11px 13px" }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, opacity: 1, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{k.l}</div>
-            <div style={{ fontSize: 15, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.text, lineHeight: 1 }}>{k.v}</div>
+            <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, opacity: 0.6, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", letterSpacing: "0.01em" }}>{k.l}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, lineHeight: 1 }}>{k.v}</div>
           </div>
         ))}
       </div>

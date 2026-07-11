@@ -38,7 +38,11 @@ export default async function ExplorePage({
     <div
       className="explore-root"
       style={{
-        minHeight: "100vh",
+        // Bare LayoutShell wrapper is overflow:hidden — own the scroll here so the
+        // fixed toolbar's reserved top padding doesn't get clipped.
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
         background: T.bg,
         backgroundImage: T.shellGlow,
         color: T.text,

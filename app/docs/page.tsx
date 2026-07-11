@@ -45,7 +45,7 @@ function H2({ children }: { children: React.ReactNode }) {
   return (
     <h2
       style={{
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: 800,
         margin: "30px 0 10px",
         color: C.text,
@@ -60,14 +60,14 @@ function H2({ children }: { children: React.ReactNode }) {
 
 function H3({ children }: { children: React.ReactNode }) {
   return (
-    <h3 style={{ fontSize: 14, fontWeight: 800, margin: "20px 0 6px", color: C.cyan, letterSpacing: "0.02em" }}>
+    <h3 style={{ fontSize: 16, fontWeight: 800, margin: "20px 0 6px", color: C.cyan, letterSpacing: "0.02em" }}>
       {children}
     </h3>
   );
 }
 
 function P({ children }: { children: React.ReactNode }) {
-  return <p style={{ fontSize: 14, lineHeight: 1.7, color: C.text, margin: "0 0 12px" }}>{children}</p>;
+  return <p style={{ fontSize: 15, lineHeight: 1.7, color: C.text, margin: "0 0 12px" }}>{children}</p>;
 }
 
 function Lead({ children }: { children: React.ReactNode }) {
@@ -80,7 +80,7 @@ function UI({ children }: { children: React.ReactNode }) {
     <span
       style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 12.5,
+        fontSize: 15,
         fontWeight: 700,
         color: C.cyan,
         background: "rgba(33,158,188,0.08)",
@@ -122,9 +122,9 @@ function LegendRow({ color, name, children, soft }: { color: string; name: strin
     <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
       <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 150, flexShrink: 0 }}>
         <Swatch color={color} soft={soft} />
-        <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{name}</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{name}</span>
       </span>
-      <span style={{ fontSize: 13, lineHeight: 1.55, color: C.text }}>{children}</span>
+      <span style={{ fontSize: 15, lineHeight: 1.55, color: C.text }}>{children}</span>
     </div>
   );
 }
@@ -133,8 +133,8 @@ function LegendRow({ color, name, children, soft }: { color: string; name: strin
 function DefRow({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "9px 0", borderBottom: `1px solid ${C.border}` }}>
-      <span style={{ minWidth: 150, flexShrink: 0, fontSize: 13, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>{term}</span>
-      <span style={{ fontSize: 13, lineHeight: 1.6, color: C.text }}>{children}</span>
+      <span style={{ minWidth: 150, flexShrink: 0, fontSize: 15, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>{term}</span>
+      <span style={{ fontSize: 15, lineHeight: 1.6, color: C.text }}>{children}</span>
     </div>
   );
 }
@@ -162,10 +162,10 @@ function Callout({ kind = "note", title, children }: { kind?: CalloutKind; title
         backdropFilter: "blur(16px)",
       }}
     >
-      <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: m.c, marginBottom: 5 }}>
+      <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: m.c, marginBottom: 5 }}>
         {m.label}
       </div>
-      <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.text }}>{children}</div>
+      <div style={{ fontSize: 15, lineHeight: 1.6, color: C.text }}>{children}</div>
     </div>
   );
 }
@@ -197,7 +197,7 @@ function Steps({ items }: { items: React.ReactNode[] }) {
           >
             {i + 1}
           </span>
-          <span style={{ fontSize: 13.5, lineHeight: 1.6, color: C.text, paddingTop: 1 }}>{it}</span>
+          <span style={{ fontSize: 15, lineHeight: 1.6, color: C.text, paddingTop: 1 }}>{it}</span>
         </li>
       ))}
     </ol>
@@ -246,7 +246,7 @@ function Figure({ caption, maxWidth = 420, children }: { caption: React.ReactNod
         </span>
         {children}
       </div>
-      <figcaption style={{ fontSize: 12, color: C.muted, lineHeight: 1.55, margin: "8px 4px 0", textAlign: "center" }}>
+      <figcaption style={{ fontSize: 15, color: C.muted, lineHeight: 1.55, margin: "8px 4px 0", textAlign: "center" }}>
         {caption}
       </figcaption>
     </figure>
@@ -1927,10 +1927,10 @@ export default function DocsPage() {
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, color: HOME_THEME.cyan, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800 }}>
+          <span style={{ fontSize: 15, color: HOME_THEME.cyan, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800 }}>
             Knowledge Base
           </span>
-          <span style={{ fontSize: 19, fontWeight: 800, lineHeight: 1 }}>Help &amp; Docs</span>
+          <span style={{ fontSize: 16, fontWeight: 800, lineHeight: 1.2 }}>Help &amp; Docs</span>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
           <input
@@ -1938,7 +1938,7 @@ export default function DocsPage() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search docs…"
             style={{
-              fontSize: 13,
+              fontSize: 15,
               padding: "7px 12px",
               width: 220,
               border: `1px solid ${C.border}`,
@@ -1965,17 +1965,17 @@ export default function DocsPage() {
           }}
         >
           {grouped.length === 0 && (
-            <div style={{ fontSize: 12, color: C.muted, padding: "10px 8px" }}>No matching articles.</div>
+            <div style={{ fontSize: 15, color: C.text, padding: "10px 8px" }}>No matching articles.</div>
           )}
           {grouped.map(([group, items]) => (
             <div key={group} style={{ marginBottom: 18 }}>
               <div
                 style={{
-                  fontSize: 9.5,
+                  fontSize: 16,
                   fontWeight: 800,
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
-                  color: C.muted,
+                  color: C.text,
                   padding: "0 8px 6px",
                 }}
               >
@@ -2000,15 +2000,15 @@ export default function DocsPage() {
                       cursor: "pointer",
                       background: on ? "rgba(33,158,188,0.12)" : "transparent",
                       borderColor: on ? "rgba(33,158,188,0.3)" : "transparent",
-                      color: on ? C.cyan : "#c3d0e0",
-                      fontSize: 13.5,
+                      color: on ? C.cyan : C.text,
+                      fontSize: 15,
                       fontWeight: on ? 700 : 500,
                       transition: "background 0.12s, color 0.12s",
                     }}
                   >
                     <span style={{ flex: 1 }}>{a.title}</span>
                     {a.status === "draft" && (
-                      <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: "0.08em", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 4px" }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 4px" }}>
                         WIP
                       </span>
                     )}
@@ -2029,10 +2029,10 @@ export default function DocsPage() {
           }}
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
-            <div style={{ fontSize: 10.5, color: C.muted, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 6 }}>
+            <div style={{ fontSize: 15, color: C.text, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 6 }}>
               {active.group}
             </div>
-            <h1 style={{ fontSize: 30, lineHeight: 1.1, margin: "0 0 18px", fontWeight: 800 }}>{active.title}</h1>
+            <h1 style={{ fontSize: 16, lineHeight: 1.3, margin: "0 0 18px", fontWeight: 800 }}>{active.title}</h1>
             {active.body()}
           </div>
         </article>

@@ -47,7 +47,12 @@ export default async function PricingPage({
     <div
       className="explore-root"
       style={{
-        minHeight: "100vh",
+        // The bare LayoutShell wrapper is a flex column with overflow:hidden, so
+        // this root must own its own scroll — otherwise the fixed toolbar's
+        // reserved top padding pushes content out of a clipped box.
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
         background: T.bg,
         backgroundImage: T.shellGlow,
         color: T.text,
