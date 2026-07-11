@@ -159,7 +159,7 @@ const OP_CSS = `
     --amber: #fb8501;
     --sm-red: #ef4444;
     --sm-green: #8ecae6;
-    --sm-muted: #9ca3af;
+    --sm-muted: #ffffff;
     --sm-border: rgba(255,255,255,0.1);
     --sm-mono: "Courier New", monospace;
   }
