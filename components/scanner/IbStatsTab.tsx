@@ -25,6 +25,9 @@ const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
 type Sym = (typeof SYMBOLS)[number];
 
+/** Card titles — the one non-white font on the page. Change here, nowhere else. */
+const TITLE_COLOR = LIGHT_BLUE;
+
 /* ── panel ────────────────────────────────────────────────────────────────────
  * Dashboard card look: variant="budget" (no top accent strip), 16px titles,
  * 15px body, white text throughout — no gray, no per-card accent color.
@@ -39,7 +42,7 @@ function Card({ title, subtitle, children }: {
       {(title != null || subtitle != null) && (
         <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 3 }}>
           {title != null && (
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text }}>{title}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: TITLE_COLOR }}>{title}</div>
           )}
           {subtitle != null && (
             <div style={{ fontSize: 15, color: HOME_THEME.text }}>{subtitle}</div>
