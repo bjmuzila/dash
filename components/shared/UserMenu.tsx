@@ -17,19 +17,32 @@ const INFO_LINKS: { href: string; label: string }[] = [
 const STRIPE_PORTAL = "https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg";
 
 /**
- * Replacement for Clerk's <UserButton>: a round avatar (display-name initial)
- * that opens a small menu with the email + a Sign out action.
- *
- * NOTE: the Google-photo avatar this used to show (via Supabase's
- * user_metadata.avatar_url) isn't available anymore -- our users table only
- * stores email + a stable google_sub, not a profile photo. Everyone gets the
- * initials avatar now; low-priority cosmetic regression, not a functional one.
+ * Replacement for Clerk's <UserButton>: a round avatar that opens a small
+ * menu with the email + a Sign out action. Shows the initials avatar unless
+ * the user has linked Discord (see /api/discord/status), in which case their
+ * Discord pfp is used instead.
  */
+type DiscordStatus = { connected: boolean; username?: string | null; avatarUrl?: string | null };
+
 export default function UserMenu() {
-  const { user, displayName, signOut } = useAuth();
+  const { user, displayName, isPaid, signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [discord, setDiscord] = useState<DiscordStatus>({ connected: false });
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    fetch("/api/discord/status")
+      .then((r) => r.json())
+      .then((d: DiscordStatus) => setDiscord(d))
+      .catch(() => {});
+  }, [user]);
+
+  const handleDisconnectDiscord = async () => {
+    await fetch("/api/discord/status", { method: "POST" }).catch(() => {});
+    setDiscord({ connected: false });
+  };
 
   const handleResetPassword = async () => {
     if (!user?.email) return;
@@ -50,7 +63,7 @@ export default function UserMenu() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  const avatarUrl = "";
+  const avatarUrl = discord.connected ? discord.avatarUrl ?? "" : "";
   const initial = (displayName || "T").charAt(0).toUpperCase();
 
   return (
@@ -137,6 +150,49 @@ export default function UserMenu() {
           >
             Manage subscription ↗
           </a>
+
+          {isPaid && (
+            <>
+              <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
+              {discord.connected ? (
+                <div style={{ padding: "8px 10px" }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text }}>
+                    Discord: {discord.username}
+                  </div>
+                  <button
+                    onClick={() => void handleDisconnectDiscord()}
+                    style={{
+                      marginTop: 4,
+                      padding: 0,
+                      border: "none",
+                      background: "transparent",
+                      color: "rgba(255,255,255,0.5)",
+                      fontSize: 11,
+                      cursor: "pointer",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ) : (
+                <a
+                  href="/api/discord/connect"
+                  style={{
+                    display: "block",
+                    padding: "8px 10px",
+                    borderRadius: 6,
+                    color: HOME_THEME.text,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    textDecoration: "none",
+                  }}
+                >
+                  Join Discord
+                </a>
+              )}
+            </>
+          )}
 
           <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
 

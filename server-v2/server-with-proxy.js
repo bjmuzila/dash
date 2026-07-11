@@ -1816,6 +1816,23 @@ async function main() {
         }
         return;
       }
+      // Dev probe: live dealer inventory (buy/sell net) for one strike, from the
+      // SAME FlowGexAccumulator the WS GEX chart's flowGEX is computed from
+      // (server-v2/computation/gex-calculator.js flowGEX branch). Lets /owner/dev
+      // show the real dealer-inventory flow GEX instead of the vol-basis proxy.
+      // GET /proxy/flow-inventory?expiry=2026-06-22&strike=190
+      if (pathname === '/proxy/flow-inventory' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const expiry = url.searchParams.get('expiry') || '';
+        const strike = Number(url.searchParams.get('strike'));
+        if (!proxy || !proxy.flowGexAccumulator) {
+          sendJson(res, 503, { error: 'proxy not ready', expiry, strike });
+          return;
+        }
+        const inv = proxy.flowGexAccumulator.getInventory(expiry).get(strike) || null;
+        sendJson(res, 200, { expiry, strike, inventory: inv });
+        return;
+      }
       // Underlying watchlist quotes (broker, after-hours aware) for the toolbar
       // dropdown. GET /proxy/quotes?symbols=AAPL,SPX,/NQU26
       // Returns { items: [{ symbol, last, mark, close, prevClose }] } — mark/last

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, PAID_STATUSES } from "@/lib/db";
+import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, PAID_STATUSES } from "@/lib/db";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
+import { syncDiscordRoleForUser } from "@/lib/discord";
 
 // NOTE: this used to also mirror paid status into a separate Supabase Postgres
 // (subscription_status table) so Supabase's custom_access_token_hook could
@@ -66,6 +67,18 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     } catch (err) {
       console.error("[stripe/webhook] welcome email error:", err);
     }
+  }
+
+  // Keep the Discord paid role in lockstep with subscription status (both
+  // directions -- a lapsed/canceled sub must lose the role just as fast as a
+  // new one gains it). Best-effort: syncDiscordRoleForUser never throws.
+  try {
+    const user = await getUserById(clerkUserId);
+    if (user?.discord_id) {
+      await syncDiscordRoleForUser(user.discord_id, PAID_STATUSES.has(sub.status));
+    }
+  } catch (err) {
+    console.error("[stripe/webhook] discord role sync error:", err);
   }
 }
 

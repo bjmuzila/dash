@@ -636,8 +636,6 @@ const SECTION_TAB = {
   hosting:  "infra",
   // Controls moved under the Infra tab (its own tab was removed).
   controls: "infra",
-  // Renders under the "Supabase / Users" nav item (Auth · Supabase key status card).
-  auth:     "auth",
 } as const;
 
 interface FeedbackItem {
@@ -1117,6 +1115,235 @@ function weeklySignupSeries(
   return { counts, labels };
 }
 
+/**
+ * Bucket page-visit timestamps into the last `weeks` calendar weeks (ET), oldest
+ * → newest. Returns { counts, labels } arrays for the line chart.
+ */
+function weeklyVisitSeries(visits: PageVisit[], weeks = 12): { counts: number[]; labels: string[] } {
+  const now = new Date();
+  const dayMs = 86400000;
+  const weekMs = 7 * dayMs;
+  const monday = new Date(now);
+  const dow = (monday.getDay() + 6) % 7; // 0 = Monday
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - dow);
+
+  const byWeek = new Map<number, number>();
+  for (const v of visits) {
+    if (!v.createdAt) continue;
+    const t = new Date(v.createdAt);
+    if (isNaN(t.getTime())) continue;
+    const weekStart = new Date(t);
+    weekStart.setHours(0, 0, 0, 0);
+    const d = (weekStart.getDay() + 6) % 7;
+    weekStart.setDate(weekStart.getDate() - d);
+    const k = weekStart.getTime();
+    byWeek.set(k, (byWeek.get(k) ?? 0) + 1);
+  }
+
+  const counts: number[] = [];
+  const labels: string[] = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const start = monday.getTime() - i * weekMs;
+    counts.push(byWeek.get(start) ?? 0);
+    labels.push(new Date(start).toLocaleDateString("en-US", { day: "numeric", month: "short" }));
+  }
+  return { counts, labels };
+}
+
+/**
+ * Bucket page-visit timestamps into the last `months` calendar months (ET), oldest
+ * → newest. Returns { counts, labels } arrays for the line chart.
+ */
+function monthlyVisitSeries(visits: PageVisit[], months = 12): { counts: number[]; labels: string[] } {
+  const now = new Date();
+  const byMonth = new Map<string, number>();
+
+  for (const v of visits) {
+    if (!v.createdAt) continue;
+    const t = new Date(v.createdAt);
+    if (isNaN(t.getTime())) continue;
+    const k = etDayKey(t).slice(0, 7); // YYYY-MM
+    byMonth.set(k, (byMonth.get(k) ?? 0) + 1);
+  }
+
+  const counts: number[] = [];
+  const labels: string[] = [];
+  const d = new Date(now.getFullYear(), now.getMonth(), 1);
+  for (let i = months - 1; i >= 0; i--) {
+    const month = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    const k = month.toLocaleDateString("en-CA", { year: "numeric", month: "2-digit" });
+    counts.push(byMonth.get(k) ?? 0);
+    labels.push(month.toLocaleDateString("en-US", { month: "short", year: "2-digit" }));
+  }
+  return { counts, labels };
+}
+
+/**
+ * Bucket signups into monthly series. Returns { counts, labels }.
+ */
+function monthlySignupSeries(
+  signups: Array<{ createdAt: number | null }>,
+  months = 12,
+): { counts: number[]; labels: string[] } {
+  const now = new Date();
+  const byMonth = new Map<string, number>();
+
+  for (const s of signups) {
+    if (s.createdAt == null) continue;
+    const t = new Date(s.createdAt);
+    if (isNaN(t.getTime())) continue;
+    const y = t.getFullYear();
+    const m = String(t.getMonth() + 1).padStart(2, "0");
+    const k = `${y}-${m}`;
+    byMonth.set(k, (byMonth.get(k) ?? 0) + 1);
+  }
+
+  const counts: number[] = [];
+  const labels: string[] = [];
+  const d = new Date(now.getFullYear(), now.getMonth(), 1);
+  for (let i = months - 1; i >= 0; i--) {
+    const month = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    const k = month.toLocaleDateString("en-CA", { year: "numeric", month: "2-digit" });
+    counts.push(byMonth.get(k) ?? 0);
+    labels.push(month.toLocaleDateString("en-US", { month: "short", year: "2-digit" }));
+  }
+  return { counts, labels };
+}
+
+/**
+ * Tabbed metrics section — shows Traffic, Signups, and Cumulative Users
+ * with daily/weekly/monthly time period tabs (defaults to daily).
+ */
+function MetricsTabSection({
+  visits, signups, users, activeSessions
+}: {
+  visits: PageVisit[];
+  signups: Array<{ createdAt: number | null }>;
+  users: number | null;
+  activeSessions: number | null;
+}) {
+  const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
+  const isMobile = useIsMobile();
+
+  // Generate series based on selected period
+  const traffic = period === "daily" ? dailyVisitSeries(visits, 7)
+    : period === "weekly" ? weeklyVisitSeries(visits, 12)
+    : monthlyVisitSeries(visits, 12);
+
+  const signupsSeries = period === "daily" ? dailySignupSeries(signups, 7)
+    : period === "weekly" ? weeklySignupSeries(signups, 7)
+    : monthlySignupSeries(signups, 12);
+
+  const cumulativeSeries = (() => {
+    const cum: number[] = [];
+    const baseLine = (users ?? 0) - signupsSeries.counts.reduce((a, b) => a + b, 0);
+    signupsSeries.counts.reduce((acc, v) => { const n = acc + v; cum.push(n); return n; }, baseLine);
+    return cum;
+  })();
+
+  const trafficMax = Math.max(...traffic.counts, 1);
+  const signupsMax = Math.max(...signupsSeries.counts, 1);
+  const cumulativeMax = Math.max(...cumulativeSeries, 1);
+  const trafficDelta = traffic.counts.length >= 2 && traffic.counts[0] > 0
+    ? Math.round(((traffic.counts[traffic.counts.length - 1] - traffic.counts[0]) / traffic.counts[0]) * 100) : null;
+
+  const TabButton = ({ p, label }: { p: typeof period; label: string }) => (
+    <button
+      onClick={() => setPeriod(p)}
+      style={{
+        padding: "4px 10px",
+        fontSize: 13,
+        borderRadius: 5,
+        border: `1px solid ${period === p ? HOME_THEME.cyan : HOME_THEME.border}`,
+        background: period === p ? `${HOME_THEME.cyan}18` : "transparent",
+        color: period === p ? HOME_THEME.cyan : HOME_THEME.text,
+        fontWeight: period === p ? 600 : 400,
+        cursor: "pointer",
+        fontFamily: "inherit",
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Tab buttons */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <TabButton p="daily" label="Daily" />
+          <TabButton p="weekly" label="Weekly" />
+          <TabButton p="monthly" label="Monthly" />
+        </div>
+        <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
+          {period === "daily" ? "7 days" : period === "weekly" ? "12 weeks" : "12 months"}
+        </span>
+      </div>
+
+      {/* Three metric cards */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(3, minmax(0,1fr))", gap: 10 }}>
+        {/* Traffic card */}
+        <div style={{ ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 }}>Traffic · {period}</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90, marginBottom: 4 }}>
+            {traffic.counts.map((v, i) => (
+              <div key={i} style={{ flex: 1, background: HOME_THEME.orange, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / trafficMax) * 82))}px` }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
+            {traffic.labels.map((l, i) => (
+              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
+            <span>{traffic.counts.reduce((a, b) => a + b, 0).toLocaleString()} visits</span>
+            {trafficDelta != null && <span style={{ color: trafficDelta >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{trafficDelta >= 0 ? "▲" : "▼"} {Math.abs(trafficDelta)}%</span>}
+          </div>
+        </div>
+
+        {/* Signups card */}
+        <div style={{ ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 }}>Signups · {period}</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90, marginBottom: 4 }}>
+            {signupsSeries.counts.map((v, i) => (
+              <div key={i} style={{ flex: 1, background: HOME_THEME.green, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / signupsMax) * 82))}px` }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
+            {signupsSeries.labels.map((l, i) => (
+              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
+            <span>{signupsSeries.counts.reduce((a, b) => a + b, 0)} new</span>
+            <span style={{ color: HOME_THEME.green }}>▲ {signupsSeries.counts[signupsSeries.counts.length - 1]} this {period === "monthly" ? "mo" : period === "weekly" ? "wk" : "day"}</span>
+          </div>
+        </div>
+
+        {/* Cumulative Users card */}
+        <div style={{ ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 }}>Cumulative users · {period}</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90, marginBottom: 4 }}>
+            {cumulativeSeries.map((v, i) => (
+              <div key={i} style={{ flex: 1, background: HOME_THEME.purple, borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / cumulativeMax) * 82))}px` }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
+            {signupsSeries.labels.map((l, i) => (
+              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
+            <span>{users != null ? `${users.toLocaleString()} total` : "—"}</span>
+            <span>{activeSessions != null ? `${activeSessions} active` : ""}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OverviewSection({ metrics }: {
   metrics: {
     daily: { counts: number[]; labels: string[] };
@@ -1132,6 +1359,8 @@ function OverviewSection({ metrics }: {
     feed: Array<{ label: string; loads: number; ago: string; active: boolean }>;
     topPages: Array<{ label: string; loads: number }>;
     rowsToday: Array<{ label: string; rows: number }>;
+    visits: PageVisit[];
+    signups: Array<{ createdAt: number | null }>;
     infra: {
       cpu: { value: string; spark: number[] };
       memory: { value: string; spark: number[] };
@@ -1150,7 +1379,7 @@ function OverviewSection({ metrics }: {
     };
   };
 }) {
-  const { daily, heatmap, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, infra, ops } = metrics;
+  const { daily, heatmap, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, visits, signups, infra, ops } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1234,55 +1463,8 @@ function OverviewSection({ metrics }: {
         ))}
       </div>
 
-      {/* Traffic · signups · cumulative */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "repeat(3, minmax(0,1fr))", gap: 10 }}>
-        <div style={cardStyle} title="Total page loads per day across the site for the last 7 days (ET day buckets). The % is the change from the first day in the window to the most recent.">
-          <div style={titleStyle}>Traffic · 7 days</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
-            {traffic.map((v, i) => (
-              <div key={i} style={{ flex: 1, background: pc(3), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / tMax) * 82))}px` }} />
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 7, marginTop: 4 }}>
-            {daily.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 14, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
-            <span>{totalVisits.toLocaleString()} visits</span>
-            {trafficDelta != null && <span style={{ color: trafficDelta >= 0 ? pc(1) : HOME_THEME.red }}>{trafficDelta >= 0 ? "▲" : "▼"} {Math.abs(trafficDelta)}%</span>}
-          </div>
-        </div>
-        <div style={cardStyle} title="New user registrations bucketed by week for the last 7 weeks. 'this wk' is the count in the current (partial) week.">
-          <div style={titleStyle}>Signups · 7 weeks</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
-            {weekly.counts.map((v, i) => (
-              <div key={i} style={{ flex: 1, background: pc(1), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / wkMax) * 82))}px` }} />
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
-            <span>{weekly.counts.reduce((a, b) => a + b, 0)} new</span>
-            <span style={{ color: pc(1) }}>▲ {weekly.counts[weekly.counts.length - 1] ?? 0} this wk</span>
-          </div>
-        </div>
-        <div style={cardStyle} title="Running total of registered users over the last 7 days (each day's signups added to the prior total). Right value is total users; 'active now' is current live sessions.">
-          <div style={titleStyle}>Cumulative users · 7 days</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 7, height: 90 }}>
-            {(cum.length ? cum : [0]).map((v, i) => (
-              <div key={i} style={{ flex: 1, background: pc(0), borderRadius: "4px 4px 0 0", height: `${Math.max(2, Math.round((v / cMax) * 82))}px` }} />
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 7, marginTop: 4 }}>
-            {dailySignups.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 14, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, marginTop: 9, color: HOME_THEME.text, opacity: 1 }}>
-            <span>{users != null ? `${users.toLocaleString()} total` : "—"}</span>
-            <span>{activeSessions != null ? `${activeSessions} active now` : ""}</span>
-          </div>
-        </div>
-      </div>
+      {/* Traffic · signups · cumulative with tabs */}
+      <MetricsTabSection visits={visits} signups={signups} users={users} activeSessions={activeSessions} />
 
       {/* Top pages · rows today */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1fr 1fr", gap: 10 }}>
@@ -1367,7 +1549,7 @@ function OverviewSection({ metrics }: {
 
 // FE / BE tab + accordion (one section open at a time). The `tab` of each
 // section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "infra" | "auth";
+type OwnerTab = "overview" | "infra";
 
 export default function OwnerDashboard() {
   const isMobile = useIsMobile();
@@ -1377,7 +1559,7 @@ export default function OwnerDashboard() {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
-      const VALID_TABS: OwnerTab[] = ["overview","infra"];
+      const VALID_TABS: OwnerTab[] = ["overview", "infra"];
       const param = new URLSearchParams(window.location.search).get("tab") as OwnerTab | null;
       if (param && VALID_TABS.includes(param)) {
         setOwnerTab(param);
@@ -2214,6 +2396,8 @@ export default function OwnerDashboard() {
       feed,
       topPages,
       rowsToday,
+      visits,
+      signups,
       infra,
       ops,
     };
@@ -2223,7 +2407,6 @@ export default function OwnerDashboard() {
   const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
     { id: "overview",  label: "Overview" },
     { id: "infra",     label: "Infra" },
-    { id: "auth",      label: "Supabase / Users", badge: clerk?.stats?.userCount ?? undefined },
   ];
   // Inject feedback badge on overview
   const feedbackBadge = feedbackOpenCount > 0 ? feedbackOpenCount : undefined;
@@ -3158,117 +3341,7 @@ export default function OwnerDashboard() {
         </div>
         )}
 
-        {/* ── Auth / Clerk keys ── */}
-        {SECTION_TAB.auth === ownerTab && (
-        <AccordionCard
-          id="auth"
-          accent={HOME_THEME.purple}
-          title="Auth · Supabase"
-          subtitle={clerk == null ? "loading…" : `${clerk.configured ? "configured" : "not configured"} · env ${clerk.environment}${clerk.stats?.userCount != null ? ` · ${clerk.stats.userCount} users` : ""}`}
-          open={openSet.has("auth")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {clerk == null ? (
-              <span style={{ fontSize: 15, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>Loading…</span>
-            ) : (
-              <>
-              {/* Key status row */}
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
-                <StatusBadge ok={clerk.configured} label={clerk.configured ? "Configured" : "Not configured"} />
-                {/* Environment badge: live = amber (be careful), test = cyan. */}
-                <span style={{
-                  fontSize: 15, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase",
-                  padding: "3px 9px", borderRadius: 20,
-                  color: clerk.environment === "live" ? HOME_THEME.orange : clerk.environment === "test" ? HOME_THEME.cyan : HOME_THEME.text,
-                  background: clerk.environment === "live" ? `${HOME_THEME.orange}1a` : clerk.environment === "test" ? `${HOME_THEME.cyan}1a` : "transparent",
-                  border: `1px solid ${clerk.environment === "live" ? HOME_THEME.orange : clerk.environment === "test" ? HOME_THEME.cyan : HOME_THEME.border}44`,
-                }}>
-                  {clerk.environment === "unknown" ? "env ?" : clerk.environment}
-                </span>
-
-                {/* Auth provider (Supabase). Secrets never leave the server. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <span style={{ fontSize: 14, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Provider</span>
-                  <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", color: clerk.configured ? HOME_THEME.green : HOME_THEME.red }}>
-                    {clerk.provider === "supabase" ? "Supabase Auth" : clerk.provider || "supabase"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Backend-API stats (read-only). Hidden if nothing came back. */}
-              {(() => {
-                const s = clerk.stats;
-                const hasStats = !!s && (s.userCount != null || s.activeSessions != null || s.recent.length > 0);
-                if (!hasStats) {
-                  // Show an error hint if the admin API was configured but didn't answer.
-                  if (clerk.statsError) {
-                    return (
-                      <div style={{ fontSize: 15, color: HOME_THEME.orange, fontFamily: "var(--font-mono)" }}>
-                        Admin API unavailable: {clerk.statsError}
-                      </div>
-                    );
-                  }
-                  return null;
-                }
-                return (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
-                    {/* Stat chips */}
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.cyan}14`, border: `1px solid ${HOME_THEME.cyan}33` }}>
-                        <span style={{ fontSize: 15, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Users</span>
-                        <span style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>
-                          {s!.userCount != null ? s!.userCount.toLocaleString() : "—"}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 8, background: `${HOME_THEME.green}14`, border: `1px solid ${HOME_THEME.green}33` }}>
-                        <span style={{ fontSize: 15, fontWeight: 400, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Active sessions</span>
-                        <span style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.green, fontFamily: "var(--font-mono)" }}>
-                          {s!.activeSessions != null ? s!.activeSessions.toLocaleString() : "—"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Recent signups */}
-                    {s!.recent.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 8 }}>
-                          Recent signups
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column" }}>
-                          {s!.recent.map((u, i) => (
-                            <div
-                              key={u.id || i}
-                              style={{
-                                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-                                padding: "5px 0",
-                                borderBottom: i < s!.recent.length - 1 ? `1px solid ${HOME_THEME.border}` : "none",
-                              }}
-                            >
-                              <span style={{ fontSize: 15, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
-                                {u.name ? <b style={{ fontWeight: 700 }}>{u.name}</b> : null}
-                                {u.name && u.email ? "  " : null}
-                                {u.email ? <span style={{ fontFamily: "var(--font-mono)", color: "#c8d8e8" }}>{u.email}</span> : (!u.name ? <span style={{ color: HOME_THEME.text, opacity: 1 }}>(no email)</span> : null)}
-                              </span>
-                              <span style={{ fontSize: 14, color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>
-                                {u.createdAt ? fmtAgo(new Date(u.createdAt).toISOString()) : "—"}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              </>
-            )}
-          </div>
-        </AccordionCard>
-        )}
-
-        {/* Activity tab removed — flow/EM ticker visit trackers moved to Overview. */}
+        {/* Auth tab removed — all activity/user metrics now consolidated on Overview tab. */}
 
 
       </div>

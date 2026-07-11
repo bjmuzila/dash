@@ -824,10 +824,19 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       google_sub        TEXT UNIQUE,
       is_owner          BOOLEAN NOT NULL DEFAULT FALSE,
       email_verified_at TIMESTAMPTZ,
+      discord_id        TEXT UNIQUE,
+      discord_username  TEXT,
+      discord_avatar    TEXT,
+      discord_connected_at TIMESTAMPTZ,
       created_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       updated_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+    -- Backfill for pre-existing tables (Discord account linking).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_id TEXT UNIQUE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_username TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_avatar TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_connected_at TIMESTAMPTZ;
 
     -- Opaque session tokens. The raw token is never stored -- only sha256(token)
     -- -- so a DB read (backup leak, etc.) can't be replayed as a live session.
@@ -1445,6 +1454,10 @@ export interface UserRecord {
   google_sub: string | null;
   is_owner: boolean;
   email_verified_at: string | null;
+  discord_id: string | null;
+  discord_username: string | null;
+  discord_avatar: string | null;
+  discord_connected_at: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -1492,6 +1505,33 @@ export async function setUserGoogleSub(id: string, googleSub: string): Promise<v
 
 export async function markUserEmailVerified(id: string): Promise<void> {
   await pgQuery(`UPDATE users SET email_verified_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND email_verified_at IS NULL`, [id]);
+}
+
+/** Links a Discord account after a successful OAuth callback. Upserts on
+ *  conflict so re-connecting (e.g. after switching Discord accounts) just
+ *  overwrites the previous link rather than erroring. */
+export async function setUserDiscord(id: string, discord: {
+  discord_id: string;
+  discord_username: string;
+  discord_avatar: string | null;
+}): Promise<void> {
+  await pgQuery(
+    `UPDATE users
+        SET discord_id = $2, discord_username = $3, discord_avatar = $4,
+            discord_connected_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [id, discord.discord_id, discord.discord_username, discord.discord_avatar]
+  );
+}
+
+export async function clearUserDiscord(id: string): Promise<void> {
+  await pgQuery(
+    `UPDATE users
+        SET discord_id = NULL, discord_username = NULL, discord_avatar = NULL,
+            discord_connected_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [id]
+  );
 }
 
 /** Owner-dashboard stats: total accounts + most recently created ones. */

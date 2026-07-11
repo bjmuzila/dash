@@ -306,11 +306,15 @@ function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record
 }
 
 // ── Flow GEX raw calc ──────────────────────────────────────────────────────
-// Shows the volume-basis (flow) GEX formula with the live inputs plugged in so
-// the per-strike number can be eyeballed — the same product the server does in
-// gex-calculator: |γ| · Volume · Spot² (calls +, puts −). OI-basis GEX is in the
-// Greeks panels above; the dealer-inventory flowGEX needs aggregate inventory
-// not available in a single-strike probe, so "flow" here is the vol basis.
+// Shows the DEALER-INVENTORY flow GEX formula — the one the home page GEX
+// chart actually plots (server-v2/computation/gex-calculator.js flowGEX
+// branch, fed by FlowGexAccumulator). γ · dealer_net · Spot², dealer_net =
+// buyVol − sellVol (dealer's own signed position from the classified tape).
+// Dealer long (either leg) = positive contribution, dealer short = negative —
+// NO put-side sign flip like the OI-basis GEX above, because the flip is
+// already baked into putNet's sign. Inventory comes from the live
+// FlowGexAccumulator via /proxy/flow-inventory (not derivable from a single
+// REST probe, which only sees today's total volume, not buy/sell split).
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
@@ -327,36 +331,47 @@ function fmtSpot(v: number | null): string {
   return v == null ? "—" : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function FlowGexCalcPanel({ call, put }: { call: ProbeResult | null; put: ProbeResult | null }) {
+function FlowGexCalcPanel({
+  call,
+  put,
+  inv,
+}: {
+  call: ProbeResult | null;
+  put: ProbeResult | null;
+  inv: { callBuyVol: number; callSellVol: number; putBuyVol: number; putSellVol: number; callNet: number; putNet: number } | null;
+}) {
   const cEx = call?.exposures as Record<string, unknown> | undefined;
   const pEx = put?.exposures as Record<string, unknown> | undefined;
   const cGamma = num((call?.feeds?.Greeks as Record<string, unknown> | undefined)?.gamma);
   const pGamma = num((put?.feeds?.Greeks as Record<string, unknown> | undefined)?.gamma);
   const spot = num(cEx?.spot) ?? num(pEx?.spot);
   const s2 = spot != null ? spot * spot : null;
-  const cFlow = num(cEx?.gexVol); // already signed + (call)
-  const pFlow = num(pEx?.gexVol); // already signed − (put)
+  const cNet = inv ? inv.callNet : null;
+  const pNet = inv ? inv.putNet : null;
+  const cFlow = cGamma != null && cNet != null && s2 != null ? cGamma * cNet * s2 : null;
+  const pFlow = pGamma != null && pNet != null && s2 != null ? pGamma * pNet * s2 : null;
   const netFlow = cFlow == null && pFlow == null ? null : (cFlow ?? 0) + (pFlow ?? 0);
-  const cols = "48px 1fr 1fr 1.1fr 1.25fr";
+  const cols = "48px 1fr 1fr 1fr 1.1fr 1.25fr";
   const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 13, fontWeight: 400, textAlign: "right" };
   const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 15, textAlign: "right" };
   const legs = [
-    { tag: "Call", tagColor: CALLS, gamma: cGamma, vol: num(cEx?.volume), flow: cFlow },
-    { tag: "Put", tagColor: PUTS, gamma: pGamma, vol: num(pEx?.volume), flow: pFlow },
+    { tag: "Call", tagColor: CALLS, gamma: cGamma, buy: inv?.callBuyVol ?? null, sell: inv?.callSellVol ?? null, net: cNet, flow: cFlow },
+    { tag: "Put", tagColor: PUTS, gamma: pGamma, buy: inv?.putBuyVol ?? null, sell: inv?.putSellVol ?? null, net: pNet, flow: pFlow },
   ];
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${WARN}`, borderRadius: 8, padding: "14px 18px" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
         <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow GEX · raw calc</span>
-        <span style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>|γ| · Volume · Spot²  (call +, put −)</span>
+        <span style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>γ · dealer_net · Spot²  (dealer long +, short −, no put flip)</span>
       </div>
       <div style={{ fontSize: 13, color: HOME_THEME.muted, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
-        vol (flow) basis · Spot {fmtSpot(spot)} · Spot² {fmtInt(s2)}
+        dealer-inventory basis (live tape) · Spot {fmtSpot(spot)} · Spot² {fmtInt(s2)} · net = buyVol − sellVol
       </div>
       <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>
         <span style={{ ...head, textAlign: "left" }}> </span>
-        <span style={head}>|γ|</span>
-        <span style={head}>× Vol</span>
+        <span style={head}>γ</span>
+        <span style={head}>Buy / Sell</span>
+        <span style={head}>× Net</span>
         <span style={head}>× S²</span>
         <span style={head}>= Flow GEX</span>
       </div>
@@ -364,14 +379,15 @@ function FlowGexCalcPanel({ call, put }: { call: ProbeResult | null; put: ProbeR
         <div key={r.tag} style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "5px 0" }}>
           <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 15 }}>{r.tag}</span>
           <span style={{ ...cell, color: r.gamma == null ? NA : VAL }}>{fmtGamma(r.gamma == null ? null : Math.abs(r.gamma))}</span>
-          <span style={{ ...cell, color: r.vol == null ? NA : VAL }}>{fmtInt(r.vol)}</span>
+          <span style={{ ...cell, color: r.buy == null ? NA : VAL, fontSize: 13 }}>{r.buy == null ? "—" : `${fmtInt(r.buy)} / ${fmtInt(r.sell)}`}</span>
+          <span style={{ ...cell, color: r.net == null ? NA : r.net < 0 ? NEG : POS }}>{r.net == null ? "n/a" : fmtInt(r.net)}</span>
           <span style={{ ...cell, color: s2 == null ? NA : VAL }}>{fmtInt(s2)}</span>
           <span style={{ ...cell, color: r.flow == null ? NA : r.flow < 0 ? NEG : POS, fontWeight: 700 }}>{r.flow == null ? "n/a" : fmtExp(r.flow)}</span>
         </div>
       ))}
       <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 2 }}>
         <span style={{ color: NET, fontWeight: 700, fontSize: 15 }}>Net</span>
-        <span /><span /><span />
+        <span /><span /><span /><span />
         <span style={{ ...cell, color: netFlow == null ? NA : netFlow < 0 ? NEG : POS, fontWeight: 800 }}>{netFlow == null ? "n/a" : fmtExp(netFlow)}</span>
       </div>
     </div>
@@ -394,6 +410,10 @@ export default function DevPage() {
   const [putResult, setPutResult] = useState<ProbeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveMs, setLiveMs] = useState(0);
+  // Live dealer inventory (buy/sell net) for the probed strike — same
+  // FlowGexAccumulator the WS GEX chart's flowGEX comes from. Distinct from
+  // callResult/putResult, which are REST-probed OI/volume/gamma.
+  const [flowInv, setFlowInv] = useState<{ callBuyVol: number; callSellVol: number; putBuyVol: number; putSellVol: number; callNet: number; putNet: number } | null>(null);
   const [logs, setLogs] = useState<{ t: number; level: "info" | "ok" | "warn" | "err"; msg: string }[]>([]);
 
   // Append a timestamped line to the on-page log panel (newest last, capped).
@@ -475,16 +495,32 @@ export default function DevPage() {
     stopRef.current = false;
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
-    setLoading(true); setError(null); setCallResult(null); setPutResult(null); setElapsed(null); setStatusMsg(null);
+    setLoading(true); setError(null); setCallResult(null); setPutResult(null); setElapsed(null); setStatusMsg(null); setFlowInv(null);
     setSentSymbol("");
     const t0 = performance.now();
     log("info", `▶ REST probe ${tkr} ${strike} ${expiry} (call + put)`);
     try {
-      // Fetch both sides at once — one strike in, calls + puts out.
-      const [callRes, putRes] = await Promise.all([
+      // Fetch both sides at once — one strike in, calls + puts out — plus the
+      // live dealer inventory for this strike (real flow-GEX basis, same
+      // source the home page GEX chart reads from).
+      const [callRes, putRes, invRes] = await Promise.all([
         probeSide("C", signal),
         probeSide("P", signal),
+        fetch(`/proxy/flow-inventory?expiry=${encodeURIComponent(expiry)}&strike=${encodeURIComponent(strike)}`, { signal })
+          .then((r) => r.json())
+          .catch(() => null),
       ]);
+      if (invRes?.inventory) {
+        const inv = invRes.inventory;
+        setFlowInv({
+          callBuyVol: Number(inv.callBuyVol ?? 0),
+          callSellVol: Number(inv.callSellVol ?? 0),
+          putBuyVol: Number(inv.putBuyVol ?? 0),
+          putSellVol: Number(inv.putSellVol ?? 0),
+          callNet: Number(inv.callNet ?? 0),
+          putNet: Number(inv.putNet ?? 0),
+        });
+      }
       setElapsed(Math.round(performance.now() - t0));
 
       const sym = callRes.d?.resolvedSymbol || putRes.d?.resolvedSymbol || "";
@@ -624,7 +660,7 @@ export default function DevPage() {
       {/* Flow GEX raw calculation (volume basis) */}
       <RowLabel text="Flow GEX · raw calc" color={WARN} />
       <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
-        <FlowGexCalcPanel call={callResult} put={putResult} />
+        <FlowGexCalcPanel call={callResult} put={putResult} inv={flowInv} />
       </div>
 
       {/* Raw market-data items — every field, nothing dropped */}

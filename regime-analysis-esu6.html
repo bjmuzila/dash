@@ -1,11 +1,11 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Regime Engine — ESU6 5m ETH</title>
+<title>Regime Engine — ESU6 5m</title>
 <style>
   :root{
     --bg:#0a0e14; --card:#111823; --card2:#0d141d; --line:#1e2a38;
     --txt:#e8eef5; --dim:#8aa0b5; --cyan:#38e1ff;
-    --trend:#2ee6a6; --chop:#f2c14e; --panic:#ff5470;
+    --up:#2ee6a6; --down:#ff5470; --chop:#f2c14e; --panic:#b98cff;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:22px}
@@ -15,43 +15,56 @@
   .row>.card{flex:1;min-width:240px}
   label{color:var(--dim);font-size:12px;margin-right:6px}
   input[type=file]{color:var(--dim)}
+  input[type=number]{width:56px;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
   select,button{background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:13px}
   button{cursor:pointer;border-color:var(--cyan);color:var(--cyan)}
   button:hover{background:#0e1b24}
+  .ctl{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
   th:first-child,td:first-child{text-align:left}
   .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
   .big{font-size:26px;font-weight:700}
   .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:700;font-size:13px}
-  .Trend{color:var(--trend);background:rgba(46,230,166,.12)}
+  .Up,.Trend{color:var(--up);background:rgba(46,230,166,.12)}
+  .Down{color:var(--down);background:rgba(255,84,112,.12)}
   .Chop{color:var(--chop);background:rgba(242,193,78,.12)}
-  .Panic{color:var(--panic);background:rgba(255,84,112,.12)}
-  .tt{color:var(--trend)} .tc{color:var(--chop)} .tp{color:var(--panic)}
+  .Panic{color:var(--panic);background:rgba(185,140,255,.14)}
   canvas{width:100%;display:block;border-radius:8px;background:var(--card2)}
   .muted{color:var(--dim);font-size:12px}
-  .hint{color:var(--dim);font-size:12px;margin-top:8px}
+  .hint{color:var(--dim);font-size:12px;margin-top:10px}
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   .stat{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  code{color:var(--cyan)}
 </style>
 
-<h1>Regime Engine — ESU6 · 5-min ETH</h1>
-<div class="sub">3-state Gaussian HMM (Baum-Welch EM) on log returns — Trend / Chop / Panic. Same math as <code>lib/regimeHmm.ts</code>, run in-browser over the full CSV.</div>
+<h1>Regime Engine — ESU6 · 5-min</h1>
+<div class="sub">Gaussian HMM (Baum-Welch EM) on <code>[return, momentum]</code>. 4-state mode splits <b>Up-Trend / Down-Trend / Chop / Panic</b> — Panic = true high-vol shock, not just "down". Runs in-browser on the full CSV.</div>
 
 <div class="card">
-  <label>CSV file</label><input id="file" type="file" accept=".csv,text/csv">
-  <label style="margin-left:14px">Window</label>
-  <select id="win">
-    <option value="0">Full sample</option>
-    <option value="4000">Last 4,000 bars</option>
-    <option value="2000" selected>Last 2,000 bars</option>
-    <option value="1000">Last 1,000 bars</option>
-    <option value="500">Last 500 bars</option>
-  </select>
-  <label style="margin-left:14px">Donchian</label>
-  <select id="don"><option>20</option><option selected>30</option><option>50</option></select>
-  <button id="run" style="margin-left:14px">Run analysis</button>
-  <div class="hint" id="status">Pick <b>ESU6 - 5 min - ETH.csv</b> and hit Run. Baum-Welch on the full 43k series works but takes a few seconds — 2,000 bars is a good live-tab-style window.</div>
+  <div class="ctl">
+    <span><label>CSV</label><input id="file" type="file" accept=".csv,text/csv"></span>
+    <span><label>States</label>
+      <select id="states"><option value="4" selected>4 (Up/Down/Chop/Panic)</option><option value="3">3 (Trend/Chop/Panic)</option></select></span>
+    <span><label>Model</label>
+      <select id="model"><option value="2" selected>Return + Momentum</option><option value="1">Return only</option></select></span>
+    <span><label>Mom window</label><input id="mw" type="number" value="12" min="2" max="78"> bars</span>
+    <span><label><input id="rth" type="checkbox" checked style="vertical-align:-2px"> RTH only</label></span>
+    <span><label>Window</label>
+      <select id="win"><option value="0">Full</option><option value="4000">4,000</option><option value="2000" selected>2,000</option><option value="1000">1,000</option></select></span>
+    <span><label>Donchian</label><select id="don"><option>20</option><option selected>30</option><option>50</option></select></span>
+    <span><label>Gate</label>
+      <select id="gate">
+        <option value="dir" selected>Long Up / Short Down</option>
+        <option value="dirp">Long Up / Short Down + Short Panic</option>
+        <option value="uponly">Long Up only</option>
+      </select></span>
+    <span><label>Decode</label>
+      <select id="decode"><option value="filtered" selected>Filtered (online, no lookahead)</option><option value="smoothed">Smoothed (uses full series)</option><option value="walkfwd">Walk-forward (rolling refit)</option></select></span>
+    <span><label>WF train</label><input id="wftrain" type="number" value="2000" min="300"> <label>step</label><input id="wfstep" type="number" value="500" min="50"></span>
+    <button id="run">Run</button>
+  </div>
+  <div class="hint" id="status">Pick <b>ESU6 - 5 min - ETH.csv</b> and Run. Returns built per-session (momentum resets daily, overnight gaps dropped). Panic is labeled by highest return-volatility; Up/Down by momentum sign.</div>
 </div>
 
 <div id="out" style="display:none">
@@ -64,7 +77,7 @@
   <div class="card">
     <div class="k">Price with decoded regime (color = state per bar)</div>
     <canvas id="priceCv" height="220"></canvas>
-    <div class="muted" style="margin-top:6px"><span class="pill Trend">Trend</span> <span class="pill Chop">Chop</span> <span class="pill Panic">Panic</span></div>
+    <div class="muted" id="legend" style="margin-top:6px"></div>
   </div>
 
   <div class="card">
@@ -74,12 +87,13 @@
 
   <div class="row">
     <div class="card">
-      <div class="k">Per-state emission stats (5-min log returns)</div>
-      <table><thead><tr><th>State</th><th>Mean %</th><th>Std %</th><th>Sharpe-ish</th><th>Stationary</th></tr></thead><tbody id="stateTbl"></tbody></table>
+      <div class="k" id="stateHdr">Per-state emission stats</div>
+      <table><thead id="stateHead"></thead><tbody id="stateTbl"></tbody></table>
+      <div class="muted" id="stateNote" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <div class="k">Transition matrix &nbsp;P(next | current)</div>
-      <table><thead><tr><th></th><th class="tt">→Trend</th><th class="tc">→Chop</th><th class="tp">→Panic</th></tr></thead><tbody id="transTbl"></tbody></table>
+      <table><thead id="transHead"></thead><tbody id="transTbl"></tbody></table>
       <div class="muted" id="persist" style="margin-top:8px"></div>
     </div>
   </div>
@@ -87,28 +101,53 @@
   <div class="card">
     <div class="k">Donchian breakout backtest — same rules, regime gate on/off</div>
     <div class="grid3" id="btGrid" style="margin-top:8px"></div>
-    <div class="muted" style="margin-top:8px">Long/short Donchian channel breakout. "Gated" only holds when the decoded regime = Trend (flat otherwise). Prototype comparison — shows the effect of the regime filter, not a production system.</div>
+    <div class="muted" id="btNote" style="margin-top:8px"></div>
   </div>
 </div>
 
 <script>
-const REGIME_LABELS=["Trend","Chop","Panic"];
-function gaussPdf(x,mu,sigma){const s=Math.max(sigma,1e-8);const z=(x-mu)/s;return Math.exp(-0.5*z*z)/(s*Math.sqrt(2*Math.PI));}
-function fitGaussianHmm(returns,opts){
-  const K=(opts&&opts.states)||3, iters=(opts&&opts.iters)||25, T=returns.length;
-  if(T<K*20)return null;
-  const sorted=[...returns].sort((a,b)=>a-b);
-  const gm=returns.reduce((a,b)=>a+b,0)/T;
-  const gv=returns.reduce((a,b)=>a+(b-gm)**2,0)/T;
-  const std0=Math.sqrt(gv)||1e-6;
-  let means=Array.from({length:K},(_,k)=>sorted[Math.min(T-1,Math.floor(((k+0.5)/K)*T))]);
-  let stds=new Array(K).fill(std0);
+function showErr(msg){const s=document.getElementById("status");if(s)s.innerHTML='<span style="color:#ff5470">Error: '+msg+'</span>';}
+window.addEventListener("error",e=>showErr((e.message||"")+(e.filename?" @"+e.lineno+":"+e.colno:"")));
+const COLOR={Up:"#2ee6a6",Down:"#ff5470",Chop:"#f2c14e",Panic:"#b98cff",Trend:"#2ee6a6"};
+function gauss1(x,mu,s){s=Math.max(s,1e-9);const z=(x-mu)/s;return Math.exp(-0.5*z*z)/(s*Math.sqrt(2*Math.PI));}
+function gaussD(x,mu,s){let p=1;for(let d=0;d<x.length;d++)p*=gauss1(x[d],mu[d],s[d]);return p;}
+
+function labelStates(K,means,stds,D){
+  const D0=D-1,idxs=[...Array(K).keys()],labels=new Array(K);
+  const panic=idxs.reduce((b,k)=>stds[k][0]>stds[b][0]?k:b,idxs[0]);
+  labels[panic]="Panic";
+  const rem=idxs.filter(k=>k!==panic);
+  const mom=k=>means[k][D0];
+  if(K===4){
+    const up=rem.reduce((b,k)=>mom(k)>mom(b)?k:b,rem[0]);
+    let down=rem.reduce((b,k)=>(k!==up&&mom(k)<mom(b))?k:b,rem.find(k=>k!==up));
+    labels[up]="Up";labels[down]="Down";
+    rem.forEach(k=>{if(k!==up&&k!==down)labels[k]="Chop";});
+    return{labels,order:["Up","Down","Chop","Panic"]};
+  }
+  const ts=k=>Math.abs(mom(k))/Math.max(stds[k][D0],1e-9);
+  const trend=rem.reduce((b,k)=>ts(k)>ts(b)?k:b,rem[0]);
+  labels[trend]="Trend";labels[rem.find(k=>k!==trend)]="Chop";
+  return{labels,order:["Trend","Chop","Panic"]};
+}
+
+function fitDiagHmm(obs,opts){
+  const K=(opts&&opts.states)||3, iters=(opts&&opts.iters)||30, T=obs.length, D=obs[0].length;
+  const decode=(opts&&opts.decode)||"filtered";
+  if(T<K*25)return null;
+  const order=obs.map((_,i)=>i).sort((a,b)=>obs[a][0]-obs[b][0]);
+  const gMean=new Array(D).fill(0),gVar=new Array(D).fill(0);
+  for(const v of obs)for(let d=0;d<D;d++)gMean[d]+=v[d]/T;
+  for(const v of obs)for(let d=0;d<D;d++)gVar[d]+=(v[d]-gMean[d])**2/T;
+  const gStd=gVar.map(v=>Math.sqrt(v)||1e-6);
+  let means=Array.from({length:K},(_,k)=>obs[order[Math.min(T-1,Math.floor(((k+0.5)/K)*T))]].slice());
+  let stds=Array.from({length:K},()=>gStd.slice());
   let A=Array.from({length:K},()=>new Array(K).fill(1/K));
   let pi0=new Array(K).fill(1/K);
   let gamma=[],logLik=-Infinity,ran=0;
   for(let it=0;it<iters;it++){ran=it+1;
     const B=new Array(T);
-    for(let t=0;t<T;t++){const r=new Array(K);for(let k=0;k<K;k++)r[k]=gaussPdf(returns[t],means[k],stds[k])+1e-12;B[t]=r;}
+    for(let t=0;t<T;t++){const r=new Array(K);for(let k=0;k<K;k++)r[k]=gaussD(obs[t],means[k],stds[k])+1e-300;B[t]=r;}
     const alpha=new Array(T),c=new Array(T);alpha[0]=new Array(K);let s0=0;
     for(let k=0;k<K;k++){alpha[0][k]=pi0[k]*B[0][k];s0+=alpha[0][k];}
     c[0]=s0>0?1/s0:1;for(let k=0;k<K;k++)alpha[0][k]*=c[0];
@@ -129,169 +168,264 @@ function fitGaussianHmm(returns,opts){
     const nA=Array.from({length:K},()=>new Array(K).fill(0));
     for(let i=0;i<K;i++){let g=0;for(let t=0;t<T-1;t++)g+=gamma[t][i];for(let j=0;j<K;j++)nA[i][j]=g>0?xiSum[i][j]/g:1/K;}
     A=nA;
-    const nm=new Array(K).fill(0),ns=new Array(K).fill(0);
-    for(let k=0;k<K;k++){let g=0,w=0;for(let t=0;t<T;t++){g+=gamma[t][k];w+=gamma[t][k]*returns[t];}
-      const mu=g>0?w/g:means[k];let vs=0;for(let t=0;t<T;t++)vs+=gamma[t][k]*(returns[t]-mu)**2;
-      nm[k]=mu;ns[k]=Math.max(g>0?Math.sqrt(vs/g):stds[k],1e-6);}
+    const nm=Array.from({length:K},()=>new Array(D).fill(0)),ns=Array.from({length:K},()=>new Array(D).fill(0));
+    for(let k=0;k<K;k++){let g=0;const w=new Array(D).fill(0);
+      for(let t=0;t<T;t++){g+=gamma[t][k];for(let d=0;d<D;d++)w[d]+=gamma[t][k]*obs[t][d];}
+      const mu=w.map(v=>g>0?v/g:0);const vs=new Array(D).fill(0);
+      for(let t=0;t<T;t++)for(let d=0;d<D;d++)vs[d]+=gamma[t][k]*(obs[t][d]-mu[d])**2;
+      for(let d=0;d<D;d++){nm[k][d]=g>0?mu[d]:means[k][d];ns[k][d]=Math.max(g>0?Math.sqrt(vs[d]/g):stds[k][d],1e-7);}
+    }
     means=nm;stds=ns;
     let ll=0;for(let t=0;t<T;t++)ll+=-Math.log(c[t]||1e-300);logLik=ll;
   }
-  const idxs=Array.from({length:K},(_,k)=>k);
-  const panicIdx=idxs.reduce((b,k)=>stds[k]>stds[b]?k:b,idxs[0]);
-  const rem=idxs.filter(k=>k!==panicIdx);
-  const ts=k=>Math.abs(means[k])/Math.max(stds[k],1e-9);
-  const trendIdx=rem.reduce((b,k)=>ts(k)>ts(b)?k:b,rem[0]);
-  const chopIdx=rem.find(k=>k!==trendIdx);
-  const labels=new Array(K);labels[trendIdx]="Trend";labels[chopIdx]="Chop";labels[panicIdx]="Panic";
-  const sib={Trend:trendIdx,Chop:chopIdx,Panic:panicIdx};
+  // final E-step with converged params -> filtered (forward only) or smoothed (fwd+bwd)
+  const Bf=new Array(T);
+  for(let t=0;t<T;t++){const r=new Array(K);for(let k=0;k<K;k++)r[k]=gaussD(obs[t],means[k],stds[k])+1e-300;Bf[t]=r;}
+  const af=new Array(T),cf=new Array(T);af[0]=new Array(K);let s0f=0;
+  for(let k=0;k<K;k++){af[0][k]=pi0[k]*Bf[0][k];s0f+=af[0][k];}
+  cf[0]=s0f>0?1/s0f:1;for(let k=0;k<K;k++)af[0][k]*=cf[0];
+  for(let t=1;t<T;t++){af[t]=new Array(K).fill(0);
+    for(let j=0;j<K;j++){let sum=0;for(let i=0;i<K;i++)sum+=af[t-1][i]*A[i][j];af[t][j]=sum*Bf[t][j];}
+    let s=0;for(let k=0;k<K;k++)s+=af[t][k];cf[t]=s>0?1/s:1;for(let k=0;k<K;k++)af[t][k]*=cf[t];}
+  let probs;
+  if(decode==="smoothed"){
+    const bf=new Array(T);bf[T-1]=new Array(K).fill(cf[T-1]);
+    for(let t=T-2;t>=0;t--){bf[t]=new Array(K).fill(0);
+      for(let i=0;i<K;i++){let sum=0;for(let j=0;j<K;j++)sum+=A[i][j]*Bf[t+1][j]*bf[t+1][j];bf[t][i]=sum*cf[t];}}
+    probs=new Array(T);
+    for(let t=0;t<T;t++){const r=new Array(K);let s=0;for(let k=0;k<K;k++){r[k]=af[t][k]*bf[t][k];s+=r[k];}for(let k=0;k<K;k++)r[k]=s>0?r[k]/s:1/K;probs[t]=r;}
+  }else{probs=af;} // filtered: scaled forward sums to 1 per bar, uses only info up to t
+
+  const{labels,order:labelOrder}=labelStates(K,means,stds,D);
+  const sib={};labels.forEach((l,k)=>sib[l]=k);
   const idxOf=l=>sib[l];
-  const transition=REGIME_LABELS.map(li=>REGIME_LABELS.map(lj=>A[idxOf(li)][idxOf(lj)]));
+  const transition=labelOrder.map(li=>labelOrder.map(lj=>A[idxOf(li)][idxOf(lj)]));
   let stat=new Array(K).fill(1/K);
   for(let i=0;i<500;i++){const nx=new Array(K).fill(0);
     for(let j=0;j<K;j++){let s=0;for(let ii=0;ii<K;ii++)s+=stat[ii]*A[ii][j];nx[j]=s;}
     const sm=nx.reduce((a,b)=>a+b,0);stat=nx.map(v=>sm>0?v/sm:1/K);}
-  const stationary=REGIME_LABELS.map(l=>stat[idxOf(l)]);
-  const gammaByLabel=gamma.map(r=>({Trend:r[trendIdx],Chop:r[chopIdx],Panic:r[panicIdx]}));
-  const decodedPath=gamma.map(r=>{let bK=0,bV=-1;for(let k=0;k<K;k++)if(r[k]>bV){bV=r[k];bK=k;}return labels[bK];});
-  return{labels,stateIndexByLabel:sib,transition,stationary,gammaByLabel,decodedPath,
+  const stationary={};labelOrder.forEach(l=>stationary[l]=stat[idxOf(l)]);
+  const gammaByLabel=probs.map(r=>{const o={};labelOrder.forEach(l=>o[l]=r[idxOf(l)]);return o;});
+  const decodedPath=probs.map(r=>{let bK=0,bV=-1;for(let k=0;k<K;k++)if(r[k]>bV){bV=r[k];bK=k;}return labels[bK];});
+  const D0=D-1;
+  const dirScore=l=>Math.abs(means[idxOf(l)][D0])/Math.max(stds[idxOf(l)][D0],1e-9);
+  return{K,D,labels,order:labelOrder,stateIndexByLabel:sib,transition,stationary,gammaByLabel,decodedPath,
     currentProbs:gammaByLabel[gammaByLabel.length-1],currentLabel:decodedPath[decodedPath.length-1],
-    means,stds,logLik,iterations:ran};
+    means,stds,dirScore,logLik,iterations:ran};
 }
-function donchianBacktest(closes,period,gate,gateLabel){
-  gateLabel=gateLabel||"Trend";let position=0,equity=1,peak=1,maxDD=0,bars=0;
-  for(let t=period;t<closes.length;t++){
-    let wh=-Infinity,wl=Infinity;for(let i=t-period;i<t;i++){if(closes[i]>wh)wh=closes[i];if(closes[i]<wl)wl=closes[i];}
-    if(closes[t]>wh)position=1;else if(closes[t]<wl)position=-1;
-    let eff=position;if(gate){if(gate[t]!==gateLabel)eff=0;}
-    const ret=(closes[t]-closes[t-1])/closes[t-1];equity*=1+eff*ret;
-    peak=Math.max(peak,equity);const dd=(equity-peak)/peak;if(dd<maxDD)maxDD=dd;bars++;
+
+// ---- walk-forward helpers: params-only EM fit + causal forward filter ----
+function fitParams(obs,K,iters){
+  const T=obs.length,D=obs[0].length;
+  const ord=obs.map((_,i)=>i).sort((a,b)=>obs[a][0]-obs[b][0]);
+  const gMean=new Array(D).fill(0),gVar=new Array(D).fill(0);
+  for(const v of obs)for(let d=0;d<D;d++)gMean[d]+=v[d]/T;
+  for(const v of obs)for(let d=0;d<D;d++)gVar[d]+=(v[d]-gMean[d])**2/T;
+  const gStd=gVar.map(v=>Math.sqrt(v)||1e-6);
+  let means=Array.from({length:K},(_,k)=>obs[ord[Math.min(T-1,Math.floor(((k+0.5)/K)*T))]].slice());
+  let stds=Array.from({length:K},()=>gStd.slice());
+  let A=Array.from({length:K},()=>new Array(K).fill(1/K));
+  let pi0=new Array(K).fill(1/K);
+  for(let it=0;it<iters;it++){
+    const B=new Array(T);
+    for(let t=0;t<T;t++){const r=new Array(K);for(let k=0;k<K;k++)r[k]=gaussD(obs[t],means[k],stds[k])+1e-300;B[t]=r;}
+    const alpha=new Array(T),c=new Array(T);alpha[0]=new Array(K);let s0=0;
+    for(let k=0;k<K;k++){alpha[0][k]=pi0[k]*B[0][k];s0+=alpha[0][k];}
+    c[0]=s0>0?1/s0:1;for(let k=0;k<K;k++)alpha[0][k]*=c[0];
+    for(let t=1;t<T;t++){alpha[t]=new Array(K).fill(0);
+      for(let j=0;j<K;j++){let sum=0;for(let i=0;i<K;i++)sum+=alpha[t-1][i]*A[i][j];alpha[t][j]=sum*B[t][j];}
+      let s=0;for(let k=0;k<K;k++)s+=alpha[t][k];c[t]=s>0?1/s:1;for(let k=0;k<K;k++)alpha[t][k]*=c[t];}
+    const beta=new Array(T);beta[T-1]=new Array(K).fill(c[T-1]);
+    for(let t=T-2;t>=0;t--){beta[t]=new Array(K).fill(0);
+      for(let i=0;i<K;i++){let sum=0;for(let j=0;j<K;j++)sum+=A[i][j]*B[t+1][j]*beta[t+1][j];beta[t][i]=sum*c[t];}}
+    const gamma=new Array(T);
+    for(let t=0;t<T;t++){const r=new Array(K);let s=0;for(let k=0;k<K;k++){r[k]=alpha[t][k]*beta[t][k];s+=r[k];}for(let k=0;k<K;k++)r[k]=s>0?r[k]/s:1/K;gamma[t]=r;}
+    const xiSum=Array.from({length:K},()=>new Array(K).fill(0));
+    for(let t=0;t<T-1;t++){let den=0;const num=Array.from({length:K},()=>new Array(K).fill(0));
+      for(let i=0;i<K;i++)for(let j=0;j<K;j++){const v=alpha[t][i]*A[i][j]*B[t+1][j]*beta[t+1][j];num[i][j]=v;den+=v;}
+      if(den>0)for(let i=0;i<K;i++)for(let j=0;j<K;j++)xiSum[i][j]+=num[i][j]/den;}
+    pi0=gamma[0].slice();
+    const nA=Array.from({length:K},()=>new Array(K).fill(0));
+    for(let i=0;i<K;i++){let g=0;for(let t=0;t<T-1;t++)g+=gamma[t][i];for(let j=0;j<K;j++)nA[i][j]=g>0?xiSum[i][j]/g:1/K;}
+    A=nA;
+    const nm=Array.from({length:K},()=>new Array(D).fill(0)),ns=Array.from({length:K},()=>new Array(D).fill(0));
+    for(let k=0;k<K;k++){let g=0;const w=new Array(D).fill(0);
+      for(let t=0;t<T;t++){g+=gamma[t][k];for(let d=0;d<D;d++)w[d]+=gamma[t][k]*obs[t][d];}
+      const mu=w.map(v=>g>0?v/g:0);const vs=new Array(D).fill(0);
+      for(let t=0;t<T;t++)for(let d=0;d<D;d++)vs[d]+=gamma[t][k]*(obs[t][d]-mu[d])**2;
+      for(let d=0;d<D;d++){nm[k][d]=g>0?mu[d]:means[k][d];ns[k][d]=Math.max(g>0?Math.sqrt(vs[d]/g):stds[k][d],1e-7);}}
+    means=nm;stds=ns;
+  }
+  return{A,means,stds,pi0};
+}
+function forwardFiltered(obs,p){
+  const K=p.means.length,T=obs.length,out=new Array(T);
+  let prev=new Array(K),s0=0;
+  for(let k=0;k<K;k++){prev[k]=p.pi0[k]*(gaussD(obs[0],p.means[k],p.stds[k])+1e-300);s0+=prev[k];}
+  for(let k=0;k<K;k++)prev[k]/=(s0||1);out[0]=prev.slice();
+  for(let t=1;t<T;t++){const cur=new Array(K).fill(0);let s=0;
+    for(let j=0;j<K;j++){let sum=0;for(let i=0;i<K;i++)sum+=prev[i]*p.A[i][j];cur[j]=sum*(gaussD(obs[t],p.means[j],p.stds[j])+1e-300);s+=cur[j];}
+    for(let k=0;k<K;k++)cur[k]/=(s||1);out[t]=cur;prev=cur;}
+  return out;
+}
+// Rolling refit; every bar decoded uses ONLY params from prior data + its own past.
+function runWalkForward(obs,rets,stepClose,K,iters,trainLen,step){
+  const T=obs.length,D=obs[0].length;
+  const oosPath=[],oosProbs=[],oosClose=[],oosRets=[];let last=null,refits=0;
+  for(let start=trainLen;start<T;start+=step){
+    const trainStart=start-trainLen;
+    const p=fitParams(obs.slice(trainStart,start),K,iters);refits++;
+    const{labels,order}=labelStates(K,p.means,p.stds,D);
+    const sib={};labels.forEach((l,k)=>sib[l]=k);
+    const testEnd=Math.min(start+step,T);
+    const fp=forwardFiltered(obs.slice(trainStart,testEnd),p);
+    for(let t=start;t<testEnd;t++){
+      const raw=fp[t-trainStart];const o={};order.forEach(l=>o[l]=raw[sib[l]]);
+      let bl=order[0],bv=-1;order.forEach(l=>{if(o[l]>bv){bv=o[l];bl=l;}});
+      oosPath.push(bl);oosProbs.push(o);oosClose.push(stepClose[t]);oosRets.push(rets[t]);
+    }
+    last={A:p.A,means:p.means,stds:p.stds,labels,order,sib};
+  }
+  return{oosPath,oosProbs,oosClose,oosRets,last,D,K,refits};
+}
+
+// gateFn(regimeLabel, rawPos) -> effective position
+function donchian(prices,rets,period,path,gateFn){
+  let position=0,equity=1,peak=1,maxDD=0,bars=0;
+  for(let t=period;t<prices.length;t++){
+    let wh=-Infinity,wl=Infinity;for(let i=t-period;i<t;i++){if(prices[i]>wh)wh=prices[i];if(prices[i]<wl)wl=prices[i];}
+    if(prices[t]>wh)position=1;else if(prices[t]<wl)position=-1;
+    const eff=gateFn?gateFn(path[t],position):position;
+    equity*=1+eff*rets[t];peak=Math.max(peak,equity);const dd=(equity-peak)/peak;if(dd<maxDD)maxDD=dd;bars++;
   }
   return{returnPct:(equity-1)*100,maxDrawdownPct:maxDD*100,bars};
 }
-function alignDecodedPathToCloses(dp){const out=[undefined];for(const l of dp)out.push(l);return out;}
 
-// ---- CSV parse: "YYYYMMDD HHMMSS,o,h,l,c,v" ----
-function parseCsv(txt){
-  const rows=[];
-  for(const line of txt.split(/\r?\n/)){
-    if(!line.trim())continue;
-    const p=line.split(",");if(p.length<5)continue;
-    const c=parseFloat(p[4]);if(!isFinite(c))continue;
-    rows.push({t:p[0],c});
-  }
-  return rows;
-}
-const C={Trend:"#2ee6a6",Chop:"#f2c14e",Panic:"#ff5470"};
-let LAST=null;
+function parseCsv(txt){const rows=[];for(const line of txt.split(/\r?\n/)){if(!line.trim())continue;const p=line.split(",");if(p.length<5)continue;const c=parseFloat(p[4]);if(!isFinite(c))continue;rows.push({t:p[0].trim(),c});}return rows;}
 
 document.getElementById("run").onclick=run;
 document.getElementById("file").onchange=e=>{if(e.target.files[0])run();};
 
 function run(){
-  const f=document.getElementById("file").files[0];
-  const st=document.getElementById("status");
+  const f=document.getElementById("file").files[0];const st=document.getElementById("status");
   if(!f){st.textContent="Choose the CSV first.";return;}
   st.textContent="Reading "+f.name+" …";
   const rd=new FileReader();
-  rd.onload=()=>{
+  rd.onerror=()=>showErr("could not read file");
+  rd.onload=()=>{try{
     let rows=parseCsv(rd.result);
-    const win=+document.getElementById("win").value;
-    if(win>0&&rows.length>win)rows=rows.slice(rows.length-win);
-    const closes=rows.map(r=>r.c);
-    if(closes.length<80){st.textContent="Not enough bars ("+closes.length+").";return;}
-    st.textContent="Fitting HMM on "+closes.length+" bars …";
-    const rets=[];for(let i=1;i<closes.length;i++)rets.push(Math.log(closes[i]/closes[i-1]));
-    setTimeout(()=>{
-      const hmm=fitGaussianHmm(rets,{states:3,iters:25});
-      if(!hmm){st.textContent="Fit failed (too few returns).";return;}
-      render(rows,closes,rets,hmm,+document.getElementById("don").value);
-      st.textContent="Done — "+closes.length+" bars, "+rets.length+" returns, "+hmm.iterations+" EM iterations. "+f.name;
+    if(document.getElementById("rth").checked)rows=rows.filter(r=>{const hm=parseInt(r.t.slice(9,13));return hm>=930&&hm<1600;});
+    const rth=document.getElementById("rth").checked;
+    const win=+document.getElementById("win").value;if(win>0&&rows.length>win)rows=rows.slice(rows.length-win);
+    if(rows.length<160){st.textContent="Not enough bars after filtering ("+rows.length+").";return;}
+    const D=+document.getElementById("model").value, K=+document.getElementById("states").value, W=Math.max(2,+document.getElementById("mw").value);
+    const obs=[],rets=[],stepClose=[];let day=null,cs=[];
+    const flush=()=>{const dret=[];for(let i=1;i<cs.length;i++)dret.push(Math.log(cs[i]/cs[i-1]));
+      for(let i=0;i<dret.length;i++){let mom=0;for(let j=Math.max(0,i-W+1);j<=i;j++)mom+=dret[j];
+        obs.push(D===2?[dret[i],mom]:[dret[i]]);rets.push(dret[i]);stepClose.push(cs[i+1]);}};
+    for(const r of rows){const d=r.t.slice(0,8);if(d!==day){if(cs.length>1)flush();day=d;cs=[r.c];}else cs.push(r.c);}
+    if(cs.length>1)flush();
+    if(obs.length<160){st.textContent="Not enough return steps ("+obs.length+").";return;}
+    const decode=document.getElementById("decode").value;
+    st.textContent=decode==="walkfwd"?"Walk-forward: refitting on rolling windows — this can take 20–40s…":"Fitting "+K+"-state "+(D===2?"2-D":"1-D")+" HMM on "+obs.length+" bars …";
+    setTimeout(()=>{try{
+      const don=+document.getElementById("don").value;
+      if(decode==="walkfwd"){
+        const trainLen=Math.max(300,+document.getElementById("wftrain").value), step=Math.max(50,+document.getElementById("wfstep").value);
+        if(obs.length<=trainLen+20){st.textContent="Window too small for walk-forward (need > train + step).";return;}
+        const wf=runWalkForward(obs,rets,stepClose,K,20,trainLen,step);
+        const L=wf.last, idxOf=l=>L.sib[l];
+        const transition=L.order.map(li=>L.order.map(lj=>L.A[idxOf(li)][idxOf(lj)]));
+        let stat=new Array(K).fill(1/K);
+        for(let i=0;i<500;i++){const nx=new Array(K).fill(0);for(let j=0;j<K;j++){let s=0;for(let ii=0;ii<K;ii++)s+=stat[ii]*L.A[ii][j];nx[j]=s;}const sm=nx.reduce((a,b)=>a+b,0);stat=nx.map(v=>sm>0?v/sm:1/K);}
+        const stationary={};L.order.forEach(l=>stationary[l]=stat[idxOf(l)]);
+        const D0=wf.D-1, dirScore=l=>Math.abs(L.means[idxOf(l)][D0])/Math.max(L.stds[idxOf(l)][D0],1e-9);
+        const hmm={K,D:wf.D,labels:L.labels,order:L.order,stateIndexByLabel:L.sib,transition,stationary,gammaByLabel:wf.oosProbs,decodedPath:wf.oosPath,currentProbs:wf.oosProbs[wf.oosProbs.length-1],currentLabel:wf.oosPath[wf.oosPath.length-1],means:L.means,stds:L.stds,dirScore,logLik:0,iterations:"WF"};
+        render(rows,wf.oosClose,wf.oosRets,hmm,don,D,W,rth);
+        document.getElementById("sampleInfo").innerHTML+='<br><span style="color:#38e1ff">Walk-forward · '+wf.oosPath.length+' out-of-sample bars · '+wf.refits+' refits · train '+trainLen+' / step '+step+'</span>';
+        st.textContent="Done — walk-forward · "+wf.oosPath.length+" OOS bars · "+wf.refits+" refits (train "+trainLen+"/step "+step+") · "+K+"-state · "+f.name;
+        return;
+      }
+      const hmm=fitDiagHmm(obs,{states:K,iters:30,decode});
+      if(!hmm){st.textContent="Fit failed (too few bars).";return;}
+      render(rows,stepClose,rets,hmm,don,D,W,rth);
+      st.textContent="Done — "+obs.length+" bars · "+K+"-state · "+(rth?"RTH":"ETH")+" · "+(D===2?"ret+mom(W="+W+")":"ret-only")+" · "+decode+" decode · "+hmm.iterations+" iters · "+f.name;
+    }catch(err){showErr(err.message+" — "+(err.stack||"").split("\n")[1]);}
     },30);
+  }catch(err){showErr(err.message);}
   };
   rd.readAsText(f);
 }
-
 function fmtDay(t){return t.slice(0,4)+"-"+t.slice(4,6)+"-"+t.slice(6,8);}
+function pill(l){return '<span class="pill '+l+'">'+l+'</span>';}
 
-function render(rows,closes,rets,hmm,don){
-  LAST=hmm;
+function render(rows,closes,rets,hmm,don,D,W,rth){
   document.getElementById("out").style.display="block";
-  const cl=hmm.currentLabel;
-  const cur=document.getElementById("curLabel");
-  cur.innerHTML='<span class="pill '+cl+'">'+cl+'</span>';
+  const O=hmm.order;
+  document.getElementById("curLabel").innerHTML=pill(hmm.currentLabel);
   const cp=hmm.currentProbs;
-  document.getElementById("curProbs").innerHTML=
-    'γ &nbsp;<span class="tt">T '+(cp.Trend*100).toFixed(0)+'%</span> · <span class="tc">C '+(cp.Chop*100).toFixed(0)+'%</span> · <span class="tp">P '+(cp.Panic*100).toFixed(0)+'%</span>';
-  document.getElementById("sampleInfo").innerHTML=
-    fmtDay(rows[0].t)+" → "+fmtDay(rows[rows.length-1].t)+"<br>"+closes.length+" bars · logLik "+hmm.logLik.toFixed(0);
+  document.getElementById("curProbs").innerHTML='γ &nbsp;'+O.map(l=>'<span style="color:'+COLOR[l]+'">'+l[0]+' '+(cp[l]*100).toFixed(0)+'%</span>').join(" · ");
+  document.getElementById("sampleInfo").innerHTML=fmtDay(rows[0].t)+" → "+fmtDay(rows[rows.length-1].t)+"<br>"+closes.length+" bars · "+(rth?"RTH only":"ETH")+" · logLik "+hmm.logLik.toFixed(0);
+  document.getElementById("legend").innerHTML=O.map(pill).join(" ");
 
-  // occupancy from decoded path
-  const cnt={Trend:0,Chop:0,Panic:0};hmm.decodedPath.forEach(l=>cnt[l]++);
-  const tot=hmm.decodedPath.length;
-  document.getElementById("occ").innerHTML=REGIME_LABELS.map(l=>
-    '<span class="pill '+l+'">'+l+' '+(100*cnt[l]/tot).toFixed(0)+'%</span>').join(" ");
+  const cnt={};O.forEach(l=>cnt[l]=0);hmm.decodedPath.forEach(l=>cnt[l]++);const tot=hmm.decodedPath.length;
+  document.getElementById("occ").innerHTML=O.map(l=>'<span class="pill '+l+'">'+l+' '+(100*cnt[l]/tot).toFixed(0)+'%</span>').join(" ");
 
-  // state table
-  const sb=document.getElementById("stateTbl");sb.innerHTML="";
-  REGIME_LABELS.forEach(l=>{
-    const i=hmm.stateIndexByLabel[l];
-    const sh=Math.abs(hmm.means[i])/Math.max(hmm.stds[i],1e-12);
-    sb.innerHTML+='<tr><td><span class="pill '+l+'">'+l+'</span></td><td>'+
-      (hmm.means[i]*100).toFixed(4)+'</td><td>'+(hmm.stds[i]*100).toFixed(4)+'</td><td>'+
-      sh.toFixed(3)+'</td><td>'+(hmm.stationary[REGIME_LABELS.indexOf(l)]*100).toFixed(1)+'%</td></tr>';
-  });
+  const head=document.getElementById("stateHead"),body=document.getElementById("stateTbl");body.innerHTML="";
+  document.getElementById("stateHdr").textContent="Per-state emission stats"+(D===2?" (return + "+W+"-bar momentum)":" (5-min log returns)");
+  if(D===2){
+    head.innerHTML='<tr><th>State</th><th>Ret mean %</th><th>Ret std %</th><th>Mom mean %</th><th>Dir. score</th><th>Stationary</th></tr>';
+    O.forEach(l=>{const i=hmm.stateIndexByLabel[l];body.innerHTML+='<tr><td>'+pill(l)+'</td><td>'+(hmm.means[i][0]*100).toFixed(4)+'</td><td>'+(hmm.stds[i][0]*100).toFixed(4)+'</td><td>'+(hmm.means[i][1]*100).toFixed(3)+'</td><td>'+hmm.dirScore(l).toFixed(3)+'</td><td>'+(hmm.stationary[l]*100).toFixed(1)+'%</td></tr>';});
+    document.getElementById("stateNote").innerHTML="Panic = highest <b>return</b> volatility (shock). Up/Down set by <b>Mom mean</b> sign.";
+  }else{
+    head.innerHTML='<tr><th>State</th><th>Mean %</th><th>Std %</th><th>|mean|/std</th><th>Stationary</th></tr>';
+    O.forEach(l=>{const i=hmm.stateIndexByLabel[l];body.innerHTML+='<tr><td>'+pill(l)+'</td><td>'+(hmm.means[i][0]*100).toFixed(4)+'</td><td>'+(hmm.stds[i][0]*100).toFixed(4)+'</td><td>'+hmm.dirScore(l).toFixed(3)+'</td><td>'+(hmm.stationary[l]*100).toFixed(1)+'%</td></tr>';});
+    document.getElementById("stateNote").innerHTML="Return-only — direction from the return mean itself.";
+  }
 
-  // transition table
+  document.getElementById("transHead").innerHTML='<tr><th></th>'+O.map(l=>'<th style="color:'+COLOR[l]+'">→'+l+'</th>').join("")+'</tr>';
   const tb=document.getElementById("transTbl");tb.innerHTML="";
-  REGIME_LABELS.forEach((li,i)=>{
-    let row='<tr><td><span class="pill '+li+'">'+li+'</span></td>';
-    REGIME_LABELS.forEach((lj,j)=>{row+='<td>'+(hmm.transition[i][j]*100).toFixed(1)+'%</td>';});
-    tb.innerHTML+=row+'</tr>';
-  });
-  document.getElementById("persist").innerHTML="Self-persistence — "+REGIME_LABELS.map((l,i)=>
-    '<span class="pill '+l+'">'+l+' '+(hmm.transition[i][i]*100).toFixed(0)+'%</span>').join(" ");
+  O.forEach((li,i)=>{tb.innerHTML+='<tr><td>'+pill(li)+'</td>'+O.map((lj,j)=>'<td>'+(hmm.transition[i][j]*100).toFixed(1)+'%</td>').join("")+'</tr>';});
+  document.getElementById("persist").innerHTML="Self-persistence — "+O.map((l,i)=>'<span class="pill '+l+'">'+l+' '+(hmm.transition[i][i]*100).toFixed(0)+'%</span>').join(" ");
 
-  drawPrice(closes,hmm.decodedPath);
-  drawRibbon(hmm.gammaByLabel);
+  drawPrice(closes,hmm.decodedPath);drawRibbon(hmm.gammaByLabel,O);
 
-  // backtest
-  const gate=alignDecodedPathToCloses(hmm.decodedPath);
-  const base=donchianBacktest(closes,don,null);
-  const gated=donchianBacktest(closes,don,gate,"Trend");
+  const path=hmm.decodedPath;
+  const base=donchian(closes,rets,don,path,null);
+  let gated,noteGate;
+  if(hmm.K===4){
+    const mode=document.getElementById("gate").value;
+    let fn,txt;
+    if(mode==="uponly"){fn=(r,pos)=>r==="Up"?Math.max(pos,0):0;txt="Long only in Up-Trend, flat everywhere else.";}
+    else if(mode==="dirp"){fn=(r,pos)=>r==="Up"?Math.max(pos,0):(r==="Down"||r==="Panic")?Math.min(pos,0):0;txt="Long in Up-Trend; short in Down-Trend and Panic; flat in Chop.";}
+    else{fn=(r,pos)=>r==="Up"?Math.max(pos,0):r==="Down"?Math.min(pos,0):0;txt="Long only in Up-Trend, short only in Down-Trend, flat in Chop &amp; Panic.";}
+    gated=donchian(closes,rets,don,path,fn);
+    noteGate="Directional gate — "+txt;
+  }else{
+    gated=donchian(closes,rets,don,path,(r,pos)=>r==="Trend"?pos:0);
+    noteGate="Gate: hold the breakout only while regime = Trend, flat otherwise.";
+  }
   const g=document.getElementById("btGrid");
-  const card=(t,r)=>'<div class="stat"><div class="k">'+t+'</div><div class="big" style="color:'+(r.returnPct>=0?"#2ee6a6":"#ff5470")+'">'+
-    (r.returnPct>=0?"+":"")+r.returnPct.toFixed(2)+'%</div><div class="muted">maxDD '+r.maxDrawdownPct.toFixed(2)+'% · '+r.bars+' bars</div></div>';
-  const delta=gated.returnPct-base.returnPct;
-  g.innerHTML=card("Ungated (always on)",base)+card("Regime-gated (Trend only)",gated)+
-    '<div class="stat"><div class="k">Gate effect</div><div class="big" style="color:'+(delta>=0?"#38e1ff":"#ff5470")+'">'+
-    (delta>=0?"+":"")+delta.toFixed(2)+'%</div><div class="muted">return Δ · DD '+
-    (gated.maxDrawdownPct-base.maxDrawdownPct>=0?"+":"")+(gated.maxDrawdownPct-base.maxDrawdownPct).toFixed(2)+'%</div></div>';
+  const card=(t,r)=>'<div class="stat"><div class="k">'+t+'</div><div class="big" style="color:'+(r.returnPct>=0?"#2ee6a6":"#ff5470")+'">'+(r.returnPct>=0?"+":"")+r.returnPct.toFixed(2)+'%</div><div class="muted">maxDD '+r.maxDrawdownPct.toFixed(2)+'% · '+r.bars+' bars</div></div>';
+  const dR=gated.returnPct-base.returnPct;
+  g.innerHTML=card("Ungated (always on)",base)+card("Regime-gated",gated)+
+    '<div class="stat"><div class="k">Gate effect</div><div class="big" style="color:'+(dR>=0?"#38e1ff":"#ff5470")+'">'+(dR>=0?"+":"")+dR.toFixed(2)+'%</div><div class="muted">return Δ · DD '+((gated.maxDrawdownPct-base.maxDrawdownPct)>=0?"+":"")+(gated.maxDrawdownPct-base.maxDrawdownPct).toFixed(2)+'%</div></div>';
+  document.getElementById("btNote").innerHTML=noteGate+" P&amp;L from per-session returns. Prototype — shows the filter's effect, not a production system.";
 }
 
 function drawPrice(closes,path){
-  const cv=document.getElementById("priceCv");const dpr=window.devicePixelRatio||1;
-  const w=cv.clientWidth,h=220;cv.width=w*dpr;cv.height=h*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);
-  x.clearRect(0,0,w,h);
+  const cv=document.getElementById("priceCv"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=220;
+  cv.width=w*dpr;cv.height=h*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);x.clearRect(0,0,w,h);
   let mn=Infinity,mx=-Infinity;for(const c of closes){if(c<mn)mn=c;if(c>mx)mx=c;}
-  const pad=8,pw=w-pad*2,ph=h-pad*2;
-  const X=i=>pad+pw*i/(closes.length-1);
-  const Y=v=>pad+ph*(1-(v-mn)/(mx-mn||1));
-  // colored segments by decoded regime (path[k] describes close[k]->close[k+1])
-  for(let i=1;i<closes.length;i++){
-    const lbl=path[i-1]||"Chop";
-    x.strokeStyle=C[lbl];x.lineWidth=1.4;x.beginPath();x.moveTo(X(i-1),Y(closes[i-1]));x.lineTo(X(i),Y(closes[i]));x.stroke();
-  }
-  x.fillStyle="#8aa0b5";x.font="11px sans-serif";
-  x.fillText(mx.toFixed(2),4,14);x.fillText(mn.toFixed(2),4,h-4);
+  const pad=8,pw=w-pad*2,ph=h-pad*2,X=i=>pad+pw*i/(closes.length-1),Y=v=>pad+ph*(1-(v-mn)/(mx-mn||1));
+  for(let i=1;i<closes.length;i++){const lbl=path[i]||"Chop";x.strokeStyle=COLOR[lbl];x.lineWidth=1.4;x.beginPath();x.moveTo(X(i-1),Y(closes[i-1]));x.lineTo(X(i),Y(closes[i]));x.stroke();}
+  x.fillStyle="#8aa0b5";x.font="11px sans-serif";x.fillText(mx.toFixed(2),4,14);x.fillText(mn.toFixed(2),4,h-4);
 }
-function drawRibbon(gbl){
-  const cv=document.getElementById("ribbonCv");const dpr=window.devicePixelRatio||1;
-  const w=cv.clientWidth,h=90;cv.width=w*dpr;cv.height=h*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);
-  x.clearRect(0,0,w,h);const n=gbl.length;const bw=w/n;
-  for(let i=0;i<n;i++){const g=gbl[i];let y=0;
-    [["Trend",g.Trend],["Chop",g.Chop],["Panic",g.Panic]].forEach(([l,p])=>{
-      const seg=p*h;x.fillStyle=C[l];x.globalAlpha=.85;x.fillRect(i*bw,y,bw+.6,seg);y+=seg;});
-  }
+function drawRibbon(gbl,order){
+  const cv=document.getElementById("ribbonCv"),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=90;
+  cv.width=w*dpr;cv.height=h*dpr;const x=cv.getContext("2d");x.scale(dpr,dpr);x.clearRect(0,0,w,h);
+  const n=gbl.length,bw=w/n;
+  for(let i=0;i<n;i++){let y=0;order.forEach(l=>{const seg=gbl[i][l]*h;x.fillStyle=COLOR[l];x.globalAlpha=.85;x.fillRect(i*bw,y,bw+.6,seg);y+=seg;});}
   x.globalAlpha=1;
 }
 </script>
