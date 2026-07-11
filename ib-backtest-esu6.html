@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Initial Balance Backtest — ESU6 5m RTH</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#111823; --panel2:#0e141d; --line:rgba(255,255,255,.08);
+    --txt:#e8eef6; --dim:#8fa3ba; --cyan:#22d3ee; --green:#34d399; --red:#f87171;
+    --amber:#fbbf24; --violet:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px}
+  .card h2{font-size:15px;margin:0 0 2px;color:var(--cyan);letter-spacing:.3px}
+  .card .desc{color:var(--dim);font-size:12px;margin-bottom:12px}
+  #drop{border:2px dashed rgba(34,211,238,.35);border-radius:16px;padding:28px;text-align:center;color:var(--dim);cursor:pointer;background:var(--panel2)}
+  #drop.hot{border-color:var(--cyan);color:var(--txt)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  tr:last-child td{border-bottom:none}
+  .g{color:var(--green)} .r{color:var(--red)} .a{color:var(--amber)} .v{color:var(--violet)} .d{color:var(--dim)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .stat .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .stat .val{font-size:22px;font-weight:700;margin-top:3px}
+  .ctl{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:14px;color:var(--dim);font-size:12px}
+  .ctl input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:5px 8px;width:70px}
+  button{background:var(--cyan);color:#04202a;border:0;border-radius:10px;padding:8px 16px;font-weight:700;cursor:pointer}
+  .note{color:var(--dim);font-size:11px;margin-top:8px;font-style:italic}
+</style>
+</head>
+<body>
+<h1>Initial Balance Backtest — ES 5m RTH</h1>
+<div class="sub">IB = 09:30–10:30 ET. Drop your <b>ESU6 - 5 min - RTH.csv</b> below (format: <code>YYYYMMDD HHMMSS,O,H,L,C,V</code>). Everything runs locally in the browser.</div>
+
+<div id="drop">Drop CSV here — or click to pick a file</div>
+<input type="file" id="file" accept=".csv,.txt" style="display:none"/>
+
+<div id="out"></div>
+
+<script>
+const ES_TICK = 0.25;
+const $ = s => document.querySelector(s);
+const pct = (n,d) => d ? (100*n/d).toFixed(1)+'%' : '—';
+const f2 = n => (n==null||!isFinite(n)) ? '—' : n.toFixed(2);
+const cls = p => p>=60?'g':p<=40?'r':'a';
+
+/* ---------- parsing ---------- */
+function parseCSV(text){
+  const rows=[];
+  for(const raw of text.split(/\r?\n/)){
+    const line=raw.trim(); if(!line) continue;
+    const p=line.split(',');
+    if(p.length<6) continue;
+    const dt=p[0].trim();
+    const m=dt.match(/^(\d{4})(\d{2})(\d{2})[ T](\d{2}):?(\d{2})/);
+    if(!m) continue; // skips header rows
+    const [_,Y,Mo,D,H,Mi]=m;
+    const o=+p[1],h=+p[2],l=+p[3],c=+p[4],v=+p[5];
+    if(![o,h,l,c].every(isFinite)) continue;
+    rows.push({date:`${Y}-${Mo}-${D}`, min:+H*60+ +Mi, hhmm:`${H}:${Mi}`, o,h,l,c, v:isFinite(v)?v:0});
+  }
+  return rows;
+}
+
+/* ---------- build day objects ---------- */
+function buildDays(rows){
+  const byDay=new Map();
+  for(const r of rows){ if(!byDay.has(r.date)) byDay.set(r.date,[]); byDay.get(r.date).push(r); }
+  const days=[];
+  for(const [date,bars] of [...byDay.entries()].sort((a,b)=>a[0]<b[0]?-1:1)){
+    bars.sort((a,b)=>a.min-b.min);
+    const ibBars = bars.filter(b=>b.min>=570 && b.min<630);   // 09:30–10:25 inclusive
+    const post   = bars.filter(b=>b.min>=630);                 // 10:30 onward
+    if(ibBars.length<10 || post.length<10) continue;            // need a real session
+    const ibh=Math.max(...ibBars.map(b=>b.h));
+    const ibl=Math.min(...ibBars.map(b=>b.l));
+    const width=ibh-ibl; if(width<=0) continue;
+    const mid=(ibh+ibl)/2;
+    const ibClose=ibBars[ibBars.length-1].c;
+    const ibVol=ibBars.reduce((s,b)=>s+b.v,0)/ibBars.length;
+
+    // formation order: which extreme printed first
+    let hiIdx=0,loIdx=0;
+    ibBars.forEach((b,i)=>{ if(b.h===ibh && !hiIdx) hiIdx=i; if(b.l===ibl && !loIdx) loIdx=i; });
+    ibBars.forEach((b,i)=>{ if(b.h===ibh) hiIdx=Math.min(hiIdx===0?i:hiIdx,i); if(b.l===ibl) loIdx=Math.min(loIdx===0?i:loIdx,i); });
+    const first = hiIdx<loIdx ? 'H' : loIdx<hiIdx ? 'L' : (ibBars[0].c>=ibBars[0].o?'L':'H');
+
+    // ORB = first 15m (3 bars)
+    const orb=ibBars.slice(0,3);
+    const orbH=Math.max(...orb.map(b=>b.h)), orbL=Math.min(...orb.map(b=>b.l));
+
+    days.push({
+      date, bars, ibBars, post, ibh, ibl, mid, width, ibClose, ibVol, first,
+      orbH, orbL,
+      dayOpen: bars[0].o,
+      dayHigh: Math.max(...bars.map(b=>b.h)),
+      dayLow : Math.min(...bars.map(b=>b.l)),
+      dayClose: bars[bars.length-1].c
+    });
+  }
+
+  // prior-day context + rolling IB stats + ATR(14) of RTH daily range
+  for(let i=0;i<days.length;i++){
+    const d=days[i], p=days[i-1];
+    d.pdh=p?p.dayHigh:null; d.pdl=p?p.dayLow:null; d.pdc=p?p.dayClose:null;
+    const prev20=days.slice(Math.max(0,i-20),i);
+    d.avgIB = prev20.length>=5 ? prev20.reduce((s,x)=>s+x.width,0)/prev20.length : null;
+    const prev14=days.slice(Math.max(0,i-14),i);
+    d.atr = prev14.length>=5 ? prev14.reduce((s,x)=>s+(x.dayHigh-x.dayLow),0)/prev14.length : null;
+    // open type vs prior RTH range
+    if(d.pdh!=null){
+      d.openType = d.dayOpen>d.pdh ? 'OAR-H' : d.dayOpen<d.pdl ? 'OAR-L'
+                 : (d.dayOpen > (d.pdh+d.pdl)/2 ? 'HIR' : 'LIR');
+    } else d.openType=null;
+  }
+
+  /* ---- per-day break sequence (post-IB) ---- */
+  for(const d of days){
+    d.events=[]; // {side, bar, i, type:'wick'|'close'}
+    d.firstTouchSide=null; d.firstTouchBar=null;
+    d.firstCloseBreak=null; // {side,i,bar,vol}
+    d.bothBroke=false;
+    let touched={H:false,L:false};
+    for(let i=0;i<d.post.length;i++){
+      const b=d.post[i];
+      if(b.h>d.ibh){
+        if(!d.firstTouchSide){d.firstTouchSide='H'; d.firstTouchBar=b;}
+        touched.H=true;
+        if(b.c>d.ibh && !d.firstCloseBreak) d.firstCloseBreak={side:'H',i,bar:b};
+      }
+      if(b.l<d.ibl){
+        if(!d.firstTouchSide){d.firstTouchSide='L'; d.firstTouchBar=b;}
+        touched.L=true;
+        if(b.c<d.ibl && !d.firstCloseBreak) d.firstCloseBreak={side:'L',i,bar:b};
+      }
+    }
+    d.touchedH=touched.H; d.touchedL=touched.L;
+    d.bothBroke=touched.H&&touched.L;
+    d.neitherBroke=!touched.H&&!touched.L;
+    d.singleBreak=(touched.H!==touched.L);
+
+    // extension from first CLOSE break
+    if(d.firstCloseBreak){
+      const fb=d.firstCloseBreak, dir=fb.side==='H'?1:-1;
+      const lvl = fb.side==='H'? d.ibh : d.ibl;
+      const rest=d.post.slice(fb.i+1);
+      let mfe=0, mae=0, backInside=false, backInsideIdx=null, retest=false, retestCont=false;
+      let peakBeforeFail=0;
+      for(let j=0;j<rest.length;j++){
+        const b=rest[j];
+        const fav = dir>0 ? b.h-lvl : lvl-b.l;
+        const adv = dir>0 ? lvl-b.l : b.h-lvl;
+        if(fav>mfe) mfe=fav;
+        if(adv>mae) mae=adv;
+        // failed breakout: closes back inside IB within 6 bars (30m) of break
+        if(!backInside && j<6){
+          const inside = dir>0 ? b.c<d.ibh : b.c>d.ibl;
+          if(inside){ backInside=true; backInsideIdx=j; peakBeforeFail=mfe; }
+        }
+        // retest: comes back to within 2 ticks of level, then continues
+        if(!retest && !backInside){
+          const near = dir>0 ? (b.l<=lvl+2*ES_TICK && b.c>lvl) : (b.h>=lvl-2*ES_TICK && b.c<lvl);
+          if(near && j>0){ retest=true; retestIdx=j; }
+        }
+      }
+      fb.mfe=mfe; fb.mae=mae; fb.rExt=mfe/d.width; fb.rAdv=mae/d.width;
+      fb.failed=backInside; fb.failIdx=backInsideIdx; fb.peakBeforeFail=peakBeforeFail;
+      fb.retest=retest;
+      fb.volSurge = fb.bar.v > d.ibVol;
+      // retest continuation: after first retest bar, does price exceed pre-retest extreme?
+      if(retest && typeof retestIdx==='number'){
+        const preExt = dir>0 ? Math.max(...rest.slice(0,retestIdx+1).map(b=>b.h))
+                             : Math.min(...rest.slice(0,retestIdx+1).map(b=>b.l));
+        const after = rest.slice(retestIdx+1);
+        fb.retestCont = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))>preExt
+                                              : Math.min(...after.map(b=>b.l))<preExt) : false;
+      } else fb.retestCont=null;
+
+      // failed-break fade outcome: after closing back inside, does it reach mid / opposite extreme?
+      if(backInside){
+        const after=rest.slice(backInsideIdx+1);
+        fb.fadeMid = after.length ? (dir>0 ? Math.min(...after.map(b=>b.l))<=d.mid
+                                           : Math.max(...after.map(b=>b.h))>=d.mid) : false;
+        fb.fadeOpp = after.length ? (dir>0 ? Math.min(...after.map(b=>b.l))<=d.ibl
+                                           : Math.max(...after.map(b=>b.h))>=d.ibh) : false;
+      }
+      // extension target hits (x IB width from break level)
+      fb.hit={};
+      [0.5,1,1.5,2].forEach(t=>{ fb.hit[t] = mfe >= t*d.width; });
+      fb.breakMin = fb.bar.min;
+
+      /* ---- Rule B: 0.25 fib pullback / retracement ---- */
+      // Variant A — "0.25 of IB range" measured back INTO the IB from the broken level.
+      //   high break → level = IBH - 0.25*width ; low break → level = IBL + 0.25*width
+      const fibA = dir>0 ? d.ibh - 0.25*d.width : d.ibl + 0.25*d.width;
+      // Variant B — 25% retrace of the post-break impulse (break level → running extreme).
+      let extremeSoFar = dir>0 ? lvl : lvl;
+      let fibB_hit=false, fibB_cont=false, fibB_extAtTouch=null, fibB_i=null;
+      let fibA_hit=false, fibA_cont=false, fibA_i=null, fibA_extAtTouch=null, fibA_fail=null, fibA_mfe=null;
+      for(let j=0;j<rest.length;j++){
+        const b=rest[j];
+        // Variant A: has price traded back to the 0.25 level?
+        if(!fibA_hit){
+          const touch = dir>0 ? b.l<=fibA : b.h>=fibA;
+          if(touch){ fibA_hit=true; fibA_i=j; fibA_extAtTouch = dir>0 ? Math.max(...rest.slice(0,j+1).map(x=>x.h))
+                                                                    : Math.min(...rest.slice(0,j+1).map(x=>x.l)); }
+        }
+        // Variant B: 25% retrace of impulse from break level to running extreme
+        if(!fibB_hit){
+          const imp = Math.abs(extremeSoFar - lvl);
+          if(imp > 0.25*d.width){ // need a real impulse before a "pullback" means anything
+            const pbLvl = dir>0 ? extremeSoFar - 0.25*imp : extremeSoFar + 0.25*imp;
+            const touch = dir>0 ? b.l<=pbLvl : b.h>=pbLvl;
+            if(touch){ fibB_hit=true; fibB_i=j; fibB_extAtTouch=extremeSoFar; }
+          }
+          extremeSoFar = dir>0 ? Math.max(extremeSoFar,b.h) : Math.min(extremeSoFar,b.l);
+        }
+      }
+      // continuation = after the pullback touch, price makes a NEW extreme beyond the pre-pullback extreme
+      if(fibA_hit && fibA_i!=null){
+        const after=rest.slice(fibA_i+1);
+        fibA_cont = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))>fibA_extAtTouch
+                                          : Math.min(...after.map(b=>b.l))<fibA_extAtTouch) : false;
+        // did the pullback keep going and kill the trade instead? (through IB midpoint)
+        fibA_fail = after.length ? (dir>0 ? Math.min(...after.map(b=>b.l))<=d.mid
+                                          : Math.max(...after.map(b=>b.h))>=d.mid) : false;
+        // MFE after re-entry at the 0.25 level, in IB widths
+        fibA_mfe = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))-fibA : fibA-Math.min(...after.map(b=>b.l)))/d.width : 0;
+      }
+      if(fibB_hit && fibB_i!=null){
+        const after=rest.slice(fibB_i+1);
+        fibB_cont = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))>fibB_extAtTouch
+                                          : Math.min(...after.map(b=>b.l))<fibB_extAtTouch) : false;
+      }
+      fb.fibA={hit:fibA_hit, cont:fibA_cont, fail:(typeof fibA_fail!=='undefined'?fibA_fail:null),
+               mfe:(typeof fibA_mfe!=='undefined'?fibA_mfe:null), lvl:fibA,
+               barsToTouch: fibA_i!=null? fibA_i+1 : null};
+      fb.fibB={hit:fibB_hit, cont:fibB_cont, barsToTouch: fibB_i!=null? fibB_i+1 : null};
+    }
+
+    /* 15m FVG inside IB (3-bar imbalance on 15m candles built from IB 5m bars) */
+    const c15=[];
+    for(let i=0;i+2<d.ibBars.length;i+=3){
+      const s=d.ibBars.slice(i,i+3);
+      c15.push({o:s[0].o,h:Math.max(...s.map(x=>x.h)),l:Math.min(...s.map(x=>x.l)),c:s[2].c});
+    }
+    d.fvg=null;
+    for(let i=0;i+2<c15.length;i++){
+      const a=c15[i],c=c15[i+2];
+      if(c.l>a.h) d.fvg='bull';
+      else if(c.h<a.l) d.fvg='bear';
+    }
+
+    /* contained day: still fully inside IB at 14:00 (min 840) */
+    const upTo2=d.post.filter(b=>b.min<840);
+    d.containedAt2 = upTo2.length>0 &&
+      Math.max(...upTo2.map(b=>b.h))<=d.ibh && Math.min(...upTo2.map(b=>b.l))>=d.ibl;
+    if(d.containedAt2){
+      const after=d.post.filter(b=>b.min>=840);
+      d.containedBrokeLate = after.length ? (Math.max(...after.map(b=>b.h))>d.ibh || Math.min(...after.map(b=>b.l))<d.ibl) : false;
+      d.containedCloseInside = after.length ? (after[after.length-1].c<=d.ibh && after[after.length-1].c>=d.ibl) : true;
+    }
+
+    // close location in IB range
+    const loc=(d.ibClose-d.ibl)/d.width;
+    d.closeLoc=loc;
+    d.closeZone = loc>=0.75?'top25' : loc<=0.25?'bot25' : 'mid50';
+    d.bias = d.ibClose>d.mid ? 'H' : d.ibClose<d.mid ? 'L' : null;
+
+    // ORB break direction (first post-ORB move out of the 9:30-9:45 range, within IB)
+    d.orbDir=null;
+    for(const b of d.ibBars.slice(3)){
+      if(b.c>d.orbH){ d.orbDir='H'; break; }
+      if(b.c<d.orbL){ d.orbDir='L'; break; }
+    }
+  }
+  return days;
+}
+
+/* ---------- report helpers ---------- */
+function row(label, n, wins, extra=''){
+  const p = n? 100*wins/n : 0;
+  return `<tr><td>${label}</td><td>${n}</td><td>${wins}</td><td class="${cls(p)}"><b>${n?p.toFixed(1)+'%':'—'}</b></td><td class="d">${extra}</td></tr>`;
+}
+function table(head, body, note=''){
+  const b = Array.isArray(body) ? body.join('') : body;
+  return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${b}</tbody></table>${note?`<div class="note">${note}</div>`:''}`;
+}
+function card(title,desc,inner){ return `<div class="card"><h2>${title}</h2><div class="desc">${desc}</div>${inner}</div>`; }
+function avg(a){ return a.length? a.reduce((s,x)=>s+x,0)/a.length : null; }
+function med(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)]; }
+function clock(min){ if(min==null||!isFinite(min)) return '—'; const h=Math.floor(min/60), m=Math.round(min%60); return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`; }
+function fcbMins(days){ return days.filter(d=>d.firstCloseBreak).map(d=>d.firstCloseBreak.breakMin); }
+
+/* ---------- main report ---------- */
+function report(days){
+  const N=days.length;
+  const out=[];
+
+  /* baseline */
+  const bH=days.filter(d=>d.touchedH).length, bL=days.filter(d=>d.touchedL).length;
+  const single=days.filter(d=>d.singleBreak).length, both=days.filter(d=>d.bothBroke).length, none=days.filter(d=>d.neitherBroke).length;
+  out.push(`<div class="grid">
+    <div class="stat"><div class="k">Sessions</div><div class="val">${N}</div></div>
+    <div class="stat"><div class="k">Date range</div><div class="val" style="font-size:14px">${days[0].date} → ${days[N-1].date}</div></div>
+    <div class="stat"><div class="k">Avg IB width</div><div class="val">${f2(avg(days.map(d=>d.width)))} pts</div></div>
+    <div class="stat"><div class="k">Median IB width</div><div class="val">${f2(days.map(d=>d.width).sort((a,b)=>a-b)[Math.floor(N/2)])} pts</div></div>
+    <div class="stat"><div class="k">IB as % of day range</div><div class="val">${f2(100*avg(days.map(d=>d.width/(d.dayHigh-d.dayLow))))}%</div></div>
+  </div>`);
+
+  out.push(card('0 · Baseline — IB break behavior','What happens at all, before any rule is applied. This is the benchmark every rule below must beat.',
+    table(['Outcome','Days','Hit','Rate','Note'],[
+      row('IB high broken (any wick)', N, bH),
+      row('IB low broken (any wick)', N, bL),
+      row('SINGLE break only (one side)', N, single, 'the "single break" edge'),
+      row('BOTH sides broken (rotation)', N, both),
+      row('NEITHER side broken (contained)', N, none),
+      row('Break confirmed by 5m CLOSE', N, days.filter(d=>d.firstCloseBreak).length),
+    ], 'A coin-flip predictor of break direction would score ~50%. Anything at 50±5% is noise.')));
+
+  /* 0b · TIME OF IB BREAK */
+  const touchMins = days.filter(d=>d.firstTouchBar).map(d=>d.firstTouchBar.min);
+  const closeMins = fcbMins(days);
+  const cbH = days.filter(d=>d.firstCloseBreak && d.firstCloseBreak.side==='H').map(d=>d.firstCloseBreak.breakMin);
+  const cbL = days.filter(d=>d.firstCloseBreak && d.firstCloseBreak.side==='L').map(d=>d.firstCloseBreak.breakMin);
+  const within = (arr,m) => pct(arr.filter(x=>x<=m).length, arr.length);
+  const distRows = [[630,'by 10:30 (first bar out)'],[660,'by 11:00'],[690,'by 11:30'],[720,'by 12:00 (noon)'],[780,'by 13:00'],[840,'by 14:00'],[900,'by 15:00']]
+    .map(([m,l])=>row(l, closeMins.length, closeMins.filter(x=>x<=m).length, `cumulative`)).join('');
+  out.push(`<div class="card"><h2>0b · Time of IB Break</h2><div class="desc">When the first break actually happens. "Touch" = any wick outside IB. "Close break" = 5m close outside IB — the tradeable one. Minutes are measured from 09:30.</div>
+    <div class="grid">
+      <div class="stat"><div class="k">Avg time · first TOUCH</div><div class="val">${clock(avg(touchMins))}</div><div class="k" style="margin-top:4px">${f2(avg(touchMins)-570)} min after IB open</div></div>
+      <div class="stat"><div class="k">Avg time · CLOSE break</div><div class="val">${clock(avg(closeMins))}</div><div class="k" style="margin-top:4px">${f2(avg(closeMins)-570)} min after IB open</div></div>
+      <div class="stat"><div class="k">Median · CLOSE break</div><div class="val">${clock(med(closeMins))}</div><div class="k" style="margin-top:4px">n = ${closeMins.length} days</div></div>
+      <div class="stat"><div class="k">Avg · HIGH breaks</div><div class="val">${clock(avg(cbH))}</div><div class="k" style="margin-top:4px">n = ${cbH.length}</div></div>
+      <div class="stat"><div class="k">Avg · LOW breaks</div><div class="val">${clock(avg(cbL))}</div><div class="k" style="margin-top:4px">n = ${cbL.length}</div></div>
+      <div class="stat"><div class="k">Earliest / Latest</div><div class="val" style="font-size:15px">${clock(Math.min(...closeMins))} – ${clock(Math.max(...closeMins))}</div></div>
+    </div>
+    ${table(['Break has occurred…','Break days','Count','Cumulative %','Note'], distRows,
+      'The steepest part of this curve is your attention window — that is when to be at the screen.')}
+  </div>`);
+
+  /* 1. midpoint close bias */
+  const withBias=days.filter(d=>d.bias);
+  const b1=withBias.filter(d=>d.firstTouchSide===d.bias).length;
+  const b1L=withBias.filter(d=>d.bias==='H'), b1S=withBias.filter(d=>d.bias==='L');
+  out.push(card('1 · Midpoint Close Bias','IB closes above mid → expect HIGH breaks first. Closes below mid → expect LOW breaks first.',
+    table(['Signal','Days','Correct','Hit rate','Detail'],[
+      row('All midpoint-bias days', withBias.length, b1),
+      row('Bias LONG (close > mid)', b1L.length, b1L.filter(d=>d.firstTouchSide==='H').length, 'predicted high breaks first'),
+      row('Bias SHORT (close < mid)', b1S.length, b1S.filter(d=>d.firstTouchSide==='L').length, 'predicted low breaks first'),
+      row('… and that side EVER breaks', withBias.length, withBias.filter(d=>d.bias==='H'?d.touchedH:d.touchedL).length, 'looser test — breaks at any point'),
+    ])));
+
+  /* 2. formation order + midpoint */
+  const conf=days.filter(d=>d.bias && ((d.first==='L'&&d.bias==='H')||(d.first==='H'&&d.bias==='L')));
+  const confL=conf.filter(d=>d.bias==='H'), confS=conf.filter(d=>d.bias==='L');
+  const disc=days.filter(d=>d.bias && !conf.includes(d));
+  out.push(card('2 · Formation Order + Midpoint','Low forms FIRST + close above mid → long. High forms FIRST + close below mid → short. (Extreme is "used up" early, session rotates the other way.)',
+    table(['Setup','Days','Correct','Hit rate','Detail'],[
+      row('CONFLUENT (order agrees w/ bias)', conf.length, conf.filter(d=>d.firstTouchSide===d.bias).length, 'the A+ filter'),
+      row('  ↳ Long (low first, close>mid)', confL.length, confL.filter(d=>d.firstTouchSide==='H').length),
+      row('  ↳ Short (high first, close<mid)', confS.length, confS.filter(d=>d.firstTouchSide==='L').length),
+      row('DISCORDANT (order fights bias)', disc.length, disc.filter(d=>d.firstTouchSide===d.bias).length, 'skip these'),
+    ], 'Compare CONFLUENT vs the raw midpoint bias in Rule 1 — the delta is the value of the formation-order filter.')));
+
+  /* 3. single break continuation */
+  const fcb=days.filter(d=>d.firstCloseBreak);
+  const sbWin=fcb.filter(d=>{
+    const s=d.firstCloseBreak.side;
+    return s==='H' ? !d.touchedL : !d.touchedH; // other side never broke
+  }).length;
+  out.push(card('3 · Single Break Continuation','After the first decisive (close-confirmed) break, does the opposite side stay untouched for the rest of the session? The claimed 70–85% edge.',
+    table(['Test','Days','Hit','Rate','Detail'],[
+      row('Opposite IB side NEVER breaks', fcb.length, sbWin, 'true "single break day" after entry'),
+      row('Break extends ≥ 0.5× IB width', fcb.length, fcb.filter(d=>d.firstCloseBreak.hit[0.5]).length),
+      row('Break extends ≥ 1.0× IB width', fcb.length, fcb.filter(d=>d.firstCloseBreak.hit[1]).length),
+      row('Never trades back to IB midpoint', fcb.length, fcb.filter(d=>{
+        const fb=d.firstCloseBreak, rest=d.post.slice(fb.i+1);
+        if(!rest.length) return false;
+        return fb.side==='H' ? Math.min(...rest.map(b=>b.l))>d.mid : Math.max(...rest.map(b=>b.h))<d.mid;
+      }).length, 'strictest version'),
+    ])));
+
+  /* 4. IB width day type */
+  const wd=days.filter(d=>d.avgIB && d.atr);
+  const narrow=wd.filter(d=>d.width < 0.5*d.atr || d.width < 0.75*d.avgIB);
+  const wide  =wd.filter(d=>d.width > 1.5*d.atr || d.width > 1.25*d.avgIB);
+  const mids  =wd.filter(d=>!narrow.includes(d)&&!wide.includes(d));
+  const trendRate = a => a.filter(d=>d.singleBreak).length;
+  const extRate = a => { const x=a.filter(d=>d.firstCloseBreak); return x.length? pct(x.filter(d=>d.firstCloseBreak.hit[1]).length,x.length):'—'; };
+  out.push(card('4 · IB Width → Day Type','Narrow IB (< 0.5× ATR or < 0.75× 20d avg IB) should trend/break. Wide IB (> 1.5× ATR or > 1.25× avg) should rotate — fade the breaks.',
+    table(['Bucket','Days','Single-break','Rate','Both-sides broke / ≥1× ext'],[
+      row('NARROW IB', narrow.length, trendRate(narrow), `both: ${pct(narrow.filter(d=>d.bothBroke).length,narrow.length)} · ≥1× ext: ${extRate(narrow)}`),
+      row('NORMAL IB', mids.length, trendRate(mids), `both: ${pct(mids.filter(d=>d.bothBroke).length,mids.length)} · ≥1× ext: ${extRate(mids)}`),
+      row('WIDE IB', wide.length, trendRate(wide), `both: ${pct(wide.filter(d=>d.bothBroke).length,wide.length)} · ≥1× ext: ${extRate(wide)}`),
+    ], 'The thesis holds only if NARROW single-break% > WIDE single-break% by a meaningful margin. Wide + high both-sides% = the fade regime.')));
+
+  /* 5. breakout entry w/ volume */
+  const volYes=fcb.filter(d=>d.firstCloseBreak.volSurge), volNo=fcb.filter(d=>!d.firstCloseBreak.volSurge);
+  const wickOnly=days.filter(d=>(d.touchedH||d.touchedL) && !d.firstCloseBreak);
+  out.push(card('5 · Breakout Entry — close beyond IB + volume','Entry = 5m CLOSE outside IB. Volume filter = break bar volume > average IB bar volume. Wick-only breaks shown for contrast.',
+    table(['Entry filter','Days','≥1× IB ext','Rate','Avg MFE / MAE (× IB width)'],[
+      row('Close break + VOLUME surge', volYes.length, volYes.filter(d=>d.firstCloseBreak.hit[1]).length,
+        `MFE ${f2(avg(volYes.map(d=>d.firstCloseBreak.rExt)))}× / MAE ${f2(avg(volYes.map(d=>d.firstCloseBreak.rAdv)))}×`),
+      row('Close break, NO volume surge', volNo.length, volNo.filter(d=>d.firstCloseBreak.hit[1]).length,
+        `MFE ${f2(avg(volNo.map(d=>d.firstCloseBreak.rExt)))}× / MAE ${f2(avg(volNo.map(d=>d.firstCloseBreak.rAdv)))}×`),
+      row('WICK-only touch (no close outside)', wickOnly.length, 0, 'these are the traps — no entry taken'),
+    ], 'MFE/MAE are measured from the broken IB level, in multiples of IB width. MAE is your stop-distance requirement.')));
+
+  /* 6. failed breakout fade */
+  const failed=fcb.filter(d=>d.firstCloseBreak.failed);
+  out.push(card('6 · Failed Breakout Fade','Break closes outside IB, then closes back INSIDE within 30 min (6 bars). Fade target = midpoint, then opposite extreme.',
+    table(['Outcome','Days','Hit','Rate','Detail'],[
+      row('Break FAILS (closes back inside ≤30m)', fcb.length, failed.length, 'base rate of the trap'),
+      row('  ↳ then reaches IB MIDPOINT', failed.length, failed.filter(d=>d.firstCloseBreak.fadeMid).length, 'target 1'),
+      row('  ↳ then reaches OPPOSITE IB extreme', failed.length, failed.filter(d=>d.firstCloseBreak.fadeOpp).length, 'target 2 — the money target'),
+    ], `Avg excursion before the fail: ${f2(avg(failed.map(d=>d.firstCloseBreak.peakBeforeFail)))} pts (${f2(avg(failed.map(d=>d.firstCloseBreak.peakBeforeFail/d.width)))}× IB width) — that is roughly your stop on a breakout entry.`)));
+
+  /* 7. FVG inside IB */
+  const fv=days.filter(d=>d.fvg);
+  const fvB=fv.filter(d=>d.fvg==='bull'), fvS=fv.filter(d=>d.fvg==='bear');
+  const hitMid = d => { // did price reach midpoint post-IB in FVG direction
+    const arr=d.post; if(!arr.length) return false;
+    return d.fvg==='bull' ? Math.max(...arr.map(b=>b.h))>=d.mid : Math.min(...arr.map(b=>b.l))<=d.mid;
+  };
+  const hitExt = d => d.fvg==='bull' ? d.touchedH : d.touchedL;
+  out.push(card('7 · 15m FVG inside IB','A 15m fair-value gap forms inside the IB (built from the 5m bars). Trade toward the IB midpoint, then the extreme in the FVG direction.',
+    table(['FVG','Days','Reaches IB extreme in FVG dir','Rate','Reaches midpoint'],[
+      row('BULLISH FVG in IB', fvB.length, fvB.filter(hitExt).length, `mid: ${pct(fvB.filter(hitMid).length,fvB.length)}`),
+      row('BEARISH FVG in IB', fvS.length, fvS.filter(hitExt).length, `mid: ${pct(fvS.filter(hitMid).length,fvS.length)}`),
+      row('FVG dir = first-touch side', fv.length, fv.filter(d=>d.firstTouchSide===(d.fvg==='bull'?'H':'L')).length, 'directional predictive power'),
+      row('NO FVG in IB (control)', N-fv.length, days.filter(d=>!d.fvg&&d.singleBreak).length, 'single-break rate for control'),
+    ])));
+
+  /* 8. retest continuation */
+  const rt=fcb.filter(d=>d.firstCloseBreak.retest);
+  const noRt=fcb.filter(d=>!d.firstCloseBreak.retest && !d.firstCloseBreak.failed);
+  out.push(card('8 · Retest Continuation','After the close-break, price returns to within 2 ticks of the broken IB level but holds it (close stays outside). Does it then make a new extreme?',
+    table(['Path','Days','Continues to new extreme','Rate','Avg MFE (× IB width)'],[
+      row('Break → clean RETEST → continue', rt.length, rt.filter(d=>d.firstCloseBreak.retestCont).length, `${f2(avg(rt.map(d=>d.firstCloseBreak.rExt)))}×`),
+      row('Break → NO retest (runs away)', noRt.length, noRt.filter(d=>d.firstCloseBreak.hit[1]).length, `${f2(avg(noRt.map(d=>d.firstCloseBreak.rExt)))}× (hit = ≥1× ext)`),
+    ], 'If retest-MFE ≥ no-retest-MFE, waiting for the retest costs you nothing and improves your entry. If it is materially lower, the best days never retest — take the break.')));
+
+  /* 8b. Rule B — 0.25 fib pullback */
+  const fA = fcb.filter(d=>d.firstCloseBreak.fibA.hit);
+  const fAno= fcb.filter(d=>!d.firstCloseBreak.fibA.hit);
+  const fB = fcb.filter(d=>d.firstCloseBreak.fibB.hit);
+  out.push(card('B · 0.25 Fib Pullback → Continuation',
+    'After the IB break, wait for a retracement to the 0.25 level, then re-enter in the break direction. Two readings of "0.25 level" — both tested, because they are very different trades.',
+    table(['Test','Days','Hit','Rate','Detail'],[
+      `<tr><td colspan="5" class="v" style="padding-top:12px"><b>Variant A — 0.25 of the IB RANGE, measured back into the IB</b> (high break → IBH − 0.25×width; low break → IBL + 0.25×width). A deep pullback that re-enters the IB.</td></tr>`,
+      row('Pullback REACHES the 0.25 level', fcb.length, fA.length, 'how often you even get filled'),
+      row('  ↳ then CONTINUES to a new extreme', fA.length, fA.filter(d=>d.firstCloseBreak.fibA.cont).length, '<b>the actual edge</b>'),
+      row('  ↳ instead runs through IB MIDPOINT (stopped)', fA.length, fA.filter(d=>d.firstCloseBreak.fibA.fail).length, 'trade dies'),
+      row('NO pullback — price never comes back', fcb.length, fAno.length, `these run: avg MFE ${f2(avg(fAno.map(d=>d.firstCloseBreak.rExt)))}× IB`),
+      `<tr><td colspan="5" class="v" style="padding-top:12px"><b>Variant B — 0.25 retrace of the post-break IMPULSE</b> (break level → running extreme). A shallow pullback that stays outside the IB.</td></tr>`,
+      row('Pullback REACHES the 0.25 impulse retrace', fcb.length, fB.length, 'requires impulse > 0.25× IB first'),
+      row('  ↳ then CONTINUES to a new extreme', fB.length, fB.filter(d=>d.firstCloseBreak.fibB.cont).length, '<b>the actual edge</b>'),
+    ],
+    `Variant A avg MFE measured <i>from the 0.25 entry</i>: <b>${f2(avg(fA.map(d=>d.firstCloseBreak.fibA.mfe)))}× IB width</b> · avg bars from break to pullback touch: <b>${f2(avg(fA.filter(d=>d.firstCloseBreak.fibA.barsToTouch).map(d=>d.firstCloseBreak.fibA.barsToTouch)))}</b> (×5 min). Compare the "continues" rate against the plain break-and-hold rate in Rule 3 — if it is not higher, the pullback is just giving the trade time to fail. Also watch the "NO pullback" MFE: if the runaway days carry the biggest moves, waiting for 0.25 filters you out of the best sessions.`)));
+
+  /* 9. extension targets */
+  const rows9=[0.5,1,1.5,2].map(t=>row(`${t}× IB width from break`, fcb.length, fcb.filter(d=>d.firstCloseBreak.hit[t]).length,
+      `avg IB=${f2(avg(days.map(d=>d.width)))}pts → target ≈ ${f2(t*avg(days.map(d=>d.width)))} pts`));
+  out.push(card('9 · Extension Targets','Probability the break reaches each scale-out multiple of IB width, measured from the broken level.',
+    table(['Target','Breaks','Reached','Hit rate','Sizing'], rows9.join(''),
+    `Avg MFE on all close-breaks: <b>${f2(avg(fcb.map(d=>d.firstCloseBreak.rExt)))}× IB width</b> · Avg MAE (heat taken): <b>${f2(avg(fcb.map(d=>d.firstCloseBreak.rAdv)))}× IB width</b>.`)));
+
+  /* 10. close location in range */
+  const top=days.filter(d=>d.closeZone==='top25'), bot=days.filter(d=>d.closeZone==='bot25'), midz=days.filter(d=>d.closeZone==='mid50');
+  const topStrong=top.filter(d=>d.first==='L'), botStrong=bot.filter(d=>d.first==='H');
+  out.push(card('10 · Close Location in IB Range','Close in top 25% of IB + low formed first → strong long. Close in bottom 25% + high formed first → strong short.',
+    table(['Zone','Days','High/low breaks as predicted','Rate','Detail'],[
+      row('TOP 25% close', top.length, top.filter(d=>d.firstTouchSide==='H').length, 'plain zone'),
+      row('  ↳ + LOW formed first (STRONG LONG)', topStrong.length, topStrong.filter(d=>d.firstTouchSide==='H').length, `single-break: ${pct(topStrong.filter(d=>d.singleBreak).length,topStrong.length)}`),
+      row('BOTTOM 25% close', bot.length, bot.filter(d=>d.firstTouchSide==='L').length, 'plain zone'),
+      row('  ↳ + HIGH formed first (STRONG SHORT)', botStrong.length, botStrong.filter(d=>d.firstTouchSide==='L').length, `single-break: ${pct(botStrong.filter(d=>d.singleBreak).length,botStrong.length)}`),
+      row('MIDDLE 50% close (no edge expected)', midz.length, midz.filter(d=>d.firstTouchSide===d.bias).length, 'bias hit-rate — expect ~coin flip'),
+    ])));
+
+  /* 11. open type + IB width */
+  const rows11=[];
+  for(const ot of ['OAR-H','OAR-L','HIR','LIR']){
+    const g=wd.filter(d=>d.openType===ot); if(!g.length) continue;
+    const gn=g.filter(d=>narrow.includes(d)), gw=g.filter(d=>wide.includes(d));
+    rows11.push(row(`${ot} — all`, g.length, g.filter(d=>d.singleBreak).length, `single-break rate`));
+    if(gn.length) rows11.push(row(`  ↳ ${ot} + NARROW IB`, gn.length, gn.filter(d=>d.singleBreak).length, `breakout thesis`));
+    if(gw.length) rows11.push(row(`  ↳ ${ot} + WIDE IB`, gw.length, gw.filter(d=>d.bothBroke).length, `both-sides-broke = rotation thesis`));
+  }
+  out.push(card('11 · Open Type + IB Width','Open outside prior RTH range (OAR-H / OAR-L) + narrow IB → strong breakout. Open inside range (HIR/LIR) + wide IB → fade/rotation.',
+    table(['Open type','Days','Hit','Rate','What "hit" means'], rows11.join(''),
+    'OAR = open above/below the prior RTH range. HIR/LIR = open inside the prior range, in the upper/lower half.')));
+
+  /* 12. ORB + IB alignment */
+  const ob=days.filter(d=>d.orbDir && d.bias);
+  const align=ob.filter(d=>d.orbDir===d.bias), oppose=ob.filter(d=>d.orbDir!==d.bias);
+  out.push(card('12 · ORB + IB Alignment','The 9:30–9:45 opening range breaks in the same direction as the IB midpoint bias.',
+    table(['Setup','Days','Bias side breaks first','Rate','Single-break rate'],[
+      row('ALIGNED (ORB dir = IB bias)', align.length, align.filter(d=>d.firstTouchSide===d.bias).length, pct(align.filter(d=>d.singleBreak).length,align.length)),
+      row('CONFLICTED (ORB vs IB bias)', oppose.length, oppose.filter(d=>d.firstTouchSide===d.bias).length, pct(oppose.filter(d=>d.singleBreak).length,oppose.length)),
+    ], 'Aligned should beat conflicted on BOTH columns for this filter to earn its keep.')));
+
+  /* 13. time filters */
+  const buckets=[[630,720,'10:30–12:00'],[720,780,'12:00–13:00'],[780,840,'13:00–14:00'],[840,900,'14:00–15:00'],[900,961,'15:00–close']];
+  const rows13=buckets.map(([a,b,label])=>{
+    const g=fcb.filter(d=>d.firstCloseBreak.breakMin>=a && d.firstCloseBreak.breakMin<b);
+    return row(label, g.length, g.filter(d=>d.firstCloseBreak.hit[1]).length,
+      `avg MFE ${f2(avg(g.map(d=>d.firstCloseBreak.rExt)))}× · fail rate ${pct(g.filter(d=>d.firstCloseBreak.failed).length,g.length)}`);
+  });
+  const byNoon=fcb.filter(d=>d.firstCloseBreak.breakMin<720);
+  out.push(card('13 · Time Filter — when the break happens','Break time bucket vs follow-through. "Hit" = extension ≥ 1× IB width.',
+    table(['Break window','Breaks','≥1× ext','Rate','Detail'],
+      rows13.join('') + row('<b>ALL breaks before noon</b>', byNoon.length, byNoon.filter(d=>d.firstCloseBreak.hit[1]).length, 'the killzone cut'),
+    'Late breaks have less session left — expect decaying extension rates. If they do not decay, the break is time-agnostic.')));
+
+  /* 14. contained day */
+  const cont=days.filter(d=>d.containedAt2);
+  out.push(card('14 · Contained Day (rare)','Price still entirely INSIDE the IB at 14:00 ET. Thesis: fade the extremes into the close.',
+    table(['Outcome','Days','Hit','Rate','Detail'],[
+      row('Contained at 14:00', N, cont.length, 'base rate of the setup'),
+      row('  ↳ STAYS inside through the close (fade works)', cont.length, cont.filter(d=>!d.containedBrokeLate).length, 'fade the extremes'),
+      row('  ↳ BREAKS out late (fade gets run over)', cont.length, cont.filter(d=>d.containedBrokeLate).length, 'the tail risk'),
+    ])));
+
+  /* ranking */
+  const scores=[
+    ['Midpoint close bias', withBias.length, b1],
+    ['Formation order + midpoint (confluent)', conf.length, conf.filter(d=>d.firstTouchSide===d.bias).length],
+    ['Single break (opposite never breaks)', fcb.length, sbWin],
+    ['Close top/bot 25% + formation order', topStrong.length+botStrong.length, topStrong.filter(d=>d.firstTouchSide==='H').length+botStrong.filter(d=>d.firstTouchSide==='L').length],
+    ['ORB aligned with IB bias', align.length, align.filter(d=>d.firstTouchSide===d.bias).length],
+    ['FVG direction = break direction', fv.length, fv.filter(d=>d.firstTouchSide===(d.fvg==='bull'?'H':'L')).length],
+    ['Failed break → opposite extreme', failed.length, failed.filter(d=>d.firstCloseBreak.fadeOpp).length],
+    ['Retest → continuation', rt.length, rt.filter(d=>d.firstCloseBreak.retestCont).length],
+    ['0.25 fib pullback (IB range) → continuation', fA.length, fA.filter(d=>d.firstCloseBreak.fibA.cont).length],
+    ['0.25 fib pullback (impulse) → continuation', fB.length, fB.filter(d=>d.firstCloseBreak.fibB.cont).length],
+    ['Break + volume → 1× ext', volYes.length, volYes.filter(d=>d.firstCloseBreak.hit[1]).length],
+    ['Narrow IB → single break', narrow.length, trendRate(narrow)],
+    ['Wide IB → both sides break (rotation)', wide.length, wide.filter(d=>d.bothBroke).length],
+    ['Contained at 2pm → stays contained', cont.length, cont.filter(d=>!d.containedBrokeLate).length],
+  ].filter(s=>s[1]>=8).sort((a,b)=> (b[2]/b[1])-(a[2]/a[1]));
+  out.unshift(card('★ Rule Ranking — highest hit rate first','Only rules with ≥8 sample days. Sample size is the first thing to check: a 90% hit rate on 9 days is nothing.',
+    table(['Rule','Sample (days)','Hit','Hit rate','Verdict'],
+      scores.map(([l,n,w])=>{ const p=100*w/n;
+        const v = n<20 ? 'thin sample' : p>=65?'tradeable' : p>=55?'marginal' : p<=45?'inverted — fade it' : 'noise';
+        return row(l,n,w,v);
+      }).join(''))));
+
+  $('#out').innerHTML = out.join('');
+}
+
+/* ---------- wiring ---------- */
+function handle(text){
+  const rows=parseCSV(text);
+  if(rows.length<200){ $('#out').innerHTML=`<div class="card r">Parsed only ${rows.length} bars — check the CSV format.</div>`; return; }
+  const days=buildDays(rows);
+  if(!days.length){ $('#out').innerHTML=`<div class="card r">No complete RTH sessions found.</div>`; return; }
+  report(days);
+}
+const drop=$('#drop'), file=$('#file');
+drop.onclick=()=>file.click();
+file.onchange=e=>{ const f=e.target.files[0]; if(f){ const r=new FileReader(); r.onload=()=>handle(r.result); r.readAsText(f);} };
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+drop.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f){ const r=new FileReader(); r.onload=()=>handle(r.result); r.readAsText(f);} });
+</script>
+</body>
+</html>

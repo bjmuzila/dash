@@ -18,7 +18,7 @@
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { HOME_THEME, homeShellStyle, homeContentStyle, homeGlossPanelStyle, classicCardStyle, classicCardAccentStyle, dissolveCardStyle } from "./homeTheme";
+import { HOME_THEME, LIGHT_BLUE, homeShellStyle, homeContentStyle, homeGlossPanelStyle, classicCardStyle, classicCardAccentStyle, dissolveCardStyle } from "./homeTheme";
 
 // Named theme accents so call sites read nicely (accent="orange") instead of
 // passing raw hex. Any hex string is also accepted.
@@ -32,9 +32,19 @@ const ACCENTS = {
 
 export type AccentName = keyof typeof ACCENTS;
 
-function resolveAccent(accent?: AccentName | string): string {
-  if (!accent) return HOME_THEME.cyan;
-  return (ACCENTS as Record<string, string>)[accent] ?? accent;
+/**
+ * ONE card accent, sitewide.
+ *
+ * Card top-accent strips used to rotate per call site (orange / green / red /
+ * purple), which is why pages like the GEX chart ended up with gold bars on some
+ * panels and cyan on others. The budget-style rollout settled on a single
+ * accent — LIGHT_BLUE — so every card reads the same regardless of what the call
+ * site passes. The `accent` prop is kept (call sites still pass it, and it's
+ * still used for non-card things like stat values) but it no longer recolors the
+ * card strip. Change it HERE if the one accent ever changes; never per-page.
+ */
+function resolveAccent(_accent?: AccentName | string): string {
+  return LIGHT_BLUE;
 }
 
 /**

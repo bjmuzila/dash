@@ -21,6 +21,14 @@ const COMING_SOON: { label: string; eta?: string; icon: string }[] = [
     label: "Full Footprint charts with Bookmap-style heatmap, big orders, and automated strategy alerts",
     eta: "Expected August",
   },
+  {
+    icon: "📊",
+    label: "Full Auction Market Theory and TPO logic with alerts",
+  },
+  {
+    icon: "⏰",
+    label: "Full IB / ORB stats and alerts",
+  },
 ];
 
 export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
