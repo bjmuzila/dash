@@ -617,6 +617,14 @@ class ThetaStreamClient {
     // session can stay "connected" while silently returning nothing, so the
     // watchdog (state/flow-watchdog.js) polls this instead of the close event.
     this.lastTradeAt = 0;
+    // Last POSITIVE spot seen per root — isOtm fallback so a wedged/zero index
+    // quote can't reach FlowProcessor as spot=0 (which flips is_otm=false for
+    // every later print and flatlines the OTM-only /flow chart). thetaRoot key.
+    this.lastGoodSpot = new Map();
+    // Chart-scoped liveness: last SPX (SPXW) OTM print. `lastTradeAt` is bumped
+    // by ANY kept root/contract, so it can't see a PARTIAL dry-up; the watchdog
+    // prefers this. Stays 0 (falls back to lastTradeAt) until the first SPX OTM.
+    this.lastSpxOtmTradeAt = 0;
     // contractKey `root|expInt|strikeTenthCents|C|P` -> { bid, ask, t, streamerSymbol, strikeDollars, root }
     this.quotes = new Map();
     // remember subscriptions so we can resubscribe on reconnect
@@ -855,15 +863,30 @@ class ThetaStreamClient {
         : null;
       // Prefer a per-root spot (set by MultiFlowManager for non-SPX roots) so
       // isOtm is correct; fall back to the SPX getSpot() for the core engine.
+      // Guard: a frozen/zero index quote (the Theta index stream ticks only on
+      // change and can wedge) must NOT reach FlowProcessor as spot=0 — that sets
+      // is_otm=false for every later print and silently flatlines the OTM-only
+      // /flow chart. Fall back to the last POSITIVE spot seen for this root.
       const rootSpot = this.rootSpot.get(root);
+      let spot = (rootSpot > 0 ? rootSpot : this.getSpot()) || 0;
+      if (spot > 0) this.lastGoodSpot.set(root, spot);
+      else spot = this.lastGoodSpot.get(root) || 0;
       this.lastTradeAt = Date.now();
+      // Chart-scoped liveness for the watchdog: only SPX (SPXW) OTM prints drive
+      // the /flow Net Drift chart, so track those separately. A partial dry-up
+      // (SPX OTM stops while another root keeps the firehose warm, or spot wedges)
+      // leaves lastTradeAt fresh and the any-root watchdog blind.
+      if (root === 'SPXW' && spot > 0) {
+        const otm = right === 'C' ? cache.strikeDollars > spot : cache.strikeDollars < spot;
+        if (otm) this.lastSpxOtmTradeAt = Date.now();
+      }
       try {
         this.onTrade({
           streamerSymbol: cache.streamerSymbol,
           price,
           size,
           quote,
-          spot: (rootSpot > 0 ? rootSpot : this.getSpot()) || 0,
+          spot,
         });
       } catch { /* never let one bad print kill the socket */ }
     }

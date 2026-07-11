@@ -1969,12 +1969,13 @@ const DAY_SLOTS: { v: DaySlot; label: string }[] = [
   { v: "custom", label: "Custom" },
 ];
 
-type DayVisual = "gex" | "flow" | "chain" | "greeks";
+type DayVisual = "gex" | "flow" | "chain" | "greeks" | "candles";
 const DAY_VISUALS: { v: DayVisual; label: string; embed?: string }[] = [
   { v: "gex", label: "GEX Chart" },
   { v: "flow", label: "Option Flow (SPX 0DTE OTM)", embed: "/flow?embed=1&chartonly=1&ticker=SPX&dteMax=0" },
   { v: "chain", label: "Option Chain", embed: "/options-chain?embed=1" },
   { v: "greeks", label: "Multi Greeks", embed: "/mult-greek?embed=1" },
+  { v: "candles", label: "ES Candles", embed: "/es-candles?embed=1" },
 ];
 // Iframe logical size — desktop layout, scaled down to fit the column.
 const DP_EMB_W = 1280;

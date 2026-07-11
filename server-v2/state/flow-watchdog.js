@@ -10,8 +10,10 @@
  * until someone notices on the chart — which is the whole reason this exists:
  * Brandon isn't always watching the chart.
  *
- * Polls `thetaStream.lastTradeAt` (bumped on every real TRADE dispatch) during
- * RTH. Two-stage response:
+ * Polls `thetaStream.lastSpxOtmTradeAt` (bumped on every SPXW OTM print — the
+ * flow that actually drives the /flow chart), falling back to `lastTradeAt`
+ * until the first SPX OTM print. Watching the chart-scoped signal catches a
+ * PARTIAL dry-up, not just a total stall. Two-stage response during RTH:
  *   1. Stale >90s  → soft fix: force-cycle the socket (thetaStream.forceReconnect()).
  *      Usually enough if it was just a transient WS-level hiccup.
  *   2. Still stale >3min after that → theta-terminal itself is likely wedged
@@ -58,7 +60,12 @@ function startFlowWatchdog(thetaStream) {
   setInterval(() => {
     try {
       if (!isMarketHours()) return;
-      const last = thetaStream.lastTradeAt || 0;
+      // Prefer the chart-scoped SPX-OTM liveness signal (bumped in proxy-thetadata
+      // on every SPXW OTM print) so a PARTIAL dry-up is caught — not just a total
+      // stall. `lastTradeAt` is bumped by ANY kept root/contract, so it stays
+      // fresh even when the SPX OTM prints that drive the /flow chart have stopped.
+      // Falls back to lastTradeAt until the first SPX OTM print of the session.
+      const last = thetaStream.lastSpxOtmTradeAt || thetaStream.lastTradeAt || 0;
       const age = last ? Date.now() - last : Infinity;
       if (age < SOFT_RECONNECT_AFTER_MS) return; // healthy
 
@@ -77,7 +84,7 @@ function startFlowWatchdog(thetaStream) {
       sendAlert({
         key: 'flow-stale',
         subject: 'CB Edge: flow feed stale',
-        message: `No option trade prints for ~${ageMin} min during market hours. `
+        message: `No SPX OTM option trade prints for ~${ageMin} min during market hours. `
           + `Socket cycling didn't recover it — theta-terminal is likely wedged. `
           + `SSH in and run: docker restart theta-terminal`,
       }).catch(() => {});

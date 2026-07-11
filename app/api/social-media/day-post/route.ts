@@ -91,6 +91,7 @@ const VISUAL_LABEL: Record<string, string> = {
   flow: "live options-flow tape",
   chain: "live options chain",
   greeks: "multi-expiry greeks dashboard",
+  candles: "ES 5-minute candle chart with the GEX levels overlaid — good for walking through how the session traded the levels",
 };
 
 function num(v: number | null | undefined, digits = 2): string {

@@ -5,6 +5,9 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 ## Friday 7/10/2026
 
 * The Signals feed on the Home page now updates itself — live CB, options-flow, and GEX wall & flip alerts appear automatically during market hours, on top of any you write in by hand.
+* The GEX scanner has a new "Best overall" ranking that blends dollar size with percentage growth, plus Strong / Big % / Very strong tags (with thresholds you can adjust) to surface the highest-conviction strikes.
+* Swapped the scanner's All/OTM filter for a clearer Positive / Negative switch — Positive finds out-of-the-money strikes above price with growing positive gamma, Negative finds ones below price with growing negative gamma — plus an adjustable "how far out-of-the-money" distance selector.
+* Flow GEX is now more accurate — trades that can't be confirmed as a buy or a sell (no live bid/ask at the time) no longer skew the reading, and the volume-based version can now reflect whether that volume was actually buying or selling.
 
 ## Thursday 7/9/2026
 

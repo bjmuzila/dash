@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-07-10 — Flow GEX buy/sell accuracy + directional Vol GEX (`server-v2/computation/flow-gex.js`, `gex-calculator.js`, `server-v2/state/flow-gex-rehydrate.js`, `flow-gex-history.js`)
+
+Excluded `bucket:'neutral'` prints — trades `inferSide` couldn't classify as buy/sell from the bid/ask (mid/unknown or no fresh quote, which FlowProcessor coerces to `side:'buy'`) — from dealer inventory via a guard in `flow-gex.js` `ingestTape` plus an `AND (bucket IS NULL OR bucket <> 'neutral')` filter on the `flow-gex-rehydrate.js` rebuild query and both `flow-gex-history.js` tape CTEs, so unclassifiable volume stops leaking in as taker buys across live + restart + the persisted vol-history heatmap. Added a directional `netVolGexDir` field in `gex-calculator.js` that signs the day's REST volume by the observed `(dealerBuy−dealerSell)/total` buy/sell ratio (dealer polarity, same as `flowGEX`), falling back to raw `netVolGEX` on strikes with no classified flow — left additive (not yet wired to the client Vol toggle); NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-10 — GEX scanner combined-score ranking + Positive/Negative side-growth filter (`app/scanner/page.tsx`, `server-v2/server-with-proxy.js`)
+
+Added combined-score ranking to the GEX Change Scanner: `server-with-proxy.js` `/proxy/strike-growth/scanner` gained `sort=score` and a `score` column (min-max normalized `0.6·|latest_chg| + 0.4·|pct_open|`, ×100), and `app/scanner/page.tsx` got a "Best overall" sort, sortable Score column, and adjustable Strong/Big%/★Very-strong Signal badges persisted to localStorage. Replaced the All/OTM moneyness toggle on both the GexScanner and StrikeQueryScanner tabs with an All/Positive/Negative switch — Positive = strike above spot AND rising GEX (Δ>0), Negative = strike below spot AND falling GEX (Δ<0) — restored a standalone "min OTM" distance dropdown, and added a backend `dir` param (`strike>spot AND latest_chg>0` / mirror) in the scanner WHERE; NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable), backend needs VPS redeploy.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-10 — Home signals feed wired to the live engine (`components/dashboard/SignalsFeed.tsx`)
 
 Repointed the `/home` `SignalsFeed` to fetch the live GEX/CB/Flow engine (`GET /proxy/signals` → `server-v2/signals-engine.js`'s `trade_signals`) alongside the hand-authored `public/signals.txt` via `Promise.allSettled`, merging them newest-first, and added `mapApiRows`/`KIND_PAGE`/`etTime`/`etDateStr` helpers that map each engine row (flip_cross, wall_reject/break, cb_reject/break, confluence, bzila_confluence, flow_divergence) to a page-tagged chip filtered to today's ET. So CB/Flow/GEX-wall/flip alerts now auto-populate during the futures session while the other vocabulary tags stay txt-only until they get emitters — NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
