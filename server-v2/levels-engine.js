@@ -780,8 +780,14 @@ async function evaluateCompletedWeek(base) {
  * publish. `payloads` is the array computeAllLevels() returns.
  */
 async function seedUpcomingWeek(base, payloads) {
-  const upcomingWeek = getWeekKey(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)); // the coming Mon's week
-  const weekLabel = labelForDate(upcomingWeek);
+  const upcomingWeek = getWeekKey(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)); // the coming Mon's week (internal join key — do not change)
+  // Display label uses the week's FRIDAY (the expiration the EM band is actually
+  // measured against), matching the legacy imported rows (e.g. "11/21" for the
+  // week ending Fri 2025-11-21). week_start/upcomingWeek stays Monday-anchored
+  // since evaluateCompletedWeek/getCompletedWeekKey match on that key.
+  const fridayOfWeek = new Date(Date.parse(`${upcomingWeek}T12:00:00`) + 4 * 24 * 60 * 60 * 1000)
+    .toISOString().slice(0, 10);
+  const weekLabel = labelForDate(fridayOfWeek);
   const rows = payloads
     .filter((p) => p.em != null)
     .map((p) => ({
