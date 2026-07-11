@@ -115,6 +115,9 @@
         .outcome-broke-low { color: #f87171; }
         .outcome-broke-both { color: #fbbf24; }
         .outcome-broke-none { color: #94a3b8; }
+        .outcome-still-none--1-candles- { color: #94a3b8; }
+        .outcome-still-none--2-candles- { color: #64748b; }
+        .outcome-still-none--3-candles- { color: #475569; }
 
         .crosstab-section {
             display: grid;
@@ -412,6 +415,43 @@
                 else if (brokeLow) outcome = 'Broke Low';
                 else outcome = 'Broke None';
 
+                // If "Broke None", track next candles and resolve final outcome
+                let followUpOutcomes = [];
+                let finalOutcome = outcome;
+
+                if (outcome === 'Broke None') {
+                    // Check up to 3 more candles
+                    for (let j = 1; j <= 3; j++) {
+                        if (i + 3 + j >= candles.length) {
+                            finalOutcome = `Still None (${j} candles)`;
+                            break;
+                        }
+
+                        const cn = candles[i + 3 + j];
+                        const brokeHn = cn.high > pHigh;
+                        const brokeLn = cn.low < pLow;
+
+                        let cnOutcome;
+                        if (brokeHn && brokeLn) cnOutcome = 'Broke Both';
+                        else if (brokeHn) cnOutcome = 'Broke High';
+                        else if (brokeLn) cnOutcome = 'Broke Low';
+                        else cnOutcome = `Still None (${j} candle${j > 1 ? 's' : ''})`;
+
+                        followUpOutcomes.push(cnOutcome);
+
+                        // Stop if broke one side or both
+                        if (cnOutcome !== `Still None (${j} candle${j > 1 ? 's' : ''})`) {
+                            finalOutcome = cnOutcome;
+                            break;
+                        }
+
+                        // If at last candle and still none
+                        if (j === 3) {
+                            finalOutcome = cnOutcome;
+                        }
+                    }
+                }
+
                 results.push({
                     pattern: name,
                     c1: `${c1.open.toFixed(2)}/${c1.close.toFixed(2)}`,
@@ -421,7 +461,8 @@
                     pLow: pLow.toFixed(2),
                     nHigh: c4.high.toFixed(2),
                     nLow: c4.low.toFixed(2),
-                    outcome
+                    outcome: finalOutcome,
+                    followUpOutcomes
                 });
             }
 
@@ -434,16 +475,25 @@
                 outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
             });
 
+            // Sort outcomes in order
+            const outcomeOrder = [
+                'Broke High', 'Broke Low', 'Broke Both', 'Broke None',
+                'Still None (1 candles)', 'Still None (2 candles)', 'Still None (3 candles)'
+            ];
+
             let html = '';
-            ['Broke High', 'Broke Low', 'Broke Both', 'Broke None'].forEach(o => {
+            outcomeOrder.forEach(o => {
                 const count = outcomes[o] || 0;
-                const pct = (100 * count / results.length).toFixed(1);
-                const cls = `outcome-${o.toLowerCase().replace(' ', '-')}`;
-                html += `<div class="stat-row">
-                    <span class="stat-label">${o}</span>
-                    <span class="stat-value ${cls}">${count} (${pct}%)</span>
-                </div>`;
+                if (count > 0) {
+                    const pct = (100 * count / results.length).toFixed(1);
+                    const cls = `outcome-${o.toLowerCase().replace(/[^a-z]/g, '-')}`;
+                    html += `<div class="stat-row">
+                        <span class="stat-label">${o}</span>
+                        <span class="stat-value ${cls}">${count} (${pct}%)</span>
+                    </div>`;
+                }
             });
+
             html += `<div class="stat-row">
                 <span class="stat-label">Total Patterns</span>
                 <span class="stat-value">${results.length}</span>
@@ -459,7 +509,12 @@
                 patterns[r.pattern][r.outcome] = (patterns[r.pattern][r.outcome] || 0) + 1;
             });
 
-            const outcomes = ['Broke High', 'Broke Low', 'Broke Both', 'Broke None'];
+            const outcomes = [
+                'Broke High', 'Broke Low', 'Broke Both', 'Broke None',
+                'Still None (1 candles)', 'Still None (2 candles)', 'Still None (3 candles)'
+            ];
+
+            const totalPatterns = results.length;
 
             let html = '<table><tr><th>Pattern</th>';
             outcomes.forEach(o => html += `<th>${o}</th>`);
@@ -467,13 +522,21 @@
 
             Object.keys(patterns).sort().forEach(p => {
                 let total = 0;
-                html += `<tr><td>${p}</td>`;
+                const counts = [];
                 outcomes.forEach(o => {
                     const count = patterns[p][o] || 0;
+                    counts.push(count);
                     total += count;
-                    html += `<td>${count}</td>`;
                 });
-                html += `<td><strong>${total}</strong></td></tr>`;
+
+                html += `<tr><td>${p}</td>`;
+                counts.forEach(count => {
+                    // % of overall patterns
+                    const pct = totalPatterns > 0 ? ((100 * count / totalPatterns).toFixed(1)) : 0;
+                    html += `<td>${count} (${pct}%)</td>`;
+                });
+                const totalPct = totalPatterns > 0 ? ((100 * total / totalPatterns).toFixed(1)) : 0;
+                html += `<td><strong>${total} (${totalPct}%)</strong></td></tr>`;
             });
 
             html += '</table>';
@@ -481,10 +544,19 @@
         }
 
         function buildDetailsTable(results) {
-            let html = '<table><tr><th>Pattern</th><th>C1</th><th>C2</th><th>C3</th><th>P-High</th><th>P-Low</th><th>N-High</th><th>N-Low</th><th>Outcome</th></tr>';
+            let html = '<table><tr><th>Pattern</th><th>C1</th><th>C2</th><th>C3</th><th>P-High</th><th>P-Low</th><th>N-High</th><th>N-Low</th><th>Outcome</th><th>Follow-Up</th></tr>';
 
             results.forEach(r => {
                 const cls = `outcome-${r.outcome.toLowerCase().replace(' ', '-')}`;
+                let followUpDisplay = '';
+
+                if (r.followUpOutcomes && r.followUpOutcomes.length > 0) {
+                    followUpDisplay = r.followUpOutcomes.map((o, idx) => {
+                        const ocls = `outcome-${o.toLowerCase().replace(/[^a-z]/g, '-')}`;
+                        return `<div class="${ocls}" style="margin-bottom: 4px;">${o}</div>`;
+                    }).join('');
+                }
+
                 html += `<tr>
                     <td>${r.pattern}</td>
                     <td>${r.c1}</td>
@@ -495,10 +567,44 @@
                     <td>${r.nHigh}</td>
                     <td>${r.nLow}</td>
                     <td class="${cls}">${r.outcome}</td>
+                    <td style="font-size: 12px;">${followUpDisplay}</td>
                 </tr>`;
             });
 
             html += '</table>';
+            return html;
+        }
+
+        function buildBrokeNoneStats(results) {
+            const noneResults = results.filter(r => r.outcome === 'Broke None');
+            if (noneResults.length === 0) {
+                return '<div class="stat-row"><span class="stat-label">No "Broke None" patterns</span></div>';
+            }
+
+            let html = `<div class="stat-row">
+                <span class="stat-label">Total "Broke None"</span>
+                <span class="stat-value">${noneResults.length}</span>
+            </div>`;
+
+            // Count first follow-up outcome for each
+            const firstOutcomes = {};
+            noneResults.forEach(r => {
+                if (r.followUpOutcomes && r.followUpOutcomes.length > 0) {
+                    const first = r.followUpOutcomes[0];
+                    firstOutcomes[first] = (firstOutcomes[first] || 0) + 1;
+                }
+            });
+
+            for (let outcome in firstOutcomes) {
+                const count = firstOutcomes[outcome];
+                const pct = (100 * count / noneResults.length).toFixed(1);
+                const cls = `outcome-${outcome.toLowerCase().replace(/[^a-z]/g, '-')}`;
+                html += `<div class="stat-row">
+                    <span class="stat-label">&nbsp;&nbsp;→ ${outcome}</span>
+                    <span class="stat-value ${cls}">${count} (${pct}%)</span>
+                </div>`;
+            }
+
             return html;
         }
 
