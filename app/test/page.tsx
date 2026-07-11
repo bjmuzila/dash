@@ -2999,6 +2999,235 @@ function RegimePersistentLearningCard({ ticker }: { ticker: RegimeTicker }) {
   );
 }
 
+// ── Pairs Regime Engine (co-equal HMM, REGIME_LEARNING_DESIGN.md Phases 3+4) ──
+// Reads the stored daily ESU-NQU spread fit (server-v2/pairs-regime-trainer.js)
+// via GET /proxy/pairs-regime-fit, computes a LIVE zscore client-side from the
+// candles already on this page (using the fit's stored β), and gates it against
+// the live market regime per the doc's sizing matrix.
+type PairsLabel = "MeanRevert" | "Drift" | "Stuck";
+const PAIRS_LABELS: PairsLabel[] = ["MeanRevert", "Drift", "Stuck"];
+const PAIRS_COLOR: Record<PairsLabel, string> = {
+  MeanRevert: HOME_THEME.green,
+  Drift: SOFT_RED,
+  Stuck: LIGHT_BLUE,
+};
+interface PairsStoredFitRow {
+  pair_id: string;
+  fit_timestamp: string;
+  lookback_bars: number;
+  hmm_params: { means: number[]; stds: number[]; transition: number[][]; labels: PairsLabel[] };
+  decoded_path: PairsLabel[];
+  stationary_dist: Record<PairsLabel, number>;
+  accuracy_metrics: { hit_rate: number | null; revert_hit: number | null; drift_hit: number | null; stuck_neutral: number | null; n: number };
+  observable_config: { type: string; ma_window: number; beta: number };
+  version: number;
+  notes: string | null;
+}
+interface PairsValidationRow {
+  refit_date: string;
+  regime_label: PairsLabel;
+  spread_zscore: number | null;
+  mean_revert_happened: boolean | null;
+  drift_continued: boolean | null;
+  confidence_percentile: number | null;
+}
+interface PairsFitApiResponse {
+  ok: boolean;
+  pair: string;
+  fit: PairsStoredFitRow | null;
+  validation: PairsValidationRow[];
+}
+
+/** Latest stored pairs fit + validation. Refetches on the WS "pairs-regime-updated" push. */
+function usePairsRegimeFit(pair: string): PairsFitApiResponse | null {
+  const [data, setData] = useState<PairsFitApiResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/proxy/pairs-regime-fit?pair=${encodeURIComponent(pair)}`, { cache: "no-store" });
+        if (res.ok) { const j = (await res.json()) as PairsFitApiResponse; if (!cancelled) setData(j); }
+      } catch { /* keep last */ }
+    };
+    void load();
+    const id = setInterval(load, 5 * 60_000);
+    const onUpdated = () => { void load(); };
+    window.addEventListener("pairs-regime-updated", onUpdated);
+    return () => { cancelled = true; clearInterval(id); window.removeEventListener("pairs-regime-updated", onUpdated); };
+  }, [pair]);
+  return data;
+}
+
+/** Live spread zscore from the page's own candles + the stored fit's β. */
+function computeLiveZscore(esRows: EsCandleRecord[], nqRows: EsCandleRecord[], beta: number, maWindow: number): number | null {
+  const nqByTs = new Map(nqRows.map((r) => [r.timestamp, Number(r.close)]));
+  const spreads: number[] = [];
+  for (const r of esRows) {
+    const p2 = nqByTs.get(r.timestamp);
+    const p1 = Number(r.close);
+    if (p2 != null && Number.isFinite(p1) && p1 > 0 && Number.isFinite(p2) && p2 > 0) spreads.push(p1 - beta * p2);
+  }
+  if (spreads.length < maWindow) return null;
+  const win = spreads.slice(-maWindow);
+  const ma = win.reduce((a, b) => a + b, 0) / win.length;
+  const sd = Math.sqrt(win.reduce((a, b) => a + (b - ma) ** 2, 0) / win.length);
+  return sd > 1e-9 ? (spreads[spreads.length - 1] - ma) / sd : 0;
+}
+
+/** REGIME_LEARNING_DESIGN.md Phase 4 sizing matrix: market regime × pairs regime. */
+function pairsGate(marketLabel: RegimeLabel | undefined, pairsLabel: PairsLabel | undefined, zscore: number | null): { size: number; reason: string } {
+  if (!marketLabel || !pairsLabel) return { size: 0, reason: "Unknown state — no fit" };
+  if (pairsLabel === "Drift") return { size: 0, reason: "Spread is trending — no reversion edge, wait" };
+  if (pairsLabel === "Stuck") return { size: 0, reason: "Flat spread — no edge, low confidence" };
+  // pairsLabel === MeanRevert:
+  if (marketLabel === "Chop" && zscore != null && Math.abs(zscore) > 1.5) {
+    return { size: 1.0, reason: "Chop × MeanRevert with |z| > 1.5 — full conviction" };
+  }
+  if (marketLabel === "Trend") return { size: 0.6, reason: "Trend × MeanRevert — pair fights the tape, size down" };
+  if (marketLabel === "Chop") return { size: 0, reason: "Chop × MeanRevert but |z| ≤ 1.5 — wait for stretch" };
+  return { size: 0, reason: "Panic — stand down" };
+}
+
+/** Pairs Regime card — pill, live zscore band, gate, validation log, fit health. */
+function PairsRegimeCard({ marketHmm, esRows, nqRows }: { marketHmm: HmmResult | null; esRows: EsCandleRecord[]; nqRows: EsCandleRecord[] }) {
+  const data = usePairsRegimeFit("ESU-NQU");
+  const fit = data?.fit ?? null;
+
+  const beta = fit?.observable_config?.beta ?? null;
+  const maWindow = fit?.observable_config?.ma_window ?? 20;
+  const zscore = useMemo(
+    () => (beta != null ? computeLiveZscore(esRows, nqRows, beta, maWindow) : null),
+    [esRows, nqRows, beta, maWindow]
+  );
+
+  const pairsLabel = fit?.decoded_path?.length ? fit.decoded_path[fit.decoded_path.length - 1] : undefined;
+  const pairsConf = pairsLabel && fit ? fit.stationary_dist[pairsLabel] ?? null : null;
+  const marketLabel = marketHmm?.currentLabel;
+  const marketProb = marketHmm && marketLabel ? marketHmm.currentProbs[marketLabel] : null;
+
+  const gate = pairsGate(marketLabel, pairsLabel, zscore);
+  // entry_confidence = (market_prob + pairs_prob)/2 × yesterday's reversion hit rate
+  const revertHit = fit?.accuracy_metrics?.revert_hit ?? null;
+  const entryConfidence = marketProb != null && pairsConf != null && revertHit != null
+    ? ((marketProb + pairsConf) / 2) * revertHit
+    : null;
+
+  const hitRate = fit?.accuracy_metrics?.hit_rate ?? null;
+  const flagged = hitRate != null && hitRate < 0.6;
+
+  return (
+    <Card
+      variant="budget"
+      accent={LIGHT_BLUE}
+      padding={16}
+      title={<span style={{ fontSize: 16, fontWeight: 900, letterSpacing: "0.1em" }}>Pairs Regime · ESU-NQU Spread</span>}
+      subtitle="server-v2/pairs-regime-trainer.js — daily 04:30 ET spread-HMM (MeanRevert/Drift/Stuck) on zscore of ESU − β·NQU, gated against the live market regime"
+    >
+      {!fit ? (
+        <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+          No stored pairs fit yet — first daily run happens at 04:30 ET, or force one via POST /proxy/pairs-regime-retrain.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Spread regime</div>
+              <div style={{ fontSize: 18, fontWeight: 900, marginTop: 2, color: pairsLabel ? PAIRS_COLOR[pairsLabel] : HOME_THEME.text }}>
+                {pairsLabel ?? "—"}{pairsConf != null ? ` (${Math.round(pairsConf * 100)}%)` : ""}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Live zscore</div>
+              <div style={{ fontSize: 18, fontWeight: 900, marginTop: 2, color: zscore != null && Math.abs(zscore) > 1.5 ? HOME_THEME.cyan : HOME_THEME.text }}>
+                {zscore != null ? `${zscore >= 0 ? "+" : ""}${zscore.toFixed(2)}σ` : "—"}
+              </div>
+              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>β = {beta != null ? beta.toFixed(4) : "—"} · MA{maWindow}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Stationary dist</div>
+              <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+                {PAIRS_LABELS.map((l) => (
+                  <span key={l} style={{ fontSize: 15, fontWeight: 800, color: PAIRS_COLOR[l] }}>
+                    {l} {Math.round((fit.stationary_dist[l] ?? 0) * 100)}%
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Fit health</div>
+              <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: flagged ? SOFT_RED : HOME_THEME.text }}>
+                {hitRate != null ? `${Math.round(hitRate * 100)}%` : "n/a"} hit-rate · {fit.accuracy_metrics.n} bars
+                {flagged ? " · below 60%" : ""}
+              </div>
+              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.7 }}>
+                v{fit.version} · {new Date(fit.fit_timestamp).toLocaleString("en-US", { timeZone: "America/New_York" })} ET
+              </div>
+            </div>
+          </div>
+
+          {/* Phase 4 gate: market regime × pairs regime → conviction size */}
+          <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)" }}>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>Signal gate</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>
+                Market <span style={{ color: marketLabel ? REGIME_COLOR[marketLabel] : HOME_THEME.text }}>{marketLabel ?? "—"}</span>
+                {" × "}Pairs <span style={{ color: pairsLabel ? PAIRS_COLOR[pairsLabel] : HOME_THEME.text }}>{pairsLabel ?? "—"}</span>
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: gate.size > 0 ? HOME_THEME.green : SOFT_RED }}>
+                Size ×{gate.size.toFixed(1)}
+              </div>
+              {entryConfidence != null && (
+                <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>
+                  Entry confidence {Math.round(entryConfidence * 100)}%
+                </div>
+              )}
+            </div>
+            <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.8, marginTop: 4 }}>{gate.reason} · Alerts-only — nothing here places or sizes a real trade.</div>
+          </div>
+
+          {/* Validation log — did the spread do what the regime said? */}
+          {(data?.validation?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase", marginBottom: 6 }}>
+                Validation log · last {data!.validation.length} days
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "110px 110px 80px 110px 90px", gap: "4px 14px", fontSize: 14, alignItems: "center" }}>
+                <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Date</span>
+                <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Call</span>
+                <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>zscore</span>
+                <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Spread did</span>
+                <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Result</span>
+                {data!.validation.map((v) => {
+                  const hit = v.regime_label === "MeanRevert" ? v.mean_revert_happened
+                    : v.regime_label === "Drift" ? v.drift_continued
+                    : v.mean_revert_happened == null ? null : !v.mean_revert_happened && !v.drift_continued;
+                  return (
+                    <Fragment key={v.refit_date}>
+                      <span style={{ fontWeight: 700, color: HOME_THEME.text }}>
+                        {new Date(v.refit_date).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" })}
+                      </span>
+                      <span style={{ fontWeight: 800, color: PAIRS_COLOR[v.regime_label] ?? HOME_THEME.text }}>{v.regime_label}</span>
+                      <span style={{ fontWeight: 700, color: HOME_THEME.text }}>
+                        {v.spread_zscore != null ? `${v.spread_zscore >= 0 ? "+" : ""}${v.spread_zscore.toFixed(2)}σ` : "—"}
+                      </span>
+                      <span style={{ fontWeight: 700, color: HOME_THEME.text }}>
+                        {v.mean_revert_happened ? "Reverted" : v.drift_continued ? "Drifted" : "Held"}
+                      </span>
+                      <span style={{ fontWeight: 900, color: hit == null ? HOME_THEME.text : hit ? HOME_THEME.green : SOFT_RED }}>
+                        {hit == null ? "—" : hit ? "HIT" : "MISS"}
+                      </span>
+                    </Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
 // Must match REGIME_ALERT_CONFIRM_BARS's default in server-v2/regime-alert-recorder.js —
 // the Alert Log only opens/closes an alert once a flip holds for this many
 // consecutive bars (filters HMM-refit noise). The price chart used to shade
@@ -3317,6 +3546,8 @@ function RegimeEngineTab() {
           </Card>
 
           <RegimePersistentLearningCard ticker={ticker} />
+
+          <PairsRegimeCard marketHmm={hmm} esRows={esChartRows} nqRows={nqChartRows} />
 
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>

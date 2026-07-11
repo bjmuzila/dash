@@ -302,13 +302,21 @@ function scoreBar(pairLabel, zNow, zFut) {
   return { hit: Math.abs(zFut - zNow) < STUCK_NEUTRAL_BAND, meanRevertHappened: reverted, driftContinued: drifted };
 }
 
-async function runTrainerForPair(base, pair) {
+/**
+ * @param {object} [opts]
+ * @param {number}  [opts.daysBack] window override (Phase 2 backtest uses 60)
+ * @param {boolean} [opts.dryRun]   fit + validate + return metrics, but write
+ *                                  NOTHING to Postgres and skip onRefit
+ */
+async function runTrainerForPair(base, pair, opts = {}) {
+  const daysBack = Number(opts.daysBack) > 0 ? Number(opts.daysBack) : DAYS_BACK;
+  const dryRun = !!opts.dryRun;
   const p = getPool();
-  if (!p || !(await ensureSchema())) return { skipped: 'no-db' };
+  if (!dryRun && (!p || !(await ensureSchema()))) return { skipped: 'no-db' };
 
   const [bars1, bars2] = await Promise.all([
-    fetchCloses(base, pair.leg1.symbol, DAYS_BACK),
-    fetchCloses(base, pair.leg2.symbol, DAYS_BACK),
+    fetchCloses(base, pair.leg1.symbol, daysBack),
+    fetchCloses(base, pair.leg2.symbol, daysBack),
   ]);
   const aligned = alignLegs(bars1, bars2);
   if (aligned.length < MIN_OBS + MA_WINDOW) return { skipped: 'not-enough-aligned-bars', aligned: aligned.length };
@@ -381,6 +389,18 @@ async function runTrainerForPair(base, pair) {
   };
   if (accuracy.hit_rate != null && accuracy.hit_rate < ACCURACY_ALERT_THRESHOLD) {
     console.warn(`[pairs-regime] ${pair.id}: hit-rate ${(accuracy.hit_rate * 100).toFixed(1)}% below ${ACCURACY_ALERT_THRESHOLD * 100}% — pair may be decorrelating`);
+  }
+
+  // Dry-run (Phase 2 backtest): stop here — return everything the caller
+  // needs to judge the regime quality, persist nothing, broadcast nothing.
+  if (dryRun) {
+    const labelCounts = { MeanRevert: 0, Drift: 0, Stuck: 0 };
+    for (const l of pairPath) labelCounts[l]++;
+    return {
+      ok: true, dryRun: true, daysBack, obs: obs.length, beta,
+      accuracy, stationaryDist, labelCounts,
+      hmmParams: { means, stds, transition, labels: [...PAIR_LABELS] },
+    };
   }
 
   // ── β stability vs previous fit (doc: warn on >20% swing) ─────────────────
@@ -522,6 +542,7 @@ module.exports = {
   startPairsRegimeTrainer,
   ensureSchema,
   runTrainerOnce,
+  runTrainerForPair,
   forceRetrainAll,
   getLatestStoredFit,
   setOnRefit,
