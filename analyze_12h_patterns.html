@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>12-Hour Candle Pattern Analysis</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -238,8 +239,10 @@
         </div>
 
         <div id="results" style="display: none;">
-            <div style="text-align: right; margin-bottom: 15px;">
-                <button onclick="downloadCSV()" style="background: #10b981;">Download Results CSV</button>
+            <div style="text-align: right; margin-bottom: 15px; display: flex; gap: 10px; justify-content: flex-end;">
+                <button onclick="downloadCSV()" style="background: #10b981;">Download CSV</button>
+                <button onclick="downloadStatsPNG()" style="background: #f59e0b;">Download Stats PNG</button>
+                <button onclick="downloadCrosstabPNG()" style="background: #8b5cf6;">Download Crosstab PNG</button>
             </div>
             <div class="stats-grid">
                 <div class="stats-card">
@@ -336,6 +339,56 @@
 
             csv += `"Total Patterns",${results.length},100%\n`;
             return csv;
+        }
+
+        async function downloadStatsPNG() {
+            const container = document.querySelector('.stats-grid');
+            if (!container) {
+                showError('Stats section not found');
+                return;
+            }
+
+            try {
+                const canvas = await html2canvas(container, {
+                    backgroundColor: '#0f172a',
+                    scale: 2,
+                    logging: false
+                });
+
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = `12h-candle-stats-${new Date().toISOString().split('T')[0]}.png`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (err) {
+                showError('Failed to download stats: ' + err.message);
+            }
+        }
+
+        async function downloadCrosstabPNG() {
+            const container = document.querySelector('.crosstab-section');
+            if (!container) {
+                showError('Crosstab section not found');
+                return;
+            }
+
+            try {
+                const canvas = await html2canvas(container, {
+                    backgroundColor: '#0f172a',
+                    scale: 2,
+                    logging: false
+                });
+
+                const link = document.createElement('a');
+                link.href = canvas.toDataURL('image/png');
+                link.download = `12h-candle-crosstab-${new Date().toISOString().split('T')[0]}.png`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (err) {
+                showError('Failed to download crosstab: ' + err.message);
+            }
         }
 
         function showError(msg) {
@@ -483,28 +536,24 @@
                 const pHigh = Math.max(c1.high, c2.high, c3.high);
                 const pLow = Math.min(c1.low, c2.low, c3.low);
 
-                const brokeHigh4 = c4.high > pHigh;
-                const brokeLow4 = c4.low < pLow;
+                // Trigger candle is C3 (last candle of pattern)
+                const triggerBrokeHigh = c3.high > pHigh;
+                const triggerBrokeLow = c3.low < pLow;
 
-                let outcome;
-                if (brokeHigh4 && brokeLow4) outcome = 'Broke Both';
-                else if (brokeHigh4) outcome = 'Broke High';
-                else if (brokeLow4) outcome = 'Broke Low';
-                else outcome = 'Broke None';
+                let triggerOutcome;
+                if (triggerBrokeHigh && triggerBrokeLow) triggerOutcome = 'Broke Both';
+                else if (triggerBrokeHigh) triggerOutcome = 'Broke High';
+                else if (triggerBrokeLow) triggerOutcome = 'Broke Low';
+                else triggerOutcome = 'Broke None';
 
-                // If "Broke None" on c4, track next 3 candles
+                // Track follow-ups (C4, C5, C6) - only if trigger didn't break
                 let followUpOutcomes = [];
-                let finalOutcome = outcome;
+                let finalOutcome = triggerOutcome;
 
-                if (outcome === 'Broke None') {
-                    // Check candles 5, 6, 7
+                if (triggerOutcome === 'Broke None') {
+                    // Check next 3 candles after trigger
                     for (let j = 1; j <= 3; j++) {
-                        if (i + 3 + j >= candles.length) {
-                            if (j === 1) finalOutcome = 'Broke None (after 1 candle)';
-                            else if (j === 2) finalOutcome = 'Broke None (after 2 candles)';
-                            else finalOutcome = 'Broke None (after 3 candles)';
-                            break;
-                        }
+                        if (i + 3 + j >= candles.length) break;
 
                         const cn = candles[i + 3 + j];
                         const brokeHn = cn.high > pHigh;
@@ -512,26 +561,17 @@
 
                         let cnOutcome;
                         if (brokeHn && brokeLn) {
-                            cnOutcome = `Broke Both (after ${j-1} candle${j-1 > 1 ? 's' : ''})`;
+                            cnOutcome = `Broke Both (after ${j} candle${j > 1 ? 's' : ''})`;
                         } else if (brokeHn) {
-                            cnOutcome = `Broke High (after ${j-1} candle${j-1 > 1 ? 's' : ''})`;
+                            cnOutcome = `Broke High (after ${j} candle${j > 1 ? 's' : ''})`;
                         } else if (brokeLn) {
-                            cnOutcome = `Broke Low (after ${j-1} candle${j-1 > 1 ? 's' : ''})`;
-                        } else {
-                            cnOutcome = `Broke None (after ${j} candle${j > 1 ? 's' : ''})`;
+                            cnOutcome = `Broke Low (after ${j} candle${j > 1 ? 's' : ''})`;
                         }
 
-                        followUpOutcomes.push(cnOutcome);
-
-                        // Stop if broke
-                        if (!cnOutcome.includes('Broke None')) {
+                        if (cnOutcome) {
+                            followUpOutcomes.push(cnOutcome);
                             finalOutcome = cnOutcome;
-                            break;
-                        }
-
-                        // If at last candle and still none
-                        if (j === 3) {
-                            finalOutcome = cnOutcome;
+                            break; // Stop once it breaks
                         }
                     }
                 }
@@ -559,26 +599,20 @@
                 outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
             });
 
-            // Sort outcomes in order
+            // Sort outcomes in order (trigger first, then follow-ups)
             const outcomeOrder = [
                 'Broke High',
                 'Broke Low',
                 'Broke Both',
-                'Broke None',
-                'Broke High (after 0 candles)',
-                'Broke Low (after 0 candles)',
                 'Broke High (after 1 candle)',
                 'Broke Low (after 1 candle)',
                 'Broke Both (after 1 candle)',
-                'Broke None (after 1 candle)',
                 'Broke High (after 2 candles)',
                 'Broke Low (after 2 candles)',
                 'Broke Both (after 2 candles)',
-                'Broke None (after 2 candles)',
                 'Broke High (after 3 candles)',
                 'Broke Low (after 3 candles)',
-                'Broke Both (after 3 candles)',
-                'Broke None (after 3 candles)'
+                'Broke Both (after 3 candles)'
             ];
 
             let html = '';
@@ -593,6 +627,16 @@
                     </div>`;
                 }
             });
+
+            // Count no-breaks
+            const noBreakCount = results.length - Object.values(outcomes).reduce((a, b) => a + b, 0);
+            if (noBreakCount > 0) {
+                const pct = (100 * noBreakCount / results.length).toFixed(1);
+                html += `<div class="stat-row">
+                    <span class="stat-label">Never Broke (3 candles)</span>
+                    <span class="stat-value" style="color: #475569;">${noBreakCount} (${pct}%)</span>
+                </div>`;
+            }
 
             html += `<div class="stat-row">
                 <span class="stat-label">Total Patterns</span>
@@ -610,10 +654,10 @@
             });
 
             const outcomes = [
-                'Broke High', 'Broke Low', 'Broke Both', 'Broke None',
-                'Broke High (after 1 candle)', 'Broke Low (after 1 candle)', 'Broke Both (after 1 candle)', 'Broke None (after 1 candle)',
-                'Broke High (after 2 candles)', 'Broke Low (after 2 candles)', 'Broke Both (after 2 candles)', 'Broke None (after 2 candles)',
-                'Broke High (after 3 candles)', 'Broke Low (after 3 candles)', 'Broke Both (after 3 candles)', 'Broke None (after 3 candles)'
+                'Broke High', 'Broke Low', 'Broke Both',
+                'Broke High (after 1 candle)', 'Broke Low (after 1 candle)', 'Broke Both (after 1 candle)',
+                'Broke High (after 2 candles)', 'Broke Low (after 2 candles)', 'Broke Both (after 2 candles)',
+                'Broke High (after 3 candles)', 'Broke Low (after 3 candles)', 'Broke Both (after 3 candles)'
             ];
 
             const totalPatterns = results.length;

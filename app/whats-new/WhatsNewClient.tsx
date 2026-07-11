@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PageShell, Card } from "@/components/shared/PageCard";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 type Entry = { date: string; items: string[] };
@@ -65,9 +65,9 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
     fontSize: 13,
     fontWeight: 700,
     cursor: "pointer",
-    border: active ? `1px solid ${HOME_THEME.cyan}80` : "1px solid transparent",
-    background: active ? `${HOME_THEME.cyan}26` : "transparent",
-    color: active ? HOME_THEME.cyan : HOME_THEME.muted + "99",
+    border: active ? `1px solid ${LIGHT_BLUE}80` : `1px solid ${HOME_THEME.border}`,
+    background: active ? `rgba(126,211,252,0.12)` : "transparent",
+    color: active ? LIGHT_BLUE : HOME_THEME.muted + "99",
     transition: "all 0.15s",
     letterSpacing: "0.04em",
   });
@@ -80,13 +80,13 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
           <div style={{
             display: "inline-block",
             fontSize: 11,
-            color: HOME_THEME.cyan,
+            color: LIGHT_BLUE,
             letterSpacing: "0.2em",
             textTransform: "uppercase",
             fontWeight: 800,
             marginBottom: 10,
-            background: `${HOME_THEME.cyan}1A`,
-            border: `1px solid ${HOME_THEME.cyan}40`,
+            background: `rgba(126,211,252,0.10)`,
+            border: `1px solid rgba(126,211,252,0.30)`,
             borderRadius: 6,
             padding: "3px 10px",
           }}>
@@ -95,7 +95,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
           <h1 style={{ fontSize: 38, lineHeight: 1.1, margin: "0 0 8px", fontWeight: 800, letterSpacing: "-0.02em", color: HOME_THEME.text }}>
             What&apos;s New
           </h1>
-          <p style={{ margin: 0, fontSize: 14, color: HOME_THEME.muted + "99" }}>
+          <p style={{ margin: 0, fontSize: 15, color: HOME_THEME.muted + "99" }}>
             The latest improvements and what&apos;s coming next.
           </p>
         </div>
@@ -124,18 +124,18 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
       {tab === "updates" && (
         <>
           {localEntries.length === 0 && (
-            <div style={{ fontSize: 13, color: HOME_THEME.muted + "99" }}>No updates yet.</div>
+            <div style={{ fontSize: 15, color: HOME_THEME.muted + "99" }}>No updates yet.</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {localEntries.map((entry, i) => (
               <Card key={i} accent="cyan" padding="20px 24px">
-                <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", color: HOME_THEME.cyan, marginBottom: 14 }}>
+                <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.04em", color: LIGHT_BLUE, marginBottom: 14 }}>
                   {entry.date}
                 </div>
                 <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 10 }}>
                   {entry.items.map((item, j) => (
-                    <li key={j} style={{ fontSize: 14, lineHeight: 1.65, color: HOME_THEME.text, display: "flex", gap: 10, alignItems: "flex-start" }}>
-                      <span style={{ color: HOME_THEME.cyan, marginTop: 3, flexShrink: 0 }}>▸</span>
+                    <li key={j} style={{ fontSize: 15, lineHeight: 1.65, color: HOME_THEME.text, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                      <span style={{ color: LIGHT_BLUE, marginTop: 3, flexShrink: 0 }}>▸</span>
                       <span style={{ flex: 1 }}>{item}</span>
                       {isOwner && (
                         <button
@@ -174,7 +174,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
       {/* Coming Soon tab */}
       {tab === "coming-soon" && (
         <div>
-          <div style={{ fontSize: 13, color: HOME_THEME.muted + "99", marginBottom: 20 }}>
+          <div style={{ fontSize: 15, color: HOME_THEME.muted + "99", marginBottom: 20 }}>
             A look at what we&apos;re building — features actively in development or planned.
           </div>
 
@@ -189,7 +189,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                     top: 0,
                     bottom: 0,
                     width: 3,
-                    background: `linear-gradient(to bottom, ${HOME_THEME.cyan}99, ${HOME_THEME.cyan}1A)`,
+                    background: `linear-gradient(to bottom, ${LIGHT_BLUE}99, ${LIGHT_BLUE}1A)`,
                     borderRadius: "18px 0 0 18px",
                   }} />
 
@@ -198,8 +198,8 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                     width: 44,
                     height: 44,
                     borderRadius: 12,
-                    background: `${HOME_THEME.cyan}1A`,
-                    border: `1px solid ${HOME_THEME.cyan}33`,
+                    background: `rgba(126,211,252,0.10)`,
+                    border: `1px solid rgba(126,211,252,0.30)`,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -211,7 +211,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
 
                   {/* Label */}
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5 }}>
                       {item.label}
                     </div>
                   </div>
@@ -224,8 +224,8 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                         fontWeight: 700,
                         letterSpacing: "0.06em",
                         color: HOME_THEME.orange,
-                        background: `${HOME_THEME.orange}1A`,
-                        border: `1px solid ${HOME_THEME.orange}4D`,
+                        background: `rgba(251,133,1,0.10)`,
+                        border: `1px solid rgba(251,133,1,0.30)`,
                         borderRadius: 6,
                         padding: "4px 10px",
                         whiteSpace: "nowrap",
@@ -237,9 +237,9 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                         fontSize: 11,
                         fontWeight: 700,
                         letterSpacing: "0.06em",
-                        color: HOME_THEME.cyan,
-                        background: `${HOME_THEME.cyan}1A`,
-                        border: `1px solid ${HOME_THEME.cyan}40`,
+                        color: LIGHT_BLUE,
+                        background: `rgba(126,211,252,0.10)`,
+                        border: `1px solid rgba(126,211,252,0.30)`,
                         borderRadius: 6,
                         padding: "4px 10px",
                         whiteSpace: "nowrap",
