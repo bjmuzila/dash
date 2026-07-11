@@ -72,16 +72,29 @@ export default function PublicNav({
         .pnav-pulse { animation: pnavPulse 2.4s ease-out infinite; }
         @media (prefers-reduced-motion: reduce) { .pnav-pulse { animation: none; } }
         @media (max-width: 960px) { .pnav-links { display: none !important; } }
+        /* Phones: the right cluster (CTA + LOGIN) plus the full-size logo is
+           wider than the viewport and pushes the buttons past the pill edge.
+           Shrink both so the bar fits ~360px. */
+        @media (max-width: 520px) {
+          .pnav-logo { height: 36px !important; }
+          .pnav-cta, .pnav-ghost {
+            height: 34px;
+            padding: 0 11px;
+            font-size: 11px;
+            letter-spacing: 0.04em;
+          }
+        }
       `}</style>
 
-      {/* Outer band — gives the pill breathing room so it floats over content.
-          Always fixed: identical position on every public page, no jump on nav. */}
+      {/* Outer band. STICKY, not fixed: it occupies its own height in normal flow
+          (so page content can never slide under it — that bug cost us three
+          rounds of paddingTop math) while still pinning to the top on scroll.
+          Same pixel position on every public page. Pages must NOT add manual top
+          padding to compensate; the band does it. */}
       <div
         style={{
-          position: "fixed",
+          position: "sticky",
           top: 0,
-          left: 0,
-          right: 0,
           display: "flex",
           justifyContent: "center",
           flexShrink: 0,
@@ -141,6 +154,7 @@ export default function PublicNav({
             <Link href="/" style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
+                className="pnav-logo"
                 src="/cb-edge-logo.png"
                 alt={APP_NAME}
                 style={{ height: 52, width: "auto", display: "block", objectFit: "contain" }}

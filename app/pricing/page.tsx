@@ -5,7 +5,7 @@ import { getSubscription } from "@/lib/db";
 import PricingActions from "@/components/pricing/PricingActions";
 import BetaGate from "@/components/pricing/BetaGate";
 import UserMenu from "@/components/shared/UserMenu";
-import PublicNav, { PUBLIC_NAV_HEIGHT } from "@/components/landing/PublicNav";
+import PublicNav from "@/components/landing/PublicNav";
 import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 import { EXPLORE } from "@/components/explore/exploreContent";
 
@@ -78,10 +78,8 @@ export default async function PricingPage({
         style={{
           maxWidth: 980,
           margin: "0 auto",
-          // Explicit longhand — the toolbar is position:fixed, so nothing in flow
-          // reserves its height. paddingTop must clear PUBLIC_NAV_HEIGHT plus a
-          // generous gap, or the first card sits under the pill.
-          paddingTop: `calc(${PUBLIC_NAV_HEIGHT}px + 72px)`,
+          // PublicNav is sticky and reserves its own height — no compensation here.
+          paddingTop: "clamp(28px,5vw,56px)",
           paddingLeft: "clamp(16px,4vw,40px)",
           paddingRight: "clamp(16px,4vw,40px)",
           paddingBottom: 80,
@@ -113,6 +111,7 @@ export default async function PricingPage({
         )}
 
         <div
+          className="pricing-grid"
           style={{
             display: "grid",
             gap: "clamp(20px,3vw,32px)",

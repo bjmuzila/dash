@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import PublicNav from "@/components/landing/PublicNav";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
 const FEATURES = [
   { slug: "gex", t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
-  { slug: "confidence-score", t: "Confidence Score", d: "Each key level scored 0–100 for Hit, Pivot or Chop — live positioning blended with historical analogs." },
+  { slug: "flow", t: "Option & Premium Flow", d: "Every print side-classified, with cumulative net premium drift across the session." },
   { slug: "ict", t: "ICT — Inner Circle Trader", d: "Live FVGs, order blocks, liquidity and market structure on ES and NQ — called as they form." },
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
 ];
@@ -73,6 +74,7 @@ export default function LandingClient() {
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
           .landing-card .landing-intro { font-size: 13.5px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
+          .landing-card .landing-trial { font-size: 10px !important; padding: 5px 11px !important; margin-bottom: 10px !important; letter-spacing: 0.08em !important; }
           .landing-card .landing-features { gap: 8px !important; }
           .landing-card .landing-feature { padding: 9px !important; }
           .landing-card .landing-feature-t { font-size: 12.5px !important; margin-bottom: 2px !important; }
@@ -104,11 +106,9 @@ export default function LandingClient() {
         }}
       />
 
-      {/* Top-right sign-in for returning subscribers */}
-      <div style={{ position: "fixed", top: 20, right: 24, zIndex: 3 }}>
-        <Link href="/sign-in" style={{ ...topSignInBtn, display: "inline-block", textDecoration: "none" }}>
-          Sign in
-        </Link>
+      {/* Same dock as /pricing, /docs and /explore/* — one toolbar everywhere. */}
+      <div style={{ position: "relative", zIndex: 4 }}>
+        <PublicNav active="Overview" />
       </div>
 
       {/* Centered explainer card */}
@@ -130,6 +130,10 @@ export default function LandingClient() {
 
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
+
+          <div style={trialBadge} className="landing-trial">
+            <span style={trialDot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
+          </div>
 
           <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
             A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
@@ -215,9 +219,11 @@ export default function LandingClient() {
             </span>
           </div>
 
-          {/* Promo code callout */}
+          {/* Trial + promo callout */}
           <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 10, background: "rgba(33,158,188,0.08)", border: "1px solid rgba(33,158,188,0.25)", textAlign: "center" }}>
-            <span style={{ fontSize: 13, color: T.muted }}>Use code </span>
+            <span style={{ fontSize: 13, color: T.muted }}>Try it free for </span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>2 days</span>
+            <span style={{ fontSize: 13, color: T.muted }}> — then use code </span>
             <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
             <span style={{ fontSize: 13, color: T.muted }}> or </span>
             <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
@@ -229,9 +235,9 @@ export default function LandingClient() {
             <Link href="/sign-in" style={{ ...primaryBtn, textDecoration: "none" }}>
               Sign in to dashboard
             </Link>
-            <Link href="/pricing?from=landing" style={{ ...primaryBtn, textDecoration: "none" }}>
-              <span>Join now</span>
-              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Code: MONTH / YEAR</span>
+            <Link href="/pricing?from=landing&trial=1" style={{ ...primaryBtn, textDecoration: "none" }}>
+              <span>Start 2-day free trial</span>
+              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Cancel anytime</span>
             </Link>
           </div>
         </div>
@@ -285,6 +291,30 @@ const legalLink: React.CSSProperties = {
 
 const legalDot: React.CSSProperties = {
   color: "rgba(139,148,167,0.5)",
+};
+
+const trialBadge: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  marginBottom: 16,
+  padding: "7px 14px",
+  borderRadius: 999,
+  fontSize: 11.5,
+  fontWeight: 800,
+  letterSpacing: "0.12em",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  color: T.cyan,
+  background: "rgba(33,158,188,0.10)",
+  border: "1px solid rgba(33,158,188,0.45)",
+};
+
+const trialDot: React.CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: 999,
+  background: T.cyan,
+  boxShadow: `0 0 10px ${T.cyan}`,
 };
 
 const card: React.CSSProperties = {
@@ -408,15 +438,4 @@ const xFollow: React.CSSProperties = {
   color: T.text,
   textDecoration: "none",
   transition: "color 0.2s, border-color 0.2s, box-shadow 0.2s",
-};
-
-const topSignInBtn: React.CSSProperties = {
-  padding: "9px 18px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(13,17,25,0.7)",
-  color: T.text,
-  fontSize: 13,
-  fontWeight: 700,
-  cursor: "pointer",
 };

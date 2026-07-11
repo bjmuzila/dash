@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import GlobalToolbar from "./GlobalToolbar";
-import PublicNav, { PUBLIC_NAV_HEIGHT } from "@/components/landing/PublicNav";
+import PublicNav from "@/components/landing/PublicNav";
 import { useAuth } from "@/components/auth/AuthProvider";
 import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
 import NotesDock from "./NotesDock";
@@ -123,12 +123,8 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         }}
       >
         {!isEmbed && <VisitTracker />}
-        {isPublicDocs && (
-          <>
-            <PublicNav active="Docs" />
-            <div style={{ height: PUBLIC_NAV_HEIGHT, flexShrink: 0 }} />
-          </>
-        )}
+        {/* Sticky — reserves its own height, no spacer needed. */}
+        {isPublicDocs && <PublicNav active="Docs" />}
         {children}
       </div>
     );

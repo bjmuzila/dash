@@ -588,6 +588,19 @@ input.dte-range::-moz-range-track {
   }
 }
 
+/* ── Pricing page: stack the recap + plan cards ────────────────────────────
+   `/pricing` is a BARE route (no dashboard chrome), and its grid is
+   `minmax(0,1fr) minmax(0,360px)`. On a phone the 360px plan card wins and
+   squeezes the "What's included" column to almost nothing — the left card
+   reads as cut off. Below the tablet width, stack them.
+   Uses its own breakpoint (not the 899px dashboard one) because a 2-column
+   980px layout already crowds at ~760px. */
+@media (max-width: 760px) {
+  .pricing-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 /* Embedded Analytics (GEX dock iframe). The budget cards are 55% translucent
    (panelBg rgba(...,0.45)) + backdrop-blur(16px); stacked in the narrow dock
    column they show through to the card/background behind them, so they read as

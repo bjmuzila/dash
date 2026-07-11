@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
 import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
-import PublicNav, { PUBLIC_NAV_HEIGHT } from "@/components/landing/PublicNav";
+import PublicNav from "@/components/landing/PublicNav";
 import NetDriftExample from "@/components/explore/NetDriftExample";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
@@ -56,9 +56,8 @@ export default async function ExplorePage({
         style={{
           maxWidth: 920,
           margin: "0 auto",
-          // Toolbar is position:fixed — nothing in flow reserves its height, so
-          // paddingTop must clear PUBLIC_NAV_HEIGHT plus a generous gap.
-          paddingTop: `calc(${PUBLIC_NAV_HEIGHT}px + 72px)`,
+          // PublicNav is sticky and reserves its own height — no compensation here.
+          paddingTop: "clamp(28px,5vw,64px)",
           paddingLeft: "clamp(16px,4vw,40px)",
           paddingRight: "clamp(16px,4vw,40px)",
           paddingBottom: 80,
