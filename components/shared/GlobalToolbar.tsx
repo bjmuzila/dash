@@ -7,7 +7,6 @@ import UserMenu from "./UserMenu";
 import { HOME_THEME } from "./homeTheme";
 import { useNotes } from "./notes";
 import { useNotesPanel } from "./NotesPanelContext";
-import { useGexPanel } from "./GexPanelContext";
 import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
@@ -119,13 +118,13 @@ function QuickCircle({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 34,
-        height: 34,
+        width: 40,
+        height: 40,
         borderRadius: "50%",
         border: `1px solid ${cyanA(0.3)}`,
         background: "rgba(255,255,255,0.04)",
         color: HOME_THEME.text,
-        fontSize: 16,
+        fontSize: 21,
         lineHeight: 1,
         fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
         transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
@@ -223,6 +222,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/whats-new",         label: "What's New",    emoji: "✨" },
   { href: "/journal",           label: "Journal",       emoji: "📓", comingSoon: true },
   { href: "/order-flow",        label: "Order Flow",    emoji: "🧾", comingSoon: true },
+  { href: "/help",              label: "Help",          emoji: "❓", comingSoon: true },
 ];
 
 // Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).
@@ -320,7 +320,6 @@ export default function GlobalToolbar() {
   const { isSignedIn, user, isOwnerClaim } = useAuth();
   const { notes } = useNotes(user?.id);
   const { open, togglePanel } = useNotesPanel();
-  const { open: gexOpen, togglePanel: toggleGex } = useGexPanel();
   const { menuOpen, toggleMenu, isMobile } = useMobileNav();
 
   // Owner gate for the owner-only nav item (matches GexDock's check).
@@ -330,7 +329,6 @@ export default function GlobalToolbar() {
   // ── hover state for the menu/notes round buttons ──
   const [hoverMenu, setHoverMenu] = useState(false);
   const [hoverNotes, setHoverNotes] = useState(false);
-  const [hoverGex, setHoverGex] = useState(false);
 
   // Hamburger geometry → so the NavMenu dropdown lines up under the button.
   const hamburgerRef = useRef<HTMLButtonElement | null>(null);
@@ -485,40 +483,6 @@ export default function GlobalToolbar() {
           <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
             <EtClock compact={isMobile} />
           </div>
-
-          {/* ── GEX groups — round pop-out button (opens GexDock). Desktop only:
-              GexDock is a right-side push panel with no mobile layout. ── */}
-          {isSignedIn && !isMobile && (
-            <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
-              <button
-                onClick={toggleGex}
-                title="GEX groups"
-                aria-label="GEX groups"
-                onMouseEnter={() => setHoverGex(true)}
-                onMouseLeave={() => setHoverGex(false)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 38,
-                  height: 38,
-                  flexShrink: 0,
-                  borderRadius: "50%",
-                  border: `1px solid ${gexOpen || hoverGex ? cyanA(0.55) : cyanA(0.35)}`,
-                  background: cyanA(0.14),
-                  color: "#7fd4e6",
-                  cursor: "pointer",
-                  fontSize: 18,
-                  lineHeight: 1,
-                  boxShadow: gexOpen || hoverGex ? `0 4px 12px -2px ${cyanA(0.45)}` : "none",
-                  transform: hoverGex ? "translateY(-1px)" : "none",
-                  transition: "border-color 0.14s, box-shadow 0.14s, transform 0.14s",
-                }}
-              >
-                <span aria-hidden style={{ fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif" }}>🧮</span>
-              </button>
-            </div>
-          )}
 
           {/* ── Notes — round icon button with count badge (desktop only; the
               right-side dock is disabled on mobile) ── */}
