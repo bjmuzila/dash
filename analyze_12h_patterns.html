@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>12-Hour Candle Pattern Analysis</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            color: #f1f5f9;
+        }
+
+        .upload-section {
+            background: #1e293b;
+            border: 2px solid #334155;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .file-input {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        input[type="file"] {
+            flex: 1;
+            padding: 10px;
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            color: #e2e8f0;
+            cursor: pointer;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #2563eb;
+        }
+
+        button:disabled {
+            background: #64748b;
+            cursor: not-allowed;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stats-card {
+            background: #1e293b;
+            border-left: 4px solid #3b82f6;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .stats-card h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #60a5fa;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #334155;
+        }
+
+        .stat-row:last-child {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: #94a3b8;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .outcome-broke-high { color: #4ade80; }
+        .outcome-broke-low { color: #f87171; }
+        .outcome-broke-both { color: #fbbf24; }
+        .outcome-broke-none { color: #94a3b8; }
+
+        .crosstab-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .crosstab {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+        }
+
+        .crosstab h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #60a5fa;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th, td {
+            padding: 10px 8px;
+            text-align: left;
+            border: 1px solid #334155;
+        }
+
+        th {
+            background: #0f172a;
+            font-weight: 600;
+            color: #60a5fa;
+        }
+
+        tr:hover {
+            background: #334155;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #94a3b8;
+        }
+
+        .spinner {
+            border: 3px solid #334155;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #7f1d1d;
+            border: 1px solid #dc2626;
+            color: #fca5a5;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .details-table {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .details-table h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #60a5fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ES 12-Hour Candle Pattern Analysis</h1>
+
+        <div class="upload-section">
+            <div class="file-input">
+                <input type="file" id="csvFile" accept=".csv" placeholder="Select CSV file...">
+                <button onclick="loadFile()">Load CSV</button>
+            </div>
+            <div class="error" id="error"></div>
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Processing candles...</p>
+            </div>
+        </div>
+
+        <div id="results" style="display: none;">
+            <div class="stats-grid">
+                <div class="stats-card">
+                    <h2>6AM Start (6am-6pm, 6pm-6am)</h2>
+                    <div id="stats-6am"></div>
+                </div>
+                <div class="stats-card">
+                    <h2>6PM Start (6pm-6am, 6am-6pm)</h2>
+                    <div id="stats-6pm"></div>
+                </div>
+            </div>
+
+            <div class="crosstab-section">
+                <div class="crosstab">
+                    <h3>Pattern × Outcome (6AM Start)</h3>
+                    <div id="crosstab-6am"></div>
+                </div>
+                <div class="crosstab">
+                    <h3>Pattern × Outcome (6PM Start)</h3>
+                    <div id="crosstab-6pm"></div>
+                </div>
+            </div>
+
+            <div class="details-table">
+                <h3>Detailed Results (6AM Start)</h3>
+                <div id="details-6am"></div>
+            </div>
+
+            <div class="details-table">
+                <h3>Detailed Results (6PM Start)</h3>
+                <div id="details-6pm"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showError(msg) {
+            const err = document.getElementById('error');
+            err.textContent = msg;
+            err.style.display = 'block';
+        }
+
+        function clearError() {
+            document.getElementById('error').style.display = 'none';
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        function loadFile() {
+            clearError();
+            const file = document.getElementById('csvFile').files[0];
+            if (!file) {
+                showError('Please select a file');
+                return;
+            }
+
+            showLoading(true);
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const csv = e.target.result;
+                    const data = Papa.parse(csv, { header: false, skipEmptyLines: true });
+                    processData(data.data);
+                    showLoading(false);
+                } catch (err) {
+                    showError('Error parsing CSV: ' + err.message);
+                    showLoading(false);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function parseTimestamp(ts) {
+            const year = parseInt(ts.substr(0, 4));
+            const month = parseInt(ts.substr(4, 2)) - 1;
+            const day = parseInt(ts.substr(6, 2));
+            const hour = parseInt(ts.substr(9, 2));
+            const min = parseInt(ts.substr(11, 2));
+            const sec = parseInt(ts.substr(13, 2));
+            return new Date(year, month, day, hour, min, sec);
+        }
+
+        function create12hCandles(rows, startHour) {
+            const candles = [];
+            let current = null;
+
+            for (const row of rows) {
+                if (row.length < 5) continue;
+
+                const dt = parseTimestamp(row[0]);
+                const open = parseFloat(row[1]);
+                const high = parseFloat(row[2]);
+                const low = parseFloat(row[3]);
+                const close = parseFloat(row[4]);
+
+                let hour = dt.getHours();
+                let date = new Date(dt);
+
+                // Determine bucket
+                let bucketHour, bucketDate;
+                if (startHour === 6) {
+                    if (hour >= 6 && hour < 18) {
+                        bucketHour = 6;
+                        bucketDate = new Date(dt);
+                    } else {
+                        bucketHour = 18;
+                        if (hour < 6) {
+                            bucketDate = new Date(dt);
+                            bucketDate.setDate(bucketDate.getDate() - 1);
+                        } else {
+                            bucketDate = new Date(dt);
+                        }
+                    }
+                } else {
+                    if (hour >= 18 || hour < 6) {
+                        bucketHour = 18;
+                        if (hour < 6) {
+                            bucketDate = new Date(dt);
+                            bucketDate.setDate(bucketDate.getDate() - 1);
+                        } else {
+                            bucketDate = new Date(dt);
+                        }
+                    } else {
+                        bucketHour = 6;
+                        bucketDate = new Date(dt);
+                    }
+                }
+
+                const key = bucketDate.toISOString().split('T')[0] + '_' + bucketHour;
+
+                if (!current || current.key !== key) {
+                    if (current) candles.push(current);
+                    current = {
+                        key, date: bucketDate, hour: bucketHour,
+                        open, high, low, close
+                    };
+                } else {
+                    current.high = Math.max(current.high, high);
+                    current.low = Math.min(current.low, low);
+                    current.close = close;
+                }
+            }
+
+            if (current) candles.push(current);
+            return candles;
+        }
+
+        function classifySize(bodies) {
+            const min = Math.min(...bodies);
+            const max = Math.max(...bodies);
+            const range = max - min > 0 ? max - min : 1;
+
+            return bodies.map(b => {
+                if (b <= min + range * 0.33) return 1;
+                if (b <= min + range * 0.67) return 2;
+                return 3;
+            });
+        }
+
+        function analyzePatterns(candles) {
+            const results = [];
+
+            for (let i = 0; i < candles.length - 3; i++) {
+                const c1 = candles[i], c2 = candles[i+1], c3 = candles[i+2], c4 = candles[i+3];
+
+                const bodies = [
+                    Math.abs(c1.close - c1.open),
+                    Math.abs(c2.close - c2.open),
+                    Math.abs(c3.close - c3.open)
+                ];
+
+                const sizes = classifySize(bodies);
+                const pattern = sizes.join('-');
+                const direction = c3.close > c1.close ? 'Bullish' : 'Bearish';
+                const name = `${pattern} ${direction} Reversal`;
+
+                const pHigh = Math.max(c1.high, c2.high, c3.high);
+                const pLow = Math.min(c1.low, c2.low, c3.low);
+
+                const brokeHigh = c4.high > pHigh;
+                const brokeLow = c4.low < pLow;
+
+                let outcome;
+                if (brokeHigh && brokeLow) outcome = 'Broke Both';
+                else if (brokeHigh) outcome = 'Broke High';
+                else if (brokeLow) outcome = 'Broke Low';
+                else outcome = 'Broke None';
+
+                results.push({
+                    pattern: name,
+                    c1: `${c1.open.toFixed(2)}/${c1.close.toFixed(2)}`,
+                    c2: `${c2.open.toFixed(2)}/${c2.close.toFixed(2)}`,
+                    c3: `${c3.open.toFixed(2)}/${c3.close.toFixed(2)}`,
+                    pHigh: pHigh.toFixed(2),
+                    pLow: pLow.toFixed(2),
+                    nHigh: c4.high.toFixed(2),
+                    nLow: c4.low.toFixed(2),
+                    outcome
+                });
+            }
+
+            return results;
+        }
+
+        function buildStatsTable(results) {
+            const outcomes = {};
+            results.forEach(r => {
+                outcomes[r.outcome] = (outcomes[r.outcome] || 0) + 1;
+            });
+
+            let html = '';
+            ['Broke High', 'Broke Low', 'Broke Both', 'Broke None'].forEach(o => {
+                const count = outcomes[o] || 0;
+                const pct = (100 * count / results.length).toFixed(1);
+                const cls = `outcome-${o.toLowerCase().replace(' ', '-')}`;
+                html += `<div class="stat-row">
+                    <span class="stat-label">${o}</span>
+                    <span class="stat-value ${cls}">${count} (${pct}%)</span>
+                </div>`;
+            });
+            html += `<div class="stat-row">
+                <span class="stat-label">Total Patterns</span>
+                <span class="stat-value">${results.length}</span>
+            </div>`;
+
+            return html;
+        }
+
+        function buildCrosstab(results) {
+            const patterns = {};
+            results.forEach(r => {
+                if (!patterns[r.pattern]) patterns[r.pattern] = {};
+                patterns[r.pattern][r.outcome] = (patterns[r.pattern][r.outcome] || 0) + 1;
+            });
+
+            const outcomes = ['Broke High', 'Broke Low', 'Broke Both', 'Broke None'];
+
+            let html = '<table><tr><th>Pattern</th>';
+            outcomes.forEach(o => html += `<th>${o}</th>`);
+            html += '<th>Total</th></tr>';
+
+            Object.keys(patterns).sort().forEach(p => {
+                let total = 0;
+                html += `<tr><td>${p}</td>`;
+                outcomes.forEach(o => {
+                    const count = patterns[p][o] || 0;
+                    total += count;
+                    html += `<td>${count}</td>`;
+                });
+                html += `<td><strong>${total}</strong></td></tr>`;
+            });
+
+            html += '</table>';
+            return html;
+        }
+
+        function buildDetailsTable(results) {
+            let html = '<table><tr><th>Pattern</th><th>C1</th><th>C2</th><th>C3</th><th>P-High</th><th>P-Low</th><th>N-High</th><th>N-Low</th><th>Outcome</th></tr>';
+
+            results.forEach(r => {
+                const cls = `outcome-${r.outcome.toLowerCase().replace(' ', '-')}`;
+                html += `<tr>
+                    <td>${r.pattern}</td>
+                    <td>${r.c1}</td>
+                    <td>${r.c2}</td>
+                    <td>${r.c3}</td>
+                    <td>${r.pHigh}</td>
+                    <td>${r.pLow}</td>
+                    <td>${r.nHigh}</td>
+                    <td>${r.nLow}</td>
+                    <td class="${cls}">${r.outcome}</td>
+                </tr>`;
+            });
+
+            html += '</table>';
+            return html;
+        }
+
+        function processData(rows) {
+            const candles6am = create12hCandles(rows, 6);
+            const candles6pm = create12hCandles(rows, 18);
+
+            const results6am = analyzePatterns(candles6am);
+            const results6pm = analyzePatterns(candles6pm);
+
+            document.getElementById('stats-6am').innerHTML = buildStatsTable(results6am);
+            document.getElementById('stats-6pm').innerHTML = buildStatsTable(results6pm);
+
+            document.getElementById('crosstab-6am').innerHTML = buildCrosstab(results6am);
+            document.getElementById('crosstab-6pm').innerHTML = buildCrosstab(results6pm);
+
+            document.getElementById('details-6am').innerHTML = buildDetailsTable(results6am);
+            document.getElementById('details-6pm').innerHTML = buildDetailsTable(results6pm);
+
+            document.getElementById('results').style.display = 'block';
+        }
+    </script>
+</body>
+</html>

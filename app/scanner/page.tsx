@@ -15,6 +15,7 @@ import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { computeValueArea } from "@/lib/valueArea";
 import { classifyDay, backtestQuadrants, sessionDates, rthBarsForDate, CONFIRM_BARS, type Quadrant } from "@/lib/balanceImbalance";
+import IbStatsTab from "@/components/scanner/IbStatsTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch" | "marketquality" | "balance";
+type MainTab = "overview" | "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch" | "marketquality" | "balance" | "ibstats";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -130,6 +131,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "ESU / NQU · Auction Market Theory",
     what: "Classifies today's session into 4 quadrants (Balance / Shift / Imbalance / Re-balance) against the prior RTH day's Value Area (POC/VAH/VAL, volume-profile derived).",
     tells: "Whether price is rangebound in value, breaking value, trending away from it, or hunting new value — plus a historical grade of whether Shifts actually confirm into Imbalance and whether Imbalance actually finds new value.",
+  },
+  {
+    tab: "ibstats",
+    title: "IB Stats",
+    accent: HOME_THEME.green,
+    scope: "ES · 3 years of 5m RTH",
+    what: "Backtests every Initial Balance (09:30–10:30) rule — midpoint bias, formation order, single-break continuation, width-based day type, failed-break fades, 0.25 fib pullbacks, extension targets, break timing — over a baked-in 3-year ES dataset.",
+    tells: "Which IB rules actually have an edge and which are coin flips, with hit rates, sample sizes, average break time, and MFE/MAE sizing for each — ranked best to worst.",
   },
 ];
 
@@ -2482,6 +2491,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "balance" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
           background: tab === "balance" ? `${LIGHT_BLUE}22` : "transparent",
         }}>Balance / Imbalance</button>
+        <button onClick={() => setTab("ibstats")} style={{
+          ...tabStyle(tab === "ibstats"),
+          border: `1px solid ${tab === "ibstats" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
+          background: tab === "ibstats" ? `${HOME_THEME.green}22` : "transparent",
+        }}>IB Stats</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -2493,6 +2507,7 @@ export default function ScannerPage() {
       {tab === "watch"  && <WatchThisScanner />}
       {tab === "marketquality" && <MarketQualityScanner />}
       {tab === "balance" && <BalanceImbalanceScanner />}
+      {tab === "ibstats" && <IbStatsTab />}
     </PageShell>
   );
 }
