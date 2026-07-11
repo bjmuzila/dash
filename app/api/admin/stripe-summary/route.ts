@@ -71,33 +71,52 @@ export async function GET() {
       limit: 100,
     });
 
+    // Total lifetime spend per customer — sum of paid invoices. Cached so a
+    // customer appearing in both the subscriptions table and recent
+    // customers list only costs one Stripe call.
+    const spendCache = new Map<string, number>();
+    async function getCustomerSpend(customerId: string): Promise<number> {
+      if (spendCache.has(customerId)) return spendCache.get(customerId)!;
+      const invoices = await stripe.invoices.list({ customer: customerId, status: "paid", limit: 100 });
+      const total = invoices.data.reduce((sum, inv) => sum + (inv.amount_paid ?? 0), 0);
+      spendCache.set(customerId, total);
+      return total;
+    }
+
     // Shape subscription rows
-    const subscriptions = realSubs.map((sub) => {
-      const customer = sub.customer as import("stripe").Stripe.Customer;
-      const item = sub.items.data[0];
-      const price = item?.price;
-      const interval = price?.recurring?.interval ?? "month";
-      return {
-        id: sub.id,
-        customer_email: customer.email ?? "—",
-        status: sub.status,
-        plan_name: price?.nickname ?? price?.lookup_key ?? price?.id ?? "—",
-        amount: price?.unit_amount ?? 0,
-        interval, // "month" | "year"
-        current_period_end: sub.current_period_end,
-        created: sub.created,
-      };
-    });
+    const subscriptions = await Promise.all(
+      realSubs.map(async (sub) => {
+        const customer = sub.customer as import("stripe").Stripe.Customer;
+        const item = sub.items.data[0];
+        const price = item?.price;
+        const interval = price?.recurring?.interval ?? "month";
+        const totalSpent = await getCustomerSpend(customer.id);
+        return {
+          id: sub.id,
+          customer_email: customer.email ?? "—",
+          status: sub.status,
+          plan_name: price?.nickname ?? price?.lookup_key ?? price?.id ?? "—",
+          amount: price?.unit_amount ?? 0,
+          interval, // "month" | "year"
+          current_period_end: sub.current_period_end,
+          created: sub.created,
+          joined: customer.created, // when the customer record was created
+          total_spent: totalSpent,
+        };
+      })
+    );
 
     // Shape recent customer rows
     const recentCustomers = await Promise.all(
       customerList.data.map(async (c) => {
         const subs = await stripe.subscriptions.list({ customer: c.id, limit: 3 });
+        const totalSpent = await getCustomerSpend(c.id);
         return {
           id: c.id,
           email: c.email ?? "—",
           name: c.name ?? null,
           created: c.created,
+          total_spent: totalSpent,
           subscriptions: subs.data.map((s) => ({
             status: s.status,
             plan: s.items.data[0]?.price?.nickname ?? "—",

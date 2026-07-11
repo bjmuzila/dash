@@ -17,6 +17,7 @@ interface StripeCustomer {
   email: string;
   name: string | null;
   created: number;
+  total_spent: number;
   subscriptions: { status: string; plan: string; amount: number }[];
 }
 
@@ -29,6 +30,8 @@ interface StripeSubscription {
   interval: "month" | "year";
   current_period_end: number;
   created: number;
+  joined: number;
+  total_spent: number;
 }
 
 interface StripeSummary {
@@ -352,11 +355,13 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
         <span style={{ fontSize: 16, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 90px 80px 90px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
         <span>Amount</span>
         <span>Status</span>
         <span>Renews</span>
+        <span>Joined</span>
+        <span>Total Spent</span>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {subs.length === 0 ? (
@@ -366,10 +371,10 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
         ) : subs.map((s) => (
           <div
             key={s.id}
-            title={`${s.customer_email} · ${fmtMoney(s.amount)}/${s.interval === "year" ? "yr" : "mo"} · ${s.status} · renews ${fmtDateShort(s.current_period_end)}`}
+            title={`${s.customer_email} · ${fmtMoney(s.amount)}/${s.interval === "year" ? "yr" : "mo"} · ${s.status} · renews ${fmtDateShort(s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 80px 90px 90px",
+              gridTemplateColumns: "1fr 80px 90px 90px 80px 90px",
               gap: 8,
               padding: "9px 16px",
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
@@ -399,6 +404,8 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
               </span>
             </span>
             <span style={{ color: T.text, fontSize: 15 }}>{fmtDateShort(s.current_period_end)}</span>
+            <span style={{ color: T.text, fontSize: 15 }}>{fmtDateShort(s.joined)}</span>
+            <span style={{ color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>{fmtMoney(s.total_spent)}</span>
           </div>
         ))}
       </div>
@@ -407,19 +414,23 @@ function SubscriptionTable({ subs }: { subs: StripeSubscription[] }) {
 }
 
 // Collapse a customer's raw Stripe subscription statuses down to the one tag
-// we show: "paid" (active) beats "trial" (trialing) beats "no sub" (anything
-// else — past_due/canceled/incomplete/unpaid/none). Mirrors PAID_STATUSES
-// (lib/db.ts) access semantics, minus the trial/paid distinction it collapses.
-function customerTag(subs: { status: string }[]): "paid" | "trial" | "no sub" {
+// we show: "paid" (active) beats "trial" (trialing) beats "cancelled"
+// (canceled, no active/trialing) beats "no sub" (never subscribed / other
+// states). Mirrors PAID_STATUSES (lib/db.ts) access semantics, minus the
+// trial/paid distinction it collapses.
+function customerTag(subs: { status: string }[]): "paid" | "trial" | "cancelled" | "no sub" {
   if (subs.some(s => s.status === "active")) return "paid";
   if (subs.some(s => s.status === "trialing")) return "trial";
+  if (subs.some(s => s.status === "canceled")) return "cancelled";
   return "no sub";
 }
 
+// paid=green, trial=yellow, cancelled=red, no sub=white
 const TAG_COLORS: Record<string, string> = {
   paid: T.green,
-  trial: T.cyan,
-  "no sub": T.muted,
+  trial: "#e0c341",
+  cancelled: T.red,
+  "no sub": "#ffffff",
 };
 
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
@@ -432,22 +443,23 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {customers.filter(c => c.email && c.email !== "—").map((c) => {
             const tag = customerTag(c.subscriptions);
+            const color = TAG_COLORS[tag];
             return (
               <div
                 key={c.id}
-                title={`${c.email} · joined ${fmtDate(c.created)}${c.subscriptions.length ? " · " + c.subscriptions.map(s => s.status).join(", ") : " · no subscription"}`}
+                title={`${c.email} · joined ${fmtDate(c.created)} · total spent ${fmtMoney(c.total_spent)}${c.subscriptions.length ? " · " + c.subscriptions.map(s => s.status).join(", ") : " · no subscription"}`}
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: T.cyan, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
-                  <div style={{ fontSize: 15, color: T.textSecondary }}>Joined {fmtDate(c.created)}</div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                  <div style={{ fontSize: 15, color: T.textSecondary }}>Joined {fmtDate(c.created)} · Spent {fmtMoney(c.total_spent)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                   <span style={{
-                    fontSize: 9, padding: "2px 7px", borderRadius: 10,
-                    background: `${TAG_COLORS[tag]}18`,
-                    border: `1px solid ${TAG_COLORS[tag]}44`,
-                    color: TAG_COLORS[tag],
+                    fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
+                    background: `${color}18`,
+                    border: `1px solid ${color}44`,
+                    color,
                   }}>
                     {tag}
                   </span>
