@@ -394,12 +394,26 @@ function report(days){
   const mids  =wd.filter(d=>!narrow.includes(d)&&!wide.includes(d));
   const trendRate = a => a.filter(d=>d.singleBreak).length;
   const extRate = a => { const x=a.filter(d=>d.firstCloseBreak); return x.length? pct(x.filter(d=>d.firstCloseBreak.hit[1]).length,x.length):'—'; };
-  out.push(card('4 · IB Width → Day Type','Narrow IB (< 0.5× ATR or < 0.75× 20d avg IB) should trend/break. Wide IB (> 1.5× ATR or > 1.25× avg) should rotate — fade the breaks.',
+  const rng = a => a.length ? `${f2(Math.min(...a.map(d=>d.width)))} – ${f2(Math.max(...a.map(d=>d.width)))} pts` : '—';
+  const avgW = a => a.length ? `avg ${f2(avg(a.map(d=>d.width)))} pts` : '—';
+  const avgAtr = avg(wd.map(d=>d.atr)), avgAvgIb = avg(wd.map(d=>d.avgIB));
+  out.push(card('4 · IB Width → Day Type','Narrow IB should trend/break. Wide IB should rotate — fade the breaks. Buckets are <b>adaptive</b> (each day is classified against its own trailing ATR and trailing average IB), so the point ranges below overlap slightly as volatility regimes shift.',
+    `<div class="grid">
+      <div class="stat"><div class="k">NARROW = width &lt;</div><div class="val" style="font-size:16px">0.5× ATR14 &nbsp;or&nbsp; 0.75× avgIB20</div><div class="k" style="margin-top:4px">≈ under ${f2(Math.min(0.5*avgAtr, 0.75*avgAvgIb))} pts at current vol</div></div>
+      <div class="stat"><div class="k">WIDE = width &gt;</div><div class="val" style="font-size:16px">1.5× ATR14 &nbsp;or&nbsp; 1.25× avgIB20</div><div class="k" style="margin-top:4px">≈ over ${f2(Math.min(1.5*avgAtr, 1.25*avgAvgIb))} pts at current vol</div></div>
+      <div class="stat"><div class="k">NORMAL</div><div class="val" style="font-size:16px">everything between</div><div class="k" style="margin-top:4px">the default state</div></div>
+      <div class="stat"><div class="k">Sample averages</div><div class="val" style="font-size:16px">ATR14 ${f2(avgAtr)} · avgIB20 ${f2(avgAvgIb)}</div><div class="k" style="margin-top:4px">RTH daily range / 20d mean IB</div></div>
+    </div>` +
     table(['Bucket','Days','Single-break','Rate','Both-sides broke / ≥1× ext'],[
       row('NARROW IB', narrow.length, trendRate(narrow), `both: ${pct(narrow.filter(d=>d.bothBroke).length,narrow.length)} · ≥1× ext: ${extRate(narrow)}`),
       row('NORMAL IB', mids.length, trendRate(mids), `both: ${pct(mids.filter(d=>d.bothBroke).length,mids.length)} · ≥1× ext: ${extRate(mids)}`),
       row('WIDE IB', wide.length, trendRate(wide), `both: ${pct(wide.filter(d=>d.bothBroke).length,wide.length)} · ≥1× ext: ${extRate(wide)}`),
-    ], 'The thesis holds only if NARROW single-break% > WIDE single-break% by a meaningful margin. Wide + high both-sides% = the fade regime.')));
+    ], 'The thesis holds only if NARROW single-break% > WIDE single-break% by a meaningful margin. Wide + high both-sides% = the fade regime.') +
+    table(['Bucket','Actual IB widths in this sample','Mean','Days','Share of sessions'],[
+      `<tr><td class="g">NARROW</td><td>${rng(narrow)}</td><td>${avgW(narrow)}</td><td>${narrow.length}</td><td>${pct(narrow.length,wd.length)}</td></tr>`,
+      `<tr><td class="a">NORMAL</td><td>${rng(mids)}</td><td>${avgW(mids)}</td><td>${mids.length}</td><td>${pct(mids.length,wd.length)}</td></tr>`,
+      `<tr><td class="r">WIDE</td><td>${rng(wide)}</td><td>${avgW(wide)}</td><td>${wide.length}</td><td>${pct(wide.length,wd.length)}</td></tr>`,
+    ], 'Use the ×ATR / ×avgIB rule live — not the raw point ranges. The point ranges are just what those thresholds worked out to across this sample.')));
 
   /* 5. breakout entry w/ volume */
   const volYes=fcb.filter(d=>d.firstCloseBreak.volSurge), volNo=fcb.filter(d=>!d.firstCloseBreak.volSurge);
