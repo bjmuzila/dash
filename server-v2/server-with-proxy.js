@@ -816,6 +816,38 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // ── GEX Levels daily history (forever-persisted key level changes) ────
+      //   GET /proxy/gex-levels-history?symbol=$SPX&limit=3650
+      if (pathname === '/proxy/gex-levels-history' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./gex-levels-history-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '$SPX').trim();
+            const limit = Math.min(10000, Number(u.searchParams.get('limit') || 3650));
+            const { rows } = await p.query(
+              `SELECT to_char(date, 'YYYY-MM-DD') AS date, symbol, spot, resistance, support,
+                      neutral, dollar_gamma, cpg_ratio, r2, s2, open_int,
+                      EXTRACT(EPOCH FROM updated_at) * 1000 AS t
+               FROM gex_levels_history
+               WHERE symbol = $1 ORDER BY date DESC LIMIT $2`,
+              [symbol, limit]
+            );
+            sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual fire (testing): POST /proxy/gex-levels-history-run
+      if (pathname === '/proxy/gex-levels-history-run' && req.method === 'POST') {
+        const { collectGexLevelsHistory } = require('./gex-levels-history-recorder');
+        collectGexLevelsHistory(`http://localhost:${PORT}`, { force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // ── Strike-growth tracker ────────────────────────────────────────────
       // Ranked latest snapshot: which strikes grew most vs today's open.
       //   GET /proxy/strike-growth?min=0&type=all&symbol=NVDA&limit=200
@@ -1985,6 +2017,9 @@ async function main() {
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);
+    // GEX Levels history recorder: persists the /test GEX Levels "History of
+    // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
+    require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
     // Day-post writer: auto-generates the premarket/midday/EOD X posts
     // (Anthropic via /api/social-media/day-post) into day_posts at their slot
     // times, so the Social Media → Day Posts tab has a ready copy/paste list.

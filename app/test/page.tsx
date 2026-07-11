@@ -442,10 +442,10 @@ function AmTbrStat({ label, value, accent }: { label: string; value: string; acc
 // like /gex2's derive() does.
 //
 // Two panels in the reference mock have no backing history in this app yet:
-//   - "History of key level changes" — no recorder persists callWall/putWall/
-//     gexFlip/CPG over time (eod_gex only stores total_gex + spot per day).
-//     Rebuilt honestly as a live, localStorage-backed log of this browser's own
-//     session (resets daily), not a fabricated multi-day table.
+//   - "History of key level changes" — now server-persisted: server-v2/
+//     gex-levels-history-recorder.js upserts one row per trading day into the
+//     gex_levels_history Postgres table (kept forever), read back via
+//     GET /proxy/gex-levels-history and merged with the localStorage cache.
 //   - "Open Interest by expiration" — would need OI totals per *other* expiries,
 //     which requires switching the shared feed. Rebuilt as "Open interest by
 //     strike" for the current 0DTE chain instead, using real callOI/putOI.
@@ -1382,13 +1382,13 @@ function StrikeLevelTable({
 }
 
 // ── daily "History of key level changes" log ────────────────────────────────
-// One row PER TRADING DAY (matches the reference mock's Date-indexed table),
-// persisted under a single localStorage key so it accumulates across days in
-// this browser instead of resetting every morning. Today's row updates in
-// place on every real change; once the date rolls over, that row is frozen
-// forever and a new one starts. Still no backend for these fields (see
-// gex-levels-tab-test memory), so this is real but browser-local history —
-// not a server-side, cross-device table.
+// One row PER TRADING DAY (matches the reference mock's Date-indexed table).
+// Source of truth is now Postgres: server-v2/gex-levels-history-recorder.js
+// upserts today's row every 5m during RTH into gex_levels_history (kept
+// FOREVER, cross-device), served via GET /proxy/gex-levels-history. The
+// localStorage copy remains a fast-paint cache + offline fallback and is
+// merged with the server rows on mount (freshest `t` wins per date). Today's
+// row still updates live in place from this browser's own 15s feed.
 
 type GlHistoryEntry = {
   date: string; // YYYY-MM-DD, America/New_York
@@ -1433,6 +1433,47 @@ function saveGlHistory(entries: GlHistoryEntry[]) {
   } catch {
     // localStorage unavailable (private mode, quota) — history just won't persist.
   }
+}
+
+// Server-persisted history (gex_levels_history, kept forever). Row shape from
+// GET /proxy/gex-levels-history maps snake_case → GlHistoryEntry.
+async function fetchServerGlHistory(): Promise<GlHistoryEntry[]> {
+  try {
+    const r = await fetch("/proxy/gex-levels-history?limit=3650", { cache: "no-store" });
+    if (!r.ok) return [];
+    const j = (await r.json()) as { ok?: boolean; rows?: Record<string, unknown>[] };
+    if (!j?.ok || !Array.isArray(j.rows)) return [];
+    const num = (v: unknown): number | null => (v == null || v === "" ? null : Number(v));
+    return j.rows
+      .map((row): GlHistoryEntry => ({
+        date: String(row.date ?? ""),
+        t: Number(row.t ?? 0),
+        spot: Number(row.spot ?? 0),
+        resistance: num(row.resistance),
+        support: num(row.support),
+        neutral: num(row.neutral),
+        dollarGamma: Number(row.dollar_gamma ?? 0),
+        cpgRatio: Number(row.cpg_ratio ?? 0),
+        r2: num(row.r2),
+        s2: num(row.s2),
+        openInt: Number(row.open_int ?? 0),
+      }))
+      .filter((e) => e.date && e.spot > 0);
+  } catch {
+    return []; // server unreachable — localStorage fallback stands
+  }
+}
+
+// Merge server + local rows keyed by date; freshest `t` wins (today's local
+// row updates every 15s vs the server's 5m upsert). Sorted date DESC.
+function mergeGlHistory(server: GlHistoryEntry[], local: GlHistoryEntry[]): GlHistoryEntry[] {
+  const byDate = new Map<string, GlHistoryEntry>();
+  for (const e of server) byDate.set(e.date, e);
+  for (const e of local) {
+    const cur = byDate.get(e.date);
+    if (!cur || (e.t ?? 0) > (cur.t ?? 0)) byDate.set(e.date, e);
+  }
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
@@ -1588,7 +1629,14 @@ function GexLevelsTab() {
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
 
   useEffect(() => {
+    // Fast-paint from localStorage, then merge in the forever Postgres history.
     setHistory(loadGlHistory());
+    let alive = true;
+    void fetchServerGlHistory().then((server) => {
+      if (!alive || !server.length) return;
+      setHistory((local) => mergeGlHistory(server, local));
+    });
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -1618,7 +1666,8 @@ function GexLevelsTab() {
         next = prev.slice();
         next[idx] = entry;
       }
-      next = next.slice(0, GL_HISTORY_MAX_DAYS);
+      // Don't truncate state — server rows extend past the localStorage cap
+      // (saveGlHistory still caps what it writes to localStorage).
       saveGlHistory(next);
       return next;
     });
@@ -1829,7 +1878,7 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
       "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
       "Strike-level table with hover-bar underlays for gamma, delta, and call/put OI &amp; volume",
       "Open interest by expiration (real, once/day), cumulative net gamma, call/put gamma, net delta, and OI-by-date charts",
-      "Browser-local daily history of level changes",
+      "Daily history of level changes persisted forever in Postgres (gex_levels_history)",
     ],
   },
   {
