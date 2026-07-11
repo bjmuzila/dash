@@ -405,7 +405,24 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     wss.close();
   }
 
-  return { wss, close };
+  // One-off small-event broadcast to every open client, outside the
+  // marketState change pipeline — used for rare server-push notices like
+  // "regime-fit-updated" / "pairs-regime-updated" (daily refits, forced
+  // retrains). Tiny frames, so no throttle/dedupe needed; still counted in
+  // the bandwidth accounting like everything else.
+  function broadcastEvent(type, data, symbol) {
+    if (!wss.clients.size) return;
+    const m = msg(type, data ?? {}, symbol);
+    let openClients = 0;
+    for (const client of wss.clients) {
+      if (client.readyState !== WebSocket.OPEN) continue;
+      openClients++;
+      safeSend(client, m);
+    }
+    if (openClients) accountBytes(type, Buffer.byteLength(m) * openClients);
+  }
+
+  return { wss, close, broadcastEvent };
 }
 
 function safeSend(ws, data) {

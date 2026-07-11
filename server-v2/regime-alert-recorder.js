@@ -24,9 +24,18 @@
  *   after listen().
  */
 
-const { fitGaussianHmm } = require('./regimeHmm');
+const { fitGaussianHmm, decodeGaussianHmm } = require('./regimeHmm');
 
 const EVAL_MS = Number(process.env.REGIME_ALERT_EVAL_MS || 60_000);
+// Per REGIME_LEARNING_DESIGN.md ("Alert Recorder: use server's stored fit, not
+// refit each cycle") the recorder now DECODES each cycle against the trainer's
+// stored daily fit (regime_fits) — stable params, no label wobble from a fresh
+// Baum-Welch on every pass. Falls back to the old live refit when there's no
+// stored fit yet, the stored fit is stale (>REGIME_ALERT_STORED_FIT_MAX_AGE_H),
+// or the kill-switch below is thrown.
+const USE_STORED_FIT = process.env.REGIME_ALERTS_USE_STORED_FIT !== '0';
+const STORED_FIT_MAX_AGE_MS = Number(process.env.REGIME_ALERT_STORED_FIT_MAX_AGE_H || 96) * 3600_000;
+const STORED_FIT_REFRESH_MS = 10 * 60_000; // re-read regime_fits at most every 10 min
 const MIN_RETURNS = 80; // same floor as the client fit (states*20)
 // The HMM is refit from scratch every cycle, and a full refit can relabel a
 // near-tied bar for a single bar even when nothing really changed (same
@@ -292,6 +301,40 @@ function getLatestFit(tickerKey) {
   return latestFit[tickerKey] ?? null;
 }
 
+// Cached stored-fit params per ticker (from regime-trainer's regime_fits
+// table), refreshed at most every STORED_FIT_REFRESH_MS. `markStoredFitStale`
+// is called by the trainer's onRefit hook so a fresh daily/forced refit is
+// picked up on the very next cycle instead of waiting out the cache TTL.
+const storedFitCache = { ESU: { at: 0, params: null }, NQU: { at: 0, params: null } };
+
+function markStoredFitStale(tickerKey) {
+  if (storedFitCache[tickerKey]) storedFitCache[tickerKey].at = 0;
+}
+
+async function getStoredParams(tickerKey) {
+  const c = storedFitCache[tickerKey];
+  if (!c) return null;
+  const now = Date.now();
+  if (now - c.at < STORED_FIT_REFRESH_MS) return c.params;
+  c.at = now;
+  try {
+    // Lazy require avoids any module-load-order surprises; trainer never
+    // requires this file back, so there's no cycle.
+    const { getLatestStoredFit } = require('./regime-trainer');
+    const latest = await getLatestStoredFit(tickerKey);
+    const fit = latest?.fit ?? null;
+    if (fit?.hmm_params && fit.fit_timestamp &&
+        now - new Date(fit.fit_timestamp).getTime() <= STORED_FIT_MAX_AGE_MS) {
+      c.params = typeof fit.hmm_params === 'string' ? JSON.parse(fit.hmm_params) : fit.hmm_params;
+    } else {
+      c.params = null; // none stored yet, or too stale to trust
+    }
+  } catch {
+    c.params = null;
+  }
+  return c.params;
+}
+
 async function runOnceForTicker(base, tk) {
   const bars = await fetchCloses(base, tk.symbol);
   if (bars.length < MIN_RETURNS + 1) return { skipped: 'not-enough-bars' };
@@ -301,10 +344,22 @@ async function runOnceForTicker(base, tk) {
     const r = Math.log(closes[i] / closes[i - 1]);
     if (Number.isFinite(r)) returns.push(r);
   }
-  const hmm = fitGaussianHmm(returns, { states: 3, iters: 25 });
+  // Preferred path: decode against the trainer's stored daily fit (stable
+  // params — no per-cycle Baum-Welch label wobble). Fallback: live refit,
+  // exactly the old behavior, when no usable stored fit exists.
+  let hmm = null;
+  let fitSource = 'live';
+  if (USE_STORED_FIT) {
+    const params = await getStoredParams(tk.key);
+    if (params) {
+      hmm = decodeGaussianHmm(returns, params);
+      if (hmm) fitSource = 'stored';
+    }
+  }
+  if (!hmm) hmm = fitGaussianHmm(returns, { states: 3, iters: 25 });
   if (!hmm) return { skipped: 'fit-failed' };
 
-  latestFit[tk.key] = { fittedAt: Date.now(), bars, hmm };
+  latestFit[tk.key] = { fittedAt: Date.now(), bars, hmm, fitSource };
 
   const label = hmm.currentLabel;
   const confidence = hmm.currentProbs[label];
@@ -428,6 +483,7 @@ module.exports = {
   getPool,
   getRecentAlerts,
   getLatestFit,
+  markStoredFitStale,
   runOnce,
   _mem: mem,
 };

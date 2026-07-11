@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CB Edge — X banner (1500×500)</title>
+<style>
+  :root{ --cy:#219EBC; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:#05060A; color:#e8eef2;
+        font:15px/1.5 Inter,"Helvetica Neue",Arial,sans-serif; padding:28px; }
+  .wrap{ max-width:1040px; margin:0 auto; }
+  h1{ font-size:20px; font-weight:800; margin:0 0 4px; letter-spacing:.2px; }
+  .sub{ color:#8aa0b6; margin:0 0 20px; font-size:13px; }
+  .stage{ border:1px solid rgba(255,255,255,.10); border-radius:16px; overflow:hidden;
+          box-shadow:0 20px 60px rgba(0,0,0,.5); background:#05060A; }
+  canvas#preview{ display:block; width:100%; height:auto; }
+  .bar{ display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:18px; }
+  label{ font-size:13px; color:#9fb2c7; }
+  input[type=text]{ background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.14); color:#e8eef2;
+        border-radius:8px; padding:9px 12px; font-size:14px; width:210px; outline:none; }
+  input[type=text]:focus{ border-color:var(--cy); }
+  .chk{ display:flex; align-items:center; gap:7px; color:#9fb2c7; font-size:13px; cursor:pointer; user-select:none; }
+  button{ background:linear-gradient(180deg,rgba(33,158,188,.9),rgba(18,103,131,.9)); color:#eafaff; border:1px solid rgba(33,158,188,.5);
+        border-radius:9px; padding:11px 18px; font-size:14px; font-weight:800; cursor:pointer;
+        letter-spacing:.04em; box-shadow:0 6px 18px rgba(33,158,188,.24); }
+  button:active{ transform:translateY(1px); }
+  .hint{ margin-top:16px; color:#7f93a8; font-size:12.5px; line-height:1.6; }
+  .hint b{ color:#bcd0e4; font-weight:700; }
+  code{ background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.14); border-radius:5px; padding:1px 6px; color:#8ECAE6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CB Edge — X / Twitter banner</h1>
+  <p class="sub">On your dashboard theme (cyan #219EBC · teal #126783 · light-blue #8ECAE6). Renders at X's 1500 × 500; preview drawn at 2× for sharpness, download is an exact 1500 × 500 PNG.</p>
+
+  <div class="stage"><canvas id="preview" width="3000" height="1000"></canvas></div>
+
+  <div class="bar">
+    <label for="url">Website on banner:</label>
+    <input id="url" type="text" value="cbedge.net" spellcheck="false">
+    <label class="chk"><input id="guides" type="checkbox"> show X safe-area guides</label>
+    <button id="dl">⬇ Download PNG (1500 × 500)</button>
+  </div>
+
+  <p class="hint">
+    <b>Set it on X:</b> Profile → <b>Edit profile</b> → tap the header → upload <code>cb-edge-x-banner.png</code>.<br>
+    The amber guides (preview only) show where your <b>profile photo</b> sits and roughly where mobile crops the top/bottom — key text is kept clear of both.
+  </p>
+</div>
+
+<script>
+const FONT='Inter,"Helvetica Neue",Arial,sans-serif';
+function rr(c,x,y,w,h,r){ r=Math.min(r,w/2,h/2); c.beginPath();
+  c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+function spaced(c,txt,x,y,ls){ let cx=x; for(const ch of txt){ c.fillText(ch,cx,y);
+  cx += c.measureText(ch).width + ls; } return cx - x; }
+
+function drawBanner(c,url){
+  const W=1500,H=500;
+  let g=c.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#05060A'); g.addColorStop(.5,'#080b13'); g.addColorStop(1,'#05060A');
+  c.fillStyle=g; c.fillRect(0,0,W,H);
+
+  let tg=c.createRadialGradient(750,-30,0,750,-30,790);
+  tg.addColorStop(0,'rgba(33,158,188,.12)'); tg.addColorStop(1,'rgba(33,158,188,0)');
+  c.fillStyle=tg; c.fillRect(0,0,W,H);
+  let lg=c.createRadialGradient(240,255,20,240,255,570);
+  lg.addColorStop(0,'rgba(33,158,188,.11)'); lg.addColorStop(1,'rgba(33,158,188,0)');
+  c.fillStyle=lg; c.fillRect(0,0,W,H);
+  let rgl=c.createRadialGradient(1285,150,20,1285,150,570);
+  rgl.addColorStop(0,'rgba(18,103,131,.22)'); rgl.addColorStop(1,'rgba(18,103,131,0)');
+  c.fillStyle=rgl; c.fillRect(0,0,W,H);
+
+  const zeroY=362, sx=812, pitch=40, bw=22;
+  const vals=[22,38,55,74,98,122,142,150,98,60,-30,-58,-40,46,72,54];
+
+  c.strokeStyle='rgba(142,202,230,.28)'; c.lineWidth=2;
+  c.beginPath(); c.moveTo(sx-12,zeroY+.5); c.lineTo(sx+vals.length*pitch+6,zeroY+.5); c.stroke();
+
+  c.save();
+  c.strokeStyle='rgba(142,202,230,.30)'; c.lineWidth=3;
+  c.shadowColor='rgba(33,158,188,.45)'; c.shadowBlur=12; c.beginPath();
+  for(let i=0;i<vals.length;i++){ const x=sx+i*pitch+bw/2, y=252+Math.sin(i*.7)*34 - i*2;
+    i?c.lineTo(x,y):c.moveTo(x,y); }
+  c.stroke(); c.restore();
+
+  for(let i=0;i<vals.length;i++){ const v=vals[i], x=sx+i*pitch, h=Math.abs(v),
+    y=v>=0?zeroY-h:zeroY, pos=v>=0;
+    let bg=c.createLinearGradient(0,zeroY-150,0,zeroY+70);
+    if(pos){ bg.addColorStop(0,'#8ECAE6'); bg.addColorStop(1,'#219EBC'); }
+    else{ bg.addColorStop(0,'#f4948e'); bg.addColorStop(1,'#EF4444'); }
+    c.save(); c.shadowColor=pos?'rgba(33,158,188,.5)':'rgba(239,68,68,.45)'; c.shadowBlur=16;
+    c.globalAlpha=.95; c.fillStyle=bg; rr(c,x,y,bw,Math.max(h,3),5); c.fill(); c.restore(); }
+
+  c.textBaseline='alphabetic';
+  c.fillStyle='rgba(142,202,230,.72)'; c.font='700 18px '+FONT;
+  spaced(c,'SPX · SPY · 0DTE  —  NET GEX PROFILE',sx,150,2);
+
+  c.fillStyle='rgba(142,202,230,.85)'; c.font='700 17px '+FONT;
+  spaced(c,'OPTIONS-FLOW · GAMMA · KEY LEVELS',98,150,3);
+
+  const wmX=94, wmY=262;
+  c.font='800 132px '+FONT;
+  c.save();
+  let cg=c.createLinearGradient(0,150,0,270);
+  cg.addColorStop(0,'#bfe6f2'); cg.addColorStop(1,'#219EBC');
+  c.fillStyle=cg; c.shadowColor='rgba(33,158,188,.55)'; c.shadowBlur=28;
+  c.fillText('CB',wmX,wmY);
+  const cbW=c.measureText('CB').width;
+  c.restore();
+  c.fillStyle='#FFFFFF'; c.fillText(' EDGE',wmX+cbW,wmY);
+  const fullW=cbW+c.measureText(' EDGE').width;
+
+  let ug=c.createLinearGradient(wmX,0,wmX+fullW,0);
+  ug.addColorStop(0,'#219EBC'); ug.addColorStop(1,'rgba(33,158,188,0)');
+  c.fillStyle=ug; rr(c,wmX,286,Math.min(fullW,540),6,3); c.fill();
+
+  c.fillStyle='#8ECAE6'; c.font='700 30px '+FONT;
+  spaced(c,'GAMMA · FLOW · LEVELS',98,332,7);
+
+  const u=(url||'cbedge.net').trim();
+  c.font='700 26px '+FONT;
+  const uw=c.measureText(u).width, pillW=uw+78, pillY=356, pillH=48;
+  c.save();
+  c.fillStyle='rgba(33,158,188,.12)'; c.strokeStyle='rgba(33,158,188,.55)'; c.lineWidth=2;
+  rr(c,96,pillY,pillW,pillH,12); c.fill(); c.stroke(); c.restore();
+  c.fillStyle='#219EBC'; c.fillText('▸',114,pillY+33);
+  c.fillStyle='#dbeef5'; c.fillText(u,146,pillY+33);
+
+  let ab=c.createLinearGradient(0,0,W,0);
+  ab.addColorStop(0,'rgba(33,158,188,0)'); ab.addColorStop(.15,'rgba(33,158,188,.12)');
+  ab.addColorStop(.5,'rgba(33,158,188,.9)'); ab.addColorStop(.85,'rgba(33,158,188,.12)');
+  ab.addColorStop(1,'rgba(33,158,188,0)');
+  c.fillStyle=ab; c.fillRect(0,0,W,3);
+
+  c.strokeStyle='rgba(255,255,255,.08)'; c.lineWidth=1; c.strokeRect(.5,.5,W-1,H-1);
+}
+
+function drawGuides(c){
+  c.save();
+  c.setLineDash([9,7]); c.lineWidth=2; c.strokeStyle='rgba(250,204,21,.9)';
+  c.fillStyle='rgba(250,204,21,.95)'; c.font='600 15px '+FONT; c.textBaseline='alphabetic';
+  c.beginPath(); c.arc(120,500,68,0,Math.PI*2); c.stroke();
+  c.fillText('profile photo',196,486);
+  c.beginPath(); c.moveTo(0,70.5); c.lineTo(1500,70.5); c.moveTo(0,430.5); c.lineTo(1500,430.5); c.stroke();
+  c.fillText('≈ mobile crop',20,60);
+  c.restore();
+}
+
+const preview=document.getElementById('preview');
+const urlIn=document.getElementById('url');
+const guidesIn=document.getElementById('guides');
+
+function render(){
+  const c=preview.getContext('2d');
+  c.setTransform(1,0,0,1,0,0); c.clearRect(0,0,preview.width,preview.height);
+  c.scale(2,2);
+  drawBanner(c,urlIn.value);
+  if(guidesIn.checked) drawGuides(c);
+}
+function download(){
+  const off=document.createElement('canvas'); off.width=1500; off.height=500;
+  drawBanner(off.getContext('2d'),urlIn.value);
+  const a=document.createElement('a');
+  a.download='cb-edge-x-banner.png'; a.href=off.toDataURL('image/png'); a.click();
+}
+urlIn.addEventListener('input',render);
+guidesIn.addEventListener('change',render);
+document.getElementById('dl').addEventListener('click',download);
+render();
+</script>
+</body>
+</html>

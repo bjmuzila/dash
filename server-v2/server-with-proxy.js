@@ -1599,6 +1599,28 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // GET /proxy/pairs-regime-fit?pair=ESU-NQU — latest stored PAIRS regime fit
+      // (server-v2/pairs-regime-trainer.js): daily 04:30 ET spread-HMM refit
+      // (MeanRevert/Drift/Stuck) + validation log. Phase 1 of the pairs engine.
+      if (pathname === '/proxy/pairs-regime-fit' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const pair = u.searchParams.get('pair') || 'ESU-NQU';
+            const data = await require('./pairs-regime-trainer').getLatestStoredFit(pair);
+            sendJson(res, 200, { ok: true, pair, ...(data || { fit: null, validation: [] }) });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // POST /proxy/pairs-regime-retrain — admin manual trigger, ignores the
+      // 04:30 ET window and the once-per-day guard.
+      if (pathname === '/proxy/pairs-regime-retrain' && req.method === 'POST') {
+        require('./pairs-regime-trainer').forceRetrainAll(`http://localhost:${PORT}`)
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
 
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
@@ -1880,7 +1902,7 @@ async function main() {
   });
 
   // Attach WS broadcaster (/ws/gex).
-  const { wss } = createGexWsServer(server, { log: console });
+  const { wss, broadcastEvent } = createGexWsServer(server, { log: console });
 
   // Start the live feed — UNLESS idle was left ON. Idle is now a true bandwidth
   // kill-switch, so a restart while idle must stay paused (no dxLink, no quotes,
@@ -2031,7 +2053,24 @@ async function main() {
     // against the actual next-day return, and stores fit + accuracy metrics
     // in Postgres (regime_fits / regime_validation_log). Additive to the
     // recorder above — read via /proxy/regime-fit; force via POST /proxy/regime-retrain.
+    // On every successful refit (daily OR forced): (a) push a tiny
+    // "regime-fit-updated" frame over /ws/gex so open tabs refetch the stored
+    // fit immediately, and (b) invalidate the alert recorder's stored-fit
+    // cache so its next 60s cycle decodes against the NEW params right away.
+    require('./regime-trainer').setOnRefit((tickerKey, summary) => {
+      try { broadcastEvent('regime-fit-updated', { ticker: tickerKey, ...summary }); } catch {}
+      try { require('./regime-alert-recorder').markStoredFitStale(tickerKey); } catch {}
+    });
     startRegimeTrainer(PORT);
+    // Pairs Regime Engine trainer (co-equal HMM, REGIME_LEARNING_DESIGN.md
+    // Phase 1): daily 04:30-04:40 ET, fits a 3-state MeanRevert/Drift/Stuck
+    // HMM on the ESU-NQU spread zscore, validates reversion/drift calls 5 bars
+    // forward, stores in pairs_regime_fits / pairs_validation_log. Read via
+    // /proxy/pairs-regime-fit; force via POST /proxy/pairs-regime-retrain.
+    require('./pairs-regime-trainer').setOnRefit((pairId, summary) => {
+      try { broadcastEvent('pairs-regime-updated', { pair: pairId, ...summary }); } catch {}
+    });
+    require('./pairs-regime-trainer').startPairsRegimeTrainer(PORT);
     // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.

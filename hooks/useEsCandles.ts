@@ -161,6 +161,12 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
       const data = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
       if (type === "snapshot") ingest(data.esCandles);
       else if (type === "esCandles") ingest(Array.isArray(data) ? data : data.esCandles);
+      // Rare server-push notices (daily/forced regime refits) — re-dispatched
+      // as window events so any mounted card (e.g. the Regime Engine tab's
+      // Persistent Learning card) can refetch without owning its own socket.
+      else if (type === "regime-fit-updated" || type === "pairs-regime-updated") {
+        try { window.dispatchEvent(new CustomEvent(type, { detail: data })); } catch { /* noop */ }
+      }
     };
 
     const connect = () => {

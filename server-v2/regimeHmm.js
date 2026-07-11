@@ -197,4 +197,107 @@ function fitGaussianHmm(returns, opts) {
   };
 }
 
-module.exports = { fitGaussianHmm, REGIME_LABELS };
+/**
+ * Decode a return sequence against FIXED, previously-fitted HMM params — no
+ * Baum-Welch, just one scaled forward-backward pass. This is what lets the
+ * alert recorder run off the trainer's stored daily fit (stable labels)
+ * instead of refitting from scratch every cycle (label wobble). Params come
+ * from regime_fits.hmm_params: means/stds are state-indexed with labels[k]
+ * naming state k; transition is REGIME_LABELS-ordered.
+ * Returns the same shape as fitGaussianHmm (iterations: 0 marks it decoded).
+ */
+function decodeGaussianHmm(returns, params) {
+  const K = REGIME_LABELS.length;
+  const T = returns.length;
+  if (!params || !Array.isArray(params.means) || !Array.isArray(params.stds) ||
+      !Array.isArray(params.transition) || !Array.isArray(params.labels) || T < 2) return null;
+
+  // Reorder means/stds into REGIME_LABELS order via the stored labels array.
+  const idxOfStored = (l) => params.labels.indexOf(l);
+  const means = REGIME_LABELS.map((l) => params.means[idxOfStored(l)]);
+  const stds = REGIME_LABELS.map((l) => Math.max(params.stds[idxOfStored(l)], 1e-8));
+  if (means.some((v) => !Number.isFinite(v)) || stds.some((v) => !Number.isFinite(v))) return null;
+  const A = params.transition; // already REGIME_LABELS-ordered
+
+  // Stationary distribution of A (power iteration) — also used as pi0.
+  let stat = new Array(K).fill(1 / K);
+  for (let i = 0; i < 500; i++) {
+    const next = new Array(K).fill(0);
+    for (let j = 0; j < K; j++) {
+      let s = 0;
+      for (let ii = 0; ii < K; ii++) s += stat[ii] * A[ii][j];
+      next[j] = s;
+    }
+    const sum = next.reduce((a, b) => a + b, 0);
+    stat = next.map((v) => (sum > 0 ? v / sum : 1 / K));
+  }
+
+  const B = new Array(T);
+  for (let t = 0; t < T; t++) {
+    const row = new Array(K);
+    for (let k = 0; k < K; k++) row[k] = gaussPdf(returns[t], means[k], stds[k]) + 1e-12;
+    B[t] = row;
+  }
+
+  const alpha = new Array(T);
+  const c = new Array(T);
+  alpha[0] = new Array(K);
+  let s0 = 0;
+  for (let k = 0; k < K; k++) { alpha[0][k] = stat[k] * B[0][k]; s0 += alpha[0][k]; }
+  c[0] = s0 > 0 ? 1 / s0 : 1;
+  for (let k = 0; k < K; k++) alpha[0][k] *= c[0];
+  for (let t = 1; t < T; t++) {
+    alpha[t] = new Array(K).fill(0);
+    for (let j = 0; j < K; j++) {
+      let sum = 0;
+      for (let i = 0; i < K; i++) sum += alpha[t - 1][i] * A[i][j];
+      alpha[t][j] = sum * B[t][j];
+    }
+    let s = 0;
+    for (let k = 0; k < K; k++) s += alpha[t][k];
+    c[t] = s > 0 ? 1 / s : 1;
+    for (let k = 0; k < K; k++) alpha[t][k] *= c[t];
+  }
+
+  const beta = new Array(T);
+  beta[T - 1] = new Array(K).fill(c[T - 1]);
+  for (let t = T - 2; t >= 0; t--) {
+    beta[t] = new Array(K).fill(0);
+    for (let i = 0; i < K; i++) {
+      let sum = 0;
+      for (let j = 0; j < K; j++) sum += A[i][j] * B[t + 1][j] * beta[t + 1][j];
+      beta[t][i] = sum * c[t];
+    }
+  }
+
+  const gammaByLabel = new Array(T);
+  const decodedPath = new Array(T);
+  for (let t = 0; t < T; t++) {
+    const row = new Array(K);
+    let s = 0;
+    for (let k = 0; k < K; k++) { row[k] = alpha[t][k] * beta[t][k]; s += row[k]; }
+    for (let k = 0; k < K; k++) row[k] = s > 0 ? row[k] / s : 1 / K;
+    gammaByLabel[t] = { Trend: row[0], Chop: row[1], Panic: row[2] };
+    let bestK = 0, bestV = -1;
+    for (let k = 0; k < K; k++) if (row[k] > bestV) { bestV = row[k]; bestK = k; }
+    decodedPath[t] = REGIME_LABELS[bestK];
+  }
+
+  let logLik = 0;
+  for (let t = 0; t < T; t++) logLik += -Math.log(c[t] || 1e-300);
+
+  return {
+    labels: [...REGIME_LABELS],
+    stateIndexByLabel: { Trend: 0, Chop: 1, Panic: 2 },
+    transition: A,
+    stationary: stat,
+    gammaByLabel,
+    decodedPath,
+    currentProbs: gammaByLabel[T - 1],
+    currentLabel: decodedPath[T - 1],
+    means, stds, logLik,
+    iterations: 0, // 0 == decoded against stored params, not refit
+  };
+}
+
+module.exports = { fitGaussianHmm, decodeGaussianHmm, REGIME_LABELS };

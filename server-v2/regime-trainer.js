@@ -37,6 +37,13 @@
 
 const { fitGaussianHmm, REGIME_LABELS } = require('./regimeHmm');
 
+// Fired after every successful store (daily window AND forced retrain) with
+// (tickerKey, summary). server-with-proxy.js wires this to (a) the /ws/gex
+// "regime-fit-updated" broadcast and (b) the alert recorder's stored-fit
+// cache invalidation. No-op until set.
+let onRefit = null;
+function setOnRefit(fn) { onRefit = typeof fn === 'function' ? fn : null; }
+
 const TICKERS = [
   { key: 'ESU', symbol: undefined },
   { key: 'NQU', symbol: '/NQ' },
@@ -335,6 +342,9 @@ async function runTrainerForTicker(base, tk) {
       [tk.key, JSON.stringify(hmmParams), JSON.stringify(hmm.decodedPath), JSON.stringify(stationaryDist), JSON.stringify(accuracy), version]
     );
     console.log(`[regime-trainer] ${tk.key}: daily refit stored (v${version}), ${bars.length} bars, hit-rate ${accuracy.hit_rate != null ? (accuracy.hit_rate * 100).toFixed(1) + '%' : 'n/a'} over ${accuracy.n} validated days`);
+    try { onRefit?.(tk.key, { version, accuracy, stationaryDist }); } catch (e) {
+      console.warn(`[regime-trainer] onRefit hook failed:`, e.message);
+    }
   } catch (e) {
     console.warn(`[regime-trainer] ${tk.key}: store failed:`, e.message);
     return { error: e.message };
@@ -427,4 +437,5 @@ module.exports = {
   runTrainerOnce,
   forceRetrainAll,
   getLatestStoredFit,
+  setOnRefit,
 };

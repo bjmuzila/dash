@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
@@ -2885,7 +2885,12 @@ function RegimePersistentLearningCard({ ticker }: { ticker: RegimeTicker }) {
     };
     void load();
     const id = setInterval(load, 5 * 60_000);
-    return () => { cancelled = true; clearInterval(id); };
+    // Server pushes "regime-fit-updated" over /ws/gex after every successful
+    // refit (daily 05:00 ET or forced); useEsCandles re-dispatches it as a
+    // window event — refetch immediately instead of waiting out the poll.
+    const onFitUpdated = () => { void load(); };
+    window.addEventListener("regime-fit-updated", onFitUpdated);
+    return () => { cancelled = true; clearInterval(id); window.removeEventListener("regime-fit-updated", onFitUpdated); };
   }, [ticker]);
 
   const fit = data?.fit ?? null;
@@ -2952,6 +2957,41 @@ function RegimePersistentLearningCard({ ticker }: { ticker: RegimeTicker }) {
             >
               {retraining ? "Retraining…" : "Force retrain now"}
             </button>
+          </div>
+        </div>
+      )}
+      {/* Validation log — per-day "did the regime call win?" rows, the
+          feedback-loop visualization REGIME_LEARNING_DESIGN.md calls for.
+          Each row: the regime label carried into that day, the actual
+          next-day return it was scored against, and hit/miss. */}
+      {(data?.validation?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase", marginBottom: 6 }}>
+            Validation log · last {data!.validation.length} scored days
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "110px 90px 110px 90px 70px", gap: "4px 14px", fontSize: 14, alignItems: "center" }}>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Date</span>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Call</span>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Actual ret</span>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Conf</span>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text, opacity: 0.8 }}>Result</span>
+            {data!.validation.map((v) => (
+              <Fragment key={v.refit_date}>
+                <span style={{ fontWeight: 700, color: HOME_THEME.text }}>
+                  {new Date(v.refit_date).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" })}
+                </span>
+                <span style={{ fontWeight: 800, color: REGIME_COLOR[v.regime_label] ?? HOME_THEME.text }}>{v.regime_label}</span>
+                <span style={{ fontWeight: 700, color: HOME_THEME.text }}>
+                  {v.actual_return_pct != null ? `${v.actual_return_pct >= 0 ? "+" : ""}${v.actual_return_pct.toFixed(2)}%` : "—"}
+                </span>
+                <span style={{ fontWeight: 700, color: HOME_THEME.text }}>
+                  {v.confidence != null ? `${Math.round(v.confidence * 100)}%` : "—"}
+                </span>
+                <span style={{ fontWeight: 900, color: v.predicted_correctly == null ? HOME_THEME.text : v.predicted_correctly ? HOME_THEME.green : SOFT_RED }}>
+                  {v.predicted_correctly == null ? "—" : v.predicted_correctly ? "HIT" : "MISS"}
+                </span>
+              </Fragment>
+            ))}
           </div>
         </div>
       )}
