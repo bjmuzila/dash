@@ -78,8 +78,13 @@ export default async function PricingPage({
         style={{
           maxWidth: 980,
           margin: "0 auto",
-          // Top pad = fixed toolbar height + breathing room (see PUBLIC_NAV_HEIGHT).
-          padding: `calc(${PUBLIC_NAV_HEIGHT}px + clamp(28px,5vw,56px)) clamp(16px,4vw,40px) 80px`,
+          // Explicit longhand — the toolbar is position:fixed, so nothing in flow
+          // reserves its height. paddingTop must clear PUBLIC_NAV_HEIGHT plus a
+          // generous gap, or the first card sits under the pill.
+          paddingTop: `calc(${PUBLIC_NAV_HEIGHT}px + 72px)`,
+          paddingLeft: "clamp(16px,4vw,40px)",
+          paddingRight: "clamp(16px,4vw,40px)",
+          paddingBottom: 80,
         }}
       >
         {fromEntry && (

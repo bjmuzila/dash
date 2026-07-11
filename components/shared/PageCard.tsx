@@ -18,34 +18,20 @@
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { HOME_THEME, LIGHT_BLUE, homeShellStyle, homeContentStyle, homeGlossPanelStyle, classicCardStyle, classicCardAccentStyle, dissolveCardStyle } from "./homeTheme";
-
-// Named theme accents so call sites read nicely (accent="orange") instead of
-// passing raw hex. Any hex string is also accepted.
-const ACCENTS = {
-  cyan: HOME_THEME.cyan,
-  purple: HOME_THEME.purple,
-  orange: HOME_THEME.orange,
-  green: HOME_THEME.green,
-  red: HOME_THEME.red,
-} as const;
-
-export type AccentName = keyof typeof ACCENTS;
+import { HOME_THEME, homeShellStyle, homeContentStyle, classicCardStyle, classicCardAccentStyle, dissolveCardStyle } from "./homeTheme";
 
 /**
- * ONE card accent, sitewide.
+ * Card accents are DEAD.
  *
- * Card top-accent strips used to rotate per call site (orange / green / red /
- * purple), which is why pages like the GEX chart ended up with gold bars on some
- * panels and cyan on others. The budget-style rollout settled on a single
- * accent — LIGHT_BLUE — so every card reads the same regardless of what the call
- * site passes. The `accent` prop is kept (call sites still pass it, and it's
- * still used for non-card things like stat values) but it no longer recolors the
- * card strip. Change it HERE if the one accent ever changes; never per-page.
+ * Cards used to carry a 2px colored strip across the top, recolored per call
+ * site — which is how the GEX chart page ended up with gold bars on some panels
+ * and cyan on others. There is now ONE card surface (the dashboard/budget look:
+ * frosted fill, hairline edge, faint light-blue radial glow, no top bar).
+ *
+ * The `accent` prop is retained only so the existing call sites still typecheck;
+ * it is ignored. Do not reintroduce a per-card accent color.
  */
-function resolveAccent(_accent?: AccentName | string): string {
-  return LIGHT_BLUE;
-}
+export type AccentName = "cyan" | "purple" | "orange" | "green" | "red";
 
 /**
  * Full-page shell: dark themed background + glow, with a scrollable content
@@ -91,13 +77,14 @@ export function PageShell({
 }
 
 /**
- * Themed panel/card. Top accent strip + radial glow + hover lift, identical to
- * the cards used across the dashboard. Optional `title` renders a standard
- * uppercase header row.
+ * Themed panel/card — the dashboard surface: frosted fill, hairline edge, faint
+ * light-blue radial glow, hover lift. NO top accent strip. Optional `title`
+ * renders a standard uppercase header row.
  */
 export function Card({
   children,
-  accent = "cyan",
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  accent: _accent,
   variant = "gloss",
   title,
   subtitle,
@@ -106,12 +93,13 @@ export function Card({
   className,
 }: {
   children?: ReactNode;
+  /** Ignored — kept so existing call sites typecheck. See note above. */
   accent?: AccentName | string;
   /**
    * Surface treatment (see BUDGET_UI_STYLE.md):
-   *   "gloss"    — original top-accent glossy panel (default, unchanged).
+   *   "gloss"    — alias of "budget" (the old top-accent panel; strip removed).
+   *   "budget"   — the dashboard card: frosted + faint light-blue glow, no top bar.
    *   "classic"  — frosted dark card with a contained hairline edge (dense tables).
-   *   "budget"   — classic card + faint light-blue radial highlight, no top bar (the Budget page look).
    *   "dissolve" — borderless, edge-feathered glass (chart/overview panels).
    */
   variant?: "gloss" | "classic" | "budget" | "dissolve";
@@ -121,12 +109,16 @@ export function Card({
   style?: CSSProperties;
   className?: string;
 }) {
-  const accentColor = resolveAccent(accent);
+  // NO top accent strip, anywhere. "gloss" used to render a 2px colored bar
+  // across the top of every card (cyan here, gold there); the dashboard/budget
+  // card look — frosted surface, hairline edge, faint light-blue radial glow —
+  // is now the single card treatment. "gloss" is kept as an alias so the ~100
+  // existing call sites don't all need touching; it resolves to the same
+  // surface as "budget".
   const base =
     variant === "dissolve" ? dissolveCardStyle :
-    variant === "budget"   ? classicCardAccentStyle :
     variant === "classic"  ? classicCardStyle  :
-    homeGlossPanelStyle(accentColor);
+    classicCardAccentStyle;
   // The hover lift only reads right on the contained (gloss/classic) cards; the
   // dissolve card has no edge so it opts out.
   const hoverClass = variant === "dissolve" ? "" : "card-hover";

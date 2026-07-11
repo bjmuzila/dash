@@ -56,8 +56,12 @@ export default async function ExplorePage({
         style={{
           maxWidth: 920,
           margin: "0 auto",
-          // Top pad = fixed toolbar height + breathing room (see PUBLIC_NAV_HEIGHT).
-          padding: `calc(${PUBLIC_NAV_HEIGHT}px + clamp(28px,5vw,64px)) clamp(16px,4vw,40px) 80px`,
+          // Toolbar is position:fixed — nothing in flow reserves its height, so
+          // paddingTop must clear PUBLIC_NAV_HEIGHT plus a generous gap.
+          paddingTop: `calc(${PUBLIC_NAV_HEIGHT}px + 72px)`,
+          paddingLeft: "clamp(16px,4vw,40px)",
+          paddingRight: "clamp(16px,4vw,40px)",
+          paddingBottom: 80,
         }}
       >
         <div style={badge}>{entry.title}</div>
