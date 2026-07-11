@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
-import Confidence7dTracker from "@/components/explore/Confidence7dTracker";
 import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
@@ -74,9 +73,24 @@ export default async function ExplorePage({
         <h1 style={{ fontSize: "clamp(30px,5vw,46px)", fontWeight: 800, margin: "16px 0 10px", lineHeight: 1.1 }}>
           {entry.title}
         </h1>
-        <p style={{ color: T.cyan, fontSize: "clamp(15px,2.5vw,19px)", fontWeight: 600, margin: "0 0 28px" }}>
+        <p style={{ color: T.cyan, fontSize: "clamp(15px,2.5vw,19px)", fontWeight: 600, margin: "0 0 24px" }}>
           {entry.tagline}
         </p>
+
+        {/* No demo mode — the 2-day free trial IS the demo. Send them straight in. */}
+        <div style={demoBlock}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <Link href={`/pricing?from=${entry.slug}&trial=1`} style={demoBtn}>
+              START MY 2-DAY FREE TRIAL ›
+            </Link>
+            <Link href="/sign-in" style={trialBtn}>
+              ALREADY A MEMBER ›
+            </Link>
+          </div>
+          <p style={{ margin: "12px 0 0", fontSize: 13.5, color: T.muted, opacity: 0.75 }}>
+            Two days of the full live dashboard — every ticker, every tool. Cancel anytime.
+          </p>
+        </div>
 
         <div style={{ display: "grid", gap: "clamp(24px,4vw,48px)", gridTemplateColumns: "minmax(0,1fr)" }}>
           {/* Body + highlights */}
@@ -120,9 +134,6 @@ export default async function ExplorePage({
             </p>
           </section>
         </div>
-
-        {/* Real last-7-session tracker (confidence-score only) */}
-        {slug === "confidence-score" && <Confidence7dTracker />}
 
         {/* Full ICT concept glossary (ict only) */}
         {slug === "ict" && <IctGlossary />}
@@ -216,6 +227,45 @@ const badge: React.CSSProperties = {
   background: "rgba(33,158,188,0.08)",
   padding: "5px 12px",
   borderRadius: 999,
+};
+
+const demoBlock: React.CSSProperties = {
+  marginBottom: 32,
+  padding: "20px 22px",
+  borderRadius: 16,
+  border: "1px solid rgba(33,158,188,0.3)",
+  background: "linear-gradient(180deg, rgba(33,158,188,0.10), rgba(33,158,188,0.03))",
+};
+
+const demoBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "14px 24px",
+  borderRadius: 10,
+  fontSize: 15,
+  fontWeight: 900,
+  letterSpacing: "0.04em",
+  color: "#fff",
+  textDecoration: "none",
+  background: "linear-gradient(180deg, #2CB6D6, #1A7D9B)",
+  border: "1px solid rgba(140,222,244,0.55)",
+  boxShadow: "0 12px 32px rgba(33,158,188,0.32)",
+};
+
+const trialBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "14px 22px",
+  borderRadius: 10,
+  fontSize: 13,
+  fontWeight: 800,
+  letterSpacing: "0.07em",
+  color: T.text,
+  textDecoration: "none",
+  background: "rgba(255,255,255,0.05)",
+  border: `1px solid ${T.border}`,
 };
 
 const teaserCard: React.CSSProperties = {

@@ -13,26 +13,28 @@ const NAV = [
   { label: "Docs", href: "/docs" },
 ];
 
+// The four "see it live" cards. Order matters — this is the row on the landing
+// page. Each links to /explore/<slug>, which fronts a REAL page in demo mode.
 const FEATURES = [
   {
     slug: "gex",
-    t: "Real-time SPX GEX",
-    d: "Live gamma exposure profiles and flip levels straight from the options chain.",
-  },
-  {
-    slug: "confidence-score",
-    t: "Confidence Score",
-    d: "Each key level scored 0–100 for Hit, Pivot or Chop — live positioning blended with historical analogs.",
+    t: "SPX GEX",
+    d: "Live gamma exposure, flip level and call/put walls straight from the chain.",
   },
   {
     slug: "ict",
-    t: "ICT — Inner Circle Trader",
-    d: "Live FVGs, order blocks, liquidity and market structure on ES and NQ — called as they form.",
+    t: "ICT",
+    d: "FVGs, order blocks, liquidity and structure on ES & NQ, called as they form.",
   },
   {
     slug: "estimated-moves",
-    t: "Estimated moves",
-    d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results.",
+    t: "Estimated Moves",
+    d: "Weekly EM levels + high-confidence zones, backed by 2+ years of tracked results.",
+  },
+  {
+    slug: "flow",
+    t: "Option & Premium Flow",
+    d: "Every print side-classified, with cumulative net premium drift across the session.",
   },
 ];
 
@@ -81,6 +83,12 @@ export default function LandingClient() {
       <style>{`
         .lp { -webkit-font-smoothing: antialiased; }
         .lp a { text-decoration: none; }
+        @keyframes lpPulse {
+          0%,100% { box-shadow: 0 0 0 0 rgba(33,158,188,0.45); }
+          50% { box-shadow: 0 0 0 10px rgba(33,158,188,0); }
+        }
+        .lp-pulse { animation: lpPulse 2.2s ease-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .lp-pulse { animation: none; } }
         .lp-nav-link { transition: color .18s, background .18s; }
         .lp-nav-link:hover { color: ${T.text}; background: rgba(255,255,255,0.08); }
         .lp-btn-solid { transition: transform .18s, box-shadow .18s; }
@@ -90,6 +98,9 @@ export default function LandingClient() {
         .lp-card { transition: border-color .18s, box-shadow .18s, transform .18s; }
         .lp-card:hover { border-color: rgba(33,158,188,0.45); box-shadow: 0 0 26px rgba(33,158,188,0.18); transform: translateY(-3px); }
         .lp-x:hover { color: ${T.cyan}; border-color: rgba(33,158,188,0.5); box-shadow: 0 0 14px rgba(33,158,188,0.45); }
+        @media (max-width: 1080px) {
+          .lp-grid { grid-template-columns: 1fr 1fr !important; }
+        }
         @media (max-width: 820px) {
           .lp-nav-links { display: none !important; }
           .lp-h1 { font-size: 42px !important; }
@@ -116,8 +127,8 @@ export default function LandingClient() {
         </nav>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Link href="/pricing?from=landing" style={navSignup} className="lp-btn-solid">
-            Join now <span style={{ opacity: 0.7 }}>›</span>
+          <Link href="/pricing?from=landing&trial=1" style={navSignup} className="lp-btn-solid lp-pulse">
+            START FREE TRIAL <span style={{ opacity: 0.8 }}>›</span>
           </Link>
           <Link href="/sign-in" style={navLogin} className="lp-btn-ghost">
             LOGIN
@@ -127,15 +138,17 @@ export default function LandingClient() {
 
       {/* ── Hero ────────────────────────────────────────────── */}
       <section style={hero} className="lp-hero" id="overview">
+        {/* Gamma Grid Horizon — CSS only, no image asset */}
         <div style={heroBg} aria-hidden>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/landing-bg.png" alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+          <div style={gridSun} />
+          <div style={gridFloor} />
+          <div style={gridHorizon} />
         </div>
         <div style={heroScrim} aria-hidden />
 
         <div style={heroInner}>
-          <div style={eyebrow}>
-            <span style={dot} /> Real-time dealer positioning
+          <div style={trialBadge} className="lp-pulse">
+            <span style={dot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
           </div>
 
           <h1 style={h1} className="lp-h1">
@@ -149,13 +162,18 @@ export default function LandingClient() {
             See dealer positioning, flow, and key levels the moment they move.
           </p>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 30 }}>
-            <Link href="/pricing?from=landing" style={ctaSolid} className="lp-btn-solid">
-              START TRADING <span style={{ opacity: 0.75 }}>›</span>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 30, alignItems: "center" }}>
+            <Link href="/pricing?from=landing&trial=1" style={ctaHuge} className="lp-btn-solid">
+              START MY 2-DAY FREE TRIAL <span style={{ opacity: 0.8 }}>›</span>
             </Link>
             <Link href="#features" style={ctaGhost} className="lp-btn-ghost">
               LEARN MORE <span style={{ opacity: 0.75 }}>›</span>
             </Link>
+          </div>
+
+          <div style={{ marginTop: 14, fontSize: 13.5, color: "rgba(255,255,255,0.6)" }}>
+            Cancel anytime · then <b style={{ color: T.green }}>$45/mo</b> with code{" "}
+            <b style={{ color: T.cyan, letterSpacing: "0.06em" }}>MONTH</b>
           </div>
 
           <div style={sourcesWrap}>
@@ -187,9 +205,9 @@ export default function LandingClient() {
         <div style={grid} className="lp-grid">
           {FEATURES.map((f) => (
             <Link key={f.slug} href={`/explore/${f.slug}`} style={cardStyle} className="lp-card">
-              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 8 }}>{f.t}</div>
-              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 14, lineHeight: 1.55 }}>{f.d}</div>
-              <div style={{ marginTop: 16, fontSize: 12, fontWeight: 700, color: T.cyan, letterSpacing: "0.06em" }}>
+              <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{f.t}</div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 15, lineHeight: 1.55 }}>{f.d}</div>
+              <div style={{ marginTop: 16, fontSize: 13, fontWeight: 700, color: T.cyan, letterSpacing: "0.06em" }}>
                 EXPLORE ›
               </div>
             </Link>
@@ -211,9 +229,25 @@ export default function LandingClient() {
         <div style={ctaPanel}>
           <div style={ctaGlow} aria-hidden />
 
-          <h2 style={{ ...h2, fontSize: 34, marginBottom: 10 }}>Get on the desk.</h2>
-          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 15, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.55 }}>
-            Sign up for the newsletter and get notified when new levels, tools and results drop.
+          <div style={{ ...trialBadge, marginBottom: 16 }} className="lp-pulse">
+            <span style={dot} /> 2 DAYS FREE · CANCEL ANYTIME
+          </div>
+
+          <h2 style={{ ...h2, fontSize: 40, marginBottom: 12 }}>
+            Trade the next session <span style={{ color: "rgba(255,255,255,0.38)" }}>with the whole board in front of you.</span>
+          </h2>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 26 }}>
+            <Link href="/pricing?from=landing&trial=1" style={ctaHuge} className="lp-btn-solid">
+              START MY 2-DAY FREE TRIAL <span style={{ opacity: 0.8 }}>›</span>
+            </Link>
+            <Link href="/sign-in" style={ctaGhost} className="lp-btn-ghost">
+              SIGN IN <span style={{ opacity: 0.75 }}>›</span>
+            </Link>
+          </div>
+
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 15, margin: "0 0 14px", maxWidth: 520, lineHeight: 1.55 }}>
+            Not ready? Get the newsletter — new levels, tools and results as they drop.
           </p>
 
           <form onSubmit={submit}>
@@ -245,14 +279,6 @@ export default function LandingClient() {
             <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>$45/mo or $500/yr</span>
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
-            <Link href="/pricing?from=landing" style={ctaSolid} className="lp-btn-solid">
-              JOIN NOW <span style={{ opacity: 0.75 }}>›</span>
-            </Link>
-            <Link href="/sign-in" style={ctaGhost} className="lp-btn-ghost">
-              SIGN IN <span style={{ opacity: 0.75 }}>›</span>
-            </Link>
-          </div>
         </div>
       </section>
 
@@ -299,6 +325,73 @@ const root: React.CSSProperties = {
   backgroundImage: T.shellGlow,
   color: T.text,
   fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
+  fontSize: 15,
+  lineHeight: 1.6,
+};
+
+/* Gamma Grid Horizon background layers */
+const gridSun: React.CSSProperties = {
+  position: "absolute",
+  left: "50%",
+  top: "42%",
+  width: "min(900px, 90vw)",
+  height: "min(900px, 90vw)",
+  transform: "translate(-50%, -50%)",
+  background:
+    "radial-gradient(circle, rgba(33,158,188,0.38) 0%, rgba(18,103,131,0.14) 38%, transparent 66%)",
+  filter: "blur(10px)",
+};
+
+const gridFloor: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  background:
+    "repeating-linear-gradient(90deg, rgba(33,158,188,0.14) 0 1px, transparent 1px 64px), repeating-linear-gradient(0deg, rgba(33,158,188,0.10) 0 1px, transparent 1px 64px)",
+  transform: "perspective(620px) rotateX(64deg) scale(2.2)",
+  transformOrigin: "50% 100%",
+  maskImage: "linear-gradient(180deg, transparent 30%, #000 70%, transparent 100%)",
+  WebkitMaskImage: "linear-gradient(180deg, transparent 30%, #000 70%, transparent 100%)",
+};
+
+const gridHorizon: React.CSSProperties = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  top: "42%",
+  height: 1,
+  background: "linear-gradient(90deg, transparent, rgba(33,158,188,0.95), transparent)",
+  boxShadow: "0 0 22px rgba(33,158,188,0.75)",
+};
+
+const trialBadge: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 9,
+  padding: "8px 16px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: "0.12em",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  color: T.cyan,
+  background: "rgba(33,158,188,0.10)",
+  border: "1px solid rgba(33,158,188,0.45)",
+  marginBottom: 20,
+};
+
+const ctaHuge: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "18px 34px",
+  borderRadius: 10,
+  fontSize: 15,
+  fontWeight: 900,
+  letterSpacing: "0.08em",
+  color: "#fff",
+  background: "linear-gradient(180deg, #2CB6D6, #1A7D9B)",
+  border: "1px solid rgba(140,222,244,0.55)",
+  boxShadow: "0 14px 40px rgba(33,158,188,0.35)",
 };
 
 const nav: React.CSSProperties = {
@@ -328,9 +421,9 @@ const navPill: React.CSSProperties = {
 };
 
 const navLink: React.CSSProperties = {
-  padding: "7px 14px",
+  padding: "8px 15px",
   borderRadius: 7,
-  fontSize: 12,
+  fontSize: 13,
   fontWeight: 700,
   letterSpacing: "0.04em",
   color: "rgba(255,255,255,0.7)",
@@ -412,37 +505,23 @@ const h1: React.CSSProperties = {
 const heroSub: React.CSSProperties = {
   marginTop: 20,
   marginBottom: 0,
-  maxWidth: 460,
-  fontSize: 15,
+  maxWidth: 520,
+  fontSize: 16.5,
   lineHeight: 1.6,
   color: "rgba(255,255,255,0.72)",
 };
 
 const sourcesWrap: React.CSSProperties = { marginTop: 44 };
 
-const ctaSolid: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "13px 22px",
-  borderRadius: 8,
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: "0.1em",
-  color: T.text,
-  background: "linear-gradient(180deg, rgba(33,158,188,0.6), rgba(18,103,131,0.35))",
-  border: "1px solid rgba(33,158,188,0.65)",
-};
-
 const ctaGhost: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  padding: "13px 22px",
-  borderRadius: 8,
-  fontSize: 12,
+  padding: "18px 26px",
+  borderRadius: 10,
+  fontSize: 13,
   fontWeight: 800,
-  letterSpacing: "0.1em",
+  letterSpacing: "0.09em",
   color: T.text,
   background: "rgba(13,17,25,0.72)",
   backdropFilter: "blur(10px)",
@@ -466,10 +545,13 @@ const h2: React.CSSProperties = {
   maxWidth: 800,
 };
 
+// Four features, ONE horizontal row. Collapses to 2×2, then 1-up on mobile
+// (see .lp-grid media queries).
 const grid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
   gap: 16,
+  alignItems: "stretch",
 };
 
 const cardStyle: React.CSSProperties = {
