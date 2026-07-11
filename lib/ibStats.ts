@@ -389,6 +389,67 @@ function analyzeBreak(fb: Breakout, d: Day): Breakout {
   return fb;
 }
 
+/* ── precomputed dataset (what the dashboard actually reads) ─────────────────
+ * The heavy lifting runs ONCE, offline, in ib-backtest-esu6.html → "Export JSON
+ * for dashboard". That writes public/data/ib-<SYM>.json: one slim record per
+ * session, no raw bars (~2,300 days ≈ 300 KB), so the tab never ships a 100 MB
+ * CSV to the browser. Shapes below must stay in sync with slim() in that file.
+ */
+
+export type SlimBreak = {
+  side: "H" | "L";
+  breakMin: number;
+  rExt: number;
+  rAdv: number;
+  volSurge: boolean;
+  failed: boolean;
+  peakBeforeFail: number;
+  fadeMid: boolean;
+  fadeOpp: boolean;
+  retest: boolean;
+  retestCont: boolean | null;
+  hit: Record<string, boolean>;
+  fibA: { hit: boolean; cont: boolean; fail: boolean; mfe: number | null; barsToTouch: number | null };
+  fibB: { hit: boolean; cont: boolean };
+};
+
+export type SlimDay = {
+  date: string;
+  width: number;
+  dayRange: number;
+  atr: number | null;
+  avgIB: number | null;
+  widthBucket: "narrow" | "normal" | "wide" | null;
+  first: "H" | "L";
+  bias: "H" | "L" | null;
+  closeZone: "top25" | "bot25" | "mid50";
+  openType: "OAR-H" | "OAR-L" | "HIR" | "LIR" | null;
+  orbDir: "H" | "L" | null;
+  fvg: "bull" | "bear" | null;
+  touchedH: boolean;
+  touchedL: boolean;
+  singleBreak: boolean;
+  bothBroke: boolean;
+  neitherBroke: boolean;
+  firstTouchSide: "H" | "L" | null;
+  firstTouchMin: number | null;
+  containedAt2: boolean;
+  containedBrokeLate: boolean;
+  noMidReturn: boolean;   // after the break, never traded back to the IB midpoint
+  fvgHitMid: boolean;     // price reached the midpoint in the FVG's direction
+  fcb: SlimBreak | null;  // first close-confirmed break
+};
+
+export type IbDataset = {
+  symbol: string;
+  barMinutes: number;
+  generated: string;
+  sessions: number;
+  from: string;
+  to: string;
+  days: SlimDay[];
+};
+
 /* ── small stat helpers used by the UI ───────────────────────────────────── */
 
 export const avg = (a: number[]): number | null => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);

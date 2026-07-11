@@ -41,11 +41,26 @@
 <div id="drop">Drop CSV here — or click to pick a file</div>
 <input type="file" id="file" accept=".csv,.txt" style="display:none"/>
 
+<div id="exportbar" class="ctl" style="display:none;margin-top:14px;align-items:center">
+  <span id="meta" class="d"></span>
+  <span>Symbol:</span>
+  <input id="sym" value="ES" style="width:70px"/>
+  <button onclick="exportJson()">Export JSON for dashboard</button>
+  <span class="d">→ saves <code>ib-&lt;SYM&gt;.json</code>; drop it in <code>public/data/</code></span>
+</div>
+
 <div id="out"></div>
 
 <script>
 const ES_TICK = 0.25;
 const $ = s => document.querySelector(s);
+
+/* Bar interval is DETECTED from the data (1m, 5m, whatever) and every
+   bar-count rule is derived from it, so the same engine works on any file. */
+let BAR_MIN = 5;                       // minutes per bar — set in handle()
+const FAIL_BARS = () => Math.round(30 / BAR_MIN);  // failed break = back inside within 30 min
+const FVG_GROUP = () => Math.round(15 / BAR_MIN);  // 15m candles for the FVG
+let LAST_DAYS = null, LAST_SYMBOL = 'ES';
 const pct = (n,d) => d ? (100*n/d).toFixed(1)+'%' : '—';
 const f2 = n => (n==null||!isFinite(n)) ? '—' : n.toFixed(2);
 const cls = p => p>=60?'g':p<=40?'r':'a';
@@ -75,9 +90,10 @@ function buildDays(rows){
   const days=[];
   for(const [date,bars] of [...byDay.entries()].sort((a,b)=>a[0]<b[0]?-1:1)){
     bars.sort((a,b)=>a.min-b.min);
-    const ibBars = bars.filter(b=>b.min>=570 && b.min<630);   // 09:30–10:25 inclusive
+    const ibBars = bars.filter(b=>b.min>=570 && b.min<630);   // 09:30 → 10:29 inclusive
     const post   = bars.filter(b=>b.min>=630);                 // 10:30 onward
-    if(ibBars.length<10 || post.length<10) continue;            // need a real session
+    const minIb = Math.max(4, Math.floor((60/BAR_MIN)*0.8));   // ≥80% of a full IB
+    if(ibBars.length<minIb || post.length<minIb) continue;      // need a real session
     const ibh=Math.max(...ibBars.map(b=>b.h));
     const ibl=Math.min(...ibBars.map(b=>b.l));
     const width=ibh-ibl; if(width<=0) continue;
@@ -91,8 +107,8 @@ function buildDays(rows){
     ibBars.forEach((b,i)=>{ if(b.h===ibh) hiIdx=Math.min(hiIdx===0?i:hiIdx,i); if(b.l===ibl) loIdx=Math.min(loIdx===0?i:loIdx,i); });
     const first = hiIdx<loIdx ? 'H' : loIdx<hiIdx ? 'L' : (ibBars[0].c>=ibBars[0].o?'L':'H');
 
-    // ORB = first 15m (3 bars)
-    const orb=ibBars.slice(0,3);
+    // ORB = first 15 minutes (09:30–09:45), whatever the bar size
+    const orb=ibBars.filter(b=>b.min<585);
     const orbH=Math.max(...orb.map(b=>b.h)), orbL=Math.min(...orb.map(b=>b.l));
 
     days.push({
@@ -158,8 +174,8 @@ function buildDays(rows){
         const adv = dir>0 ? lvl-b.l : b.h-lvl;
         if(fav>mfe) mfe=fav;
         if(adv>mae) mae=adv;
-        // failed breakout: closes back inside IB within 6 bars (30m) of break
-        if(!backInside && j<6){
+        // failed breakout: closes back inside IB within 30 minutes of the break
+        if(!backInside && j<FAIL_BARS()){
           const inside = dir>0 ? b.c<d.ibh : b.c>d.ibl;
           if(inside){ backInside=true; backInsideIdx=j; peakBeforeFail=mfe; }
         }
@@ -244,11 +260,11 @@ function buildDays(rows){
       fb.fibB={hit:fibB_hit, cont:fibB_cont, barsToTouch: fibB_i!=null? fibB_i+1 : null};
     }
 
-    /* 15m FVG inside IB (3-bar imbalance on 15m candles built from IB 5m bars) */
-    const c15=[];
-    for(let i=0;i+2<d.ibBars.length;i+=3){
-      const s=d.ibBars.slice(i,i+3);
-      c15.push({o:s[0].o,h:Math.max(...s.map(x=>x.h)),l:Math.min(...s.map(x=>x.l)),c:s[2].c});
+    /* 15m FVG inside IB (3-candle imbalance on 15m candles rebuilt from the raw bars) */
+    const c15=[]; const G=FVG_GROUP();
+    for(let i=0;i+G-1<d.ibBars.length;i+=G){
+      const s=d.ibBars.slice(i,i+G);
+      c15.push({o:s[0].o,h:Math.max(...s.map(x=>x.h)),l:Math.min(...s.map(x=>x.l)),c:s[s.length-1].c});
     }
     d.fvg=null;
     for(let i=0;i+2<c15.length;i++){
@@ -275,7 +291,7 @@ function buildDays(rows){
 
     // ORB break direction (first post-ORB move out of the 9:30-9:45 range, within IB)
     d.orbDir=null;
-    for(const b of d.ibBars.slice(3)){
+    for(const b of d.ibBars.filter(x=>x.min>=585)){
       if(b.c>d.orbH){ d.orbDir='H'; break; }
       if(b.c<d.orbL){ d.orbDir='L'; break; }
     }
@@ -569,13 +585,70 @@ function report(days){
   $('#out').innerHTML = out.join('');
 }
 
+/* ---------- export for the dashboard ---------- */
+/* Writes one compact record per session — no raw bars. ~2,300 days ≈ 300 KB.
+   Drop the file in the repo at public/data/ib-ES.json / ib-NQ.json. */
+function slim(d){
+  const fb=d.firstCloseBreak;
+  const rest = fb ? d.post.slice(fb.i+1) : [];
+  const noMidReturn = fb && rest.length
+    ? (fb.side==='H' ? Math.min(...rest.map(b=>b.l))>d.mid : Math.max(...rest.map(b=>b.h))<d.mid)
+    : false;
+  const fvgHitMid = d.fvg && d.post.length
+    ? (d.fvg==='bull' ? Math.max(...d.post.map(b=>b.h))>=d.mid : Math.min(...d.post.map(b=>b.l))<=d.mid)
+    : false;
+  return {
+    date:d.date, width:d.width, dayRange:d.dayHigh-d.dayLow,
+    atr:d.atr, avgIB:d.avgIB, widthBucket:d.widthBucket ?? null,
+    first:d.first, bias:d.bias, closeZone:d.closeZone, openType:d.openType, orbDir:d.orbDir, fvg:d.fvg,
+    touchedH:d.touchedH, touchedL:d.touchedL,
+    singleBreak:d.singleBreak, bothBroke:d.bothBroke, neitherBroke:d.neitherBroke,
+    firstTouchSide:d.firstTouchSide, firstTouchMin:d.firstTouchBar?d.firstTouchBar.min:null,
+    containedAt2:d.containedAt2, containedBrokeLate:!!d.containedBrokeLate,
+    noMidReturn, fvgHitMid,
+    fcb: fb ? {
+      side:fb.side, breakMin:fb.breakMin, rExt:fb.rExt, rAdv:fb.rAdv,
+      volSurge:!!fb.volSurge, failed:!!fb.failed, peakBeforeFail:fb.peakBeforeFail,
+      fadeMid:!!fb.fadeMid, fadeOpp:!!fb.fadeOpp,
+      retest:!!fb.retest, retestCont:fb.retestCont,
+      hit:{ "0.5":!!fb.hit[0.5], "1":!!fb.hit[1], "1.5":!!fb.hit[1.5], "2":!!fb.hit[2] },
+      fibA:{ hit:!!fb.fibA.hit, cont:!!fb.fibA.cont, fail:!!fb.fibA.fail, mfe:fb.fibA.mfe, barsToTouch:fb.fibA.barsToTouch },
+      fibB:{ hit:!!fb.fibB.hit, cont:!!fb.fibB.cont },
+    } : null,
+  };
+}
+function exportJson(){
+  const sym=($('#sym').value||'ES').trim().toUpperCase();
+  const payload={
+    symbol:sym, barMinutes:BAR_MIN, generated:new Date().toISOString().slice(0,10),
+    sessions:LAST_DAYS.length, from:LAST_DAYS[0].date, to:LAST_DAYS[LAST_DAYS.length-1].date,
+    days:LAST_DAYS.map(slim),
+  };
+  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=`ib-${sym}.json`; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /* ---------- wiring ---------- */
 function handle(text){
   const rows=parseCSV(text);
   if(rows.length<200){ $('#out').innerHTML=`<div class="card r">Parsed only ${rows.length} bars — check the CSV format.</div>`; return; }
+
+  // detect the bar interval (mode of consecutive in-session gaps)
+  const gaps={};
+  for(let i=1;i<Math.min(rows.length,4000);i++){
+    const g=rows[i].min-rows[i-1].min;
+    if(g>0 && g<=60) gaps[g]=(gaps[g]||0)+1;
+  }
+  BAR_MIN = +Object.entries(gaps).sort((a,b)=>b[1]-a[1])[0][0] || 5;
+
   const days=buildDays(rows);
   if(!days.length){ $('#out').innerHTML=`<div class="card r">No complete RTH sessions found.</div>`; return; }
+  LAST_DAYS=days;
   report(days);
+  $('#exportbar').style.display='flex';
+  $('#meta').textContent = `${BAR_MIN}m bars · ${days.length} sessions · ${days[0].date} → ${days[days.length-1].date}`;
 }
 const drop=$('#drop'), file=$('#file');
 drop.onclick=()=>file.click();

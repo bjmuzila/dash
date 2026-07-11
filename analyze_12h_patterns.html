@@ -281,6 +281,8 @@
     <script>
         let currentResults6am = [];
         let currentResults6pm = [];
+        let currentCandles6am = [];
+        let currentCandles6pm = [];
 
         function downloadCSV() {
             let csv = 'Start Time,Pattern,C1,C2,C3,Pattern High,Pattern Low,Next High,Next Low,Outcome,Follow-Up Candles\n';
@@ -646,43 +648,67 @@
             return html;
         }
 
-        function buildCrosstab(results) {
-            const patterns = {};
-            results.forEach(r => {
-                if (!patterns[r.pattern]) patterns[r.pattern] = {};
-                patterns[r.pattern][r.outcome] = (patterns[r.pattern][r.outcome] || 0) + 1;
-            });
+        function buildCrosstab(candles) {
+            // Analyze 2-candle starts and their 3rd candle outcomes
+            const twoCandles = {};
 
-            const outcomes = [
-                'Broke High', 'Broke Low', 'Broke Both',
-                'Broke High (after 1 candle)', 'Broke Low (after 1 candle)', 'Broke Both (after 1 candle)',
-                'Broke High (after 2 candles)', 'Broke Low (after 2 candles)', 'Broke Both (after 2 candles)',
-                'Broke High (after 3 candles)', 'Broke Low (after 3 candles)', 'Broke Both (after 3 candles)'
-            ];
+            for (let i = 0; i < candles.length - 2; i++) {
+                const c1 = candles[i], c2 = candles[i+1], c3 = candles[i+2];
 
-            const totalPatterns = results.length;
+                // Get sizes for first 2 candles (based on body size relative to each other)
+                const body1 = Math.abs(c1.close - c1.open);
+                const body2 = Math.abs(c2.close - c2.open);
+                const bodies = [body1, body2];
+                const min = Math.min(...bodies);
+                const max = Math.max(...bodies);
+                const range = max - min > 0 ? max - min : 1;
 
-            let html = '<table style="font-size: 11px;"><tr><th>Pattern</th>';
-            outcomes.forEach(o => html += `<th style="font-size: 11px;">${o}</th>`);
-            html += '<th>Total</th></tr>';
+                let size1, size2;
+                if (body1 <= min + range * 0.33) size1 = 1;
+                else if (body1 <= min + range * 0.67) size1 = 2;
+                else size1 = 3;
 
-            Object.keys(patterns).sort().forEach(p => {
-                let total = 0;
-                const counts = [];
-                outcomes.forEach(o => {
-                    const count = patterns[p][o] || 0;
-                    counts.push(count);
-                    total += count;
-                });
+                if (body2 <= min + range * 0.33) size2 = 1;
+                else if (body2 <= min + range * 0.67) size2 = 2;
+                else size2 = 3;
 
-                html += `<tr><td style="font-size: 11px;">${p}</td>`;
-                counts.forEach(count => {
-                    // % of overall patterns
-                    const pct = totalPatterns > 0 ? ((100 * count / totalPatterns).toFixed(1)) : 0;
+                // Get direction (U = up/close > open, D = down/close < open)
+                const dir1 = c1.close > c1.open ? 'U' : 'D';
+                const dir2 = c2.close > c2.open ? 'U' : 'D';
+
+                // Get 3rd candle outcome
+                const body3 = Math.abs(c3.close - c3.open);
+                const dir3 = c3.close > c3.open ? 'U' : 'D';
+
+                let size3;
+                if (body3 <= min + range * 0.33) size3 = 1;
+                else if (body3 <= min + range * 0.67) size3 = 2;
+                else size3 = 3;
+
+                // Create key for 2-candle start (e.g., "2U-1D")
+                const key = `${size1}${dir1}-${size2}${dir2}`;
+                const outcome = `${size3}${dir3}`;
+
+                if (!twoCandles[key]) twoCandles[key] = {};
+                twoCandles[key][outcome] = (twoCandles[key][outcome] || 0) + 1;
+            }
+
+            // Build table
+            let html = '<table style="font-size: 11px;"><tr><th>2-Candle Start</th><th>1U</th><th>1D</th><th>2U</th><th>2D</th><th>3U</th><th>3D</th><th>Total</th></tr>';
+
+            const outcomeOrder = ['1U', '1D', '2U', '2D', '3U', '3D'];
+
+            Object.keys(twoCandles).sort().forEach(key => {
+                const outcomes = twoCandles[key];
+                let total = Object.values(outcomes).reduce((a, b) => a + b, 0);
+
+                html += `<tr><td style="font-size: 11px;"><strong>${key}</strong></td>`;
+                outcomeOrder.forEach(o => {
+                    const count = outcomes[o] || 0;
+                    const pct = total > 0 ? ((100 * count / total).toFixed(0)) : 0;
                     html += `<td style="font-size: 11px;">${count} (${pct}%)</td>`;
                 });
-                const totalPct = totalPatterns > 0 ? ((100 * total / totalPatterns).toFixed(1)) : 0;
-                html += `<td style="font-size: 11px;"><strong>${total} (${totalPct}%)</strong></td></tr>`;
+                html += `<td style="font-size: 11px;"><strong>${total}</strong></td></tr>`;
             });
 
             html += '</table>';
@@ -764,12 +790,14 @@
             // Store globally for download
             currentResults6am = results6am;
             currentResults6pm = results6pm;
+            currentCandles6am = candles6am;
+            currentCandles6pm = candles6pm;
 
             document.getElementById('stats-6am').innerHTML = buildStatsTable(results6am);
             document.getElementById('stats-6pm').innerHTML = buildStatsTable(results6pm);
 
-            document.getElementById('crosstab-6am').innerHTML = buildCrosstab(results6am);
-            document.getElementById('crosstab-6pm').innerHTML = buildCrosstab(results6pm);
+            document.getElementById('crosstab-6am').innerHTML = buildCrosstab(candles6am);
+            document.getElementById('crosstab-6pm').innerHTML = buildCrosstab(candles6pm);
 
             document.getElementById('details-6am').innerHTML = buildDetailsTable(results6am);
             document.getElementById('details-6pm').innerHTML = buildDetailsTable(results6pm);
