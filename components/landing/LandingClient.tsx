@@ -114,7 +114,7 @@ export default function LandingClient() {
       <section style={hero} className="lp-hero" id="overview">
         <div style={heroScrim} aria-hidden />
 
-        <div style={heroInner}>
+        <div style={heroInner} id="hero-content">
           <div style={trialBadge} className="lp-pulse">
             <span style={dot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
           </div>

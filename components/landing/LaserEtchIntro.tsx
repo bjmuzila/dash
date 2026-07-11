@@ -59,7 +59,12 @@ export default function LaserEtchIntro() {
     if (doneRef.current) return;
     doneRef.current = true;
     setCollapsed(true);
-    setTimeout(() => setGone(true), COLLAPSE_MS + 50);
+    setTimeout(() => {
+      setGone(true);
+      document
+        .getElementById("hero-content")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, COLLAPSE_MS + 50);
   };
 
   useEffect(() => {

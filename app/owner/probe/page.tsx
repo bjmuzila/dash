@@ -1,696 +1,652 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import { OWNER_THEME as HOME_THEME, homeShellStyle } from "@/components/shared/ownerTheme";
-import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-// Local calm shell (replaces PageShell's glow background for owner pages).
-function PageShell({ children }: { children: ReactNode }) {
-  return (
-    <div style={homeShellStyle}>
-      <main style={{ flex: 1, overflow: "auto", padding: "clamp(14px,2vw,24px)", display: "flex", flexDirection: "column", gap: "clamp(16px,2vw,32px)", minHeight: 0 }}>
-        {children}
-      </main>
-    </div>
-  );
+/* ────────────────────────────────────────────────────────────────────────────
+ * Options Probe — type a contract in shorthand ("TSLA 420c 7/17") plus your fill
+ * price; it records the entry and tracks the result as it prints. Thin client over
+ * the deployed /api/watch pipeline: resolves the contract via /proxy/probe-rest
+ * (Theta greeks + TT quote), persists to Postgres, and a server-side recorder
+ * keeps filling history during RTH even when this page is closed — the same proxy
+ * pipeline the GEX tabs use. Full greeks + price charts live on /owner/watch.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+interface ProbeSnapshot { ts: number | string | null; mark: number | null; last: number | null; bid: number | null; ask: number | null }
+interface ProbeRow {
+  id: number; ticker: string; expiration: string; strike: number;
+  side: string; note: string | null; added_price: number | null; snapshot: ProbeSnapshot | null;
 }
+interface ParsedContract { ticker: string; strike: number; side: "C" | "P"; expiry: string; atPrice: number | null }
 
-// All chrome sourced from the shared theme. Data-encoding colors (calls=green,
-// puts=red, net=purple, pos/neg) are theme tokens too.
-// Budget theme: single light-blue accent + frosted card with a faint light-blue
-// radial highlight (no top/accent bars). See BUDGET_UI_STYLE.md.
-const C = {
-  cyan: "#7dd3fc",
-  border: HOME_THEME.border,
-  card: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
-  label: HOME_THEME.text,
-};
-const NA = "rgba(255,255,255,0.45)";        // n/a / muted
-const POS = HOME_THEME.green;               // positive / calls accent value
-const NEG = HOME_THEME.red;                 // negative / puts value
-const CALLS = HOME_THEME.green;             // calls row accent
-const PUTS = HOME_THEME.red;                // puts row accent
-const NET = HOME_THEME.purple;              // net row accent
-const WARN = HOME_THEME.orange;             // warn / amber
-const VAL = "#CFE6F5";                       // neutral monospace value (count fields)
+// Parse "TSLA 420c 7/17", "SPX 6000p 12/19/26", "AAPL 250 C 2026-01-16 @ 3.10".
+// Returns null until ticker + strike + side + a valid expiry are all present.
+function parseContract(raw: string): ParsedContract | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const tickerM = s.match(/^([A-Za-z.]{1,6})/);
+  if (!tickerM) return null;
+  const ticker = tickerM[1].toUpperCase();
 
-type ProbeResult = {
-  feeds?: Record<string, Record<string, unknown>>;
-  exposures?: Record<string, unknown>;
-  oiCompare?: Record<string, unknown>;
-  [k: string]: unknown;
-};
-
-// Combine call + put exposures into one NET row. The server already signs puts
-// negative (gex/dex/vex/thetaExp), so call + put = net. spot is shared.
-const NET_KEYS = ["gex", "gexVol", "dex", "vex", "thetaExp", "vannaExp", "charmExp", "oi", "volume"] as const;
-function combineExposures(call?: Record<string, unknown>, put?: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (!call && !put) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const k of NET_KEYS) {
-    const a = call?.[k];
-    const b = put?.[k];
-    const an = typeof a === "number" ? a : null;
-    const bn = typeof b === "number" ? b : null;
-    out[k] = an == null && bn == null ? null : (an ?? 0) + (bn ?? 0);
-  }
-  out.spot = (typeof call?.spot === "number" ? call.spot : null) ?? (typeof put?.spot === "number" ? put.spot : null);
-  return out;
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 15, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{children}</div>
-    </div>
-  );
-}
-
-const FEED_ORDER = ["Quote", "Trade", "Summary", "Greeks"] as const;
-
-function fmt(v: unknown): string {
-  if (v == null || v === "") return "—";
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(+v.toFixed(6));
-  return String(v);
-}
-
-// Compact formatter for big exposure numbers (B/M/K), signed.
-function fmtExp(v: unknown): string {
-  if (v == null || v === "") return "—";
-  if (typeof v !== "number" || !Number.isFinite(v)) return String(v);
-  const a = Math.abs(v);
-  const s = v < 0 ? "-" : "";
-  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(3)}B`;
-  if (a >= 1e6) return `${s}${(a / 1e6).toFixed(2)}M`;
-  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(1)}K`;
-  return `${s}${a.toFixed(2)}`;
-}
-
-const EXPOSURE_ROWS: { key: string; label: string }[] = [
-  { key: "gex", label: "GEX (γ·OI·S²)" },
-  { key: "dex", label: "DEX (δ·OI·100·S)" },
-  { key: "vex", label: "VEX (vega·OI·100·S)" },
-  { key: "thetaExp", label: "Theta exp" },
-  { key: "gexVol", label: "GEX (vol)" },
-  { key: "vannaExp", label: "Vanna exp" },
-  { key: "charmExp", label: "Charm exp" },
-];
-
-// 5th panel: net-greek exposures for the single contract.
-function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> | undefined; accent?: string }) {
-  return (
-    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>Greeks</div>
-      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
-      {data && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {EXPOSURE_ROWS.map(({ key, label }) => {
-            const v = data[key];
-            const na = v == null;
-            return (
-              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15 }}>
-                <span style={{ color: C.label }}>{label}</span>
-                <span style={{ color: na ? NA : (typeof v === "number" && v < 0 ? NEG : POS), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
-              </div>
-            );
-          })}
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
-            <span>spot</span><span>{fmt(data.spot)}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Section divider label between the call / put / net rows.
-function RowLabel({ text, color }: { text: string; color: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}>
-      <span style={{ fontSize: 16, fontWeight: 500, color, letterSpacing: "0.01em" }}>{text}</span>
-      <div style={{ flex: 1, height: 1, background: C.border }} />
-    </div>
-  );
-}
-
-// Row 3: net (call + put) exposures. Same rows as ExposurePanel, plus net OI/vol.
-const NET_ROWS: { key: string; label: string }[] = [
-  { key: "gex", label: "Net GEX (γ·OI·S²)" },
-  { key: "dex", label: "Net DEX (δ·OI·100·S)" },
-  { key: "vex", label: "Net VEX (vega·OI·100·S)" },
-  { key: "thetaExp", label: "Net Theta exp" },
-  { key: "gexVol", label: "Net GEX (vol)" },
-  { key: "vannaExp", label: "Net Vanna exp" },
-  { key: "charmExp", label: "Net Charm exp" },
-  { key: "oi", label: "Σ OI (call + put)" },
-  { key: "volume", label: "Σ Volume (call + put)" },
-];
-// Screenshot the net card element to a PNG data-URL. Buttons inside the card are
-// marked data-html2canvas-ignore so they don't appear in the shot.
-async function captureNetCard(el: HTMLElement): Promise<string> {
-  const { default: html2canvas } = await import("html2canvas");
-  const canvas = await html2canvas(el, {
-    backgroundColor: HOME_THEME.bg,
-    useCORS: true,
-    allowTaint: true,
-    scale: 2,
-    logging: false,
-  });
-  return canvas.toDataURL("image/png");
-}
-
-function dataUrlToBytes(dataUrl: string): Uint8Array {
-  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
-  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-}
-
-// Copy + Discord now share a PNG SCREENSHOT of the net card (not text).
-function ShareActions({ targetRef, caption }: { targetRef: React.RefObject<HTMLDivElement | null>; caption: string }) {
-  const [copied, setCopied] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState<null | "ok" | "err">(null);
-
-  async function copy() {
-    if (!targetRef.current) return;
-    try {
-      const png = await captureNetCard(targetRef.current);
-      const blob = new Blob([dataUrlToBytes(png)], { type: "image/png" });
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-      setCopied(true); setTimeout(() => setCopied(false), 1500);
-    } catch { /* clipboard/image unsupported — ignore */ }
-  }
-  async function share() {
-    if (!targetRef.current) return;
-    setSending(true); setSent(null);
-    try {
-      const png = await captureNetCard(targetRef.current);
-      const form = new FormData();
-      form.append("payload_json", JSON.stringify({ content: caption }));
-      form.append("files[0]", new Blob([dataUrlToBytes(png)], { type: "image/png" }), "net-greeks.png");
-      const r = await fetch("/api/discord-share", { method: "POST", body: form });
-      setSent(r.ok ? "ok" : "err");
-    } catch { setSent("err"); }
-    finally { setSending(false); setTimeout(() => setSent(null), 2500); }
-  }
-  const btn: React.CSSProperties = { fontSize: 15, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };
-  return (
-    <div style={{ display: "flex", gap: 8 }} data-html2canvas-ignore="true">
-      <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? POS : VAL }}>{copied ? "✓ Copied" : "⧉ Copy img"}</button>
-      <button onClick={share} disabled={sending} style={{ ...btn, background: "rgba(255,255,255,0.06)", color: HOME_THEME.text, borderColor: HOME_THEME.borderStrong, opacity: sending ? 0.6 : 1, cursor: sending ? "wait" : "pointer" }}>
-        {sending ? "Sending…" : sent === "ok" ? "✓ Sent" : sent === "err" ? "✗ Failed" : "↗ Discord"}
-      </button>
-    </div>
-  );
-}
-
-function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unknown> | undefined; ticker: string; strike: string }) {
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const caption = `**Net Greeks · Call + Put** — ${ticker || "?"} · ${strike || "?"}`;
-  return (
-    <div ref={cardRef} style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${NET}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Net Greeks · Call + Put</span>
-          <span style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
-        </div>
-        <ShareActions targetRef={cardRef} caption={caption} />
-      </div>
-      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
-      {data && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {NET_ROWS.map(({ key, label }) => {
-            const v = data[key];
-            const na = v == null;
-            const isCount = key === "oi" || key === "volume";
-            return (
-              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15 }}>
-                <span style={{ color: C.label }}>{label}</span>
-                <span style={{ color: na ? NA : isCount ? VAL : (typeof v === "number" && v < 0 ? NEG : POS), fontWeight: 700 }}>
-                  {na ? "n/a" : isCount ? fmt(v) : fmtExp(v)}
-                </span>
-              </div>
-            );
-          })}
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
-            <span>spot</span><span>{fmt(data.spot)}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// OI cross-check panel: Theta OPRA OI (authoritative) vs TT REST OI.
-function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> | undefined; accent?: string }) {
-  const ok = data?.ok === true;
-  const matched = ok && data?.match === true;
-  const theta = data?.theta as number | null | undefined;
-  const tt = data?.tt as number | null | undefined;
-  const diff = data?.diff as number | null | undefined;
-  const pct = data?.pctDiff as number | null | undefined;
-  const aPct = typeof pct === "number" ? Math.abs(pct) : null;
-  const diffColor = aPct == null ? NA : aPct <= 2 ? POS : aPct <= 10 ? WARN : NEG;
-  return (
-    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Theta vs TT REST</div>
-      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
-      {ok && !matched && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "var(--font-mono)", fontSize: 15 }}>
-          <div style={{ color: WARN }}>Partial — one source missing</div>
-          {theta != null && <div style={{ color: C.label }}>Theta OI: <span style={{ color: VAL }}>{fmt(theta)}</span></div>}
-          {tt != null && <div style={{ color: C.label }}>TT OI: <span style={{ color: VAL }}>{fmt(tt)}</span></div>}
-        </div>
-      )}
-      {matched && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-mono)", fontSize: 15 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ color: C.label }}>Theta (OPRA)</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(theta)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ color: C.label }}>TT REST</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(tt)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 2 }}>
-            <span style={{ color: C.label }}>Diff (Θ−TT)</span>
-            <span style={{ color: diffColor, fontWeight: 800 }}>
-              {fmt(diff)}{typeof pct === "number" ? ` (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""}
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// One feed-type panel: a titled card listing its key/value rows.
-function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record<string, unknown> | undefined; accent?: string }) {
-  // bs* fields are pure-Black-Scholes values added for the Watch tracker's
-  // consumption (see proxy-tastytrade.js feeds.Greeks) — hidden here so this
-  // probe view keeps showing only the Theta-first merged greeks it always has.
-  const entries = data ? Object.entries(data).filter(([k]) => !k.startsWith("bs")) : [];
-  return (
-    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>{name}</div>
-      {entries.length === 0 && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {entries.map(([k, v]) => (
-          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15 }}>
-            <span style={{ color: C.label }}>{k}</span>
-            <span style={{ color: v == null || v === "" ? NA : VAL, fontWeight: 700 }}>{fmt(v)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Flow GEX raw calc ──────────────────────────────────────────────────────
-// Shows the DEALER-INVENTORY flow GEX formula — the one the home page GEX
-// chart actually plots (server-v2/computation/gex-calculator.js flowGEX
-// branch, fed by FlowGexAccumulator). γ · dealer_net · Spot², dealer_net =
-// buyVol − sellVol (dealer's own signed position from the classified tape).
-// Dealer long (either leg) = positive contribution, dealer short = negative —
-// NO put-side sign flip like the OI-basis GEX above, because the flip is
-// already baked into putNet's sign. Inventory comes from the live
-// FlowGexAccumulator via /proxy/flow-inventory (not derivable from a single
-// REST probe, which only sees today's total volume, not buy/sell split).
-function num(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-function fmtGamma(v: number | null): string {
-  if (v == null) return "—";
-  const a = Math.abs(v);
-  if (a === 0) return "0";
-  return a < 1e-4 ? v.toExponential(3) : v.toFixed(6);
-}
-function fmtInt(v: number | null): string {
-  return v == null ? "—" : Math.round(v).toLocaleString("en-US");
-}
-function fmtSpot(v: number | null): string {
-  return v == null ? "—" : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function FlowGexCalcPanel({
-  call,
-  put,
-  inv,
-}: {
-  call: ProbeResult | null;
-  put: ProbeResult | null;
-  inv: { callBuyVol: number; callSellVol: number; putBuyVol: number; putSellVol: number; callNet: number; putNet: number } | null;
-}) {
-  const cEx = call?.exposures as Record<string, unknown> | undefined;
-  const pEx = put?.exposures as Record<string, unknown> | undefined;
-  const cGamma = num((call?.feeds?.Greeks as Record<string, unknown> | undefined)?.gamma);
-  const pGamma = num((put?.feeds?.Greeks as Record<string, unknown> | undefined)?.gamma);
-  const spot = num(cEx?.spot) ?? num(pEx?.spot);
-  const s2 = spot != null ? spot * spot : null;
-  const cNet = inv ? inv.callNet : null;
-  const pNet = inv ? inv.putNet : null;
-  const cFlow = cGamma != null && cNet != null && s2 != null ? cGamma * cNet * s2 : null;
-  const pFlow = pGamma != null && pNet != null && s2 != null ? pGamma * pNet * s2 : null;
-  const netFlow = cFlow == null && pFlow == null ? null : (cFlow ?? 0) + (pFlow ?? 0);
-  const cols = "48px 1fr 1fr 1fr 1.1fr 1.25fr";
-  const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 13, fontWeight: 400, textAlign: "right" };
-  const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 15, textAlign: "right" };
-  const legs = [
-    { tag: "Call", tagColor: CALLS, gamma: cGamma, buy: inv?.callBuyVol ?? null, sell: inv?.callSellVol ?? null, net: cNet, flow: cFlow },
-    { tag: "Put", tagColor: PUTS, gamma: pGamma, buy: inv?.putBuyVol ?? null, sell: inv?.putSellVol ?? null, net: pNet, flow: pFlow },
-  ];
-  return (
-    <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${WARN}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
-        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow GEX · raw calc</span>
-        <span style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>γ · dealer_net · Spot²  (dealer long +, short −, no put flip)</span>
-      </div>
-      <div style={{ fontSize: 13, color: HOME_THEME.muted, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
-        dealer-inventory basis (live tape) · Spot {fmtSpot(spot)} · Spot² {fmtInt(s2)} · net = buyVol − sellVol
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>
-        <span style={{ ...head, textAlign: "left" }}> </span>
-        <span style={head}>γ</span>
-        <span style={head}>Buy / Sell</span>
-        <span style={head}>× Net</span>
-        <span style={head}>× S²</span>
-        <span style={head}>= Flow GEX</span>
-      </div>
-      {legs.map((r) => (
-        <div key={r.tag} style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "5px 0" }}>
-          <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 15 }}>{r.tag}</span>
-          <span style={{ ...cell, color: r.gamma == null ? NA : VAL }}>{fmtGamma(r.gamma == null ? null : Math.abs(r.gamma))}</span>
-          <span style={{ ...cell, color: r.buy == null ? NA : VAL, fontSize: 13 }}>{r.buy == null ? "—" : `${fmtInt(r.buy)} / ${fmtInt(r.sell)}`}</span>
-          <span style={{ ...cell, color: r.net == null ? NA : r.net < 0 ? NEG : POS }}>{r.net == null ? "n/a" : fmtInt(r.net)}</span>
-          <span style={{ ...cell, color: s2 == null ? NA : VAL }}>{fmtInt(s2)}</span>
-          <span style={{ ...cell, color: r.flow == null ? NA : r.flow < 0 ? NEG : POS, fontWeight: 700 }}>{r.flow == null ? "n/a" : fmtExp(r.flow)}</span>
-        </div>
-      ))}
-      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 2 }}>
-        <span style={{ color: NET, fontWeight: 700, fontSize: 15 }}>Net</span>
-        <span /><span /><span /><span />
-        <span style={{ ...cell, color: netFlow == null ? NA : netFlow < 0 ? NEG : POS, fontWeight: 800 }}>{netFlow == null ? "n/a" : fmtExp(netFlow)}</span>
-      </div>
-    </div>
-  );
-}
-
-export default function ProbePage() {
-  const [ticker, setTicker] = useState("SPXW");
-  const [strike, setStrike] = useState("");
-  // True until the user edits the strike, so the spot-snap auto-fill doesn't
-  // clobber a manually-typed strike.
-  const strikeTouched = useRef(false);
-  const [expiry, setExpiry] = useState("");
-  const [expirations, setExpirations] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
-  const [sentSymbol, setSentSymbol] = useState("");
-  const [callResult, setCallResult] = useState<ProbeResult | null>(null);
-  const [putResult, setPutResult] = useState<ProbeResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [liveMs, setLiveMs] = useState(0);
-  // Live dealer inventory (buy/sell net) for the probed strike — same
-  // FlowGexAccumulator the WS GEX chart's flowGEX comes from. Distinct from
-  // callResult/putResult, which are REST-probed OI/volume/gamma.
-  const [flowInv, setFlowInv] = useState<{ callBuyVol: number; callSellVol: number; putBuyVol: number; putSellVol: number; callNet: number; putNet: number } | null>(null);
-  const [logs, setLogs] = useState<{ t: number; level: "info" | "ok" | "warn" | "err"; msg: string }[]>([]);
-
-  // Append a timestamped line to the on-page log panel (newest last, capped).
-  function log(level: "info" | "ok" | "warn" | "err", msg: string) {
-    setLogs((prev) => [...prev, { t: Date.now(), level, msg }].slice(-200));
+  let strike: number | null = null;
+  let side: "C" | "P" | null = null;
+  const cs = s.match(/(\d+(?:\.\d+)?)\s*([cCpP])(?![A-Za-z])/); // "420c" / "250 C"
+  if (cs) {
+    strike = parseFloat(cs[1]);
+    side = cs[2].toUpperCase() as "C" | "P";
+  } else {
+    const rest = s.slice(ticker.length);
+    const sideM = rest.match(/\b(call|put|c|p)\b/i);
+    const strikeM = rest.match(/(\d+(?:\.\d+)?)/);
+    if (sideM) side = /^(c|call)$/i.test(sideM[1]) ? "C" : "P";
+    if (strikeM) strike = parseFloat(strikeM[1]);
   }
 
-  // Abort handle for the poll loop + in-flight fetch.
-  const stopRef = useRef(false);
-  const abortRef = useRef<AbortController | null>(null);
-  function stop() {
-    stopRef.current = true;
-    abortRef.current?.abort();
-    log("warn", "■ stopped by user");
-    setStatusMsg("Stopped.");
-    setLoading(false);
-  }
-
-  // Live "page is alive" counter — ticks up while polling so a stalled tab is obvious.
-  useEffect(() => {
-    if (!loading) return;
-    const start = performance.now();
-    setLiveMs(0);
-    const id = setInterval(() => setLiveMs(Math.round(performance.now() - start)), 100);
-    return () => clearInterval(id);
-  }, [loading]);
-
-  // Load available expiries from the proxy (same source the chart uses).
-  useEffect(() => {
-    fetch("/proxy/expirations")
-      .then((r) => r.json())
-      .then((d) => {
-        const exps: string[] = Array.isArray(d?.expirations) ? d.expirations : [];
-        setExpirations(exps);
-        if (exps.length && !expiry) setExpiry(d?.expiry || exps[0]);
-      })
-      .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Default the strike to the chain strike closest to live spot (unless the user
-  // has already typed one). Uses the same /proxy/gex spot + strikes as the chart.
-  useEffect(() => {
-    fetch("/proxy/gex")
-      .then((r) => r.json())
-      .then((d) => {
-        if (strikeTouched.current) return;
-        const spot = Number(d?.spot);
-        if (!(spot > 0)) return;
-        const strikes: number[] = Array.isArray(d?.gexRows)
-          ? d.gexRows.map((r: { strike: number }) => Number(r.strike)).filter((n: number) => n > 0)
-          : [];
-        // Nearest real chain strike to spot; fall back to rounding spot itself.
-        const nearest = strikes.length
-          ? strikes.reduce((best, s) => (Math.abs(s - spot) < Math.abs(best - spot) ? s : best))
-          : Math.round(spot);
-        setStrike(String(nearest));
-      })
-      .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const tkr = ticker.trim().toUpperCase();
-
-  // All tickers (SPX included) probe via REST — one request, no polling, no
-  // dependency on the live feed having the symbol subscribed. This is the path
-  // that reliably loads. /proxy/probe-rest does: chain → resolve strike →
-  // market-data (quote / OI / volume / prev-close).
-  // Probe one side; returns the parsed response (or throws on abort).
-  async function probeSide(type: "C" | "P", signal: AbortSignal) {
-    const url = `/proxy/probe-rest?ticker=${encodeURIComponent(tkr)}&expiry=${encodeURIComponent(expiry)}&type=${type}&strike=${encodeURIComponent(strike)}`;
-    const r = await fetch(url, { signal });
-    const d = await r.json();
-    return { status: r.status, d };
-  }
-
-  async function render() {
-    if (!tkr || !expiry || !strike) { setError("Pick a ticker, expiry and strike first."); return; }
-    stopRef.current = false;
-    abortRef.current = new AbortController();
-    const signal = abortRef.current.signal;
-    setLoading(true); setError(null); setCallResult(null); setPutResult(null); setElapsed(null); setStatusMsg(null); setFlowInv(null);
-    setSentSymbol("");
-    const t0 = performance.now();
-    log("info", `▶ REST probe ${tkr} ${strike} ${expiry} (call + put)`);
-    try {
-      // Fetch both sides at once — one strike in, calls + puts out — plus the
-      // live dealer inventory for this strike (real flow-GEX basis, same
-      // source the home page GEX chart reads from).
-      const [callRes, putRes, invRes] = await Promise.all([
-        probeSide("C", signal),
-        probeSide("P", signal),
-        fetch(`/proxy/flow-inventory?expiry=${encodeURIComponent(expiry)}&strike=${encodeURIComponent(strike)}`, { signal })
-          .then((r) => r.json())
-          .catch(() => null),
-      ]);
-      if (invRes?.inventory) {
-        const inv = invRes.inventory;
-        setFlowInv({
-          callBuyVol: Number(inv.callBuyVol ?? 0),
-          callSellVol: Number(inv.callSellVol ?? 0),
-          putBuyVol: Number(inv.putBuyVol ?? 0),
-          putSellVol: Number(inv.putSellVol ?? 0),
-          callNet: Number(inv.callNet ?? 0),
-          putNet: Number(inv.putNet ?? 0),
-        });
-      }
-      setElapsed(Math.round(performance.now() - t0));
-
-      const sym = callRes.d?.resolvedSymbol || putRes.d?.resolvedSymbol || "";
-      if (sym) setSentSymbol(sym);
-
-      const cOk = callRes.d?.found, pOk = putRes.d?.found;
-      if (cOk) setCallResult(callRes.d.result);
-      if (pOk) setPutResult(putRes.d.result);
-
-      // Log each side.
-      for (const [name, res] of [["CALL", callRes], ["PUT", putRes]] as const) {
-        const d = res.d;
-        if (d?.found) {
-          const f = d.result?.feeds || {};
-          const ex = d.result?.exposures || {};
-          log("ok", `${name} OI=${f?.Summary?.openInterest ?? "—"} vol=${f?.Trade?.volume ?? "—"} GEX=${fmtExp(ex?.gex)} DEX=${fmtExp(ex?.dex)}`);
-          const oc = d.result?.oiCompare;
-          if (oc?.match) {
-            const aPct = typeof oc.pctDiff === "number" ? Math.abs(oc.pctDiff) : null;
-            const lvl = aPct == null ? "info" : aPct <= 2 ? "ok" : aPct <= 10 ? "warn" : "err";
-            log(lvl, `${name} OI theta=${oc.theta ?? "—"} tt=${oc.tt ?? "—"} diff=${oc.diff ?? "—"}${typeof oc.pctDiff === "number" ? ` (${oc.pctDiff >= 0 ? "+" : ""}${oc.pctDiff.toFixed(1)}%)` : ""}`);
-          }
-        } else {
-          log("warn", `${name} ${res.status} ${d?.status || "?"}`);
-        }
-      }
-
-      if (cOk || pOk) {
-        const cex = cOk ? callRes.d.result?.exposures : undefined;
-        const pex = pOk ? putRes.d.result?.exposures : undefined;
-        const net = combineExposures(cex, pex);
-        log("ok", `Σ NET GEX=${fmtExp(net?.gex)} DEX=${fmtExp(net?.dex)} VEX=${fmtExp(net?.vex)} spot=${net?.spot ?? "—"}`);
-        setStatusMsg("REST — calls + puts + net");
-      } else {
-        // Neither side resolved — surface the most useful error.
-        const d = callRes.d?.error || callRes.d?.status ? callRes.d : putRes.d;
-        if (d?.error) { setError(d.error); log("err", `✖ ${d.error}`); }
-        else if (d?.status === "no-expiry") {
-          const av = Array.isArray(d?.availableExpirations) ? d.availableExpirations.join(", ") : "—";
-          setError(`No expiry ${expiry} for ${d?.chainTicker || tkr}. Available: ${av}`);
-        } else if (d?.status === "no-strike") {
-          setError(`Expiry ${expiry} exists but no strikes matched ${strike} for ${d?.chainTicker || tkr}.`);
-        } else {
-          setStatusMsg(`No data (${d?.status || callRes.status}).`);
-        }
-      }
-    } catch (e) {
-      if ((e as Error)?.name !== "AbortError" && !stopRef.current) {
-        const m = String((e as Error)?.message || e);
-        setError(m); log("err", `✖ ${m}`);
-      }
-    } finally {
-      setLoading(false);
+  let expiry: string | null = null;
+  const iso = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const md = s.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (iso) {
+    expiry = `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  } else if (md) {
+    const mo = parseInt(md[1], 10), da = parseInt(md[2], 10);
+    let yr = md[3] ? parseInt(md[3], 10) : NaN;
+    if (md[3] && md[3].length === 2) yr = 2000 + parseInt(md[3], 10);
+    if (!Number.isFinite(yr)) {
+      const now = new Date();
+      yr = now.getFullYear();
+      // If the M/D already passed this year, roll it to next year.
+      if (new Date(yr, mo - 1, da) < new Date(now.getFullYear(), now.getMonth(), now.getDate())) yr += 1;
+    }
+    if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) {
+      expiry = `${yr}-${String(mo).padStart(2, "0")}-${String(da).padStart(2, "0")}`;
     }
   }
 
-  const inputStyle: React.CSSProperties = { background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 15, fontFamily: "var(--font-mono)", outline: "none" };
+  let atPrice: number | null = null;
+  const at = s.match(/@\s*(\d+(?:\.\d+)?)/);
+  if (at) atPrice = parseFloat(at[1]);
+
+  if (strike == null || !Number.isFinite(strike) || !side || !expiry) return null;
+  return { ticker, strike, side, expiry, atPrice };
+}
+
+const OP_CSS = `
+  .op-wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-bottom: 44px; }
+  .op-card { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
+  .op-card-h { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text1); padding: 13px 16px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .op-card-h .sub { font-size: 11px; font-weight: 600; letter-spacing: 0.01em; text-transform: none; color: var(--sm-muted); }
+  .op-card-b { padding: 16px; }
+  .op-entry { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+  .op-entry .contract { flex: 2; min-width: 220px; }
+  .op-entry .price { flex: 1; min-width: 120px; }
+  .op-input { width: 100%; box-sizing: border-box; background: var(--bg0); color: var(--text1); border: 1px solid var(--sm-border); border-radius: 6px; padding: 11px 12px; font-family: var(--sm-mono); font-size: 14px; }
+  .op-input:focus { outline: none; border-color: var(--cyan); }
+  .op-input::placeholder { color: var(--sm-muted); opacity: 0.55; }
+  .op-go { font-family: var(--sm-mono); font-size: 12px; font-weight: 800; letter-spacing: 0.04em; cursor: pointer; padding: 0 18px; border-radius: 6px; border: 1px solid var(--cyan); background: var(--cyan); color: #05060a; white-space: nowrap; }
+  .op-go:disabled { opacity: 0.45; cursor: default; }
+  .op-note-row { margin-top: 10px; }
+  .op-preview { margin-top: 11px; font-family: var(--sm-mono); font-size: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .op-chip { padding: 4px 9px; border-radius: 6px; border: 1px solid rgba(33,158,188,0.4); color: var(--cyan); background: rgba(33,158,188,0.08); }
+  .op-chip.side-p { border-color: rgba(251,133,1,0.5); color: var(--amber); background: rgba(251,133,1,0.08); }
+  .op-hint { color: var(--sm-muted); }
+  .op-err { margin-top: 12px; font-size: 12px; color: var(--sm-red); border-left: 2px solid var(--sm-red); padding: 6px 10px; background: rgba(239,68,68,0.06); border-radius: 0 6px 6px 0; }
+  .op-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); }
+  .op-btn:hover { border-color: var(--cyan); }
+  .op-btn:disabled { opacity: 0.5; cursor: default; }
+  .op-link { font-family: var(--sm-mono); font-size: 11px; color: var(--cyan); text-decoration: none; }
+  .op-link:hover { text-decoration: underline; }
+  .op-row { display: grid; grid-template-columns: 1.3fr 1.25fr 1fr auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--sm-border); }
+  .op-row:last-child { border-bottom: none; }
+  .op-tick { font-size: 16px; font-weight: 800; color: var(--text1); }
+  .op-badge { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
+  .op-badge.c { color: var(--sm-green); background: rgba(142,202,230,0.12); border: 1px solid rgba(142,202,230,0.4); }
+  .op-badge.p { color: var(--amber); background: rgba(251,133,1,0.12); border: 1px solid rgba(251,133,1,0.4); }
+  .op-rowsub { font-size: 12px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
+  .op-px { font-family: var(--sm-mono); font-size: 13px; color: var(--text1); }
+  .op-px .arrow { color: var(--sm-muted); margin: 0 6px; }
+  .op-px .lbl { color: var(--sm-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 4px; }
+  .op-pnl { font-family: var(--sm-mono); font-size: 15px; font-weight: 800; text-align: right; }
+  .op-pnl .d { font-size: 11px; font-weight: 600; display: block; margin-top: 2px; }
+  .op-x { background: none; border: none; color: var(--sm-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; justify-self: end; }
+  .op-x:hover { color: var(--sm-red); }
+  .op-empty { padding: 26px; text-align: center; color: var(--sm-muted); font-size: 13px; }
+  .op-note { font-size: 11px; color: var(--sm-muted); line-height: 1.55; margin-top: 12px; }
+  .op-shorthand { display: flex; gap: 10px; margin-bottom: 12px; }
+  .op-shorthand .op-input { flex: 1; }
+  .op-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .op-f { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 92px; }
+  .op-flab { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sm-muted); font-family: var(--sm-mono); }
+  .op-flab i { text-transform: none; letter-spacing: 0; opacity: 0.7; font-style: normal; }
+  .op-side { display: flex; gap: 6px; }
+  .op-sidebtn { flex: 1; font-family: var(--sm-mono); font-size: 12px; font-weight: 700; cursor: pointer; padding: 10px 8px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg0); color: var(--sm-muted); }
+  .op-sidebtn.on.c { border-color: rgba(142,202,230,0.6); color: var(--sm-green); background: rgba(142,202,230,0.10); }
+  .op-sidebtn.on.p { border-color: rgba(251,133,1,0.6); color: var(--amber); background: rgba(251,133,1,0.10); }
+  .op-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .op-tcard { background: var(--bg0); border: 1px solid var(--sm-border); border-radius: 10px; padding: 14px; }
+  .op-tcard-h { display: flex; align-items: center; justify-content: space-between; }
+  .op-bigrow { margin: 10px 0 8px; }
+  .op-big { font-family: var(--sm-mono); font-size: 24px; font-weight: 800; line-height: 1; }
+  .op-bigsub { font-family: var(--sm-mono); font-size: 13px; color: var(--text1); margin-top: 6px; }
+  .op-bigsub .lbl { color: var(--sm-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 3px; }
+  .op-bigsub .arrow { color: var(--sm-muted); margin: 0 6px; }
+  .op-dollars { font-weight: 700; }
+  .op-legend { display: flex; align-items: center; gap: 14px; margin-top: 8px; font-family: var(--sm-mono); font-size: 12px; color: var(--sm-muted); }
+  .op-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .op-legend .dot.in { background: transparent; border: 1.5px solid var(--text1); }
+  .op-legend .dot.now { background: var(--cyan); }
+  .op-legend-ago { margin-left: auto; }
+  .op-sparkempty { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); padding: 16px 0; text-align: center; }
+  .op-tcard { cursor: pointer; transition: border-color 0.12s; }
+  .op-tcard:hover { border-color: rgba(33,158,188,0.4); }
+  .op-tcard.open { border-color: rgba(33,158,188,0.5); }
+  .op-chev { color: var(--sm-muted); font-size: 11px; margin-left: 6px; }
+  .op-chartwrap { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--sm-border); cursor: default; }
+  .op-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .op-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+  .op-tgl { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; cursor: pointer; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--sm-border); background: transparent; color: var(--sm-muted); }
+  .op-tgl:hover { color: var(--text1); }
+  .op-tgl.on { color: var(--text1); background: rgba(255,255,255,0.08); }
+  .op-tgl.on.cyan { color: #219EBC; background: rgba(33,158,188,0.12); border-color: rgba(33,158,188,0.4); }
+  .op-chartempty { padding: 40px 0; text-align: center; color: var(--sm-muted); font-size: 12px; font-family: var(--sm-mono); }
+  .op-charthint { margin-top: 8px; font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); letter-spacing: 0.04em; }
+
+  :root {
+    --bg0: #05060a;
+    --bg1: #0d1119;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --text1: #ffffff;
+    --cyan: #219ebc;
+    --amber: #fb8501;
+    --sm-red: #ef4444;
+    --sm-green: #8ecae6;
+    --sm-muted: #9ca3af;
+    --sm-border: rgba(255,255,255,0.1);
+    --sm-mono: "Courier New", monospace;
+  }
+`;
+
+type ProbeMetricKey = "mark" | "net_gex" | "delta" | "theta" | "vega" | "iv";
+interface ProbeHistSnap { ts: number; mark: number | null; net_gex: number | null; delta: number | null; theta: number | null; vega: number | null; iv: number | null }
+const PROBE_METRICS: { key: ProbeMetricKey; label: string; d: number }[] = [
+  { key: "mark", label: "Price", d: 2 },
+  { key: "net_gex", label: "Net GEX", d: 0 },
+  { key: "delta", label: "Δ", d: 3 },
+  { key: "theta", label: "Θ", d: 3 },
+  { key: "vega", label: "V", d: 3 },
+  { key: "iv", label: "IV", d: 4 },
+];
+const PROBE_RANGES: { key: string; label: string }[] = [
+  { key: "1d", label: "1D" }, { key: "3d", label: "3D" }, { key: "1w", label: "1W" }, { key: "1m", label: "1M" },
+];
+
+function opFmtGEX(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const a = Math.abs(v), sign = v >= 0 ? "+" : "−";
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+  return `${sign}$${(a / 1e3).toFixed(2)}K`;
+}
+function opIsRth(ts: number | string | null | undefined): boolean {
+  const t = Number(ts);
+  if (!Number.isFinite(t)) return false;
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false }).formatToParts(new Date(t));
+  const get = (k: string) => p.find((x) => x.type === k)?.value;
+  const wd = get("weekday");
+  if (wd === "Sat" || wd === "Sun") return false;
+  const mins = Number(get("hour")) * 60 + Number(get("minute"));
+  return mins >= 9 * 60 + 30 && mins < 16 * 60;
+}
+
+function ProbeChart({ history, metric }: { history: ProbeHistSnap[]; metric: ProbeMetricKey }) {
+  const W = 960, H = 340, PADL = 56, PADR = 16, PADT = 16, PADB = 28;
+  const pts = history
+    .map((s) => ({ ts: s.ts, v: s[metric] as number | null }))
+    .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
+  if (pts.length < 2) {
+    return <div className="op-chartempty">Not enough history yet — snapshots accrue every refresh (and through RTH server-side).</div>;
+  }
+  const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  let minY = Math.min(...ys), maxY = Math.max(...ys);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
+  const n = pts.length;
+  const sx = (i: number) => PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - PADL - PADR);
+  const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
+  const area = `${path} L${sx(n - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
+  const dec = PROBE_METRICS.find((m) => m.key === metric)!.d;
+  const fmtY = (v: number) => (metric === "net_gex" ? opFmtGEX(v) : v.toFixed(dec));
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
+  const multiDay = maxX - minX > 20 * 3600_000;
+  const fmtT = (ts: number) => multiDay
+    ? new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
+      <defs>
+        <linearGradient id="opwg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(33,158,188,0.28)" />
+          <stop offset="100%" stopColor="rgba(33,158,188,0)" />
+        </linearGradient>
+      </defs>
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={11} fill="#ffffff" fontFamily="var(--sm-mono)">{fmtY(v)}</text>
+        </g>
+      ))}
+      <text x={PADL} y={H - 6} textAnchor="start" fontSize={11} fill="#ffffff" fontFamily="var(--sm-mono)">{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={11} fill="#ffffff" fontFamily="var(--sm-mono)">{fmtT(maxX)}</text>
+      <path d={area} fill="url(#opwg)" />
+      <path d={path} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={sx(n - 1)} cy={sy(pts[pts.length - 1].v)} r={3} fill="#219EBC" />
+    </svg>
+  );
+}
+
+function ProbeSpark({ points, entry }: { points: { ts: number; mark: number }[]; entry: number | null }) {
+  const W = 300, H = 60, PAD = 7;
+  if (points.length < 1) {
+    return <div className="op-sparkempty">building history — snapshots accrue every refresh</div>;
+  }
+  const ys = points.map((p) => p.mark);
+  const dom = entry != null && Number.isFinite(entry) ? [...ys, entry] : ys;
+  let minY = Math.min(...dom), maxY = Math.max(...dom);
+  if (minY === maxY) { minY -= 0.5; maxY += 0.5; }
+  const padY = (maxY - minY) * 0.14; minY -= padY; maxY += padY;
+  const n = points.length;
+  const sx = (i: number) => PAD + (n <= 1 ? 0 : i / (n - 1)) * (W - PAD * 2);
+  const sy = (v: number) => H - PAD - ((v - minY) / (maxY - minY || 1)) * (H - PAD * 2);
+  const line = points.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.mark).toFixed(1)}`).join(" ");
+  const last = points[points.length - 1];
+  const area = `${line} L${sx(n - 1).toFixed(1)},${(H - PAD).toFixed(1)} L${sx(0).toFixed(1)},${(H - PAD).toFixed(1)} Z`;
+  const up = entry != null ? last.mark - entry : 0;
+  const nowColor = entry == null ? "#219EBC" : up > 0 ? "#8ECAE6" : up < 0 ? "#EF4444" : "#9aa4b2";
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {entry != null && Number.isFinite(entry) && (
+        <line x1={PAD} y1={sy(entry)} x2={W - PAD} y2={sy(entry)} stroke="#9aa4b2" strokeWidth={1} strokeDasharray="4 4" opacity={0.55} />
+      )}
+      <path d={area} fill="rgba(33,158,188,0.10)" />
+      <path d={line} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      {entry != null && Number.isFinite(entry) && (
+        <circle cx={sx(0)} cy={sy(entry)} r={3.5} fill="#0d1119" stroke="#ffffff" strokeWidth={1.5} />
+      )}
+      <circle cx={sx(n - 1)} cy={sy(last.mark)} r={4} fill={nowColor} stroke="#05060a" strokeWidth={1} />
+    </svg>
+  );
+}
+
+export default function OptionsProbe() {
+  const [shorthand, setShorthand] = useState("");
+  const [ticker, setTicker] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [strike, setStrike] = useState("");
+  const [side, setSide] = useState<"C" | "P">("C");
+  const [fill, setFill] = useState("");
+  const [note, setNote] = useState("");
+  const [rows, setRows] = useState<ProbeRow[]>([]);
+  const [historyById, setHistoryById] = useState<Record<number, { ts: number; mark: number }[]>>({});
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [histFull, setHistFull] = useState<Record<number, ProbeHistSnap[]>>({});
+  const [histLoading, setHistLoading] = useState(false);
+  const [metric, setMetric] = useState<ProbeMetricKey>("mark");
+  const [range, setRange] = useState<string>("1d");
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [lastLoad, setLastLoad] = useState<number | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const entryVal = useMemo(() => {
+    const n = parseFloat(fill.replace(/[^0-9.]/g, ""));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [fill]);
+  // Ready to add once ticker + a valid ISO expiry + a positive strike are present.
+  const canAdd = ticker.trim().length > 0 && /^\d{4}-\d{2}-\d{2}$/.test(expiry) && parseFloat(strike) > 0;
+
+  // Shorthand → fields: "TSLA 420c 7/17" fills the structured inputs below.
+  const applyShorthand = useCallback((str: string) => {
+    const p = parseContract(str);
+    if (!p) { setErr("Couldn't parse — try: TSLA 420c 7/17"); return; }
+    setErr(null);
+    setTicker(p.ticker);
+    setStrike(String(p.strike));
+    setSide(p.side);
+    setExpiry(p.expiry);
+    if (p.atPrice != null) setFill(String(p.atPrice));
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/watch", { cache: "no-store" });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      setRows(Array.isArray(j.rows) ? j.rows : []);
+      setErr(null);
+      setLastLoad(Date.now());
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    timer.current = setInterval(load, 20_000);
+    return () => { if (timer.current) clearInterval(timer.current); };
+  }, [load]);
+
+  const loadHistories = useCallback(async (ids: number[]) => {
+    const entries = await Promise.all(ids.map(async (id) => {
+      try {
+        const res = await fetch(`/api/watch?history=${id}`, { cache: "no-store" });
+        const j = await res.json();
+        const pts = (Array.isArray(j.history) ? j.history : [])
+          .map((s: { ts: number | string; mark: number | null }) => ({ ts: Number(s.ts), mark: Number(s.mark) }))
+          .filter((p: { ts: number; mark: number }) => Number.isFinite(p.ts) && Number.isFinite(p.mark))
+          .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
+        return [id, pts] as const;
+      } catch {
+        return [id, [] as { ts: number; mark: number }[]] as const;
+      }
+    }));
+    setHistoryById((prev) => {
+      const next = { ...prev };
+      for (const [id, pts] of entries) next[id] = pts;
+      return next;
+    });
+  }, []);
+
+  const idKey = rows.map((r) => r.id).join(",");
+  useEffect(() => {
+    const ids = idKey ? idKey.split(",").map(Number) : [];
+    if (ids.length) loadHistories(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idKey]);
+
+  const loadFullHistory = useCallback(async (id: number, r: string) => {
+    setHistLoading(true);
+    try {
+      const res = await fetch(`/api/watch?history=${id}&range=${r}`, { cache: "no-store" });
+      const j = await res.json();
+      const snaps: ProbeHistSnap[] = (Array.isArray(j.history) ? j.history : [])
+        .map((s: Record<string, unknown>) => ({
+          ts: Number(s.ts),
+          mark: s.mark == null ? null : Number(s.mark),
+          net_gex: s.net_gex == null ? null : Number(s.net_gex),
+          delta: s.delta == null ? null : Number(s.delta),
+          theta: s.theta == null ? null : Number(s.theta),
+          vega: s.vega == null ? null : Number(s.vega),
+          iv: s.iv == null ? null : Number(s.iv),
+        }))
+        .filter((s: ProbeHistSnap) => Number.isFinite(s.ts) && opIsRth(s.ts))
+        .sort((a: ProbeHistSnap, b: ProbeHistSnap) => a.ts - b.ts);
+      setHistFull((m) => ({ ...m, [id]: snaps }));
+    } catch {
+      /* keep prior */
+    } finally {
+      setHistLoading(false);
+    }
+  }, []);
+
+  const toggleCard = useCallback((id: number) => {
+    setExpandedId((cur) => {
+      const next = cur === id ? null : id;
+      if (next != null) loadFullHistory(next, range);
+      return next;
+    });
+  }, [loadFullHistory, range]);
+
+  const changeRange = useCallback((r: string) => {
+    setRange(r);
+    if (expandedId != null) loadFullHistory(expandedId, r);
+  }, [expandedId, loadFullHistory]);
+
+  useEffect(() => {
+    if (expandedId == null) return;
+    const t = setInterval(() => loadFullHistory(expandedId, range), 20_000);
+    return () => clearInterval(t);
+  }, [expandedId, range, loadFullHistory]);
+
+  const probeAndTrack = useCallback(async () => {
+    if (!canAdd) { setErr("Enter ticker, expiry and strike"); return; }
+    setAdding(true);
+    try {
+      const res = await fetch("/api/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add",
+          ticker: ticker.trim().toUpperCase(),
+          expiry,
+          strike: Number(strike),
+          side,
+          note: note || null,
+          addedPrice: entryVal,
+        }),
+      });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      setShorthand(""); setTicker(""); setStrike(""); setFill(""); setNote("");
+      await load();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setAdding(false);
+    }
+  }, [canAdd, ticker, expiry, strike, side, note, entryVal, load]);
+
+  const refreshPrices = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch("/api/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refresh" }),
+      });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      if (Array.isArray(j.rows)) {
+        setRows(j.rows);
+        void loadHistories((j.rows as ProbeRow[]).map((x) => x.id));
+      }
+      setErr(null);
+      setLastLoad(Date.now());
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadHistories]);
+
+  const remove = useCallback(async (id: number) => {
+    setRows((r) => r.filter((x) => x.id !== id));
+    try {
+      await fetch("/api/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "remove", id }),
+      });
+    } catch { /* optimistic */ }
+  }, []);
+
+  const px = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "—" : Number(v).toFixed(2));
+  const fmtExp = (iso: string) => {
+    const d = new Date(iso + "T00:00:00");
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" });
+  };
+  const ago = (ts: number | string | null | undefined) => {
+    const t = Number(ts);
+    if (!Number.isFinite(t) || t <= 0) return "—";
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    return `${Math.round(s / 3600)}h ago`;
+  };
+  const upDown = (v: number | null) => (v == null ? "var(--sm-muted)" : v > 0 ? "var(--sm-green)" : v < 0 ? "var(--sm-red)" : "var(--sm-muted)");
 
   return (
-    <PageShell>
-      <div style={{ color: HOME_THEME.text }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Symbol Probe</span>
-        <span style={{ fontSize: 15, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
-        <span style={{ fontSize: 15, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
-      </div>
+    <div className="op-wrap">
+      <style>{OP_CSS}</style>
 
-      {/* Controls */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 20 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
-          Ticker
-          <input
-            value={ticker}
-            onChange={(e) => setTicker(e.target.value.toUpperCase().replace(/[^A-Z.]/g, ""))}
-            style={{ ...inputStyle, width: 110 }}
-          />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
-          Strike
-          <input value={strike} onChange={(e) => { strikeTouched.current = true; setStrike(e.target.value.replace(/[^\d.]/g, "")); }} style={{ ...inputStyle, width: 120 }} />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
-          Expiry
-          <ThemedSelect
-            value={expiry}
-            placeholder="—"
-            width={160}
-            options={expirations.map((x) => ({ value: x, label: x }))}
-            onChange={setExpiry}
-          />
-        </label>
-        <button onClick={render} disabled={loading} style={{ ...inputStyle, cursor: loading ? "wait" : "pointer", background: C.cyan, color: HOME_THEME.bg, fontWeight: 500, padding: "9px 22px", border: "none" }}>
-          {loading ? "Loading…" : "Render"}
-        </button>
-        <button onClick={stop} disabled={!loading} style={{ ...inputStyle, cursor: loading ? "pointer" : "not-allowed", background: loading ? HOME_THEME.red : `${HOME_THEME.red}22`, color: HOME_THEME.text, fontWeight: 500, padding: "9px 22px", border: "none", opacity: loading ? 1 : 0.5 }}>
-          ■ Stop
-        </button>
-      </div>
+      {/* Probe entry */}
+      <div className="op-card">
+        <div className="op-card-h">Probe a contract <span className="sub">records your entry, then tracks the result live</span></div>
+        <div className="op-card-b">
+          {/* Optional shorthand → fills the fields below */}
+          <div className="op-shorthand">
+            <input
+              className="op-input"
+              value={shorthand}
+              onChange={(e) => setShorthand(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") applyShorthand(shorthand); }}
+              placeholder="shortcut: TSLA 420c 7/17  →  Enter to fill"
+            />
+            <button type="button" className="op-btn" onClick={() => applyShorthand(shorthand)} disabled={!shorthand.trim()}>Fill ↓</button>
+          </div>
 
-      {error && <div style={{ color: HOME_THEME.red, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{error}</div>}
-      {statusMsg && !error && <div style={{ color: loading || statusMsg.startsWith("⚠") ? WARN : C.cyan, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{statusMsg}</div>}
-
-      {/* Readout */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        <Field label="Ticker">{tkr || "—"}</Field>
-        <Field label="Strike">{strike || "—"}</Field>
-        <Field label="Resolved Symbol">{sentSymbol || "—"}</Field>
-        <Field label="Elapsed">
-          {loading
-            ? <span style={{ color: WARN }}>{(liveMs / 1000).toFixed(1)}s ⏱</span>
-            : elapsed != null ? `${elapsed} ms` : "—"}
-        </Field>
-      </div>
-
-      {/* Row 1 — CALL cards */}
-      <RowLabel text="Calls" color={CALLS} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => <FeedPanel key={`c-${name}`} name={name} data={callResult?.feeds?.[name]} accent={CALLS} />)}
-        <ExposurePanel data={callResult?.exposures} accent={CALLS} />
-        <OiComparePanel data={callResult?.oiCompare} accent={CALLS} />
-      </div>
-
-      {/* Row 2 — PUT cards */}
-      <RowLabel text="Puts" color={PUTS} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
-        {FEED_ORDER.map((name) => <FeedPanel key={`p-${name}`} name={name} data={putResult?.feeds?.[name]} accent={PUTS} />)}
-        <ExposurePanel data={putResult?.exposures} accent={PUTS} />
-        <OiComparePanel data={putResult?.oiCompare} accent={PUTS} />
-      </div>
-
-      {/* Row 3 — NET (call + put) Greeks */}
-      <RowLabel text="Net · Calls + Puts" color={NET} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-        <NetExposurePanel data={combineExposures(callResult?.exposures, putResult?.exposures)} ticker={tkr} strike={strike} />
-      </div>
-
-      {/* Flow GEX raw calculation (volume basis) */}
-      <RowLabel text="Flow GEX · raw calc" color={WARN} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
-        <FlowGexCalcPanel call={callResult} put={putResult} inv={flowInv} />
-      </div>
-
-      {/* Raw market-data items — every field, nothing dropped */}
-      <details style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", marginTop: 12 }}>
-        <summary style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", cursor: "pointer" }}>Raw response (call + put)</summary>
-        <pre style={{ margin: "10px 0 0", fontSize: 15, fontFamily: "var(--font-mono)", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {(callResult || putResult) ? JSON.stringify({ call: callResult, put: putResult }, null, 2) : "—"}
-        </pre>
-      </details>
-
-      {/* Log panel */}
-      <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", marginTop: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Log</div>
-          <button onClick={() => setLogs([])} style={{ ...inputStyle, padding: "4px 12px", fontSize: 15, cursor: "pointer" }}>Clear</button>
-        </div>
-        <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 15, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
-          {!logs.length && <span style={{ color: C.label }}>—</span>}
-          {logs.map((l, i) => {
-            const color = l.level === "ok" ? POS : l.level === "warn" ? WARN : l.level === "err" ? HOME_THEME.red : HOME_THEME.text;
-            const ts = new Date(l.t).toLocaleTimeString("en-US", { hour12: false }) + "." + String(l.t % 1000).padStart(3, "0");
-            return (
-              <div key={i} style={{ color, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                <span style={{ color: C.label }}>{ts}</span>  {l.msg}
+          <div className="op-form">
+            <label className="op-f"><span className="op-flab">Ticker</span>
+              <input className="op-input" value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="TSLA" />
+            </label>
+            <label className="op-f"><span className="op-flab">Expiration</span>
+              <input className="op-input" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} style={{ colorScheme: "dark" }} />
+            </label>
+            <label className="op-f"><span className="op-flab">Strike</span>
+              <input className="op-input" type="number" step="any" value={strike} onChange={(e) => setStrike(e.target.value)} placeholder="420" />
+            </label>
+            <div className="op-f"><span className="op-flab">Side</span>
+              <div className="op-side">
+                <button type="button" className={`op-sidebtn${side === "C" ? " on c" : ""}`} onClick={() => setSide("C")}>Call</button>
+                <button type="button" className={`op-sidebtn${side === "P" ? " on p" : ""}`} onClick={() => setSide("P")}>Put</button>
               </div>
-            );
-          })}
+            </div>
+            <label className="op-f"><span className="op-flab">Fill price <i>(opt)</i></span>
+              <input className="op-input" value={fill} onChange={(e) => setFill(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && canAdd && !adding) probeAndTrack(); }} placeholder="live mark" inputMode="decimal" />
+            </label>
+            <button type="button" className="op-go" onClick={probeAndTrack} disabled={!canAdd || adding}>
+              {adding ? "Probing…" : "Probe & Track"}
+            </button>
+          </div>
+
+          <div className="op-note-row">
+            <input className="op-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="note / thesis (optional)" />
+          </div>
+
+          <div className="op-preview">
+            {canAdd ? (
+              <>
+                <span className={`op-chip${side === "P" ? " side-p" : ""}`}>
+                  {ticker} {parseFloat(strike) % 1 ? strike : Math.round(parseFloat(strike))}{side} · {fmtExp(expiry)}
+                </span>
+                <span className="op-hint">entry {entryVal != null ? `@ ${entryVal.toFixed(2)}` : "= live mark on add"}</span>
+              </>
+            ) : (
+              <span className="op-hint">fill ticker, expiry &amp; strike — or paste a shortcut like <b>TSLA 420c 7/17</b> above</span>
+            )}
+          </div>
+          {err && <div className="op-err">{err}</div>}
         </div>
       </div>
+
+      {/* Tracked results */}
+      <div className="op-card">
+        <div className="op-card-h">
+          Tracked <span className="sub">{rows.length} contract{rows.length === 1 ? "" : "s"}{lastLoad ? ` · updated ${ago(lastLoad)}` : ""}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
+            <span style={{ fontFamily: "var(--sm-mono)", fontSize: 11, color: "var(--sm-muted)" }}>click a card for the full chart</span>
+            <button type="button" className="op-btn" onClick={refreshPrices} disabled={refreshing}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>
+          </span>
+        </div>
+        <div className="op-card-b">
+          {loading ? (
+            <div className="op-empty">Loading…</div>
+          ) : rows.length === 0 ? (
+            <div className="op-empty">No contracts yet — probe one above.</div>
+          ) : (
+            <div className="op-grid">
+              {rows.map((r) => {
+                const entry = r.added_price;
+                const mark = r.snapshot?.mark ?? r.snapshot?.last ?? null;
+                const pct = entry != null && mark != null && entry !== 0 ? ((mark - entry) / entry) * 100 : null;
+                const dollars = entry != null && mark != null ? (mark - entry) * 100 : null;
+                const hist = (historyById[r.id] ?? []).filter((h) => opIsRth(h.ts));
+                const liveTs = Number(r.snapshot?.ts);
+                const pts = mark != null && Number.isFinite(liveTs) && opIsRth(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
+                  ? [...hist, { ts: liveTs, mark }]
+                  : hist;
+                const isOpen = expandedId === r.id;
+                return (
+                  <div
+                    key={r.id}
+                    className={`op-tcard${isOpen ? " open" : ""}`}
+                    onClick={() => toggleCard(r.id)}
+                    style={isOpen ? { gridColumn: "1 / -1" } : undefined}
+                  >
+                    <div className="op-tcard-h">
+                      <div>
+                        <span className="op-tick">{r.ticker}</span>
+                        <span className={`op-badge ${r.side === "C" ? "c" : "p"}`}>{r.strike % 1 ? r.strike : Math.round(r.strike)}{r.side}</span>
+                        <span className="op-chev">{isOpen ? "▾" : "▸"}</span>
+                      </div>
+                      <button type="button" className="op-x" title="Remove" onClick={(e) => { e.stopPropagation(); remove(r.id); }}>×</button>
+                    </div>
+                    <div className="op-rowsub">{fmtExp(r.expiration)}{r.note ? ` · ${r.note}` : ""}</div>
+                    <div className="op-bigrow">
+                      <div className="op-big" style={{ color: upDown(pct) }}>
+                        {pct == null ? "—" : `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`}
+                      </div>
+                      <div className="op-bigsub">
+                        <span className="lbl">in</span>{px(entry)}<span className="arrow">→</span><span className="lbl">now</span>{px(mark)}
+                        <span className="op-dollars" style={{ color: upDown(dollars) }}>
+                          {dollars == null ? "" : ` · ${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toFixed(0)}/ct`}
+                        </span>
+                      </div>
+                    </div>
+                    {!isOpen && <ProbeSpark points={pts} entry={entry} />}
+                    {!isOpen && (
+                      <div className="op-legend">
+                        <span><i className="dot in" /> in {px(entry)}</span>
+                        <span><i className="dot now" style={{ background: upDown(pct) }} /> now {px(mark)}</span>
+                        <span className="op-legend-ago">{ago(r.snapshot?.ts)}</span>
+                      </div>
+                    )}
+                    {isOpen && (
+                      <div className="op-chartwrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="op-toolbar">
+                          <div className="op-toggles">
+                            {PROBE_RANGES.map((rg) => (
+                              <button key={rg.key} type="button" className={`op-tgl${range === rg.key ? " on" : ""}`} onClick={() => changeRange(rg.key)}>{rg.label}</button>
+                            ))}
+                          </div>
+                          <div className="op-toggles">
+                            {PROBE_METRICS.map((m) => (
+                              <button key={m.key} type="button" className={`op-tgl${metric === m.key ? " on cyan" : ""}`} onClick={() => setMetric(m.key)}>{m.label}</button>
+                            ))}
+                          </div>
+                        </div>
+                        {histLoading && !(histFull[r.id]?.length)
+                          ? <div className="op-chartempty">Loading history…</div>
+                          : <ProbeChart history={histFull[r.id] ?? []} metric={metric} />}
+                        <div className="op-charthint">
+                          {metric === "mark" ? "Option price (mark)" : PROBE_METRICS.find((m) => m.key === metric)?.label} · RTH only · entry @ {px(entry)} · {ago(r.snapshot?.ts)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="op-note">
+            Entry is the fill price you type, or the live mark at the moment you add it if you leave it blank. Prices, greeks and OI come from Theta + Tastytrade through <b>/proxy/probe-rest</b> — the same pipeline the GEX tabs use — and a server-side recorder keeps snapshotting through the session, so the sparkline keeps filling even with this tab closed. Any ticker works. P&amp;L is per single contract (×100).
+          </div>
+        </div>
       </div>
-    </PageShell>
+    </div>
   );
 }
