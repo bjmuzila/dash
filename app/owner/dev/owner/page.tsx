@@ -1564,7 +1564,7 @@ function OverviewSection({ metrics }: {
 
 // FE / BE tab + accordion (one section open at a time). The `tab` of each
 // section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "infra" | "probe" | "social-media";
+type OwnerTab = "overview" | "infra";
 
 export default function OwnerDashboard() {
   const isMobile = useIsMobile();
@@ -2422,8 +2422,6 @@ export default function OwnerDashboard() {
   const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
     { id: "overview",       label: "Overview" },
     { id: "infra",          label: "Infra" },
-    { id: "probe",          label: "Probe" },
-    { id: "social-media",   label: "Social Media" },
   ];
   // Inject feedback badge on overview
   const feedbackBadge = feedbackOpenCount > 0 ? feedbackOpenCount : undefined;
@@ -3360,47 +3358,6 @@ export default function OwnerDashboard() {
 
         {/* Auth tab removed — all activity/user metrics now consolidated on Overview tab. */}
 
-        {/* ── Probe tab ── */}
-        {ownerTab === "probe" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
-              Symbol Probe · Chain → Strike Resolve → Market Data
-            </div>
-            <iframe
-              src="/owner/dev"
-              style={{
-                flex: 1,
-                width: "100%",
-                height: "calc(100vh - 200px)",
-                border: `1px solid ${HOME_THEME.border}`,
-                borderRadius: 12,
-                background: HOME_THEME.bg,
-              }}
-              title="Probe Tool"
-            />
-          </div>
-        )}
-
-        {/* ── Social Media tab ── */}
-        {ownerTab === "social-media" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, letterSpacing: "0.01em" }}>
-              Social Media · X Card Generator
-            </div>
-            <iframe
-              src="/social-media"
-              style={{
-                flex: 1,
-                width: "100%",
-                height: "calc(100vh - 200px)",
-                border: `1px solid ${HOME_THEME.border}`,
-                borderRadius: 12,
-                background: HOME_THEME.bg,
-              }}
-              title="Social Media Card"
-            />
-          </div>
-        )}
 
       </div>
       </div>

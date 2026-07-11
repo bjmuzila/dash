@@ -29,7 +29,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       // Control Panel sections promoted to top-level entries (no longer nested).
       { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞" },
       { label: "Infra", href: "/owner/dev/owner?tab=infra", glyph: "◈" },
-      { label: "Probe", href: "/owner/dev/owner?tab=probe", glyph: "🔍" },
+      { label: "Probe", href: "/owner/probe", glyph: "🔍" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤" },
       { label: "Backtests", href: "/owner/backtests", glyph: "∿" },
@@ -64,8 +64,6 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
 export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "infra",    label: "Infra" },
-  { id: "probe",    label: "Probe" },
-  { id: "social-media", label: "Social Media" },
 ];
 
 // Root-level backend routes that live outside /owner but should still show the
