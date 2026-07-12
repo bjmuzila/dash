@@ -848,6 +848,23 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_trading_journals_user_date
       ON trading_journals(user_id, date);
 
+    -- The table shipped once WITHOUT this constraint, and CREATE TABLE IF NOT
+    -- EXISTS won't retrofit it — so the importer's ON CONFLICT (user_id, date)
+    -- blew up with "no unique or exclusion constraint matching". Add it here,
+    -- idempotently, after collapsing any duplicate (user, date) rows that the
+    -- pre-constraint build allowed in (keep the newest, it's the corrected one).
+    DELETE FROM trading_journals a USING trading_journals b
+      WHERE a.user_id = b.user_id AND a.date = b.date AND a.id < b.id;
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'trading_journals_user_id_date_key'
+      ) THEN
+        ALTER TABLE trading_journals
+          ADD CONSTRAINT trading_journals_user_id_date_key UNIQUE (user_id, date);
+      END IF;
+    END $$;
+
     -- Individual executions behind a journal day, imported from a broker CSV
     -- (tastytrade / TOS / IBKR / Rithmic / MotiveWave / Tradovate / generic).
     -- The day rows in trading_journals are DERIVED from these, never typed —
@@ -1198,16 +1215,27 @@ export async function insertTradingFills(userId: string, fills: TradingFill[]): 
   return res.rowCount ?? 0;
 }
 
-/** All fills for a user, oldest first — the input to round-trip matching. */
+/** All fills for a user, oldest first — the input to round-trip matching.
+ *  node-pg hands BIGINT back as a STRING (it won't fit an i32), which silently
+ *  breaks the FIFO sort and the ET session bucketing downstream. Coerce the
+ *  numerics here so callers always get real numbers. Same class of bug as the
+ *  fails-recorder string-timestamp one. */
 export async function getTradingFills(userId: string, date?: string): Promise<TradingFill[]> {
   await getDb();
-  return date
-    ? queryAll<TradingFill>(
-        `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
-           FROM trading_fills WHERE user_id = ? AND date = ? ORDER BY ts ASC`, [userId, date])
-    : queryAll<TradingFill>(
-        `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
-           FROM trading_fills WHERE user_id = ? ORDER BY ts ASC`, [userId]);
+  const sql = date
+    ? `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
+         FROM trading_fills WHERE user_id = ? AND date = ? ORDER BY ts ASC`
+    : `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
+         FROM trading_fills WHERE user_id = ? ORDER BY ts ASC`;
+  const rows = await queryAll<TradingFill>(sql, date ? [userId, date] : [userId]);
+  return rows.map((r) => ({
+    ...r,
+    ts: Number(r.ts),
+    qty: Number(r.qty),
+    price: Number(r.price),
+    fees: Number(r.fees),
+    multiplier: Number(r.multiplier),
+  }));
 }
 
 export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {
