@@ -85,13 +85,17 @@ function extractSetups(candles: IctCandle[]): Detected[] {
   // Structure-based stop: the nearest swing pivot on the WRONG side of entry
   // (the level that, if lost, invalidates the idea), buffered beyond by ATR.
   // Falls back to 1 ATR from entry when no qualifying pivot exists.
+  // NOTE: gate on `confirmTs` (idx + k), not `ts`. A fractal pivot needs k bars to
+  // its right to exist, so filtering on `p.ts <= ts` placed the stop using a level
+  // that wasn't knowable until k bars AFTER entry — future data in the risk
+  // denominator, which inflated every R multiple and win rate downstream.
   const structuralStop = (dir: "bull" | "bear", entry: number, ts: number): number => {
     if (dir === "bull") {
-      const lows = a.pivots.filter((p) => p.type === "low" && p.ts <= ts && p.price < entry).map((p) => p.price);
+      const lows = a.pivots.filter((p) => p.type === "low" && p.confirmTs <= ts && p.price < entry).map((p) => p.price);
       const lvl = lows.length ? Math.max(...lows) : entry - atr;
       return lvl - buf;
     }
-    const highs = a.pivots.filter((p) => p.type === "high" && p.ts <= ts && p.price > entry).map((p) => p.price);
+    const highs = a.pivots.filter((p) => p.type === "high" && p.confirmTs <= ts && p.price > entry).map((p) => p.price);
     const lvl = highs.length ? Math.min(...highs) : entry + atr;
     return lvl + buf;
   };
@@ -126,7 +130,7 @@ function extractSetups(candles: IctCandle[]): Detected[] {
   // Liquidity sweeps (only the moment a pool is swept counts as an event)
   for (const p of a.liquidity) {
     if (!p.swept) continue;
-    const sweepBar = candles.find((c) => c.timestamp > p.ts &&
+    const sweepBar = candles.find((c) => c.timestamp > p.confirmTs &&
       (p.side === "BSL" ? c.high > p.price : c.low < p.price));
     if (!sweepBar) continue;
     // A sweep is a reversal cue → expected move OPPOSITE the sweep direction.

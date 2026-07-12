@@ -27,12 +27,10 @@ interface EarnRow {
 const CHIP_W = 46;
 const CHIP_GAP = 10;
 
-// Primary: davidepalazzo/ticker-logos (transparent PNGs, ALL-CAPS filenames).
-function logoUrl(sym: string) {
-  return `https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${sym.toUpperCase()}.png`;
-}
-function logoFallbackUrl(sym: string) {
-  return `https://financialmodelingprep.com/image-stock/${sym.toUpperCase()}.png`;
+// Server-side resolver: ticker-logos repo → Wikidata/Wikimedia Commons (P154).
+// Always transparent PNG; 404s when nothing found so the text chip takes over.
+function logoUrl(sym: string, name?: string) {
+  return `/proxy/ticker-logo?sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || "")}`;
 }
 
 function fmtMcap(n: number) {
@@ -478,27 +476,23 @@ function renderSession(label: string, rows: EarnRow[]) {
             >
               <span style={{
                 width: 34, height: 34, borderRadius: 8, overflow: "hidden",
-                background: "#fff", border: `1px solid ${HT.border}`,
+                background: "transparent",
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
               }}>
                 <img
-                  src={logoUrl(e.symbol)} alt={e.symbol} width={34} height={34}
+                  src={logoUrl(e.symbol, e.company)} alt={e.symbol} width={34} height={34}
                   style={{ width: 34, height: 34, objectFit: "contain" }}
-                  data-fallback="0"
                   onError={(ev) => {
                     const t = ev.currentTarget;
-                    if (t.dataset.fallback === "0") {
-                      t.dataset.fallback = "1";
-                      t.src = logoFallbackUrl(e.symbol);
-                      return;
-                    }
                     t.style.display = "none";
                     const p = t.parentElement;
                     if (p && !p.querySelector(".logo-fallback")) {
+                      p.style.background = "rgba(33,158,188,0.10)";
+                      p.style.border = `1px solid ${HT.border}`;
                       const s = document.createElement("span");
                       s.className = "logo-fallback";
                       s.textContent = e.symbol.slice(0, 4);
-                      s.style.cssText = "font-size:8px;font-weight:800;color:#05080d;text-align:center;line-height:1;";
+                      s.style.cssText = `font-size:9px;font-weight:800;color:${HT.cyan};text-align:center;line-height:1;`;
                       p.appendChild(s);
                     }
                   }}

@@ -835,6 +835,22 @@ async function main() {
         })();
         return;
       }
+      // Logo resolver: GET /proxy/ticker-logo?sym=ASML&name=ASML+Holding
+      // 302 → transparent PNG (ticker-logos repo, else Wikidata/Commons P154).
+      if (pathname === '/proxy/ticker-logo' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const sym = (u.searchParams.get('sym') || '').toUpperCase().trim();
+            const name = u.searchParams.get('name') || '';
+            const url = await require('./ticker-logo').resolveLogo(sym, name);
+            if (!url) { res.writeHead(404); res.end('no logo'); return; }
+            res.writeHead(302, { Location: url, 'Cache-Control': 'public, max-age=86400' });
+            res.end();
+          } catch (e) { res.writeHead(502); res.end(String(e?.message || e)); }
+        })();
+        return;
+      }
       // Manual fire: POST /proxy/earnings-week-run?week=this|next
       if (pathname === '/proxy/earnings-week-run' && req.method === 'POST') {
         const u = new URL(req.url, `http://localhost:${PORT}`);

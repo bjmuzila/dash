@@ -282,7 +282,17 @@ export function detectOrderBlocks(candles: IctCandle[], disp: Displacement[]): O
 
 // ── Swing pivots + market structure ──────────────────────────────────────────
 
-export interface Pivot { type: "high" | "low"; price: number; ts: number; idx: number; }
+export interface Pivot {
+  type: "high" | "low";
+  price: number;
+  ts: number;        // bar the pivot FORMED on
+  idx: number;
+  // A fractal pivot needs `k` bars to its RIGHT before it can be known. Anything
+  // that consumes a pivot as a decision input must gate on these, not on ts/idx —
+  // using ts/idx reads `k` bars into the future (lookahead bias).
+  confirmIdx: number; // = idx + k
+  confirmTs: number;  // timestamp of the bar that confirms it
+}
 
 /** Fractal swing pivots: a high higher than `k` bars each side (and vice versa). */
 export function detectPivots(candles: IctCandle[], k = 2): Pivot[] {
@@ -294,8 +304,10 @@ export function detectPivots(candles: IctCandle[], k = 2): Pivot[] {
       if (candles[j].high >= candles[i].high) isHigh = false;
       if (candles[j].low <= candles[i].low) isLow = false;
     }
-    if (isHigh) out.push({ type: "high", price: candles[i].high, ts: candles[i].timestamp, idx: i });
-    if (isLow) out.push({ type: "low", price: candles[i].low, ts: candles[i].timestamp, idx: i });
+    const confirmIdx = i + k;
+    const confirmTs = candles[confirmIdx].timestamp;
+    if (isHigh) out.push({ type: "high", price: candles[i].high, ts: candles[i].timestamp, idx: i, confirmIdx, confirmTs });
+    if (isLow) out.push({ type: "low", price: candles[i].low, ts: candles[i].timestamp, idx: i, confirmIdx, confirmTs });
   }
   return out.sort((a, b) => a.idx - b.idx);
 }
@@ -325,24 +337,27 @@ export function detectStructure(candles: IctCandle[], pivots: Pivot[]): Structur
   // Average body for the MSS displacement test.
   const avgBody = candles.reduce((s, c) => s + Math.abs(c.close - c.open), 0) / Math.max(1, candles.length);
 
+  // Pivots become usable at confirmIdx (idx + k), NOT at idx — absorbing them at
+  // idx let structure break a level `k` bars before that level was knowable.
+  const byConfirm = [...pivots].sort((a, b) => a.confirmIdx - b.confirmIdx);
   let pi = 0;
   for (let i = 0; i < candles.length; i++) {
-    // Absorb any pivots confirmed at/before this bar.
-    while (pi < pivots.length && pivots[pi].idx <= i) {
-      const p = pivots[pi];
+    // Absorb any pivots CONFIRMED at/before this bar.
+    while (pi < byConfirm.length && byConfirm[pi].confirmIdx <= i) {
+      const p = byConfirm[pi];
       if (p.type === "high") lastHigh = p; else lastLow = p;
       pi++;
     }
     const c = candles[i];
     const body = Math.abs(c.close - c.open);
     // Break of swing high (bullish break).
-    if (lastHigh && c.close > lastHigh.price && lastHigh.idx < i) {
+    if (lastHigh && c.close > lastHigh.price && lastHigh.confirmIdx <= i) {
       const kind = trend === "bear" ? (body >= avgBody * 1.6 ? "MSS" : "CHOCH") : "BOS";
       events.push({ kind, dir: "bull", price: lastHigh.price, ts: c.timestamp });
       trend = "bull"; lastHigh = null;
     }
     // Break of swing low (bearish break).
-    else if (lastLow && c.close < lastLow.price && lastLow.idx < i) {
+    else if (lastLow && c.close < lastLow.price && lastLow.confirmIdx <= i) {
       const kind = trend === "bull" ? (body >= avgBody * 1.6 ? "MSS" : "CHOCH") : "BOS";
       events.push({ kind, dir: "bear", price: lastLow.price, ts: c.timestamp });
       trend = "bear"; lastLow = null;
@@ -356,9 +371,10 @@ export function detectStructure(candles: IctCandle[], pivots: Pivot[]): Structur
 export interface LiquidityPool {
   side: "BSL" | "SSL"; // buy-side (above) / sell-side (below)
   price: number;
-  ts: number;          // most recent touch
+  ts: number;          // most recent touch (formation)
+  confirmTs: number;   // when the pool became KNOWABLE (latest pivot confirmation)
   count: number;       // how many swings cluster here (equal highs/lows)
-  swept: boolean;      // has price traded beyond it after formation?
+  swept: boolean;      // has price traded beyond it after CONFIRMATION?
 }
 
 /**
@@ -383,8 +399,12 @@ export function detectLiquidity(candles: IctCandle[], pivots: Pivot[], tolTicks 
       }
       const price = group.reduce((s, g) => s + g.price, 0) / group.length;
       const ts = Math.max(...group.map((g) => g.ts));
-      const swept = candles.some((c) => c.timestamp > ts && (side === "BSL" ? c.high > price + tol : c.low < price - tol));
-      pools.push({ side, price, ts, count: group.length, swept });
+      // The pool isn't knowable until its LAST constituent pivot is confirmed.
+      // Sweeps are measured from there — measuring from `ts` counted pierces that
+      // happened before the pool could have been drawn.
+      const confirmTs = Math.max(...group.map((g) => g.confirmTs));
+      const swept = candles.some((c) => c.timestamp > confirmTs && (side === "BSL" ? c.high > price + tol : c.low < price - tol));
+      pools.push({ side, price, ts, confirmTs, count: group.length, swept });
     }
     return pools;
   };
@@ -406,7 +426,7 @@ export function liquiditySweepTimes(candles: IctCandle[], pools: LiquidityPool[]
   const sweeps = new Set<number>();
   for (const p of pools) {
     for (const c of candles) {
-      if (c.timestamp <= p.ts) continue;
+      if (c.timestamp <= p.confirmTs) continue; // pool not knowable yet
       const pierced = p.side === "BSL" ? c.high > p.price + tol : c.low < p.price - tol;
       if (pierced) { sweeps.add(c.timestamp); } // every candle that takes the pool
     }
@@ -531,7 +551,9 @@ export function detectInducement(candles: IctCandle[], pivots: Pivot[]): IctSign
   const out: IctSignal[] = [];
   const byIdx = pivots;
   for (const p of byIdx) {
-    for (let i = p.idx + 1; i < Math.min(candles.length, p.idx + 12); i++) {
+    // Start scanning from CONFIRMATION, not formation — a sweep of a level that
+    // wasn't a known pivot yet isn't an inducement, it's hindsight.
+    for (let i = p.confirmIdx + 1; i < Math.min(candles.length, p.confirmIdx + 12); i++) {
       const c = candles[i];
       if (p.type === "high") {
         if (c.high > p.price && c.close < p.price) { // swept the high, closed back below
@@ -561,7 +583,7 @@ export function detectTurtleSoup(candles: IctCandle[], pools: LiquidityPool[], t
   for (const p of pools) {
     if (p.count < 2) continue; // needs relative-equal cluster
     for (const c of candles) {
-      if (c.timestamp <= p.ts) continue;
+      if (c.timestamp <= p.confirmTs) continue; // pool not knowable yet
       if (p.side === "BSL" && c.high > p.price + tol && c.close < p.price) {
         out.push({ kind: "turtleSoup", dir: "bear", price: p.price, ts: c.timestamp, note: "EQH swept, failed" });
         break;
