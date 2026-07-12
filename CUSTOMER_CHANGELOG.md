@@ -2,6 +2,18 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 7/12/2026
+
+* Fixed the Inverse FVG setup, which had barely been logging anything — it had recorded just 3 setups in a month when it should have been finding several a day. It now tracks properly (124 over the last 18 sessions).
+* Corrected how ICT setup results are scored. The old scoring was accidentally using price information that wouldn't have been available at the time of entry, which made the win rates look far better than they really were. All the stats on the results page are now measured honestly, so expect the numbers to be lower — and trustworthy.
+* Order Block and Judas Swing setups are now recorded at the moment you could actually take the trade, rather than at a price that was only identifiable in hindsight.
+* Removed the Dark Pool section from the Flow page — the off-exchange print data wasn't reliable enough to trade off of, so it's gone rather than left as noise.
+* GEX Scanner now opens with a Top 10 card grid showing the biggest gamma moves of the last 15 minutes at a glance, filtered to strikes at least 5% out of the money by default.
+* Retired the Greeks Sensitivity and Vol Pin tabs from the Scanner to keep the page focused on the tools that are actually working.
+* The Scanner's IB Stats tab now leads with a live read of today's session: a breakout-direction gauge, an expansion matrix showing the odds of a one-sided trend vs a two-sided chop day, the tactical rule that's active right now, and one overall bullish-or-bearish break score.
+* The long historical stat tables are tucked away so the tab opens straight to what matters for today's trade.
+* The GEX heatmap has a new Vol GEX Speed column showing how fast volume-based gamma is being built up or torn down at each strike over the last 30 seconds, minute, or 5 minutes — a wall growing as price approaches it often means a pin, while one draining away can mean a breakout is coming.
+
 ## Saturday 7/11/2026
 
 * New "IB Stats" tab in the Scanner — every Initial Balance (9:30–10:30) trading rule backtested over nine years of ES and NQ data, ranked by hit rate so you can see at a glance which ones actually have an edge and which are coin flips.

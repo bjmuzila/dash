@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-07-12 — Vol-only GEX speed column (`hooks/useVolGexSpeed.ts`, `app/home/HomeClient.tsx`, `components/dashboard/GexHeatmap.tsx`, `server-v2/server-with-proxy.js`)
+
+Added a per-strike **VOL GEX SPEED** column to the GEX heatmap: `Δ|netVolGEX|` over a rolling 30s/1m/5m window (+ = wall building, − = bleeding; raw signed Δ kept in the hook for tooltips), fed by new `hooks/useVolGexSpeed.ts` — a hybrid source that samples the live WS chain into a 2s ring buffer (6m retention) and falls back to a Postgres seed on reload via `/proxy/gex-history?basis=vol` (new param in `handleGexHistory`, reads `net_vol_gex` instead of `net_gex`; default unchanged, so existing callers are untouched — **server change, needs VPS rebuild**). Wired into `HomeClient` (6th column + 30s/1m/5m toggle beside the Intensity slider) and `GexHeatmap` (`showSpeed` prop; `/mobile` on, `/social-media` off); the column renders through the shared `dataCell`/`cellBg` path so it inherits the same palette, font size and color as every other column, but keeps its own magnitude scale since Δ$ is orders of magnitude below the level. A green/red "Building/Bleeding" movers rail (`components/dashboard/VolGexSpeedRail.tsx`) was built then removed at Brandon's request — the file is now unused dead code, safe to delete. Build gotcha hit and fixed: a `{/* */}` JSX comment placed in ternary-expression position in `app/mobile/page.tsx` broke the Docker build (TS1005). Caveat baked into the docs: vol-only GEX accumulates from the open, so the metric skews positive for the first ~30 min — rank across strikes, don't read the level.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — ICT: IFVG never fired + systemic lookahead bias across every detector (`lib/calculations/ictConcepts.ts`, `app/api/ict-setups/route.ts`, `scripts/backfill-ict.mjs`)
+
+Fixed IFVG (Inverse FVG) logging only 3 setups in a month: in `detectFVGs` the `into`/retouch branch ran BEFORE the `through` inversion check and `break`'d the loop, so a break candle (which almost always also trades into the gap) was misclassified as a retouch — inversion could only fire if the first candle to touch the gap also closed through it in one bar; also loosened sweep matching from exact-timestamp equality to a 15-min `sweptWithin()` window (sweep→displace is the canonical sequence, but KEPT the "first candle to take the pool" `break` — removing it made every bar resting beyond a pool a "sweep" and the gate a no-op, inflating IFVG 124→185), fixed `detect2022Model` matching entry gaps on `f.ts` instead of `invertedTs` (disqualified every IFVG setup) and `detectRangeLiquidity` filtering `!f.spent` (inverted gaps are spent by construction → no IFVG ever appeared as internal liquidity), adopted SMC-spec gap formation (`close[1]` confirmation, width filter w/ ticks|points|percent modes, 50% wick/close mitigation — deliberately NOT the Pine 9% default, which is a 540pt gap on ES), and fixed `detectPO3` reading the Asian range from the same ET day (20:00–24:00 occurs AFTER the NY session it sets up) instead of the prior day. Separately removed **systemic lookahead bias** that made every number on `/owner/dev/results` fiction: fractal pivots need k bars to their right to exist, but `detectStructure`/`detectLiquidity`/`liquiditySweepTimes`/`detectTurtleSoup`/`detectInducement` and the grader's `structuralStop` all gated on formation (`ts`/`idx`) not confirmation — added `Pivot.confirmIdx`/`confirmTs` + `LiquidityPool.confirmTs` and gated on those; then killed three trigger-timestamp leaks where a setup was stamped at the bar the pattern *points at* rather than the bar it was *confirmed on*: Order Block (entered at the pre-impulse OB candle → now trades the retest after `OrderBlock.confirmTs`), Judas (stamped at the session extreme, knowable only an hour later → now stamped at the window's final bar), Breaker (stamped at the BOS bar though it only exists because a later retest happened → now stamped at the retest). Added `scripts/backfill-ict.mjs` (replays `POST /api/ict-setups {action:"scan"}` per date; idempotent on `setup_key`; run via `docker compose run --rm -v /opt/dashboard/scripts:/app/scripts:ro -e ICT_BASE_URL=http://dashboard:3002 dashboard node scripts/backfill-ict.mjs --days=30`) — after a wipe + 18-session backfill IFVG went 3 → 124 setups and came off a fake 100% to **57.4% @ 2.60 avg R**, while `ob` (93.9% @ 11.22R) and `judas` (93.1% @ 7.87R) stood exposed as pure lookahead and are pending re-measurement after the next backfill. Every other detector now sits at 44–57% (coin-flip); only `cisd` (63.6%, n=56) shows daylight, and `avg_r` is MFE-based so it is NOT bankable without a realistic exit rule. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable all session); `npx tsc --noEmit` REQUIRED before push — `detectFVGs` moved from positional args to an options object and `Pivot`/`LiquidityPool`/`OrderBlock` gained required fields. Note `es_candles` history only starts 2026-06-17, so `--days=30` yields 18 sessions, and the managed PG needs `ssl:{rejectUnauthorized:false}` for ad-hoc `pg` queries.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — GEX Scanner Top-10 size cards + tab removals (`app/scanner/page.tsx`)
+
+In `GexScanner`: default `minOtm` changed `0 → 0.05` (opens at 15m / All / OTM 5%+), plus a new `topBySize` derivation (top 10 by `|latest_chg|`, sorted independently of the table) rendered as a 5×2 `classicCardAccentStyle` grid above the table showing strike, Δ GEX, expiry/spot, OTM%, % vs open, score and `SignalBadge`. Also removed the Greeks Sensitivity and Vol Pin tabs (tab buttons, render branches, `MainTab` union members, `SCAN_META` overview cards) — `GreeksScanner`/`VolPinScanner` left in-file as dead code since `SortTh`/`fmtPct` are shared by other tabs. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED`).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — Dark Pool feature removed (`app/flow/page.tsx`, `server-v2/*`)
+
+Ripped out the dark-pool (TRF print) feature end-to-end: deleted the Dark Pool card, `Darkpool*` types, `fmtShares()` and the 5s `/proxy/darkpool-levels` poller from `app/flow/page.tsx`; removed the `/proxy/darkpool-{history,accum,levels}` routes and `startDarkpoolRecorder()` from `server-v2/server-with-proxy.js`; dropped `darkpool_prints` from `server-v2/state/retention-cleanup.js` (RETENTION map, DELETE, VACUUM list) and `scripts/db-prune.sql`; de-jargoned the `/flow` copy in `components/explore/exploreContent.ts`. Sandbox was down (`HYPERVISOR_VIRT_DISABLED`) so the four orphaned modules — `server-v2/darkpool-{routes,stream,recorder}.js` and `server-v2/state/darkpool-history-writer.js` — still need a manual `git rm`, plus `DROP TABLE IF EXISTS darkpool_prints;` on the VPS. NOT build-verified.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — IB Stats live gauges + owner-gated history (`components/scanner/IbStatsTab.tsx`)
+
+Added a `LiveGauges` card to the `/scanner` IB Stats tab: a direction-bias needle gauge (P(high breaks first), scored on the tightest matching sample ≥40 sessions via `bestSample()` over today's bias + formation order + width bucket + ORB), an expansion matrix (single-break / rotation / contained), an active tactical-rule card with live edge rate, and one signed −100…+100 overall BULLISH/BEARISH break verdict (halved while the IB is still forming). The 14 historical stat tables + rule ranking are now collapsed behind an owner-only toggle (`useAuth().isOwnerClaim`, falling back to `NEXT_PUBLIC_OWNER_USER_ID`) — cosmetic gate only, `public/data/ib-*.json` is still publicly fetchable. Also diagnosed the failed VPS build: `ReferenceError: tab is not defined` on `/trading` prerender came from an uncommitted local deletion of the tab-strip block in `app/trading/page.tsx` never reaching `origin/prod`. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-11 — IB Stats scanner tab (`lib/ibStats.ts`, `components/scanner/IbStatsTab.tsx`, `app/scanner/page.tsx`, `ib-backtest-esu6.html`, `public/data/ib-ES.json`, `ib-NQ.json`)
 
 Added an Initial Balance (09:30–10:30 ET) rule backtest as a new `/scanner` tab: 14 IB rules + a 0.25-fib-pullback rule (two variants: 0.25 of the IB range vs 0.25 retrace of the post-break impulse), break-time distribution, day-of-week slice, IB width buckets (narrow `<0.5×ATR14` or `<0.75×avgIB20` / wide `>1.5×ATR14` or `>1.25×avgIB20`), and a hit-rate ranking with sample-size verdicts — engine in `lib/ibStats.ts` (pure, interval-agnostic; break = bar CLOSE outside IB, failed break = back inside within 30 min). Heavy compute runs offline in the standalone `ib-backtest-esu6.html` (now auto-detects bar interval and exports a slim per-session JSON), so the tab just fetches `public/data/ib-{ES,NQ}.json` (~1.8MB each, 1m data since 2017) and aggregates client-side behind an ES/NQ switcher; themed with `variant="budget"` cards (no top accent strip), white 15px body, 16px LIGHT_BLUE titles. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).

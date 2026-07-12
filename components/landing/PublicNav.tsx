@@ -20,7 +20,6 @@ function blueA(a: number) { return `rgba(18,103,131,${a})`; }
 
 export const PUBLIC_NAV = [
   { label: "Overview", href: "/#overview" },
-  { label: "Features", href: "/#features" },
   { label: "Pricing", href: "/pricing?from=nav" },
   { label: "Docs", href: "/docs" },
 ];

@@ -38,13 +38,6 @@ function fmtMcap(n: number) {
   return `$${Math.round(n / 1e9)}B`;
 }
 
-function dayLabelShort(dateStr: string, today: string) {
-  if (dateStr === today) return "TODAY";
-  return new Date(dateStr + "T12:00:00")
-    .toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" })
-    .toUpperCase();
-}
-
 const IMPACT_COLOR: Record<string, string> = {
   High:      HT.red,
   Medium:    "#f59e0b",
@@ -170,17 +163,15 @@ export default function EconomicCalendarPage() {
 
   const today = etToday();
 
-  // Group today → Friday, split premarket / after-hours.
-  const earnDays = (() => {
-    const map = new Map<string, { pre: EarnRow[]; after: EarnRow[]; unknown: EarnRow[] }>();
+  // Earnings keyed by ET date → premarket / after-hours. "Time TBD" is dropped.
+  const earnByDate = (() => {
+    const map = new Map<string, { pre: EarnRow[]; after: EarnRow[] }>();
     for (const r of earnings) {
-      if (!map.has(r.date)) map.set(r.date, { pre: [], after: [], unknown: [] });
-      const b = map.get(r.date)!;
-      if (r.session === "pre") b.pre.push(r);
-      else if (r.session === "after") b.after.push(r);
-      else b.unknown.push(r);
+      if (r.session !== "pre" && r.session !== "after") continue;
+      if (!map.has(r.date)) map.set(r.date, { pre: [], after: [] });
+      map.get(r.date)![r.session].push(r);
     }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    return map;
   })();
 
   function toggleFilter(key: FilterKey) {
@@ -259,34 +250,51 @@ export default function EconomicCalendarPage() {
 
   function renderWithDaySeparators(evList: CalEvent[], faded: boolean) {
     const result: React.ReactNode[] = [];
-    let lastDate = "";
-    evList.forEach((ev, i) => {
-      if (ev.date !== lastDate) {
-        lastDate = ev.date;
-        const isTod = ev.date === today;
-        result.push(
-          <div
-            key={`sep-${faded ? "s" : "a"}-${ev.date}`}
-            style={{
-              padding: "6px 16px",
-              background: isTod ? "rgba(33,158,188,0.06)" : HT.panelBg,
-              borderTop: `1px solid ${HT.border}`,
-              display: "flex", alignItems: "center", gap: 8,
-            }}
-          >
-            <span style={{ fontSize: 11, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
-              {fullDayLabel(ev.date, today)}
-            </span>
-            {isTod && (
-              <span style={{ fontSize: 8, fontWeight: 900, background: HT.cyan, color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
-                TODAY
-              </span>
-            )}
-          </div>
-        );
-      }
-      result.push(renderEvent(ev, i, faded));
+    const byDate = new Map<string, CalEvent[]>();
+    evList.forEach(ev => {
+      if (!byDate.has(ev.date)) byDate.set(ev.date, []);
+      byDate.get(ev.date)!.push(ev);
     });
+
+    let i = 0;
+    for (const [date, evs] of byDate) {
+      const isTod = date === today;
+      result.push(
+        <div
+          key={`sep-${faded ? "s" : "a"}-${date}`}
+          style={{
+            padding: "6px 16px",
+            background: isTod ? "rgba(33,158,188,0.06)" : HT.panelBg,
+            borderTop: `1px solid ${HT.border}`,
+            display: "flex", alignItems: "center", gap: 8,
+          }}
+        >
+          <span style={{ fontSize: 11, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
+            {fullDayLabel(date, today)}
+          </span>
+          {isTod && (
+            <span style={{ fontSize: 8, fontWeight: 900, background: HT.cyan, color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
+              TODAY
+            </span>
+          )}
+        </div>
+      );
+
+      const bucket = faded ? null : earnByDate.get(date);
+      if (bucket?.pre.length) result.push(<EarnRowBlock key={`pre-${date}`} kind="pre" rows={bucket.pre} />);
+
+      // After-hours slots in after the last event at/before 16:00.
+      const afterIdx = evs.findIndex(e => (e.time || "00:00") > "16:00");
+      evs.forEach((ev, k) => {
+        if (bucket?.after.length && afterIdx >= 0 && k === afterIdx) {
+          result.push(<EarnRowBlock key={`aft-${date}`} kind="after" rows={bucket.after} />);
+        }
+        result.push(renderEvent(ev, i++, faded));
+      });
+      if (bucket?.after.length && afterIdx < 0) {
+        result.push(<EarnRowBlock key={`aft-${date}`} kind="after" rows={bucket.after} />);
+      }
+    }
     return result;
   }
 
@@ -405,65 +413,39 @@ export default function EconomicCalendarPage() {
         )}
       </div>
 
-      {/* Earnings this week (mega caps only, today → Friday) */}
-      {earnDays.length > 0 && (
-        <div style={{
-          flexShrink: 0,
-          borderTop: `1px solid ${HT.border}`,
-          background: HT.panelBgStrong,
-          backdropFilter: "blur(16px)",
-          padding: "8px 16px 10px",
-          maxHeight: "38%",
-          overflowY: "auto",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HT.cyan }}>
-              Earnings This Week
-            </span>
-            <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
-              MKT CAP ≥ $100B · {earnings.length}
-            </span>
-          </div>
-
-          <div style={{ display: "flex", gap: 14, overflowX: "auto", paddingBottom: 4 }}>
-            {earnDays.map(([date, buckets]) => {
-              const isTod = date === today;
-              return (
-                <div
-                  key={date}
-                  style={{
-                    flexShrink: 0,
-                    minWidth: 200,
-                    border: `1px solid ${HT.border}`,
-                    borderTop: `2px solid ${isTod ? HT.cyan : HT.border}`,
-                    borderRadius: 10,
-                    background: isTod ? "rgba(33,158,188,0.05)" : HT.bg,
-                    padding: "8px 10px 10px",
-                  }}
-                >
-                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: isTod ? HT.cyan : HT.text, marginBottom: 8 }}>
-                    {dayLabelShort(date, today)}
-                  </div>
-                  {renderSession("Premarket", buckets.pre)}
-                  {renderSession("After hours", buckets.after)}
-                  {buckets.unknown.length > 0 && renderSession("Time TBD", buckets.unknown)}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function renderSession(label: string, rows: EarnRow[]) {
+// One earnings row woven into the calendar table — same grid as an event row.
+function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }) {
   return (
-    <div style={{ marginBottom: 8 }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>
-        {label}: {rows.length === 0 && <span style={{ color: "#22303f" }}>—</span>}
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "80px 1fr",
+      borderTop: `1px solid ${HT.border}`,
+      borderLeft: `3px solid ${HT.cyan}`,
+      background: `linear-gradient(90deg, ${HT.cyan}12 0%, transparent 40%), ${HT.bg}`,
+      minHeight: 52,
+    }}>
+      <div style={{
+        display: "flex", flexDirection: "column", justifyContent: "center",
+        padding: "8px 12px",
+        borderRight: `1px solid ${HT.border}`,
+        boxShadow: `inset -1px 0 8px ${HT.cyan}18`,
+      }}>
+        <span style={{ fontSize: 12, color: HT.cyan, fontFamily: "var(--font-mono)", fontWeight: 800, lineHeight: 1.25 }}>
+          {kind === "pre" ? "PRE" : "AFTER"}
+        </span>
+        <span style={{ fontSize: 10, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
+          {kind === "pre" ? "MARKET" : "HOURS"}
+        </span>
       </div>
-      {rows.length > 0 && (
+
+      <div style={{ padding: "8px 14px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: HT.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+          {kind === "pre" ? "Premarket earnings" : "After-hours earnings"}
+        </span>
         <div style={{ display: "flex", flexWrap: "wrap", gap: CHIP_GAP }}>
           {rows.map((e) => (
             <a
@@ -504,7 +486,7 @@ function renderSession(label: string, rows: EarnRow[]) {
             </a>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
