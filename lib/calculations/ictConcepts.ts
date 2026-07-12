@@ -265,7 +265,11 @@ export interface OrderBlock {
   dir: Dir;          // bull OB = demand (last down candle before up impulse)
   top: number;
   bottom: number;
-  ts: number;        // timestamp of the OB candle
+  ts: number;        // timestamp of the OB candle (formation — NOT tradeable yet)
+  // An OB is only IDENTIFIABLE once the displacement leg and its imbalance have
+  // printed. Entering at `ts` is lookahead: you'd be buying a candle that only
+  // becomes an "order block" several bars later. Trade off `confirmTs`.
+  confirmTs: number;
   mitigated: boolean;
   violated: boolean;     // price CLOSED through the far side → OB is spent, drop it
   swept: boolean;        // OB candle took liquidity (broke prior candle's extreme)
@@ -306,11 +310,15 @@ export function detectOrderBlocks(candles: IctCandle[], disp: Displacement[]): O
     // Imbalance after the OB: a 3-candle FVG straddling the impulse out of it.
     const a = candles[obIdx + 1], c3 = candles[obIdx + 3];
     const hasImbalance = !!a && !!c3 && (d.dir === "bull" ? c3.low > a.high : c3.high < a.low);
+    // Knowable only once BOTH the impulse leg has completed and the imbalance bar
+    // (obIdx+3) has printed — whichever is later.
+    const confirmTs = Math.max(d.endTs, c3 ? c3.timestamp : d.endTs);
     out.push({
       dir: d.dir,
       top: ob.high,
       bottom: ob.low,
       ts: ob.timestamp,
+      confirmTs,
       mitigated: candles.slice(obIdx + 2).some((c) =>
         d.dir === "bull" ? c.low <= ob.high && c.low >= ob.low : c.high >= ob.low && c.high <= ob.high),
       // Price traded fully THROUGH the block: a later candle CLOSED beyond its
@@ -669,10 +677,15 @@ export function detectJudas(candles: IctCandle[]): IctSignal[] {
       const openPx = win[0].open;
       let hi = -Infinity, lo = Infinity, hiTs = 0, loTs = 0;
       for (const c of win) { if (c.high > hi) { hi = c.high; hiTs = c.timestamp; } if (c.low < lo) { lo = c.low; loTs = c.timestamp; } }
-      const last = win[win.length - 1].close;
-      // Pushed up first then closed below open → bearish Judas (real move down).
-      if (hiTs < loTs && last < openPx) out.push({ kind: "judas", dir: "bear", price: hi, ts: hiTs, note: "false high at open" });
-      else if (loTs < hiTs && last > openPx) out.push({ kind: "judas", dir: "bull", price: lo, ts: loTs, note: "false low at open" });
+      const lastBar = win[win.length - 1];
+      const last = lastBar.close;
+      // The Judas verdict requires the WHOLE window (it depends on `last`), so the
+      // signal is only knowable at the window's final bar. Stamping it at hiTs/loTs
+      // — the session extreme — entered at the best price of the hour an hour before
+      // that price was known to be the extreme. That alone produced ~8R averages.
+      const ts = lastBar.timestamp;
+      if (hiTs < loTs && last < openPx) out.push({ kind: "judas", dir: "bear", price: hi, ts, note: "false high at open" });
+      else if (loTs < hiTs && last > openPx) out.push({ kind: "judas", dir: "bull", price: lo, ts, note: "false low at open" });
     }
   }
   return dedupeByTs(out);
@@ -693,8 +706,14 @@ export function detectBreakers(candles: IctCandle[], obs: OrderBlock[], structur
       .filter((o) => o.ts < s.ts && o.dir !== s.dir)
       .sort((a, b) => b.ts - a.ts)[0];
     if (!ob) continue;
-    const retest = candles.some((c) => c.timestamp > s.ts && c.low <= ob.top && c.high >= ob.bottom);
-    if (retest) out.push({ kind: "breaker", dir: s.dir, price: s.dir === "bull" ? ob.top : ob.bottom, ts: s.ts, note: "OB flipped on BOS" });
+    // The breaker is only tradeable ON the retest. Stamping it at the BOS bar
+    // (s.ts) recorded an entry that only EXISTS because a retest happened later —
+    // the signal was conditioned on a future bar.
+    const retestBar = candles.find((c) => c.timestamp > s.ts && c.low <= ob.top && c.high >= ob.bottom);
+    if (retestBar) {
+      out.push({ kind: "breaker", dir: s.dir, price: s.dir === "bull" ? ob.top : ob.bottom,
+        ts: retestBar.timestamp, note: "OB flipped on BOS, retested" });
+    }
   }
   return dedupeByTs(out);
 }

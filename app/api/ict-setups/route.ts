@@ -162,12 +162,19 @@ function extractSetups(candles: IctCandle[]): Detected[] {
       f.activeDir, ts, mid,
       `${f.inverted ? "IFVG" : "FVG"} ${f.activeDir} ${round2(f.bottom)}–${round2(f.top)}`);
   }
-  // Valid order blocks (swept + imbalance) — the tradeable ones
+  // Valid order blocks (swept + imbalance) — the tradeable ones.
+  // The trade is the RETEST of the zone after the block is confirmed, not the OB
+  // candle itself: at o.ts the candle is just a candle, and it only becomes an
+  // "order block" once the impulse + imbalance print (o.confirmTs). Entering at
+  // o.ts booked the pre-impulse price with hindsight — that alone was producing a
+  // ~94% win rate at 11R. If price never returns to the zone, there is no trade.
   for (const o of a.orderBlocks) {
     if (!o.valid) continue;
+    const retest = candles.find((c) => c.timestamp > o.confirmTs && c.low <= o.top && c.high >= o.bottom);
+    if (!retest) continue;
     const edge = o.dir === "bull" ? o.bottom : o.top;
-    pushEvent("ob", "Order Block", o.dir, o.ts, edge,
-      `OB ${o.dir} ${round2(o.bottom)}–${round2(o.top)}`);
+    pushEvent("ob", "Order Block", o.dir, retest.timestamp, edge,
+      `OB ${o.dir} ${round2(o.bottom)}–${round2(o.top)} (retest)`);
   }
   // OTE band entry: record the first bar that trades into the OTE zone
   if (a.range) {
