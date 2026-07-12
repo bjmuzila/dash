@@ -49,59 +49,6 @@ const CURATED_TABLES = [
 
 type TableId = string;
 
-/**
- * Rows-written-today counts per tracked table. Moved here from the owner
- * dashboard's Database tab so all DB surfaces live on the backend Database page.
- * Self-contained: fetches its own per-table counts from /api/db countOnly.
- */
-function RowCountsToday() {
-  const [counts, setCounts] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
-
-  const loadCounts = useCallback(async () => {
-    setLoading(true);
-    const today = todayET();
-    const out: Record<string, number> = {};
-    await Promise.all(
-      CURATED_TABLES.map(async (id) => {
-        try {
-          const r = await fetch(`/api/db?table=${id}&limit=1&date=${today}&countOnly=true`, { cache: "no-store" });
-          const j = await r.json();
-          out[id] = Number(j.count ?? 0);
-        } catch { out[id] = 0; }
-      }),
-    );
-    setCounts(out);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { void loadCounts(); }, [loadCounts]);
-
-  return (
-    <div style={{ ...homePanelStyle, padding: "14px 16px", marginBottom: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Database · Today</span>
-        <span style={{ fontSize: 12, color: HOME_THEME.muted, fontFamily: "var(--font-mono)" }}>
-          {loading ? "loading…" : `${CURATED_TABLES.length} tracked · use the browser below for all tables`}
-        </span>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(120px, 1fr))", gap: 10 }}>
-        {CURATED_TABLES.map((id) => (
-          <div key={id} style={{ ...homePanelStyle, minHeight: 0, padding: "10px 14px", overflow: "hidden" }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: HOME_THEME.muted, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {labelFor(id)}
-            </div>
-            <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {counts[id] != null ? counts[id].toLocaleString() : "—"}
-            </div>
-            <div style={{ fontSize: 11, color: HOME_THEME.muted, whiteSpace: "nowrap" }}>rows today</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function fmtCell(v: unknown, key?: string): string {
   if (v == null) return "-";
   if (typeof v === "number") {
@@ -260,14 +207,16 @@ export default function DatabasePage() {
   const [count, setCount] = useState(0);
   const [dateFilter, setDateFilter] = useState<string>(todayET());
   const [limit, setLimit] = useState(200);
-  const [allTables, setAllTables] = useState<{ name: string; approx_rows: number }[]>([]);
+  const [allTables, setAllTables] = useState<{ name: string; approx_rows: number; today_rows?: number | null }[]>([]);
   const [tableSearch, setTableSearch] = useState("");
 
   // Every base table in the DB, fetched once from information_schema (via
   // /api/db/tables) — this is what makes the picker cover EVERYTHING being
   // saved, not just the curated 14 this page originally shipped with.
+  // `today=` also returns today's row count per table, which replaces the old
+  // "Database · Today" card grid: the count now lives in the table button.
   useEffect(() => {
-    fetch("/api/db/tables", { cache: "no-store" })
+    fetch(`/api/db/tables?today=${todayET()}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => setAllTables(Array.isArray(j.tables) ? j.tables : []))
       .catch(() => setAllTables([]));
@@ -364,12 +313,12 @@ export default function DatabasePage() {
         </div>
       </div>
 
-      <div style={homeContentStyle}>
+      <div style={{ ...homeContentStyle, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
         <EodGexToday />
-        <RowCountsToday />
         <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-            {/* Every base table in the DB (information_schema) — one push button each, count shown in the button. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8, borderBottom: `1px solid ${HOME_THEME.border}`, flexShrink: 0 }}>
+            {/* Every base table in the DB (information_schema) — one push button each.
+                Button shows (total rows)(rows written today, red). */}
             <div className="flex items-center gap-2 flex-wrap">
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted }}>
                 Table ({allTables.length || "…"})
@@ -380,12 +329,17 @@ export default function DatabasePage() {
                 placeholder="filter…"
                 style={{ ...homeInputStyle, width: 140, fontSize: 11, padding: "5px 8px" }}
               />
+              <span style={{ fontSize: 10, color: HOME_THEME.muted }}>
+                (total)<span style={{ color: HOME_THEME.red }}>(today)</span>
+              </span>
             </div>
-            <div className="flex flex-wrap" style={{ gap: 6 }}>
-              {(allTables.length ? allTables : CURATED_TABLES.map((n) => ({ name: n, approx_rows: 0 })))
+            {/* Capped + scrollable so ~84 buttons can't push the data grid off the page. */}
+            <div className="flex flex-wrap" style={{ gap: 6, maxHeight: 168, overflowY: "auto", paddingRight: 4 }}>
+              {(allTables.length ? allTables : CURATED_TABLES.map((n) => ({ name: n, approx_rows: 0, today_rows: null as number | null })))
                 .filter((t) => t.name.toLowerCase().includes(tableSearch.toLowerCase()))
                 .map((t) => {
                   const on = tab === t.name;
+                  const today = t.today_rows;
                   return (
                     <button
                       key={t.name}
@@ -407,8 +361,12 @@ export default function DatabasePage() {
                         boxShadow: on ? `0 0 14px ${HOME_THEME.cyan}3a, 0 2px 8px rgba(0,0,0,0.35)` : "none",
                         transition: "background .14s, color .14s, border-color .14s",
                       }}
+                      title={today != null ? `${t.approx_rows.toLocaleString()} total · ${today.toLocaleString()} today` : `${t.approx_rows.toLocaleString()} total`}
                     >
                       {labelFor(t.name)} ({t.approx_rows.toLocaleString()})
+                      {today != null && today > 0 && (
+                        <span style={{ color: HOME_THEME.red, marginLeft: 2 }}>({today.toLocaleString()})</span>
+                      )}
                     </button>
                   );
                 })}
