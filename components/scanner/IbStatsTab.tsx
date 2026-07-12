@@ -360,8 +360,210 @@ function LiveToday({ sym, ds, days, hist }: {
       </div>
       </Card>
 
+      <LiveGauges live={live} days={days} dowName={dowName} />
+
       <Playbook live={live} days={days} dowName={dowName} />
     </>
+  );
+}
+
+/* ── LIVE GAUGES ──────────────────────────────────────────────────────────────
+ * Direction bias gauge + expansion matrix + active rule + one overall
+ * bullish/bearish verdict. Every number is scored live off the dataset against
+ * today's actual conditions — nothing hardcoded.
+ */
+
+const MIN_N = 40;
+
+/** Pick the tightest condition stack that still has a usable sample. */
+function bestSample(days: SlimDay[], conds: ((d: SlimDay) => boolean)[], labels: string[]) {
+  for (let i = conds.length; i > 0; i--) {
+    const g = days.filter((d) => conds.slice(0, i).every((c) => c(d)));
+    if (g.length >= MIN_N) return { g, label: labels.slice(0, i).join(" + ") };
+  }
+  return { g: days, label: "all sessions" };
+}
+
+function Gauge({ pHigh }: { pHigh: number }) {
+  const ang = -90 + (pHigh / 100) * 180;
+  const arc = 125;
+  const hiSide = pHigh >= 50;
+  return (
+    <div style={{ position: "relative", width: 190, height: 108, margin: "0 auto" }}>
+      <svg viewBox="0 0 100 50" style={{ width: "100%", height: "100%" }}>
+        <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth="10" strokeLinecap="round" />
+        <path d="M 10 50 A 40 40 0 0 1 50 10" fill="none" stroke={HOME_THEME.green} strokeWidth="10"
+          strokeDasharray={arc} strokeDashoffset={arc - arc * (pHigh / 100)} style={{ transition: "stroke-dashoffset .6s" }} />
+        <path d="M 50 10 A 40 40 0 0 1 90 50" fill="none" stroke={HOME_THEME.red} strokeWidth="10"
+          strokeDasharray={arc} strokeDashoffset={arc - arc * ((100 - pHigh) / 100)} style={{ transition: "stroke-dashoffset .6s" }} />
+        <line x1="50" y1="50" x2="50" y2="15" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"
+          style={{ transformOrigin: "50px 50px", transform: `rotate(${ang}deg)`, transition: "transform .6s" }} />
+        <circle cx="50" cy="50" r="4.5" fill="#fff" />
+      </svg>
+      <div style={{ position: "absolute", bottom: 0, width: "100%", textAlign: "center" }}>
+        <div style={{ fontSize: 24, fontWeight: 800, color: HOME_THEME.text }}>
+          {(hiSide ? pHigh : 100 - pHigh).toFixed(1)}%
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", color: hiSide ? HOME_THEME.green : HOME_THEME.red }}>
+          {Math.abs(pHigh - 50) < 2 ? "NO DIRECTIONAL EDGE" : hiSide ? "HIGH BREAK BIAS" : "LOW BREAK BIAS"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Bar({ label, p, color }: { label: string; p: number; color: string }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, color: HOME_THEME.text, marginBottom: 4 }}>
+        <span>{label}</span><span style={{ fontWeight: 800, color }}>{p.toFixed(1)}%</span>
+      </div>
+      <div style={{ height: 8, borderRadius: 6, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
+        <div style={{ width: `${p}%`, height: "100%", background: color, transition: "width .6s" }} />
+      </div>
+    </div>
+  );
+}
+
+function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
+  const bias = live.bias as "H" | "L" | null;
+  const first = live.first as "H" | "L";
+  const bucketKey = String(live.bucket).toLowerCase() as SlimDay["widthBucket"];
+  const orbDir = live.orbDir as "H" | "L" | null;
+  const dowIdx = DOW_NAMES.indexOf(dowName);
+
+  const g = useMemo(() => {
+    const conds: ((d: SlimDay) => boolean)[] = [];
+    const labels: string[] = [];
+    if (bias) { conds.push((d) => d.bias === bias); labels.push(bias === "H" ? "close > mid" : "close < mid"); }
+    conds.push((d) => d.first === first); labels.push(`${first === "H" ? "HIGH" : "LOW"} first`);
+    if (bucketKey) { conds.push((d) => d.widthBucket === bucketKey); labels.push(`${String(live.bucket)} IB`); }
+    if (orbDir) { conds.push((d) => d.orbDir === orbDir); labels.push(`ORB ${orbDir === "H" ? "up" : "down"}`); }
+    return bestSample(days, conds, labels);
+  }, [days, bias, first, bucketKey, orbDir, live.bucket]);
+
+  const withTouch = g.g.filter((d) => d.firstTouchSide);
+  const pHigh = withTouch.length ? (100 * withTouch.filter((d) => d.firstTouchSide === "H").length) / withTouch.length : 50;
+
+  const dowDays = dowIdx >= 1 && dowIdx <= 5
+    ? g.g.filter((d) => new Date(`${d.date}T12:00:00Z`).getUTCDay() === dowIdx)
+    : [];
+  const mx = dowDays.length >= MIN_N ? dowDays : g.g;
+  const pSingle = (100 * mx.filter((d) => d.singleBreak).length) / (mx.length || 1);
+  const pBoth = (100 * mx.filter((d) => d.bothBroke).length) / (mx.length || 1);
+  const pNone = (100 * mx.filter((d) => d.neitherBroke).length) / (mx.length || 1);
+
+  /* active rule — the tactical read that fits today's live state right now */
+  const B = (d: SlimDay) => d.fcb!;
+  const fcb = days.filter((d) => d.fcb);
+  const rule = (() => {
+    if (live.breakSide && !live.ibComplete) return null;
+    if (live.brokeH && live.brokeL) {
+      const w = days.filter((d) => d.bothBroke);
+      return { name: "BOTH SIDES BROKEN — rotation day", n: mx.length, p: pBoth, verdict: "fade" as const,
+        note: `${w.length} rotation days in the full sample — fade the extremes, don't chase` };
+    }
+    if (live.breakSide) {
+      const side = live.breakSide as "H" | "L";
+      const grp = fcb.filter((d) => B(d).side === side && d.widthBucket === bucketKey);
+      const use = grp.length >= MIN_N ? grp : fcb.filter((d) => B(d).side === side);
+      const cont = use.filter((d) => B(d).hit["1"]).length;
+      const failP = (100 * use.filter((d) => B(d).failed).length) / (use.length || 1);
+      const p = (100 * cont) / (use.length || 1);
+      return failP > 50
+        ? { name: `${side === "H" ? "HIGH" : "LOW"} break — fails more often than it runs`, n: use.length, p: 100 - failP, verdict: "fade" as const, note: `${failP.toFixed(1)}% of these breaks close back inside within 30m` }
+        : { name: `${side === "H" ? "HIGH" : "LOW"} break confirmed → ≥1× ext`, n: use.length, p, verdict: p >= 55 ? ("tradeable" as const) : ("noise" as const), note: `fail rate ${failP.toFixed(1)}%` };
+    }
+    if (bias) {
+      const use = g.g.filter((d) => d.firstTouchSide);
+      const p = bias === "H" ? pHigh : 100 - pHigh;
+      return { name: `Midpoint bias → ${bias === "H" ? "HIGH" : "LOW"} breaks first`, n: use.length, p,
+        verdict: p >= 60 ? ("tradeable" as const) : p <= 45 ? ("fade" as const) : ("noise" as const), note: g.label };
+    }
+    return { name: "No bias — IB closed on the midpoint", n: g.g.length, p: 50, verdict: "noise" as const, note: "wait for a break" };
+  })();
+
+  /* overall verdict — one signed number */
+  const score = (() => {
+    let s = (pHigh - 50) * 1.6;                                   // directional conditional
+    if (live.brokeH && !live.brokeL) s += 22;
+    if (live.brokeL && !live.brokeH) s -= 22;
+    if (live.brokeH && live.brokeL) s *= 0.4;                     // rotation kills conviction
+    if (live.price > live.mid) s += 6; else if (live.price < live.mid) s -= 6;
+    if (bias === "H") s += 4; else if (bias === "L") s -= 4;
+    if (!live.ibComplete) s *= 0.5;                               // IB not final
+    return Math.max(-100, Math.min(100, s));
+  })();
+  const bull = score >= 0;
+  const strength = Math.abs(score) >= 45 ? "STRONG" : Math.abs(score) >= 20 ? "LEAN" : "NEUTRAL";
+  const sColor = strength === "NEUTRAL" ? HOME_THEME.orange : bull ? HOME_THEME.green : HOME_THEME.red;
+  const vColor = rule?.verdict === "tradeable" ? HOME_THEME.green : rule?.verdict === "fade" ? HOME_THEME.red : HOME_THEME.orange;
+
+  return (
+    <Card accent="cyan" title="Live Read — direction, expansion, active rule"
+      subtitle={`Scored on ${g.g.length} matching sessions · ${g.label}${live.ibComplete ? "" : " · IB STILL FORMING"}`}>
+
+      {/* overall verdict */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
+        background: "rgba(255,255,255,0.03)", border: `1px solid ${sColor}`, borderRadius: 12, padding: "14px 18px", marginBottom: 14,
+      }}>
+        <div>
+          <div style={{ fontSize: 15, color: HOME_THEME.text }}>Overall break bias</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: sColor, marginTop: 2 }}>
+            {strength === "NEUTRAL" ? "NEUTRAL — no edge" : `${strength} ${bull ? "BULLISH" : "BEARISH"} BREAK`}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 34, fontWeight: 800, color: sColor }}>{score >= 0 ? "+" : ""}{score.toFixed(0)}</div>
+          <div style={{ fontSize: 15, color: HOME_THEME.text }}>−100 bear … +100 bull</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12 }}>
+        {/* direction gauge */}
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, marginBottom: 6 }}>Breakout target bias</div>
+          <Gauge pHigh={pHigh} />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 15, color: HOME_THEME.text }}>
+            <span>High first <b style={{ color: HOME_THEME.green }}>{pHigh.toFixed(1)}%</b></span>
+            <span>Low first <b style={{ color: HOME_THEME.red }}>{(100 - pHigh).toFixed(1)}%</b></span>
+          </div>
+        </div>
+
+        {/* expansion matrix */}
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, marginBottom: 10 }}>Expansion matrix</div>
+          <Bar label="Single-side trend" p={pSingle} color={HOME_THEME.cyan} />
+          <Bar label="Rotational chop (both)" p={pBoth} color={HOME_THEME.purple} />
+          <Bar label="Contained range (none)" p={pNone} color={HOME_THEME.orange} />
+          <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>
+            {pBoth > 32 ? "Rotational risk HIGH — expect a two-sided day" : "One-sided break expected — opposite extreme protected"}
+            {` · n=${mx.length}`}
+          </div>
+        </div>
+
+        {/* active rule */}
+        <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${vColor}`, borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, marginBottom: 10 }}>Active tactical rule</div>
+          {rule ? (
+            <>
+              <div style={{ fontSize: 17, fontWeight: 800, color: vColor }}>
+                {rule.verdict === "tradeable" ? "TRADEABLE EDGE" : rule.verdict === "fade" ? "FADE SETUP" : "NO EDGE"}
+              </div>
+              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>{rule.name}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
+                <span style={{ fontSize: 15, color: HOME_THEME.text }}>Edge rate</span>
+                <span style={{ fontSize: 24, fontWeight: 800, color: vColor }}>{rule.p.toFixed(1)}%</span>
+              </div>
+              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>{rule.note} · n={rule.n}</div>
+            </>
+          ) : (
+            <div style={{ fontSize: 15, color: HOME_THEME.text }}>Waiting on the 10:30 ET close.</div>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -532,6 +734,7 @@ function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName
 
 export default function IbStatsTab() {
   const [sym, setSym] = useState<Sym>("ES");
+  const [showStats, setShowStats] = useState(false);
   const [sets, setSets] = useState<Partial<Record<Sym, IbDataset>>>({});
   const [err, setErr] = useState<string | null>(null);
 
@@ -694,6 +897,17 @@ export default function IbStatsTab() {
           }}
         />
 
+        <button
+          onClick={() => setShowStats((v) => !v)}
+          style={{
+            alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
+            border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: HOME_THEME.text,
+          }}
+        >
+          {showStats ? "Hide historical stats ▲" : `Show historical stats (${N} sessions) ▼`}
+        </button>
+
+        {showStats && (<>
         <Card accent="blue" title={`Initial Balance Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`Last updated ${LAST_UPDATED}`}>
           <div style={statGrid}>
             <Stat k="Sessions" v={String(N)} sub={`${yearsSpan.toFixed(1)} years of data`} />
@@ -967,6 +1181,7 @@ export default function IbStatsTab() {
             <Row indent label="BREAKS out late (fade gets run over)" n={cont.length} hits={cont.filter((d) => d.containedBrokeLate).length} detail="the tail risk" />
           </Tbl>
         </Card>
+        </>)}
       </div>
     </div>
   );

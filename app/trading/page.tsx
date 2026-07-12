@@ -92,45 +92,115 @@ const BROKER_LABEL: Record<string, string> = {
   generic: "Unrecognized format",
 };
 
-function MiniLine({ values, color }: { values: number[]; color: string }) {
-  if (values.length < 2) {
-    return <div style={{ height: 120, display: "grid", placeItems: "center", color: HT.muted, fontSize: 11 }}>No data yet</div>;
-  }
-  const w = 320, h = 120, pad = 8;
-  const min = Math.min(...values, 0), max = Math.max(...values, 0);
-  const range = max - min || 1;
-  const x = (i: number) => pad + ((w - 2 * pad) * i) / (values.length - 1);
-  const y = (v: number) => pad + (h - 2 * pad) * (1 - (v - min) / range);
-  const d = values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(v)}`).join(" ");
+/** One plotted day. `sub` is the extra context line shown in the tooltip. */
+interface Pt { label: string; value: number; sub?: string }
+
+const CH_W = 320, CH_H = 120, CH_PAD = 8;
+
+const emptyChart = (
+  <div style={{ height: CH_H, display: "grid", placeItems: "center", color: HT.muted, fontSize: 15 }}>No data yet</div>
+);
+
+/**
+ * Shared hover tooltip. The SVG scales to the card width, so pointer math is
+ * done in PERCENT of the container (not SVG user units) — otherwise the hit
+ * index drifts as the card resizes.
+ */
+function ChartTip({ pt, xPct, fmt }: { pt: Pt; xPct: number; fmt: (v: number) => string }) {
+  // Flip the tooltip to the left of the cursor near the right edge so it never
+  // clips out of the card.
+  const flip = xPct > 62;
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 120 }}>
-      <line x1={pad} y1={y(0)} x2={w - pad} y2={y(0)} stroke={HT.border} />
-      <path d={d} fill="none" stroke={color} strokeWidth={2} />
-    </svg>
+    <div
+      style={{
+        position: "absolute", top: 4, left: `${xPct}%`,
+        transform: flip ? "translateX(-100%) translateX(-10px)" : "translateX(10px)",
+        pointerEvents: "none", zIndex: 5,
+        background: HT.panelBgStrong ?? "rgba(10,15,20,.95)",
+        border: `1px solid ${HT.border}`, borderRadius: 4,
+        padding: "6px 9px", whiteSpace: "nowrap",
+        boxShadow: "0 4px 14px rgba(0,0,0,.45)",
+      }}
+    >
+      <div style={{ fontSize: 12, color: HT.muted }}>{pt.label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: pt.value >= 0 ? T.green : T.red }}>
+        {fmt(pt.value)}
+      </div>
+      {pt.sub && <div style={{ fontSize: 12, color: HT.muted, marginTop: 1 }}>{pt.sub}</div>}
+    </div>
   );
 }
 
-function MiniBars({ values }: { values: number[] }) {
-  if (!values.length) {
-    return <div style={{ height: 120, display: "grid", placeItems: "center", color: HT.muted, fontSize: 11 }}>No data yet</div>;
-  }
-  const w = 320, h = 120, pad = 8;
-  const maxAbs = Math.max(...values.map(Math.abs), 1);
-  const bw = Math.max(2, (w - 2 * pad) / values.length - 2);
-  const zero = h / 2;
+/** Track the hovered index from a pointer move over the chart box. */
+function useHoverIndex(count: number) {
+  const [i, setI] = useState<number | null>(null);
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!count) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const p = (e.clientX - r.left) / r.width;              // 0..1 across the box
+    const idx = Math.round(p * (count - 1));
+    setI(Math.min(count - 1, Math.max(0, idx)));
+  };
+  return { i, onMove, onLeave: () => setI(null) };
+}
+
+function MiniLine({ points, color, fmt = fmt$ }: { points: Pt[]; color: string; fmt?: (v: number) => string }) {
+  const { i, onMove, onLeave } = useHoverIndex(points.length);
+  if (points.length < 2) return emptyChart;
+
+  const vals = points.map((p) => p.value);
+  const min = Math.min(...vals, 0), max = Math.max(...vals, 0);
+  const range = max - min || 1;
+  const x = (n: number) => CH_PAD + ((CH_W - 2 * CH_PAD) * n) / (points.length - 1);
+  const y = (v: number) => CH_PAD + (CH_H - 2 * CH_PAD) * (1 - (v - min) / range);
+  const d = vals.map((v, n) => `${n === 0 ? "M" : "L"}${x(n)},${y(v)}`).join(" ");
+  const hoverX = i != null ? (x(i) / CH_W) * 100 : 0;
+
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 120 }}>
-      <line x1={pad} y1={zero} x2={w - pad} y2={zero} stroke={HT.border} />
-      {values.map((v, i) => {
-        const bh = (Math.abs(v) / maxAbs) * (h / 2 - pad);
-        return (
-          <rect key={i}
-            x={pad + i * (bw + 2)} y={v >= 0 ? zero - bh : zero}
-            width={bw} height={bh}
-            fill={v >= 0 ? T.green : T.red} opacity={0.85} />
-        );
-      })}
-    </svg>
+    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
+      <svg viewBox={`0 0 ${CH_W} ${CH_H}`} preserveAspectRatio="none" style={{ width: "100%", height: CH_H, display: "block", cursor: "crosshair" }}>
+        <line x1={CH_PAD} y1={y(0)} x2={CH_W - CH_PAD} y2={y(0)} stroke={HT.border} />
+        <path d={d} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        {i != null && (
+          <>
+            <line x1={x(i)} y1={CH_PAD} x2={x(i)} y2={CH_H - CH_PAD} stroke={HT.border} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+            <circle cx={x(i)} cy={y(vals[i])} r={3.5} fill={color} stroke={HT.bg} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          </>
+        )}
+      </svg>
+      {i != null && <ChartTip pt={points[i]} xPct={hoverX} fmt={fmt} />}
+    </div>
+  );
+}
+
+function MiniBars({ points, fmt = fmt$ }: { points: Pt[]; fmt?: (v: number) => string }) {
+  const { i, onMove, onLeave } = useHoverIndex(points.length);
+  if (!points.length) return emptyChart;
+
+  const vals = points.map((p) => p.value);
+  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  const slot = (CH_W - 2 * CH_PAD) / points.length;
+  const bw = Math.max(2, slot - 2);
+  const zero = CH_H / 2;
+  const hoverX = i != null ? ((CH_PAD + i * slot + bw / 2) / CH_W) * 100 : 0;
+
+  return (
+    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
+      <svg viewBox={`0 0 ${CH_W} ${CH_H}`} preserveAspectRatio="none" style={{ width: "100%", height: CH_H, display: "block", cursor: "crosshair" }}>
+        <line x1={CH_PAD} y1={zero} x2={CH_W - CH_PAD} y2={zero} stroke={HT.border} />
+        {vals.map((v, n) => {
+          const bh = (Math.abs(v) / maxAbs) * (CH_H / 2 - CH_PAD);
+          return (
+            <rect key={n}
+              x={CH_PAD + n * slot} y={v >= 0 ? zero - bh : zero}
+              width={bw} height={bh}
+              fill={v >= 0 ? T.green : T.red}
+              opacity={i == null || i === n ? 0.9 : 0.4} />
+          );
+        })}
+      </svg>
+      {i != null && <ChartTip pt={points[i]} xPct={hoverX} fmt={fmt} />}
+    </div>
   );
 }
 
@@ -139,8 +209,6 @@ export default function TradingPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState<"all" | "verified" | "manual">("all");
-  const [tab, setTab] = useState("journal");
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [modalErr, setModalErr] = useState("");
@@ -206,12 +274,13 @@ export default function TradingPage() {
     (async () => { await migrateLocal(); await load(); })();
   }, [migrateLocal, load]);
 
+  // Every entry counts — there's no manual/verified split any more (imported and
+  // hand-typed days are the same thing to the stats). The only filter left is a
+  // click on a calendar day.
   const visible = useMemo(() => {
-    let v = journals;
-    if (filter !== "all") v = v.filter((j) => j.kind === filter);
-    if (selectedDay) v = v.filter((j) => j.date === selectedDay);
+    const v = selectedDay ? journals.filter((j) => j.date === selectedDay) : journals;
     return [...v].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
-  }, [journals, filter, selectedDay]);
+  }, [journals, selectedDay]);
 
   // ── KPIs ─────────────────────────────────────────────────────────────────────
   const k = useMemo(() => {
@@ -251,8 +320,28 @@ export default function TradingPage() {
         const gl = Math.abs(losses.reduce((s, j) => s + j.net_pnl, 0));
         return gl > 0 ? gw / gl : null;
       })(),
-      // Per-day profit factor series, for the sparkline.
-      pfSeries: visible.map((j) => j.profit_factor),
+      // Hoverable series — each point carries its date + a context line so the
+      // tooltip can say WHY the number is what it is, not just what it is.
+      pfSeries: visible.map((j) => ({
+        label: j.date,
+        value: j.profit_factor,
+        sub: `${j.trades} trades · ${j.win_rate.toFixed(0)}% win`,
+      })),
+      cumSeries: visible.map((j, i) => ({
+        label: j.date,
+        value: cum[i],
+        sub: `day ${j.net_pnl >= 0 ? "+" : ""}${fmt$(j.net_pnl)}`,
+      })),
+      ddSeries: visible.map((j, i) => ({
+        label: j.date,
+        value: dd[i],
+        sub: dd[i] < 0 ? `below peak of ${fmt$(cum[i] - dd[i])}` : "at equity high",
+      })),
+      pnlSeries: visible.map((j) => ({
+        label: j.date,
+        value: j.net_pnl,
+        sub: `${j.trades} trades · ${j.win_rate.toFixed(0)}% win · fees ${fmt$(j.commissions)}`,
+      })),
     };
   }, [visible]);
 
@@ -416,12 +505,9 @@ export default function TradingPage() {
       </Card>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* Filters */}
+        {/* Toolbar */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button style={btnStyle(filter === "all")} onClick={() => setFilter("all")}>All Journals</button>
-            <button style={btnStyle(filter === "verified")} onClick={() => setFilter("verified")}>✓ Verified</button>
-            <button style={btnStyle(filter === "manual")} onClick={() => setFilter("manual")}>✎ Manual</button>
             {selectedDay && (
               <button style={btnStyle()} onClick={() => setSelectedDay(null)}>Day: {selectedDay} ✕</button>
             )}
@@ -497,23 +583,23 @@ export default function TradingPage() {
                 <div style={titleStyle}>
                   Profit Factor <span style={{ color: HT.text }}>{k.profitFactor != null ? k.profitFactor.toFixed(2) : "—"}</span>
                 </div>
-                <MiniLine values={k.pfSeries} color={HT.cyan} />
+                <MiniLine points={k.pfSeries} color={HT.cyan} fmt={(v) => (v ? v.toFixed(2) : "—")} />
               </Card>
               <Card padding={16}>
                 <div style={titleStyle}>
                   Cumulative PnL <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>
                 </div>
-                <MiniLine values={k.cum} color={T.green} />
+                <MiniLine points={k.cumSeries} color={T.green} />
               </Card>
               <Card padding={16}>
                 <div style={titleStyle}>
                   Drawdown (Max) <span style={{ color: T.red }}>{visible.length ? fmt$(k.maxDD) : "—"}</span>
                 </div>
-                <MiniLine values={k.dd} color={T.red} />
+                <MiniLine points={k.ddSeries} color={T.red} />
               </Card>
               <Card padding={16}>
                 <div style={titleStyle}>PnL Per Day</div>
-                <MiniBars values={visible.map((j) => j.net_pnl)} />
+                <MiniBars points={k.pnlSeries} />
               </Card>
             </div>
 
