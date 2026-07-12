@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-12 — Earnings calendar woven into the econ calendar (`server-v2/earnings-calendar-recorder.js`, `server-v2/ticker-logo.js`, `server-v2/server-with-proxy.js`, `components/dashboard/EconCalendarPanel.tsx`, `app/economic-calendar/page.tsx`)
+
+New `earnings-calendar-recorder.js` scrapes the Nasdaq earnings API (`api.nasdaq.com/api/calendar/earnings?date=`) for names with market cap ≥ $100B (`EARNINGS_MIN_MCAP`) into a new `earnings_calendar` table — Saturday 09:00–09:30 ET pulls the coming Mon–Fri, plus a boot backfill that scrapes the current week if it's empty; exposed via `GET /proxy/earnings-week` (today → Friday) and `POST /proxy/earnings-week-run?week=this|next`. New `ticker-logo.js` + `GET /proxy/ticker-logo?sym=&name=` 302-redirects to a transparent logo, resolving davidepalazzo/ticker-logos → Wikidata P154 → Commons `Special:FilePath`, caching hits and misses in a new `ticker_logos` table (delete a row to re-resolve a bad logo). Both `EconCalendarPanel` (home) and `/economic-calendar` now render earnings as rows *inside* the event table — a cyan PRE/MARKET row under the day header before the first news item, and an AFTER/HOURS row after the last event at/before 16:00 ET; `session = unknown` (Time TBD) names are dropped, and the old dead `/api/earnings-today` strip (route never existed) is gone. Not build-verified.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
 ## 2026-07-12 — Vol-only GEX speed column (`hooks/useVolGexSpeed.ts`, `app/home/HomeClient.tsx`, `components/dashboard/GexHeatmap.tsx`, `server-v2/server-with-proxy.js`)
 
 Added a per-strike **VOL GEX SPEED** column to the GEX heatmap: `Δ|netVolGEX|` over a rolling 30s/1m/5m window (+ = wall building, − = bleeding; raw signed Δ kept in the hook for tooltips), fed by new `hooks/useVolGexSpeed.ts` — a hybrid source that samples the live WS chain into a 2s ring buffer (6m retention) and falls back to a Postgres seed on reload via `/proxy/gex-history?basis=vol` (new param in `handleGexHistory`, reads `net_vol_gex` instead of `net_gex`; default unchanged, so existing callers are untouched — **server change, needs VPS rebuild**). Wired into `HomeClient` (6th column + 30s/1m/5m toggle beside the Intensity slider) and `GexHeatmap` (`showSpeed` prop; `/mobile` on, `/social-media` off); the column renders through the shared `dataCell`/`cellBg` path so it inherits the same palette, font size and color as every other column, but keeps its own magnitude scale since Δ$ is orders of magnitude below the level. A green/red "Building/Bleeding" movers rail (`components/dashboard/VolGexSpeedRail.tsx`) was built then removed at Brandon's request — the file is now unused dead code, safe to delete. Build gotcha hit and fixed: a `{/* */}` JSX comment placed in ternary-expression position in `app/mobile/page.tsx` broke the Docker build (TS1005). Caveat baked into the docs: vol-only GEX accumulates from the open, so the metric skews positive for the first ~30 min — rank across strikes, don't read the level.

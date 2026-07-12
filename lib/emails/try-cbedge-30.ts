@@ -8,8 +8,9 @@
 // recipient (e.g. "TRY30-K4M9XZ", max_redemptions:1) and swaps it in right
 // before sending — mirrors how {{UNSUBSCRIBE_URL}} is swapped per recipient.
 //
-// Requires STRIPE_TRY30_COUPON_ID (base Stripe Coupon, $15 off / duration
-// "once") to exist before this campaign is sent.
+// Requires STRIPE_TRY30_COUPON_ID (base Stripe Coupon, $90 off — regular
+// price is $120/mo, this drops the first month to $30 — duration "once")
+// to exist before this campaign is sent.
 //
 // Brand palette: bg #05060A · panel #0D1119 · cyan #219EBC · accent #8ECAE6
 
@@ -45,7 +46,7 @@ export function tryCbEdge30Text(opts: TryCbEdge30Opts = {}): string {
     "",
     "You created a CB Edge account but never subscribed — so you haven't seen the dashboard actually running yet: live GEX and options flow, the ICT tracker, the regime engine, estimated moves, scanner and alerts, all of it.",
     "",
-    "To make it an easy call, your first month is $30 instead of $45.",
+    "To make it an easy call, your first month is $30 instead of $120.",
     "",
     `USE CODE: ${PROMO_CODE_PLACEHOLDER} at checkout (this code is yours alone — one-time use)`,
     "",
@@ -104,7 +105,7 @@ export function tryCbEdge30Email(opts: TryCbEdge30Opts = {}): string {
                 You created a <strong style="color:#219EBC;">CB Edge</strong> account but never subscribed — so you haven't actually seen the dashboard running: live GEX &amp; options flow, the ICT tracker, the regime engine, estimated moves, scanner and alerts.
               </p>
               <p style="margin:0 0 14px 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
-                To make it an easy call, your <strong style="color:#8ECAE6;">first month is $30</strong> instead of $45.
+                To make it an easy call, your <strong style="color:#8ECAE6;">first month is $30</strong> instead of $120.
               </p>
             </td>
           </tr>
@@ -115,6 +116,7 @@ export function tryCbEdge30Email(opts: TryCbEdge30Opts = {}): string {
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(33,158,188,0.35);border-radius:14px;background:radial-gradient(circle at 50% 0%,rgba(33,158,188,0.14) 0%,transparent 70%),rgba(33,158,188,0.04);">
                 <tr>
                   <td align="center" style="padding:22px 20px;">
+                    <div style="font:400 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#EF4444;text-decoration:line-through;margin-bottom:4px;">$120</div>
                     <div style="font:900 34px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;letter-spacing:-0.02em;">$30 <span style="font:400 16px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;">first month</span></div>
                     <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#8ECAE6;margin-top:12px;">Your one-time code</div>
                     <div style="margin-top:10px;">

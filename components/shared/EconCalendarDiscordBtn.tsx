@@ -10,6 +10,43 @@
 
 import { useState, useCallback } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+
+// Single source of truth for the snapshot palette — dashboard theme, no ad-hoc hex.
+const HT = {
+  bg: HOME_THEME.bg,
+  panelBg: HOME_THEME.panelBg,
+  border: HOME_THEME.border,
+  cyan: HOME_THEME.cyan,
+  green: HOME_THEME.green,
+  red: HOME_THEME.red,
+  orange: HOME_THEME.orange,
+  text: HOME_THEME.text,
+  muted: "#b8c2d6",
+} as const;
+
+function hexA(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+interface EarnRow {
+  symbol: string;
+  company: string;
+  callTime: string;
+  marketCap: number;
+}
+
+function fmtCap(v: number): string {
+  if (!v || v <= 0) return "–";
+  if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
+  return `$${v}`;
+}
 
 // ── Owner gate (cosmetic — matches DataBox/NavMenu) ───────────────────────────
 function useIsOwner(): boolean {
@@ -189,9 +226,9 @@ function headlinePriorityIndex(ev: CalEvent): number {
 // ── Build the snapshot HTML (matches snapshot-template-example.html CSS) ──────
 
 function impactBadge(impact: string): { bg: string; border: string; text: string } {
-  if (impact === "High") return { bg: "rgba(239,68,68,0.16)", border: "rgba(239,68,68,0.4)", text: "#EF4444" };
-  if (impact === "Medium") return { bg: "rgba(251,133,1,0.16)", border: "rgba(251,133,1,0.4)", text: "#FB8501" };
-  return { bg: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.12)", text: "#b8c2d6" };
+  if (impact === "High") return { bg: hexA(HT.red, 0.16), border: hexA(HT.red, 0.4), text: HT.red };
+  if (impact === "Medium") return { bg: hexA(HT.orange, 0.16), border: hexA(HT.orange, 0.4), text: HT.orange };
+  return { bg: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.12)", text: HT.muted };
 }
 
 function dash(v?: string): string {
@@ -206,7 +243,21 @@ function densityScale(n: number): number {
   return Math.max(0.7, Math.min(1.55, s));
 }
 
-function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""): string {
+function earningsRowsHTML(rows: EarnRow[]): string {
+  return rows.map(r => {
+    const t = (r.callTime || "").toUpperCase();
+    const tag = t === "BMO" ? { txt: "BMO", c: HT.orange } : t === "AMC" ? { txt: "AMC", c: HT.green } : { txt: "TNS", c: HT.muted };
+    return `
+    <div class="ern-row">
+      <div class="er-sym">${r.symbol}</div>
+      <div class="er-co">${r.company || ""}</div>
+      <div class="er-cap">${fmtCap(r.marketCap)}</div>
+      <div class="er-when"><span class="impact-pill" style="background:${hexA(tag.c, 0.14)};border-color:${hexA(tag.c, 0.4)};color:${tag.c}">${tag.txt}</span></div>
+    </div>`;
+  }).join("");
+}
+
+function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", earnings: EarnRow[] = []): string {
   const today = etToday();
   const todayEvents = events
     .filter(e => e.date === today && includeTemplateEvent(e))
@@ -279,31 +330,39 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = ""):
     </div>
   `).join("");
 
+  const ernRows = earnings.slice(0, 8);
+
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
 <style>
-:root{--bg:#05060A;--panelBg:rgba(13,17,25,0.55);--panelBgSoft:rgba(13,17,25,0.4);--border:rgba(255,255,255,0.10);--cyan:#219EBC;--green:#8ECAE6;--red:#EF4444;--orange:#FB8501;--text:#FFFFFF;--muted:#b8c2d6}
+:root{--bg:${HT.bg};--panelBg:${HT.panelBg};--border:${HT.border};--cyan:${HT.cyan};--green:${HT.green};--red:${HT.red};--orange:${HT.orange};--text:${HT.text};--muted:${HT.muted};--lblue:${LIGHT_BLUE}}
 *{box-sizing:border-box;margin:0;padding:0}
-body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:Arial,Helvetica,sans-serif;background:var(--bg)}
-.snapshot{width:min(1280px,100%);min-height:680px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 0%,rgba(33,158,188,0.10) 0%,transparent 45%),radial-gradient(circle at 85% 10%,rgba(142,202,230,0.06) 0%,transparent 40%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
+body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:'Inter','Helvetica Neue',Arial,sans-serif;background:var(--bg)}
+.snapshot{width:min(1280px,100%);min-height:680px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 50%,${hexA(HT.cyan, 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,rgba(18,103,131,0.07) 0%,transparent 50%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
-.badge{background:rgba(33,158,188,0.12);border:1px solid rgba(33,158,188,0.4);color:var(--cyan);padding:14px 26px;font-size:24px;letter-spacing:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
+.badge{display:inline-flex;align-items:center;justify-content:center;line-height:1;height:56px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;letter-spacing:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:10px 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
-.today-pill{background:rgba(33,158,188,0.16);border:1px solid rgba(33,158,188,0.4);color:var(--cyan);border-radius:8px;padding:10px 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
+.date-pill{display:inline-flex;align-items:center;line-height:1;height:40px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
+.today-pill{display:inline-flex;align-items:center;line-height:1;height:40px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
-.grid{display:grid;grid-template-columns:2fr 3fr;gap:20px;margin-top:24px;flex:1;min-height:0}
-.panel{border-radius:16px;border:1px solid var(--border);background:var(--panelBg);overflow:hidden;height:100%;display:flex;flex-direction:column}
+.grid{display:grid;grid-template-columns:1.5fr 3fr 1.7fr;gap:18px;margin-top:24px;flex:1;min-height:0}
+/* THE card surface (classicCardAccentStyle): frosted fill, hairline edge, faint
+   light-blue radial glow, 18px radius. NO per-card accent strip, NO colored
+   panel titles — see PageCard.tsx. */
+.panel{border-radius:18px;border:1px solid var(--border);background:radial-gradient(circle at 50% 0%,rgba(126,211,252,0.10) 0%,transparent 60%),var(--panelBg);box-shadow:0 18px 40px rgba(0,0,0,0.22);overflow:hidden;height:100%;display:flex;flex-direction:column}
 .panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
-.panel-title{font-size:16px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:var(--text)}
-.panel-pct{font-size:14px;font-weight:800;color:var(--muted);background:rgba(255,255,255,0.06);border-radius:8px;padding:4px 10px}
-.pres .panel-title{color:var(--green)}
-.pres .panel-pct{color:var(--green);background:rgba(142,202,230,0.12)}
-.econ .panel-title{color:var(--cyan)}
-.econ .panel-pct{color:var(--cyan);background:rgba(33,158,188,0.12)}
+.panel-title{font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
+.panel-pct{display:inline-flex;align-items:center;line-height:1;font-size:12px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:5px 10px}
+.ern-body{display:flex;flex-direction:column;flex:1}
+.ern-row{display:grid;grid-template-columns:64px 1fr 56px 52px;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex:1}
+.ern-row:last-child{border-bottom:none}
+.er-sym{font-size:14px;font-weight:800;color:var(--text)}
+.er-co{font-size:12px;font-weight:600;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.er-cap{font-size:12px;font-weight:700;text-align:right;color:var(--text)}
+.er-when{text-align:right}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 .pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center}
 .pres-row:last-child{border-bottom:none}
-.pr-time{color:var(--green);font-weight:700;font-size:${presTimeSize}px}
+.pr-time{color:var(--lblue);font-weight:700;font-size:${presTimeSize}px}
 .pr-title{font-size:${presTitleSize}px;font-weight:600;line-height:1.3}
 .empty-panel{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:rgba(255,255,255,0.35);font-size:14px}
 .econ-table{display:flex;flex-direction:column;flex:1}
@@ -347,6 +406,13 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
         </div>
         ${econRowsHTML}
       </div>` : `<div class="empty-panel">No high-impact events today</div>`}
+    </div>
+    <div class="panel ern">
+      <div class="panel-head">
+        <div class="panel-title">Earnings</div>
+        <div class="panel-pct">${earnings.length}</div>
+      </div>
+      ${ernRows.length > 0 ? `<div class="ern-body">${earningsRowsHTML(ernRows)}</div>` : `<div class="empty-panel">No earnings today</div>`}
     </div>
   </div>
   ${logoDataUrl ? `
@@ -414,16 +480,19 @@ async function copyImageToClipboard(imageBase64: string): Promise<void> {
 }
 
 async function buildCalendarTemplateImage(): Promise<string> {
-  const [calRes, quoteRes, logoRes] = await Promise.all([
+  const [calRes, quoteRes, logoRes, ernRes] = await Promise.all([
     fetch("/api/calendar", { cache: "no-store" }),
     fetch("/api/calendar-quote", { cache: "no-store" }).catch(() => null),
     fetch("/cb-edge-square.png", { cache: "no-store" }).catch(() => null),
+    fetch("/api/earnings-today", { cache: "no-store" }).catch(() => null),
   ]);
   const calJson = calRes.ok ? await calRes.json() : {};
   const quoteJson = quoteRes?.ok ? await quoteRes.json() : {};
+  const ernJson = ernRes?.ok ? await ernRes.json() : {};
 
   const events: CalEvent[] = calJson.events ?? [];
   const quote: string = quoteJson.quote ?? "";
+  const earnings: EarnRow[] = ernJson.earnings ?? [];
 
   let logoDataUrl = "";
   if (logoRes?.ok) {
@@ -435,7 +504,7 @@ async function buildCalendarTemplateImage(): Promise<string> {
     });
   }
 
-  const html = buildSnapshotHTML(events, quote, logoDataUrl);
+  const html = buildSnapshotHTML(events, quote, logoDataUrl, earnings);
   return renderAndCapture(html);
 }
 

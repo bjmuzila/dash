@@ -10,6 +10,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Removed the Dark Pool section from the Flow page — the off-exchange print data wasn't reliable enough to trade off of, so it's gone rather than left as noise.
 * GEX Scanner now opens with a Top 10 card grid showing the biggest gamma moves of the last 15 minutes at a glance, filtered to strikes at least 5% out of the money by default.
 * Retired the Greeks Sensitivity and Vol Pin tabs from the Scanner to keep the page focused on the tools that are actually working.
+* The Economic Calendar now shows earnings right in the schedule: the biggest companies reporting each day (over $100B in market cap) appear as their own row — premarket names before that day's news, after-hours names after the 4pm close — with a company logo and ticker for each.
 * The Scanner's IB Stats tab now leads with a live read of today's session: a breakout-direction gauge, an expansion matrix showing the odds of a one-sided trend vs a two-sided chop day, the tactical rule that's active right now, and one overall bullish-or-bearish break score.
 * The long historical stat tables are tucked away so the tab opens straight to what matters for today's trade.
 * The GEX heatmap has a new Vol GEX Speed column showing how fast volume-based gamma is being built up or torn down at each strike over the last 30 seconds, minute, or 5 minutes — a wall growing as price approaches it often means a pin, while one draining away can mean a breakout is coming.

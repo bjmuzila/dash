@@ -167,7 +167,10 @@ export default function AdminEmailsPage() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error || `Send failed (${res.status})`);
       const failNote = j.failedCount ? ` (${j.failedCount} failed)` : "";
-      setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}.`);
+      const failDetail = Array.isArray(j.failed) && j.failed.length
+        ? " — " + j.failed.slice(0, 3).map((f: { error?: string }) => f.error || "unknown error").join("; ")
+        : "";
+      setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}.${failDetail}`);
       setSubject("");
       setBody("");
       loadHistory();
