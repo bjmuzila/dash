@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { densifyChainRows, netGEXOf, type ChainRow, type CalcMode } from "@/lib/calculations/calculations";
 import { useVolGexSpeed, type SpeedWindow } from "@/hooks/useVolGexSpeed";
-import VolGexSpeedRail, { SPEED_BLEED, SPEED_BUILD, fmtSpeedPct } from "./VolGexSpeedRail";
 
 interface HeatmapRow {
   strike: number;
@@ -56,8 +55,6 @@ interface Props {
   rollingNetGexByStrike?: Record<number, number>;
   /** Adds the VOL GEX SPEED column (Δ|vol-only GEX| over a rolling window). */
   showSpeed?: boolean;
-  /** Adds the fastest-building / fastest-bleeding rail on the right. */
-  showSpeedRail?: boolean;
   speedWindow?: SpeedWindow;
   /** Fired when a strike row/cell is clicked. Carries the full ChainRow + click pos. */
   onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
@@ -72,7 +69,6 @@ export default function GexHeatmap({
   window: win = 20,
   rollingNetGexByStrike = {},
   showSpeed = false,
-  showSpeedRail = false,
   speedWindow = 60,
   onStrikeClick,
 }: Props) {
@@ -80,7 +76,6 @@ export default function GexHeatmap({
   const initializedRef = useRef(false);
   const anchorStrikeRef = useRef<number | null>(null);
   const useVol = dataMode === "vol-only";
-  const [speedWin, setSpeedWin] = useState<SpeedWindow>(speedWindow);
 
   const denseChain = densifyChainRows(chain);
   const rowByStrike = new Map(denseChain.map(r => [r.strike, r]));
@@ -111,8 +106,7 @@ export default function GexHeatmap({
     strike: r.strike,
     netVolGEX: r.netVolGEX ?? netGEXOf(r, "vol", spotPrice || Number(r.spotPrice ?? r.spot ?? 0)),
   }));
-  const speedOn = showSpeed || showSpeedRail;
-  const { speed, usingSeed } = useVolGexSpeed(speedSource, expiry ?? "", speedWin, { seed: speedOn });
+  const { speed } = useVolGexSpeed(speedSource, expiry ?? "", speedWindow, { seed: showSpeed });
 
   const COLS: readonly { key: ColKey; label: string }[] = showSpeed
     ? [...BASE_COLS, SPEED_COL]
@@ -181,15 +175,6 @@ export default function GexHeatmap({
     const m = maxMap[key] || 0;
     if (m === 0 || !n) return "transparent";
     const pos = n >= 0;
-    // Speed column reads as BUILD (green) vs BLEED (red) — deliberately a
-    // different palette from the cyan/red level columns so they aren't confused.
-    if (key === "volSpeed") {
-      const ratio = Math.min(Math.abs(n) / m, 1);
-      const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
-      const alpha = topRank === 1 ? 0.55 : topRank === 2 ? 0.35 : topRank === 3 ? 0.22 : Math.min(0.18, 0.02 + eased * 0.16);
-      const rgb = pos ? "61,220,132" : "255,86,110";
-      return `rgba(${rgb},${alpha.toFixed(2)})`;
-    }
     if (topRank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
     if (topRank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
     if (topRank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
@@ -245,8 +230,7 @@ export default function GexHeatmap({
   const gridCols = `68px repeat(${COLS.length}, 1fr)`;
 
   return (
-    <div style={{ display: "flex", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, height: "100%", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--overview-bg, #05080d)", overflow: "hidden" }}>
       <div style={{
         display: "grid",
         gridTemplateColumns: gridCols,
@@ -349,23 +333,7 @@ export default function GexHeatmap({
                         </svg>
                       </span>
                     )}
-                    {c.key === "volSpeed"
-                      ? (v == null
-                          ? <span style={{ color: "#3a5570" }}>—</span>
-                          : (
-                            <span
-                              title={`Δ|vol GEX| over ${speedWin}s — ${v >= 0 ? "wall BUILDING" : "wall BLEEDING"}`}
-                              style={{ display: "inline-flex", alignItems: "baseline", gap: 4, cursor: "help" }}
-                            >
-                              <span style={{ color: v >= 0 ? SPEED_BUILD : SPEED_BLEED, fontWeight: 700 }}>
-                                {(v >= 0 ? "+" : "−") + fmtG(Math.abs(v))}
-                              </span>
-                              <span style={{ fontSize: 8.5, color: "#8da8c2" }}>
-                                {row.volSpeedPct == null ? "" : fmtSpeedPct(row.volSpeedPct)}
-                              </span>
-                            </span>
-                          ))
-                      : fmtG(v)}
+                    {fmtG(v)}
                   </div>
                 );
               })}
@@ -373,16 +341,6 @@ export default function GexHeatmap({
           );
         })}
       </div>
-    </div>
-
-    {showSpeedRail && (
-      <VolGexSpeedRail
-        speed={speed}
-        windowSec={speedWin}
-        onWindowChange={setSpeedWin}
-        usingSeed={usingSeed}
-      />
-    )}
     </div>
   );
 }

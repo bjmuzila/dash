@@ -20,7 +20,6 @@ import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useVolGexSpeed, type SpeedWindow, type VolGexSpeedMap } from "@/hooks/useVolGexSpeed";
-import VolGexSpeedRail, { SPEED_BLEED, SPEED_BUILD, fmtSpeedPct } from "@/components/dashboard/VolGexSpeedRail";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -99,19 +98,6 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
   const alpha = Math.min(0.18, 0.02 + eased * 0.16);
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
-}
-
-// Speed-cell background. Same alpha curve as metricBg, different palette:
-// green = vol gamma BUILDING at the strike, red = BLEEDING. Kept visually distinct
-// from the cyan/red level columns on purpose.
-function metricSpeedBg(value: number, maxValue: number, intensity: number): string {
-  const n = value || 0;
-  const m = maxValue || 0;
-  if (m === 0 || !n) return "transparent";
-  const ratio = Math.min(Math.abs(n) / m, 1);
-  const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
-  const alpha = Math.min(0.45, 0.02 + eased * 0.42);
-  return n >= 0 ? `rgba(61,220,132,${alpha.toFixed(2)})` : `rgba(255,86,110,${alpha.toFixed(2)})`;
 }
 
 type ExpiryOption = { value: string; label: string };
@@ -890,11 +876,7 @@ export function HomeClient({
     () => chainRows.map((r) => ({ strike: r.strike, netVolGEX: r.netVolGEX ?? 0 })),
     [chainRows]
   );
-  const { speed: volSpeed, usingSeed: volSpeedSeeded } = useVolGexSpeed(
-    speedSource,
-    selectedExpiry,
-    speedWin
-  );
+  const { speed: volSpeed } = useVolGexSpeed(speedSource, selectedExpiry, speedWin);
 
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
@@ -1321,6 +1303,29 @@ export function HomeClient({
                         style={{ width: 80, height: 3, accentColor: "#219EBC" }}
                       />
                       <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
+                      {/* Rolling window for the VOL GEX SPEED column. */}
+                      <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginLeft: 6 }}>Speed</span>
+                      <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                        {([30, 60, 300] as SpeedWindow[]).map((w) => (
+                          <button
+                            key={w}
+                            onClick={() => setSpeedWin(w)}
+                            title={`Δ|vol-only GEX| over the last ${w < 60 ? `${w}s` : `${w / 60}m`}`}
+                            style={{
+                              padding: "2px 7px",
+                              fontSize: 9,
+                              fontWeight: 700,
+                              cursor: "pointer",
+                              border: "none",
+                              fontFamily: "inherit",
+                              background: speedWin === w ? "rgba(33,158,188,0.14)" : "transparent",
+                              color: speedWin === w ? "#219EBC" : "#5a7a98",
+                            }}
+                          >
+                            {w < 60 ? `${w}s` : `${w / 60}m`}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                     )}
                   </div>
@@ -1441,9 +1446,6 @@ export function HomeClient({
                         );
                       };
 
-                      const speedBg = (value: number) =>
-                        metricSpeedBg(value, heatmapColorMeta.max["volSpeedVal"] ?? 1, intensity);
-
                       // Numeric cell: heatmap view paints a background; table view draws a bar.
                       const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
                         const isTable = heatmapView === "table";
@@ -1504,50 +1506,16 @@ export function HomeClient({
                             {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
                             {dataCell(row.dex, row.dexVal, "dexVal", 3)}
                             {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
-                            {/* VOL GEX SPEED — own green/red build-vs-bleed palette so it
-                                never reads as another cyan/red level column. */}
-                            <td
-                              key={5}
-                              title={row.volSpeedVal == null
-                                ? "Collecting — speed appears once the window fills."
-                                : `Δ|vol GEX| ${fmtMoney(row.volSpeedVal)} over ${speedWin}s — ${row.volSpeedVal >= 0 ? "wall BUILDING" : "wall BLEEDING"}`}
-                              style={{
-                                position: "relative",
-                                padding: "0 16px",
-                                textAlign: heatmapView === "table" ? "left" : "right",
-                                lineHeight: 1.1,
-                                overflow: "hidden",
-                                cursor: "help",
-                                ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder, borderRight: atmBorder } : {}),
-                                background: heatmapView === "table" || row.volSpeedVal == null
-                                  ? "transparent"
-                                  : speedBg(row.volSpeedVal),
-                                fontWeight: isAtm ? 700 : 400,
-                              }}
-                            >
-                              {heatmapView === "table" ? barEl(row.volSpeedVal, "volSpeedVal") : (
-                                row.volSpeedVal == null
-                                  ? <span style={{ color: "#3a5570" }}>—</span>
-                                  : (
-                                    <span style={{ position: "relative", zIndex: 1, display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-                                      <span style={{ color: row.volSpeedVal >= 0 ? SPEED_BUILD : SPEED_BLEED, fontWeight: 700 }}>{row.volSpeed}</span>
-                                      <span style={{ fontSize: 10, color: "#8da8c2" }}>{row.volSpeedPct == null ? "" : fmtSpeedPct(row.volSpeedPct)}</span>
-                                    </span>
-                                  )
-                              )}
-                            </td>
+                            {/* VOL GEX SPEED — rendered by the shared dataCell so it uses the
+                                exact same heatmap palette, font size and color as every other
+                                column. Sign still means build (+) vs bleed (−). */}
+                            {dataCell(row.volSpeed, row.volSpeedVal, "volSpeedVal", 5)}
                           </tr>
                         </React.Fragment>
                       );
                     })}
                   </tbody>
                 </table>
-                <VolGexSpeedRail
-                  speed={volSpeed}
-                  windowSec={speedWin}
-                  onWindowChange={setSpeedWin}
-                  usingSeed={volSpeedSeeded}
-                />
                 </div>
                 )}
               </div>
