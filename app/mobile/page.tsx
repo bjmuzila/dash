@@ -440,7 +440,8 @@ export default function MobileGexPage() {
             </div>
           </div>
         ) : viewMode === "heatmap" ? (
-          <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={0.8} window={20} />
+          {/* showSpeed only — the movers rail needs ~176px it doesn't have on mobile. */}
+          <GexHeatmap chain={chain} spotPrice={spotPrice} dataMode={dataMode} intensity={0.8} window={20} expiry={selectedExpiry} showSpeed />
         ) : (
           <GexChart
             chain={chain}

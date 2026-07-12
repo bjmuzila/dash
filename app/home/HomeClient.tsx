@@ -19,6 +19,8 @@ import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
+import { useVolGexSpeed, type SpeedWindow, type VolGexSpeedMap } from "@/hooks/useVolGexSpeed";
+import VolGexSpeedRail, { SPEED_BLEED, SPEED_BUILD, fmtSpeedPct } from "@/components/dashboard/VolGexSpeedRail";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -73,6 +75,10 @@ type HeatmapRow = {
   dexVal: number;      dex: string;
   gexVexVal: number;   gexVex: string;   // Net VEX (vanna)
   rollingVal: number | null; rolling: string;  // 30-min rolling net GEX (DB)
+  // Vol-only GEX speed: Δ|netVolGEX| over the selected window.
+  // + = wall BUILDING at that strike, − = wall BLEEDING. See hooks/useVolGexSpeed.
+  volSpeedVal: number | null; volSpeed: string;
+  volSpeedPct: number | null;
   type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
   rank?: number;
   rankColor?: string;
@@ -93,6 +99,19 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
   const alpha = Math.min(0.18, 0.02 + eased * 0.16);
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
+}
+
+// Speed-cell background. Same alpha curve as metricBg, different palette:
+// green = vol gamma BUILDING at the strike, red = BLEEDING. Kept visually distinct
+// from the cyan/red level columns on purpose.
+function metricSpeedBg(value: number, maxValue: number, intensity: number): string {
+  const n = value || 0;
+  const m = maxValue || 0;
+  if (m === 0 || !n) return "transparent";
+  const ratio = Math.min(Math.abs(n) / m, 1);
+  const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
+  const alpha = Math.min(0.45, 0.02 + eased * 0.42);
+  return n >= 0 ? `rgba(61,220,132,${alpha.toFixed(2)})` : `rgba(255,86,110,${alpha.toFixed(2)})`;
 }
 
 type ExpiryOption = { value: string; label: string };
@@ -261,7 +280,12 @@ function pickCenterRows(rows: ChainRow[], spot: number, sideCount = 20): ChainRo
   return sorted.slice(start, end);
 }
 
-function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<number, number>): HeatmapRow[] {
+function toHeatmapRows(
+  rows: ChainRow[],
+  spot: number,
+  rollingByStrike?: Map<number, number>,
+  speedByStrike?: VolGexSpeedMap
+): HeatmapRow[] {
   const windowRows = pickCenterRows(rows, spot, 20);
   // Rank by OI+Vol net (netGEX OI-only + netVolGEX vol-only), matching the column.
   const oiVol = (r: ChainRow) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
@@ -286,6 +310,7 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
     const flowGex = row.flowGEX ?? 0;  // Flow GEX from dealer inventory
     const rolling = rollingByStrike?.get(row.strike); // 30-min rolling net GEX
+    const sp = speedByStrike?.[row.strike];           // vol-only GEX speed
     const isAtm = row.strike === atmStrike;
     let type: HeatmapRow["type"] = "neutral";
     if (isAtm) type = "atm";
@@ -304,6 +329,9 @@ function toHeatmapRows(rows: ChainRow[], spot: number, rollingByStrike?: Map<num
       gexVexVal: flowGex,    gexVex: fmtMoney(flowGex),
       rollingVal: rolling ?? null,
       rolling: rolling == null ? "—" : fmtMoney(rolling),
+      volSpeedVal: sp ? sp.magDelta : null,
+      volSpeed: sp ? fmtMoney(sp.magDelta) : "—",
+      volSpeedPct: sp ? sp.pct : null,
       type,
       rank: rankMap.get(row.strike)?.rank,
       rankColor: rankMap.get(row.strike)?.rankColor,
@@ -494,6 +522,8 @@ export function HomeClient({
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
   // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
   const [intensity, setIntensity] = useState(1.75);
+  // Rolling window for the VOL GEX SPEED column + movers rail.
+  const [speedWin, setSpeedWin] = useState<SpeedWindow>(60);
   // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
   // option chain. ("table" divergent-bars view retired from the switcher; kept in
   // the union so its now-unreachable render branch stays valid without a refactor.)
@@ -854,15 +884,28 @@ export function HomeClient({
     });
   }, [gexChainRows, wsChainRows]);
 
+  // Vol-only GEX speed (Δ|netVolGEX| per strike over a rolling window). Hybrid
+  // source: live ring buffer + Postgres seed on reload. See hooks/useVolGexSpeed.
+  const speedSource = useMemo(
+    () => chainRows.map((r) => ({ strike: r.strike, netVolGEX: r.netVolGEX ?? 0 })),
+    [chainRows]
+  );
+  const { speed: volSpeed, usingSeed: volSpeedSeeded } = useVolGexSpeed(
+    speedSource,
+    selectedExpiry,
+    speedWin
+  );
+
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
     if (!(useSpot > 0) || !chainRows.length) return [] as HeatmapRow[];
-    return toHeatmapRows(chainRows, useSpot, rollingByStrike);
-  }, [chainRows, chartSpot, spot, rollingByStrike]);
+    return toHeatmapRows(chainRows, useSpot, rollingByStrike, volSpeed);
+  }, [chainRows, chartSpot, spot, rollingByStrike, volSpeed]);
 
   // Column maxes + top-3 magnitudes for intensity coloring (per visible column).
+  // volSpeedVal gets its own scale — Δ$ is orders of magnitude below the level.
   const heatmapColorMeta = useMemo(() => {
-    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal"] as const;
+    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal", "volSpeedVal"] as const;
     const max: Record<string, number> = {};
     const top3: Record<string, number[]> = {};
     for (const c of cols) {
@@ -1324,18 +1367,26 @@ export function HomeClient({
                 {heatmapView === "chain" ? (
                   <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
                 ) : (
-                <table style={{ width: "100%", height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
+                <table style={{ flex: 1, minWidth: 0, height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
-                    <col style={{ width: "10%" }} />
-                    <col style={{ width: "22.5%" }} />
-                    <col style={{ width: "22.5%" }} />
-                    <col style={{ width: "22.5%" }} />
-                    <col style={{ width: "22.5%" }} />
+                    <col style={{ width: "9%" }} />
+                    <col style={{ width: "19%" }} />
+                    <col style={{ width: "19%" }} />
+                    <col style={{ width: "17%" }} />
+                    <col style={{ width: "17%" }} />
+                    <col style={{ width: "19%" }} />
                   </colgroup>
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Flow Gex"].map((header, index) => (
-                        <th key={header} style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 || heatmapView === "table" ? "left" : "right", color: "#fff" }}>{header}</th>
+                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Flow Gex", `Vol GEX Speed`].map((header, index) => (
+                        <th
+                          key={header}
+                          title={index === 5 ? `Δ|vol-only GEX| over the last ${speedWin < 60 ? `${speedWin}s` : `${speedWin / 60}m`} — green = wall building, red = bleeding` : undefined}
+                          style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 || heatmapView === "table" ? "left" : "right", color: "#fff", cursor: index === 5 ? "help" : undefined }}
+                        >
+                          {header}
+                        </th>
                       ))}
                     </tr>
                   </thead>
@@ -1390,6 +1441,9 @@ export function HomeClient({
                         );
                       };
 
+                      const speedBg = (value: number) =>
+                        metricSpeedBg(value, heatmapColorMeta.max["volSpeedVal"] ?? 1, intensity);
+
                       // Numeric cell: heatmap view paints a background; table view draws a bar.
                       const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
                         const isTable = heatmapView === "table";
@@ -1413,7 +1467,7 @@ export function HomeClient({
                         <React.Fragment key={rowKey}>
                           {showDivider && (
                             <tr>
-                              <td colSpan={5} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(33,158,188,0.15), rgba(18,103,131,0.10), transparent)" }} />
+                              <td colSpan={6} style={{ padding: 0, height: 1, background: "linear-gradient(to right, transparent, rgba(33,158,188,0.15), rgba(18,103,131,0.10), transparent)" }} />
                             </tr>
                           )}
                           <tr
@@ -1450,12 +1504,51 @@ export function HomeClient({
                             {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
                             {dataCell(row.dex, row.dexVal, "dexVal", 3)}
                             {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
+                            {/* VOL GEX SPEED — own green/red build-vs-bleed palette so it
+                                never reads as another cyan/red level column. */}
+                            <td
+                              key={5}
+                              title={row.volSpeedVal == null
+                                ? "Collecting — speed appears once the window fills."
+                                : `Δ|vol GEX| ${fmtMoney(row.volSpeedVal)} over ${speedWin}s — ${row.volSpeedVal >= 0 ? "wall BUILDING" : "wall BLEEDING"}`}
+                              style={{
+                                position: "relative",
+                                padding: "0 16px",
+                                textAlign: heatmapView === "table" ? "left" : "right",
+                                lineHeight: 1.1,
+                                overflow: "hidden",
+                                cursor: "help",
+                                ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder, borderRight: atmBorder } : {}),
+                                background: heatmapView === "table" || row.volSpeedVal == null
+                                  ? "transparent"
+                                  : speedBg(row.volSpeedVal),
+                                fontWeight: isAtm ? 700 : 400,
+                              }}
+                            >
+                              {heatmapView === "table" ? barEl(row.volSpeedVal, "volSpeedVal") : (
+                                row.volSpeedVal == null
+                                  ? <span style={{ color: "#3a5570" }}>—</span>
+                                  : (
+                                    <span style={{ position: "relative", zIndex: 1, display: "inline-flex", alignItems: "baseline", gap: 5 }}>
+                                      <span style={{ color: row.volSpeedVal >= 0 ? SPEED_BUILD : SPEED_BLEED, fontWeight: 700 }}>{row.volSpeed}</span>
+                                      <span style={{ fontSize: 10, color: "#8da8c2" }}>{row.volSpeedPct == null ? "" : fmtSpeedPct(row.volSpeedPct)}</span>
+                                    </span>
+                                  )
+                              )}
+                            </td>
                           </tr>
                         </React.Fragment>
                       );
                     })}
                   </tbody>
                 </table>
+                <VolGexSpeedRail
+                  speed={volSpeed}
+                  windowSec={speedWin}
+                  onWindowChange={setSpeedWin}
+                  usingSeed={volSpeedSeeded}
+                />
+                </div>
                 )}
               </div>
             </div>

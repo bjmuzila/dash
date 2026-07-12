@@ -425,13 +425,17 @@ async function handleGexHistory(req, res) {
   const expiry = searchParams.get('expiry') || '';
   const ages = (searchParams.get('ages') || '5,15,30')
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+  // basis=vol → per-strike VOL-ONLY baselines (net_vol_gex) for the heatmap's
+  // Vol GEX Speed column. Default stays net_gex so existing callers are unchanged.
+  const basis = searchParams.get('basis') === 'vol' ? 'vol' : 'net';
+  const col = basis === 'vol' ? 'net_vol_gex' : 'net_gex';
 
   if (!expiry || !ages.length) {
-    return sendJson(res, 200, { mode: 'point', ages, baselines: {} });
+    return sendJson(res, 200, { mode: 'point', basis, ages, baselines: {} });
   }
   const pool = getHistPool();
   if (!pool) {
-    return sendJson(res, 200, { mode: 'point', ages, baselines: {} });
+    return sendJson(res, 200, { mode: 'point', basis, ages, baselines: {} });
   }
 
   const date = todayYmdET();
@@ -444,21 +448,21 @@ async function handleGexHistory(req, res) {
   for (const age of ages) {
     const target = now - age * 60_000;
     const { rows } = await pool.query(
-      `SELECT DISTINCT ON (strike) strike, net_gex
+      `SELECT DISTINCT ON (strike) strike, ${col} AS val
          FROM option_strike_gex_history
-        WHERE date = $1 AND expiry = $2 AND timestamp <= $3
+        WHERE date = $1 AND expiry = $2 AND timestamp <= $3 AND ${col} IS NOT NULL
         ORDER BY strike, ABS(timestamp - $4) ASC`,
       [date, expiry, target, target]
     );
     for (const r of rows) {
       const strike = Number(r.strike);
-      const v = Number(r.net_gex);
+      const v = Number(r.val);
       if (!Number.isFinite(strike) || !Number.isFinite(v)) continue;
       (baselines[strike] ||= {})[String(age)] = v;
     }
   }
 
-  sendJson(res, 200, { mode: 'point', ages, baselines });
+  sendJson(res, 200, { mode: 'point', basis, ages, baselines });
 }
 
 // ── /proxy/flow-history ────────────────────────────────────────────────────
