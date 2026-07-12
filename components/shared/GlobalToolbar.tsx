@@ -220,7 +220,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/test",              label: "Test Lab",      emoji: "⚗️" },
   { href: "/owner",             label: "Owner",         emoji: "🛡️", ownerOnly: true },
   { href: "/whats-new",         label: "What's New",    emoji: "✨" },
-  { href: "/journal",           label: "Journal",       emoji: "📓", comingSoon: true },
+  // Journal is LIVE. The route is /trading (app/trading/page.tsx) — there is no
+  // /journal page; that href was a placeholder while the tile was coming-soon.
+  { href: "/trading",           label: "Journal",       emoji: "📓" },
   { href: "/order-flow",        label: "Order Flow",    emoji: "🧾", comingSoon: true },
   { href: "/lookup",            label: "Lookup",        emoji: "❓", comingSoon: true },
 ];

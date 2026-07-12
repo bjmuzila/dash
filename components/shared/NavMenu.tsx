@@ -54,8 +54,9 @@ const GEX_ITEMS: NavItem[] = [
   { label: "Order Flow", href: "/order-flow" },
 ];
 
-// Routes that exist in the nav but are not yet live — rendered as disabled labels
-const COMING_SOON = new Set(["/trading", "/order-flow"]);
+// Routes that exist in the nav but are not yet live — rendered as disabled labels.
+// /trading (the Journal) is LIVE now — Postgres-backed, with broker CSV import.
+const COMING_SOON = new Set(["/order-flow"]);
 
 // Routes that still work in "delayed" mode for unpaid signed-in users (see
 // middleware.ts PAID_EXEMPT + app/home + app/mult-greek's static branches).

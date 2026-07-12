@@ -56,7 +56,11 @@ export async function POST(req: NextRequest) {
       // clerk_user_id on the session is the webhook's fallback mapping if the
       // customer lookup ever misses.
       metadata: { clerk_user_id: userId },
+      // No trial_period_days here on purpose: the free trial is configured in
+      // Stripe on the Price. Checkout applies it automatically. Setting it here
+      // would override the dashboard value.
       subscription_data: { metadata: { clerk_user_id: userId } },
+      payment_method_collection: "always",
       allow_promotion_codes: true,
       success_url: `${origin}/checkout/success`,
       cancel_url: `${origin}/pricing?checkout=cancelled`,

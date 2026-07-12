@@ -27,14 +27,33 @@ const IMPACT_COLOR: Record<string, string> = {
 
 function impactColor(i: string) { return IMPACT_COLOR[i] ?? "#3a5570"; }
 
-interface EarnRow { symbol: string; company: string; callTime: string; marketCap: number; }
+interface EarnRow {
+  date: string;                        // YYYY-MM-DD (ET)
+  symbol: string;
+  company: string;
+  session: "pre" | "after" | "unknown";
+  market_cap: number;
+  eps_est: string | null;
+}
 
-const CHIP_W = 44;   // chip column width
-const CHIP_GAP = 12; // flex gap between chips
+const CHIP_W = 40;   // chip column width
+const CHIP_GAP = 8;  // flex gap between chips
 
-// FMP per-ticker logo (free, predictable URL).
-function logoUrl(sym: string) {
-  return `https://financialmodelingprep.com/image-stock/${sym.toUpperCase()}.png`;
+// Server resolver: ticker-logos repo → Wikidata/Commons P154. Transparent PNG.
+function logoUrl(sym: string, name?: string) {
+  return `/proxy/ticker-logo?sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || "")}`;
+}
+
+function fmtMcap(n: number) {
+  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+  return `$${Math.round(n / 1e9)}B`;
+}
+
+function dayLabelShort(dateStr: string, today: string) {
+  if (dateStr === today) return "TODAY";
+  return new Date(dateStr + "T12:00:00")
+    .toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" })
+    .toUpperCase();
 }
 
 function etToday() {
@@ -127,10 +146,8 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
   const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all-usd", "trump"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
-  const [maxChips,      setMaxChips]      = useState(8);
   const dropRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function h(e: MouseEvent) {
@@ -145,7 +162,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
     const [econRes, qRes, earnRes] = await Promise.all([
       fetch("/api/calendar", { cache: "no-store" }),
       fetch("/api/calendar-quote", { cache: "no-store" }),
-      fetch("/api/earnings-today", { cache: "no-store" }),
+      fetch("/proxy/earnings-week", { cache: "no-store" }),
     ]);
     const econJson = await econRes.json();
     if (!econRes.ok) {
@@ -164,7 +181,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
     }
     if (earnRes.ok) {
       const ej = await earnRes.json();
-      setEarnings(Array.isArray(ej.earnings) ? ej.earnings : []);
+      setEarnings(Array.isArray(ej.rows) ? ej.rows : []);
     }
   }, []);
 
@@ -182,21 +199,18 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
     return () => clearInterval(id);
   }, []);
 
-  // Measure how many logo chips fit on a single row; reserve one slot for the "+N" chip.
-  useEffect(() => {
-    const el = stripRef.current;
-    if (!el) return;
-    const measure = () => {
-      const w = el.clientWidth;
-      if (w <= 0) return;
-      const fit = Math.max(1, Math.floor((w + CHIP_GAP) / (CHIP_W + CHIP_GAP)));
-      setMaxChips(fit);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [earnings.length]);
+  // Earnings grouped by day (today → Friday), split premarket / after-hours.
+  const earnDays = (() => {
+    const map = new Map<string, { pre: EarnRow[]; after: EarnRow[]; unknown: EarnRow[] }>();
+    for (const r of earnings) {
+      if (!map.has(r.date)) map.set(r.date, { pre: [], after: [], unknown: [] });
+      const b = map.get(r.date)!;
+      if (r.session === "pre") b.pre.push(r);
+      else if (r.session === "after") b.after.push(r);
+      else b.unknown.push(r);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  })();
 
   const today    = etToday();
   const weekDays = etWeekDays();
@@ -429,8 +443,11 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         </div>
       )}
 
+      {/* Body: events (2/3) + earnings-this-week rail (1/3) */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+
       {/* Events */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
+      <div style={{ flex: "2 1 0", minWidth: 0, overflowY: "auto" }}>
         {loading ? (
           <div style={{ color: "#fff", fontSize: 11, padding: "8px 10px" }}>Loading…</div>
         ) : error ? (
@@ -452,102 +469,110 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         )}
       </div>
 
-      {/* Earnings Today — logo strip pinned to the bottom of the panel */}
-      {earnings.length > 0 && (
+      {/* Earnings this week — right 1/3 rail (mega caps, today → Friday) */}
+      <div style={{
+        flex: "1 1 0", minWidth: 150, overflowY: "auto",
+        borderLeft: `1px solid ${HT.border}`,
+        background: HT.panelBgStrong,
+        backdropFilter: "blur(16px)",
+        padding: "6px 8px 10px",
+      }}>
         <div style={{
-          flexShrink: 0,
-          borderTop: `1px solid ${HT.border}`,
-          background: HT.panelBgStrong,
-          backdropFilter: "blur(16px)",
-          padding: "6px 10px 8px",
+          fontSize: 9, fontWeight: 800, letterSpacing: "0.12em",
+          textTransform: "uppercase", color: "#219EBC", marginBottom: 2,
         }}>
-          <div style={{
-            fontSize: 9, fontWeight: 800, letterSpacing: "0.12em",
-            textTransform: "uppercase", color: "#219EBC", marginBottom: 6,
-          }}>
-            Earnings Today · {earnings.length}
-          </div>
-          <div ref={stripRef} style={{
-            display: "flex", gap: CHIP_GAP, overflow: "hidden",
-            paddingBottom: 2, flexWrap: "nowrap",
-          }}>
-            {(() => {
-              const overflow = earnings.length - maxChips;
-              const showCount = overflow > 0 ? Math.max(0, maxChips - 1) : maxChips;
-              const shown = earnings.slice(0, showCount);
-              const hidden = earnings.length - shown.length;
-              return (<>
-            {shown.map((e) => (
-              <a
-                key={e.symbol}
-                href={`https://finance.yahoo.com/quote/${e.symbol}`}
-                target="_blank"
-                rel="noreferrer"
-                title={`${e.company || e.symbol}${e.callTime ? ` · ${e.callTime}` : ""}`}
-                style={{
-                  display: "flex", flexDirection: "column", alignItems: "center",
-                  gap: 4, flexShrink: 0, width: 44, textDecoration: "none",
-                }}
-              >
-                <span style={{
-                  width: 32, height: 32, borderRadius: 8, overflow: "hidden",
-                  background: "#fff", border: `1px solid ${HT.border}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  flexShrink: 0,
-                }}>
-                  <img
-                    src={logoUrl(e.symbol)}
-                    alt={e.symbol}
-                    width={32}
-                    height={32}
-                    style={{ width: 32, height: 32, objectFit: "contain" }}
-                    onError={(ev) => {
-                      const t = ev.currentTarget;
-                      t.style.display = "none";
-                      const p = t.parentElement;
-                      if (p && !p.querySelector(".logo-fallback")) {
-                        const s = document.createElement("span");
-                        s.className = "logo-fallback";
-                        s.textContent = e.symbol.slice(0, 4);
-                        s.style.cssText = "font-size:8px;font-weight:800;color:#05080d;text-align:center;line-height:1;";
-                        p.appendChild(s);
-                      }
-                    }}
-                  />
-                </span>
-                <span style={{
-                  fontSize: 9, fontWeight: 700, color: "#fff",
-                  fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
-                  maxWidth: 44, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>
-                  {e.symbol}
-                </span>
-              </a>
-            ))}
-            {hidden > 0 && (
-              <div
-                title={`${hidden} more reporting today`}
-                style={{
-                  display: "flex", flexDirection: "column", alignItems: "center",
-                  justifyContent: "flex-start", gap: 4, flexShrink: 0, width: CHIP_W,
-                }}
-              >
-                <span style={{
-                  width: 32, height: 32, borderRadius: 8,
-                  background: "rgba(33,158,188,0.10)", border: `1px solid ${HT.border}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 10, fontWeight: 800, color: "#219EBC",
-                }}>
-                  +{hidden}
-                </span>
-                <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
-                  MORE
-                </span>
+          Earnings This Week
+        </div>
+        <div style={{ fontSize: 8, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
+          MKT CAP ≥ $100B · {earnings.length}
+        </div>
+
+        {earnDays.length === 0 ? (
+          <div style={{ fontSize: 10, color: "#3a5570" }}>No mega-cap earnings left this week.</div>
+        ) : earnDays.map(([date, buckets]) => {
+          const isTod = date === today;
+          return (
+            <div key={date} style={{ marginBottom: 10 }}>
+              <div style={{
+                fontSize: 9, fontWeight: 800, letterSpacing: "0.1em",
+                color: isTod ? "#219EBC" : "#fff",
+                borderBottom: `1px solid ${HT.border}`,
+                paddingBottom: 3, marginBottom: 6,
+              }}>
+                {dayLabelShort(date, today)}
               </div>
-            )}
-              </>);
-            })()}
-          </div>
+              <EarnSession label="Premarket" rows={buckets.pre} />
+              <EarnSession label="After hours" rows={buckets.after} />
+              {buckets.unknown.length > 0 && <EarnSession label="Time TBD" rows={buckets.unknown} />}
+            </div>
+          );
+        })}
+      </div>
+
+      </div>
+    </div>
+  );
+}
+
+function EarnSession({ label, rows }: { label: string; rows: EarnRow[] }) {
+  return (
+    <div style={{ marginBottom: 7 }}>
+      <div style={{
+        fontSize: 8, fontWeight: 700, color: "#3a5570",
+        textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4,
+      }}>
+        {label}: {rows.length === 0 && <span style={{ color: "#22303f" }}>—</span>}
+      </div>
+      {rows.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: CHIP_GAP }}>
+          {rows.map((e) => (
+            <a
+              key={e.symbol}
+              href={`https://finance.yahoo.com/quote/${e.symbol}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`${e.company || e.symbol} · ${fmtMcap(e.market_cap)}${e.eps_est ? ` · est ${e.eps_est}` : ""}`}
+              style={{
+                display: "flex", flexDirection: "column", alignItems: "center",
+                gap: 3, flexShrink: 0, width: CHIP_W, textDecoration: "none",
+              }}
+            >
+              <span style={{
+                width: 30, height: 30, borderRadius: 7, overflow: "hidden",
+                background: "transparent",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>
+                <img
+                  src={logoUrl(e.symbol, e.company)}
+                  alt={e.symbol}
+                  width={30}
+                  height={30}
+                  style={{ width: 30, height: 30, objectFit: "contain" }}
+                  onError={(ev) => {
+                    const t = ev.currentTarget;
+                    t.style.display = "none";
+                    const p = t.parentElement;
+                    if (p && !p.querySelector(".logo-fallback")) {
+                      p.style.background = "rgba(33,158,188,0.10)";
+                      p.style.border = `1px solid ${HT.border}`;
+                      const s = document.createElement("span");
+                      s.className = "logo-fallback";
+                      s.textContent = e.symbol.slice(0, 4);
+                      s.style.cssText = "font-size:8px;font-weight:800;color:#219EBC;text-align:center;line-height:1;";
+                      p.appendChild(s);
+                    }
+                  }}
+                />
+              </span>
+              <span style={{
+                fontSize: 8, fontWeight: 700, color: "#fff",
+                fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+                maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                {e.symbol}
+              </span>
+            </a>
+          ))}
         </div>
       )}
     </div>

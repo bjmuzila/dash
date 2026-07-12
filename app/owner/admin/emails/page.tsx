@@ -222,12 +222,41 @@ export default function AdminEmailsPage() {
 
           <div>
             {label("Audience")}
-            <div style={{ width: "100%", overflowX: "auto", scrollbarWidth: "none", msOverflowStyle: "none", WebkitOverflowScrolling: "touch" }}>
-              <SegGroup
-                options={AUDIENCE_OPTIONS}
-                active={audience}
-                onChange={(v) => setAudience(v as Audience)}
-              />
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                width: "100%",
+                padding: 4,
+                background: "rgba(0,0,0,0.22)",
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.04)",
+                boxSizing: "border-box",
+              }}
+            >
+              {AUDIENCE_OPTIONS.map((o) => {
+                const on = audience === o.value;
+                return (
+                  <button
+                    key={o.value}
+                    onClick={() => setAudience(o.value as Audience)}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: 9,
+                      fontSize: 14,
+                      fontWeight: on ? 700 : 500,
+                      whiteSpace: "nowrap",
+                      cursor: "pointer",
+                      color: on ? "#FFFFFF" : HOME_THEME.muted,
+                      background: on ? HOME_THEME.cyan : "rgba(255,255,255,0.04)",
+                      border: `1px solid ${on ? HOME_THEME.cyan : "rgba(255,255,255,0.08)"}`,
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
             </div>
             <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
               <span>

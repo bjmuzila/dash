@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { Card as ThemeCard } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
@@ -733,6 +734,14 @@ function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName
 /* ── component ────────────────────────────────────────────────────────────── */
 
 export default function IbStatsTab() {
+  const { userId, isOwnerClaim } = useAuth();
+  // Cosmetic owner gate — the historical stat tables are owner-only. Same
+  // pattern as /traders-dashboard: prefer the session's owner claim, fall back
+  // to the public owner id for the pre-claim path.
+  const isOwner = isOwnerClaim || (
+    process.env.NEXT_PUBLIC_OWNER_USER_ID ? userId === process.env.NEXT_PUBLIC_OWNER_USER_ID : false
+  );
+
   const [sym, setSym] = useState<Sym>("ES");
   const [showStats, setShowStats] = useState(false);
   const [sets, setSets] = useState<Partial<Record<Sym, IbDataset>>>({});
@@ -897,17 +906,19 @@ export default function IbStatsTab() {
           }}
         />
 
-        <button
-          onClick={() => setShowStats((v) => !v)}
-          style={{
-            alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
-            border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: HOME_THEME.text,
-          }}
-        >
-          {showStats ? "Hide historical stats ▲" : `Show historical stats (${N} sessions) ▼`}
-        </button>
+        {isOwner && (
+          <button
+            onClick={() => setShowStats((v) => !v)}
+            style={{
+              alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
+              border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: HOME_THEME.text,
+            }}
+          >
+            {showStats ? "Hide historical stats ▲ (owner)" : `Show historical stats (${N} sessions) ▼ (owner)`}
+          </button>
+        )}
 
-        {showStats && (<>
+        {isOwner && showStats && (<>
         <Card accent="blue" title={`Initial Balance Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`Last updated ${LAST_UPDATED}`}>
           <div style={statGrid}>
             <Stat k="Sessions" v={String(N)} sub={`${yearsSpan.toFixed(1)} years of data`} />
