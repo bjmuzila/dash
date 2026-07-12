@@ -33,6 +33,13 @@ export interface IctCandle {
 
 export type Dir = "bull" | "bear";
 
+/** How long after a liquidity sweep an FVG break still counts as an inversion. */
+const SWEEP_WINDOW_MS = 15 * 60_000; // 3 × 5m bars
+function sweptWithin(sweeps: Set<number>, ts: number, windowMs: number): boolean {
+  for (const s of sweeps) if (s <= ts && ts - s <= windowMs) return true;
+  return false;
+}
+
 // ── ET helpers ───────────────────────────────────────────────────────────────
 
 /** Minutes since ET midnight for a ms timestamp. */
@@ -118,23 +125,16 @@ export function detectFVGs(
         continue;
       }
 
-      // Touched the void. First touch → mitigated. A LATER touch on a different
-      // candle → retouched (the gap has now been used twice; caller removes it).
-      const into = f.dir === "bull" ? k.low <= f.top : k.high >= f.bottom;
-      if (into) {
-        if (!f.mitigated) { f.mitigated = true; f.mitigatedTs = k.timestamp; }
-        else if (f.mitigatedTs != null && k.timestamp > f.mitigatedTs && !f.retouched) {
-          // 2nd time price passes through → the box ENDS here and is done.
-          f.retouched = true; f.retouchedTs = k.timestamp; f.endTs = k.timestamp;
-          break;
-        }
-      }
-      // CLOSED fully through the far side → candidate inversion.
+      // CLOSED fully through the far side → candidate inversion. This MUST be
+      // tested before the touch bookkeeping below: a break candle almost always
+      // also trades into the void, so checking `into` first would classify the
+      // break as a "retouch" and exit the loop before inversion could ever fire.
       const through = f.dir === "bull" ? k.close < f.bottom : k.close > f.top;
       if (through) {
         f.spent = true;
-        // Only flips to an IFVG if that break also swept liquidity.
-        if (sweepTimes.has(k.timestamp)) {
+        // Flips to an IFVG if the break swept liquidity on this candle or in the
+        // few bars just before it (sweep → displace is the canonical sequence).
+        if (sweptWithin(sweepTimes, k.timestamp, SWEEP_WINDOW_MS)) {
           f.inverted = true;
           f.invertedTs = k.timestamp;
           f.activeDir = f.dir === "bull" ? "bear" : "bull";
@@ -143,6 +143,18 @@ export function detectFVGs(
         }
         if (f.endTs == null) f.endTs = k.timestamp; // box stops at the break
         break; // not inverted → the gap is dropped by the caller
+      }
+
+      // Touched the void but did NOT break it. First touch → mitigated. A LATER
+      // touch on a different candle → retouched (gap used twice; caller removes).
+      const into = f.dir === "bull" ? k.low <= f.top : k.high >= f.bottom;
+      if (into) {
+        if (!f.mitigated) { f.mitigated = true; f.mitigatedTs = k.timestamp; }
+        else if (f.mitigatedTs != null && k.timestamp > f.mitigatedTs && !f.retouched) {
+          // 2nd time price passes through → the box ENDS here and is done.
+          f.retouched = true; f.retouchedTs = k.timestamp; f.endTs = k.timestamp;
+          break;
+        }
       }
     }
   }
@@ -396,7 +408,7 @@ export function liquiditySweepTimes(candles: IctCandle[], pools: LiquidityPool[]
     for (const c of candles) {
       if (c.timestamp <= p.ts) continue;
       const pierced = p.side === "BSL" ? c.high > p.price + tol : c.low < p.price - tol;
-      if (pierced) { sweeps.add(c.timestamp); break; } // first candle to take the pool
+      if (pierced) { sweeps.add(c.timestamp); } // every candle that takes the pool
     }
   }
   return sweeps;
@@ -649,7 +661,13 @@ export function detect2022Model(turtle: IctSignal[], structure: StructureEvent[]
   for (const ts of turtle) {
     const mss = structure.find((s) => s.kind === "MSS" && s.dir === ts.dir && s.ts > ts.ts && s.ts - ts.ts <= 10 * 300_000);
     if (!mss) continue;
-    const fvg = fvgs.find((f) => f.activeDir === ts.dir && f.ts >= mss.ts && f.ts - mss.ts <= 10 * 300_000);
+    // The entry gap must become ACTIVE after the MSS. For an IFVG that moment is
+    // `invertedTs` (the flip), NOT `ts` (the original gap's formation, which is
+    // usually long before the MSS and would wrongly disqualify it).
+    const fvg = fvgs.find((f) => {
+      const activeTs = f.inverted && f.invertedTs != null ? f.invertedTs : f.ts;
+      return f.activeDir === ts.dir && activeTs >= mss.ts && activeTs - mss.ts <= 10 * 300_000;
+    });
     if (fvg) out.push({ kind: "model2022", dir: ts.dir, price: mss.price, ts: mss.ts, note: "sweep→MSS→FVG" });
   }
   return dedupeByTs(out);
@@ -671,9 +689,20 @@ export interface PO3 {
 export function detectPO3(candles: IctCandle[]): PO3[] {
   const out: PO3[] = [];
   const days = [...new Set(candles.map((c) => c.date || etDate(c.timestamp)))].sort();
-  for (const day of days) {
-    const bars = candles.filter((c) => (c.date || etDate(c.timestamp)) === day);
-    const asia = bars.filter((c) => { const m = etMinutes(c.timestamp); return m >= 1200 || m < 120; });
+  const dayOf = (c: IctCandle) => c.date || etDate(c.timestamp);
+  for (let di = 0; di < days.length; di++) {
+    const day = days[di];
+    const bars = candles.filter((c) => dayOf(c) === day);
+    // Accumulation = the Asian session that PRECEDES this day's London/NY, i.e.
+    // 20:00–24:00 ET on the PRIOR calendar day (+ this day's 00:00–02:00 tail).
+    // Reading 20:00–24:00 from `day` itself pulled bars that occur AFTER the NY
+    // session it is supposed to set up — the range was junk (and lookahead).
+    const prevDay = di > 0 ? days[di - 1] : null;
+    const asia = candles.filter((c) => {
+      const m = etMinutes(c.timestamp);
+      const d = dayOf(c);
+      return (prevDay != null && d === prevDay && m >= 1200) || (d === day && m < 120);
+    });
     const london = bars.filter((c) => { const m = etMinutes(c.timestamp); return m >= 120 && m < 420; });
     const ny = bars.filter((c) => { const m = etMinutes(c.timestamp); return m >= 570 && m < 960; });
     if (!asia.length) continue;
@@ -704,7 +733,10 @@ export function detectRangeLiquidity(range: DealingRange | null, fvgs: FVG[], ob
   if (!range) return { erlHigh: null, erlLow: null, internal: [] };
   const inRange = (top: number, bottom: number) => bottom >= range.low && top <= range.high;
   const internal: RangeLiquidity["internal"] = [];
-  for (const f of fvgs) if (!f.spent && inRange(f.top, f.bottom)) internal.push({ top: f.top, bottom: f.bottom, kind: "fvg" });
+  // An INVERTED gap is spent by construction (`spent` = closed through), but an
+  // IFVG is prime internal liquidity — keep it. Only drop gaps that were consumed
+  // WITHOUT inverting.
+  for (const f of fvgs) if ((!f.spent || f.inverted) && inRange(f.top, f.bottom)) internal.push({ top: f.top, bottom: f.bottom, kind: "fvg" });
   for (const o of obs) if (!o.mitigated && !o.violated && inRange(o.top, o.bottom)) internal.push({ top: o.top, bottom: o.bottom, kind: "ob" });
   return { erlHigh: range.high, erlLow: range.low, internal };
 }
@@ -779,7 +811,7 @@ export function analyzeICT(candles: IctCandle[]): IctAnalysis {
   // Liquidity first → its sweep timestamps qualify which FVG breaks invert (IFVG).
   const liquidity = detectLiquidity(candles, pivots);
   const sweepTimes = liquiditySweepTimes(candles, liquidity);
-  const fvgs = detectFVGs(candles, 8, 0.25, sweepTimes);
+  const fvgs = detectFVGs(candles, 4, 0.25, sweepTimes);
   const orderBlocks = detectOrderBlocks(candles, displacement);
   const structure = detectStructure(candles, pivots);
   const range = dealingRange(pivots);

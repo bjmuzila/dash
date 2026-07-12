@@ -38,7 +38,6 @@ const RETENTION = {
   flow_prints:                Number(process.env.RETENTION_FLOW_PRINTS_DAYS || 5),    // ≥ big-premium prints kept this many session days (0–7DTE Combined lookback)
   flow_prints_big_premium:    Number(process.env.RETENTION_FLOW_BIG_PREMIUM || 500_000), // "big" = survives the full window regardless of expiry
   flow_prints_small_days:     Number(process.env.RETENTION_FLOW_SMALL_DAYS || 1),     // < big-premium prints: purged on expiry or after this many days (disk guard)
-  darkpool_prints:            Number(process.env.RETENTION_DARKPOOL_DAYS || 10), // 7D toggle needs >=10
   greek_snapshots:            Number(process.env.RETENTION_GREEK_SNAPSHOTS_DAYS || 10),
   ticker_wall_snapshots:      Number(process.env.RETENTION_TICKER_WALL_DAYS || 10),
   scanner_snapshots:          Number(process.env.RETENTION_SCANNER_SNAPSHOTS_DAYS || 10),
@@ -113,9 +112,6 @@ async function runDeletes(p) {
   await run('strike_growth',
     `DELETE FROM strike_growth WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.strike_growth} days'`);
 
-  await run('darkpool_prints',
-    `DELETE FROM darkpool_prints WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.darkpool_prints} days'`);
-
   await run('greek_snapshots',
     `DELETE FROM greek_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.greek_snapshots} days'`);
 
@@ -189,7 +185,7 @@ async function runDeletes(p) {
 }
 
 const VACUUM_TABLES = [
-  'strike_growth', 'option_strike_gex_history', 'flow_prints', 'darkpool_prints',
+  'strike_growth', 'option_strike_gex_history', 'flow_prints',
   'greek_snapshots', 'ticker_wall_snapshots', 'scanner_snapshots', 'vol_pin_snapshots',
   'watch_snapshots', 'preview_snapshots', 'home_static_snapshots',
   'mult_greek_static_snapshots', 'page_visits', 'ticker_events',

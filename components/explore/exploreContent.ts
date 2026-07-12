@@ -71,14 +71,14 @@ export const EXPLORE: Record<string, ExploreEntry> = {
     tagline: "Every meaningful print, sized and side-classified, with cumulative net premium drift.",
     body: [
       "Option flow tells you what size is actually doing — not what it's saying. Every print on the tape is bid/ask-classified into a buy or a sell, tagged call or put, and rolled into a directional read: buy calls and sell puts are bullish, buy puts and sell calls are bearish.",
-      "The Net Drift chart plots cumulative net call premium against net put premium across the whole 9:30–4:00 session, so you can see the exact minute conviction shows up. Filter by premium floor, size, DTE, expiry and moneyness; flip to Combined to watch the whole market on one tape, or drill a single ticker with its dark-pool prints beside it.",
+      "The Net Drift chart plots cumulative net call premium against net put premium across the whole 9:30–4:00 session, so you can see the exact minute conviction shows up. Filter by premium floor, size, DTE, expiry and moneyness; flip to Combined to watch the whole market on one tape, or drill a single ticker on its own.",
     ],
     highlights: [
       "Bid/ask side classification — real buys vs sells, not just prints",
       "Cumulative Net Premium (Net Drift) across the full session",
       "Premium split: buy calls / buy puts / sell calls / sell puts",
       "Filters: premium floor, size, DTE, expiry, OTM-only",
-      "Combined tape across every ticker, or one ticker + dark pool",
+      "Combined tape across every ticker, or a single-ticker drill-down",
     ],
     teaserLabel: "Sample session flow",
     teaserStats: [

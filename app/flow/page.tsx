@@ -26,41 +26,12 @@ import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 
-// ── Dark Pool (TRF prints) types ────────────────────────────────────────────
-// "Dark pool" here = off-exchange stock prints reported through a FINRA/NYSE
-// Trade Reporting Facility (exchange codes 57/58/59 on the Theta stock trade
-// stream) — the same proxy every retail dark-pool tool uses, since the public
-// tape has no further per-ATS breakout. Index tickers (SPX/NDX/RUT/XSP) have no
-// stock listing, so this section is skipped for them.
-type DarkpoolWindow = "intraday" | "5d" | "7d";
-type DarkpoolLevel = { price: number; shares: number; notional: number };
-type DarkpoolLevels = {
-  window: DarkpoolWindow;
-  dates?: string[];
-  darkShares: number;
-  darkNotional: number;
-  totalShares: number;
-  totalNotional: number;
-  pctOff: number | null;
-  fromTs: number | null;
-  toTs: number | null;
-  levels: DarkpoolLevel[];
-};
-
 const C = HOME_THEME;
 const BUY_GREEN = "#22c55e";
 const BULLISH = BUY_GREEN; // calls / buys
 const BEARISH = C.red; //     puts / sells
 const VOL_GREEN = "rgba(34,197,94,0.55)";
 const VOL_RED = "rgba(239,68,68,0.55)";
-
-// Share-count formatter (no $) for the Dark Pool card's shares dark/total.
-function fmtShares(val: number): string {
-  const a = Math.abs(val);
-  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(1)}M`;
-  if (a >= 1_000) return `${(a / 1_000).toFixed(0)}K`;
-  return a.toLocaleString();
-}
 
 function fmtPremium(val: number): string {
   const a = Math.abs(val);
@@ -292,34 +263,6 @@ export default function FlowPage() {
     const id = isToday ? setInterval(load, 15000) : null;
     return () => { cancelled = true; clearTimeout(kick); if (id) clearInterval(id); };
   }, [view, minPremium, date, isToday]);
-
-  // ── Dark Pool (per-ticker): off-exchange % stat + Heaviest Dark Levels. ──
-  // Polling, not WS — TRF prints can legally be reported seconds-to-minutes
-  // after execution, so a 5s poll is no less "live" than a push feed here.
-  const [dpWindow, setDpWindow] = useState<DarkpoolWindow>("intraday");
-  const [dpLevels, setDpLevels] = useState<DarkpoolLevels | null>(null);
-  const isIndexTicker = INDEX_TICKERS.has(active);
-
-  useEffect(() => {
-    if (view !== "ticker" || isIndexTicker) { setDpLevels(null); return; }
-    let cancelled = false;
-    const qp = new URLSearchParams({ underlying: active, window: dpWindow, date });
-    const load = () =>
-      fetch(`/proxy/darkpool-levels?${qp.toString()}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (!cancelled && j) setDpLevels(j as DarkpoolLevels); })
-        .catch(() => {});
-    load();
-    const id = dpWindow === "intraday" && isToday ? setInterval(load, 5000) : null;
-    return () => { cancelled = true; if (id) clearInterval(id); };
-  }, [view, active, date, isToday, dpWindow, isIndexTicker]);
-
-  // Bar widths in "Heaviest Dark Levels" are relative to the biggest level.
-  const dpMaxLevelNotional = useMemo(
-    () => Math.max(1, ...(dpLevels?.levels ?? []).map((l) => l.notional)),
-    [dpLevels]
-  );
-
 
   // ── WS: /ws/gex, keep only the flow tape. ──
   const unmountedRef = useRef(false);
@@ -803,7 +746,7 @@ export default function FlowPage() {
       </div>
       )}
 
-      {/* ── Filters + Dark Pool bars, side by side, full window width, above the chart. ── */}
+      {/* ── Filters, full window width, above the chart. ── */}
       {!chartOnly && (
       <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", flexShrink: 0 }}>
       <div style={{ flex: "1 1 480px", minWidth: 0 }}>
@@ -928,57 +871,6 @@ export default function FlowPage() {
         </div>
       </Card>
       </div>
-
-      {view === "ticker" && (
-        <div style={{ flex: "1 1 340px", minWidth: 280, maxWidth: 460 }}>
-          <Card variant="budget" padding={0} style={{ height: "100%" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px 4px", flexWrap: "wrap" }}>
-              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
-                Dark Pool <span style={{ color: C.purple }}>·</span> Off-Exchange
-              </div>
-              <select
-                style={{ ...homeInputStyle, width: 110 }}
-                value={dpWindow}
-                onChange={(e) => setDpWindow(e.target.value as DarkpoolWindow)}
-              >
-                <option value="intraday">Intraday</option>
-                <option value="5d">5 Day</option>
-                <option value="7d">7 Day</option>
-              </select>
-            </div>
-
-            {isIndexTicker ? (
-              <p style={{ fontSize: 15, padding: "0 20px 20px", color: C.text }}>
-                {active} is an index — no stock listing, so no dark-pool prints. Pick an equity ticker (e.g. SPY, QQQ) to see this.
-              </p>
-            ) : !dpLevels || dpLevels.levels.length === 0 ? (
-              <p style={{ fontSize: 15, padding: "8px 20px 20px", color: C.text }}>
-                No dark-pool prints recorded for {active} {dpWindow === "intraday" ? `on ${date}` : `in the last ${dpWindow === "5d" ? "5" : "7"} sessions`}.
-              </p>
-            ) : (
-              <div style={{ padding: "10px 20px 20px" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {dpLevels.levels.map((lvl) => {
-                    const pct = Math.max(3, (lvl.notional / dpMaxLevelNotional) * 100);
-                    return (
-                      <div key={lvl.price} style={{ display: "grid", gridTemplateColumns: "68px 1fr auto", gap: 10, alignItems: "center" }}>
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, color: C.text }}>{lvl.price.toFixed(2)}</span>
-                        <div style={{ height: 12, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
-                          <div style={{ width: `${pct}%`, height: "100%", borderRadius: 4, background: `linear-gradient(90deg, ${C.purple}, ${C.cyan})` }} />
-                        </div>
-                        <div style={{ textAlign: "right", fontFamily: "var(--font-mono)", lineHeight: 1.3 }}>
-                          <div style={{ color: C.purple, fontWeight: 700, fontSize: 15 }}>{fmtPremium(lvl.notional)}</div>
-                          <div style={{ color: C.text, fontSize: 15 }}>{fmtShares(lvl.shares)} shares</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </Card>
-        </div>
-      )}
       </div>
       )}
 

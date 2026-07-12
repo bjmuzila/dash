@@ -13,7 +13,6 @@
 
 -- Highest cardinality / heaviest first --------------------------------------
 DELETE FROM strike_growth              WHERE date::date < CURRENT_DATE - INTERVAL '5 days';
-DELETE FROM darkpool_prints            WHERE date::date < CURRENT_DATE - INTERVAL '10 days';  -- 7D toggle needs >=10 calendar days
 DELETE FROM greek_snapshots            WHERE date::date < CURRENT_DATE - INTERVAL '10 days';
 
 -- option_strike_gex_history: the only live consumer is the 5/15/30m-ago
@@ -77,6 +76,6 @@ DELETE FROM ticker_events              WHERE created_at < NOW() - INTERVAL '14 d
 -- SELECT pg_size_pretty(pg_total_relation_size('premium_flow')); -- etc, check first
 
 VACUUM (VERBOSE, ANALYZE) strike_growth, option_strike_gex_history, flow_prints,
-  darkpool_prints, greek_snapshots, home_static_snapshots, mult_greek_static_snapshots,
+  greek_snapshots, home_static_snapshots, mult_greek_static_snapshots,
   ticker_wall_snapshots, scanner_snapshots, vol_pin_snapshots, watch_snapshots,
   preview_snapshots, page_visits, ticker_events;
