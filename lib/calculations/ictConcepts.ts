@@ -79,34 +79,75 @@ export interface FVG {
   activeDir: Dir;    // dir the zone currently acts on (= dir, or flipped if inverted)
 }
 
+export interface FvgOptions {
+  /** Minimum gap width. Interpreted per `widthMode`. */
+  minWidth?: number;
+  /** "ticks" (× `tick`), "points" (absolute price), or "percent" (of gap bottom). */
+  widthMode?: "ticks" | "points" | "percent";
+  tick?: number;
+  /**
+   * Require the MIDDLE candle to close beyond the first candle's far edge
+   * (Pine's `close[1] > high[2]` / `close[1] < low[2]`). Filters gaps that are
+   * just a wick artifact rather than real displacement.
+   */
+  requireCloseConfirm?: boolean;
+  /** Mitigation measured by wick (high/low) or by close. */
+  mitigation?: "wick" | "close";
+  /** Fraction of the gap that must be penetrated to count as mitigated (0–1). */
+  mitigationPct?: number;
+  /** Candles that swept liquidity — qualifies an FVG break as an inversion. */
+  sweepTimes?: Set<number>;
+}
+
 /**
  * 3-candle FVG: bullish gap = candle1.high < candle3.low (price ran up leaving
- * an unfilled void); bearish gap = candle1.low > candle3.high. A gap is
- * "mitigated" once a later candle trades back into the void. `minTicks` filters
- * noise gaps (ES tick = 0.25).
+ * an unfilled void); bearish gap = candle1.low > candle3.high.
+ *
+ * Formation follows the standard ICT/SMC rule set:
+ *   bull → low[0] > high[2] AND close[1] > high[2]   (gap bottom = high[2], top = low[0])
+ *   bear → high[0] < low[2] AND close[1] < low[2]    (gap top = low[2], bottom = high[0])
+ * The `close[1]` confirmation is what separates a real displacement gap from a
+ * wick-only artifact.
+ *
+ * Mitigation: price must penetrate `mitigationPct` of the gap (default 50%),
+ * measured by wick or close. A mitigated gap is dead for DISPLAY purposes —
+ * but it is still tracked, because a gap must be allowed to break in order to
+ * invert (see below). Deleting it at mitigation would make IFVG impossible.
  *
  * Inversion (IFVG): if a later candle CLOSES fully through the gap (past the far
- * edge) and that same candle swept a liquidity pool (`sweepTimes`), the gap is
- * marked `inverted` and its `activeDir` flips — a broken bullish FVG becomes
- * bearish resistance and vice versa. Mitigated-but-not-inverted gaps are still
- * flagged so the caller can drop them from the display.
+ * edge) and a liquidity pool was swept on/just before that candle (`sweepTimes`),
+ * the gap flips polarity — `inverted` is set and `activeDir` reverses, so a
+ * broken bullish FVG becomes bearish resistance and vice versa.
  */
-export function detectFVGs(
-  candles: IctCandle[],
-  minTicks = 1,
-  tick = 0.25,
-  sweepTimes: Set<number> = new Set()
-): FVG[] {
+export function detectFVGs(candles: IctCandle[], opts: FvgOptions = {}): FVG[] {
+  const {
+    minWidth = 4,
+    widthMode = "ticks",
+    tick = 0.25,
+    requireCloseConfirm = true,
+    mitigation = "wick",
+    mitigationPct = 0.5,
+    sweepTimes = new Set<number>(),
+  } = opts;
+
+  // NOTE: `percent` is deliberately available but must not be used on ES with a
+  // crypto-style default — 9% of ~6000 is a 540pt gap and nothing would ever print.
+  const wideEnough = (top: number, bottom: number): boolean => {
+    const dist = top - bottom;
+    if (widthMode === "percent") return bottom > 0 && (dist / bottom) * 100 >= minWidth;
+    if (widthMode === "points") return dist >= minWidth;
+    return dist >= minWidth * tick;
+  };
+
   const out: FVG[] = [];
-  const minGap = minTicks * tick;
   for (let i = 2; i < candles.length; i++) {
-    const a = candles[i - 2], c = candles[i];
-    // Bullish FVG
-    if (c.low - a.high >= minGap) {
+    const a = candles[i - 2], b = candles[i - 1], c = candles[i];
+    // Bullish: gap between high[2] (bottom) and low[0] (top).
+    if (c.low > a.high && (!requireCloseConfirm || b.close > a.high) && wideEnough(c.low, a.high)) {
       out.push(mkFvg("bull", c.low, a.high, a.timestamp, c.timestamp));
     }
-    // Bearish FVG
-    else if (a.low - c.high >= minGap) {
+    // Bearish: gap between high[0] (bottom) and low[2] (top).
+    else if (c.high < a.low && (!requireCloseConfirm || b.close < a.low) && wideEnough(a.low, c.high)) {
       out.push(mkFvg("bear", a.low, c.high, a.timestamp, c.timestamp));
     }
   }
@@ -145,13 +186,20 @@ export function detectFVGs(
         break; // not inverted → the gap is dropped by the caller
       }
 
-      // Touched the void but did NOT break it. First touch → mitigated. A LATER
-      // touch on a different candle → retouched (gap used twice; caller removes).
-      const into = f.dir === "bull" ? k.low <= f.top : k.high >= f.bottom;
+      // Penetrated the void but did NOT break it. Mitigation requires price to
+      // eat `mitigationPct` of the gap (default 50%), by wick or by close — a
+      // one-tick graze no longer kills the gap the way a bare touch used to.
+      const fillLevel = f.dir === "bull"
+        ? f.top - (f.top - f.bottom) * mitigationPct   // bull: price comes DOWN into it
+        : f.bottom + (f.top - f.bottom) * mitigationPct; // bear: price comes UP into it
+      const probe = f.dir === "bull"
+        ? (mitigation === "close" ? k.close : k.low)
+        : (mitigation === "close" ? k.close : k.high);
+      const into = f.dir === "bull" ? probe <= fillLevel : probe >= fillLevel;
       if (into) {
         if (!f.mitigated) { f.mitigated = true; f.mitigatedTs = k.timestamp; }
         else if (f.mitigatedTs != null && k.timestamp > f.mitigatedTs && !f.retouched) {
-          // 2nd time price passes through → the box ENDS here and is done.
+          // 2nd time price eats into it → the box ENDS here and is done.
           f.retouched = true; f.retouchedTs = k.timestamp; f.endTs = k.timestamp;
           break;
         }
@@ -428,7 +476,11 @@ export function liquiditySweepTimes(candles: IctCandle[], pools: LiquidityPool[]
     for (const c of candles) {
       if (c.timestamp <= p.confirmTs) continue; // pool not knowable yet
       const pierced = p.side === "BSL" ? c.high > p.price + tol : c.low < p.price - tol;
-      if (pierced) { sweeps.add(c.timestamp); } // every candle that takes the pool
+      // ONLY the first candle to take the pool is the sweep. Without this `break`,
+      // price merely RESTING beyond a pool marks every subsequent bar as a sweep,
+      // which turns the IFVG gate into a no-op (every broken gap "inverts").
+      // The sweep→displace lag is handled by sweptWithin()'s window, not here.
+      if (pierced) { sweeps.add(c.timestamp); break; }
     }
   }
   return sweeps;
@@ -833,7 +885,12 @@ export function analyzeICT(candles: IctCandle[]): IctAnalysis {
   // Liquidity first → its sweep timestamps qualify which FVG breaks invert (IFVG).
   const liquidity = detectLiquidity(candles, pivots);
   const sweepTimes = liquiditySweepTimes(candles, liquidity);
-  const fvgs = detectFVGs(candles, 4, 0.25, sweepTimes);
+  const fvgs = detectFVGs(candles, {
+    minWidth: 4, widthMode: "ticks", tick: 0.25,  // 1.00 ES pt — NOT the Pine 9% default
+    requireCloseConfirm: true,                     // close[1] beyond high[2]/low[2]
+    mitigation: "wick", mitigationPct: 0.5,        // 50% fill, by wick
+    sweepTimes,
+  });
   const orderBlocks = detectOrderBlocks(candles, displacement);
   const structure = detectStructure(candles, pivots);
   const range = dealingRange(pivots);
