@@ -222,7 +222,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/whats-new",         label: "What's New",    emoji: "✨" },
   { href: "/journal",           label: "Journal",       emoji: "📓", comingSoon: true },
   { href: "/order-flow",        label: "Order Flow",    emoji: "🧾", comingSoon: true },
-  { href: "/help",              label: "Help",          emoji: "❓", comingSoon: true },
+  { href: "/lookup",            label: "Lookup",        emoji: "❓", comingSoon: true },
 ];
 
 // Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).
