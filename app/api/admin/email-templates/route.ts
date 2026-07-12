@@ -7,6 +7,7 @@ import { launchPromoEmail, launchPromoText, LAUNCH_PROMO_SUBJECT } from "@/lib/e
 import { subscriberThankYouEmail, subscriberThankYouText, SUBSCRIBER_THANKYOU_SUBJECT } from "@/lib/emails/subscriber-thankyou";
 import { pricingApologyEmail, pricingApologyText, PRICING_APOLOGY_SUBJECT } from "@/lib/emails/pricing-apology";
 import { pricingComparisonEmail, pricingComparisonText, PRICING_COMPARISON_SUBJECT } from "@/lib/emails/pricing-comparison";
+import { tryCbEdge30Email, tryCbEdge30Text, TRY_CBEDGE_30_SUBJECT } from "@/lib/emails/try-cbedge-30";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -39,6 +40,13 @@ function buildTemplates(): Template[] {
       subject: PRICING_COMPARISON_SUBJECT,
       html: pricingComparisonEmail(),
       text: pricingComparisonText(),
+    },
+    {
+      id: "try-cbedge-30",
+      label: "Signed up, never subscribed — $30 first month (TRY30)",
+      subject: TRY_CBEDGE_30_SUBJECT,
+      html: tryCbEdge30Email(),
+      text: tryCbEdge30Text(),
     },
     {
       id: "founder-thankyou",

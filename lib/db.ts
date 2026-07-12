@@ -409,6 +409,20 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_email_unsub_created ON email_unsubscribes(created_at DESC);
 
+    -- Single-use, per-recipient Stripe promotion codes (e.g. the TRY30 nudge
+    -- email). One row per email; the code is minted once via the Stripe API
+    -- (promotionCodes.create, max_redemptions:1) and reused on any resend so
+    -- the same person always gets the same code instead of a fresh one.
+    CREATE TABLE IF NOT EXISTS promo_codes_single_use (
+      email             TEXT NOT NULL,
+      campaign          TEXT NOT NULL,
+      code              TEXT NOT NULL,
+      coupon_id         TEXT NOT NULL,
+      promotion_code_id TEXT NOT NULL,
+      created_at        TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (email, campaign)
+    );
+
     -- Business expenses shown/netted on the owner Sales page (/owner/dev/sales).
     -- amount_cents is always the per-cadence charge (e.g. 5000 = $50/mo if
     -- cadence='monthly'); the page converts to a monthly-equivalent for the
@@ -809,6 +823,31 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ALTER TABLE watch_snapshots ADD COLUMN IF NOT EXISTS prev_close REAL;
     ALTER TABLE watch_snapshots ADD COLUMN IF NOT EXISTS net_gex REAL;
 
+    -- Trading journal (/trading). Replaces the old localStorage key
+    -- "trading_journals" so entries persist server-side and follow the user
+    -- across browsers/devices. One row per journaled session-day per user; a
+    -- user may log more than one entry for the same date (no unique on date).
+    CREATE TABLE IF NOT EXISTS trading_journals (
+      id            SERIAL PRIMARY KEY,
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      date          TEXT NOT NULL,           -- YYYY-MM-DD (session date)
+      net_pnl       REAL NOT NULL DEFAULT 0,
+      trades        REAL NOT NULL DEFAULT 0,
+      win_rate      REAL NOT NULL DEFAULT 0, -- 0-100
+      avg_win       REAL NOT NULL DEFAULT 0,
+      avg_loss      REAL NOT NULL DEFAULT 0,
+      profit_factor REAL NOT NULL DEFAULT 0,
+      avg_mae       REAL NOT NULL DEFAULT 0,
+      avg_mfe       REAL NOT NULL DEFAULT 0,
+      commissions   REAL NOT NULL DEFAULT 0,
+      notes         TEXT,
+      kind          TEXT NOT NULL DEFAULT 'manual',  -- 'manual' | 'verified'
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_trading_journals_user_date
+      ON trading_journals(user_id, date);
+
     -- ── Custom auth (replaces Supabase Auth) ──────────────────────────────────
     -- One row per account. id is a plain TEXT uuid generated app-side
     -- (crypto.randomUUID()) rather than a DB default, so the migration script can
@@ -994,6 +1033,83 @@ export async function setWatchAddedPrice(id: number, price: number): Promise<voi
     `UPDATE watch_options SET added_price = ? WHERE id = ? AND added_price IS NULL`,
     [price, id]
   );
+}
+
+// ── Trading journal (/trading) ───────────────────────────────────────────────
+// Server-side replacement for the old localStorage "trading_journals" key.
+// Every function is user-scoped: the user_id comes from the session in the API
+// route, never from the client body, so one user can't read/delete another's.
+
+export interface TradingJournal {
+  id: number;
+  user_id?: string;
+  date: string;            // YYYY-MM-DD
+  net_pnl: number;
+  trades: number;
+  win_rate: number;        // 0-100
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number;
+  avg_mae: number;
+  avg_mfe: number;
+  commissions: number;
+  notes: string | null;
+  kind: "manual" | "verified";
+}
+
+export type TradingJournalInput = Omit<TradingJournal, "id" | "user_id">;
+
+export async function getTradingJournals(userId: string): Promise<TradingJournal[]> {
+  await getDb();
+  return queryAll<TradingJournal>(
+    `SELECT id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
+            avg_mae, avg_mfe, commissions, notes, kind
+       FROM trading_journals
+      WHERE user_id = ?
+      ORDER BY date ASC, id ASC`,
+    [userId]
+  );
+}
+
+export async function insertTradingJournal(
+  userId: string, j: TradingJournalInput
+): Promise<TradingJournal | undefined> {
+  await getDb();
+  const rows = await queryAll<TradingJournal>(
+    `INSERT INTO trading_journals
+       (user_id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
+        avg_mae, avg_mfe, commissions, notes, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     RETURNING id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
+               avg_mae, avg_mfe, commissions, notes, kind`,
+    [userId, j.date, j.net_pnl, j.trades, j.win_rate, j.avg_win, j.avg_loss,
+     j.profit_factor, j.avg_mae, j.avg_mfe, j.commissions, j.notes ?? null, j.kind]
+  );
+  return rows[0];
+}
+
+/** Full-row edit. Scoped by user_id so a guessed id can't touch someone else's row. */
+export async function updateTradingJournal(
+  userId: string, id: number, j: TradingJournalInput
+): Promise<TradingJournal | undefined> {
+  await getDb();
+  const rows = await queryAll<TradingJournal>(
+    `UPDATE trading_journals
+        SET date = ?, net_pnl = ?, trades = ?, win_rate = ?, avg_win = ?, avg_loss = ?,
+            profit_factor = ?, avg_mae = ?, avg_mfe = ?, commissions = ?, notes = ?,
+            kind = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ?
+      RETURNING id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
+                avg_mae, avg_mfe, commissions, notes, kind`,
+    [j.date, j.net_pnl, j.trades, j.win_rate, j.avg_win, j.avg_loss, j.profit_factor,
+     j.avg_mae, j.avg_mfe, j.commissions, j.notes ?? null, j.kind, id, userId]
+  );
+  return rows[0];
+}
+
+export async function deleteTradingJournal(userId: string, id: number): Promise<void> {
+  await getDb();
+  await queryAll(`DELETE FROM trading_journals WHERE id = ? AND user_id = ?`, [id, userId]);
 }
 
 export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {
@@ -2007,6 +2123,53 @@ export async function listUnsubscribes(limit = 5000): Promise<UnsubscribeRecord[
   return queryAll<UnsubscribeRecord>(
     "SELECT email, source, created_at FROM email_unsubscribes ORDER BY created_at DESC LIMIT ?",
     [limit]
+  );
+}
+
+// ── Single-use per-recipient promo codes (campaign-scoped) ─────────────────
+
+export interface PromoCodeRecord {
+  email: string;
+  campaign: string;
+  code: string;
+  coupon_id: string;
+  promotion_code_id: string;
+  created_at: string;
+}
+
+/** Look up an already-minted code for this (email, campaign) pair, if any. */
+export async function getPromoCode(
+  email: string,
+  campaign: string
+): Promise<PromoCodeRecord | undefined> {
+  return queryOne<PromoCodeRecord>(
+    "SELECT * FROM promo_codes_single_use WHERE email = ? AND campaign = ?",
+    [email.trim().toLowerCase(), campaign]
+  );
+}
+
+/** Persist a newly minted code. Idempotent — a race just keeps whichever
+ *  row won; caller always re-reads via getPromoCode after. */
+export async function savePromoCode(input: {
+  email: string;
+  campaign: string;
+  code: string;
+  coupon_id: string;
+  promotion_code_id: string;
+}): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO promo_codes_single_use (email, campaign, code, coupon_id, promotion_code_id)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (email, campaign) DO NOTHING`,
+    [input.email.trim().toLowerCase(), input.campaign, input.code, input.coupon_id, input.promotion_code_id]
+  );
+}
+
+export async function listPromoCodes(campaign: string, limit = 5000): Promise<PromoCodeRecord[]> {
+  return queryAll<PromoCodeRecord>(
+    "SELECT * FROM promo_codes_single_use WHERE campaign = ? ORDER BY created_at DESC LIMIT ?",
+    [campaign, limit]
   );
 }
 

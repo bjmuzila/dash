@@ -2,77 +2,69 @@
 
 /**
  * Trading — Journaling Dashboard.
- * React port of pages/old/trading.html, with the journal entries wired up
- * (localStorage key: trading_journals) instead of dead placeholders.
+ *
+ * Entries live in Postgres (table: trading_journals) behind /api/journal, scoped
+ * to the signed-in user. This replaces the old localStorage key
+ * "trading_journals", which was per-browser and didn't survive a device change.
+ * A one-time migration lifts any surviving localStorage entries into the DB on
+ * first load, then clears the key (see migrateLocal()).
+ *
+ * Chrome is 100% shared-theme: PageShell + Card + HOME_THEME tokens. The only
+ * color literals left are the win/loss + chart series encodings (T.green /
+ * T.red), which are data encodings, not chrome — and they're sourced from the
+ * theme too.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { HOME_THEME as HT, homeGlossPanelStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { HOME_THEME as HT, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
-interface Journal {
+/** Wire shape from /api/journal (snake_case, straight off the row). */
+interface JournalRow {
   id: number;
   date: string;        // YYYY-MM-DD
-  netPnl: number;
+  net_pnl: number;
   trades: number;
-  winRate: number;     // 0-100
-  avgWin: number;
-  avgLoss: number;
-  profitFactor: number;
-  avgMAE: number;
-  avgMFE: number;
+  win_rate: number;    // 0-100
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number;
+  avg_mae: number;
+  avg_mfe: number;
   commissions: number;
-  notes: string;
+  notes: string | null;
   kind: "manual" | "verified";
 }
 
-const LS_KEY = "trading_journals";
+const LS_KEY = "trading_journals";          // legacy localStorage key (migrated once)
+const LS_MIGRATED = "trading_journals_migrated";
 
-// Data-viz color aliases (chart series + win/loss cells) sourced from the theme.
-const T = {
-  green: HT.green, red: HT.red,
-};
+// Data-viz encodings (win/loss cells + chart series), sourced from the theme.
+const T = { green: HT.green, red: HT.red };
 
-// Rotating accent palette so cards alternate colors. Warm-weighted (no cyan) so
-// the page doesn't read all-blue.
-const ACCENT_CYCLE = [HT.orange, HT.purple, HT.green, HT.red];
-const accentAt = (i: number) => ACCENT_CYCLE[((i % ACCENT_CYCLE.length) + ACCENT_CYCLE.length) % ACCENT_CYCLE.length];
-
-// hex → rgba helper (local, mirrors homeTheme's private one).
-const aRgba = (hex: string, a: number) => {
-  const h = hex.replace("#", "");
-  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
-};
-
-// Stronger-glow gloss panel — more saturated top strip + radial so the accent
-// actually shows through the dark glass instead of reading blue.
-const panelStyleAt = (i: number): React.CSSProperties => {
-  const c = accentAt(i);
-  return {
-    ...homeGlossPanelStyle(c),
-    padding: 16,
-    borderTop: `2px solid ${aRgba(c, 0.85)}`,
-    background: `radial-gradient(circle at 50% 0%, ${aRgba(c, 0.16)} 0%, transparent 62%), ${HT.panelBg}`,
-  };
-};
-const panelStyle: React.CSSProperties = panelStyleAt(0);
 const btnStyle = (active = false): React.CSSProperties => ({
-  ...homeButtonStyle,
-  background: active ? HT.cyan : "transparent",
-  color: active ? HT.bg : HT.muted,
-  border: `1px solid ${HT.border}`,
+  ...(active ? homeButtonStyle : homeSecondaryButtonStyle),
+  ...(active ? {} : { color: HT.muted }),
 });
 const inputStyle: React.CSSProperties = {
-  background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, padding: "7px 9px",
-  borderRadius: 4, color: HT.text, fontSize: 12, outline: "none", width: "100%",
-  colorScheme: "dark", accentColor: HT.cyan,
+  ...homeInputStyle,
+  width: "100%",
+  colorScheme: "dark",
+  accentColor: HT.cyan,
 };
 const labelStyle: React.CSSProperties = {
   fontSize: 10, fontWeight: 700, color: HT.muted, textTransform: "uppercase",
   letterSpacing: ".08em", display: "block", marginBottom: 4,
 };
+const cellStyle: React.CSSProperties = { padding: "5px 6px", borderBottom: `1px solid ${HT.border}` };
 
 const fmt$ = (v: number) => (v < 0 ? "-" : "") + "$" + Math.abs(v).toFixed(2);
+const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
+
+const EMPTY_FORM = {
+  date: "", netPnl: "", trades: "", winRate: "", avgWin: "", avgLoss: "",
+  profitFactor: "", avgMAE: "", avgMFE: "", commissions: "", notes: "",
+};
 
 function MiniLine({ values, color }: { values: number[]; color: string }) {
   if (values.length < 2) {
@@ -117,61 +109,95 @@ function MiniBars({ values }: { values: number[] }) {
 }
 
 export default function TradingPage() {
-  const [journals, setJournals] = useState<Journal[]>([]);
-  const [hydrated, setHydrated] = useState(false);
+  const [journals, setJournals] = useState<JournalRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
   const [filter, setFilter] = useState<"all" | "verified" | "manual">("all");
   const [tab, setTab] = useState("journal");
   const [showModal, setShowModal] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
   const [modalErr, setModalErr] = useState("");
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  // Modal fields
-  const [f, setF] = useState({
-    date: "", netPnl: "", trades: "", winRate: "", avgWin: "", avgLoss: "",
-    profitFactor: "", avgMAE: "", avgMFE: "", commissions: "", notes: "",
-  });
+  // Modal fields (strings — coerced on save).
+  const [f, setF] = useState(EMPTY_FORM);
 
-  useEffect(() => {
+  // ── Load from the API ────────────────────────────────────────────────────────
+  const load = useCallback(async () => {
     try {
+      const res = await fetch("/api/journal", { cache: "no-store" });
+      if (res.status === 401) { setErr("Sign in to use the journal."); setJournals([]); return; }
+      const j = await res.json();
+      setJournals(Array.isArray(j.rows) ? j.rows : []);
+      setErr("");
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  /**
+   * One-time lift of legacy localStorage entries into Postgres. Runs before the
+   * first load; the key is cleared afterward so it can't double-import. Any
+   * entry that fails to POST is left behind by design (we only clear on a clean
+   * run) — better a retry next visit than a silent loss.
+   */
+  const migrateLocal = useCallback(async () => {
+    try {
+      if (localStorage.getItem(LS_MIGRATED)) return;
       const raw = localStorage.getItem(LS_KEY);
-      if (raw) setJournals(JSON.parse(raw));
-    } catch { /* ignore */ }
-    setHydrated(true);
+      if (!raw) { localStorage.setItem(LS_MIGRATED, "1"); return; }
+      const old = JSON.parse(raw);
+      if (!Array.isArray(old) || !old.length) { localStorage.setItem(LS_MIGRATED, "1"); return; }
+      let ok = 0;
+      for (const o of old) {
+        const res = await fetch("/api/journal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...o, kind: o.kind === "verified" ? "verified" : "manual" }),
+        });
+        if (res.ok) ok++;
+      }
+      if (ok === old.length) {
+        localStorage.removeItem(LS_KEY);
+        localStorage.setItem(LS_MIGRATED, "1");
+      }
+    } catch { /* migration is best-effort; never block the page */ }
   }, []);
 
   useEffect(() => {
-    if (hydrated) {
-      try { localStorage.setItem(LS_KEY, JSON.stringify(journals)); } catch { /* ignore */ }
-    }
-  }, [hydrated, journals]);
+    (async () => { await migrateLocal(); await load(); })();
+  }, [migrateLocal, load]);
 
   const visible = useMemo(() => {
     let v = journals;
     if (filter !== "all") v = v.filter((j) => j.kind === filter);
     if (selectedDay) v = v.filter((j) => j.date === selectedDay);
-    return [...v].sort((a, b) => a.date.localeCompare(b.date));
+    return [...v].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
   }, [journals, filter, selectedDay]);
 
   // ── KPIs ─────────────────────────────────────────────────────────────────────
   const k = useMemo(() => {
-    const wins = visible.filter((j) => j.netPnl > 0);
-    const losses = visible.filter((j) => j.netPnl < 0);
-    const totalPnl = visible.reduce((s, j) => s + j.netPnl, 0);
+    const wins = visible.filter((j) => j.net_pnl > 0);
+    const losses = visible.filter((j) => j.net_pnl < 0);
+    const totalPnl = visible.reduce((s, j) => s + j.net_pnl, 0);
     const totalTrades = visible.reduce((s, j) => s + j.trades, 0);
-    const avgWin = wins.length ? wins.reduce((s, j) => s + j.netPnl, 0) / wins.length : 0;
-    const avgLoss = losses.length ? losses.reduce((s, j) => s + j.netPnl, 0) / losses.length : 0;
+    const avgWin = wins.length ? wins.reduce((s, j) => s + j.net_pnl, 0) / wins.length : 0;
+    const avgLoss = losses.length ? losses.reduce((s, j) => s + j.net_pnl, 0) / losses.length : 0;
     // Streaks
     let bestW = 0, bestL = 0, curW = 0, curL = 0;
     for (const j of visible) {
-      if (j.netPnl > 0) { curW++; curL = 0; } else if (j.netPnl < 0) { curL++; curW = 0; } else { curW = 0; curL = 0; }
+      if (j.net_pnl > 0) { curW++; curL = 0; } else if (j.net_pnl < 0) { curL++; curW = 0; } else { curW = 0; curL = 0; }
       bestW = Math.max(bestW, curW); bestL = Math.max(bestL, curL);
     }
     // Cumulative + drawdown
     const cum: number[] = [];
     let run = 0;
-    for (const j of visible) { run += j.netPnl; cum.push(run); }
+    for (const j of visible) { run += j.net_pnl; cum.push(run); }
     let peak = -Infinity, maxDD = 0;
     const dd: number[] = cum.map((v) => {
       peak = Math.max(peak, v);
@@ -184,7 +210,7 @@ export default function TradingPage() {
       wins: wins.length, losses: losses.length, winPct, totalPnl, totalTrades,
       avgWin, avgLoss, bestW, bestL, cum, dd, maxDD,
       pnlPerTrade: totalTrades > 0 ? totalPnl / totalTrades : null,
-      efficiency: visible.map((j) => (j.avgMFE !== 0 ? (j.netPnl / Math.max(1, j.trades)) / Math.abs(j.avgMFE) : 0)),
+      efficiency: visible.map((j) => (j.avg_mfe !== 0 ? (j.net_pnl / Math.max(1, j.trades)) / Math.abs(j.avg_mfe) : 0)),
     };
   }, [visible]);
 
@@ -197,7 +223,7 @@ export default function TradingPage() {
     for (let d = 1; d <= days; d++) {
       const date = `${calMonth.y}-${String(calMonth.m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const dayJ = journals.filter((j) => j.date === date);
-      cells.push({ day: d, date, pnl: dayJ.length ? dayJ.reduce((s, j) => s + j.netPnl, 0) : null });
+      cells.push({ day: d, date, pnl: dayJ.length ? dayJ.reduce((s, j) => s + j.net_pnl, 0) : null });
     }
     while (cells.length % 7) cells.push(null);
     return cells;
@@ -206,25 +232,68 @@ export default function TradingPage() {
   const monthLabel = new Date(calMonth.y, calMonth.m, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   // ── Actions ──────────────────────────────────────────────────────────────────
-  const saveJournal = () => {
-    if (!f.date) { setModalErr("Trading date is required."); return; }
-    const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
-    if (f.netPnl.trim() === "" || !Number.isFinite(num(f.netPnl))) { setModalErr("Net P&L is required and must be a number."); return; }
-    setJournals((j) => [...j, {
-      id: Date.now(), date: f.date, netPnl: num(f.netPnl), trades: num(f.trades),
-      winRate: num(f.winRate), avgWin: num(f.avgWin), avgLoss: num(f.avgLoss),
-      profitFactor: num(f.profitFactor), avgMAE: num(f.avgMAE), avgMFE: num(f.avgMFE),
-      commissions: num(f.commissions), notes: f.notes, kind: "manual",
-    }]);
-    setF({ date: "", netPnl: "", trades: "", winRate: "", avgWin: "", avgLoss: "", profitFactor: "", avgMAE: "", avgMFE: "", commissions: "", notes: "" });
+  const openNew = () => { setEditId(null); setF(EMPTY_FORM); setModalErr(""); setShowModal(true); };
+
+  const openEdit = (j: JournalRow) => {
+    setEditId(j.id);
+    setF({
+      date: j.date,
+      netPnl: String(j.net_pnl), trades: String(j.trades), winRate: String(j.win_rate),
+      avgWin: String(j.avg_win), avgLoss: String(j.avg_loss), profitFactor: String(j.profit_factor),
+      avgMAE: String(j.avg_mae), avgMFE: String(j.avg_mfe), commissions: String(j.commissions),
+      notes: j.notes ?? "",
+    });
     setModalErr("");
-    setShowModal(false);
+    setShowModal(true);
+  };
+
+  /** Create (POST) or edit (PATCH) — the DB row is the source of truth after. */
+  const saveJournal = async () => {
+    if (!f.date) { setModalErr("Trading date is required."); return; }
+    if (f.netPnl.trim() === "" || !Number.isFinite(num(f.netPnl))) {
+      setModalErr("Net P&L is required and must be a number."); return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        ...(editId != null ? { id: editId } : {}),
+        date: f.date, netPnl: num(f.netPnl), trades: num(f.trades), winRate: num(f.winRate),
+        avgWin: num(f.avgWin), avgLoss: num(f.avgLoss), profitFactor: num(f.profitFactor),
+        avgMAE: num(f.avgMAE), avgMFE: num(f.avgMFE), commissions: num(f.commissions),
+        notes: f.notes, kind: "manual",
+      };
+      const res = await fetch("/api/journal", {
+        method: editId != null ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json();
+      if (!res.ok) { setModalErr(j.error || "Save failed."); return; }
+      const row: JournalRow = j.row;
+      setJournals((all) => (editId != null ? all.map((x) => (x.id === row.id ? row : x)) : [...all, row]));
+      setF(EMPTY_FORM);
+      setEditId(null);
+      setModalErr("");
+      setShowModal(false);
+    } catch (e) {
+      setModalErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeJournal = async (id: number) => {
+    const prev = journals;
+    setJournals((all) => all.filter((x) => x.id !== id));   // optimistic
+    const res = await fetch(`/api/journal?id=${id}`, { method: "DELETE" });
+    if (!res.ok) { setJournals(prev); setErr("Delete failed."); }
   };
 
   const exportCSV = () => {
     const header = "date,netPnl,trades,winRate,avgWin,avgLoss,profitFactor,avgMAE,avgMFE,commissions,notes,kind";
     const rows = journals.map((j) =>
-      [j.date, j.netPnl, j.trades, j.winRate, j.avgWin, j.avgLoss, j.profitFactor, j.avgMAE, j.avgMFE, j.commissions, JSON.stringify(j.notes ?? ""), j.kind].join(","));
+      [j.date, j.net_pnl, j.trades, j.win_rate, j.avg_win, j.avg_loss, j.profit_factor,
+       j.avg_mae, j.avg_mfe, j.commissions, JSON.stringify(j.notes ?? ""), j.kind].join(","));
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -233,25 +302,25 @@ export default function TradingPage() {
     URL.revokeObjectURL(a.href);
   };
 
-  const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode, idx = 0) => (
-    <div style={{ ...panelStyleAt(idx), display: "flex", flexDirection: "column", minHeight: 130 }}>
+  const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode) => (
+    <Card padding={16} style={{ display: "flex", flexDirection: "column", minHeight: 130 }}>
       <div style={{ fontSize: 10, fontWeight: 700, color: HT.muted, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: HT.text }}>{val}</div>
       <div style={{ fontSize: 10, color: HT.muted, marginTop: 2 }}>{sub}</div>
       {extra && <div style={{ marginTop: "auto" }}>{extra}</div>}
-    </div>
+    </Card>
   );
 
   return (
     <PageShell>
       {/* Header */}
-      <Card accent="orange" padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>Journaling Dashboard</div>
-        <div style={{
-          fontSize: 10, fontWeight: 700, color: T.green, border: `1px solid ${T.green}55`,
-          background: `${T.green}18`, padding: "4px 10px", borderRadius: 20,
-        }}>
-          Market Open
+      <Card padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: HT.text }}>Journaling Dashboard</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {err && <span style={{ fontSize: 11, color: T.red }}>{err}</span>}
+          <span style={{ fontSize: 10, color: HT.muted }}>
+            {loading ? "Loading…" : `${journals.length} saved`}
+          </span>
         </div>
       </Card>
 
@@ -268,7 +337,7 @@ export default function TradingPage() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button style={btnStyle()} onClick={exportCSV}>Export CSV</button>
-            <button style={btnStyle(true)} onClick={() => setShowModal(true)}>+ New Journal</button>
+            <button style={btnStyle(true)} onClick={openNew}>+ New Journal</button>
           </div>
         </div>
 
@@ -285,9 +354,9 @@ export default function TradingPage() {
         </div>
 
         {tab !== "journal" ? (
-          <div style={{ ...panelStyle, display: "grid", placeItems: "center", minHeight: 240, color: HT.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".1em" }}>
+          <Card style={{ display: "grid", placeItems: "center", minHeight: 240, color: HT.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".1em" }}>
             {tab} — coming soon
-          </div>
+          </Card>
         ) : (
           <>
             {/* KPI strip */}
@@ -298,58 +367,58 @@ export default function TradingPage() {
                 <div style={{ height: 6, background: HT.border, borderRadius: 3, overflow: "hidden", display: "flex" }}>
                   <div style={{ width: `${k.winPct ?? 0}%`, background: T.green }} />
                   <div style={{ width: `${k.winPct != null ? 100 - k.winPct : 0}%`, background: T.red }} />
-                </div>, 0)}
+                </div>)}
               {kpiCard("Avg Win / Loss",
                 k.avgLoss !== 0 ? Math.abs(k.avgWin / k.avgLoss).toFixed(2) : "—",
                 "Avg Absolute Trade",
                 <div style={{ fontSize: 10 }}>
                   <div style={{ color: T.green }}>W {k.avgWin ? fmt$(k.avgWin) : "—"}</div>
                   <div style={{ color: T.red }}>L {k.avgLoss ? fmt$(k.avgLoss) : "—"}</div>
-                </div>, 1)}
+                </div>)}
               {kpiCard("Net PnL",
                 <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>,
-                "Total Net PnL", undefined, 2)}
+                "Total Net PnL")}
               {kpiCard("Max Streaks", k.bestW || "—", "Best win streak",
-                <div style={{ fontSize: 10 }}>
+                <div style={{ fontSize: 10, color: HT.muted }}>
                   <div>Consecutive wins <span style={{ color: T.green }}>{k.bestW}</span></div>
                   <div>Consecutive losses <span style={{ color: T.red }}>{k.bestL}</span></div>
-                </div>, 3)}
+                </div>)}
               {kpiCard("Per Trade",
                 k.pnlPerTrade != null ? fmt$(k.pnlPerTrade) : "—",
                 "Net PnL / trade",
-                <div style={{ fontSize: 10 }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>, 4)}
+                <div style={{ fontSize: 10, color: HT.muted }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>)}
             </div>
 
             {/* Charts strip */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              <div style={panelStyleAt(0)}>
-                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>Capture Efficiency Score</div>
+              <Card padding={16}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: HT.text }}>Capture Efficiency Score</div>
                 <MiniLine values={k.efficiency} color={HT.cyan} />
-              </div>
-              <div style={panelStyleAt(1)}>
-                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+              </Card>
+              <Card padding={16}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: HT.text }}>
                   Cumulative PnL <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>
                 </div>
                 <MiniLine values={k.cum} color={T.green} />
-              </div>
-              <div style={panelStyleAt(2)}>
-                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>
+              </Card>
+              <Card padding={16}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: HT.text }}>
                   Drawdown (Max) <span style={{ color: T.red }}>{visible.length ? fmt$(k.maxDD) : "—"}</span>
                 </div>
                 <MiniLine values={k.dd} color={T.red} />
-              </div>
-              <div style={panelStyleAt(3)}>
-                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>PnL Per Day</div>
-                <MiniBars values={visible.map((j) => j.netPnl)} />
-              </div>
+              </Card>
+              <Card padding={16}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, color: HT.text }}>PnL Per Day</div>
+                <MiniBars values={visible.map((j) => j.net_pnl)} />
+              </Card>
             </div>
 
             {/* Tables */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
-              <div style={panelStyleAt(4)}>
+              <Card padding={16}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, targets: !c.targets }))}
-                  style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", cursor: "pointer" }}
+                  style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", cursor: "pointer", color: HT.text }}
                 >
                   <span>Session vs Targets</span><span>{collapsed.targets ? "▶" : "▼"}</span>
                 </div>
@@ -359,23 +428,23 @@ export default function TradingPage() {
                       {[
                         ["Avg Win", k.avgWin ? fmt$(k.avgWin) : "—"],
                         ["Avg Loss", k.avgLoss ? fmt$(k.avgLoss) : "—"],
-                        ["Avg MAE", visible.length ? fmt$(visible.reduce((s, j) => s + j.avgMAE, 0) / visible.length) : "—"],
+                        ["Avg MAE", visible.length ? fmt$(visible.reduce((s, j) => s + j.avg_mae, 0) / visible.length) : "—"],
                         ["Win Ratio", k.winPct != null ? `${k.winPct.toFixed(1)}%` : "—"],
                       ].map(([l, v], i, arr) => (
                         <tr key={l as string}>
                           <td style={{ color: HT.muted, padding: "6px 0", borderBottom: i < arr.length - 1 ? `1px solid ${HT.border}` : "none" }}>{l}</td>
-                          <td style={{ textAlign: "right", color: HT.muted, borderBottom: i < arr.length - 1 ? `1px solid ${HT.border}` : "none" }}>{v}</td>
+                          <td style={{ textAlign: "right", color: HT.text, borderBottom: i < arr.length - 1 ? `1px solid ${HT.border}` : "none" }}>{v}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
-              </div>
+              </Card>
 
-              <div style={panelStyleAt(5)}>
+              <Card padding={16}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, log: !c.log }))}
-                  style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", cursor: "pointer" }}
+                  style={{ fontSize: 11, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", cursor: "pointer", color: HT.text }}
                 >
                   <span>Journal Log ({visible.length} entries)</span><span>{collapsed.log ? "▶" : "▼"}</span>
                 </div>
@@ -392,34 +461,37 @@ export default function TradingPage() {
                       <tbody>
                         {visible.map((j, i) => (
                           <tr key={j.id}>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}` }}>{j.date}</td>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}`, color: j.netPnl >= 0 ? T.green : T.red }}>{fmt$(j.netPnl)}</td>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}`, color: k.cum[i] >= 0 ? T.green : T.red }}>{fmt$(k.cum[i])}</td>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}` }}>{j.trades}</td>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}` }}>{j.winRate ? `${j.winRate}%` : "—"}</td>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}`, color: j.netPnl >= 0 ? T.green : T.red, fontWeight: 700 }}>
-                              {j.netPnl >= 0 ? "WIN" : "LOSS"}
+                            <td style={{ ...cellStyle, color: HT.text }}>{j.date}</td>
+                            <td style={{ ...cellStyle, color: j.net_pnl >= 0 ? T.green : T.red }}>{fmt$(j.net_pnl)}</td>
+                            <td style={{ ...cellStyle, color: k.cum[i] >= 0 ? T.green : T.red }}>{fmt$(k.cum[i])}</td>
+                            <td style={{ ...cellStyle, color: HT.text }}>{j.trades}</td>
+                            <td style={{ ...cellStyle, color: HT.text }}>{j.win_rate ? `${j.win_rate}%` : "—"}</td>
+                            <td style={{ ...cellStyle, color: j.net_pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>
+                              {j.net_pnl >= 0 ? "WIN" : "LOSS"}
                             </td>
-                            <td style={{ padding: "5px 6px", borderBottom: `1px solid ${HT.border}`, textAlign: "right" }}>
+                            <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                              <button style={{ ...btnStyle(), padding: "2px 8px", fontSize: 10, marginRight: 4 }}
+                                onClick={() => openEdit(j)}>Edit</button>
                               <button style={{ ...btnStyle(), padding: "2px 8px", fontSize: 10 }}
-                                onClick={() => setJournals((all) => all.filter((x) => x.id !== j.id))}>✕</button>
+                                onClick={() => removeJournal(j.id)}>✕</button>
                             </td>
                           </tr>
                         ))}
                         {!visible.length && (
-                          <tr><td colSpan={7} style={{ padding: 16, color: HT.muted, textAlign: "center" }}>No journal entries yet — click + New Journal.</td></tr>
+                          <tr><td colSpan={7} style={{ padding: 16, color: HT.muted, textAlign: "center" }}>
+                            {loading ? "Loading…" : "No journal entries yet — click + New Journal."}
+                          </td></tr>
                         )}
                       </tbody>
                     </table>
                   </div>
                 )}
-              </div>
+              </Card>
             </div>
 
             {/* Calendar */}
-            <div style={panelStyleAt(6)}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>Session Calendar</div>
+            <Card title="Session Calendar" padding={16}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, color: HT.muted, fontSize: 13 }}>
                   <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: c.m === 0 ? 11 : c.m - 1 }))}>&lt;</span>
                   <strong style={{ color: HT.text }}>{monthLabel}</strong>
@@ -445,56 +517,66 @@ export default function TradingPage() {
                   </div>
                 ) : <div key={i} style={{ minHeight: 52 }} />)}
               </div>
-            </div>
+            </Card>
           </>
         )}
       </div>
 
-      {/* NEW JOURNAL MODAL */}
+      {/* NEW / EDIT JOURNAL MODAL */}
       {showModal && (
         <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}
           onClick={() => setShowModal(false)}
         >
-          <div style={{ background: HT.panelBgStrong, backdropFilter: "blur(16px)", maxWidth: 520, width: "95vw", borderRadius: 6, border: `1px solid ${HT.border}`, padding: 20 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, paddingBottom: 10, borderBottom: `1px solid ${HT.border}` }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>New Journal Entry</div>
-              <button onClick={() => setShowModal(false)} style={{ background: "none", border: "none", fontSize: 20, color: HT.muted, cursor: "pointer" }}>×</button>
-            </div>
+          <Card
+            className="no-card-lift"
+            padding={20}
+            style={{ maxWidth: 520, width: "95vw" }}
+          >
+            <div onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, paddingBottom: 10, borderBottom: `1px solid ${HT.border}` }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: HT.text }}>
+                  {editId != null ? "Edit Journal Entry" : "New Journal Entry"}
+                </div>
+                <button onClick={() => setShowModal(false)} style={{ background: "none", border: "none", fontSize: 20, color: HT.muted, cursor: "pointer" }}>×</button>
+              </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div>
-                <label style={labelStyle}>Trading Date</label>
-                <input type="date" style={inputStyle} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <label style={labelStyle}>Trading Date</label>
+                  <input type="date" style={inputStyle} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div><label style={labelStyle}>Net P&L ($)</label><input type="number" step="0.01" placeholder="e.g. 312.50" style={inputStyle} value={f.netPnl} onChange={(e) => setF({ ...f, netPnl: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Total Trades</label><input type="number" step="1" min="0" placeholder="e.g. 8" style={inputStyle} value={f.trades} onChange={(e) => setF({ ...f, trades: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Win Rate (%)</label><input type="number" step="0.1" min="0" max="100" placeholder="e.g. 62.5" style={inputStyle} value={f.winRate} onChange={(e) => setF({ ...f, winRate: e.target.value })} /></div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div><label style={labelStyle}>Avg Win ($)</label><input type="number" step="0.01" placeholder="e.g. 187.00" style={inputStyle} value={f.avgWin} onChange={(e) => setF({ ...f, avgWin: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Avg Loss ($)</label><input type="number" step="0.01" placeholder="e.g. -95.00" style={inputStyle} value={f.avgLoss} onChange={(e) => setF({ ...f, avgLoss: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Profit Factor</label><input type="number" step="0.01" min="0" placeholder="e.g. 1.87" style={inputStyle} value={f.profitFactor} onChange={(e) => setF({ ...f, profitFactor: e.target.value })} /></div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div><label style={labelStyle}>Avg MAE ($)</label><input type="number" step="0.01" placeholder="e.g. -44.00" style={inputStyle} value={f.avgMAE} onChange={(e) => setF({ ...f, avgMAE: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Avg MFE ($)</label><input type="number" step="0.01" placeholder="e.g. 210.00" style={inputStyle} value={f.avgMFE} onChange={(e) => setF({ ...f, avgMFE: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Commissions ($)</label><input type="number" step="0.01" placeholder="e.g. -24.00" style={inputStyle} value={f.commissions} onChange={(e) => setF({ ...f, commissions: e.target.value })} /></div>
+                </div>
+                <div>
+                  <label style={labelStyle}>Notes</label>
+                  <textarea rows={2} placeholder="Market conditions, key trades, observations…" style={{ ...inputStyle, resize: "vertical", minHeight: 48 }} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+                </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                <div><label style={labelStyle}>Net P&L ($)</label><input type="number" step="0.01" placeholder="e.g. 312.50" style={inputStyle} value={f.netPnl} onChange={(e) => setF({ ...f, netPnl: e.target.value })} /></div>
-                <div><label style={labelStyle}>Total Trades</label><input type="number" step="1" min="0" placeholder="e.g. 8" style={inputStyle} value={f.trades} onChange={(e) => setF({ ...f, trades: e.target.value })} /></div>
-                <div><label style={labelStyle}>Win Rate (%)</label><input type="number" step="0.1" min="0" max="100" placeholder="e.g. 62.5" style={inputStyle} value={f.winRate} onChange={(e) => setF({ ...f, winRate: e.target.value })} /></div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                <div><label style={labelStyle}>Avg Win ($)</label><input type="number" step="0.01" placeholder="e.g. 187.00" style={inputStyle} value={f.avgWin} onChange={(e) => setF({ ...f, avgWin: e.target.value })} /></div>
-                <div><label style={labelStyle}>Avg Loss ($)</label><input type="number" step="0.01" placeholder="e.g. -95.00" style={inputStyle} value={f.avgLoss} onChange={(e) => setF({ ...f, avgLoss: e.target.value })} /></div>
-                <div><label style={labelStyle}>Profit Factor</label><input type="number" step="0.01" min="0" placeholder="e.g. 1.87" style={inputStyle} value={f.profitFactor} onChange={(e) => setF({ ...f, profitFactor: e.target.value })} /></div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                <div><label style={labelStyle}>Avg MAE ($)</label><input type="number" step="0.01" placeholder="e.g. -44.00" style={inputStyle} value={f.avgMAE} onChange={(e) => setF({ ...f, avgMAE: e.target.value })} /></div>
-                <div><label style={labelStyle}>Avg MFE ($)</label><input type="number" step="0.01" placeholder="e.g. 210.00" style={inputStyle} value={f.avgMFE} onChange={(e) => setF({ ...f, avgMFE: e.target.value })} /></div>
-                <div><label style={labelStyle}>Commissions ($)</label><input type="number" step="0.01" placeholder="e.g. -24.00" style={inputStyle} value={f.commissions} onChange={(e) => setF({ ...f, commissions: e.target.value })} /></div>
-              </div>
-              <div>
-                <label style={labelStyle}>Notes</label>
-                <textarea rows={2} placeholder="Market conditions, key trades, observations…" style={{ ...inputStyle, resize: "vertical", minHeight: 48 }} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+
+              {modalErr && <div style={{ fontSize: 11, color: T.red, marginTop: 8 }}>{modalErr}</div>}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${HT.border}` }}>
+                <button style={btnStyle()} onClick={() => setShowModal(false)} disabled={saving}>Cancel</button>
+                <button style={btnStyle(true)} onClick={saveJournal} disabled={saving}>
+                  {saving ? "Saving…" : editId != null ? "Save Changes" : "Save Entry"}
+                </button>
               </div>
             </div>
-
-            {modalErr && <div style={{ fontSize: 11, color: T.red, marginTop: 8 }}>{modalErr}</div>}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${HT.border}` }}>
-              <button style={btnStyle()} onClick={() => setShowModal(false)}>Cancel</button>
-              <button style={btnStyle(true)} onClick={saveJournal}>Save Entry</button>
-            </div>
-          </div>
+          </Card>
         </div>
       )}
     </PageShell>

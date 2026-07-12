@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
 import { listAllUsersForBroadcast, listWaitlist, addEmailSend, listEmailSends, getUnsubscribedSet } from "@/lib/db";
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
+import { applyPromoCodesHtml, applyPromoCodesText, hasPromoCodePlaceholder } from "@/lib/promoCodes";
 import { loadLegacyEmails } from "@/lib/emails/legacyEmails";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
@@ -142,7 +143,25 @@ export async function POST(req: NextRequest) {
     // private. Fine for current list sizes.
     const sent: string[] = [];
     const failed: Array<{ batch: string[]; error: string }> = [];
+    const needsPromoCode = hasPromoCodePlaceholder(html) || hasPromoCodePlaceholder(text);
     for (const recipient of to) {
+      // Mint (or reuse) this recipient's own single-use Stripe promo code if
+      // the template references one. Each person gets a code that only works
+      // once — never a shared code the whole list races to redeem. A mint
+      // failure (e.g. missing coupon env var) fails just this recipient
+      // rather than the whole batch.
+      let recipientHtml = html;
+      let recipientText = text;
+      if (needsPromoCode) {
+        try {
+          if (html) recipientHtml = await applyPromoCodesHtml(html, recipient);
+          if (text) recipientText = await applyPromoCodesText(text, recipient);
+        } catch (e) {
+          failed.push({ batch: [recipient], error: `promo code: ${String(e)}` });
+          continue;
+        }
+      }
+
       const unsubUrl = unsubscribeApiUrl(recipient);
       const payload: Record<string, unknown> = {
         from: FROM_EMAIL,
@@ -158,8 +177,8 @@ export async function POST(req: NextRequest) {
       // Swap the template's {{UNSUBSCRIBE_URL}} placeholder for this recipient's
       // real tokenized URL (or append a footer if the body has no placeholder).
       // Guarantees exactly one working unsubscribe link in every email.
-      if (html) payload.html = applyUnsubscribeHtml(html, recipient);
-      if (text) payload.text = applyUnsubscribeText(text, recipient);
+      if (recipientHtml) payload.html = applyUnsubscribeHtml(recipientHtml, recipient);
+      if (recipientText) payload.text = applyUnsubscribeText(recipientText, recipient);
 
       const r = await fetch("https://api.resend.com/emails", {
         method: "POST",
