@@ -529,25 +529,7 @@ export default function TradingPage() {
           <Card padding={12} style={{ fontSize: 15, color: T.red }}>{importErr}</Card>
         )}
 
-        {/* Tabs */}
-        <div className="tab-strip" style={{ display: "flex", gap: 0, borderBottom: `1px solid ${HT.border}` }}>
-          {["journal", "comparison", "analysis"].map((t) => (
-            <div key={t} onClick={() => setTab(t)} style={{
-              padding: "8px 16px", fontSize: 15, fontWeight: 600, cursor: "pointer",
-              textTransform: "capitalize",
-              color: tab === t ? HT.cyan : HT.muted,
-              borderBottom: `2px solid ${tab === t ? HT.cyan : "transparent"}`,
-            }}>{t}</div>
-          ))}
-        </div>
-
-        {tab !== "journal" ? (
-          <Card style={{ display: "grid", placeItems: "center", minHeight: 240, color: HT.muted, fontSize: 15, textTransform: "uppercase", letterSpacing: ".1em" }}>
-            {tab} — coming soon
-          </Card>
-        ) : (
-          <>
-            {/* KPI strip */}
+        {/* KPI strip */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
               {kpiCard("Day Win %",
                 k.winPct != null ? `${k.winPct.toFixed(0)}%` : "—",
@@ -709,9 +691,7 @@ export default function TradingPage() {
                   </div>
                 ) : <div key={i} style={{ minHeight: 52 }} />)}
               </div>
-            </Card>
-          </>
-        )}
+        </Card>
       </div>
 
       {/* CSV IMPORT PREVIEW — nothing is written until "Import" is clicked */}
