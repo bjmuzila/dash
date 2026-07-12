@@ -825,8 +825,9 @@ async function ensureAllTables(pool: Pool): Promise<void> {
 
     -- Trading journal (/trading). Replaces the old localStorage key
     -- "trading_journals" so entries persist server-side and follow the user
-    -- across browsers/devices. One row per journaled session-day per user; a
-    -- user may log more than one entry for the same date (no unique on date).
+    -- across browsers/devices. ONE row per session-day per user — the CSV
+    -- importer upserts on (user_id, date), so a re-imported statement corrects
+    -- the day in place instead of stacking duplicates.
     CREATE TABLE IF NOT EXISTS trading_journals (
       id            SERIAL PRIMARY KEY,
       user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -837,16 +838,45 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       avg_win       REAL NOT NULL DEFAULT 0,
       avg_loss      REAL NOT NULL DEFAULT 0,
       profit_factor REAL NOT NULL DEFAULT 0,
-      avg_mae       REAL NOT NULL DEFAULT 0,
-      avg_mfe       REAL NOT NULL DEFAULT 0,
       commissions   REAL NOT NULL DEFAULT 0,
       notes         TEXT,
       kind          TEXT NOT NULL DEFAULT 'manual',  -- 'manual' | 'verified'
       created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (user_id, date)
     );
     CREATE INDEX IF NOT EXISTS idx_trading_journals_user_date
       ON trading_journals(user_id, date);
+
+    -- Individual executions behind a journal day, imported from a broker CSV
+    -- (tastytrade / TOS / IBKR / Rithmic / MotiveWave / Tradovate / generic).
+    -- The day rows in trading_journals are DERIVED from these, never typed —
+    -- see lib/journal/csv.ts. Keeping the fills (rather than only the rolled-up
+    -- day) is what makes per-trade MAE/MFE and setup analysis possible later;
+    -- it cannot be backfilled from a day row.
+    --
+    -- ext_id is a stable hash of the source CSV line, so re-importing the same
+    -- statement is a no-op instead of doubling every stat.
+    CREATE TABLE IF NOT EXISTS trading_fills (
+      id          SERIAL PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      date        TEXT NOT NULL,          -- YYYY-MM-DD, ET session date
+      ts          BIGINT NOT NULL,        -- epoch ms (execution time)
+      symbol      TEXT NOT NULL,          -- raw broker symbol
+      underlying  TEXT NOT NULL,
+      asset_type  TEXT NOT NULL,          -- 'option' | 'future' | 'equity'
+      side        TEXT NOT NULL,          -- 'BUY' | 'SELL'
+      qty         REAL NOT NULL,
+      price       REAL NOT NULL,
+      fees        REAL NOT NULL DEFAULT 0,
+      multiplier  REAL NOT NULL DEFAULT 1,
+      source      TEXT NOT NULL,          -- broker id
+      ext_id      TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (user_id, ext_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trading_fills_user_date ON trading_fills(user_id, date);
+    CREATE INDEX IF NOT EXISTS idx_trading_fills_user_ts   ON trading_fills(user_id, ts);
 
     -- ── Custom auth (replaces Supabase Auth) ──────────────────────────────────
     -- One row per account. id is a plain TEXT uuid generated app-side
@@ -1050,8 +1080,6 @@ export interface TradingJournal {
   avg_win: number;
   avg_loss: number;
   profit_factor: number;
-  avg_mae: number;
-  avg_mfe: number;
   commissions: number;
   notes: string | null;
   kind: "manual" | "verified";
@@ -1063,7 +1091,7 @@ export async function getTradingJournals(userId: string): Promise<TradingJournal
   await getDb();
   return queryAll<TradingJournal>(
     `SELECT id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
-            avg_mae, avg_mfe, commissions, notes, kind
+            commissions, notes, kind
        FROM trading_journals
       WHERE user_id = ?
       ORDER BY date ASC, id ASC`,
@@ -1078,12 +1106,12 @@ export async function insertTradingJournal(
   const rows = await queryAll<TradingJournal>(
     `INSERT INTO trading_journals
        (user_id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
-        avg_mae, avg_mfe, commissions, notes, kind)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        commissions, notes, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
-               avg_mae, avg_mfe, commissions, notes, kind`,
+               commissions, notes, kind`,
     [userId, j.date, j.net_pnl, j.trades, j.win_rate, j.avg_win, j.avg_loss,
-     j.profit_factor, j.avg_mae, j.avg_mfe, j.commissions, j.notes ?? null, j.kind]
+     j.profit_factor, j.commissions, j.notes ?? null, j.kind]
   );
   return rows[0];
 }
@@ -1096,13 +1124,13 @@ export async function updateTradingJournal(
   const rows = await queryAll<TradingJournal>(
     `UPDATE trading_journals
         SET date = ?, net_pnl = ?, trades = ?, win_rate = ?, avg_win = ?, avg_loss = ?,
-            profit_factor = ?, avg_mae = ?, avg_mfe = ?, commissions = ?, notes = ?,
+            profit_factor = ?, commissions = ?, notes = ?,
             kind = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND user_id = ?
       RETURNING id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
-                avg_mae, avg_mfe, commissions, notes, kind`,
+                commissions, notes, kind`,
     [j.date, j.net_pnl, j.trades, j.win_rate, j.avg_win, j.avg_loss, j.profit_factor,
-     j.avg_mae, j.avg_mfe, j.commissions, j.notes ?? null, j.kind, id, userId]
+     j.commissions, j.notes ?? null, j.kind, id, userId]
   );
   return rows[0];
 }
@@ -1110,6 +1138,76 @@ export async function updateTradingJournal(
 export async function deleteTradingJournal(userId: string, id: number): Promise<void> {
   await getDb();
   await queryAll(`DELETE FROM trading_journals WHERE id = ? AND user_id = ?`, [id, userId]);
+}
+
+/** Upsert a day row by (user, date). CSV import owns the derived stats; a manual
+ *  edit to the same date is overwritten by a re-import, but the NOTES survive —
+ *  the broker can't know what the user wrote, so we never blank it. */
+export async function upsertTradingJournalDay(
+  userId: string, j: TradingJournalInput
+): Promise<TradingJournal | undefined> {
+  await getDb();
+  const rows = await queryAll<TradingJournal>(
+    `INSERT INTO trading_journals
+       (user_id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
+        commissions, notes, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (user_id, date) DO UPDATE SET
+       net_pnl = EXCLUDED.net_pnl, trades = EXCLUDED.trades, win_rate = EXCLUDED.win_rate,
+       avg_win = EXCLUDED.avg_win, avg_loss = EXCLUDED.avg_loss,
+       profit_factor = EXCLUDED.profit_factor, commissions = EXCLUDED.commissions,
+       notes = COALESCE(EXCLUDED.notes, trading_journals.notes),
+       kind = EXCLUDED.kind, updated_at = CURRENT_TIMESTAMP
+     RETURNING id, date, net_pnl, trades, win_rate, avg_win, avg_loss, profit_factor,
+               commissions, notes, kind`,
+    [userId, j.date, j.net_pnl, j.trades, j.win_rate, j.avg_win, j.avg_loss,
+     j.profit_factor, j.commissions, j.notes ?? null, j.kind]
+  );
+  return rows[0];
+}
+
+// ── Trading fills (CSV import) ───────────────────────────────────────────────
+
+export interface TradingFill {
+  date: string; ts: number; symbol: string; underlying: string;
+  asset_type: string; side: string; qty: number; price: number;
+  fees: number; multiplier: number; source: string; ext_id: string;
+}
+
+/** Bulk insert. ON CONFLICT DO NOTHING on (user_id, ext_id) → re-importing the
+ *  same statement inserts nothing instead of doubling every stat. Returns the
+ *  number of NEW fills actually written. */
+export async function insertTradingFills(userId: string, fills: TradingFill[]): Promise<number> {
+  if (!fills.length) return 0;
+  const pool = await getDb();
+  const COLS = 13;                       // must match the column list below
+  const values: unknown[] = [];
+  const tuples = fills.map((f, i) => {
+    values.push(userId, f.date, f.ts, f.symbol, f.underlying, f.asset_type,
+      f.side, f.qty, f.price, f.fees, f.multiplier, f.source, f.ext_id);
+    const ph = Array.from({ length: COLS }, (_, c) => `$${i * COLS + c + 1}`);
+    return `(${ph.join(", ")})`;
+  });
+  const res = await pool.query(
+    `INSERT INTO trading_fills
+       (user_id, date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id)
+     VALUES ${tuples.join(",")}
+     ON CONFLICT (user_id, ext_id) DO NOTHING`,
+    values
+  );
+  return res.rowCount ?? 0;
+}
+
+/** All fills for a user, oldest first — the input to round-trip matching. */
+export async function getTradingFills(userId: string, date?: string): Promise<TradingFill[]> {
+  await getDb();
+  return date
+    ? queryAll<TradingFill>(
+        `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
+           FROM trading_fills WHERE user_id = ? AND date = ? ORDER BY ts ASC`, [userId, date])
+    : queryAll<TradingFill>(
+        `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
+           FROM trading_fills WHERE user_id = ? ORDER BY ts ASC`, [userId]);
 }
 
 export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {

@@ -38,8 +38,6 @@ function parseBody(body: Record<string, unknown>): TradingJournalInput | null {
     avg_win: num(body.avgWin ?? body.avg_win),
     avg_loss: num(body.avgLoss ?? body.avg_loss),
     profit_factor: num(body.profitFactor ?? body.profit_factor),
-    avg_mae: num(body.avgMAE ?? body.avg_mae),
-    avg_mfe: num(body.avgMFE ?? body.avg_mfe),
     commissions: num(body.commissions),
     notes: body.notes ? String(body.notes).slice(0, 4000) : null,
     kind: String(body.kind ?? "manual") === "verified" ? "verified" : "manual",
