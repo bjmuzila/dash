@@ -44,8 +44,6 @@ const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsur
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
-const { startDarkpoolRecorder } = require('./darkpool-recorder');
-const { handleDarkpoolHistory, handleDarkpoolAccum, handleDarkpoolLevels } = require('./darkpool-routes');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, getLatestFit: getRegimeLatestFit, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
 const { startRegimeTrainer, getLatestStoredFit: getRegimeStoredFit, forceRetrainAll: forceRegimeRetrain } = require('./regime-trainer');
@@ -304,33 +302,6 @@ async function handleProxyRest(req, res) {
   if (pathname === '/proxy/flow-netprem') {
     handleFlowNetPrem(req, res).catch((e) => {
       sendJson(res, 500, { error: 'flow-netprem failed', detail: String(e?.message || e) });
-    });
-    return true;
-  }
-
-  // /proxy/darkpool-history?underlying=SPY&date=YYYY-MM-DD&limit=2000
-  // Per-ticker dark-pool (TRF) print tape, oldest-first.
-  if (pathname === '/proxy/darkpool-history') {
-    handleDarkpoolHistory(req, res).catch((e) => {
-      sendJson(res, 500, { error: 'darkpool-history failed', detail: String(e?.message || e) });
-    });
-    return true;
-  }
-
-  // /proxy/darkpool-accum?underlying=SPY&window=intraday|5d|7d
-  // Accumulation bins for the Dark Pool card's running-total chart.
-  if (pathname === '/proxy/darkpool-accum') {
-    handleDarkpoolAccum(req, res).catch((e) => {
-      sendJson(res, 500, { error: 'darkpool-accum failed', detail: String(e?.message || e) });
-    });
-    return true;
-  }
-
-  // /proxy/darkpool-levels?underlying=SPY&window=intraday|5d|7d
-  // Heaviest-dark-levels price profile + % of volume traded off-exchange.
-  if (pathname === '/proxy/darkpool-levels') {
-    handleDarkpoolLevels(req, res).catch((e) => {
-      sendJson(res, 500, { error: 'darkpool-levels failed', detail: String(e?.message || e) });
     });
     return true;
   }
@@ -848,6 +819,27 @@ async function main() {
       if (pathname === '/proxy/gex-levels-history-run' && req.method === 'POST') {
         const { collectGexLevelsHistory } = require('./gex-levels-history-recorder');
         collectGexLevelsHistory(`http://localhost:${PORT}`, { force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      // ── Earnings calendar (weekly, mcap ≥ $100B) ─────────────────────────
+      //   GET /proxy/earnings-week  → today → Friday, one row per name
+      if (pathname === '/proxy/earnings-week' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getWeekRows, MIN_MCAP } = require('./earnings-calendar-recorder');
+            const rows = await getWeekRows();
+            sendJson(res, 200, { ok: true, minMcap: MIN_MCAP, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual fire: POST /proxy/earnings-week-run?week=this|next
+      if (pathname === '/proxy/earnings-week-run' && req.method === 'POST') {
+        const u = new URL(req.url, `http://localhost:${PORT}`);
+        const week = u.searchParams.get('week') === 'next' ? 'next' : 'this';
+        require('./earnings-calendar-recorder').runSweep(week)
           .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
@@ -2041,6 +2033,9 @@ async function main() {
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
+    // Earnings calendar: Sat 09:00 ET scrape of next Mon–Fri from Nasdaq,
+    // mcap ≥ $100B → earnings_calendar (feeds /economic-calendar bottom strip).
+    require('./earnings-calendar-recorder').startEarningsCalendarRecorder();
     // Day-post writer: auto-generates the premarket/midday/EOD X posts
     // (Anthropic via /api/social-media/day-post) into day_posts at their slot
     // times, so the Social Media → Day Posts tab has a ready copy/paste list.
@@ -2067,10 +2062,6 @@ async function main() {
     // instead of depending on a browser tab staying open. NDX runs 24/7;
     // SPY/QQQ only tick during RTH. Feeds /proxy/wall-history.
     startTickerWallRecorder();
-    // Dark pool (TRF) print recorder: separate Theta STOCK trade-stream connection,
-    // filters exchange codes 57/58/59, writes to darkpool_prints for the /flow
-    // page's per-ticker Dark Pool card. Requires a Theta Stocks Pro subscription.
-    startDarkpoolRecorder();
     // Net greeks time-series: writes $SPX net GEX/DEX/CHEX/VEX every 5m during
     // RTH into greeks_ts (feeds the Analytics "Net Greeks" card).
     startGreeksTsWriter(PORT);

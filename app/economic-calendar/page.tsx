@@ -15,13 +15,36 @@ interface CalEvent {
   actual: string;
 }
 
-interface EarnRow { symbol: string; company: string; callTime: string; marketCap: number; }
+interface EarnRow {
+  date: string;                          // YYYY-MM-DD (ET)
+  symbol: string;
+  company: string;
+  session: "pre" | "after" | "unknown";
+  market_cap: number;
+  eps_est: string | null;
+}
 
-const CHIP_W = 44;
-const CHIP_GAP = 12;
+const CHIP_W = 46;
+const CHIP_GAP = 10;
 
+// Primary: davidepalazzo/ticker-logos (transparent PNGs, ALL-CAPS filenames).
 function logoUrl(sym: string) {
+  return `https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${sym.toUpperCase()}.png`;
+}
+function logoFallbackUrl(sym: string) {
   return `https://financialmodelingprep.com/image-stock/${sym.toUpperCase()}.png`;
+}
+
+function fmtMcap(n: number) {
+  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+  return `$${Math.round(n / 1e9)}B`;
+}
+
+function dayLabelShort(dateStr: string, today: string) {
+  if (dateStr === today) return "TODAY";
+  return new Date(dateStr + "T12:00:00")
+    .toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" })
+    .toUpperCase();
 }
 
 const IMPACT_COLOR: Record<string, string> = {
@@ -100,9 +123,7 @@ export default function EconomicCalendarPage() {
   const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
-  const [maxChips,      setMaxChips]      = useState(12);
   const dropRef   = useRef<HTMLDivElement>(null);
-  const stripRef  = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function h(e: MouseEvent) {
@@ -119,7 +140,7 @@ export default function EconomicCalendarPage() {
       const [econRes, qRes, earnRes] = await Promise.all([
         fetch("/api/calendar", { cache: "no-store" }),
         fetch("/api/calendar-quote", { cache: "no-store" }),
-        fetch("/api/earnings-today", { cache: "no-store" }),
+        fetch("/proxy/earnings-week", { cache: "no-store" }),
       ]);
       const econJson = await econRes.json();
       if (!econRes.ok) throw new Error(econJson?.error || `HTTP ${econRes.status}`);
@@ -136,7 +157,7 @@ export default function EconomicCalendarPage() {
       }
       if (earnRes.ok) {
         const ej = await earnRes.json();
-        setEarnings(Array.isArray(ej.earnings) ? ej.earnings : []);
+        setEarnings(Array.isArray(ej.rows) ? ej.rows : []);
       }
     } catch (e) { setError(String(e)); setEvents([]); }
     finally    { setLoading(false); }
@@ -149,21 +170,20 @@ export default function EconomicCalendarPage() {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    const el = stripRef.current;
-    if (!el) return;
-    const measure = () => {
-      const w = el.clientWidth;
-      if (w <= 0) return;
-      setMaxChips(Math.max(1, Math.floor((w + CHIP_GAP) / (CHIP_W + CHIP_GAP))));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [earnings.length]);
-
   const today = etToday();
+
+  // Group today → Friday, split premarket / after-hours.
+  const earnDays = (() => {
+    const map = new Map<string, { pre: EarnRow[]; after: EarnRow[]; unknown: EarnRow[] }>();
+    for (const r of earnings) {
+      if (!map.has(r.date)) map.set(r.date, { pre: [], after: [], unknown: [] });
+      const b = map.get(r.date)!;
+      if (r.session === "pre") b.pre.push(r);
+      else if (r.session === "after") b.after.push(r);
+      else b.unknown.push(r);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  })();
 
   function toggleFilter(key: FilterKey) {
     setActiveFilters(prev => {
@@ -387,74 +407,108 @@ export default function EconomicCalendarPage() {
         )}
       </div>
 
-      {/* Earnings Today strip */}
-      {earnings.length > 0 && (
+      {/* Earnings this week (mega caps only, today → Friday) */}
+      {earnDays.length > 0 && (
         <div style={{
           flexShrink: 0,
           borderTop: `1px solid ${HT.border}`,
           background: HT.panelBgStrong,
           backdropFilter: "blur(16px)",
           padding: "8px 16px 10px",
+          maxHeight: "38%",
+          overflowY: "auto",
         }}>
-          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HT.cyan, marginBottom: 8 }}>
-            Earnings Today · {earnings.length}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HT.cyan }}>
+              Earnings This Week
+            </span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
+              MKT CAP ≥ $100B · {earnings.length}
+            </span>
           </div>
-          <div ref={stripRef} style={{ display: "flex", gap: CHIP_GAP, overflow: "hidden", paddingBottom: 2, flexWrap: "nowrap" }}>
-            {(() => {
-              const overflow = earnings.length - maxChips;
-              const showCount = overflow > 0 ? Math.max(0, maxChips - 1) : maxChips;
-              const shown = earnings.slice(0, showCount);
-              const hidden = earnings.length - shown.length;
+
+          <div style={{ display: "flex", gap: 14, overflowX: "auto", paddingBottom: 4 }}>
+            {earnDays.map(([date, buckets]) => {
+              const isTod = date === today;
               return (
-                <>
-                  {shown.map((e) => (
-                    <a
-                      key={e.symbol}
-                      href={`https://finance.yahoo.com/quote/${e.symbol}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={`${e.company || e.symbol}${e.callTime ? ` · ${e.callTime}` : ""}`}
-                      style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flexShrink: 0, width: CHIP_W, textDecoration: "none" }}
-                    >
-                      <span style={{
-                        width: 32, height: 32, borderRadius: 8, overflow: "hidden",
-                        background: "#fff", border: `1px solid ${HT.border}`,
-                        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                      }}>
-                        <img
-                          src={logoUrl(e.symbol)} alt={e.symbol} width={32} height={32}
-                          style={{ width: 32, height: 32, objectFit: "contain" }}
-                          onError={(ev) => {
-                            const t = ev.currentTarget;
-                            t.style.display = "none";
-                            const p = t.parentElement;
-                            if (p && !p.querySelector(".logo-fallback")) {
-                              const s = document.createElement("span");
-                              s.className = "logo-fallback";
-                              s.textContent = e.symbol.slice(0, 4);
-                              s.style.cssText = "font-size:8px;font-weight:800;color:#05080d;text-align:center;line-height:1;";
-                              p.appendChild(s);
-                            }
-                          }}
-                        />
-                      </span>
-                      <span style={{ fontSize: 9, fontWeight: 700, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {e.symbol}
-                      </span>
-                    </a>
-                  ))}
-                  {hidden > 0 && (
-                    <div title={`${hidden} more reporting today`} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", gap: 4, flexShrink: 0, width: CHIP_W }}>
-                      <span style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(33,158,188,0.10)", border: `1px solid ${HT.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: HT.cyan }}>
-                        +{hidden}
-                      </span>
-                      <span style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", fontFamily: "var(--font-mono)" }}>MORE</span>
-                    </div>
-                  )}
-                </>
+                <div
+                  key={date}
+                  style={{
+                    flexShrink: 0,
+                    minWidth: 200,
+                    border: `1px solid ${HT.border}`,
+                    borderTop: `2px solid ${isTod ? HT.cyan : HT.border}`,
+                    borderRadius: 10,
+                    background: isTod ? "rgba(33,158,188,0.05)" : HT.bg,
+                    padding: "8px 10px 10px",
+                  }}
+                >
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: isTod ? HT.cyan : HT.text, marginBottom: 8 }}>
+                    {dayLabelShort(date, today)}
+                  </div>
+                  {renderSession("Premarket", buckets.pre)}
+                  {renderSession("After hours", buckets.after)}
+                  {buckets.unknown.length > 0 && renderSession("Time TBD", buckets.unknown)}
+                </div>
               );
-            })()}
+            })}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderSession(label: string, rows: EarnRow[]) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: "#3a5570", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>
+        {label}: {rows.length === 0 && <span style={{ color: "#22303f" }}>—</span>}
+      </div>
+      {rows.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: CHIP_GAP }}>
+          {rows.map((e) => (
+            <a
+              key={e.symbol}
+              href={`https://finance.yahoo.com/quote/${e.symbol}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`${e.company || e.symbol} · ${fmtMcap(e.market_cap)}${e.eps_est ? ` · est ${e.eps_est}` : ""}`}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flexShrink: 0, width: CHIP_W, textDecoration: "none" }}
+            >
+              <span style={{
+                width: 34, height: 34, borderRadius: 8, overflow: "hidden",
+                background: "#fff", border: `1px solid ${HT.border}`,
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>
+                <img
+                  src={logoUrl(e.symbol)} alt={e.symbol} width={34} height={34}
+                  style={{ width: 34, height: 34, objectFit: "contain" }}
+                  data-fallback="0"
+                  onError={(ev) => {
+                    const t = ev.currentTarget;
+                    if (t.dataset.fallback === "0") {
+                      t.dataset.fallback = "1";
+                      t.src = logoFallbackUrl(e.symbol);
+                      return;
+                    }
+                    t.style.display = "none";
+                    const p = t.parentElement;
+                    if (p && !p.querySelector(".logo-fallback")) {
+                      const s = document.createElement("span");
+                      s.className = "logo-fallback";
+                      s.textContent = e.symbol.slice(0, 4);
+                      s.style.cssText = "font-size:8px;font-weight:800;color:#05080d;text-align:center;line-height:1;";
+                      p.appendChild(s);
+                    }
+                  }}
+                />
+              </span>
+              <span style={{ fontSize: 9, fontWeight: 700, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {e.symbol}
+              </span>
+            </a>
+          ))}
         </div>
       )}
     </div>
