@@ -1468,6 +1468,8 @@ export default function OptionsChainPage({
           // Shared strike axis: ONE strike column on the left, then one
           // value-only column per expiration. Row N = same strike everywhere.
           const STRIKE_COL = 76;
+          // Sticky header/strike column must be fully opaque — rows scroll under it.
+          const HDR_BG = "#0D1119";
           return (
           <div style={{
             display: "grid",
@@ -1479,7 +1481,7 @@ export default function OptionsChainPage({
             background: HT.panelBg,
           }}>
             {/* ── Header row: empty strike corner + one expiry header per column ── */}
-            <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
+            <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
               Strike
             </div>
             {renderIdx.map((i) => {
@@ -1492,7 +1494,7 @@ export default function OptionsChainPage({
                     : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
                 : null;
               return (
-                <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HT.panelBgStrong}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HT.panelBgStrong}`, borderBottom: `1px solid ${HT.border}` }}>
+                <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
                   <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
                   <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                     {colTotal == null ? "—" : fmtMoney(colTotal)}
@@ -1508,7 +1510,7 @@ export default function OptionsChainPage({
               if (strike == null) {
                 return (
                   <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HT.panelBgStrong, borderRight: `1px solid ${HT.border}` }} />
+                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
                     {renderIdx.map((i) => (
                       <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
                     ))}
@@ -1544,7 +1546,7 @@ export default function OptionsChainPage({
                     position: "sticky", left: 0, zIndex: 2,
                     padding: "2px 8px", fontSize: 12, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
                     color: isATM ? "#0a0e14" : "#e4e4e7",
-                    background: isATM ? "#ffb300" : HT.panelBgStrong,
+                    background: isATM ? "#ffb300" : HDR_BG,
                     borderRight: `1px solid ${HT.border}`,
                     borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
                     borderBottom: isATM ? "2px solid #ffffff" : undefined,

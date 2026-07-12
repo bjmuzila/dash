@@ -52,7 +52,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "greeks" | "volpin" | "strike" | "oi" | "watch" | "marketquality" | "balance" | "ibstats";
+type MainTab = "overview" | "gex" | "strike" | "oi" | "watch" | "marketquality" | "balance" | "ibstats";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -75,22 +75,6 @@ const SCAN_META: ScanMeta[] = [
     scope: "Stocks · cross-ticker",
     what: "Ranks strikes across the whole ticker universe by how much their GEX has moved in the last 5–60 minutes, either by raw size or by z-score vs their own recent history.",
     tells: "Where dealer hedging pressure is building fastest right now — the strikes seeing unusually large, non-routine gamma shifts.",
-  },
-  {
-    tab: "greeks",
-    title: "Greeks Sensitivity Scanner",
-    accent: HOME_THEME.purple,
-    scope: "SPX · per-strike",
-    what: "Tracks Charm (delta decay), Vanna (vol-driven delta), Gamma acceleration, and a combined Theta-Gamma imbalance score, per strike.",
-    tells: "Which strikes are heating up fastest on delta decay or vol sensitivity — used to spot 0DTE pin risk or zones primed for an explosive move.",
-  },
-  {
-    tab: "volpin",
-    title: "Vol Pin Scanner",
-    accent: HOME_THEME.orange,
-    scope: "Stocks · IV/RV + range",
-    what: "Watches IV-RV spread contraction and intraday price-range tightening together, versus each ticker's highest-OI strike.",
-    tells: "Classic pre-pin signatures — vol crush plus range compression near a magnet strike — flagging PINNING / SQUEEZING / WATCHING candidates into expiry.",
   },
   {
     tab: "strike",
@@ -211,7 +195,7 @@ function GexScanner() {
   const [minZ, setMinZ] = useState(0);
   const [colSort, setColSort] = useState<ColSort>(null);
   const [dir, setDir] = useState<"all" | "pos" | "neg">("all");
-  const [minOtm, setMinOtm] = useState(0);   // how far OTM the strike must sit vs spot (0 = any)
+  const [minOtm, setMinOtm] = useState(0.05);   // default: 5%+ OTM
   const [minExpiry, setMinExpiry] = useState("");
   const [maxExpiry, setMaxExpiry] = useState("");
   // Adjustable signal thresholds (user settings, persisted). Image defaults:
@@ -260,6 +244,11 @@ function GexScanner() {
     if (maxExpiry && r.expiry > maxExpiry) return false;
     return true;
   });
+
+  // Top 10 cards: always biggest |Δ GEX| in the window, independent of table sort.
+  const topBySize = [...expiryFilteredRows]
+    .sort((a, b) => Math.abs(b.latest_chg || 0) - Math.abs(a.latest_chg || 0))
+    .slice(0, 10);
 
   const displayRows = colSort
     ? [...expiryFilteredRows].sort((a, b) => {
@@ -379,6 +368,54 @@ function GexScanner() {
       </div>
 
       {err && <div style={{ color: HOME_THEME.red, marginBottom: 12 }}>{err}</div>}
+
+      {/* Top 10 by size — biggest |Δ GEX| in the window, always sorted by size regardless of table sort */}
+      {!!topBySize.length && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.orange, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
+            Top 10 · biggest {win}m size
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+            {topBySize.map((r, i) => {
+              const up = r.latest_chg >= 0;
+              const col = up ? HOME_THEME.green : HOME_THEME.red;
+              const sig = classify(r);
+              const otmPct = (r.otm_dist ?? 0) * 100;
+              return (
+                <div
+                  key={`card-${r.symbol}-${r.expiry}-${r.strike}`}
+                  className="card-hover"
+                  style={{
+                    ...classicCardAccentStyle,
+                    padding: "12px 14px",
+                    borderLeft: `3px solid ${col}`,
+                    background: sig === "very" ? "rgba(255,209,102,0.10)" : (classicCardAccentStyle as any).background,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>
+                      <span style={{ color: "rgba(255,255,255,0.35)", marginRight: 6 }}>{i + 1}</span>{r.symbol}
+                    </span>
+                    <span style={{ fontSize: 14, color: "rgba(255,255,255,0.6)" }}>{r.strike}</span>
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtB(r.latest_chg)}</div>
+                  <div style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
+                    {r.expiry} · spot {r.spot > 0 ? r.spot.toFixed(2) : "—"}
+                  </div>
+                  <div style={{ display: "flex", gap: 10, fontSize: 14, marginTop: 6, flexWrap: "wrap" }}>
+                    <span style={{ color: HOME_THEME.orange }}>OTM {otmPct.toFixed(1)}%</span>
+                    <span style={{ color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                      {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}% vs open`}
+                    </span>
+                    <span style={{ color: HOME_THEME.cyan }}>score {scoreOf(r).toFixed(0)}</span>
+                  </div>
+                  <div style={{ marginTop: 6 }}><SignalBadge s={sig} /></div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
@@ -2464,12 +2501,6 @@ export default function ScannerPage() {
       <div style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
         <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
         <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
-        <button onClick={() => setTab("greeks")} style={tabStyle(tab === "greeks")}>Greeks Sensitivity</button>
-        <button onClick={() => setTab("volpin")} style={{
-          ...tabStyle(tab === "volpin"),
-          border: `1px solid ${tab === "volpin" ? HOME_THEME.purple : "rgba(255,255,255,0.1)"}`,
-          background: tab === "volpin" ? `${HOME_THEME.purple}22` : "transparent",
-        }}>Vol Pin</button>
         <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
         <button onClick={() => setTab("oi")} style={{
           ...tabStyle(tab === "oi"),
@@ -2500,8 +2531,6 @@ export default function ScannerPage() {
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
       {tab === "gex"    && <GexScanner />}
-      {tab === "greeks" && <GreeksScanner />}
-      {tab === "volpin" && <VolPinScanner />}
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "oi"     && <OiChangeScanner />}
       {tab === "watch"  && <WatchThisScanner />}
