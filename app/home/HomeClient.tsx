@@ -1100,8 +1100,11 @@ export function HomeClient({
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
             <div ref={gexContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
-              {/* Full-featured toolbar — scales to fit instead of scrolling */}
-              <FitScale min={0.6}>
+              {/* Full-featured toolbar — scales to fit instead of scrolling.
+                  min is deliberately low: at 0.6 the bar still overflowed on
+                  ~1280px-wide windows and fell back to a hidden scrollbar,
+                  which read as "cut off". */}
+              <FitScale min={0.42}>
               <GexToolbar
                 gexMode={gexMode}
                 dataMode={dataMode}
@@ -1180,7 +1183,11 @@ export function HomeClient({
             </div>
 
             <div style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 24 }}>
-              <div className="grad-divider-b tab-strip" style={{ display: "flex", flexShrink: 0 }}>
+              {/* Tabs + right-side controls scale down together so the size
+                  buttons / discord / refresh never get pushed out of the card
+                  on a narrow window. */}
+              <FitScale min={0.42}>
+              <div className="grad-divider-b tab-strip" style={{ display: "flex", flexShrink: 0, whiteSpace: "nowrap" }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
                   { id: "flow", label: "Flow", icon: <FlowIcon /> },
@@ -1189,16 +1196,16 @@ export function HomeClient({
                   { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
                   { id: "escandles", label: "ES Candles", icon: <CandlesIcon /> },
                 ] as const).map((tab) => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
                   </button>
                 ))}
-                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 4 }}>
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 4, flexShrink: 0 }}>
                   <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6 }} />
                   <EconCalendarTemplateCopyBtn />
                   <EconCalendarDiscordBtn />
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 8, flexShrink: 0 }}>
                   {([
                     { id: "min", title: "Minimize (tabs only)" },
                     { id: "half", title: "Half height" },
@@ -1224,6 +1231,7 @@ export function HomeClient({
                   })}
                 </div>
               </div>
+              </FitScale>
               <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: 24, display: econSize === "min" ? "none" : "block" }}>
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
@@ -1270,8 +1278,12 @@ export function HomeClient({
 
             <div ref={heatmapContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                {/* Header row scales to fit — title + intensity/speed controls on
+                    the left and refresh/snap/discord/view-switch on the right
+                    otherwise overflow the card and get clipped on a narrow window. */}
+                <FitScale min={0.42}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
                     {heatmapView === "chain" && (
@@ -1329,10 +1341,10 @@ export function HomeClient({
                     </div>
                     )}
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
                     {heatmapView !== "chain" && (
                     <>
-                    <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4 }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
+                    <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
@@ -1366,6 +1378,7 @@ export function HomeClient({
                     </div>
                   </div>
                 </div>
+                </FitScale>
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>

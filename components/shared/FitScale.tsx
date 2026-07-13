@@ -66,7 +66,9 @@ export default function FitScale({
   }, [min]);
 
   return (
-    <div ref={hostRef} style={{ width: "100%", overflowX: overflowing ? "auto" : "hidden", overflowY: "hidden" }}>
+    // flexShrink:0 — when used as a column-flex child (toolbars / tab rows at the
+    // top of a card) the bar must keep its own height instead of being squeezed.
+    <div ref={hostRef} style={{ width: "100%", flexShrink: 0, overflowX: overflowing ? "auto" : "hidden", overflowY: "hidden" }}>
       <div
         ref={boxRef}
         style={{
