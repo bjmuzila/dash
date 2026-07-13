@@ -336,6 +336,8 @@ export default function EsCandlesPage() {
   // the loaded GEX columns made every SPX→ES conversion (CB line included) shift
   // when the user toggled 1D vs 5D, because a different set of days had spots.
   const dayBasisRef = useRef<Map<string, number>>(new Map());
+  // Throttle for the ?debugBasis=1 console dump (the overlay redraws on rAF).
+  const basisDebugAtRef = useRef(0);
   // Front expiry from the live feed; drives the one-time history backfill.
   const [feedExpiry, setFeedExpiry] = useState<string>("");
   // Expirations offered by the feed + the one the heatmap history is showing.
@@ -1293,6 +1295,43 @@ export default function EsCandlesPage() {
         };
       };
       const basisAt = buildBasisAt();
+
+      // ?debugBasis=1 → dump exactly what basis each source yields per ET day, so
+      // a wrong level can be traced to a number instead of eyeballed off a chart.
+      // Logs once per second at most; costs nothing when the flag is absent.
+      if (typeof window !== "undefined"
+          && new URLSearchParams(window.location.search).get("debugBasis") === "1"
+          && Date.now() - basisDebugAtRef.current > 1000) {
+        basisDebugAtRef.current = Date.now();
+        const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
+        const days = [...new Set([...columnsRef.current.values()].map((c) => etDayKey(c.slotTs)))].sort();
+        const cbByDay = new Map<string, number[]>();
+        for (const p of mvcHistory) {
+          if (p.basis == null) continue;
+          const k = etDayKey(p.ts);
+          const arr = cbByDay.get(k) ?? [];
+          if (!cbByDay.has(k)) cbByDay.set(k, arr);
+          arr.push(p.basis);
+        }
+        const table = days.map((d) => {
+          const cb = cbByDay.get(d) ?? [];
+          // Basis actually applied to that day's first column.
+          const col = [...columnsRef.current.values()].find((c) => etDayKey(c.slotTs) === d);
+          return {
+            day: d,
+            isToday: d === todayKey,
+            applied: col ? Number(basisAt(col.slotTs).toFixed(2)) : null,
+            cbRows: cb.length,
+            cbMin: cb.length ? Number(Math.min(...cb).toFixed(2)) : null,
+            cbMax: cb.length ? Number(Math.max(...cb).toFixed(2)) : null,
+            cbMedian: cb.length ? Number(median(cb).toFixed(2)) : null,
+            eodClose: dayBasisRef.current.get(d) != null ? Number((dayBasisRef.current.get(d) as number).toFixed(2)) : null,
+            colSpot: col?.spot ?? null,
+          };
+        });
+        console.log(`[basis] live=${basis.toFixed(2)} mvcRows=${mvcHistory.length} withBasis=${mvcHistory.filter((p) => p.basis != null).length}`);
+        console.table(table);
+      }
 
       // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
       const slotX = (slotTs: number): { left: number; w: number } | null => {
