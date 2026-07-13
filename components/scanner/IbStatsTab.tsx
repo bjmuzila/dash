@@ -408,7 +408,7 @@ function LiveToday({ sym, ds, days, hist }: {
           <tr>
             <td style={tdL}>Day of week</td>
             <td style={td}>{dowName}</td>
-            <td style={tdDim}>{dowRow && dowRow.sb != null ? `single-break rate on ${dowName}s: ${dowRow.sb.toFixed(1)}% (n=${dowRow.n})` : "—"}</td>
+            <td style={tdDim}>{dowRow && dowRow.sb != null ? `single-break rate on ${dowName}s: ${dowRow.sb.toFixed(1)}%` : "—"}</td>
           </tr>
         </tbody>
       </table>
@@ -532,9 +532,8 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
   const rule = (() => {
     if (live.breakSide && !live.ibComplete) return null;
     if (live.brokeH && live.brokeL) {
-      const w = days.filter((d) => d.bothBroke);
       return { name: "BOTH SIDES BROKEN — rotation day", n: mx.length, p: pBoth, verdict: "fade" as const,
-        note: `${w.length} rotation days in the full sample — fade the extremes, don't chase` };
+        note: `Rotation day — fade the extremes, don't chase` };
     }
     if (live.breakSide) {
       const side = live.breakSide as "H" | "L";
@@ -612,7 +611,6 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
           <Bar label="Contained range (none)" p={pNone} color={HOME_THEME.orange} />
           <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>
             {pBoth > 32 ? "Rotational risk HIGH — expect a two-sided day" : "One-sided break expected — opposite extreme protected"}
-            {` · n=${mx.length}`}
           </div>
         </div>
 
@@ -629,7 +627,7 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
                 <span style={{ fontSize: 15, color: HOME_THEME.text }}>Edge rate</span>
                 <span style={{ fontSize: 24, fontWeight: 800, color: vColor }}>{rule.p.toFixed(1)}%</span>
               </div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>{rule.note} · n={rule.n}</div>
+              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>{rule.note}</div>
             </>
           ) : (
             <div style={{ fontSize: 15, color: HOME_THEME.text }}>Waiting on the 10:30 ET close.</div>
@@ -690,7 +688,11 @@ function buildRules(live: any, dowName: string): LiveRule[] {
   const W = (s: "H" | "L") => (s === "H" ? "HIGH" : "LOW");
   const zoneWord = zone === "top25" ? "TOP 25%" : zone === "bot25" ? "BOTTOM 25%" : "MIDDLE 50%";
   const confluent = !!bias && ((first === "L" && bias === "H") || (first === "H" && bias === "L"));
-  const noBreak = "no close-confirmed break yet — nothing to grade";
+  // The side today's IB leans toward. PENDING rules are still scored — they show
+  // the conditional rate for the break that HASN'T printed yet, i.e. "if it fires,
+  // here's what it did historically on sessions that looked like this one."
+  const exp: "H" | "L" = bias ?? first;
+  const noBreak = "no close-confirmed break yet — odds below are for IF it fires";
 
   const R: LiveRule[] = [];
 
@@ -729,7 +731,10 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => (d.fcb!.side === "H" ? !d.touchedL : !d.touchedH),
   } : {
     id: "3", name: "Single Break Continuation", state: "pending",
-    read: noBreak, side: null, question: "—",
+    read: `${noBreak} — projected side: ${W(exp)}`,
+    side: exp, question: `IF the ${W(exp)} breaks, the ${exp === "H" ? "LOW" : "HIGH"} never does`,
+    cond: (d) => !!d.fcb && d.fcb.side === exp,
+    outcome: (d) => (exp === "H" ? !d.touchedL : !d.touchedH),
   });
 
   /* 4 · IB Width → Day Type */
@@ -755,8 +760,12 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => !!d.fcb!.hit["1"],
   } : {
     id: "5", name: "Breakout Entry — close + volume", state: "pending",
-    read: brk ? "break printed but bar volume is unavailable on the live feed" : noBreak,
-    side: null, question: "—",
+    read: brk
+      ? "break printed but bar volume is unavailable on the live feed — showing the all-breaks rate"
+      : `${noBreak} — projected side: ${W(exp)}`,
+    side: exp, question: `IF a ${W(exp)} break prints WITH a volume surge, it runs ≥ 1× IB width`,
+    cond: (d) => !!d.fcb && d.fcb.side === exp && d.fcb.volSurge,
+    outcome: (d) => !!d.fcb!.hit["1"],
   });
 
   /* 6 · Failed Breakout Fade */
@@ -771,7 +780,11 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => (live.failed ? d.fcb!.fadeOpp : d.fcb!.failed),
   } : {
     id: "6", name: "Failed Breakout Fade", state: "pending",
-    read: noBreak, side: null, question: "—",
+    read: `${noBreak} — this is the trap rate to expect`,
+    side: exp === "H" ? "L" : "H",
+    question: `IF a ${W(exp)} break prints, it FAILS back inside within 30m`,
+    cond: (d) => !!d.fcb && d.fcb.side === exp,
+    outcome: (d) => d.fcb!.failed,
   });
 
   /* 7 · 15m FVG inside the IB */
@@ -795,8 +808,14 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     cond: (d) => !!d.fcb?.retest && d.fcb.retestCont != null,
     outcome: (d) => !!d.fcb!.retestCont,
   } : {
-    id: "8", name: "Retest Continuation", state: brk ? "not-in-play" : "pending",
-    read: brk ? `no retest of the broken ${W(brk)} yet` : noBreak, side: null, question: "—",
+    id: "8", name: "Retest Continuation", state: "pending",
+    read: brk
+      ? `no retest of the broken ${W(brk)} yet — odds below are for IF it comes back`
+      : `${noBreak} — projected side: ${W(exp)}`,
+    side: brk ?? exp,
+    question: `IF the broken ${W(brk ?? exp)} is retested, it continues to a new extreme`,
+    cond: (d) => !!d.fcb && d.fcb.side === (brk ?? exp) && d.fcb.retest && d.fcb.retestCont != null,
+    outcome: (d) => !!d.fcb!.retestCont,
   });
 
   /* 9 · Extension Targets */
@@ -808,7 +827,10 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => !!d.fcb!.hit["1"],
   } : {
     id: "9", name: "Extension Targets", state: "pending",
-    read: noBreak, side: null, question: "—",
+    read: `${noBreak} — targets would measure from the IB ${W(exp)} (${f2(exp === "H" ? live.ibh : live.ibl)})`,
+    side: exp, question: `IF a ${W(exp)} break prints, it reaches ≥ 1× IB width`,
+    cond: (d) => !!d.fcb && d.fcb.side === exp,
+    outcome: (d) => !!d.fcb!.hit["1"],
   });
 
   /* 10 · Close Location in IB Range */
@@ -866,7 +888,15 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => !!d.fcb!.hit["1"],
   } : {
     id: "13", name: "Time Filter — when the break happens", state: "pending",
-    read: noBreak, side: null, question: "—",
+    read: `${noBreak} — it's ${clock(live.nowMin)} ET, so a break now counts as ${live.nowMin <= 660 ? "EARLY" : live.nowMin <= 780 ? "MIDDAY" : "LATE"}`,
+    side: exp,
+    question: `IF the break prints in this window, it runs ≥ 1× IB width`,
+    cond: (d) => !!d.fcb && (live.nowMin <= 660
+      ? d.fcb.breakMin <= 660
+      : live.nowMin <= 780
+        ? d.fcb.breakMin > 660 && d.fcb.breakMin <= 780
+        : d.fcb.breakMin > 780),
+    outcome: (d) => !!d.fcb!.hit["1"],
   });
 
   /* 14 · Contained Day */
@@ -876,10 +906,15 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     side: null, question: "it stays contained into the close (never breaks late)",
     cond: (d) => d.containedAt2,
     outcome: (d) => !d.containedBrokeLate,
+  } : live.nowMin < 840 && !live.brokeH && !live.brokeL ? {
+    id: "14", name: "Contained Day (rare)", state: "pending",
+    read: `Still inside the IB at ${clock(live.nowMin)} ET — not confirmed until 14:00`,
+    side: null, question: "IF price is still contained at 14:00, it never breaks late",
+    cond: (d) => d.containedAt2,
+    outcome: (d) => !d.containedBrokeLate,
   } : {
-    id: "14", name: "Contained Day (rare)", state: live.nowMin < 840 ? "pending" : "not-in-play",
-    read: live.nowMin < 840 ? "can't be known until 14:00 ET" : "price already broke the IB — not a contained day",
-    side: null, question: "—",
+    id: "14", name: "Contained Day (rare)", state: "not-in-play",
+    read: "price already broke the IB — not a contained day", side: null, question: "—",
   });
 
   /* 0c · day-of-week, kept as a live read alongside the rules */
@@ -899,15 +934,19 @@ function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowNam
   const rules = buildRules(live, dowName);
   const provisional = !live.ibComplete;
 
+  // Score EVERY rule that has a condition — including PENDING ones. A pending
+  // rule's % is the "if it fires" rate: the trigger hasn't happened yet, but the
+  // odds for when it does are exactly what you want on screen beforehand.
   const scored = rules.map((r) => {
-    if (r.state !== "in-play" || !r.cond || !r.outcome) return { ...r, n: 0, hits: 0, p: null as number | null };
+    if (!r.cond || !r.outcome) return { ...r, n: 0, hits: 0, p: null as number | null };
     const g = days.filter(r.cond);
     const hits = g.filter(r.outcome).length;
     return { ...r, n: g.length, hits, p: g.length ? (100 * hits) / g.length : null };
   });
 
   const inPlay = scored.filter((r) => r.state === "in-play");
-  const off = scored.filter((r) => r.state !== "in-play");
+  const pending = scored.filter((r) => r.state === "pending");
+  const off = scored.filter((r) => r.state === "not-in-play");
 
   const stateChip = (s: RuleState) => {
     const [txt, col] =
@@ -927,6 +966,11 @@ function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowNam
     const col = s === "H" ? HOME_THEME.green : HOME_THEME.red;
     return <span style={{ color: col, fontWeight: 800 }}>{s === "H" ? "HIGH ↑" : "LOW ↓"}</span>;
   };
+
+  // 4-column section header — sample counts are owner-only, so this board has no Sample column
+  const secRow = (text: string) => (
+    <tr><td colSpan={4} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 15, paddingTop: 14 }}>{text}</td></tr>
+  );
 
   return (
     <Card
@@ -954,13 +998,13 @@ function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowNam
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            {["Rule", "Live read", "Points to", "Hit rate", "Sample"].map((h, i) => (
+            {["Rule", "Live read", "Points to", "Hit rate"].map((h, i) => (
               <th key={h} style={i === 0 ? thL : i === 1 ? thL : th}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {sectionRow(provisional ? `IN PLAY (conditional — if the IB formed now) · ${inPlay.length}` : `IN PLAY · ${inPlay.length}`)}
+          {secRow(provisional ? `IN PLAY (conditional — if the IB formed now) · ${inPlay.length}` : `IN PLAY · ${inPlay.length}`)}
           {inPlay.map((r) => (
             <tr key={r.id}>
               <td style={{ ...tdL, fontWeight: 800 }}>{r.id} · {r.name}</td>
@@ -972,17 +1016,30 @@ function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowNam
               <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 18 }}>
                 {r.p == null ? "—" : `${r.p.toFixed(1)}%`}
               </td>
-              <td style={td}>{r.n} days{r.n > 0 && r.n < 40 ? " · thin" : ""}</td>
             </tr>
           ))}
 
-          {sectionRow(`NOT IN PLAY · ${off.length}`)}
+          {secRow(`PENDING — not triggered yet, here are the odds IF it fires · ${pending.length}`)}
+          {pending.map((r) => (
+            <tr key={r.id}>
+              <td style={{ ...tdL, fontWeight: 800 }}>{r.id} · {r.name}</td>
+              <td style={tdL}>
+                <div>{r.read}</div>
+                <div style={{ color: HOME_THEME.text, opacity: 0.85 }}>chance {r.question}</div>
+              </td>
+              <td style={td}>{sideChip(r.side)}</td>
+              <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 18 }}>
+                {r.p == null ? "—" : `${r.p.toFixed(1)}%`}
+              </td>
+            </tr>
+          ))}
+
+          {secRow(`NOT IN PLAY · ${off.length}`)}
           {off.map((r) => (
             <tr key={r.id}>
               <td style={{ ...tdL, fontWeight: 800, opacity: 0.75 }}>{r.id} · {r.name}</td>
               <td style={{ ...tdL, opacity: 0.75 }}>{r.read}</td>
               <td style={td}>{stateChip(r.state)}</td>
-              <td style={td}>—</td>
               <td style={td}>—</td>
             </tr>
           ))}
@@ -991,8 +1048,9 @@ function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowNam
 
       <div style={note}>
         Every % is a conditional base rate, not a prediction — &ldquo;on the past sessions that looked like this one, how often did it
-        happen?&rdquo; Samples under 40 days are flagged thin. PENDING means the trigger cannot exist yet (it needs the IB to close, a
-        break to print, or the 14:00 bell); NOT IN PLAY means the trigger is genuinely absent today.
+        happen?&rdquo; PENDING rules haven&rsquo;t triggered yet (they need a break to print or the 14:00 bell) — their % is the
+        <b> if it fires</b> rate, conditioned on today&rsquo;s IB and the side it leans toward. NOT IN PLAY means the trigger is
+        genuinely absent today, so there is nothing to score.
       </div>
     </Card>
   );

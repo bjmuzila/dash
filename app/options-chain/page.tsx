@@ -675,6 +675,9 @@ export default function OptionsChainPage({
 } = {}) {
   // Number of sequential columns to render (default 14; embeds may narrow it).
   const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
+  // Standalone /options-chain route (no external ticker) = stripped-down view:
+  // no Δ change columns, no per-expiry $ totals, no toolbar grand total.
+  const isStandalone = externalTicker == null;
   // Fallback calendar list (used only until/if the per-ticker expirations
   // fetch resolves). Real listings come from /api/expirations so we never
   // offer a date the ticker doesn't actually trade (e.g. NVDA has no Monday
@@ -1143,10 +1146,13 @@ export default function OptionsChainPage({
     return columns.map(col => {
       if (!col) return 0;
       let total = 0;
-      col.cells.forEach(cell => { total += Math.abs(cell.gex); });
+      col.cells.forEach((_cell, strike) => {
+        const v = valueAt(col, strike);
+        if (v != null) total += Math.abs(v);
+      });
       return total;
     });
-  }, [columns]);
+  }, [columns, valueAt]);
 
   // MVC per column = the visible strike with the highest ABSOLUTE net GEX.
   // Always keyed on GEX (the MVC definition), independent of the active greek.
@@ -1319,7 +1325,9 @@ export default function OptionsChainPage({
           <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
         </div>
       )}
-      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0 }}>
+      {/* Toolbar sits in normal flow at the top (scrolls away with the page) but
+          is fully opaque so grid rows never bleed through underneath it. */}
+      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
@@ -1386,7 +1394,7 @@ export default function OptionsChainPage({
           </>
         )}
 
-        {showGrandTotal && (
+        {showGrandTotal && !isStandalone && (
           <>
             <span style={{ color: HT.border }}>|</span>
             <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
@@ -1486,7 +1494,7 @@ export default function OptionsChainPage({
             </div>
             {renderIdx.map((i) => {
               const col = columns[i];
-              const isChangeCol = changeMode !== "live" && changeMeta.hasData && col != null &&
+              const isChangeCol = !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
                 changeMeta.expiries.has(col.expiration);
               const colTotal = col
                 ? (isChangeCol
@@ -1496,9 +1504,11 @@ export default function OptionsChainPage({
               return (
                 <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
                   <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
-                  <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
-                    {colTotal == null ? "—" : fmtMoney(colTotal)}
-                  </div>
+                  {!isStandalone && (
+                    <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+                      {colTotal == null ? "—" : fmtMoney(colTotal)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1569,7 +1579,7 @@ export default function OptionsChainPage({
                     const col = columns[colIdx];
                     const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] };
                     const isChangeCol =
-                      changeMode !== "live" && changeMeta.hasData && col != null &&
+                      !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
                       changeMeta.expiries.has(col.expiration);
                     const chKey = isChangeCol ? `${col!.expiration}|${strike}` : "";
                     const value = isChangeCol
@@ -1580,9 +1590,10 @@ export default function OptionsChainPage({
                       : scale;
                     const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
                     const gexTotalAbs = colGexTotalAbs[colIdx] ?? 0;
+                    // Signed share of the column's total |greek| — negative net greek → negative %.
                     const normalizedGexPct =
-                      !isChangeCol && greekMode === "gex" && value != null && gexTotalAbs > 0
-                        ? (Math.abs(value) / gexTotalAbs) * 100
+                      !isChangeCol && value != null && gexTotalAbs > 0
+                        ? (value / gexTotalAbs) * 100
                         : null;
                     const pin = pinByCol[colIdx];
                     const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
@@ -1629,12 +1640,13 @@ export default function OptionsChainPage({
                             </svg>
                           </span>
                         )}
-                        {normalizedGexPct != null && (
-                          <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.75, color: "#cfe8ff" }}>
-                            {normalizedGexPct.toFixed(1)}%
+                        {normalizedGexPct != null ? (
+                          <span style={{ fontSize: 12, fontWeight: 400, color: "rgba(255,255,255,0.78)" }}>
+                            {normalizedGexPct < 0 ? "-" : ""}{Math.abs(normalizedGexPct).toFixed(1)}%
                           </span>
+                        ) : (
+                          <span>{value == null ? "·" : fmtMoney(value)}</span>
                         )}
-                        <span>{value == null ? "·" : fmtMoney(value)}</span>
                       </div>
                     );
                   })}
