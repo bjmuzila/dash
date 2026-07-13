@@ -56,8 +56,12 @@ export async function ensurePromoCode(email: string, campaign: string): Promise<
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = `${prefix}-${randomSuffix()}`;
     try {
+      // NOTE: Stripe's promotion_codes API no longer takes a top-level
+      // `coupon` param — the coupon must be nested under `promotion`
+      // (`promotion.type: "coupon"`, `promotion.coupon: <id>`). Passing the
+      // old flat shape fails with "Received unknown parameter: coupon".
       const promo = await stripe.promotionCodes.create({
-        coupon: couponId,
+        promotion: { type: "coupon", coupon: couponId },
         code,
         max_redemptions: 1,
         restrictions: { first_time_transaction: true },
