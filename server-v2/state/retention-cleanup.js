@@ -115,8 +115,16 @@ async function runDeletes(p) {
   await run('greek_snapshots',
     `DELETE FROM greek_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.greek_snapshots} days'`);
 
-  // option_strike_gex_history: only the front/0DTE expiry during RTH is ever
-  // read live — drop anything else (see scripts/db-prune.sql for the reasoning).
+  // option_strike_gex_history: keep only the front/0DTE expiry (see
+  // scripts/db-prune.sql for the reasoning).
+  //
+  // Time-of-day: this used to delete EVERYTHING outside 09:30–16:00 ET, which is
+  // why the ES Candles heatmap went black from the 18:00 Globex open to midnight
+  // — the columns were written, then purged overnight. The overnight tape is real
+  // context for a futures chart, so non-RTH rows are now KEPT, thinned to the
+  // 5-minute grid (SLOT_MS in app/es-candles/page.tsx) the heatmap buckets into
+  // anyway. That's lossless for the chart at ~1/5th the overnight rows. RTH keeps
+  // full 1-min resolution.
   await run('option_strike_gex_history', `
     DELETE FROM option_strike_gex_history t
     USING (
@@ -128,8 +136,11 @@ async function runDeletes(p) {
       AND (
         t.date::date < CURRENT_DATE - INTERVAL '${RETENTION.option_strike_gex_history} days'
         OR t.expiry <> f.front_expiry
-        OR to_char(to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York', 'HH24:MI')
-           NOT BETWEEN '09:30' AND '16:00'
+        OR (
+          to_char(to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York', 'HH24:MI')
+            NOT BETWEEN '09:30' AND '16:00'
+          AND (EXTRACT(MINUTE FROM to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York')::int % 5) <> 0
+        )
       )
   `);
 

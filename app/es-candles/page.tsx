@@ -289,7 +289,7 @@ export default function EsCandlesPage() {
   // Today's MVC history: raw SPX strikeOIVol per snapshot. Converted to ES at
   // DRAW time using the live ESU basis (same as the other levels), so the line
   // tracks the current /ESU price — not the stale per-row esPrice.
-  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number }>>([]);
+  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; basis: number | null }>>([]);
   const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
   // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
@@ -330,6 +330,12 @@ export default function EsCandlesPage() {
   // close. Used to derive SPX from ES on the right axis OVERNIGHT / pre-open,
   // until the 9:30 ET open when the live basis takes over. 0 = not available.
   const prevBasisRef = useRef(0);
+  // ET date → that session's ES−SPX basis, built from DAILY closes (ES 16:00
+  // candle − SPX 16:00 eod_gex). This is the authoritative historical basis and
+  // is deliberately INDEPENDENT of the heatmap backfill window: deriving it from
+  // the loaded GEX columns made every SPX→ES conversion (CB line included) shift
+  // when the user toggled 1D vs 5D, because a different set of days had spots.
+  const dayBasisRef = useRef<Map<string, number>>(new Map());
   // Front expiry from the live feed; drives the one-time history backfill.
   const [feedExpiry, setFeedExpiry] = useState<string>("");
   // Expirations offered by the feed + the one the heatmap history is showing.
@@ -769,10 +775,20 @@ export default function EsCandlesPage() {
         const json = await res.json();
         const rows = Array.isArray(json.rows) ? json.rows : [];
         const pts = rows
-          .map((r: Record<string, unknown>) => ({
-            ts: Number(r.timestamp ?? 0),
-            spx: Number(r.strikeOIVol ?? 0),
-          }))
+          .map((r: Record<string, unknown>) => {
+            // Every CB snapshot stores spxPrice AND esPrice sampled at the SAME
+            // instant — an exact basis for that row, better than anything we can
+            // infer from candles or daily closes. Use it when both are present
+            // and the diff is sane; 0/garbage falls back to basisAt(ts) at draw.
+            const spxPx = Number(r.spxPrice ?? 0);
+            const esPx = Number(r.esPrice ?? 0);
+            const b = spxPx > 0 && esPx > 0 ? esPx - spxPx : NaN;
+            return {
+              ts: Number(r.timestamp ?? 0),
+              spx: Number(r.strikeOIVol ?? 0),
+              basis: Number.isFinite(b) && Math.abs(b) < 250 ? b : null,
+            };
+          })
           .filter((p: { ts: number; spx: number }) => p.ts > 0 && p.spx > 0)
           .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
         if (cancelled) return;
@@ -1055,6 +1071,23 @@ export default function EsCandlesPage() {
           prevBasisRef.current = esClose - spxClose;
           setPrevCloses({ es: esClose, spx: spxClose, date: esDate });
         }
+        // Same two sources, but for EVERY day we have both closes for → the
+        // per-session basis map used by all historical SPX→ES conversions
+        // (heatmap cells + CB/MVC history). Window-independent by construction.
+        if (!cancelled) {
+          const spxByDate = new Map(spxRows.map((r) => [r.date, Number(r.spot ?? 0)]));
+          const next = new Map<string, number>();
+          for (const bar of esBars) {
+            const d = bar.date ?? (bar.slotKey ?? "").slice(0, 10);
+            const es = Number(bar.close);
+            const spx = Number(spxByDate.get(d) ?? 0);
+            if (d && es > 0 && spx > 0) next.set(d, es - spx);
+          }
+          if (next.size) {
+            dayBasisRef.current = next;
+            drawOverlayRef.current(); // repaint with the corrected historical basis
+          }
+        }
       } catch { /* keep last frozen basis */ }
     };
     void compute();
@@ -1185,26 +1218,79 @@ export default function EsCandlesPage() {
         const s = [...xs].sort((a, b) => a - b);
         return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
       };
-      // Built ONCE per draw from every stored GEX column (they're the only source
-      // of historical SPX spot), then shared by every SPX→ES conversion of a PAST
-      // value on this canvas: heatmap cells AND the CB/MVC history line. Live
-      // "now" levels (Call/Put/Flip, the current CB) keep using `basis`.
+      // basisAt(t) — the ONE conversion used by every SPX→ES mapping of a PAST
+      // value on this canvas: heatmap cells AND the CB/MVC history line.
+      //
+      // Best source is the CB snapshot table: every row stores spxPrice AND
+      // esPrice sampled at the SAME instant, so each row is an exact basis
+      // reading. CB snapshots are written every 5 min DURING RTH ONLY — there
+      // are none in ETH, because SPX doesn't print overnight.
+      //
+      // That "no ETH rows" fact drives the whole design: overnight the basis is
+      // UNMEASURABLE (cash is closed), so we HOLD THE LAST MEASURED BASIS FLAT
+      // from the 16:00 close through the night until the next 09:30. We must
+      // never compute ES − (stale SPX) in ETH: the stale spot makes ES movement
+      // leak straight into the basis and the whole heatmap bends along with the
+      // candles. (That was the first version of this and it looked awful.)
+      //
+      // Resolution order:
+      //   1. Today                 → live server basis (matches the Call/Put/Flip
+      //                              lines, which are now-values).
+      //   2. Last CB snapshot ≤ t  → exact (esPrice − spxPrice), held flat
+      //                              forward. Median of the last 3 so one bad row
+      //                              can't jump a column. Handles ETH for free.
+      //   3. First CB snapshot > t → for timestamps before any CB row exists.
+      //   4. dayBasisRef           → daily closes (ES 16:00 − SPX 16:00).
+      //   5. GEX column median     → last resort for days with no CB rows at all.
+      //   6. live basis.
+      //
+      // 2–5 are window-independent by construction: NONE may be derived from the
+      // loaded heatmap columns alone, or toggling 1D/5D silently moves levels.
       const buildBasisAt = (): ((tsMs: number) => number) => {
         const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
+
+        // Exact per-row CB bases, ascending by ts (mvcHistory is already sorted).
+        const cbPts = mvcHistory
+          .filter((p) => p.basis != null)
+          .map((p) => ({ ts: p.ts, b: p.basis as number }));
+
+        // GEX-column fallback (RTH days only — see the ETH warning above).
         const samples = new Map<string, number[]>();
         for (const c of columnsRef.current.values()) {
           if (!(c.spot && c.spot > 0)) continue;
           const k = etDayKey(c.slotTs);
-          if (k === todayKey) continue; // live basis wins for the active session
+          if (k === todayKey) continue;
           const es = esCloseAt(c.slotTs);
           if (es == null) continue;
           const arr = samples.get(k) ?? [];
           if (!samples.has(k)) samples.set(k, arr);
           arr.push(es - c.spot);
         }
-        const dayBasis = new Map<string, number>();
-        for (const [k, xs] of samples) if (xs.length) dayBasis.set(k, median(xs));
-        return (tsMs: number) => dayBasis.get(etDayKey(tsMs)) ?? basis;
+        const colBasis = new Map<string, number>();
+        for (const [k, xs] of samples) if (xs.length) colBasis.set(k, median(xs));
+
+        // Last CB basis at or before t, held flat forward (so ETH inherits the
+        // 16:00 basis and stays pinned there until the next session's first row).
+        const heldCb = (tsMs: number): number | null => {
+          if (!cbPts.length) return null;
+          let lo = 0, hi = cbPts.length - 1, idx = -1;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (cbPts[mid].ts <= tsMs) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+          }
+          if (idx < 0) return cbPts[0].b; // before any snapshot → first known
+          const win = cbPts.slice(Math.max(0, idx - 2), idx + 1).map((p) => p.b);
+          return median(win);
+        };
+
+        return (tsMs: number) => {
+          const k = etDayKey(tsMs);
+          if (k === todayKey) return basis;
+          return heldCb(tsMs)
+            ?? dayBasisRef.current.get(k)
+            ?? colBasis.get(k)
+            ?? basis;
+        };
       };
       const basisAt = buildBasisAt();
 
@@ -1465,12 +1551,13 @@ export default function EsCandlesPage() {
         for (let i = 0; i < mvcHistory.length; i++) {
           const p = mvcHistory[i];
           const x = xOf(p.ts);
-          // Convert the SPX CB/MVC level → ES with the basis THAT SESSION had —
-          // same per-session basis the heatmap columns use (buildBasisAt). The
-          // live basis is only right for "now": using it for prior days dragged
-          // every historical CB segment off its true ES level, exactly like it
-          // did for the heatmap.
-          const y = series.priceToCoordinate(p.spx + basisAt(p.ts));
+          // Convert the SPX CB level → ES with the basis THAT SNAPSHOT was taken
+          // at: the row's own (esPrice − spxPrice), a simultaneous pair recorded
+          // by the CB writer. Falls back to the per-session basisAt(ts) when a
+          // row has no usable pair. The live basis is only right for "now" —
+          // using it for prior days dragged every historical CB segment off its
+          // true ES level, exactly as it did for the heatmap.
+          const y = series.priceToCoordinate(p.spx + (p.basis ?? basisAt(p.ts)));
           if (x == null || y == null) { flush(prevX); runStartX = null; runY = null; prevX = null; continue; }
           if (runY == null) { runStartX = x; runY = y; }
           else if (Math.abs(y - runY) > 0.5) {
