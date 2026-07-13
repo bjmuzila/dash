@@ -289,7 +289,7 @@ export default function EsCandlesPage() {
   // Today's MVC history: raw SPX strikeOIVol per snapshot. Converted to ES at
   // DRAW time using the live ESU basis (same as the other levels), so the line
   // tracks the current /ESU price — not the stale per-row esPrice.
-  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; basis: number | null }>>([]);
+  const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; spxPx: number; basis: number | null }>>([]);
   const showMvcLine = true; // CB level always on
   const [showHeatmap, setShowHeatmap] = useState(true);
   // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
@@ -793,7 +793,11 @@ export default function EsCandlesPage() {
             // before — normalize to ms or every day-bucket lookup silently misses.
             let ts = Number(r.timestamp ?? 0);
             if (ts > 0 && ts < 1e12) ts *= 1000;
-            return { ts, spx: Number(r.strikeOIVol ?? 0), basis: usable ? b : null };
+            // spxPrice is kept even when esPrice is unusable: SPX at a known
+            // instant + the ES candle at that instant reconstructs the basis
+            // without trusting esPrice at all. (Safe here, unlike the GEX table's
+            // `spot`, because CB rows are RTH-only and spxPrice actually ticks.)
+            return { ts, spx: Number(r.strikeOIVol ?? 0), spxPx, basis: usable ? b : null };
           })
           .filter((p: { ts: number; spx: number }) => p.ts > 0 && p.spx > 0)
           .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
@@ -1259,28 +1263,30 @@ export default function EsCandlesPage() {
       const buildBasisAt = (): ((tsMs: number) => number) => {
         const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
 
-        // Exact per-row CB bases, ascending by ts (mvcHistory is already sorted).
-        const cbPts = mvcHistory
-          .filter((p) => p.basis != null)
-          .map((p) => ({ ts: p.ts, b: p.basis as number }));
-
-        // GEX-column fallback (RTH days only — see the ETH warning above).
-        const samples = new Map<string, number[]>();
-        for (const c of columnsRef.current.values()) {
-          if (!(c.spot && c.spot > 0)) continue;
-          const k = etDayKey(c.slotTs);
-          if (k === todayKey) continue;
-          const es = esCloseAt(c.slotTs);
-          if (es == null) continue;
-          const arr = samples.get(k) ?? [];
-          if (!samples.has(k)) samples.set(k, arr);
-          arr.push(es - c.spot);
+        // Per-CB-row basis, ascending by ts. TWO ways to get it, in order:
+        //   a) the row's own esPrice − spxPrice (exact, same instant), when
+        //      esPrice is actually populated;
+        //   b) ES candle close at that instant − spxPrice. spxPrice is live SPX
+        //      during RTH, so this is a genuine simultaneous pair too. (This is
+        //      NOT the stale-spot trap that bent the heatmap: that came from the
+        //      GEX table's `spot`, which doesn't tick. CB rows are RTH-only and
+        //      spxPrice moves.)
+        const cbPts: Array<{ ts: number; b: number }> = [];
+        for (const p of mvcHistory) {
+          let b = p.basis;
+          if (b == null && p.spxPx > 0) {
+            const es = esCloseAt(p.ts);
+            if (es != null) {
+              const d = es - p.spxPx;
+              if (Math.abs(d) >= 1 && Math.abs(d) <= 250) b = d;
+            }
+          }
+          if (b != null) cbPts.push({ ts: p.ts, b });
         }
-        const colBasis = new Map<string, number>();
-        for (const [k, xs] of samples) if (xs.length) colBasis.set(k, median(xs));
 
         // Last CB basis at or before t, held flat forward (so ETH inherits the
         // 16:00 basis and stays pinned there until the next session's first row).
+        // Median of the last 3 so a single bad row can't jump a column.
         const heldCb = (tsMs: number): number | null => {
           if (!cbPts.length) return null;
           let lo = 0, hi = cbPts.length - 1, idx = -1;
@@ -1289,16 +1295,17 @@ export default function EsCandlesPage() {
             if (cbPts[mid].ts <= tsMs) { idx = mid; lo = mid + 1; } else hi = mid - 1;
           }
           if (idx < 0) return cbPts[0].b; // before any snapshot → first known
-          const win = cbPts.slice(Math.max(0, idx - 2), idx + 1).map((p) => p.b);
-          return median(win);
+          return median(cbPts.slice(Math.max(0, idx - 2), idx + 1).map((p) => p.b));
         };
 
+        // NOTE: nothing below may be derived from columnsRef. A basis sourced
+        // from the loaded heatmap columns changes with the 1D/5D backfill window,
+        // which silently MOVED the CB level when the user toggled the range.
         return (tsMs: number) => {
           const k = etDayKey(tsMs);
           if (k === todayKey) return basis;
           const b = heldCb(tsMs)
             ?? dayBasisRef.current.get(k)
-            ?? colBasis.get(k)
             ?? (basis || prevBasisRef.current);
           // A ~0 basis is never real for ES vs SPX. If every source came back
           // empty/zero, prefer the last known good basis over silently drawing
@@ -1317,13 +1324,20 @@ export default function EsCandlesPage() {
         basisDebugAtRef.current = Date.now();
         const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
         const days = [...new Set([...columnsRef.current.values()].map((c) => etDayKey(c.slotTs)))].sort();
+        // Count what basisAt would ACTUALLY use: esPrice pair when usable, else
+        // reconstructed from the ES candle vs spxPrice.
         const cbByDay = new Map<string, number[]>();
         for (const p of mvcHistory) {
-          if (p.basis == null) continue;
+          let b = p.basis;
+          if (b == null && p.spxPx > 0) {
+            const es = esCloseAt(p.ts);
+            if (es != null && Math.abs(es - p.spxPx) >= 1 && Math.abs(es - p.spxPx) <= 250) b = es - p.spxPx;
+          }
+          if (b == null) continue;
           const k = etDayKey(p.ts);
           const arr = cbByDay.get(k) ?? [];
           if (!cbByDay.has(k)) cbByDay.set(k, arr);
-          arr.push(p.basis);
+          arr.push(b);
         }
         const table = days.map((d) => {
           const cb = cbByDay.get(d) ?? [];
