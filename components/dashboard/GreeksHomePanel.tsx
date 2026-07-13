@@ -18,6 +18,7 @@ import { queryGreeksToday } from "@/lib/snapdb";
 import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
 import LiveSkewBand from "@/components/greeks/LiveSkewBand";
 import LiveGreeksGauges from "@/components/dashboard/LiveGreeksGauges";
+import StateRail from "@/components/dashboard/StateRail";
 
 // Behavior card samples the live feed on this cadence rather than every tick.
 const REFRESH_MS = 30_000;
@@ -147,6 +148,18 @@ export default function GreeksHomePanel() {
 
   return (
     <div style={{ width: "100%", height: "100%", overflowY: "auto", overflowX: "hidden", padding: 4 }}>
+      {/* ── 0. State rail — regime / convexity / dex lean / skew + current play.
+             Uses the 30s-sampled snapshot (not every tick) so the rail and the
+             behavior card below it never disagree. ── */}
+      <div style={{ marginBottom: 14 }}>
+        <StateRail
+          gex={snap?.gex ?? null}
+          dex={snap?.dex ?? null}
+          vex={snap?.vex ?? null}
+          hasData={!!snap}
+        />
+      </div>
+
       {/* ── 1. The 4 live greek gauges (GEX/DEX/CHEX/VEX) ── */}
       <div style={{ marginBottom: 14 }}>
         <LiveGreeksGauges />

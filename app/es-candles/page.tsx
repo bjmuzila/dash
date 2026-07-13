@@ -1185,10 +1185,14 @@ export default function EsCandlesPage() {
         const s = [...xs].sort((a, b) => a - b);
         return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
       };
-      const basisForCols = (cols: GexColumn[]): number[] => {
+      // Built ONCE per draw from every stored GEX column (they're the only source
+      // of historical SPX spot), then shared by every SPX→ES conversion of a PAST
+      // value on this canvas: heatmap cells AND the CB/MVC history line. Live
+      // "now" levels (Call/Put/Flip, the current CB) keep using `basis`.
+      const buildBasisAt = (): ((tsMs: number) => number) => {
         const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
         const samples = new Map<string, number[]>();
-        for (const c of cols) {
+        for (const c of columnsRef.current.values()) {
           if (!(c.spot && c.spot > 0)) continue;
           const k = etDayKey(c.slotTs);
           if (k === todayKey) continue; // live basis wins for the active session
@@ -1200,8 +1204,9 @@ export default function EsCandlesPage() {
         }
         const dayBasis = new Map<string, number>();
         for (const [k, xs] of samples) if (xs.length) dayBasis.set(k, median(xs));
-        return cols.map((c) => dayBasis.get(etDayKey(c.slotTs)) ?? basis);
+        return (tsMs: number) => dayBasis.get(etDayKey(tsMs)) ?? basis;
       };
+      const basisAt = buildBasisAt();
 
       // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
       const slotX = (slotTs: number): { left: number; w: number } | null => {
@@ -1254,11 +1259,10 @@ export default function EsCandlesPage() {
             if (d <= 0) return 1;
             return Math.max(0.12, 1 - d / fadeSpan);
           };
-          // Historical ES basis, one per column (see basisForCols above).
-          const colBases = basisForCols(cols);
           for (let ci = 0; ci < cols.length; ci++) {
             const col = cols[ci];
-            const colBasis = colBases[ci];
+            // Per-session historical basis (see buildBasisAt above).
+            const colBasis = basisAt(col.slotTs);
             const sx = slotX(col.slotTs);
             if (!sx) continue;
             // Carry each column forward to the NEXT stored column's left edge so
@@ -1461,9 +1465,12 @@ export default function EsCandlesPage() {
         for (let i = 0; i < mvcHistory.length; i++) {
           const p = mvcHistory[i];
           const x = xOf(p.ts);
-          // Convert SPX MVC level → ES using the live ESU basis (esFut − spx),
-          // the same basis the Call/Put/Flip lines use.
-          const y = series.priceToCoordinate(p.spx + basis);
+          // Convert the SPX CB/MVC level → ES with the basis THAT SESSION had —
+          // same per-session basis the heatmap columns use (buildBasisAt). The
+          // live basis is only right for "now": using it for prior days dragged
+          // every historical CB segment off its true ES level, exactly like it
+          // did for the heatmap.
+          const y = series.priceToCoordinate(p.spx + basisAt(p.ts));
           if (x == null || y == null) { flush(prevX); runStartX = null; runY = null; prevX = null; continue; }
           if (runY == null) { runStartX = x; runY = y; }
           else if (Math.abs(y - runY) > 0.5) {

@@ -138,7 +138,7 @@ function QuickCircle({
       {circle}
       <span
         style={{
-          maxWidth: 74,
+          maxWidth: NAV_ITEM_W,
           fontSize: 9,
           fontWeight: 600,
           color: HOME_THEME.text,
@@ -160,6 +160,7 @@ function QuickCircle({
     alignItems: "center",
     gap: 3,
     flexShrink: 0,
+    width: NAV_ITEM_W,
     textDecoration: "none",
     cursor: comingSoon ? "not-allowed" : draggable ? "grab" : "pointer",
     background: "none",
@@ -230,6 +231,34 @@ const NAV_ITEMS: NavItem[] = [
 // Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).
 const NAV_ORDER_KEY = "cb-toolbar-nav-order-v1";
 
+// ── Responsive sizing for the left-side nav strip ─────────────────────────────
+// Each QuickCircle is a fixed-width column so we can compute how many fit.
+const NAV_ITEM_W = 56;   // px, column width (circle is 40px, label ellipsises)
+const NAV_GAP = 8;       // px, gap between columns
+// Everything else in the pill that is NOT the nav strip: hamburger, logo, bell,
+// ticker (min), divider, clock, notes, user menu, gaps + pill padding + band
+// padding. The nav strip only gets what's left over.
+const NAV_RESERVED_PX = 640;
+
+/**
+ * useNavCapacity — how many nav circles fit on screen right now.
+ * Derived from the *viewport* width (not the strip's own width) so it can't
+ * oscillate: shrinking the strip never feeds back into the measurement.
+ */
+function useNavCapacity() {
+  const [capacity, setCapacity] = useState(0);
+  useEffect(() => {
+    const apply = () => {
+      const avail = window.innerWidth - NAV_RESERVED_PX;
+      setCapacity(Math.max(0, Math.floor((avail + NAV_GAP) / (NAV_ITEM_W + NAV_GAP))));
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+  }, []);
+  return capacity;
+}
+
 /**
  * GexGroupNav — the left-side nav strip. One icon+label button per NAV_ITEMS
  * entry; clicking navigates the whole page to that route. Buttons are
@@ -243,6 +272,10 @@ function GexGroupNav({ isOwner }: { isOwner: boolean }) {
   // order (no hydration mismatch), then reorder to the saved arrangement.
   const [order, setOrder] = useState<string[]>(() => NAV_ITEMS.map((it) => it.href));
   const [dragId, setDragId] = useState<string | null>(null);
+  // How many circles actually fit at the current window size. Anything past this
+  // is dropped rather than allowed to overflow the pill — every route here is
+  // also in the hamburger (NavMenu), so nothing becomes unreachable.
+  const capacity = useNavCapacity();
 
   useEffect(() => {
     try {
@@ -281,10 +314,24 @@ function GexGroupNav({ isOwner }: { isOwner: boolean }) {
   // non-owners (it still occupies its slot in `order`, just isn't shown).
   const items = order
     .map((h) => NAV_ITEMS.find((it) => it.href === h))
-    .filter((it): it is NavItem => !!it && (!it.ownerOnly || isOwner));
+    .filter((it): it is NavItem => !!it && (!it.ownerOnly || isOwner))
+    .slice(0, capacity);
+
+  if (items.length === 0) return null;
 
   return (
-    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+    <div
+      style={{
+        position: "relative",
+        zIndex: 1,
+        display: "flex",
+        alignItems: "center",
+        gap: NAV_GAP,
+        flexShrink: 1,
+        minWidth: 0,
+        overflow: "hidden",
+      }}
+    >
       {items.map((it) => (
         <QuickCircle
           key={it.href}
@@ -475,7 +522,7 @@ export default function GlobalToolbar() {
 
           {/* ── Live ticker (ESU / NQU + dropdown) — now sits just left of the
               clock; shrinks/clips on narrow screens ── */}
-          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: isMobile ? "40vw" : "48vw", display: "flex", alignItems: "center", overflow: "hidden" }}>
+          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: isMobile ? "40vw" : "clamp(160px, 24vw, 380px)", display: "flex", alignItems: "center", overflow: "hidden" }}>
             <ToolbarTicker />
           </div>
 
