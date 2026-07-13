@@ -1987,6 +1987,15 @@ const DAY_POSTS_KEY = "cb-edge-day-posts";
 // Auto-generated rows written server-side by day-post-writer at slot times.
 interface AutoDayPost { date: string; slot: string; tweet: string; created_at: string }
 const AUTO_SLOT_TIMES: Record<string, string> = { premarket: "~8:40 AM", midday: "~12:25 PM", eod: "~4:03 PM" };
+// Actual generation time (row.created_at) rendered in ET — the schedule above is
+// the window's open, this is when the writer really landed the row.
+function autoRunTimeET(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+  });
+}
 
 function DayPosts({ form }: { form: FormState }) {
   const [slot, setSlot] = useState<DaySlot>("premarket");
@@ -2265,7 +2274,12 @@ function DayPosts({ form }: { form: FormState }) {
           const label = DAY_SLOTS.find((d) => d.v === s)?.label ?? s;
           return (
             <div key={s} className="dp-row" style={{ alignItems: "flex-start", borderBottom: "1px solid var(--sm-border)", paddingBottom: 10 }}>
-              <span className="dp-label" style={{ color: "var(--cyan)", minWidth: 130, paddingTop: 2 }}>{label}</span>
+              <span className="dp-label" style={{ color: "var(--cyan)", minWidth: 130, paddingTop: 2, display: "flex", flexDirection: "column", gap: 2 }}>
+                {label}
+                {row && (
+                  <span className="dp-hint" style={{ fontSize: 11 }}>ran {autoRunTimeET(row.created_at)} ET</span>
+                )}
+              </span>
               {row ? (
                 <>
                   <span style={{ flex: 1, fontSize: 15, color: "var(--text1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{row.tweet}</span>

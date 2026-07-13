@@ -984,6 +984,47 @@ export function HomeClient({
     [chartRows]
   );
 
+  // % of total |net GEX| that is positive, across every strike on the selected
+  // (0DTE) expiry. 100% = pure long-gamma chain, 0% = pure short-gamma.
+  const posGexPct = useMemo(() => {
+    const s = chartSpot;
+    if (!(s > 0) || chartRows.length === 0) return null;
+    let pos = 0, abs = 0;
+    for (const r of chartRows) {
+      const g = netGEXOf(r, "net", s);
+      if (g > 0) pos += g;
+      abs += Math.abs(g);
+    }
+    return abs > 0 ? (pos / abs) * 100 : null;
+  }, [chartRows, chartSpot]);
+
+  // Bull/Bear premium split — same calc as the /test Flow Inventory panel
+  // (buy calls + sell puts = bullish premium), SPX tape only.
+  const [flowBull, setFlowBull] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/proxy/flow-history?underlying=SPX&limit=20000`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const tape: { premium?: number; type?: string; side?: string }[] = Array.isArray(json?.tape) ? json.tape : [];
+        let bull = 0, bear = 0;
+        for (const o of tape) {
+          const prem = o.premium || 0;
+          const isPut = o.type === "P";
+          const isBuy = o.side === "buy";
+          if ((isBuy && !isPut) || (!isBuy && isPut)) bull += prem; else bear += prem;
+        }
+        const tot = bull + bear;
+        if (!cancelled) setFlowBull(tot > 0 ? Math.round((bull / tot) * 100) : null);
+      } catch { /* keep last good value */ }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   // MVC = strike carrying the peak |OI+Vol net GEX| (most valuable concentration).
   // OI+Vol = netGEX (OI-only) + netVolGEX (vol-only) — matches the GexChart MVC
@@ -1142,6 +1183,8 @@ export function HomeClient({
                   { label: "Flip",      value: flipPoint != null ? formatStrikeValue(flipPoint) : "—", color: C.orange },
                   { label: "CB",        value: mvcStrike != null ? formatStrikeValue(mvcStrike) : "—", color: C.purple },
                   { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
+                  { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
+                  { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
                 ].map((t) => (
                   <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
                     <span style={{ fontSize: 9, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>

@@ -1579,44 +1579,76 @@ export default function EsCandlesPage() {
             }
             if (sessMax > 0) {
               const k = bubbleScaleRef.current;
-              const rMax = 9 * k;   // px radius at the session max
+              const rMax = 11 * k;  // px radius at the session max
               const rMin = 0.8 * k; // floor so tiny strikes stay dots
               ctx.save();
               for (const m of mins) {
                 const x = ts.timeToCoordinate((m.slotTs / 1000) as UTCTimestamp);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
+                // Rank THIS minute's strikes by |net GEX|. The top 3 are what the
+                // eye needs to find instantly — where the gamma actually is — and
+                // a pure magnitude ramp buries them: on a quiet minute nothing is
+                // near the session max, so every bubble renders small and dim and
+                // the levels are indistinguishable. Ranking is per-column and
+                // relative, so the leaders always read, in any regime.
+                const rank = new Map<number, number>(); // strike → 0|1|2
+                [...m.cells]
+                  .filter((c) => valOf(c))
+                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)))
+                  .slice(0, 3)
+                  .forEach((c, i) => rank.set(c.strike, i));
                 for (const cell of m.cells) {
                   const v = valOf(cell);
                   if (!v) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
                   const ratio = Math.min(Math.abs(v) / sessMax, 1);
+                  const rk = rank.get(cell.strike);
                   // sqrt → bubble AREA (not radius) tracks |GEX|, which is how
-                  // the eye actually reads size.
-                  const r = rMin + Math.sqrt(ratio) * (rMax - rMin);
+                  // the eye actually reads size. Top-3 get a size boost on top so
+                  // they separate from the field even when the whole column is
+                  // small relative to the session max.
+                  const rankBoost = rk === 0 ? 1.55 : rk === 1 ? 1.32 : rk === 2 ? 1.16 : 1;
+                  const r = (rMin + Math.sqrt(ratio) * (rMax - rMin)) * rankBoost;
                   if (r < 0.35) continue;
                   // SOLID fill, no stroke. Magnitude is carried by the COLOR (a
-                  // dim→hot ramp) and the radius — not by opacity. The previous
-                  // version filled at low alpha and stroked brighter on top, so
-                  // every bubble read as a ring with a different-colored middle.
+                  // dim→hot ramp) and the radius — not by opacity. Filling at low
+                  // alpha and stroking brighter on top made every bubble read as a
+                  // ring with a different-colored middle.
                   //
-                  // Ramp: deep/desaturated at small |GEX| → the full cyan/red at
-                  // mid → washed toward white at the session's biggest strikes,
-                  // so the heavy gamma pops the way it does on the heatmap.
-                  const t = Math.pow(ratio, 0.6);
-                  const lo = v >= 0 ? [14, 70, 120] : [92, 22, 34];   // dim
-                  const mid = v >= 0 ? [41, 182, 246] : [255, 71, 87]; // full
-                  const hi = v >= 0 ? [186, 240, 255] : [255, 190, 195]; // hot
+                  // Ramp: deep/desaturated at small |GEX| → full cyan/red at mid →
+                  // washed toward white at the top. `t` is gamma-curved (^0.45) to
+                  // stretch the LOW end, where most strikes live — a linear ramp
+                  // squashed them all into the same dim blue and made adjacent
+                  // levels impossible to tell apart.
+                  //
+                  // The top 3 then get a COLOR FLOOR (they never render below the
+                  // full-saturation mid) plus a glow, so "where is the gamma" is
+                  // answerable at a glance instead of by comparing dot sizes.
+                  const t = Math.pow(ratio, 0.45);
+                  const tEff = rk != null ? Math.max(t, rk === 0 ? 0.92 : rk === 1 ? 0.75 : 0.6) : t;
+                  const lo = v >= 0 ? [14, 70, 120] : [92, 22, 34];       // dim
+                  const mid = v >= 0 ? [41, 182, 246] : [255, 71, 87];    // full
+                  const hi = v >= 0 ? [200, 245, 255] : [255, 205, 210];  // hot
                   const mix = (a: number[], b: number[], f: number) =>
                     a.map((x, i) => Math.round(x + (b[i] - x) * f));
-                  const c = t <= 0.5
-                    ? mix(lo, mid, t / 0.5)
-                    : mix(mid, hi, (t - 0.5) / 0.5);
+                  const c = tEff <= 0.5
+                    ? mix(lo, mid, tEff / 0.5)
+                    : mix(mid, hi, (tEff - 0.5) / 0.5);
                   ctx.beginPath();
                   ctx.arc(x, y, r, 0, Math.PI * 2);
-                  ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.95)`;
+                  if (rk != null) {
+                    // Glow scaled by rank — #1 unmistakable, #3 clearly in the set.
+                    ctx.shadowColor = `rgba(${mid[0]},${mid[1]},${mid[2]},0.9)`;
+                    ctx.shadowBlur = (rk === 0 ? 12 : rk === 1 ? 8 : 5) * k;
+                  } else {
+                    ctx.shadowBlur = 0;
+                  }
+                  // Non-leaders sit back a little so the leaders come forward.
+                  ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${rk != null ? 1 : 0.8})`;
                   ctx.fill();
+                  ctx.shadowBlur = 0;
                 }
               }
               ctx.restore();
