@@ -36,7 +36,50 @@ function thetaRoot(underlying = SYMBOL) {
 // Low-level v3 REST. Theta serves JSON when asked; we ask. Errors surface the
 // body so the FREE-tier "requires a value subscription" gate is legible.
 // ---------------------------------------------------------------------------
+// --- Global Theta REST governor -------------------------------------------
+// theta-terminal is a SINGLE upstream shared by every recorder + proxy route in
+// this process. Uncoordinated parallel callers (oi-change, watch-quotes,
+// scanner, strike-growth…) blew past its concurrency limit and it answered 429
+// to EVERYTHING — including the calls that keep the flow stream alive. Every
+// REST call funnels through thetaGet, so the cap lives here, once, for all of
+// them. Not per-caller: per-caller limits still sum to a stampede.
+const THETA_MAX_CONCURRENT = Number(process.env.THETA_MAX_CONCURRENT || 3);
+const THETA_MAX_RETRIES    = Number(process.env.THETA_MAX_RETRIES || 3);
+
+let _inFlight = 0;
+const _queue = [];
+
+function _acquire() {
+  if (_inFlight < THETA_MAX_CONCURRENT) { _inFlight += 1; return Promise.resolve(); }
+  return new Promise((resolve) => _queue.push(resolve));
+}
+function _release() {
+  const next = _queue.shift();
+  if (next) next();          // hand the slot straight to the next waiter
+  else _inFlight -= 1;
+}
+
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function thetaGet(pathAndQuery) {
+  await _acquire();
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await _thetaGetOnce(pathAndQuery);
+      } catch (e) {
+        // 429 = terminal is saturated, not a bad request. Back off and retry;
+        // anything else (472 NOT_FOUND, INVALID_ARGUMENT, tier gates) is real.
+        if (!/-> 429\b/.test(e.message) || attempt >= THETA_MAX_RETRIES) throw e;
+        await _sleep(250 * 2 ** attempt); // 250 / 500 / 1000ms
+      }
+    }
+  } finally {
+    _release();
+  }
+}
+
+async function _thetaGetOnce(pathAndQuery) {
   const sep = pathAndQuery.includes('?') ? '&' : '?';
   const url = `${THETA_BASE_URL}${pathAndQuery}${sep}format=json`;
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
@@ -270,6 +313,13 @@ async function buildExpiryRows(underlying = SYMBOL, expiration) {
 // Both return the nested {contract,data[]} shape → flatSnapshotRows. Strike in
 // dollars; right CALL/PUT. `strike_range=n` trims to ±n strikes around that
 // date's spot server-side (no need to know historical spot up front).
+// Today's session date in ET (Theta's "current day" is exchange-local, not UTC —
+// after 20:00 ET a UTC date is already tomorrow and would wrongly take the
+// historical wildcard path).
+const etTodayIso = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date()); // en-CA formats as YYYY-MM-DD
+
 // ---------------------------------------------------------------------------
 // Theta v3 wants YYYYMMDD. Accept an ISO 'YYYY-MM-DD' string (strip dashes) OR a
 // JS Date (the daily-history callers pass `new Date(...)`, which String()-ifies
@@ -306,16 +356,24 @@ async function fetchEodHistoryTheta(underlying, date, { strikeRange = 40, maxDte
 async function fetchOiHistoryTheta(underlying, date, { strikeRange = 40, maxDte } = {}) {
   const root = thetaRoot(underlying);
   const d = ymdCompact(date);
+
+  // Theta v3 rejects expiration=* when the date is TODAY ("Cannot fetch
+  // current-day data without specifying an expiration"). Past dates are fine.
+  // Don't fire the doomed wildcard call just to catch it — that was a wasted
+  // round-trip + a WARN line per ticker per sweep against a rate-limited
+  // upstream. Go straight to the per-expiration path.
+  if (d === ymdCompact(etTodayIso())) {
+    return fetchOiHistoryThetaByExpiration(root, d, { strikeRange, maxDte });
+  }
+
   let json;
   try {
     json = await thetaGet(
       `/v3/option/history/open_interest?symbol=${encodeURIComponent(root)}&expiration=*&start_date=${d}&end_date=${d}&strike_range=${strikeRange}`,
     );
   } catch (e) {
-    // Theta v3 rejects expiration=* when start_date/end_date == today ("Cannot
-    // fetch current-day data without specifying an expiration") — historical
-    // (past) dates are unaffected. Fall back to one call per expiration,
-    // capped to maxDte if given so this doesn't blow up on LEAPS-heavy roots.
+    // Belt-and-braces: if Theta's current-day boundary disagrees with ours
+    // (clock skew, pre-open), still fall back rather than fail the ticker.
     if (!/current-day/i.test(e.message)) throw e;
     return fetchOiHistoryThetaByExpiration(root, d, { strikeRange, maxDte });
   }
@@ -861,16 +919,48 @@ class ThetaStreamClient {
       const quote = (cache.bid != null && cache.ask != null)
         ? { bid: cache.bid, ask: cache.ask, t: cache.t }
         : null;
-      // Prefer a per-root spot (set by MultiFlowManager for non-SPX roots) so
-      // isOtm is correct; fall back to the SPX getSpot() for the core engine.
-      // Guard: a frozen/zero index quote (the Theta index stream ticks only on
-      // change and can wedge) must NOT reach FlowProcessor as spot=0 — that sets
-      // is_otm=false for every later print and silently flatlines the OTM-only
-      // /flow chart. Fall back to the last POSITIVE spot seen for this root.
+      // Spot resolution is PER-ROOT and must never cross underlyings.
+      //
+      // getSpot() is the CORE ENGINE's spot — i.e. SPX. It is only a valid
+      // fallback for the core root. Using it for any other root tagged e.g.
+      // NVDA prints with SPX's 7557 spot, which flips isOtm for every strike
+      // and corrupts the dealer sign downstream. MultiFlowManager fills
+      // rootSpot asynchronously at boot (and its _resolveSpot can be delayed by
+      // a slow/rate-limited stock snapshot), so there IS a window where a
+      // non-core root has no spot yet — during that window we must drop the
+      // print, not guess with someone else's underlying.
+      //
+      // Frozen/zero index quote guard still applies: the Theta index stream
+      // ticks only on change and can wedge, so spot=0 must not reach
+      // FlowProcessor (it sets is_otm=false for every print and silently
+      // flatlines the OTM-only /flow chart). Fall back to the last POSITIVE
+      // spot seen FOR THIS ROOT.
+      const isCoreRoot = root === thetaRoot(SYMBOL);
       const rootSpot = this.rootSpot.get(root);
-      let spot = (rootSpot > 0 ? rootSpot : this.getSpot()) || 0;
+      let spot = (rootSpot > 0 ? rootSpot : (isCoreRoot ? this.getSpot() : 0)) || 0;
+      // TEMP: tracing the cross-root spot leak — for any NON-core root, log which
+      // branch supplied the spot the first few times we see that root.
+      if (!isCoreRoot) {
+        this._spotSrcLogged = this._spotSrcLogged || new Set();
+        if (!this._spotSrcLogged.has(root) && this._spotSrcLogged.size < 30) {
+          this._spotSrcLogged.add(root);
+          console.log(
+            `[SPOT-SRC] root=${root} coreRoot=${thetaRoot(SYMBOL)} ` +
+            `rootSpot=${rootSpot} getSpot=${this.getSpot()} ` +
+            `lastGood=${this.lastGoodSpot.get(root)} -> spot=${spot}`
+          );
+        }
+      }
       if (spot > 0) this.lastGoodSpot.set(root, spot);
       else spot = this.lastGoodSpot.get(root) || 0;
+      if (!(spot > 0)) {
+        // No spot for this root, now or ever. Drop rather than mis-tag.
+        if ((this._noSpotDropLog ?? 0) < 20) {
+          this._noSpotDropLog = (this._noSpotDropLog ?? 0) + 1;
+          console.warn(`[THETA-WS] dropping ${root} print — no spot for root yet`);
+        }
+        return;
+      }
       this.lastTradeAt = Date.now();
       // Chart-scoped liveness for the watchdog: only SPX (SPXW) OTM prints drive
       // the /flow Net Drift chart, so track those separately. A partial dry-up

@@ -337,7 +337,10 @@ export default function EsCandlesPage() {
   // floored to 5-min heatmap slots — too coarse for the bubble trail).
   const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
   const bubbleScaleRef = useRef(1);
-  useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
+  // NOTE: the effect that syncs this ref lives next to the bubbleScale useState
+  // below — NOT here. A `[bubbleScale]` dep array is evaluated during render, and
+  // the state is declared further down, so putting it here threw a TDZ
+  // ReferenceError ("Cannot access before initialization") and 500'd the page.
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
   const drawOverlayRef = useRef<() => void>(() => {});
@@ -416,6 +419,9 @@ export default function EsCandlesPage() {
   // trail shows gamma building/bleeding at each level through the day.
   const [showGexBubbles, setShowGexBubbles] = useState(false);
   const [bubbleScale, setBubbleScale] = useState(1); // manual radius multiplier (sizing is taste)
+  // Mirrored into a ref so the imperative overlay draw reads it without
+  // re-subscribing. Must stay BELOW the useState above (see bubbleScaleRef).
+  useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.

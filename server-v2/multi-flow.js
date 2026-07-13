@@ -143,6 +143,9 @@ class MultiFlowManager {
     if (FLOW_BULK_STREAM) {
       this.thetaStream.addBulkRoot(thetaR);
       const spot = await this._resolveSpot(root);
+      // TEMP: tracing a cross-root spot leak (SPCX prints tagged with SPX's
+      // spot). Log every rootSpot write so we can see which key gets which value.
+      console.log(`[MULTIFLOW-SPOT] bulk write root=${root} thetaR=${thetaR} spot=${spot}`);
       if (spot > 0 && this.thetaStream.rootSpot) this.thetaStream.rootSpot.set(thetaR, spot);
       this.state.set(root, { spot, mode: 'bulk' });
       return;
@@ -162,6 +165,8 @@ class MultiFlowManager {
     }
     // Record spot per root so the stream client tags non-SPX prints' isOtm
     // against the correct underlying (keyed by the Theta root, e.g. SPXW).
+    // TEMP: see [MULTIFLOW-SPOT] note above — tracing the cross-root spot leak.
+    console.log(`[MULTIFLOW-SPOT] sub write root=${root} thetaR=${thetaR} spot=${spot}`);
     if (spot > 0 && this.thetaStream.rootSpot) this.thetaStream.rootSpot.set(thetaR, spot);
     // subscribeActive seeds the quote cache + sends TRADE+QUOTE per contract; the
     // stream client de-dupes its own sub list, so re-calling on window shift is safe.
