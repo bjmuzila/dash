@@ -162,7 +162,6 @@ function GexScannerPanel() {
               style={{
                 ...classicCardAccentStyle,
                 padding: "10px 12px",
-                borderLeft: `3px solid ${col}`,
                 background: sig === "very" ? "rgba(255,209,102,0.10)" : (classicCardAccentStyle as any).background,
               }}
             >

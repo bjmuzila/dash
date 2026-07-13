@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PageShell } from "@/components/shared/PageCard";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Options Probe — type a contract in shorthand ("TSLA 420c 7/17") plus your fill
@@ -490,6 +491,7 @@ export default function OptionsProbe() {
   const upDown = (v: number | null) => (v == null ? "var(--sm-muted)" : v > 0 ? "var(--sm-green)" : v < 0 ? "var(--sm-red)" : "var(--sm-muted)");
 
   return (
+    <PageShell>
     <div className="op-wrap">
       <style>{OP_CSS}</style>
 
@@ -648,5 +650,6 @@ export default function OptionsProbe() {
         </div>
       </div>
     </div>
+    </PageShell>
   );
 }

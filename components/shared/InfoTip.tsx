@@ -3,19 +3,16 @@
 /**
  * InfoTip — small "ⓘ" affordance that reveals a themed hover box.
  *
- * Pure CSS-free (inline styles + local hover state) so it works anywhere without
- * a portal. The box is absolutely positioned relative to the trigger; pass
- * `align` to keep it on-screen near a container edge.
+ * The box is PORTALED to document.body with position:fixed. That's deliberate:
+ * the scanner cards use backdrop-filter/transform, which create stacking
+ * contexts — an absolutely-positioned popover inside one gets painted under the
+ * neighbouring cards no matter how high its z-index is. Portaling escapes them.
  *
- *   <InfoTip title="Score" width={280}>
- *     <p>…explanation…</p>
- *   </InfoTip>
- *
- * Wrap any label instead of the default ⓘ glyph by passing `children` of the
- * trigger via `label`.
+ *   <InfoTip title="Score" width={280}>…</InfoTip>
  */
 
-import { useState, type ReactNode } from "react";
+import { useState, useRef, useLayoutEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 
 export function InfoTip({
@@ -23,30 +20,40 @@ export function InfoTip({
   children,
   label,
   width = 300,
-  align = "left",
   side = "top",
 }: {
   title?: string;
   children: ReactNode;
   label?: ReactNode;          // trigger content; defaults to an ⓘ glyph
   width?: number;
-  align?: "left" | "right" | "center";
   side?: "top" | "bottom";
+  /** @deprecated position is now auto-flipped to stay on-screen */
+  align?: "left" | "right" | "center";
 }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [box, setBox] = useState<{ top: number; left: number } | null>(null);
 
-  const pos: React.CSSProperties = {
-    position: "absolute",
-    zIndex: 300,
-    width,
-    ...(side === "top" ? { bottom: "calc(100% + 8px)" } : { top: "calc(100% + 8px)" }),
-    ...(align === "left"   ? { left: 0 }
-      : align === "right"  ? { right: 0 }
-      : { left: "50%", transform: "translateX(-50%)" }),
-  };
+  // Position against the viewport, clamped to stay on-screen. Flips above/below
+  // if there isn't room on the preferred side.
+  useLayoutEffect(() => {
+    if (!open || !ref.current) { setBox(null); return; }
+    const r = ref.current.getBoundingClientRect();
+    const GAP = 8, M = 8, H = 220; // H = generous height estimate for flipping
+    const wantTop = side === "top";
+    const roomAbove = r.top > H + GAP + M;
+    const above = wantTop ? roomAbove : false;
+    const top = above ? r.top - GAP - H : r.bottom + GAP;
+    const left = Math.min(
+      Math.max(M, r.left + r.width / 2 - width / 2),
+      window.innerWidth - width - M
+    );
+    setBox({ top, left });
+  }, [open, side, width]);
 
   return (
     <span
+      ref={ref}
       style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -66,15 +73,19 @@ export function InfoTip({
         {label ?? "ⓘ"}
       </span>
 
-      {open && (
+      {open && box && typeof document !== "undefined" && createPortal(
         <div
           style={{
-            ...pos,
+            position: "fixed",
+            top: box.top,
+            left: box.left,
+            width,
+            zIndex: 9999,
             borderRadius: 10,
             padding: "10px 12px",
-            background: "rgba(13,17,25,0.97)",
+            background: "rgba(13,17,25,0.98)",
             border: `1px solid ${HOME_THEME.border}`,
-            boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
             color: HOME_THEME.text,
             fontSize: 12,
             fontWeight: 400,
@@ -83,7 +94,7 @@ export function InfoTip({
             textTransform: "none",
             letterSpacing: 0,
             whiteSpace: "normal",
-            cursor: "default",
+            pointerEvents: "none",
           }}
         >
           {title && (
@@ -92,7 +103,8 @@ export function InfoTip({
             </div>
           )}
           {children}
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );
@@ -103,9 +115,9 @@ export function InfoTip({
  * Used on /scanner (cards + table header) and the home Scanner tab so the two
  * can never drift apart.
  */
-export function ScoreInfo({ align = "left", side = "top" }: { align?: "left" | "right" | "center"; side?: "top" | "bottom" }) {
+export function ScoreInfo({ side = "top" }: { align?: "left" | "right" | "center"; side?: "top" | "bottom" }) {
   return (
-    <InfoTip title="Score — combined 0–100" width={320} align={align} side={side}>
+    <InfoTip title="Score — combined 0–100" width={320} side={side}>
       <div style={{
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: 11,

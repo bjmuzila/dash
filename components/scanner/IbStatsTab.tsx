@@ -153,6 +153,13 @@ function etMin(ts: number): number {
   return (h % 24) * 60 + m;
 }
 
+/** true ET calendar date of a bar (YYYY-MM-DD) — used to keep sessions apart */
+function etDate(ts: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(ts));
+}
+
 const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 function LiveToday({ sym, ds, days, hist }: {
@@ -168,11 +175,22 @@ function LiveToday({ sym, ds, days, hist }: {
 
   const live = useMemo(() => {
     if (!candles?.length) return null;
-    const bars = candles
-      .map((c) => ({ min: etMin(c.timestamp), h: c.high, l: c.low, c: c.close, o: c.open }))
+    // Bars arrive for ~2 sessions. Group by TRUE ET session date — filtering on
+    // minute-of-day alone would blend yesterday's RTH into today's IB.
+    const all = candles
+      .map((c) => ({
+        day: etDate(c.timestamp), min: etMin(c.timestamp),
+        h: c.high, l: c.low, c: c.close, o: c.open, v: (c as { volume?: number }).volume ?? 0,
+      }))
       .filter((b) => b.min >= 570 && b.min <= 960)
-      .sort((a, b) => a.min - b.min);
-    if (!bars.length) return null;
+      .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.min - b.min));
+    if (!all.length) return null;
+
+    const today = all[all.length - 1].day;
+    const bars = all.filter((b) => b.day === today);
+    const priorBars = all.filter((b) => b.day < today);
+    const pdh = priorBars.length ? Math.max(...priorBars.map((b) => b.h)) : null;
+    const pdl = priorBars.length ? Math.min(...priorBars.map((b) => b.l)) : null;
 
     const ibBars = bars.filter((b) => b.min >= 570 && b.min < 630);
     const post = bars.filter((b) => b.min >= 630);
@@ -252,12 +270,66 @@ function LiveToday({ sym, ds, days, hist }: {
 
     const zone: SlimDay["closeZone"] = loc >= 0.75 ? "top25" : loc <= 0.25 ? "bot25" : "mid50";
 
+    /* ── rule 11 · open type — needs the prior RTH range ── */
+    const dayOpen = bars[0].o;
+    const openType: SlimDay["openType"] =
+      pdh == null || pdl == null ? null
+        : dayOpen > pdh ? "OAR-H"
+          : dayOpen < pdl ? "OAR-L"
+            : dayOpen > (pdh + pdl) / 2 ? "HIR"
+              : "LIR";
+
+    /* ── rule 7 · 15m FVG inside the IB — rebuild 15m bars from the IB bars ── */
+    const b15: { h: number; l: number }[] = [];
+    for (let s = 570; s < 630; s += 15) {
+      const g = ibBars.filter((b) => b.min >= s && b.min < s + 15);
+      if (g.length) b15.push({ h: Math.max(...g.map((x) => x.h)), l: Math.min(...g.map((x) => x.l)) });
+    }
+    let fvg: SlimDay["fvg"] = null;
+    for (let i = 2; i < b15.length; i++) {
+      if (b15[i].l > b15[i - 2].h) fvg = "bull";
+      else if (b15[i].h < b15[i - 2].l) fvg = "bear";
+    }
+
+    /* ── rules 5/6/8 · things that only exist once a close-break has printed ── */
+    const bIdx = breakMin != null ? post.findIndex((b) => b.min === breakMin) : -1;
+    const brk = bIdx >= 0 ? post[bIdx] : null;
+    const after = bIdx >= 0 ? post.slice(bIdx + 1) : [];
+    const ibVol = avg(ibBars.map((b) => b.v)) ?? 0;
+    const volSurge = brk && ibVol > 0 ? brk.v > ibVol : null;
+
+    // rule 6 — closes back inside the IB within 30 min of the break
+    const failed = brk
+      ? after.filter((b) => b.min <= brk.min + 30)
+          .some((b) => (breakSide === "H" ? b.c < ibh : b.c > ibl))
+      : null;
+
+    // rule 8 — comes back to within 2 ticks of the broken level, then closes back outside
+    const tick = sym === "ES" ? 0.25 : 0.25;
+    const lvlPx = breakSide === "H" ? ibh : breakSide === "L" ? ibl : null;
+    const rtIdx = lvlPx != null && brk
+      ? after.findIndex((b) => (breakSide === "H" ? b.l <= lvlPx + 2 * tick : b.h >= lvlPx - 2 * tick))
+      : -1;
+    const retest = rtIdx >= 0;
+    const retestCont = retest && lvlPx != null
+      ? after.slice(rtIdx + 1).some((b) => (breakSide === "H" ? b.c > lvlPx : b.c < lvlPx))
+      : null;
+
+    // rule 14 — still fully inside the IB at 14:00 ET
+    const at2 = bars.filter((b) => b.min <= 840);
+    const containedAt2 = nowMin >= 840
+      ? !at2.some((b) => b.min >= 630 && (b.c > ibh || b.c < ibl))
+      : null;
+
+    const extHit1 = targets.find((t) => t.t === 1)?.hit ?? false;
+
     return {
       pending: false as const, nowMin, price, ibh, ibl, mid, width, ibComplete,
       first, bias, closeZone, zone, orbDir, status, bucket, breakSide, breakMin, targets, dayHigh, dayLow,
-      brokeH, brokeL,
+      brokeH, brokeL, touchH, touchL, openType, fvg, volSurge, failed, retest, retestCont,
+      containedAt2, extHit1, pdh, pdl, dayOpen,
     };
-  }, [candles, hist]);
+  }, [candles, hist, sym]);
 
   const dowName = DOW_NAMES[new Date().getDay()];
   const dowRow = hist.dowStats.find((d) => d.name === dowName);
@@ -290,7 +362,7 @@ function LiveToday({ sym, ds, days, hist }: {
     <>
       <LiveGauges live={live} days={days} dowName={dowName} />
 
-      <Playbook live={live} days={days} dowName={dowName} />
+      <RuleBoard live={live} days={days} dowName={dowName} />
 
       <Card
         accent="cyan"
@@ -582,7 +654,353 @@ type Setup = {
   side?: "H" | "L";
 };
 
-function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
+/* ── the 14 rules, evaluated against the live session ─────────────────────────
+ * Each rule reports one of three live states:
+ *   IN PLAY      — today's session satisfies the rule's trigger; % is the
+ *                  conditional base rate on the sessions that matched it
+ *   NOT IN PLAY  — the trigger is absent today (and we say which one)
+ *   PENDING      — the trigger can't exist yet (needs the IB, or needs a break)
+ * Before 10:30 ET every IB-derived read is provisional and flagged as such.
+ */
+
+type RuleState = "in-play" | "not-in-play" | "pending";
+
+type LiveRule = {
+  id: string;
+  name: string;
+  state: RuleState;
+  read: string;                   // what today actually shows
+  side: "H" | "L" | null;         // direction the rule points, if any
+  question: string;               // what the % measures
+  cond?: (d: SlimDay) => boolean;
+  outcome?: (d: SlimDay) => boolean;
+};
+
+function buildRules(live: any, dowName: string): LiveRule[] {
+  const bias = live.bias as "H" | "L" | null;
+  const first = live.first as "H" | "L";
+  const zone = live.zone as SlimDay["closeZone"];
+  const bucket = live.bucket as string;
+  const bk = bucket.toLowerCase() as SlimDay["widthBucket"];
+  const orbDir = live.orbDir as "H" | "L" | null;
+  const brk = live.breakSide as "H" | "L" | null;
+  const openType = live.openType as SlimDay["openType"];
+  const fvg = live.fvg as SlimDay["fvg"];
+  const dowIdx = DOW_NAMES.indexOf(dowName);
+  const W = (s: "H" | "L") => (s === "H" ? "HIGH" : "LOW");
+  const zoneWord = zone === "top25" ? "TOP 25%" : zone === "bot25" ? "BOTTOM 25%" : "MIDDLE 50%";
+  const confluent = !!bias && ((first === "L" && bias === "H") || (first === "H" && bias === "L"));
+  const noBreak = "no close-confirmed break yet — nothing to grade";
+
+  const R: LiveRule[] = [];
+
+  /* 1 · Midpoint Close Bias */
+  R.push(bias ? {
+    id: "1", name: "Midpoint Close Bias", state: "in-play",
+    read: `IB closed ${bias === "H" ? "ABOVE" : "BELOW"} mid → lean ${bias === "H" ? "LONG" : "SHORT"}`,
+    side: bias, question: `${W(bias)} breaks first`,
+    cond: (d) => d.bias === bias, outcome: (d) => d.firstTouchSide === bias,
+  } : {
+    id: "1", name: "Midpoint Close Bias", state: "not-in-play",
+    read: "IB closed exactly ON the midpoint — no bias", side: null, question: "—",
+  });
+
+  /* 2 · Formation Order + Midpoint */
+  R.push(bias && confluent ? {
+    id: "2", name: "Formation Order + Midpoint", state: "in-play",
+    read: `${W(first)} formed first + close ${bias === "H" ? "above" : "below"} mid — CONFLUENT (the A+ filter)`,
+    side: bias, question: `${W(bias)} breaks first`,
+    cond: (d) => d.bias === bias && d.first === first,
+    outcome: (d) => d.firstTouchSide === bias,
+  } : {
+    id: "2", name: "Formation Order + Midpoint", state: "not-in-play",
+    read: bias
+      ? `${W(first)} formed first + close ${bias === "H" ? "above" : "below"} mid — DISCORDANT, the rule says skip`
+      : "no midpoint bias to align with",
+    side: null, question: "—",
+  });
+
+  /* 3 · Single Break Continuation */
+  R.push(brk ? {
+    id: "3", name: "Single Break Continuation", state: "in-play",
+    read: `Broke the ${W(brk)} — does the other side stay untouched?`,
+    side: brk, question: `${brk === "H" ? "LOW" : "HIGH"} never breaks (stays a single-break day)`,
+    cond: (d) => !!d.fcb && d.fcb.side === brk,
+    outcome: (d) => (d.fcb!.side === "H" ? !d.touchedL : !d.touchedH),
+  } : {
+    id: "3", name: "Single Break Continuation", state: "pending",
+    read: noBreak, side: null, question: "—",
+  });
+
+  /* 4 · IB Width → Day Type */
+  R.push(bk === "narrow" || bk === "normal" || bk === "wide" ? {
+    id: "4", name: "IB Width → Day Type", state: "in-play",
+    read: `${bucket} IB (${f2(live.width)} pts) → ${bk === "narrow" ? "trend / breakout lean" : bk === "wide" ? "rotation lean — fade the breaks" : "no width edge"}`,
+    side: null, question: bk === "wide" ? "BOTH sides break (rotation)" : "only ONE side breaks",
+    cond: (d) => d.widthBucket === bk,
+    outcome: (d) => (bk === "wide" ? d.bothBroke : d.singleBreak),
+  } : {
+    id: "4", name: "IB Width → Day Type", state: "not-in-play",
+    read: "width bucket unavailable — ATR14 / avgIB20 not yet established", side: null, question: "—",
+  });
+
+  /* 5 · Breakout Entry + volume */
+  R.push(brk && live.volSurge != null ? {
+    id: "5", name: "Breakout Entry — close + volume", state: "in-play",
+    read: live.volSurge
+      ? `${W(brk)} break came WITH a volume surge (break bar > avg IB bar)`
+      : `${W(brk)} break came with NO volume surge — the weaker version`,
+    side: brk, question: "the break runs ≥ 1× IB width",
+    cond: (d) => !!d.fcb && d.fcb.volSurge === live.volSurge,
+    outcome: (d) => !!d.fcb!.hit["1"],
+  } : {
+    id: "5", name: "Breakout Entry — close + volume", state: "pending",
+    read: brk ? "break printed but bar volume is unavailable on the live feed" : noBreak,
+    side: null, question: "—",
+  });
+
+  /* 6 · Failed Breakout Fade */
+  R.push(brk ? {
+    id: "6", name: "Failed Breakout Fade", state: "in-play",
+    read: live.failed
+      ? `The ${W(brk)} break ALREADY FAILED — closed back inside. Fade target: mid, then the opposite extreme`
+      : `${W(brk)} break is holding — this is the trap risk, not yet triggered`,
+    side: brk === "H" ? "L" : "H",
+    question: live.failed ? "the fade reaches the OPPOSITE IB extreme" : "this break fails and closes back inside ≤30m",
+    cond: (d) => !!d.fcb && d.fcb.side === brk && (live.failed ? d.fcb.failed : true),
+    outcome: (d) => (live.failed ? d.fcb!.fadeOpp : d.fcb!.failed),
+  } : {
+    id: "6", name: "Failed Breakout Fade", state: "pending",
+    read: noBreak, side: null, question: "—",
+  });
+
+  /* 7 · 15m FVG inside the IB */
+  R.push(fvg ? {
+    id: "7", name: "15m FVG inside the IB", state: "in-play",
+    read: `${fvg === "bull" ? "BULLISH" : "BEARISH"} 15m fair-value gap inside the IB`,
+    side: fvg === "bull" ? "H" : "L",
+    question: `the ${fvg === "bull" ? "HIGH" : "LOW"} is the side that gets touched first`,
+    cond: (d) => d.fvg === fvg,
+    outcome: (d) => d.firstTouchSide === (fvg === "bull" ? "H" : "L"),
+  } : {
+    id: "7", name: "15m FVG inside the IB", state: "not-in-play",
+    read: "no 15m FVG formed inside today's IB", side: null, question: "—",
+  });
+
+  /* 8 · Retest Continuation */
+  R.push(brk && live.retest ? {
+    id: "8", name: "Retest Continuation", state: "in-play",
+    read: `Price came back to the broken ${W(brk)} and ${live.retestCont ? "held — continuation is live" : "is still deciding"}`,
+    side: brk, question: "it continues to a new extreme after the retest",
+    cond: (d) => !!d.fcb?.retest && d.fcb.retestCont != null,
+    outcome: (d) => !!d.fcb!.retestCont,
+  } : {
+    id: "8", name: "Retest Continuation", state: brk ? "not-in-play" : "pending",
+    read: brk ? `no retest of the broken ${W(brk)} yet` : noBreak, side: null, question: "—",
+  });
+
+  /* 9 · Extension Targets */
+  R.push(brk ? {
+    id: "9", name: "Extension Targets", state: "in-play",
+    read: `Measuring from the broken ${W(brk)} — ${live.targets.filter((t: any) => t.hit).length}/${live.targets.length} targets reached`,
+    side: brk, question: "the move reaches ≥ 1× IB width",
+    cond: (d) => !!d.fcb && d.fcb.side === brk,
+    outcome: (d) => !!d.fcb!.hit["1"],
+  } : {
+    id: "9", name: "Extension Targets", state: "pending",
+    read: noBreak, side: null, question: "—",
+  });
+
+  /* 10 · Close Location in IB Range */
+  const strongZone = (zone === "top25" && first === "L") || (zone === "bot25" && first === "H");
+  R.push(strongZone && bias ? {
+    id: "10", name: "Close Location in IB Range", state: "in-play",
+    read: `Close in the ${zoneWord} + ${W(first)} formed first — the strong ${zone === "top25" ? "LONG" : "SHORT"} version`,
+    side: zone === "top25" ? "H" : "L",
+    question: `${zone === "top25" ? "HIGH" : "LOW"} breaks first`,
+    cond: (d) => d.closeZone === zone && d.first === first,
+    outcome: (d) => d.firstTouchSide === (zone === "top25" ? "H" : "L"),
+  } : {
+    id: "10", name: "Close Location in IB Range", state: "not-in-play",
+    read: zone === "mid50"
+      ? "IB closed in the MIDDLE 50% — no close-location edge"
+      : `Close in the ${zoneWord} but ${W(first)} formed first — zone and formation order disagree`,
+    side: null, question: "—",
+  });
+
+  /* 11 · Open Type + IB Width */
+  R.push(openType && bk ? {
+    id: "11", name: "Open Type + IB Width", state: "in-play",
+    read: `${openType} open (${openType.startsWith("OAR") ? "outside" : "inside"} the prior RTH range) + ${bucket} IB`,
+    side: null, question: "only ONE side breaks",
+    cond: (d) => d.openType === openType && d.widthBucket === bk,
+    outcome: (d) => d.singleBreak,
+  } : {
+    id: "11", name: "Open Type + IB Width", state: "not-in-play",
+    read: "prior-session RTH range unavailable on the live feed — open type can't be classified",
+    side: null, question: "—",
+  });
+
+  /* 12 · ORB + IB Alignment */
+  R.push(orbDir && bias ? {
+    id: "12", name: "ORB + IB Alignment", state: "in-play",
+    read: orbDir === bias
+      ? `ORB broke ${W(orbDir)} — ALIGNED with the midpoint bias`
+      : `ORB broke ${W(orbDir)} — CONFLICTS with the midpoint bias`,
+    side: bias, question: `${W(bias)} breaks first`,
+    cond: (d) => d.bias === bias && d.orbDir === orbDir,
+    outcome: (d) => d.firstTouchSide === bias,
+  } : {
+    id: "12", name: "ORB + IB Alignment", state: "not-in-play",
+    read: !orbDir ? "the 09:30–09:45 opening range never broke inside the IB" : "no midpoint bias to align with",
+    side: null, question: "—",
+  });
+
+  /* 13 · Time Filter */
+  const bm = live.breakMin as number | null;
+  R.push(bm != null ? {
+    id: "13", name: "Time Filter — when the break happens", state: "in-play",
+    read: `Break printed at ${clock(bm)} ET — ${bm <= 660 ? "early (first 30m out of the IB)" : bm <= 780 ? "midday" : "late"}`,
+    side: brk, question: "the break runs ≥ 1× IB width given that timing",
+    cond: (d) => !!d.fcb && (bm <= 660 ? d.fcb.breakMin <= 660 : bm <= 780 ? d.fcb.breakMin > 660 && d.fcb.breakMin <= 780 : d.fcb.breakMin > 780),
+    outcome: (d) => !!d.fcb!.hit["1"],
+  } : {
+    id: "13", name: "Time Filter — when the break happens", state: "pending",
+    read: noBreak, side: null, question: "—",
+  });
+
+  /* 14 · Contained Day */
+  R.push(live.containedAt2 === true ? {
+    id: "14", name: "Contained Day (rare)", state: "in-play",
+    read: "Price is STILL fully inside the IB at 14:00 ET — the rare contained day",
+    side: null, question: "it stays contained into the close (never breaks late)",
+    cond: (d) => d.containedAt2,
+    outcome: (d) => !d.containedBrokeLate,
+  } : {
+    id: "14", name: "Contained Day (rare)", state: live.nowMin < 840 ? "pending" : "not-in-play",
+    read: live.nowMin < 840 ? "can't be known until 14:00 ET" : "price already broke the IB — not a contained day",
+    side: null, question: "—",
+  });
+
+  /* 0c · day-of-week, kept as a live read alongside the rules */
+  if (dowIdx >= 1 && dowIdx <= 5) {
+    R.push({
+      id: "0c", name: `Day of week — ${dowName}`, state: "in-play",
+      read: `It's ${dowName}`, side: null, question: "only ONE side breaks",
+      cond: (d) => new Date(`${d.date}T12:00:00Z`).getUTCDay() === dowIdx,
+      outcome: (d) => d.singleBreak,
+    });
+  }
+
+  return R;
+}
+
+function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
+  const rules = buildRules(live, dowName);
+  const provisional = !live.ibComplete;
+
+  const scored = rules.map((r) => {
+    if (r.state !== "in-play" || !r.cond || !r.outcome) return { ...r, n: 0, hits: 0, p: null as number | null };
+    const g = days.filter(r.cond);
+    const hits = g.filter(r.outcome).length;
+    return { ...r, n: g.length, hits, p: g.length ? (100 * hits) / g.length : null };
+  });
+
+  const inPlay = scored.filter((r) => r.state === "in-play");
+  const off = scored.filter((r) => r.state !== "in-play");
+
+  const stateChip = (s: RuleState) => {
+    const [txt, col] =
+      s === "in-play" ? ["IN PLAY", HOME_THEME.green]
+        : s === "pending" ? ["PENDING", HOME_THEME.orange]
+          : ["NOT IN PLAY", HOME_THEME.red];
+    return (
+      <span style={{
+        fontSize: 15, fontWeight: 800, color: col, border: `1px solid ${col}`,
+        borderRadius: 6, padding: "1px 8px", whiteSpace: "nowrap",
+      }}>{txt}</span>
+    );
+  };
+
+  const sideChip = (s: "H" | "L" | null) => {
+    if (!s) return <span style={{ color: HOME_THEME.text }}>—</span>;
+    const col = s === "H" ? HOME_THEME.green : HOME_THEME.red;
+    return <span style={{ color: col, fontWeight: 800 }}>{s === "H" ? "HIGH ↑" : "LOW ↓"}</span>;
+  };
+
+  return (
+    <Card
+      accent="green"
+      title="In Play Right Now — all 14 rules against today's session"
+      subtitle={provisional
+        ? "IB STILL FORMING — every read below is CONDITIONAL: this is what the rules would say if the IB closed where it stands right now. They can still flip before 10:30 ET."
+        : "IB FORMED — each rule scored against every past session that matched today's condition"}
+    >
+      {/* the levels every rule below is measured against */}
+      <div style={statGrid}>
+        <Stat k="Live price" v={f2(live.price)} sub={`day range ${f2(live.dayLow)} – ${f2(live.dayHigh)}`} />
+        <Stat k="IB High" v={f2(live.ibh)} sub={live.price < live.ibh ? `${f2(live.ibh - live.price)} pts above price` : `broken — ${f2(live.price - live.ibh)} pts below price`} />
+        <Stat k="IB Low" v={f2(live.ibl)} sub={live.price > live.ibl ? `${f2(live.price - live.ibl)} pts below price` : `broken — ${f2(live.ibl - live.price)} pts above price`} />
+        <Stat k="IB Mid" v={f2(live.mid)} sub={live.price >= live.mid ? "price above mid" : "price below mid"} />
+        <Stat k="IB Width" v={`${f2(live.width)} pts`} sub={String(live.bucket)} />
+        <Stat
+          k="IB"
+          v={provisional ? "FORMING" : "FORMED"}
+          sub={provisional ? `not final until 10:30 ET · now ${clock(live.nowMin)}` : `locked at 10:30 ET · now ${clock(live.nowMin)}`}
+        />
+        <Stat k="Status" v={String(live.status)} sub={live.breakMin != null ? `broke ${live.breakSide === "H" ? "high" : "low"} at ${clock(live.breakMin)} ET` : "no close outside yet"} />
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            {["Rule", "Live read", "Points to", "Hit rate", "Sample"].map((h, i) => (
+              <th key={h} style={i === 0 ? thL : i === 1 ? thL : th}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sectionRow(provisional ? `IN PLAY (conditional — if the IB formed now) · ${inPlay.length}` : `IN PLAY · ${inPlay.length}`)}
+          {inPlay.map((r) => (
+            <tr key={r.id}>
+              <td style={{ ...tdL, fontWeight: 800 }}>{r.id} · {r.name}</td>
+              <td style={tdL}>
+                <div>{r.read}</div>
+                <div style={{ color: HOME_THEME.text, opacity: 0.85 }}>chance {r.question}</div>
+              </td>
+              <td style={td}>{sideChip(r.side)}</td>
+              <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 18 }}>
+                {r.p == null ? "—" : `${r.p.toFixed(1)}%`}
+              </td>
+              <td style={td}>{r.n} days{r.n > 0 && r.n < 40 ? " · thin" : ""}</td>
+            </tr>
+          ))}
+
+          {sectionRow(`NOT IN PLAY · ${off.length}`)}
+          {off.map((r) => (
+            <tr key={r.id}>
+              <td style={{ ...tdL, fontWeight: 800, opacity: 0.75 }}>{r.id} · {r.name}</td>
+              <td style={{ ...tdL, opacity: 0.75 }}>{r.read}</td>
+              <td style={td}>{stateChip(r.state)}</td>
+              <td style={td}>—</td>
+              <td style={td}>—</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div style={note}>
+        Every % is a conditional base rate, not a prediction — &ldquo;on the past sessions that looked like this one, how often did it
+        happen?&rdquo; Samples under 40 days are flagged thin. PENDING means the trigger cannot exist yet (it needs the IB to close, a
+        break to print, or the 14:00 bell); NOT IN PLAY means the trigger is genuinely absent today.
+      </div>
+    </Card>
+  );
+}
+
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/** @deprecated superseded by RuleBoard — kept only for reference, not rendered. */
+function PlaybookLegacy({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
   const bias = live.bias as "H" | "L" | null;
   const first = live.first as "H" | "L";
   const zone = live.zone as SlimDay["closeZone"];
@@ -732,6 +1150,23 @@ function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName
 
 /* ── component ────────────────────────────────────────────────────────────── */
 
+/** Backfill atr / avgIB / widthBucket for datasets exported without them.
+ *  Trailing windows only (no lookahead): day i uses the 14/20 sessions BEFORE it. */
+function deriveWidthBuckets(src: SlimDay[]): SlimDay[] {
+  if (src.some((d) => d.widthBucket)) return src;   // already populated — leave alone
+  const mean = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+  return src.map((d, i) => {
+    const atr = d.atr ?? mean(src.slice(Math.max(0, i - 14), i).map((x) => x.dayRange));
+    const avgIB = d.avgIB ?? mean(src.slice(Math.max(0, i - 20), i).map((x) => x.width));
+    if (atr == null || avgIB == null || i < 14) return { ...d, atr, avgIB };
+    const widthBucket: SlimDay["widthBucket"] =
+      d.width < 0.5 * atr || d.width < 0.75 * avgIB ? "narrow"
+        : d.width > 1.5 * atr || d.width > 1.25 * avgIB ? "wide"
+          : "normal";
+    return { ...d, atr, avgIB, widthBucket };
+  });
+}
+
 export default function IbStatsTab() {
   const { userId, isOwnerClaim } = useAuth();
   // Cosmetic owner gate — the historical stat tables are owner-only. Same
@@ -778,7 +1213,13 @@ export default function IbStatsTab() {
   if (err) return <div>{symTabs}<Card title="IB Stats — dataset not found"><div style={{ color: HOME_THEME.red, fontSize: 15 }}>{err}</div></Card></div>;
   if (!ds) return <div>{symTabs}<Card title="IB Stats"><div style={{ color: HOME_THEME.text, fontSize: 15 }}>Loading {sym} dataset…</div></Card></div>;
 
-  const days = ds.days;
+  /* The exporter wrote atr / avgIB / widthBucket as null for every session, so the
+   * width-bucket tables came up empty. Derive them here from the raw sessions:
+   *   atr    = trailing 14d mean of RTH day range
+   *   avgIB  = trailing 20d mean of IB width
+   *   bucket = narrow/normal/wide per the 0.5×ATR|0.75×avgIB / 1.5×ATR|1.25×avgIB rule
+   * Days already stored with real values are left untouched. */
+  const days = deriveWidthBuckets(ds.days);
   const N = days.length;
   const widths = days.map((d) => d.width);
   const yearsSpan = (new Date(ds.to).getTime() - new Date(ds.from).getTime()) / (365.25 * 864e5);

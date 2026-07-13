@@ -119,14 +119,12 @@ type ApiRow = {
 
 // kind → source-page tag (drives color/glyph via pageAccent) + click route.
 const KIND_PAGE: Record<string, { page: string; link: string }> = {
+  whale_print:      { page: "Flow",      link: "/flow" },
   flow_divergence:  { page: "Flow",      link: "/flow" },
-  cb_reject:        { page: "CB",        link: "/es-candles" },
-  cb_break:         { page: "CB",        link: "/es-candles" },
   flip_cross:       { page: "Analytics", link: "/es-candles" },
-  wall_reject:      { page: "Analytics", link: "/es-candles" },
-  wall_break:       { page: "Analytics", link: "/es-candles" },
+  ib_formed:        { page: "Balance",   link: "/scanner" },
+  ib_break:         { page: "Balance",   link: "/scanner" },
   bzila_confluence: { page: "Strategy",  link: "/es-candles" },
-  confluence:       { page: "Analytics", link: "/es-candles" },
 };
 
 function etDateStr(ts: number): string {

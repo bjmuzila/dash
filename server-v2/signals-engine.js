@@ -16,32 +16,32 @@
  * All detection runs in ES-PRICE SPACE (the instrument we trade), converting SPX
  * levels to ES with the live basis:  levelEs = levelSpx + basis.  Price = esFut.
  *
- * THE FOUR SETUPS  (each carries a direction, level, price, score 1-5, reason):
+ * THE SETUPS  (each carries a direction, level, price, score 1-5, reason):
  *
  *   1) GEX FLIP CROSS  (regime)
  *        price crosses the flip by ≥ CROSS_BUFFER pts →
  *          up-cross   = LONG  (into positive-gamma / mean-revert-up regime)
  *          down-cross = SHORT (into negative-gamma / trend-down regime)
  *
- *   2) WALL REJECT / BREAKOUT  (Call Wall & Put Wall)
- *        touch within WALL_TOUCH then push back by ≥ WALL_REJECT  → REJECT (fade)
- *          Call Wall reject = SHORT,  Put Wall reject = LONG
- *        close beyond the wall by ≥ WALL_BREAK                    → BREAK (momentum)
- *          above Call Wall = LONG,   below Put Wall = SHORT
+ *   2) INITIAL BALANCE  (kind='ib_formed' / 'ib_break')
+ *        IB = the 09:30–10:30 ET range of today's ES candles.
+ *          ib_formed : fired once, the first eval at/after 10:30 ET, carrying the
+ *                      IBH/IBL/width — informational (direction='neutral'), it's
+ *                      the "stats in play" marker the Scanner IB tab backtests.
+ *          ib_break  : price crosses IBH (+IB_BREAK buf) → LONG, or IBL (−buf) →
+ *                      SHORT. Extension out of the IB is the tradable event.
+ *        Both are annotated with confluence like any other level signal.
  *
- *   3) CB KEY-LEVEL REACTION  (the scored CB/MVC level)
- *        same touch→reject vs break machinery as a wall, but the CB is a magnet:
- *          reject from below = SHORT (acted as resistance)
- *          reject from above = LONG  (acted as support)
- *          decisive break     = continuation in the break direction
- *        Gated by CB SIZE — small CBs (≤ CB_MIN_SIZE $B) rarely get reached, so
- *        their reactions are logged at lower score (see cb-size backtest note).
+ *   3) CONFLUENCE ANNOTATION  (booster only — no standalone signal)
+ *        every signal is annotated with any other named level (walls, flip, CB,
+ *        session H/L, IBH/IBL, volume POC/VAH/VAL) within CONFLUENCE_DIST — each
+ *        stacked level is +1 score.
  *
- *   4) CONFLUENCE  (booster + standalone)
- *        every GEX/CB signal is annotated with any other level (session H/L,
- *        volume POC/VAH/VAL, or a second GEX level) within CONFLUENCE_DIST — each
- *        stacked level +1 score. When price reacts at a ≥2-level cluster that no
- *        primary detector already fired on, a standalone CONFLUENCE signal fires.
+ *   4) WHALE PRINTS  (kind='whale_print')
+ *        a single OTM option PURCHASE (side='buy') ≥ WHALE_MIN_PREMIUM ($1M) with
+ *        1–7 DTE (0DTE excluded — that's noise/hedging, not positioning), pulled
+ *        from the persisted tape via /proxy/flow-history. Call buy = LONG,
+ *        put buy = SHORT. Deduped by print identity, never re-fires.
  *
  *   5) BZILA CONFLUENCE v2  ("Bzila GEX Confluence System", kind='bzila_confluence')
  *        a separate, independently-scored setup ported from the polished
@@ -105,6 +105,13 @@ const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);
 const FD_THRESHOLD       = Number(process.env.SIGNALS_FD_THRESHOLD       || 2e9); // |Σ flowGEX| for a directional aggregate ($)
 const FD_OUTLIER_RATIO   = Number(process.env.SIGNALS_FD_OUTLIER_RATIO   || 1.5); // |maxFlow| / |Σ flowGEX| to be "concentrated"
 const FD_OUTLIER_MIN     = Number(process.env.SIGNALS_FD_OUTLIER_MIN     || 3e9); // min |maxFlow| for a "monster" bar ($)
+// Initial Balance (detector #2): 09:30–10:30 ET range; a break needs IB_BREAK pts
+// of penetration so a one-tick poke through the extreme isn't an extension.
+const IB_BREAK           = Number(process.env.SIGNALS_IB_BREAK           || 2.0);  // ES pts beyond IBH/IBL
+// Whale prints (detector #4): OTM option BUYS ≥ $1M premium, 1–7 DTE.
+const WHALE_MIN_PREMIUM  = Number(process.env.SIGNALS_WHALE_MIN_PREMIUM  || 1_000_000); // $
+const WHALE_DTE_MIN      = Number(process.env.SIGNALS_WHALE_DTE_MIN      || 1);    // 0DTE excluded
+const WHALE_DTE_MAX      = Number(process.env.SIGNALS_WHALE_DTE_MAX      || 7);
 
 // ── PG pool (same lazy, no-DB-safe pattern as gex-history-writer / play-recorder) ──
 let pool = null;
@@ -266,7 +273,13 @@ let ctxCache = { at: 0, levels: {} };
 function computeContextLevels(esCandles, asOf = Date.now()) {
   const now = asOf;
   if (now - ctxCache.at < 60_000) return ctxCache.levels;
-  const out = { pdh: null, pdl: null, onh: null, onl: null, poc: null, vah: null, val: null };
+  const out = {
+    pdh: null, pdl: null, onh: null, onl: null, poc: null, vah: null, val: null,
+    // Initial Balance: today's 09:30–10:30 ET range. `ibComplete` only once the
+    // 10:30 bell has passed — before that IBH/IBL are still forming and must not
+    // be traded as a finished range.
+    ibh: null, ibl: null, ibComplete: false,
+  };
   const bars = Array.isArray(esCandles) ? esCandles.filter((c) => c && c.high > 0 && c.low > 0) : [];
   if (bars.length) {
     const dayKey = (ts) => etDateStr(new Date(ts));
@@ -298,6 +311,19 @@ function computeContextLevels(esCandles, asOf = Date.now()) {
     out.pdl = Number.isFinite(pdl) ? pdl : null;
     out.onh = Number.isFinite(onh) ? onh : null;
     out.onl = Number.isFinite(onl) ? onl : null;
+
+    // ── Initial Balance: today's bars stamped 09:30–10:29 ET (a 5m bar is stamped
+    // at its OPEN, so the 10:25 bar is the last one inside the IB hour).
+    let ibh = -Infinity, ibl = Infinity;
+    for (const b of todays) {
+      const m = etMinutesOf(b.timestamp);
+      if (m >= 570 && m < 630) { if (b.high > ibh) ibh = b.high; if (b.low < ibl) ibl = b.low; }
+    }
+    if (Number.isFinite(ibh) && Number.isFinite(ibl)) {
+      out.ibh = ibh;
+      out.ibl = ibl;
+      out.ibComplete = nowMin >= 630; // 10:30 ET — the hour is closed, range is final
+    }
 
     // Volume profile (1-pt bins) over today's bars → POC / VAH / VAL (70% VA).
     const src = todays.length ? todays : bars.slice(-78);
@@ -335,7 +361,8 @@ function computeContextLevels(esCandles, asOf = Date.now()) {
 function evaluateFrame(cur, mem, cfg = {}) {
   const C = {
     CROSS_BUFFER, WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
-    CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS, FLIP_CROSS_ENABLED, ...cfg,
+    CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS, FLIP_CROSS_ENABLED,
+    IB_BREAK, ...cfg,
   };
   const out = [];
   const { ts, priceEs, basis } = cur;
@@ -354,6 +381,7 @@ function evaluateFrame(cur, mem, cfg = {}) {
   push('Flip', flipEs); push('Call Wall', callEs); push('Put Wall', putEs); push('CB', cbEs);
   push('PDH', ctx.pdh); push('PDL', ctx.pdl); push('ONH', ctx.onh); push('ONL', ctx.onl);
   push('POC', ctx.poc); push('VAH', ctx.vah); push('VAL', ctx.val);
+  if (ctx.ibComplete) { push('IBH', ctx.ibh); push('IBL', ctx.ibl); }
 
   // Confluence names near a given ES level, excluding the signal's own level name.
   const confluenceAt = (es, selfName) =>
@@ -393,83 +421,42 @@ function evaluateFrame(cur, mem, cfg = {}) {
     else if (downCross) fire({ kind: 'flip_cross', direction: 'short', setup: 'GEX flip cross ↓', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `ES ${priceEs.toFixed(2)} crossed below the GEX flip → negative-gamma regime` });
   }
 
-  // Shared touch→reject / break machinery for wall-like magnet levels.
-  const reactLevel = (key, es, opts) => {
-    if (es == null || es <= 0) return;
-    const st = mem.levels[key] || (mem.levels[key] = { touchedAt: 0, side: 0 });
-    const dist = priceEs - es;              // + above, - below
-    // Register a touch (and the side we approached from).
-    if (Math.abs(dist) <= opts.touch) { st.touchedAt = ts; if (st.side === 0) st.side = Math.sign(prev ? prev.priceEs - es : dist) || 1; }
-    const touchedRecently = ts - st.touchedAt <= C.TOUCH_WINDOW_MS;
-
-    // Breakout = a THRESHOLD CROSS through ±brk this frame, not merely being
-    // beyond it. Sitting far on one side of a level (price is always >brk from
-    // at least one wall/the CB) must NOT re-fire a break every cooldown window.
-    const prevDist = (prev ? prev.priceEs : priceEs) - es;
-    if (prevDist < opts.brk && dist >= opts.brk) {
-      opts.onBreak('up'); st.touchedAt = 0; st.side = 0; return;
-    }
-    if (prevDist > -opts.brk && dist <= -opts.brk) {
-      opts.onBreak('down'); st.touchedAt = 0; st.side = 0; return;
-    }
-    // Reject: touched, then pushed back to the side it came from by ≥ reject.
-    if (touchedRecently) {
-      if (st.side < 0 && dist <= -opts.rej) { opts.onReject('from_below'); st.touchedAt = 0; st.side = 0; }
-      else if (st.side > 0 && dist >= opts.rej) { opts.onReject('from_above'); st.touchedAt = 0; st.side = 0; }
-    }
-    // Leaving the zone entirely resets the approach side.
-    if (Math.abs(dist) > Math.max(opts.brk, opts.touch) * 2) { st.side = 0; }
-  };
-
-  // ── 2) CALL WALL ── (reject only when approached from below = resistance)
-  reactLevel('call', callEs, {
-    touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
-    onReject: (from) => { if (from === 'from_below') fire({ kind: 'wall_reject', direction: 'short', setup: 'Call Wall reject', levelName: 'Call Wall', levelEs: callEs, base: 3, reason: `Rejected at the Call Wall (${callEs.toFixed(2)}) → fade short` }); },
-    onBreak: (dir) => { if (dir === 'up') fire({ kind: 'wall_break', direction: 'long', setup: 'Call Wall break', levelName: 'Call Wall', levelEs: callEs, base: 3, reason: `Broke above the Call Wall (${callEs.toFixed(2)}) → gamma-unpin momentum long` }); },
-  });
-
-  // ── 2) PUT WALL ── (reject only when approached from above = support)
-  reactLevel('put', putEs, {
-    touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
-    onReject: (from) => { if (from === 'from_above') fire({ kind: 'wall_reject', direction: 'long', setup: 'Put Wall reject', levelName: 'Put Wall', levelEs: putEs, base: 3, reason: `Rejected at the Put Wall (${putEs.toFixed(2)}) → fade long` }); },
-    onBreak: (dir) => { if (dir === 'down') fire({ kind: 'wall_break', direction: 'short', setup: 'Put Wall break', levelName: 'Put Wall', levelEs: putEs, base: 3, reason: `Broke below the Put Wall (${putEs.toFixed(2)}) → breakdown momentum short` }); },
-  });
-
-  // ── 3) CB KEY LEVEL ──
-  if (cbEs != null) {
-    const bigEnough = (cur.cbSize == null) || (cur.cbSize >= C.CB_MIN_SIZE);
-    const cbBase = bigEnough ? 3 : 1; // small CBs rarely get reached → low-confidence
-    const sizeTxt = cur.cbSize != null ? ` (${Number(cur.cbSize).toFixed(1)}B)` : '';
-    reactLevel('cb', cbEs, {
-      touch: C.CB_TOUCH, rej: C.CB_REJECT, brk: C.CB_BREAK,
-      onReject: (from) => {
-        if (from === 'from_below') fire({ kind: 'cb_reject', direction: 'short', setup: 'CB reject (resistance)', levelName: 'CB', levelEs: cbEs, base: cbBase, reason: `Held below the CB level${sizeTxt} → resistance, fade short` });
-        else fire({ kind: 'cb_reject', direction: 'long', setup: 'CB reject (support)', levelName: 'CB', levelEs: cbEs, base: cbBase, reason: `Held above the CB level${sizeTxt} → support, fade long` });
-      },
-      onBreak: (dir) => fire({ kind: 'cb_break', direction: dir === 'up' ? 'long' : 'short', setup: `CB break ${dir === 'up' ? '↑' : '↓'}`, levelName: 'CB', levelEs: cbEs, base: cbBase, reason: `Broke ${dir === 'up' ? 'above' : 'below'} the CB level${sizeTxt} → continuation` }),
+  // ── 2) INITIAL BALANCE ──
+  // ib_formed: once per session, the first frame at/after 10:30 ET. Informational
+  // ("stats in play"), so it carries direction 'neutral' and is keyed on the day,
+  // not on a level+direction cooldown.
+  const ibDay = etDateStr(new Date(ts));
+  if (ctx.ibComplete && ctx.ibh != null && ctx.ibl != null && mem.ibFormedDay !== ibDay) {
+    mem.ibFormedDay = ibDay;
+    const width = ctx.ibh - ctx.ibl;
+    const conf = confluenceAt(ctx.ibh, 'IBH').concat(confluenceAt(ctx.ibl, 'IBL'));
+    out.push({
+      ts, kind: 'ib_formed', direction: 'neutral',
+      setup: 'Initial Balance formed',
+      levelName: 'IB',
+      levelEs: +ctx.ibh.toFixed(2),
+      levelSpx: +spxOf(ctx.ibh).toFixed(2),
+      priceEs: +priceEs.toFixed(2),
+      priceSpx: +(priceEs - (basis || 0)).toFixed(2),
+      score: 3,
+      confluence: conf.length ? [...new Set(conf)].join(', ') : null,
+      reason: `IB ${ctx.ibl.toFixed(2)}–${ctx.ibh.toFixed(2)} (${width.toFixed(2)} pts) — stats in play`,
+      meta: { ibh: +ctx.ibh.toFixed(2), ibl: +ctx.ibl.toFixed(2), ibWidth: +width.toFixed(2), basis: +(basis || 0).toFixed(2) },
     });
   }
 
-  // ── 4) STANDALONE CONFLUENCE ZONE ──
-  // Cluster all named levels; when price touches+rejects a ≥2 cluster that no
-  // primary detector already fired on this frame, emit a confluence reaction.
-  const firedLevels = new Set(out.map((s) => (s.levelEs != null ? Math.round(s.levelEs) : null)));
-  const clusters = [];
-  const sorted = [...namedLevels].sort((a, b) => a.es - b.es);
-  for (const l of sorted) {
-    const c = clusters[clusters.length - 1];
-    if (c && Math.abs(l.es - c.center) <= C.CONFLUENCE_DIST) {
-      c.names.push(l.name); c.sum += l.es; c.center = c.sum / c.names.length;
-    } else clusters.push({ names: [l.name], sum: l.es, center: l.es });
-  }
-  for (const c of clusters) {
-    if (c.names.length < 2) continue;
-    if (firedLevels.has(Math.round(c.center))) continue;
-    reactLevel(`cz_${Math.round(c.center)}`, c.center, {
-      touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK + 1,
-      onReject: (from) => fire({ kind: 'confluence', direction: from === 'from_below' ? 'short' : 'long', setup: 'Confluence reaction', levelName: c.names.join('+'), levelEs: c.center, base: 3, reason: `Reacted at stacked zone ${c.names.join(' + ')} (${c.center.toFixed(2)})` }),
-      onBreak: () => {}, // breaks of a confluence zone are covered by the primary level detectors
-    });
+  // ib_break: extension out of a COMPLETE IB. A break is a threshold CROSS this
+  // frame (prev inside, now beyond by ≥ IB_BREAK) — price simply sitting outside
+  // the range must not re-fire every cooldown window.
+  if (ctx.ibComplete && ctx.ibh != null && ctx.ibl != null && prev) {
+    const brk = C.IB_BREAK;
+    if (prev.priceEs < ctx.ibh + brk && priceEs >= ctx.ibh + brk) {
+      fire({ kind: 'ib_break', direction: 'long', setup: 'IB break ↑', levelName: 'IBH', levelEs: ctx.ibh, base: 3,
+        reason: `Extended above the Initial Balance high (${ctx.ibh.toFixed(2)}) → upside extension` });
+    } else if (prev.priceEs > ctx.ibl - brk && priceEs <= ctx.ibl - brk) {
+      fire({ kind: 'ib_break', direction: 'short', setup: 'IB break ↓', levelName: 'IBL', levelEs: ctx.ibl, base: 3,
+        reason: `Extended below the Initial Balance low (${ctx.ibl.toFixed(2)}) → downside extension` });
+    }
   }
 
   // Carry state forward.
@@ -703,7 +690,114 @@ function evaluateFlowDivergence(cur, mem, cfg = {}) {
   return out;
 }
 
+// ── pure detector #7: Whale prints (kind='whale_print') ──
+// A single OTM option PURCHASE ≥ WHALE_MIN_PREMIUM with 1–7 DTE. Sells are
+// ignored (short premium is a different trade — a whale *paying* for convexity
+// is the positioning signal), and 0DTE is excluded: same-day OTM lottos are the
+// noisiest part of the tape and don't express a directional view worth alerting.
+//   call buy  → LONG   (paying up for upside)
+//   put  buy  → SHORT  (paying up for downside)
+// Dedup is by print identity (ts|symbol|price|size), not the level+direction
+// cooldown the level detectors use — each distinct whale print is its own event,
+// so two $2M buys a minute apart both fire, but a re-poll of the same tape never
+// re-fires one. mem.whaleSeen is capped so a busy session can't grow it forever.
+// `rows` = /proxy/flow-history tape shape: { ts, underlying, symbol, expiration,
+// strike, type:'C'|'P', side:'buy'|'sell', premium, is_otm, spot }.
+const WHALE_SEEN_MAX = 4000;
+function evaluateWhalePrints(rows, mem, cfg = {}) {
+  const C = { WHALE_MIN_PREMIUM, WHALE_DTE_MIN, WHALE_DTE_MAX, ...cfg };
+  const out = [];
+  if (!Array.isArray(rows) || !rows.length) return out;
+  if (!mem.whaleSeen) mem.whaleSeen = new Set();
+
+  const todayEt = etDateStr();
+  const dteOf = (expiration) => {
+    if (!expiration) return null;
+    const exp = Date.parse(`${String(expiration).slice(0, 10)}T00:00:00-05:00`);
+    if (!Number.isFinite(exp)) return null;
+    const today = Date.parse(`${todayEt}T00:00:00-05:00`);
+    return Math.round((exp - today) / 86_400_000);
+  };
+
+  for (const r of rows) {
+    if (!r) continue;
+    if (r.side !== 'buy') continue;                 // purchases only
+    if (!r.is_otm) continue;                        // OTM only (frozen at print time)
+    const premium = Number(r.premium) || 0;
+    if (premium < C.WHALE_MIN_PREMIUM) continue;
+    const dte = dteOf(r.expiration);
+    if (dte == null || dte < C.WHALE_DTE_MIN || dte > C.WHALE_DTE_MAX) continue;
+
+    const ts = Number(r.ts);
+    if (!Number.isFinite(ts)) continue;
+    const id = `${ts}|${r.symbol || ''}|${r.price ?? ''}|${r.size ?? ''}`;
+    if (mem.whaleSeen.has(id)) continue;
+    mem.whaleSeen.add(id);
+
+    const ticker = String(r.underlying || r.symbol || '').toUpperCase();
+    const isCall = r.type === 'C';
+    const direction = isCall ? 'long' : 'short';
+    const strike = Number(r.strike);
+    const prem = premium >= 1e6 ? `$${(premium / 1e6).toFixed(1)}M` : `$${Math.round(premium / 1e3)}K`;
+    // Score by conviction: bigger premium = higher score (3 → 5).
+    const score = premium >= 5e6 ? 5 : premium >= 2.5e6 ? 4 : 3;
+
+    out.push({
+      ts,
+      kind: 'whale_print',
+      direction,
+      setup: `Whale ${isCall ? 'call' : 'put'} buy — ${ticker} ${Number.isFinite(strike) ? Math.round(strike) : '?'}${isCall ? 'C' : 'P'} ${prem}`,
+      levelName: `${ticker} ${Number.isFinite(strike) ? Math.round(strike) : '?'}${isCall ? 'C' : 'P'}`,
+      levelEs: null,     // an option strike on any ticker — not an ES level
+      levelSpx: null,
+      priceEs: Number(r.spot) || 0,   // underlying at print time (NOT NULL in schema)
+      priceSpx: Number(r.spot) || null,
+      score,
+      confluence: null,
+      reason: `${prem} OTM ${isCall ? 'call' : 'put'} purchased, ${dte}DTE (exp ${String(r.expiration).slice(0, 10)}) → ${isCall ? 'bullish' : 'bearish'} positioning`,
+      meta: {
+        ticker, strike: Number.isFinite(strike) ? strike : null, type: r.type,
+        premium: Math.round(premium), dte, expiration: r.expiration ?? null,
+        size: r.size ?? null, price: r.price ?? null, spot: Number(r.spot) || null,
+      },
+    });
+  }
+
+  // Cap the dedup set (drop oldest inserts — Set preserves insertion order).
+  if (mem.whaleSeen.size > WHALE_SEEN_MAX) {
+    const excess = mem.whaleSeen.size - WHALE_SEEN_MAX;
+    let i = 0;
+    for (const k of mem.whaleSeen) { if (i++ >= excess) break; mem.whaleSeen.delete(k); }
+  }
+  return out;
+}
+
 // ── engine loop ───────────────────────────────────────────────────────────────
+// Whale tape: the persisted flow_prints day tape, pulled at the $1M floor in SQL
+// so we're not dragging the full tape across the wire every eval. Polled on a
+// slower cadence than EVAL_MS (prints don't need 3s resolution) and seeded on the
+// first pass with `seeded=false` → that first batch only PRIMES the dedup set, so
+// a restart mid-session doesn't spam every whale print from earlier in the day.
+let whaleCache = { at: 0, rows: [], seeded: false };
+const WHALE_POLL_MS = Number(process.env.SIGNALS_WHALE_POLL_MS || 20_000);
+async function refreshWhales(base) {
+  if (Date.now() - whaleCache.at < WHALE_POLL_MS) return null;
+  whaleCache.at = Date.now();
+  try {
+    const url = `${base}/proxy/flow-history?date=${etDateStr()}&limit=20000&minPremium=${WHALE_MIN_PREMIUM}`;
+    const res = await fetch(url, {
+      headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const j = await res.json().catch(() => ({}));
+    whaleCache.rows = Array.isArray(j.tape) ? j.tape : [];
+    return whaleCache.rows;
+  } catch {
+    return null;
+  }
+}
+
 let cbCache = { spx: null, size: null, at: 0 };
 async function refreshCb(base) {
   if (Date.now() - cbCache.at < 60_000) return;
@@ -766,7 +860,7 @@ async function refreshConfidence(base) {
 
 async function sendDiscord(sig) {
   if (!DISCORD_WEBHOOK) return;
-  const dot = sig.direction === 'long' ? '🟢' : '🔴';
+  const dot = sig.direction === 'long' ? '🟢' : sig.direction === 'short' ? '🔴' : '⚪';
   const conf = sig.confluence ? ` • +${sig.confluence}` : '';
   const content = `${dot} **${sig.direction.toUpperCase()}** • ${sig.setup} → ES ${sig.priceEs.toFixed(2)}`
     + (sig.levelEs != null ? ` @ ${sig.levelName} ${sig.levelEs.toFixed(2)}` : '')
@@ -778,7 +872,11 @@ async function sendDiscord(sig) {
   } catch { /* alerts are best-effort */ }
 }
 
-const mem = { prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {}, fdPrev: null };
+const mem = {
+  prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {}, fdPrev: null,
+  ibFormedDay: null,        // ET date the ib_formed signal already fired for
+  whaleSeen: new Set(),     // print identities already alerted (capped)
+};
 
 function readFrame() {
   const s = marketState.getState();
@@ -827,18 +925,40 @@ function readFrame() {
 
 async function runOnce(base, { force = false } = {}) {
   if (!force && !inSession()) return { skipped: 'off-session' };
-  await Promise.all([refreshCb(base), refreshIct(base), refreshConfidence(base)]);
+  const [, , , whaleRows] = await Promise.all([
+    refreshCb(base), refreshIct(base), refreshConfidence(base), refreshWhales(base),
+  ]);
+
+  // Whale prints are tape-driven, not frame-driven: they don't need a basis, a
+  // price, or a warm chart, so they're evaluated BEFORE the frame gates below.
+  const whaleSigs = [];
+  if (whaleRows) {
+    const fired = evaluateWhalePrints(whaleRows, mem);
+    if (!whaleCache.seeded) {
+      // First pull of the session/process: prime the dedup set, emit nothing.
+      whaleCache.seeded = true;
+      console.log(`[signals] whale tape seeded — ${fired.length} existing print(s) marked seen, not fired`);
+    } else {
+      whaleSigs.push(...fired);
+    }
+  }
+
   const frame = readFrame();
-  if (!force && !frame.chartReady) return { skipped: 'warming' };
-  if (!(frame.priceEs > 0) || !(frame.basis !== 0)) return { skipped: 'no-price-or-basis' };
-  const sigs = [...evaluateFrame(frame, mem), ...evaluateBzilaConfluence(frame, mem), ...evaluateFlowDivergence(frame, mem)];
+  if (!force && !frame.chartReady) { await emit(whaleSigs); return { skipped: 'warming', fired: whaleSigs.length }; }
+  if (!(frame.priceEs > 0) || !(frame.basis !== 0)) { await emit(whaleSigs); return { skipped: 'no-price-or-basis', fired: whaleSigs.length }; }
+  const sigs = [...whaleSigs, ...evaluateFrame(frame, mem), ...evaluateBzilaConfluence(frame, mem), ...evaluateFlowDivergence(frame, mem)];
+  await emit(sigs);
+  return { fired: sigs.length, price: frame.priceEs };
+}
+
+/** Persist + alert + log a batch of signals. */
+async function emit(sigs) {
   for (const sig of sigs) {
     sig.sessionDate = etDateStr(new Date(sig.ts));
     await insertSignal(sig);
     void sendDiscord(sig);
     console.log(`[signals] ${sig.direction.toUpperCase()} ${sig.setup} @ ${sig.levelName ?? '-'} ES ${sig.priceEs} (score ${sig.score}${sig.confluence ? ', +' + sig.confluence : ''})`);
   }
-  return { fired: sigs.length, price: frame.priceEs };
 }
 
 let timer = null;
@@ -863,6 +983,7 @@ module.exports = {
   evaluateFrame,   // pure — used by signals-engine.selftest.js
   evaluateBzilaConfluence, // pure — used by signals-engine.selftest.js
   evaluateFlowDivergence,  // pure — flow-vs-price divergence detector (#6)
+  evaluateWhalePrints,     // pure — OTM ≥$1M 1-7DTE option BUYS off the flow tape (#7)
   computeContextLevels,
   inSession,
   _mem: mem,
