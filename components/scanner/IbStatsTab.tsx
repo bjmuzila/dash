@@ -28,6 +28,31 @@ const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
 type Sym = (typeof SYMBOLS)[number];
 
+/* ── opening-range windows ───────────────────────────────────────────────────
+ * Every rule in this tab is window-agnostic: it only ever asks "the range built
+ * from 09:30 for N minutes". IB is just N=60. The exporter (ib-backtest-esu6.html)
+ * writes the SAME schema for each window, so switching windows is a file swap:
+ *
+ *   60m → public/data/ib-<SYM>.json
+ *   30m → public/data/orb30-<SYM>.json
+ *   15m → public/data/orb15-<SYM>.json
+ *    5m → public/data/orb5-<SYM>.json
+ *
+ * A missing file just shows the "dataset not found" card — export it and drop it in.
+ */
+const WINDOWS = [
+  { min: 60, label: "IB 60m", range: "09:30–10:30" },
+  { min: 30, label: "ORB 30m", range: "09:30–10:00" },
+  { min: 15, label: "ORB 15m", range: "09:30–09:45" },
+  { min: 5, label: "ORB 5m", range: "09:30–09:35" },
+] as const;
+type Win = (typeof WINDOWS)[number]["min"];
+const dsPath = (sym: Sym, win: Win) => (win === 60 ? `/data/ib-${sym}.json` : `/data/orb${win}-${sym}.json`);
+const winLabel = (win: Win) => WINDOWS.find((w) => w.min === win)!.label;
+const winRange = (win: Win) => WINDOWS.find((w) => w.min === win)!.range;
+/** minute-of-day the opening range closes (570 = 09:30 ET) */
+const rangeEnd = (win: Win) => 570 + win;
+
 /** Card titles are the only non-white font on the page — colored per card via
  *  the `accent` prop. The card SURFACE stays accent-free (no top strip); this
  *  only tints the title text. */
@@ -162,12 +187,15 @@ function etDate(ts: number): string {
 
 const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-function LiveToday({ sym, ds, days, hist }: {
+function LiveToday({ sym, win, ds, days, hist }: {
   sym: Sym;
+  win: Win;
   ds: IbDataset;
   days: SlimDay[];
   hist: { dowStats: { name: string; sb: number | null; n: number }[]; avgIb: number; avgAtr: number };
 }) {
+  const REND = rangeEnd(win);          // 09:30 + window, in minutes-of-day
+  const WLBL = winLabel(win);          // "IB 60m" / "ORB 15m" / …
   const es = useEsCandles(sym === "ES", 2);
   const nq = useNqCandles(sym === "NQ", 2);
   const candles = sym === "ES" ? es.candles : nq.candles;
@@ -192,11 +220,11 @@ function LiveToday({ sym, ds, days, hist }: {
     const pdh = priorBars.length ? Math.max(...priorBars.map((b) => b.h)) : null;
     const pdl = priorBars.length ? Math.min(...priorBars.map((b) => b.l)) : null;
 
-    const ibBars = bars.filter((b) => b.min >= 570 && b.min < 630);
-    const post = bars.filter((b) => b.min >= 630);
+    const ibBars = bars.filter((b) => b.min >= 570 && b.min < REND);
+    const post = bars.filter((b) => b.min >= REND);
     const last = bars[bars.length - 1];
     const nowMin = last.min;
-    const ibComplete = nowMin >= 630;
+    const ibComplete = nowMin >= REND;
 
     if (!ibBars.length) return { pending: true, nowMin, price: last.c } as const;
 
@@ -256,8 +284,9 @@ function LiveToday({ sym, ds, days, hist }: {
         }))
       : [];
 
-    // live ORB — first close outside the 09:30–09:45 range, inside the IB
-    const orb = ibBars.filter((b) => b.min < 585);
+    // live inner-ORB — first close outside the 09:30–09:45 range, still inside the
+    // opening range. Only meaningful when the window is longer than 15m.
+    const orb = win > 15 ? ibBars.filter((b) => b.min < 585) : [];
     let orbDir: "H" | "L" | null = null;
     if (orb.length) {
       const orbH = Math.max(...orb.map((b) => b.h));
@@ -281,7 +310,7 @@ function LiveToday({ sym, ds, days, hist }: {
 
     /* ── rule 7 · 15m FVG inside the IB — rebuild 15m bars from the IB bars ── */
     const b15: { h: number; l: number }[] = [];
-    for (let s = 570; s < 630; s += 15) {
+    for (let s = 570; s < REND; s += 15) {
       const g = ibBars.filter((b) => b.min >= s && b.min < s + 15);
       if (g.length) b15.push({ h: Math.max(...g.map((x) => x.h)), l: Math.min(...g.map((x) => x.l)) });
     }
@@ -318,7 +347,7 @@ function LiveToday({ sym, ds, days, hist }: {
     // rule 14 — still fully inside the IB at 14:00 ET
     const at2 = bars.filter((b) => b.min <= 840);
     const containedAt2 = nowMin >= 840
-      ? !at2.some((b) => b.min >= 630 && (b.c > ibh || b.c < ibl))
+      ? !at2.some((b) => b.min >= REND && (b.c > ibh || b.c < ibl))
       : null;
 
     const extHit1 = targets.find((t) => t.t === 1)?.hit ?? false;
@@ -329,7 +358,7 @@ function LiveToday({ sym, ds, days, hist }: {
       brokeH, brokeL, touchH, touchL, openType, fvg, volSurge, failed, retest, retestCont,
       containedAt2, extHit1, pdh, pdl, dayOpen,
     };
-  }, [candles, hist, sym]);
+  }, [candles, hist, sym, win, REND]);
 
   const dowName = DOW_NAMES[new Date().getDay()];
   const dowRow = hist.dowStats.find((d) => d.name === dowName);
@@ -346,7 +375,7 @@ function LiveToday({ sym, ds, days, hist }: {
 
   if (live.pending) {
     return (
-      <Card title={`Today — ${sym} · ${dowName}`} subtitle="Pre-IB — levels set at 10:30 ET">
+      <Card title={`Today — ${sym} · ${dowName}`} subtitle={`Pre-range — ${WLBL} levels set at ${clock(REND)} ET`}>
         <div style={statGrid}>
           <Stat k="Live price" v={f2(live.price)} />
           <Stat k="Clock (ET)" v={clock(live.nowMin)} />
@@ -366,15 +395,15 @@ function LiveToday({ sym, ds, days, hist }: {
 
       <Card
         accent="cyan"
-        title={`Today — ${sym} · ${dowName}`}
-        subtitle={`${live.ibComplete ? "IB complete" : "IB STILL FORMING — levels not final until 10:30 ET"} · ${clock(live.nowMin)} ET${connected ? "" : " · feed disconnected"}`}
+        title={`Today — ${sym} · ${WLBL} · ${dowName}`}
+        subtitle={`${live.ibComplete ? `${WLBL} complete` : `${WLBL} STILL FORMING — levels not final until ${clock(REND)} ET`} · ${clock(live.nowMin)} ET${connected ? "" : " · feed disconnected"}`}
       >
       <div style={statGrid}>
         <Stat k="Live price" v={f2(live.price)} sub={`day range ${f2(live.dayLow)} – ${f2(live.dayHigh)}`} />
-        <Stat k="IB High" v={f2(live.ibh)} sub={distH > 0 ? `${f2(distH)} pts above price` : `broken — ${f2(-distH)} pts below price`} />
-        <Stat k="IB Low" v={f2(live.ibl)} sub={distL > 0 ? `${f2(distL)} pts below price` : `broken — ${f2(-distL)} pts above price`} />
-        <Stat k="IB Mid" v={f2(live.mid)} sub={live.price >= live.mid ? "price above mid" : "price below mid"} />
-        <Stat k="IB Width" v={`${f2(live.width)} pts`} sub={`${live.bucket} · sample avg ${f2(hist.avgIb)}`} />
+        <Stat k={`${WLBL} High`} v={f2(live.ibh)} sub={distH > 0 ? `${f2(distH)} pts above price` : `broken — ${f2(-distH)} pts below price`} />
+        <Stat k={`${WLBL} Low`} v={f2(live.ibl)} sub={distL > 0 ? `${f2(distL)} pts below price` : `broken — ${f2(-distL)} pts above price`} />
+        <Stat k={`${WLBL} Mid`} v={f2(live.mid)} sub={live.price >= live.mid ? "price above mid" : "price below mid"} />
+        <Stat k={`${WLBL} Width`} v={`${f2(live.width)} pts`} sub={`${live.bucket} · sample avg ${f2(hist.avgIb)}`} />
         <Stat k="Status" v={live.status} sub={live.breakMin != null ? `broke ${live.breakSide === "H" ? "high" : "low"} at ${clock(live.breakMin)}` : "no close outside yet"} />
       </div>
 
@@ -1235,41 +1264,54 @@ export default function IbStatsTab() {
   );
 
   const [sym, setSym] = useState<Sym>("ES");
+  const [win, setWin] = useState<Win>(60);
   const [showStats, setShowStats] = useState(false);
-  const [sets, setSets] = useState<Partial<Record<Sym, IbDataset>>>({});
-  const [err, setErr] = useState<string | null>(null);
+  // cache key is symbol + window — each combination is its own exported file
+  const [sets, setSets] = useState<Record<string, IbDataset>>({});
+  const [errs, setErrs] = useState<Record<string, string>>({});
+  const key = `${sym}-${win}`;
 
   useEffect(() => {
-    if (sets[sym]) return;
+    if (sets[key] || errs[key]) return;
     let alive = true;
-    setErr(null);
-    fetch(`/data/ib-${sym}.json`)
+    const path = dsPath(sym, win);
+    fetch(path)
       .then((r) => {
-        if (!r.ok) throw new Error(`${sym}: ${r.status} — is public/data/ib-${sym}.json in the repo?`);
+        if (!r.ok) throw new Error(`${sym} ${winLabel(win)}: ${r.status} — is public${path} in the repo? Export it from ib-backtest-esu6.html with the ${win}m window selected.`);
         return r.json();
       })
-      .then((j: IbDataset) => { if (alive) setSets((s) => ({ ...s, [sym]: j })); })
-      .catch((e) => { if (alive) setErr(String(e.message || e)); });
+      .then((j: IbDataset) => { if (alive) setSets((s) => ({ ...s, [key]: j })); })
+      .catch((e) => { if (alive) setErrs((s) => ({ ...s, [key]: String(e.message || e) })); });
     return () => { alive = false; };
-  }, [sym, sets]);
+  }, [sym, win, key, sets, errs]);
 
-  const ds = sets[sym];
+  const ds = sets[key];
+  const err = errs[key];
+
+  const btn = (on: boolean): React.CSSProperties => ({
+    padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
+    border: `1px solid ${on ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
+    background: on ? "rgba(33,158,188,0.15)" : "transparent",
+    color: HOME_THEME.text, transition: "all 0.15s",
+  });
 
   const symTabs = (
-    <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+    <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
       {SYMBOLS.map((s) => (
-        <button key={s} onClick={() => setSym(s)} style={{
-          padding: "8px 22px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
-          border: `1px solid ${sym === s ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
-          background: sym === s ? "rgba(33,158,188,0.15)" : "transparent",
-          color: HOME_THEME.text, transition: "all 0.15s",
-        }}>{s}</button>
+        <button key={s} onClick={() => setSym(s)} style={{ ...btn(sym === s), padding: "8px 22px" }}>{s}</button>
       ))}
+      <div style={{ width: 1, height: 26, background: "rgba(255,255,255,0.15)", margin: "0 6px" }} />
+      {WINDOWS.map((w) => (
+        <button key={w.min} onClick={() => setWin(w.min)} style={btn(win === w.min)} title={`${w.range} ET`}>
+          {w.label}
+        </button>
+      ))}
+      <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>{winRange(win)} ET</span>
     </div>
   );
 
-  if (err) return <div>{symTabs}<Card title="IB Stats — dataset not found"><div style={{ color: HOME_THEME.red, fontSize: 15 }}>{err}</div></Card></div>;
-  if (!ds) return <div>{symTabs}<Card title="IB Stats"><div style={{ color: HOME_THEME.text, fontSize: 15 }}>Loading {sym} dataset…</div></Card></div>;
+  if (err) return <div>{symTabs}<Card title={`${winLabel(win)} Stats — dataset not found`}><div style={{ color: HOME_THEME.red, fontSize: 15 }}>{err}</div></Card></div>;
+  if (!ds) return <div>{symTabs}<Card title={`${winLabel(win)} Stats`}><div style={{ color: HOME_THEME.text, fontSize: 15 }}>Loading {sym} {winLabel(win)} dataset…</div></Card></div>;
 
   /* The exporter wrote atr / avgIB / widthBucket as null for every session, so the
    * width-bucket tables came up empty. Derive them here from the raw sessions:
@@ -1290,10 +1332,11 @@ export default function IbStatsTab() {
   const closeMins = fcb.map((d) => B(d).breakMin);
   const cbH = fcb.filter((d) => B(d).side === "H").map((d) => B(d).breakMin);
   const cbL = fcb.filter((d) => B(d).side === "L").map((d) => B(d).breakMin);
-  const timeBuckets: [number, string][] = [
-    [630, "by 10:30 (first bar out)"], [660, "by 11:00"], [690, "by 11:30"],
-    [720, "by 12:00 (noon)"], [780, "by 13:00"], [840, "by 14:00"], [900, "by 15:00"],
-  ];
+  const REND = rangeEnd(win);
+  const timeBuckets: [number, string][] = ([
+    [REND, `by ${clock(REND)} (first bar out)`], [REND + 15, `by ${clock(REND + 15)}`], [REND + 30, `by ${clock(REND + 30)}`],
+    [660, "by 11:00"], [720, "by 12:00 (noon)"], [780, "by 13:00"], [840, "by 14:00"], [900, "by 15:00"],
+  ] as [number, string][]).filter(([m], i, a) => m >= REND && a.findIndex(([x]) => x === m) === i);
 
   /* rules */
   const wb = days.filter((d) => d.bias);
@@ -1348,7 +1391,7 @@ export default function IbStatsTab() {
   const oppose = ob.filter((d) => d.orbDir !== d.bias);
 
   const tf: [number, number, string][] = [
-    [630, 720, "10:30 – 12:00"], [720, 780, "12:00 – 13:00"], [780, 840, "13:00 – 14:00"],
+    [REND, 720, `${clock(REND)} – 12:00`], [720, 780, "12:00 – 13:00"], [780, 840, "13:00 – 14:00"],
     [840, 900, "14:00 – 15:00"], [900, 961, "15:00 – close"],
   ];
   const byNoon = fcb.filter((d) => B(d).breakMin < 720);
@@ -1393,6 +1436,7 @@ export default function IbStatsTab() {
 
         <LiveToday
           sym={sym}
+          win={win}
           ds={ds}
           days={days}
           hist={{
@@ -1417,17 +1461,19 @@ export default function IbStatsTab() {
         )}
 
         {isOwner && showStats && (<>
-        <Card accent="blue" title={`Initial Balance Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`Last updated ${LAST_UPDATED}`}>
+        <Card accent="blue" title={`${winLabel(win)} Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`${winRange(win)} ET · last updated ${LAST_UPDATED}`}>
           <div style={statGrid}>
             <Stat k="Sessions" v={String(N)} sub={`${yearsSpan.toFixed(1)} years of data`} />
             <Stat k="Date range" v={`${ds.from} → ${ds.to}`} sub={`${ds.barMinutes}m bars, RTH`} />
-            <Stat k="Avg IB width" v={`${f2(avg(widths))} pts`} />
-            <Stat k="Median IB width" v={`${f2(med(widths))} pts`} />
-            <Stat k="IB as % of day range" v={`${f2((avg(days.map((d) => d.width / d.dayRange)) ?? 0) * 100)}%`} />
+            <Stat k={`Avg ${winLabel(win)} width`} v={`${f2(avg(widths))} pts`} />
+            <Stat k={`Median ${winLabel(win)} width`} v={`${f2(med(widths))} pts`} />
+            <Stat k="Range as % of day range" v={`${f2((avg(days.map((d) => d.width / d.dayRange)) ?? 0) * 100)}%`} />
           </div>
           <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.55 }}>
-            IB = 09:30–10:30 ET high/low. A <b>break</b> means a bar <b>close</b> outside the IB — wick-only touches are tracked
-            separately as the trap set. Extensions, MFE and MAE are quoted in multiples of IB width, measured from the broken level.
+            {winLabel(win)} = {winRange(win)} ET high/low. A <b>break</b> means a bar <b>close</b> outside the range — wick-only touches
+            are tracked separately as the trap set. Extensions, MFE and MAE are quoted in multiples of range width, measured from the
+            broken level. Every rule below is identical across windows, so the tabs above are directly comparable: the shorter the
+            window, the earlier the entry and the higher the both-sides-broke tax.
           </div>
         </Card>
 

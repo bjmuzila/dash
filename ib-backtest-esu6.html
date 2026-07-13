@@ -35,8 +35,19 @@
 </style>
 </head>
 <body>
-<h1>Initial Balance Backtest — ES 5m RTH</h1>
-<div class="sub">IB = 09:30–10:30 ET. Drop any <b>ES 5m RTH CSV</b> below (format: <code>YYYYMMDD HHMMSS,O,H,L,C,V</code>) — contract month is irrelevant, it's treated as a continuous series. Everything runs locally in the browser.</div>
+<h1>Opening Range Backtest — IB 60m / ORB 30m / 15m / 5m</h1>
+<div class="sub">The range is built from 09:30 ET forward for the selected window (IB = the full 60 min). Drop any <b>5m or 1m RTH CSV</b> below (format: <code>YYYYMMDD HHMMSS,O,H,L,C,V</code>) — contract month is irrelevant, it's treated as a continuous series. Everything runs locally in the browser. <b>Every rule below is identical across windows</b>, so the exported JSON schema is the same — the dashboard tab just swaps files.</div>
+
+<div class="ctl">
+  <span>Opening range window:</span>
+  <select id="win" style="background:#0e141d;border:1px solid rgba(255,255,255,.08);color:#e8eef6;border-radius:8px;padding:6px 10px;font-weight:700">
+    <option value="60">60 min — IB (09:30–10:30)</option>
+    <option value="30">30 min — ORB (09:30–10:00)</option>
+    <option value="15">15 min — ORB (09:30–09:45)</option>
+    <option value="5">5 min — ORB (09:30–09:35)</option>
+  </select>
+  <span class="d">changing this re-runs the whole report on the loaded file</span>
+</div>
 
 <div id="drop">Drop CSV here — or click to pick a file</div>
 <input type="file" id="file" accept=".csv,.txt" style="display:none"/>
@@ -46,7 +57,7 @@
   <span>Symbol:</span>
   <input id="sym" value="ES" style="width:70px"/>
   <button onclick="exportJson()">Export JSON for dashboard</button>
-  <span class="d">→ saves <code>ib-&lt;SYM&gt;.json</code>; drop it in <code>public/data/</code></span>
+  <span class="d">→ saves <code id="fname">ib-&lt;SYM&gt;.json</code>; drop it in <code>public/data/</code></span>
 </div>
 
 <div id="out"></div>
@@ -58,9 +69,12 @@ const $ = s => document.querySelector(s);
 /* Bar interval is DETECTED from the data (1m, 5m, whatever) and every
    bar-count rule is derived from it, so the same engine works on any file. */
 let BAR_MIN = 5;                       // minutes per bar — set in handle()
-const FAIL_BARS = () => Math.round(30 / BAR_MIN);  // failed break = back inside within 30 min
-const FVG_GROUP = () => Math.round(15 / BAR_MIN);  // 15m candles for the FVG
-let LAST_DAYS = null, LAST_SYMBOL = 'ES';
+let WIN = 60;                          // opening-range window in minutes — 60 = classic IB
+const RANGE_END = () => 570 + WIN;     // minute-of-day the range closes (570 = 09:30)
+const FAIL_BARS = () => Math.max(1, Math.round(30 / BAR_MIN));  // failed break = back inside within 30 min
+const FVG_GROUP = () => Math.max(1, Math.round(15 / BAR_MIN));  // 15m candles for the FVG
+let LAST_DAYS = null, LAST_ROWS = null, LAST_SYMBOL = 'ES';
+const WNAME = () => WIN===60 ? 'IB' : `ORB${WIN}`;
 const pct = (n,d) => d ? (100*n/d).toFixed(1)+'%' : '—';
 const f2 = n => (n==null||!isFinite(n)) ? '—' : n.toFixed(2);
 const cls = p => p>=60?'g':p<=40?'r':'a';
@@ -90,10 +104,10 @@ function buildDays(rows){
   const days=[];
   for(const [date,bars] of [...byDay.entries()].sort((a,b)=>a[0]<b[0]?-1:1)){
     bars.sort((a,b)=>a.min-b.min);
-    const ibBars = bars.filter(b=>b.min>=570 && b.min<630);   // 09:30 → 10:29 inclusive
-    const post   = bars.filter(b=>b.min>=630);                 // 10:30 onward
-    const minIb = Math.max(4, Math.floor((60/BAR_MIN)*0.8));   // ≥80% of a full IB
-    if(ibBars.length<minIb || post.length<minIb) continue;      // need a real session
+    const ibBars = bars.filter(b=>b.min>=570 && b.min<RANGE_END());   // 09:30 → range close
+    const post   = bars.filter(b=>b.min>=RANGE_END());                 // range close onward
+    const minIb = Math.max(1, Math.floor((WIN/BAR_MIN)*0.8));          // ≥80% of a full window
+    if(ibBars.length<minIb || post.length<12) continue;                 // need a real session
     const ibh=Math.max(...ibBars.map(b=>b.h));
     const ibl=Math.min(...ibBars.map(b=>b.l));
     const width=ibh-ibl; if(width<=0) continue;
@@ -107,9 +121,11 @@ function buildDays(rows){
     ibBars.forEach((b,i)=>{ if(b.h===ibh) hiIdx=Math.min(hiIdx===0?i:hiIdx,i); if(b.l===ibl) loIdx=Math.min(loIdx===0?i:loIdx,i); });
     const first = hiIdx<loIdx ? 'H' : loIdx<hiIdx ? 'L' : (ibBars[0].c>=ibBars[0].o?'L':'H');
 
-    // ORB = first 15 minutes (09:30–09:45), whatever the bar size
-    const orb=ibBars.filter(b=>b.min<585);
-    const orbH=Math.max(...orb.map(b=>b.h)), orbL=Math.min(...orb.map(b=>b.l));
+    // inner ORB = first 15 minutes (09:30–09:45). Only meaningful when the range
+    // window is longer than 15m — otherwise the "inner" range IS the range.
+    const orb = WIN>15 ? ibBars.filter(b=>b.min<585) : [];
+    const orbH = orb.length? Math.max(...orb.map(b=>b.h)) : null;
+    const orbL = orb.length? Math.min(...orb.map(b=>b.l)) : null;
 
     days.push({
       date, bars, ibBars, post, ibh, ibl, mid, width, ibClose, ibVol, first,
@@ -289,11 +305,13 @@ function buildDays(rows){
     d.closeZone = loc>=0.75?'top25' : loc<=0.25?'bot25' : 'mid50';
     d.bias = d.ibClose>d.mid ? 'H' : d.ibClose<d.mid ? 'L' : null;
 
-    // ORB break direction (first post-ORB move out of the 9:30-9:45 range, within IB)
+    // inner-ORB break direction (first move out of the 9:30–9:45 range, still inside the window)
     d.orbDir=null;
-    for(const b of d.ibBars.filter(x=>x.min>=585)){
-      if(b.c>d.orbH){ d.orbDir='H'; break; }
-      if(b.c<d.orbL){ d.orbDir='L'; break; }
+    if(d.orbH!=null){
+      for(const b of d.ibBars.filter(x=>x.min>=585)){
+        if(b.c>d.orbH){ d.orbDir='H'; break; }
+        if(b.c<d.orbL){ d.orbDir='L'; break; }
+      }
     }
   }
   return days;
@@ -346,7 +364,8 @@ function report(days){
   const cbH = days.filter(d=>d.firstCloseBreak && d.firstCloseBreak.side==='H').map(d=>d.firstCloseBreak.breakMin);
   const cbL = days.filter(d=>d.firstCloseBreak && d.firstCloseBreak.side==='L').map(d=>d.firstCloseBreak.breakMin);
   const within = (arr,m) => pct(arr.filter(x=>x<=m).length, arr.length);
-  const distRows = [[630,'by 10:30 (first bar out)'],[660,'by 11:00'],[690,'by 11:30'],[720,'by 12:00 (noon)'],[780,'by 13:00'],[840,'by 14:00'],[900,'by 15:00']]
+  const distRows = [[RANGE_END(),`by ${clock(RANGE_END())} (first bar out)`],[RANGE_END()+15,`by ${clock(RANGE_END()+15)}`],[RANGE_END()+30,`by ${clock(RANGE_END()+30)}`],[660,'by 11:00'],[720,'by 12:00 (noon)'],[780,'by 13:00'],[840,'by 14:00'],[900,'by 15:00']]
+    .filter(([m])=>m>=RANGE_END())
     .map(([m,l])=>row(l, closeMins.length, closeMins.filter(x=>x<=m).length, `cumulative`)).join('');
   out.push(`<div class="card"><h2>0b · Time of IB Break</h2><div class="desc">When the first break actually happens. "Touch" = any wick outside IB. "Close break" = 5m close outside IB — the tradeable one. Minutes are measured from 09:30.</div>
     <div class="grid">
@@ -617,16 +636,21 @@ function slim(d){
     } : null,
   };
 }
+/* File name is what the dashboard tab fetches:
+     60m → ib-<SYM>.json   ·   30/15/5m → orb<WIN>-<SYM>.json
+   Schema is IDENTICAL across windows, so the React tab needs no new logic. */
+function outName(sym){ return WIN===60 ? `ib-${sym}.json` : `orb${WIN}-${sym}.json`; }
 function exportJson(){
   const sym=($('#sym').value||'ES').trim().toUpperCase();
   const payload={
-    symbol:sym, barMinutes:BAR_MIN, generated:new Date().toISOString().slice(0,10),
+    symbol:sym, window:WIN, windowLabel:WNAME(), barMinutes:BAR_MIN,
+    generated:new Date().toISOString().slice(0,10),
     sessions:LAST_DAYS.length, from:LAST_DAYS[0].date, to:LAST_DAYS[LAST_DAYS.length-1].date,
     days:LAST_DAYS.map(slim),
   };
   const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
   const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download=`ib-${sym}.json`; a.click();
+  a.href=URL.createObjectURL(blob); a.download=outName(sym); a.click();
   URL.revokeObjectURL(a.href);
 }
 
@@ -642,14 +666,22 @@ function handle(text){
     if(g>0 && g<=60) gaps[g]=(gaps[g]||0)+1;
   }
   BAR_MIN = +Object.entries(gaps).sort((a,b)=>b[1]-a[1])[0][0] || 5;
-
-  const days=buildDays(rows);
+  LAST_ROWS=rows;
+  run();
+}
+function run(){
+  if(!LAST_ROWS) return;
+  if(WIN < BAR_MIN){ $('#out').innerHTML=`<div class="card r">Window is ${WIN}m but the file is ${BAR_MIN}m bars — you need ${WIN}m-or-finer data for this window.</div>`; return; }
+  const days=buildDays(LAST_ROWS);
   if(!days.length){ $('#out').innerHTML=`<div class="card r">No complete RTH sessions found.</div>`; return; }
   LAST_DAYS=days;
   report(days);
   $('#exportbar').style.display='flex';
-  $('#meta').textContent = `${BAR_MIN}m bars · ${days.length} sessions · ${days[0].date} → ${days[days.length-1].date}`;
+  $('#fname').textContent = outName(($('#sym').value||'ES').trim().toUpperCase());
+  $('#meta').textContent = `${WNAME()} (${WIN}m range) · ${BAR_MIN}m bars · ${days.length} sessions · ${days[0].date} → ${days[days.length-1].date}`;
 }
+$('#win').onchange = e => { WIN = +e.target.value; run(); };
+$('#sym').oninput = () => { if(LAST_DAYS) $('#fname').textContent = outName(($('#sym').value||'ES').trim().toUpperCase()); };
 const drop=$('#drop'), file=$('#file');
 drop.onclick=()=>file.click();
 file.onchange=e=>{ const f=e.target.files[0]; if(f){ const r=new FileReader(); r.onload=()=>handle(r.result); r.readAsText(f);} };

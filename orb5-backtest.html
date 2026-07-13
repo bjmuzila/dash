@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>ORB Backtest (5m / 15m) — ES / NQ</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#111823; --panel2:#0e141d; --line:rgba(255,255,255,.08);
+    --txt:#e8eef6; --dim:#8fa3ba; --cyan:#22d3ee; --green:#34d399; --red:#f87171;
+    --amber:#fbbf24; --violet:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px}
+  .card h2{font-size:15px;margin:0 0 2px;color:var(--cyan);letter-spacing:.3px}
+  .card .desc{color:var(--dim);font-size:12px;margin-bottom:12px}
+  #drop{border:2px dashed rgba(34,211,238,.35);border-radius:16px;padding:28px;text-align:center;color:var(--dim);cursor:pointer;background:var(--panel2)}
+  #drop.hot{border-color:var(--cyan);color:var(--txt)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  tr:last-child td{border-bottom:none}
+  .g{color:var(--green)} .r{color:var(--red)} .a{color:var(--amber)} .v{color:var(--violet)} .d{color:var(--dim)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .stat .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .stat .val{font-size:22px;font-weight:700;margin-top:3px}
+  .ctl{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:14px 0;color:var(--dim);font-size:12px}
+  .ctl input{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:5px 8px;width:70px}
+  button{background:var(--cyan);color:#04202a;border:0;border-radius:10px;padding:8px 16px;font-weight:700;cursor:pointer}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
+  .tab{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:10px;padding:7px 14px;cursor:pointer;font-weight:700;font-size:13px}
+  .tab.on{background:var(--cyan);color:#04202a;border-color:var(--cyan)}
+  .note{color:var(--dim);font-size:11px;margin-top:8px;font-style:italic}
+</style>
+</head>
+<body>
+<h1>5-Minute ORB Backtest — ES / NQ</h1>
+<div class="sub">ORB = the <b>09:30–09:35 ET</b> range (first 5-minute candle). Drop one or more RTH CSVs below (format: <code>YYYYMMDD HHMMSS,O,H,L,C,V</code>) — one file per symbol; the tab name comes from the filename. Contract month is irrelevant, each file is treated as a continuous series. Everything runs locally in the browser. Same engine style as the Initial Balance tool, retargeted at the 5m opening range.</div>
+
+<div id="drop">Drop CSV(s) here — or click to pick files</div>
+<input type="file" id="file" accept=".csv,.txt" multiple style="display:none"/>
+
+<div id="exportbar" class="ctl" style="display:none">
+  <span id="meta" class="d"></span>
+  <button onclick="exportJson()">Export JSON for dashboard</button>
+  <span class="d">→ saves <code>orb5-&lt;SYM&gt;.json</code>; drop it in <code>public/data/</code></span>
+</div>
+
+<div id="tabs" class="tabs"></div>
+<div id="out"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const TICK = { ES:0.25, NQ:0.25, MES:0.25, MNQ:0.25 };
+
+let BAR_MIN = 5;                                     // detected per file
+const FAIL_MIN = 20;                                 // failed break = closes back inside within 20 min
+const ORB_END  = () => 570 + 5;                      // 09:35 ET, in minutes-from-midnight
+const SETS = {};                                     // symbol -> {days, barMin}
+let ACTIVE = null;
+
+const pct = (n,d) => d ? (100*n/d).toFixed(1)+'%' : '—';
+const f2  = n => (n==null||!isFinite(n)) ? '—' : n.toFixed(2);
+const cls = p => p>=60?'g':p<=40?'r':'a';
+const avg = a => a.length? a.reduce((s,x)=>s+x,0)/a.length : null;
+const med = a => { if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)]; };
+const clock = min => (min==null||!isFinite(min)) ? '—'
+  : `${String(Math.floor(min/60)).padStart(2,'0')}:${String(Math.round(min%60)).padStart(2,'0')}`;
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+/* ---------- parsing (identical contract to the IB tool) ---------- */
+function parseCSV(text){
+  const rows=[];
+  for(const raw of text.split(/\r?\n/)){
+    const line=raw.trim(); if(!line) continue;
+    const p=line.split(',');
+    if(p.length<6) continue;
+    const m=p[0].trim().match(/^(\d{4})(\d{2})(\d{2})[ T](\d{2}):?(\d{2})/);
+    if(!m) continue;                                  // skips header rows
+    const [_,Y,Mo,D,H,Mi]=m;
+    const o=+p[1],h=+p[2],l=+p[3],c=+p[4],v=+p[5];
+    if(![o,h,l,c].every(isFinite)) continue;
+    rows.push({date:`${Y}-${Mo}-${D}`, min:+H*60+ +Mi, o,h,l,c, v:isFinite(v)?v:0});
+  }
+  return rows;
+}
+
+/* ---------- build day objects ---------- */
+function buildDays(rows, tick){
+  const byDay=new Map();
+  for(const r of rows){ if(!byDay.has(r.date)) byDay.set(r.date,[]); byDay.get(r.date).push(r); }
+  const days=[];
+  for(const [date,bars] of [...byDay.entries()].sort((a,b)=>a[0]<b[0]?-1:1)){
+    bars.sort((a,b)=>a.min-b.min);
+    const orbBars = bars.filter(b=>b.min>=570 && b.min<ORB_END());   // 09:30 → 09:34 inclusive
+    const post    = bars.filter(b=>b.min>=ORB_END());                // 09:35 onward
+    const ibBars  = bars.filter(b=>b.min>=570 && b.min<630);         // for the ORB→IB cross-check
+    if(!orbBars.length || post.length < 20) continue;                // need a real session after the ORB
+    const orbH=Math.max(...orbBars.map(b=>b.h));
+    const orbL=Math.min(...orbBars.map(b=>b.l));
+    const width=orbH-orbL; if(width<=0) continue;
+    const mid=(orbH+orbL)/2;
+    const open=orbBars[0].o, close=orbBars[orbBars.length-1].c;
+    const vol=orbBars.reduce((s,b)=>s+b.v,0);
+
+    days.push({
+      date, dow: DOW[new Date(date+'T12:00:00Z').getUTCDay()],
+      bars, orbBars, post, ibBars,
+      orbH, orbL, mid, width, open, close, vol, tick,
+      color: close>open ? 'green' : close<open ? 'red' : 'doji',
+      bodyLoc: (close-orbL)/width,                                   // where the 5m closed inside its own range
+      ibh: ibBars.length? Math.max(...ibBars.map(b=>b.h)) : null,
+      ibl: ibBars.length? Math.min(...ibBars.map(b=>b.l)) : null,
+      dayOpen: bars[0].o,
+      dayHigh: Math.max(...bars.map(b=>b.h)),
+      dayLow : Math.min(...bars.map(b=>b.l)),
+      dayClose: bars[bars.length-1].c,
+    });
+  }
+
+  // prior-day context, trailing ORB size, ATR(14) of RTH daily range
+  for(let i=0;i<days.length;i++){
+    const d=days[i], p=days[i-1];
+    d.pdh=p?p.dayHigh:null; d.pdl=p?p.dayLow:null; d.pdc=p?p.dayClose:null;
+    const prev20=days.slice(Math.max(0,i-20),i);
+    d.avgORB = prev20.length>=5 ? avg(prev20.map(x=>x.width)) : null;
+    d.avgVol = prev20.length>=5 ? avg(prev20.map(x=>x.vol))   : null;
+    const prev14=days.slice(Math.max(0,i-14),i);
+    d.atr = prev14.length>=5 ? avg(prev14.map(x=>x.dayHigh-x.dayLow)) : null;
+    if(d.pdh!=null){
+      d.openType = d.dayOpen>d.pdh ? 'OAR-H' : d.dayOpen<d.pdl ? 'OAR-L'
+                 : (d.dayOpen > (d.pdh+d.pdl)/2 ? 'HIR' : 'LIR');
+    } else d.openType=null;
+    d.gap = d.pdc!=null ? d.dayOpen-d.pdc : null;
+  }
+
+  /* ---- per-day break sequence (post-ORB) ---- */
+  const FAIL_BARS = Math.max(1, Math.round(FAIL_MIN/BAR_MIN));
+  for(const d of days){
+    let tH=false,tL=false;
+    d.firstTouchSide=null; d.firstTouchBar=null; d.firstCloseBreak=null;
+    for(let i=0;i<d.post.length;i++){
+      const b=d.post[i];
+      if(b.h>d.orbH){
+        if(!d.firstTouchSide){d.firstTouchSide='H'; d.firstTouchBar=b;}
+        tH=true;
+        if(b.c>d.orbH && !d.firstCloseBreak) d.firstCloseBreak={side:'H',i,bar:b};
+      }
+      if(b.l<d.orbL){
+        if(!d.firstTouchSide){d.firstTouchSide='L'; d.firstTouchBar=b;}
+        tL=true;
+        if(b.c<d.orbL && !d.firstCloseBreak) d.firstCloseBreak={side:'L',i,bar:b};
+      }
+    }
+    d.touchedH=tH; d.touchedL=tL;
+    d.bothBroke=tH&&tL; d.neitherBroke=!tH&&!tL; d.singleBreak=(tH!==tL);
+
+    // day close relative to the ORB
+    d.closeAboveORB = d.dayClose>d.orbH;
+    d.closeBelowORB = d.dayClose<d.orbL;
+    d.closeInsideORB = !d.closeAboveORB && !d.closeBelowORB;
+
+    // ORB break side vs the IB (09:30–10:30) break side — does the 5m call the hour?
+    d.ibBreakSide=null;
+    if(d.ibh!=null){
+      for(const b of d.bars.filter(x=>x.min>=630)){
+        if(b.h>d.ibh){ d.ibBreakSide='H'; break; }
+        if(b.l<d.ibl){ d.ibBreakSide='L'; break; }
+      }
+    }
+
+    if(d.firstCloseBreak){
+      const fb=d.firstCloseBreak, dir=fb.side==='H'?1:-1;
+      const lvl = fb.side==='H'? d.orbH : d.orbL;
+      const rest=d.post.slice(fb.i+1);
+      let mfe=0, mae=0, backInside=false, backInsideIdx=null, retest=false, retestIdx=null, peakBeforeFail=0;
+      for(let j=0;j<rest.length;j++){
+        const b=rest[j];
+        const fav = dir>0 ? b.h-lvl : lvl-b.l;
+        const adv = dir>0 ? lvl-b.l : b.h-lvl;
+        if(fav>mfe) mfe=fav;
+        if(adv>mae) mae=adv;
+        if(!backInside && j<FAIL_BARS){
+          const inside = dir>0 ? b.c<d.orbH : b.c>d.orbL;
+          if(inside){ backInside=true; backInsideIdx=j; peakBeforeFail=mfe; }
+        }
+        if(!retest && !backInside && j>0){
+          const near = dir>0 ? (b.l<=lvl+2*d.tick && b.c>lvl) : (b.h>=lvl-2*d.tick && b.c<lvl);
+          if(near){ retest=true; retestIdx=j; }
+        }
+      }
+      fb.mfe=mfe; fb.mae=mae; fb.rExt=mfe/d.width; fb.rAdv=mae/d.width;
+      fb.atrExt = d.atr ? mfe/d.atr : null;
+      fb.failed=backInside; fb.failIdx=backInsideIdx; fb.peakBeforeFail=peakBeforeFail;
+      fb.retest=retest;
+      fb.volSurge = d.avgVol!=null ? d.vol > d.avgVol : null;   // was the ORB itself a high-volume candle
+      fb.breakMin = fb.bar.min;
+
+      if(retest && retestIdx!=null){
+        const preExt = dir>0 ? Math.max(...rest.slice(0,retestIdx+1).map(b=>b.h))
+                             : Math.min(...rest.slice(0,retestIdx+1).map(b=>b.l));
+        const after = rest.slice(retestIdx+1);
+        fb.retestCont = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))>preExt
+                                              : Math.min(...after.map(b=>b.l))<preExt) : false;
+      } else fb.retestCont=null;
+
+      if(backInside){
+        const after=rest.slice(backInsideIdx+1);
+        fb.fadeMid = after.length ? (dir>0 ? Math.min(...after.map(b=>b.l))<=d.mid
+                                           : Math.max(...after.map(b=>b.h))>=d.mid) : false;
+        fb.fadeOpp = after.length ? (dir>0 ? Math.min(...after.map(b=>b.l))<=d.orbL
+                                           : Math.max(...after.map(b=>b.h))>=d.orbH) : false;
+      }
+      fb.hit={};
+      [1,2,3,5].forEach(t=>{ fb.hit[t] = mfe >= t*d.width; });
+      fb.hitAtr={};
+      [0.25,0.5].forEach(t=>{ fb.hitAtr[t] = d.atr ? mfe >= t*d.atr : false; });
+
+      /* 0.25 pullback re-entry — measured back INTO the ORB from the broken edge */
+      const fibLvl = dir>0 ? d.orbH - 0.25*d.width : d.orbL + 0.25*d.width;
+      let fHit=false,fIdx=null,fExtAtTouch=null;
+      for(let j=0;j<rest.length;j++){
+        const b=rest[j];
+        const touch = dir>0 ? b.l<=fibLvl : b.h>=fibLvl;
+        if(touch){ fHit=true; fIdx=j;
+          fExtAtTouch = dir>0 ? Math.max(...rest.slice(0,j+1).map(x=>x.h))
+                              : Math.min(...rest.slice(0,j+1).map(x=>x.l));
+          break; }
+      }
+      let fCont=false,fFail=null,fMfe=null;
+      if(fHit){
+        const after=rest.slice(fIdx+1);
+        fCont = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))>fExtAtTouch
+                                      : Math.min(...after.map(b=>b.l))<fExtAtTouch) : false;
+        fFail = after.length ? (dir>0 ? Math.min(...after.map(b=>b.l))<=d.orbL
+                                      : Math.max(...after.map(b=>b.h))>=d.orbH) : false;   // ran clean through the ORB
+        fMfe  = after.length ? (dir>0 ? Math.max(...after.map(b=>b.h))-fibLvl
+                                      : fibLvl-Math.min(...after.map(b=>b.l)))/d.width : 0;
+      }
+      fb.fib={hit:fHit, cont:fCont, fail:fFail, mfe:fMfe, barsToTouch: fIdx!=null? fIdx+1 : null};
+    }
+  }
+  return days;
+}
+
+/* ---------- report helpers ---------- */
+function row(label, n, wins, extra=''){
+  const p = n? 100*wins/n : 0;
+  return `<tr><td>${label}</td><td>${n}</td><td>${wins}</td><td class="${cls(p)}"><b>${n?p.toFixed(1)+'%':'—'}</b></td><td class="d">${extra}</td></tr>`;
+}
+function table(head, body, note=''){
+  const b = Array.isArray(body) ? body.join('') : body;
+  return `<table><thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${b}</tbody></table>${note?`<div class="note">${note}</div>`:''}`;
+}
+function card(title,desc,inner){ return `<div class="card"><h2>${title}</h2><div class="desc">${desc}</div>${inner}</div>`; }
+
+/* ---------- main report ---------- */
+function report(sym){
+  const days = SETS[sym].days, N=days.length, out=[];
+  const fcb = days.filter(d=>d.firstCloseBreak);
+
+  /* header */
+  const avgW = avg(days.map(d=>d.width));
+  const avgWpct = 100*avg(days.map(d=>d.width/d.open));
+  out.push(`<div class="grid">
+    <div class="stat"><div class="k">Sessions</div><div class="val">${N}</div></div>
+    <div class="stat"><div class="k">Date range</div><div class="val" style="font-size:14px">${days[0].date} → ${days[N-1].date}</div></div>
+    <div class="stat"><div class="k">Avg ORB width</div><div class="val">${f2(avgW)} pts</div><div class="k" style="margin-top:4px">${f2(avgWpct)}% of price</div></div>
+    <div class="stat"><div class="k">Median ORB width</div><div class="val">${f2(med(days.map(d=>d.width)))} pts</div></div>
+    <div class="stat"><div class="k">ORB as % of day range</div><div class="val">${f2(100*avg(days.map(d=>d.width/(d.dayHigh-d.dayLow))))}%</div></div>
+  </div>`);
+
+  /* 0 · baseline */
+  out.push(card('0 · Baseline — ORB break behavior','What happens before any rule is applied. The 5m range is tiny, so almost everything breaks — the benchmark is not "does it break", it is "does the break hold".',
+    table(['Outcome','Days','Hit','Rate','Note'],[
+      row('ORB high broken (any wick)', N, days.filter(d=>d.touchedH).length),
+      row('ORB low broken (any wick)',  N, days.filter(d=>d.touchedL).length),
+      row('SINGLE break only (one side)', N, days.filter(d=>d.singleBreak).length, 'the trend-day signature'),
+      row('BOTH sides broken (whipsaw)',  N, days.filter(d=>d.bothBroke).length, 'the 5m ORB tax'),
+      row('NEITHER side broken',          N, days.filter(d=>d.neitherBroke).length, 'essentially never'),
+      row('Break confirmed by a CLOSE outside', N, fcb.length),
+      row('First touch = HIGH side', N, days.filter(d=>d.firstTouchSide==='H').length, 'directional baseline — should be ~50%'),
+    ], 'Compare BOTH-sides-broken here against the same number in the 60m IB tool. That difference is the price you pay for the earlier entry.')));
+
+  /* 0b · timing */
+  const touchMins = days.filter(d=>d.firstTouchBar).map(d=>d.firstTouchBar.min);
+  const closeMins = fcb.map(d=>d.firstCloseBreak.breakMin);
+  const distRows = [[575,'by 09:35 (first bar out)'],[585,'by 09:45'],[600,'by 10:00'],[630,'by 10:30'],[660,'by 11:00'],[720,'by 12:00']]
+    .map(([m,l])=>row(l, closeMins.length, closeMins.filter(x=>x<=m).length, 'cumulative')).join('');
+  out.push(`<div class="card"><h2>0b · Time of ORB Break</h2><div class="desc">When the first break actually happens. "Touch" = any wick outside the 5m range. "Close break" = a bar closes outside it — the tradeable one.</div>
+    <div class="grid">
+      <div class="stat"><div class="k">Avg time · first TOUCH</div><div class="val">${clock(avg(touchMins))}</div><div class="k" style="margin-top:4px">${f2(avg(touchMins)-575)} min after ORB close</div></div>
+      <div class="stat"><div class="k">Avg time · CLOSE break</div><div class="val">${clock(avg(closeMins))}</div><div class="k" style="margin-top:4px">${f2(avg(closeMins)-575)} min after ORB close</div></div>
+      <div class="stat"><div class="k">Median · CLOSE break</div><div class="val">${clock(med(closeMins))}</div><div class="k" style="margin-top:4px">n = ${closeMins.length} days</div></div>
+      <div class="stat"><div class="k">Break inside the IB hour</div><div class="val">${pct(closeMins.filter(x=>x<630).length, closeMins.length)}</div><div class="k" style="margin-top:4px">before 10:30</div></div>
+    </div>
+    ${table(['Break has occurred…','Break days','Count','Cumulative %','Note'], distRows,
+      'A 5m ORB break that has not happened by 10:00 is a different animal — the session is already balancing.')}
+  </div>`);
+
+  /* 1 · ORB candle color */
+  const gr=days.filter(d=>d.color==='green'), rd=days.filter(d=>d.color==='red');
+  out.push(card('1 · ORB Candle Color','Green 5m opening candle → expect the high to break first. Red → the low. The single simplest read of the range.',
+    table(['Signal','Days','Correct','Hit rate','Detail'],[
+      row('GREEN ORB → high breaks first', gr.length, gr.filter(d=>d.firstTouchSide==='H').length, `single-break: ${pct(gr.filter(d=>d.singleBreak).length,gr.length)}`),
+      row('RED ORB → low breaks first',    rd.length, rd.filter(d=>d.firstTouchSide==='L').length, `single-break: ${pct(rd.filter(d=>d.singleBreak).length,rd.length)}`),
+      row('GREEN → day CLOSES above ORB high', gr.length, gr.filter(d=>d.closeAboveORB).length, 'hold-into-the-close version'),
+      row('RED → day CLOSES below ORB low',    rd.length, rd.filter(d=>d.closeBelowORB).length, 'hold-into-the-close version'),
+    ], 'If both rows sit at ~50%, colour is noise on this instrument and every rule below must carry the weight instead.')));
+
+  /* 2 · close location inside the ORB */
+  const top=days.filter(d=>d.bodyLoc>=0.75), bot=days.filter(d=>d.bodyLoc<=0.25), midz=days.filter(d=>d.bodyLoc>0.25&&d.bodyLoc<0.75);
+  out.push(card('2 · Where the ORB Candle Closed','Strong close in the top quarter of its own range → buyers ended the auction in control. Bottom quarter → sellers. Middle → no information.',
+    table(['Zone','Days','Predicted side breaks first','Rate','Single-break rate'],[
+      row('Close in TOP 25% of ORB',    top.length,  top.filter(d=>d.firstTouchSide==='H').length,  pct(top.filter(d=>d.singleBreak).length,top.length)),
+      row('Close in BOTTOM 25% of ORB', bot.length,  bot.filter(d=>d.firstTouchSide==='L').length,  pct(bot.filter(d=>d.singleBreak).length,bot.length)),
+      row('Close in MIDDLE 50%',        midz.length, midz.filter(d=>d.firstTouchSide==='H').length, 'high-first rate — expect a coin flip'),
+    ])));
+
+  /* 3 · single-break continuation */
+  const sbWin = fcb.filter(d=> d.firstCloseBreak.side==='H' ? !d.touchedL : !d.touchedH).length;
+  out.push(card('3 · Single Break Continuation','After the first close-confirmed break, does the opposite side of the 5m range stay untouched for the rest of the session? This is the number that decides whether the 5m ORB is tradeable at all.',
+    table(['Test','Days','Hit','Rate','Detail'],[
+      row('Opposite ORB side NEVER breaks', fcb.length, sbWin, 'true single-break day after entry'),
+      row('Never trades back to ORB midpoint', fcb.length, fcb.filter(d=>{
+        const fb=d.firstCloseBreak, rest=d.post.slice(fb.i+1); if(!rest.length) return false;
+        return fb.side==='H' ? Math.min(...rest.map(b=>b.l))>d.mid : Math.max(...rest.map(b=>b.h))<d.mid;
+      }).length, 'strictest version'),
+      row('Break extends ≥ 2× ORB width', fcb.length, fcb.filter(d=>d.firstCloseBreak.hit[2]).length),
+      row('Day CLOSES on the break side',  fcb.length, fcb.filter(d=>d.firstCloseBreak.side==='H'? d.closeAboveORB : d.closeBelowORB).length, 'held it into the bell'),
+    ], 'A 5m range is inside almost every subsequent bar\'s noise. Expect this to be materially worse than the 60m IB equivalent — that is the whole trade-off.')));
+
+  /* 4 · ORB width buckets */
+  const wd=days.filter(d=>d.avgORB && d.atr);
+  const narrow=wd.filter(d=>d.width < 0.75*d.avgORB);
+  const wide  =wd.filter(d=>d.width > 1.25*d.avgORB);
+  const norm  =wd.filter(d=>!narrow.includes(d)&&!wide.includes(d));
+  const bucketRow=(label,a)=>row(label, a.length, a.filter(d=>d.singleBreak).length,
+    `both broke: ${pct(a.filter(d=>d.bothBroke).length,a.length)} · avg width ${f2(avg(a.map(d=>d.width)))} pts · ≥2× ext: ${(()=>{const x=a.filter(d=>d.firstCloseBreak);return x.length?pct(x.filter(d=>d.firstCloseBreak.hit[2]).length,x.length):'—';})()}`);
+  out.push(card('4 · ORB Width → Day Type','Buckets are adaptive: each day is measured against its own trailing 20-day average ORB, so the thresholds move with volatility. Thesis: a narrow opening candle compresses energy and trends; a wide one already spent the move and rotates.',
+    `<div class="grid">
+      <div class="stat"><div class="k">NARROW</div><div class="val" style="font-size:16px">&lt; 0.75× avgORB20</div><div class="k" style="margin-top:4px">≈ under ${f2(0.75*avg(wd.map(d=>d.avgORB)))} pts at current vol</div></div>
+      <div class="stat"><div class="k">WIDE</div><div class="val" style="font-size:16px">&gt; 1.25× avgORB20</div><div class="k" style="margin-top:4px">≈ over ${f2(1.25*avg(wd.map(d=>d.avgORB)))} pts at current vol</div></div>
+      <div class="stat"><div class="k">Sample averages</div><div class="val" style="font-size:16px">ATR14 ${f2(avg(wd.map(d=>d.atr)))} · avgORB20 ${f2(avg(wd.map(d=>d.avgORB)))}</div></div>
+    </div>` +
+    table(['Bucket','Days','Single-break','Rate','Detail'],[
+      bucketRow('NARROW ORB', narrow),
+      bucketRow('NORMAL ORB', norm),
+      bucketRow('WIDE ORB',   wide),
+    ], 'The thesis only holds if NARROW single-break% beats WIDE by a real margin. If WIDE has the higher both-sides-broke rate, that is your fade regime.')));
+
+  /* 5 · volume on the ORB candle */
+  const volYes=fcb.filter(d=>d.firstCloseBreak.volSurge===true), volNo=fcb.filter(d=>d.firstCloseBreak.volSurge===false);
+  out.push(card('5 · ORB Volume Filter','Was the opening 5m candle itself a high-volume candle (vs the trailing 20-day average ORB volume)? Real participation in the open should mean the break carries.',
+    table(['Filter','Breaks','≥2× ORB ext','Rate','Avg MFE / MAE (× ORB width)'],[
+      row('ORB volume ABOVE 20d avg', volYes.length, volYes.filter(d=>d.firstCloseBreak.hit[2]).length,
+        `MFE ${f2(avg(volYes.map(d=>d.firstCloseBreak.rExt)))}× / MAE ${f2(avg(volYes.map(d=>d.firstCloseBreak.rAdv)))}×`),
+      row('ORB volume BELOW 20d avg', volNo.length, volNo.filter(d=>d.firstCloseBreak.hit[2]).length,
+        `MFE ${f2(avg(volNo.map(d=>d.firstCloseBreak.rExt)))}× / MAE ${f2(avg(volNo.map(d=>d.firstCloseBreak.rAdv)))}×`),
+    ], 'MFE/MAE are measured from the broken ORB edge in multiples of ORB width. MAE is your minimum stop distance — and on a 5m range it is brutal.')));
+
+  /* 6 · failed break fade */
+  const failed=fcb.filter(d=>d.firstCloseBreak.failed);
+  out.push(card('6 · Failed Breakout Fade','Price closes outside the ORB, then closes back INSIDE within 20 minutes. Fade target = midpoint, then the opposite edge.',
+    table(['Outcome','Days','Hit','Rate','Detail'],[
+      row('Break FAILS (back inside ≤20m)', fcb.length, failed.length, 'base rate of the trap'),
+      row('  ↳ then reaches ORB MIDPOINT',  failed.length, failed.filter(d=>d.firstCloseBreak.fadeMid).length, 'target 1'),
+      row('  ↳ then reaches OPPOSITE edge', failed.length, failed.filter(d=>d.firstCloseBreak.fadeOpp).length, 'target 2'),
+    ], `Avg excursion before the fail: ${f2(avg(failed.map(d=>d.firstCloseBreak.peakBeforeFail)))} pts (${f2(avg(failed.map(d=>d.firstCloseBreak.peakBeforeFail/d.width)))}× ORB width) — that is roughly the stop a breakout entry has to survive.`)));
+
+  /* 7 · retest */
+  const rt=fcb.filter(d=>d.firstCloseBreak.retest);
+  const noRt=fcb.filter(d=>!d.firstCloseBreak.retest && !d.firstCloseBreak.failed);
+  out.push(card('7 · Retest Continuation','After the close-break, price returns to within 2 ticks of the broken edge but holds it (close stays outside). Does it then make a new extreme?',
+    table(['Path','Breaks','Continues to new extreme','Rate','Avg MFE (× ORB width)'],[
+      row('Break → clean RETEST → continue', rt.length, rt.filter(d=>d.firstCloseBreak.retestCont).length, `${f2(avg(rt.map(d=>d.firstCloseBreak.rExt)))}×`),
+      row('Break → NO retest (runs away)',   noRt.length, noRt.filter(d=>d.firstCloseBreak.hit[2]).length, `${f2(avg(noRt.map(d=>d.firstCloseBreak.rExt)))}× (hit = ≥2× ext)`),
+    ], 'If the runaway days carry the bigger MFE, waiting for the retest filters you out of the best sessions.')));
+
+  /* 8 · 0.25 pullback */
+  const fA=fcb.filter(d=>d.firstCloseBreak.fib.hit), fAno=fcb.filter(d=>!d.firstCloseBreak.fib.hit);
+  out.push(card('8 · 0.25 Pullback Re-entry','After the break, wait for a retrace to 25% back inside the ORB, then re-enter in the break direction. Continuation = a new extreme beyond the pre-pullback high/low.',
+    table(['Test','Days','Hit','Rate','Detail'],[
+      row('Pullback REACHES the 0.25 level', fcb.length, fA.length, 'how often you even get filled'),
+      row('  ↳ then CONTINUES to a new extreme', fA.length, fA.filter(d=>d.firstCloseBreak.fib.cont).length, '<b>the actual edge</b>'),
+      row('  ↳ instead runs clean through the ORB', fA.length, fA.filter(d=>d.firstCloseBreak.fib.fail).length, 'trade dies'),
+      row('NO pullback — price never comes back', fcb.length, fAno.length, `these run: avg MFE ${f2(avg(fAno.map(d=>d.firstCloseBreak.rExt)))}× ORB`),
+    ], `Avg MFE from the 0.25 entry: <b>${f2(avg(fA.map(d=>d.firstCloseBreak.fib.mfe)))}× ORB width</b> · avg bars from break to pullback touch: <b>${f2(avg(fA.filter(d=>d.firstCloseBreak.fib.barsToTouch).map(d=>d.firstCloseBreak.fib.barsToTouch)))}</b>. Compare "continues" against the plain hold rate in Rule 3.`)));
+
+  /* 9 · extension targets */
+  const rows9=[1,2,3,5].map(t=>row(`${t}× ORB width from the broken edge`, fcb.length, fcb.filter(d=>d.firstCloseBreak.hit[t]).length,
+    `≈ ${f2(t*avgW)} pts at avg ORB width`));
+  const atrRows=[0.25,0.5].map(t=>row(`${t}× ATR14 from the broken edge`, fcb.length, fcb.filter(d=>d.firstCloseBreak.hitAtr[t]).length,
+    `≈ ${f2(t*avg(wd.map(d=>d.atr)))} pts at avg ATR`));
+  out.push(card('9 · Extension Targets','Probability the break reaches each scale-out multiple, measured from the broken ORB edge. ORB multiples are unstable on a tiny range, so ATR multiples are given too — those are the ones to size against.',
+    table(['Target','Breaks','Reached','Hit rate','Sizing'], rows9.join('')+atrRows.join(''),
+    `Avg MFE on all close-breaks: <b>${f2(avg(fcb.map(d=>d.firstCloseBreak.rExt)))}× ORB width</b> (${f2(avg(fcb.filter(d=>d.firstCloseBreak.atrExt!=null).map(d=>d.firstCloseBreak.atrExt)))}× ATR14) · Avg MAE (heat taken): <b>${f2(avg(fcb.map(d=>d.firstCloseBreak.rAdv)))}× ORB width</b>.`)));
+
+  /* 10 · ORB → IB */
+  const withIb=days.filter(d=>d.ibBreakSide && d.firstCloseBreak);
+  out.push(card('10 · Does the 5m ORB call the IB hour?','The bridge to the Initial Balance tool. Does the first close-break of the 5m range predict which side of the 09:30–10:30 IB gets taken out after 10:30?',
+    table(['Test','Days','Agree','Rate','Detail'],[
+      row('ORB break side = IB break side', withIb.length, withIb.filter(d=>d.firstCloseBreak.side===d.ibBreakSide).length, 'the 5m as an early IB signal'),
+      row('ORB break side = day close side', fcb.filter(d=>!d.closeInsideORB).length,
+          fcb.filter(d=>!d.closeInsideORB && (d.firstCloseBreak.side==='H'? d.closeAboveORB : d.closeBelowORB)).length, 'held all day'),
+      row('Day closes back INSIDE the ORB', N, days.filter(d=>d.closeInsideORB).length, 'the full round trip — pure chop'),
+    ], 'If the ORB break predicts the IB break well above 50%, the 5m entry is a legitimate front-run of the IB trade. If not, take the IB and skip the ORB.')));
+
+  /* 11 · open type */
+  const rows11=[];
+  for(const ot of ['OAR-H','OAR-L','HIR','LIR']){
+    const g=wd.filter(d=>d.openType===ot); if(!g.length) continue;
+    rows11.push(row(`${ot} — all`, g.length, g.filter(d=>d.singleBreak).length, `both broke: ${pct(g.filter(d=>d.bothBroke).length,g.length)}`));
+    const gn=g.filter(d=>narrow.includes(d));
+    if(gn.length>=5) rows11.push(row(`  ↳ ${ot} + NARROW ORB`, gn.length, gn.filter(d=>d.singleBreak).length, 'breakout thesis'));
+  }
+  out.push(card('11 · Open Type + ORB Width','OAR = the session opened outside the prior RTH range (gap). HIR/LIR = opened inside it, upper/lower half. Hit = single-break day.',
+    table(['Open type','Days','Single-break','Rate','Detail'], rows11.join(''),
+    'A gap open with a narrow ORB is the textbook trend-day setup — this table says whether that is true on your data.')));
+
+  /* 12 · day of week */
+  const rows12=['Mon','Tue','Wed','Thu','Fri'].map(w=>{
+    const g=days.filter(d=>d.dow===w); if(!g.length) return '';
+    return row(w, g.length, g.filter(d=>d.singleBreak).length,
+      `high-first: ${pct(g.filter(d=>d.firstTouchSide==='H').length,g.length)} · both broke: ${pct(g.filter(d=>d.bothBroke).length,g.length)}`);
+  });
+  out.push(card('12 · Day of Week','Hit = single-break day. Directional skew shown in the detail column.',
+    table(['Day','Sessions','Single-break','Rate','Detail'], rows12.join(''),
+    'Day-of-week edges decay fast and are the easiest thing to overfit. Treat anything under ~50 sessions per day as decoration.')));
+
+  /* ★ ranking */
+  const scores=[
+    ['ORB colour → first-touch side', gr.length+rd.length, gr.filter(d=>d.firstTouchSide==='H').length+rd.filter(d=>d.firstTouchSide==='L').length],
+    ['ORB colour → day closes that side', gr.length+rd.length, gr.filter(d=>d.closeAboveORB).length+rd.filter(d=>d.closeBelowORB).length],
+    ['Close top/bottom 25% → that side breaks first', top.length+bot.length, top.filter(d=>d.firstTouchSide==='H').length+bot.filter(d=>d.firstTouchSide==='L').length],
+    ['Single break (opposite side never breaks)', fcb.length, sbWin],
+    ['Break holds → day closes on break side', fcb.length, fcb.filter(d=>d.firstCloseBreak.side==='H'? d.closeAboveORB : d.closeBelowORB).length],
+    ['Break → ≥2× ORB extension', fcb.length, fcb.filter(d=>d.firstCloseBreak.hit[2]).length],
+    ['Break + ORB volume surge → ≥2× ext', volYes.length, volYes.filter(d=>d.firstCloseBreak.hit[2]).length],
+    ['Failed break → opposite edge (fade)', failed.length, failed.filter(d=>d.firstCloseBreak.fadeOpp).length],
+    ['Retest → continuation', rt.length, rt.filter(d=>d.firstCloseBreak.retestCont).length],
+    ['0.25 pullback → continuation', fA.length, fA.filter(d=>d.firstCloseBreak.fib.cont).length],
+    ['Narrow ORB → single break', narrow.length, narrow.filter(d=>d.singleBreak).length],
+    ['Wide ORB → both sides break (rotation)', wide.length, wide.filter(d=>d.bothBroke).length],
+    ['ORB break side = IB break side', withIb.length, withIb.filter(d=>d.firstCloseBreak.side===d.ibBreakSide).length],
+  ].filter(s=>s[1]>=8).sort((a,b)=> (b[2]/b[1])-(a[2]/a[1]));
+  out.unshift(card('★ Rule Ranking — highest hit rate first','Only rules with ≥8 sample days. Sample size first: a 90% hit rate on 9 days is nothing. Directional rules are graded against a 50% coin flip, not against zero.',
+    table(['Rule','Sample (days)','Hit','Hit rate','Verdict'],
+      scores.map(([l,n,w])=>{ const p=100*w/n;
+        const v = n<20 ? 'thin sample' : p>=65?'tradeable' : p>=55?'marginal' : p<=45?'inverted — fade it' : 'noise';
+        return row(l,n,w,v);
+      }).join(''))));
+
+  $('#out').innerHTML = out.join('');
+}
+
+/* ---------- export ---------- */
+function slim(d){
+  const fb=d.firstCloseBreak;
+  return {
+    date:d.date, dow:d.dow, width:d.width, dayRange:d.dayHigh-d.dayLow, atr:d.atr, avgORB:d.avgORB,
+    color:d.color, bodyLoc:d.bodyLoc, openType:d.openType,
+    touchedH:d.touchedH, touchedL:d.touchedL,
+    singleBreak:d.singleBreak, bothBroke:d.bothBroke, neitherBroke:d.neitherBroke,
+    firstTouchSide:d.firstTouchSide, firstTouchMin:d.firstTouchBar?d.firstTouchBar.min:null,
+    ibBreakSide:d.ibBreakSide,
+    closeAboveORB:d.closeAboveORB, closeBelowORB:d.closeBelowORB, closeInsideORB:d.closeInsideORB,
+    fcb: fb ? {
+      side:fb.side, breakMin:fb.breakMin, rExt:fb.rExt, rAdv:fb.rAdv, atrExt:fb.atrExt,
+      volSurge:fb.volSurge, failed:!!fb.failed, peakBeforeFail:fb.peakBeforeFail,
+      fadeMid:!!fb.fadeMid, fadeOpp:!!fb.fadeOpp, retest:!!fb.retest, retestCont:fb.retestCont,
+      hit:{ "1":!!fb.hit[1], "2":!!fb.hit[2], "3":!!fb.hit[3], "5":!!fb.hit[5] },
+      fib:{ hit:!!fb.fib.hit, cont:!!fb.fib.cont, fail:!!fb.fib.fail, mfe:fb.fib.mfe },
+    } : null,
+  };
+}
+function exportJson(){
+  if(!ACTIVE) return;
+  const days=SETS[ACTIVE].days;
+  const payload={
+    symbol:ACTIVE, window:'ORB5', barMinutes:SETS[ACTIVE].barMin, generated:new Date().toISOString().slice(0,10),
+    sessions:days.length, from:days[0].date, to:days[days.length-1].date, days:days.map(slim),
+  };
+  const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=`orb5-${ACTIVE}.json`; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---------- wiring ---------- */
+function symbolFromName(name){
+  const n=name.toUpperCase();
+  const m=n.match(/\b(MNQ|MES|NQ|ES|RTY|YM)\b/) || n.match(/(MNQ|MES|NQ|ES|RTY|YM)/);
+  return m ? m[1] : n.replace(/\.(CSV|TXT)$/,'').slice(0,10);
+}
+function handle(text, name){
+  const rows=parseCSV(text);
+  if(rows.length<200){ $('#out').innerHTML=`<div class="card r">Parsed only ${rows.length} bars from ${name} — check the CSV format.</div>`; return; }
+
+  const gaps={};
+  for(let i=1;i<Math.min(rows.length,4000);i++){
+    const g=rows[i].min-rows[i-1].min;
+    if(g>0 && g<=60) gaps[g]=(gaps[g]||0)+1;
+  }
+  BAR_MIN = +Object.entries(gaps).sort((a,b)=>b[1]-a[1])[0][0] || 5;
+
+  const sym=symbolFromName(name);
+  const days=buildDays(rows, TICK[sym] ?? 0.25);
+  if(!days.length){ $('#out').innerHTML=`<div class="card r">No complete RTH sessions found in ${name}.</div>`; return; }
+  SETS[sym]={days, barMin:BAR_MIN, file:name};
+  ACTIVE=sym;
+  renderTabs();
+  show(sym);
+}
+function renderTabs(){
+  const syms=Object.keys(SETS);
+  $('#tabs').innerHTML = syms.map(s=>`<div class="tab ${s===ACTIVE?'on':''}" onclick="show('${s}')">${s} <span style="opacity:.65;font-weight:400">${SETS[s].days.length}d</span></div>`).join('');
+}
+function show(sym){
+  ACTIVE=sym;
+  BAR_MIN=SETS[sym].barMin;
+  renderTabs();
+  report(sym);
+  $('#exportbar').style.display='flex';
+  const d=SETS[sym].days;
+  $('#meta').textContent = `${sym} · ${SETS[sym].barMin}m bars · ${d.length} sessions · ${d[0].date} → ${d[d.length-1].date}`;
+}
+function readFiles(list){
+  [...list].forEach(f=>{ const r=new FileReader(); r.onload=()=>handle(r.result, f.name); r.readAsText(f); });
+}
+const drop=$('#drop'), file=$('#file');
+drop.onclick=()=>file.click();
+file.onchange=e=>readFiles(e.target.files);
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+drop.addEventListener('drop',e=>{ e.preventDefault(); readFiles(e.dataTransfer.files); });
+</script>
+</body>
+</html>

@@ -2,6 +2,26 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Monday 7/13/2026
+
+* Added a market State Rail to the Greeks tab on the home page — four live power bars showing the dealer gamma regime, whether volatility is cheap or expensive right now, which way dealer hedging is leaning, and where the options skew sits, with a plain-English "current play" call underneath (sell premium, buy convexity, fade the range, or stand aside).
+* The volatility bar compares what the market is *actually* doing to what options are *charging* for it — so you can see at a glance whether premium is rich or cheap, rather than guessing. When the live price feed goes quiet it now says so instead of showing a confident but meaningless reading.
+* Fixed the GEX levels on the ES Candles chart. Because SPX and ES futures trade at a gap that changes over time, older levels on the chart were being placed using today's gap — so the further back you looked, the more wrong they were. Every day's levels now use that day's own gap, so the heatmap bands and the CB line finally sit where they actually were.
+* The chart's levels are no longer thrown off outside market hours. When the cash market is closed, SPX stops updating while futures keep moving, and the chart was mistaking that for a real change — putting every level tens of points off. It now holds the last true reading until the market reopens.
+* The heatmap no longer goes blank from the 6pm futures open through midnight — the overnight session now shows.
+* Fixed the ES Candles snapshot printing the chart twice in one image.
+* GEX bubbles are now solid-colored instead of hollow rings, and the three biggest strikes in each minute stand out clearly so you can see where the gamma is at a glance.
+* The IB Stats tab on the Scanner now shows all 14 Initial Balance rules against today's live session in one place, right at the top: today's IB high, low, mid and width, whether the IB has formed yet, and every rule sorted into what's in play, what hasn't triggered yet, and what simply isn't on the table today.
+* Rules that haven't triggered yet now show you the odds *if* they do fire — so before a break even happens, you can see how often that break historically runs, fails, or reverses.
+* Before 10:30am the board clearly labels every read as provisional, since the IB isn't final until then.
+* Fixed the IB width tables, which were showing all zeros — narrow, normal and wide day-type stats now populate correctly.
+* Fixed a bug where the previous day's session could bleed into today's Initial Balance levels.
+
+## Monday 7/13/2026
+
+* ES Candles has a new **Bubbles** overlay: every minute it drops a bubble at each strike, sized by how much gamma is sitting there — blue for calls, red for puts. Watch the bubbles swell and shrink through the day to see exactly where dealers are building or bleeding gamma. It loads with the full session already filled in, and there's a slider to dial the bubble size to your taste.
+* The old GEX Lines overlay has been retired — the bubbles show the same thing with a time dimension.
+
 ## Sunday 7/12/2026
 
 * Fixed the Inverse FVG setup, which had barely been logging anything — it had recorded just 3 setups in a month when it should have been finding several a day. It now tracks properly (124 over the last 18 sessions).
