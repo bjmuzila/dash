@@ -134,6 +134,29 @@ const DEFAULT_TICKERS = [
   "SPX", "SPY", "QQQ", "META", "TSLA", "AMZN", "AAPL", "NVDA", "MSFT", "GOOGL", "AMD", "NDX",
 ] as const;
 
+// Recent tickers (most-recent-first, max 7) persisted in the browser — same
+// pattern as /options-chain's RECENT dropdown.
+const RECENT_TICKERS_KEY = "flow-recent-tickers-v1";
+const RECENT_TICKERS_MAX = 7;
+
+function loadRecentTickers(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(RECENT_TICKERS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((t): t is string => typeof t === "string").slice(0, RECENT_TICKERS_MAX) : [];
+  } catch { return []; }
+}
+
+function pushRecentTicker(list: string[], ticker: string): string[] {
+  const t = ticker.toUpperCase();
+  const next = [t, ...list.filter((x) => x !== t)].slice(0, RECENT_TICKERS_MAX);
+  if (typeof window !== "undefined") {
+    try { window.localStorage.setItem(RECENT_TICKERS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
+  return next;
+}
+
 // URL params (used by the Day Posts capture embed):
 //   ?chartonly=1  → render ONLY the Net Drift chart card (no filters/tape/dark pool)
 //   ?ticker=SPX   → preset the active ticker
@@ -165,6 +188,10 @@ export default function FlowPage() {
     return t ? t.toUpperCase() : DEFAULT_TICKERS[0];
   });
   const [tickerInput, setTickerInput] = useState("");
+  // Recents (browser-cached). Hydrated after mount to avoid SSR mismatch.
+  const [recentTickers, setRecentTickers] = useState<string[]>([]);
+  const [recentOpen, setRecentOpen] = useState(false);
+  useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
 
   // ── Other filters ──
   const [side, setSide] = useState<SideFilter>("all");
@@ -189,6 +216,11 @@ export default function FlowPage() {
   // effect as a reset without the blank-flash in between.
   const [historySwitching, setHistorySwitching] = useState(false);
   useEffect(() => {
+    // Combined view doesn't read `history` — skip the pull entirely. With the
+    // full roster recording (millions of prints/day) this per-ticker query is
+    // expensive, and racing it against the combined pull is what made Combined
+    // take ~a minute to fill.
+    if (view === "combined") { setHistorySwitching(false); return; }
     let cancelled = false;
     setHistorySwitching(true);
     // Push the premium floor to the server so the 20k cap keeps the biggest
@@ -197,16 +229,20 @@ export default function FlowPage() {
     // fills by mid-morning and the newest-20k window silently drops the whole
     // early session (looks like "history starts at 11am" with no error).
     const premParam = minPremium > 0 ? `&minPremium=${minPremium}` : "";
-    fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}${premParam}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (cancelled) return;
-        if (j && Array.isArray(j.tape)) setHistory(j.tape as FlowOrder[]);
-        setHistorySwitching(false);
-      })
-      .catch(() => { if (!cancelled) setHistorySwitching(false); });
-    return () => { cancelled = true; };
-  }, [active, date, minPremium]);
+    // Debounced like the combined pull: dragging the premium slider otherwise
+    // fires one full-session query per slider step.
+    const kick = setTimeout(() => {
+      fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}${premParam}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (cancelled) return;
+          if (j && Array.isArray(j.tape)) setHistory(j.tape as FlowOrder[]);
+          setHistorySwitching(false);
+        })
+        .catch(() => { if (!cancelled) setHistorySwitching(false); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(kick); };
+  }, [active, date, minPremium, view]);
 
   // ── Net-drift bins for the ACTIVE ticker, aggregated in SQL over the WHOLE
   // session (not the tape's 20k raw-row cap) so the chart always spans the
@@ -216,6 +252,8 @@ export default function FlowPage() {
   const [netBins, setNetBins] = useState<NetBin[]>([]);
   const [netSwitching, setNetSwitching] = useState(false);
   useEffect(() => {
+    // Chart is hidden in Combined view — don't poll its bins every 5s there.
+    if (view === "combined") { setNetSwitching(false); return; }
     let cancelled = false;
     setNetSwitching(true);
     const qp = new URLSearchParams({ underlying: active, bin: String(BIN_SEC), date });
@@ -240,7 +278,7 @@ export default function FlowPage() {
     // Past sessions are static — only poll the live edge for today.
     const id = isToday ? setInterval(load, 5000) : null;
     return () => { cancelled = true; if (id) clearInterval(id); };
-  }, [active, date, isToday, side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly]);
+  }, [active, date, isToday, side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly, view]);
 
   // ── Combined view backfill: the whole day's tape (ALL tickers), fetched once
   // when the Combined tab is opened. Live prints still arrive via the WS `orders`
@@ -618,13 +656,17 @@ export default function FlowPage() {
   const bigOtmActive =
     view === "combined" && minPremium === 500_000 && dteMin === 0 && dteMax === 7 && otmOnly;
 
-  function addTicker() {
-    const t = tickerInput.trim().toUpperCase();
+  // Select a ticker (from input, GO, or the RECENT dropdown): add it to the
+  // watchlist, make it active, and remember it in the browser recents.
+  function selectTicker(raw: string) {
+    const t = raw.trim().toUpperCase();
     if (!t) return;
     setTickerList((prev) => (prev.includes(t) ? prev : [...prev, t]));
     setActive(t);
     setTickerInput("");
+    setRecentTickers((prev) => pushRecentTicker(prev, t));
   }
+  function addTicker() { selectTicker(tickerInput); }
 
   // ── Styles ──
   const labelStyle: React.CSSProperties = {
@@ -769,7 +811,7 @@ export default function FlowPage() {
                   <button
                     key={t}
                     className="flow-chip"
-                    onClick={() => setActive(t)}
+                    onClick={() => selectTicker(t)}
                     style={{
                       padding: "6px 12px", fontSize: 15, fontWeight: 700, cursor: "pointer",
                       letterSpacing: "0.04em", borderRadius: 6,
@@ -784,13 +826,76 @@ export default function FlowPage() {
                   </button>
                 );
               })}
+              {/* Type a ticker (datalist suggestions) → GO, plus a RECENT
+                  dropdown backed by localStorage. Mirrors /options-chain. */}
               <input
-                style={{ ...homeInputStyle, width: 120 }}
+                list="flow-ticker-suggestions"
+                style={{ ...homeInputStyle, width: 120, textTransform: "uppercase" }}
                 placeholder="+ add ticker"
                 value={tickerInput}
-                onChange={(e) => setTickerInput(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
                 onKeyDown={(e) => { if (e.key === "Enter") addTicker(); }}
               />
+              <datalist id="flow-ticker-suggestions">
+                {DEFAULT_TICKERS.map((t) => <option key={t} value={t} />)}
+              </datalist>
+              <button
+                className="flow-chip"
+                onClick={addTicker}
+                disabled={!tickerInput.trim()}
+                style={{
+                  padding: "6px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.06em",
+                  borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)",
+                  color: C.cyan, cursor: tickerInput.trim() ? "pointer" : "not-allowed",
+                  opacity: tickerInput.trim() ? 1 : 0.45,
+                }}
+              >
+                GO
+              </button>
+
+              {recentTickers.length > 0 && (
+                <div style={{ position: "relative" }}>
+                  <button
+                    className="flow-chip"
+                    onClick={() => setRecentOpen((o) => !o)}
+                    onBlur={() => setTimeout(() => setRecentOpen(false), 120)}
+                    style={{
+                      padding: "6px 12px", fontSize: 15, fontWeight: 700, letterSpacing: "0.04em",
+                      borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)",
+                      color: C.text, cursor: "pointer",
+                    }}
+                  >
+                    Recent ▾
+                  </button>
+                  {recentOpen && (
+                    <div
+                      style={{
+                        position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 80,
+                        minWidth: 120, borderRadius: 6, overflow: "hidden",
+                        border: `1px solid ${C.border}`, background: "rgba(6,12,18,0.98)",
+                        boxShadow: "0 10px 24px rgba(0,0,0,0.6)",
+                      }}
+                    >
+                      {recentTickers.map((t) => (
+                        <button
+                          key={t}
+                          onMouseDown={() => { selectTicker(t); setRecentOpen(false); }}
+                          style={{
+                            display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+                            padding: "7px 12px", fontSize: 15, fontWeight: 700, border: "none",
+                            background: t === active ? DOCK_THEME.activeTile : "transparent",
+                            color: t === active ? C.cyan : C.text,
+                          }}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -389,9 +389,9 @@ function LiveToday({ sym, win, ds, days, hist }: {
 
   return (
     <>
-      <LiveGauges live={live} days={days} dowName={dowName} />
+      <LiveGauges live={live} days={days} dowName={dowName} win={win} />
 
-      <RuleBoard live={live} days={days} dowName={dowName} />
+      <RuleBoard live={live} days={days} dowName={dowName} win={win} />
 
       <Card
         accent="cyan"
@@ -425,8 +425,8 @@ function LiveToday({ sym, win, ds, days, hist }: {
             </td>
           </tr>
           <tr>
-            <td style={tdL}>IB close location</td>
-            <td style={td}>{live.closeZone} of the IB</td>
+            <td style={tdL}>{WLBL} close location</td>
+            <td style={td}>{live.closeZone} of the {WLBL}</td>
             <td style={tdDim}>Rule 10 — strong only when the zone agrees with the formation order</td>
           </tr>
           <tr>
@@ -450,7 +450,7 @@ function LiveToday({ sym, win, ds, days, hist }: {
             <tbody>
               {live.targets.map((t) => (
                 <tr key={t.t}>
-                  <td style={tdL}>{t.t}× IB width from the broken level</td>
+                  <td style={tdL}>{t.t}× {WLBL} width from the broken level</td>
                   <td style={td}>{f2(t.px)}</td>
                   <td style={{ ...td, color: t.hit ? HOME_THEME.green : HOME_THEME.text, fontWeight: 800 }}>{t.hit ? "REACHED" : "not yet"}</td>
                 </tr>
@@ -527,7 +527,8 @@ function Bar({ label, p, color }: { label: string; p: number; color: string }) {
   );
 }
 
-function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
+function LiveGauges({ live, days, dowName, win }: { live: any; days: SlimDay[]; dowName: string; win: Win }) {
+  const L = winLabel(win);
   const bias = live.bias as "H" | "L" | null;
   const first = live.first as "H" | "L";
   const bucketKey = String(live.bucket).toLowerCase() as SlimDay["widthBucket"];
@@ -539,10 +540,10 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
     const labels: string[] = [];
     if (bias) { conds.push((d) => d.bias === bias); labels.push(bias === "H" ? "close > mid" : "close < mid"); }
     conds.push((d) => d.first === first); labels.push(`${first === "H" ? "HIGH" : "LOW"} first`);
-    if (bucketKey) { conds.push((d) => d.widthBucket === bucketKey); labels.push(`${String(live.bucket)} IB`); }
-    if (orbDir) { conds.push((d) => d.orbDir === orbDir); labels.push(`ORB ${orbDir === "H" ? "up" : "down"}`); }
+    if (bucketKey) { conds.push((d) => d.widthBucket === bucketKey); labels.push(`${String(live.bucket)} ${L}`); }
+    if (orbDir) { conds.push((d) => d.orbDir === orbDir); labels.push(`inner ORB ${orbDir === "H" ? "up" : "down"}`); }
     return bestSample(days, conds, labels);
-  }, [days, bias, first, bucketKey, orbDir, live.bucket]);
+  }, [days, bias, first, bucketKey, orbDir, live.bucket, L]);
 
   const withTouch = g.g.filter((d) => d.firstTouchSide);
   const pHigh = withTouch.length ? (100 * withTouch.filter((d) => d.firstTouchSide === "H").length) / withTouch.length : 50;
@@ -581,7 +582,7 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
       return { name: `Midpoint bias → ${bias === "H" ? "HIGH" : "LOW"} breaks first`, n: use.length, p,
         verdict: p >= 60 ? ("tradeable" as const) : p <= 45 ? ("fade" as const) : ("noise" as const), note: g.label };
     }
-    return { name: "No bias — IB closed on the midpoint", n: g.g.length, p: 50, verdict: "noise" as const, note: "wait for a break" };
+    return { name: `No bias — ${L} closed on the midpoint`, n: g.g.length, p: 50, verdict: "noise" as const, note: "wait for a break" };
   })();
 
   /* overall verdict — one signed number */
@@ -601,8 +602,8 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
   const vColor = rule?.verdict === "tradeable" ? HOME_THEME.green : rule?.verdict === "fade" ? HOME_THEME.red : HOME_THEME.orange;
 
   return (
-    <Card accent="cyan" title="Live Read — direction, expansion, active rule"
-      subtitle={`${g.label}${live.ibComplete ? "" : " · IB STILL FORMING"}`}>
+    <Card accent="cyan" title={`Live Read — direction, expansion, active rule · ${L}`}
+      subtitle={`${g.label}${live.ibComplete ? "" : ` · ${L} STILL FORMING`}`}>
 
       {/* overall verdict */}
       <div style={{
@@ -703,7 +704,9 @@ type LiveRule = {
   outcome?: (d: SlimDay) => boolean;
 };
 
-function buildRules(live: any, dowName: string): LiveRule[] {
+function buildRules(live: any, dowName: string, win: Win): LiveRule[] {
+  const L = winLabel(win);              // "IB 60m" / "ORB 15m" — the range this board is reading
+  const REND = rangeEnd(win);
   const bias = live.bias as "H" | "L" | null;
   const first = live.first as "H" | "L";
   const zone = live.zone as SlimDay["closeZone"];
@@ -728,12 +731,12 @@ function buildRules(live: any, dowName: string): LiveRule[] {
   /* 1 · Midpoint Close Bias */
   R.push(bias ? {
     id: "1", name: "Midpoint Close Bias", state: "in-play",
-    read: `IB closed ${bias === "H" ? "ABOVE" : "BELOW"} mid → lean ${bias === "H" ? "LONG" : "SHORT"}`,
+    read: `${L} closed ${bias === "H" ? "ABOVE" : "BELOW"} mid → lean ${bias === "H" ? "LONG" : "SHORT"}`,
     side: bias, question: `${W(bias)} breaks first`,
     cond: (d) => d.bias === bias, outcome: (d) => d.firstTouchSide === bias,
   } : {
     id: "1", name: "Midpoint Close Bias", state: "not-in-play",
-    read: "IB closed exactly ON the midpoint — no bias", side: null, question: "—",
+    read: `${L} closed exactly ON the midpoint — no bias`, side: null, question: "—",
   });
 
   /* 2 · Formation Order + Midpoint */
@@ -766,25 +769,25 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => (exp === "H" ? !d.touchedL : !d.touchedH),
   });
 
-  /* 4 · IB Width → Day Type */
+  /* 4 · Range Width → Day Type */
   R.push(bk === "narrow" || bk === "normal" || bk === "wide" ? {
-    id: "4", name: "IB Width → Day Type", state: "in-play",
-    read: `${bucket} IB (${f2(live.width)} pts) → ${bk === "narrow" ? "trend / breakout lean" : bk === "wide" ? "rotation lean — fade the breaks" : "no width edge"}`,
+    id: "4", name: `${L} Width → Day Type`, state: "in-play",
+    read: `${bucket} ${L} (${f2(live.width)} pts) → ${bk === "narrow" ? "trend / breakout lean" : bk === "wide" ? "rotation lean — fade the breaks" : "no width edge"}`,
     side: null, question: bk === "wide" ? "BOTH sides break (rotation)" : "only ONE side breaks",
     cond: (d) => d.widthBucket === bk,
     outcome: (d) => (bk === "wide" ? d.bothBroke : d.singleBreak),
   } : {
-    id: "4", name: "IB Width → Day Type", state: "not-in-play",
-    read: "width bucket unavailable — ATR14 / avgIB20 not yet established", side: null, question: "—",
+    id: "4", name: `${L} Width → Day Type`, state: "not-in-play",
+    read: "width bucket unavailable — ATR14 / 20d avg range not yet established", side: null, question: "—",
   });
 
   /* 5 · Breakout Entry + volume */
   R.push(brk && live.volSurge != null ? {
     id: "5", name: "Breakout Entry — close + volume", state: "in-play",
     read: live.volSurge
-      ? `${W(brk)} break came WITH a volume surge (break bar > avg IB bar)`
+      ? `${W(brk)} break came WITH a volume surge (break bar > avg ${L} bar)`
       : `${W(brk)} break came with NO volume surge — the weaker version`,
-    side: brk, question: "the break runs ≥ 1× IB width",
+    side: brk, question: `the break runs ≥ 1× ${L} width`,
     cond: (d) => !!d.fcb && d.fcb.volSurge === live.volSurge,
     outcome: (d) => !!d.fcb!.hit["1"],
   } : {
@@ -792,7 +795,7 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     read: brk
       ? "break printed but bar volume is unavailable on the live feed — showing the all-breaks rate"
       : `${noBreak} — projected side: ${W(exp)}`,
-    side: exp, question: `IF a ${W(exp)} break prints WITH a volume surge, it runs ≥ 1× IB width`,
+    side: exp, question: `IF a ${W(exp)} break prints WITH a volume surge, it runs ≥ 1× ${L} width`,
     cond: (d) => !!d.fcb && d.fcb.side === exp && d.fcb.volSurge,
     outcome: (d) => !!d.fcb!.hit["1"],
   });
@@ -804,7 +807,7 @@ function buildRules(live: any, dowName: string): LiveRule[] {
       ? `The ${W(brk)} break ALREADY FAILED — closed back inside. Fade target: mid, then the opposite extreme`
       : `${W(brk)} break is holding — this is the trap risk, not yet triggered`,
     side: brk === "H" ? "L" : "H",
-    question: live.failed ? "the fade reaches the OPPOSITE IB extreme" : "this break fails and closes back inside ≤30m",
+    question: live.failed ? `the fade reaches the OPPOSITE ${L} extreme` : "this break fails and closes back inside ≤30m",
     cond: (d) => !!d.fcb && d.fcb.side === brk && (live.failed ? d.fcb.failed : true),
     outcome: (d) => (live.failed ? d.fcb!.fadeOpp : d.fcb!.failed),
   } : {
@@ -816,17 +819,20 @@ function buildRules(live: any, dowName: string): LiveRule[] {
     outcome: (d) => d.fcb!.failed,
   });
 
-  /* 7 · 15m FVG inside the IB */
+  /* 7 · 15m FVG inside the range — impossible once the window is ≤15m (nothing to nest) */
   R.push(fvg ? {
-    id: "7", name: "15m FVG inside the IB", state: "in-play",
-    read: `${fvg === "bull" ? "BULLISH" : "BEARISH"} 15m fair-value gap inside the IB`,
+    id: "7", name: `15m FVG inside the ${L}`, state: "in-play",
+    read: `${fvg === "bull" ? "BULLISH" : "BEARISH"} 15m fair-value gap inside the ${L}`,
     side: fvg === "bull" ? "H" : "L",
     question: `the ${fvg === "bull" ? "HIGH" : "LOW"} is the side that gets touched first`,
     cond: (d) => d.fvg === fvg,
     outcome: (d) => d.firstTouchSide === (fvg === "bull" ? "H" : "L"),
   } : {
-    id: "7", name: "15m FVG inside the IB", state: "not-in-play",
-    read: "no 15m FVG formed inside today's IB", side: null, question: "—",
+    id: "7", name: `15m FVG inside the ${L}`, state: "not-in-play",
+    read: win <= 15
+      ? `window is only ${win}m — a 15m FVG cannot form inside it. Use the 30m or 60m tab for this rule.`
+      : `no 15m FVG formed inside today's ${L}`,
+    side: null, question: "—",
   });
 
   /* 8 · Retest Continuation */
@@ -851,59 +857,61 @@ function buildRules(live: any, dowName: string): LiveRule[] {
   R.push(brk ? {
     id: "9", name: "Extension Targets", state: "in-play",
     read: `Measuring from the broken ${W(brk)} — ${live.targets.filter((t: any) => t.hit).length}/${live.targets.length} targets reached`,
-    side: brk, question: "the move reaches ≥ 1× IB width",
+    side: brk, question: `the move reaches ≥ 1× ${L} width`,
     cond: (d) => !!d.fcb && d.fcb.side === brk,
     outcome: (d) => !!d.fcb!.hit["1"],
   } : {
     id: "9", name: "Extension Targets", state: "pending",
-    read: `${noBreak} — targets would measure from the IB ${W(exp)} (${f2(exp === "H" ? live.ibh : live.ibl)})`,
-    side: exp, question: `IF a ${W(exp)} break prints, it reaches ≥ 1× IB width`,
+    read: `${noBreak} — targets would measure from the ${L} ${W(exp)} (${f2(exp === "H" ? live.ibh : live.ibl)})`,
+    side: exp, question: `IF a ${W(exp)} break prints, it reaches ≥ 1× ${L} width`,
     cond: (d) => !!d.fcb && d.fcb.side === exp,
     outcome: (d) => !!d.fcb!.hit["1"],
   });
 
-  /* 10 · Close Location in IB Range */
+  /* 10 · Close Location in the range */
   const strongZone = (zone === "top25" && first === "L") || (zone === "bot25" && first === "H");
   R.push(strongZone && bias ? {
-    id: "10", name: "Close Location in IB Range", state: "in-play",
+    id: "10", name: `Close Location in the ${L} Range`, state: "in-play",
     read: `Close in the ${zoneWord} + ${W(first)} formed first — the strong ${zone === "top25" ? "LONG" : "SHORT"} version`,
     side: zone === "top25" ? "H" : "L",
     question: `${zone === "top25" ? "HIGH" : "LOW"} breaks first`,
     cond: (d) => d.closeZone === zone && d.first === first,
     outcome: (d) => d.firstTouchSide === (zone === "top25" ? "H" : "L"),
   } : {
-    id: "10", name: "Close Location in IB Range", state: "not-in-play",
+    id: "10", name: `Close Location in the ${L} Range`, state: "not-in-play",
     read: zone === "mid50"
-      ? "IB closed in the MIDDLE 50% — no close-location edge"
+      ? `${L} closed in the MIDDLE 50% — no close-location edge`
       : `Close in the ${zoneWord} but ${W(first)} formed first — zone and formation order disagree`,
     side: null, question: "—",
   });
 
-  /* 11 · Open Type + IB Width */
+  /* 11 · Open Type + range width */
   R.push(openType && bk ? {
-    id: "11", name: "Open Type + IB Width", state: "in-play",
-    read: `${openType} open (${openType.startsWith("OAR") ? "outside" : "inside"} the prior RTH range) + ${bucket} IB`,
+    id: "11", name: `Open Type + ${L} Width`, state: "in-play",
+    read: `${openType} open (${openType.startsWith("OAR") ? "outside" : "inside"} the prior RTH range) + ${bucket} ${L}`,
     side: null, question: "only ONE side breaks",
     cond: (d) => d.openType === openType && d.widthBucket === bk,
     outcome: (d) => d.singleBreak,
   } : {
-    id: "11", name: "Open Type + IB Width", state: "not-in-play",
+    id: "11", name: `Open Type + ${L} Width`, state: "not-in-play",
     read: "prior-session RTH range unavailable on the live feed — open type can't be classified",
     side: null, question: "—",
   });
 
-  /* 12 · ORB + IB Alignment */
+  /* 12 · inner 09:30–09:45 ORB vs the range's midpoint bias — needs a window > 15m */
   R.push(orbDir && bias ? {
-    id: "12", name: "ORB + IB Alignment", state: "in-play",
+    id: "12", name: `Inner 15m ORB + ${L} Alignment`, state: "in-play",
     read: orbDir === bias
-      ? `ORB broke ${W(orbDir)} — ALIGNED with the midpoint bias`
-      : `ORB broke ${W(orbDir)} — CONFLICTS with the midpoint bias`,
+      ? `Inner 15m ORB broke ${W(orbDir)} — ALIGNED with the midpoint bias`
+      : `Inner 15m ORB broke ${W(orbDir)} — CONFLICTS with the midpoint bias`,
     side: bias, question: `${W(bias)} breaks first`,
     cond: (d) => d.bias === bias && d.orbDir === orbDir,
     outcome: (d) => d.firstTouchSide === bias,
   } : {
-    id: "12", name: "ORB + IB Alignment", state: "not-in-play",
-    read: !orbDir ? "the 09:30–09:45 opening range never broke inside the IB" : "no midpoint bias to align with",
+    id: "12", name: `Inner 15m ORB + ${L} Alignment`, state: "not-in-play",
+    read: win <= 15
+      ? `window is only ${win}m — there is no inner ORB to nest inside it. Use the 30m or 60m tab for this rule.`
+      : !orbDir ? `the 09:30–09:45 opening range never broke inside the ${L}` : "no midpoint bias to align with",
     side: null, question: "—",
   });
 
@@ -911,15 +919,15 @@ function buildRules(live: any, dowName: string): LiveRule[] {
   const bm = live.breakMin as number | null;
   R.push(bm != null ? {
     id: "13", name: "Time Filter — when the break happens", state: "in-play",
-    read: `Break printed at ${clock(bm)} ET — ${bm <= 660 ? "early (first 30m out of the IB)" : bm <= 780 ? "midday" : "late"}`,
-    side: brk, question: "the break runs ≥ 1× IB width given that timing",
+    read: `Break printed at ${clock(bm)} ET — ${bm <= REND + 30 ? `early (first 30m out of the ${L})` : bm <= 780 ? "midday" : "late"}`,
+    side: brk, question: `the break runs ≥ 1× ${L} width given that timing`,
     cond: (d) => !!d.fcb && (bm <= 660 ? d.fcb.breakMin <= 660 : bm <= 780 ? d.fcb.breakMin > 660 && d.fcb.breakMin <= 780 : d.fcb.breakMin > 780),
     outcome: (d) => !!d.fcb!.hit["1"],
   } : {
     id: "13", name: "Time Filter — when the break happens", state: "pending",
     read: `${noBreak} — it's ${clock(live.nowMin)} ET, so a break now counts as ${live.nowMin <= 660 ? "EARLY" : live.nowMin <= 780 ? "MIDDAY" : "LATE"}`,
     side: exp,
-    question: `IF the break prints in this window, it runs ≥ 1× IB width`,
+    question: `IF the break prints in this window, it runs ≥ 1× ${L} width`,
     cond: (d) => !!d.fcb && (live.nowMin <= 660
       ? d.fcb.breakMin <= 660
       : live.nowMin <= 780
@@ -931,19 +939,19 @@ function buildRules(live: any, dowName: string): LiveRule[] {
   /* 14 · Contained Day */
   R.push(live.containedAt2 === true ? {
     id: "14", name: "Contained Day (rare)", state: "in-play",
-    read: "Price is STILL fully inside the IB at 14:00 ET — the rare contained day",
+    read: `Price is STILL fully inside the ${L} at 14:00 ET — the rare contained day`,
     side: null, question: "it stays contained into the close (never breaks late)",
     cond: (d) => d.containedAt2,
     outcome: (d) => !d.containedBrokeLate,
   } : live.nowMin < 840 && !live.brokeH && !live.brokeL ? {
     id: "14", name: "Contained Day (rare)", state: "pending",
-    read: `Still inside the IB at ${clock(live.nowMin)} ET — not confirmed until 14:00`,
+    read: `Still inside the ${L} at ${clock(live.nowMin)} ET — not confirmed until 14:00`,
     side: null, question: "IF price is still contained at 14:00, it never breaks late",
     cond: (d) => d.containedAt2,
     outcome: (d) => !d.containedBrokeLate,
   } : {
     id: "14", name: "Contained Day (rare)", state: "not-in-play",
-    read: "price already broke the IB — not a contained day", side: null, question: "—",
+    read: `price already broke the ${L} — not a contained day`, side: null, question: "—",
   });
 
   /* 0c · day-of-week, kept as a live read alongside the rules */
@@ -959,8 +967,10 @@ function buildRules(live: any, dowName: string): LiveRule[] {
   return R;
 }
 
-function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowName: string }) {
-  const rules = buildRules(live, dowName);
+function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; dowName: string; win: Win }) {
+  const L = winLabel(win);
+  const REND = rangeEnd(win);
+  const rules = buildRules(live, dowName, win);
   const provisional = !live.ibComplete;
 
   // Score EVERY rule that has a condition — including PENDING ones. A pending
@@ -1004,22 +1014,22 @@ function RuleBoard({ live, days, dowName }: { live: any; days: SlimDay[]; dowNam
   return (
     <Card
       accent="green"
-      title="In Play Right Now — all 14 rules against today's session"
+      title={`In Play Right Now — all 14 rules against today's ${L} (${winRange(win)} ET)`}
       subtitle={provisional
-        ? "IB STILL FORMING — every read below is CONDITIONAL: this is what the rules would say if the IB closed where it stands right now. They can still flip before 10:30 ET."
-        : "IB FORMED — each rule scored against every past session that matched today's condition"}
+        ? `${L} STILL FORMING — every read below is CONDITIONAL: this is what the rules would say if the range closed where it stands right now. They can still flip before ${clock(REND)} ET.`
+        : `${L} FORMED — each rule scored against every past session that matched today's condition`}
     >
       {/* the levels every rule below is measured against */}
       <div style={statGrid}>
         <Stat k="Live price" v={f2(live.price)} sub={`day range ${f2(live.dayLow)} – ${f2(live.dayHigh)}`} />
-        <Stat k="IB High" v={f2(live.ibh)} sub={live.price < live.ibh ? `${f2(live.ibh - live.price)} pts above price` : `broken — ${f2(live.price - live.ibh)} pts below price`} />
-        <Stat k="IB Low" v={f2(live.ibl)} sub={live.price > live.ibl ? `${f2(live.price - live.ibl)} pts below price` : `broken — ${f2(live.ibl - live.price)} pts above price`} />
-        <Stat k="IB Mid" v={f2(live.mid)} sub={live.price >= live.mid ? "price above mid" : "price below mid"} />
-        <Stat k="IB Width" v={`${f2(live.width)} pts`} sub={String(live.bucket)} />
+        <Stat k={`${L} High`} v={f2(live.ibh)} sub={live.price < live.ibh ? `${f2(live.ibh - live.price)} pts above price` : `broken — ${f2(live.price - live.ibh)} pts below price`} />
+        <Stat k={`${L} Low`} v={f2(live.ibl)} sub={live.price > live.ibl ? `${f2(live.price - live.ibl)} pts below price` : `broken — ${f2(live.ibl - live.price)} pts above price`} />
+        <Stat k={`${L} Mid`} v={f2(live.mid)} sub={live.price >= live.mid ? "price above mid" : "price below mid"} />
+        <Stat k={`${L} Width`} v={`${f2(live.width)} pts`} sub={String(live.bucket)} />
         <Stat
-          k="IB"
+          k={L}
           v={provisional ? "FORMING" : "FORMED"}
-          sub={provisional ? `not final until 10:30 ET · now ${clock(live.nowMin)}` : `locked at 10:30 ET · now ${clock(live.nowMin)}`}
+          sub={provisional ? `not final until ${clock(REND)} ET · now ${clock(live.nowMin)}` : `locked at ${clock(REND)} ET · now ${clock(live.nowMin)}`}
         />
         <Stat k="Status" v={String(live.status)} sub={live.breakMin != null ? `broke ${live.breakSide === "H" ? "high" : "low"} at ${clock(live.breakMin)} ET` : "no close outside yet"} />
       </div>

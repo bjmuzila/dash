@@ -192,7 +192,7 @@ function GexScanner() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [win, setWin] = useState<Win>(15);
-  const [sort, setSort] = useState<GexSort>("z");
+  const [sort, setSort] = useState<GexSort>("abs"); // default: biggest |Δ GEX|
   const [minZ, setMinZ] = useState(0);
   const [colSort, setColSort] = useState<ColSort>(null);
   // Default "build": only strikes whose OWN side is growing (above spot & Δ↑ = call
@@ -2493,7 +2493,7 @@ function BalanceImbalanceScanner() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function ScannerPage() {
-  const [tab, setTab] = useState<MainTab>("overview");
+  const [tab, setTab] = useState<MainTab>("gex");
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding: "8px 20px", borderRadius: 8, fontSize: 15, cursor: "pointer", fontWeight: 700,

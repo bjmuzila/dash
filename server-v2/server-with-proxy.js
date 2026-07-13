@@ -384,6 +384,12 @@ async function ensureFlowPrintsSchema(pool) {
     // on every 5s poll. INCLUDE-ing the filtered+summed columns here lets
     // Postgres answer straight from the index (index-only scan) instead.
     await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_netprem_covering_idx ON flow_prints (date, underlying_norm, ts) INCLUDE (type, side, premium, size, is_otm)');
+    // Combined (no-ticker) tape pull filters on `premium` alone. With the full
+    // roster recording (millions of prints/day) the date-only path degenerates
+    // into a seq scan — measured 11s on 4.3M rows, which blows past the client
+    // fetch and silently yields an empty tape. Index the exact shape of that
+    // query so it becomes an index range scan.
+    await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_prem_ts_idx ON flow_prints (date, premium DESC, ts DESC)');
     await pool.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
     _flowSchemaEnsured = true;
   } catch (e) {
