@@ -19,12 +19,6 @@
 #  [Watch This]  new watch-this — ticker / strike / expiration (links to page)
 #  [Balance]     today's quadrant transition
 #
-# Replace the examples below with your live signals:
-
-9:32   [CB] new CB 7400 — moved up from 7380
-9:38   [Econ] 5 minutes to CPI
-9:45   [Flow] new whale — SPX 7400C $1.2M {/flow}
-9:58   [Traders] 1 minute to market open
-10:05  [Greeks] vanna-charm melt up {/greeks}
-10:10  [Analytics] GEX crossed 0 {/es-candles}
-10:18  [Balance] quadrant flipped to balanced {/scanner}
+# Hand-authored signals go below this line. Live engine signals (/proxy/signals)
+# and the AUTO ECON ALERTS block are merged in automatically — do NOT leave
+# example lines here, they outrank real signals in the newest-first sort.
