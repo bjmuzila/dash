@@ -997,11 +997,14 @@ export default function EstimatedMoves() {
         body: JSON.stringify({
           ticker: apiTicker,
           label: apiTicker,
-          pivot: fmtFuture(lvl.pivot),
-          buy_near: fmtFuture(lvl.noShortNear),
-          buy_far: fmtFuture(lvl.noShortFar),
-          sell_near: fmtFuture(lvl.noLongNear),
-          sell_far: fmtFuture(lvl.noLongFar),
+          // fmtPrice, NOT fmtFuture: only ES/NQ trade in quarter ticks. fmtFuture
+          // quarter-rounded penny names too (SPY 771.77 -> 772.00), publishing
+          // prices that can't print. Mirrors fmtZone in server-v2/levels-engine.js.
+          pivot: fmtPrice(lvl.ticker, lvl.pivot),
+          buy_near: fmtPrice(lvl.ticker, lvl.noShortNear),
+          buy_far: fmtPrice(lvl.ticker, lvl.noShortFar),
+          sell_near: fmtPrice(lvl.ticker, lvl.noLongNear),
+          sell_far: fmtPrice(lvl.ticker, lvl.noLongFar),
         }),
       }).catch((e) => console.warn("[Levels] zone push failed:", apiTicker, e));
     });

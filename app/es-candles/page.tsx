@@ -27,7 +27,12 @@ function toChartTime(ts: number): UTCTimestamp {
 // netOiVol = gamma×(OI+vol), netVol = gamma×vol only. The active metric is
 // chosen at draw time by gexMetric so the toggle re-renders without new data.
 type GexCell = { strike: number; netOiVol: number; netVol: number };
-type GexColumn = { slotTs: number; cells: GexCell[] };
+// `spot` = SPX at the moment this column's snapshot was taken. Strikes are in
+// SPX space but the chart plots ES, so each column converts with ITS OWN basis
+// (esAtSlot − spot). A single live basis mis-places every historical column:
+// ES−SPX basis drifts with carry/dividends, decays into expiry, and steps at the
+// quarterly roll — easily 10–30pt of error across a 5-day window.
+type GexColumn = { slotTs: number; cells: GexCell[]; spot?: number };
 type GexMetric = "voloi" | "vol";
 
 // Volume-by-price profile + value-area levels, derived from candle OHLCV.
@@ -644,7 +649,9 @@ export default function EsCandlesPage() {
           setRailRows(cells.map((c) => ({ strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol })));
           const slotTs = slotFloorMs(Date.now());
           const map = columnsRef.current;
-          map.set(slotTs, { slotTs, cells });
+          // Stamp the live column with the SPX spot from THIS frame so it ages
+          // into history carrying its own basis, exactly like a DB-backfilled one.
+          map.set(slotTs, { slotTs, cells, spot: spx > 0 ? spx : undefined });
           // Keep ~2 full days of 1-min slots (a 24h day = 1440 slots). The old
           // 200 cap chopped off the morning columns mid-session, making the
           // all-day heatmap vanish from the left.
@@ -722,7 +729,7 @@ export default function EsCandlesPage() {
         // History persists both net_gex (OI+vol) and net_vol_gex (vol-only), so
         // the Vol-only heatmap mode now has backfill too. netVol falls back to 0
         // for legacy rows written before the column existed.
-        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }> };
+        type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }>; spot?: number };
         const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
         if (cancelled || !raw.length) return;
         const map = columnsRef.current;
@@ -735,7 +742,10 @@ export default function EsCandlesPage() {
           const cells: GexCell[] = col.cells
             .filter((c) => c.strike > 0 && Number.isFinite(c.net))
             .map((c) => ({ strike: c.strike, netOiVol: c.net, netVol: Number(c.netVol ?? 0) }));
-          map.set(slotTs, { slotTs, cells });
+          // Historical SPX spot for this snapshot → per-column ES basis at draw
+          // time. 0/undefined (legacy rows) falls back to the live basis.
+          const colSpot = Number(col.spot ?? 0);
+          map.set(slotTs, { slotTs, cells, spot: colSpot > 0 ? colSpot : undefined });
         }
         drawOverlayRef.current();
       } catch { /* live feed still populates the front expiry going forward */ }
@@ -1133,6 +1143,47 @@ export default function EsCandlesPage() {
 
       const ts = chart.timeScale();
       const basis = basisRef.current;
+
+      // ── Per-column ES basis ────────────────────────────────────────────────
+      // Strikes live in SPX space; the chart plots ES. The basis (ES − SPX) is
+      // NOT a constant: it drifts with carry/dividends, decays toward 0 into
+      // expiry, and steps at the quarterly roll. Rendering a 5-day heatmap with
+      // one live basis therefore slides every older column off its true level.
+      //
+      // Each GEX snapshot already stores the SPX spot it was taken at, so the
+      // truthful basis for column t is (ES close at t) − (SPX spot at t). We
+      // rebuild it per column from the candles we already have on screen and
+      // fall back to the live basis only when a column has no stored spot
+      // (legacy rows written before spot was surfaced).
+      const esCloseAt = (tsMs: number): number | null => {
+        if (!rows.length) return null;
+        // Binary search: last candle at or before this slot.
+        let lo = 0, hi = rows.length - 1, found = -1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (rows[mid].timestamp <= tsMs) { found = mid; lo = mid + 1; } else hi = mid - 1;
+        }
+        if (found < 0) return null;
+        // Don't reach across a huge gap (e.g. a weekend) for a basis.
+        if (tsMs - rows[found].timestamp > 6 * 60 * 60 * 1000) return null;
+        return rows[found].close;
+      };
+      // Raw per-column basis, then a median-of-3 smooth across adjacent columns.
+      // ES close and SPX spot are sampled a few seconds apart, so the raw diff
+      // carries a point or two of noise — unsmoothed, cells would wobble
+      // vertically column-to-column. The median kills the jitter without
+      // flattening the real drift/roll steps.
+      const basisForCols = (cols: GexColumn[]): number[] => {
+        const raw = cols.map((c) => (c.spot && c.spot > 0 ? (() => {
+          const es = esCloseAt(c.slotTs);
+          return es != null ? es - (c.spot as number) : basis;
+        })() : basis));
+        return raw.map((_, i) => {
+          const a = raw[Math.max(0, i - 1)], b = raw[i], c = raw[Math.min(raw.length - 1, i + 1)];
+          return [a, b, c].sort((x, y) => x - y)[1];
+        });
+      };
+
       // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
       const slotX = (slotTs: number): { left: number; w: number } | null => {
         const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
@@ -1184,8 +1235,11 @@ export default function EsCandlesPage() {
             if (d <= 0) return 1;
             return Math.max(0.12, 1 - d / fadeSpan);
           };
+          // Historical ES basis, one per column (see basisForCols above).
+          const colBases = basisForCols(cols);
           for (let ci = 0; ci < cols.length; ci++) {
             const col = cols[ci];
+            const colBasis = colBases[ci];
             const sx = slotX(col.slotTs);
             if (!sx) continue;
             // Carry each column forward to the NEXT stored column's left edge so
@@ -1207,15 +1261,15 @@ export default function EsCandlesPage() {
               const cell = sorted[i];
               const color = gexColor(valOf(cell), colMax, intensity, colTop3);
               if (!color) continue;
-              const fade = distFade(cell.strike + basis);
+              const fade = distFade(cell.strike + colBasis);
               if (fade <= 0) continue;
               // Scale the rgba alpha by the distance fade.
               const faded = fade >= 0.999
                 ? color
                 : color.replace(/,([0-9.]+)\)$/, (_m, a) => `,${(parseFloat(a) * fade).toFixed(3)})`);
               const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
-              const pTop = series.priceToCoordinate(nextStrike + basis);
-              const pBot = series.priceToCoordinate(cell.strike + basis);
+              const pTop = series.priceToCoordinate(nextStrike + colBasis);
+              const pBot = series.priceToCoordinate(cell.strike + colBasis);
               if (pTop == null || pBot == null) continue;
               const top = Math.min(pTop, pBot);
               const cellH = Math.max(1, Math.abs(pBot - pTop));

@@ -28,6 +28,9 @@ function zoneSymbol(ticker) {
   if (ticker === 'NDX') return '$NDX{=w}';
   return `${ticker}{=w}`;
 }
+// NOTE: zoneSymbol()'s '/ESU6{=w}' resolves to Yahoo's CONTINUOUS "ES=F" series
+// (see historyYahooSymbol in proxy-tastytrade.js) — it is NOT the ESU6 contract.
+// It survives only for the long-history EM backfill map, never for zones.
 const QUOTE_SYMBOLS = Array.from(new Set([
   ...SYMBOLS, ...Object.values(API_SYMBOL), '/ESU26', '/NQU26', 'VIX',
 ]));
@@ -43,6 +46,11 @@ function fmtFuture(num) {
   if (num === undefined || !Number.isFinite(num)) return null;
   return roundQuarter(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+// Zone levels: ONLY ES/NQ trade in quarter ticks. Quarter-rounding SPY/AAPL/etc
+// snapped penny-priced names to the nearest 0.25 (e.g. SPY far 771.77 -> 772.00),
+// so zones print prices that can't exist. Route zones through fmtPrice, which
+// quarter-rounds ESM/NQM and leaves everything else at 2dp.
+const fmtZone = (ticker, num) => fmtPrice(ticker, num);
 function fmtEm(num) {
   if (num === undefined || !Number.isFinite(num) || num < 0) return null;
   return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
@@ -484,6 +492,71 @@ function weeklyFromDaily(daily) {
     .sort((a, b) => a.time - b.time);
 }
 
+// ── futures weekly candle: broker bars, NOT Yahoo ───────────────────────────
+// /api/dxlink/candles is Yahoo-backed (historyYahooSymbol maps /ES* -> "ES=F"),
+// which is a CONTINUOUS, roll-adjusted series — its weekly OHLC does not match
+// the ESU6 contract you chart, so the zones came out ~120 pts off pivot. The
+// authoritative bars are the ones the app already streams from /ESU26:XCME and
+// persists 5m at a time into es_candles / nq_candles. Aggregate those instead.
+//
+// ETH week = Sunday 18:00 ET open -> Friday 17:00 ET close. Shifting each bar
+// +6h before keying puts the Sunday-evening session into the week it belongs to.
+const ETH_SHIFT_MS = 6 * 60 * 60 * 1000;
+let _zonePool = null;
+function zonePool() {
+  if (_zonePool) return _zonePool;
+  if (!process.env.DATABASE_URL) return null;
+  const { Pool } = require('pg');
+  _zonePool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? undefined : { rejectUnauthorized: false },
+    max: 2,
+    keepAlive: true,
+  });
+  _zonePool.on('error', (e) => {
+    console.warn('[levels] zone pool error (will reconnect):', e.message);
+    try { _zonePool?.end().catch(() => {}); } catch {}
+    _zonePool = null;
+  });
+  return _zonePool;
+}
+
+async function fetchWeeklyHistoryFutures(ticker, daysBack = 140) {
+  const p = zonePool();
+  if (!p) throw new Error(`No DATABASE_URL — cannot build ${ticker} weekly zone candle`);
+  const tbl = ticker === 'NQM' ? 'nq_candles' : 'es_candles';
+  const since = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+  const { rows } = await p.query(
+    `SELECT timestamp, open, high, low, close FROM ${tbl}
+      WHERE timestamp >= $1 ORDER BY timestamp ASC`,
+    [since]
+  );
+  const byWeek = new Map();
+  for (const r of rows) {
+    // BIGINT columns come back as strings from pg — coerce or every compare lies.
+    const ts = Number(r.timestamp);
+    const o = Number(r.open); const h = Number(r.high);
+    const l = Number(r.low); const c = Number(r.close);
+    if (!(ts > 0) || ![o, h, l, c].every(Number.isFinite) || !(c > 0)) continue;
+    const wk = getWeekKey(new Date(ts + ETH_SHIFT_MS));
+    let g = byWeek.get(wk);
+    if (!g) { g = { wk, bars: [] }; byWeek.set(wk, g); }
+    g.bars.push({ time: ts, open: o, high: h, low: l, close: c });
+  }
+  return Array.from(byWeek.values())
+    .map(({ wk, bars }) => {
+      bars.sort((a, b) => a.time - b.time);
+      return {
+        time: Date.parse(`${wk}T04:00:00.000Z`), // Monday 00:00 ET — keys to `wk`
+        open: bars[0].open,
+        close: bars[bars.length - 1].close,
+        high: Math.max(...bars.map((x) => x.high)),
+        low: Math.min(...bars.map((x) => x.low)),
+      };
+    })
+    .sort((a, b) => a.time - b.time);
+}
+
 // Theta weekly history. Index route for SPX/NDX, stock route for equities.
 // Futures (ESM/NQM) have no Theta feed and are handled by the dxLink path.
 async function fetchWeeklyHistoryTheta(ticker, daysBack = 140) {
@@ -503,7 +576,7 @@ async function fetchWeeklyHistoryTheta(ticker, daysBack = 140) {
 // `ticker` is the candle ticker (SPX/NDX/ESM/NQM/equity), NOT the {=w} symbol.
 async function fetchWeeklyHistory(engine, ticker, daysBack = 140) {
   if (ticker === 'ESM' || ticker === 'NQM') {
-    return fetchWeeklyHistoryDx(engine, zoneSymbol(ticker));
+    return fetchWeeklyHistoryFutures(ticker, daysBack);
   }
   return fetchWeeklyHistoryTheta(ticker, daysBack);
 }
@@ -514,10 +587,39 @@ async function computeZonesForTicker(engine, ticker) {
   const targetWeek = getCompletedWeekKey();
   const bars = await fetchWeeklyHistory(engine, ticker);
   const exact = bars.find((i) => getWeekKey(new Date(i.time)) === targetWeek);
-  const candidates = bars.filter((i) => getWeekKey(new Date(i.time)) <= targetWeek);
-  const selected = exact || candidates[candidates.length - 1] || bars[bars.length - 1];
-  if (!selected) throw new Error(`No weekly candles for ${ticker}`);
-  return buildZoneLevels(ticker, [selected]);
+  // NO stale fallback. Previously this fell back to the newest available bar,
+  // which silently published zones off an old (or rolled-contract) week — the
+  // zones then sit hundreds of points from price with no error anywhere. If the
+  // completed week's candle isn't there, fail loud so the publish is skipped.
+  if (!exact) {
+    const last = bars[bars.length - 1];
+    const newest = last ? getWeekKey(new Date(last.time)) : 'none';
+    throw new Error(`No weekly candle for ${ticker} week ${targetWeek} (newest=${newest})`);
+  }
+
+  // Futures weekly CLOSE = the official Friday settle, not the last 5m bar we
+  // happened to record. es_candles stops at the last streamed bar (16:00-ish),
+  // so its close ran ~5.75 pts hot vs the 17:00 ET settle and pushed the pivot
+  // (and every zone) ~1.9 pts high. H/L from the bars are tick-exact; only the
+  // close needs the settle. Falls back to the bar close if no settle is quoted.
+  // Weekend-only: `prev-close` is Friday's settle on Sat/Sun, but midweek it's
+  // just yesterday's settle — applying it then would corrupt the weekly close.
+  // The publisher fires Sat 9am ET; weekday /em-zones lookups keep the bar close.
+  const etDay = getEtNow().getDay();
+  const isWeekend = etDay === 6 || etDay === 0;
+  if ((ticker === 'ESM' || ticker === 'NQM') && isWeekend) {
+    try {
+      const quotes = await fetchAllQuotes(engine);
+      const q = quotes[ticker] || {};
+      const settle = Number(q['prev-close'] ?? q.prevClose ?? q['day-close']);
+      if (Number.isFinite(settle) && settle > 0 && settle >= exact.low && settle <= exact.high) {
+        return buildZoneLevels(ticker, [{ ...exact, close: settle }]);
+      }
+    } catch (e) {
+      console.warn(`[levels] ${ticker} settle lookup failed, using bar close:`, e.message);
+    }
+  }
+  return buildZoneLevels(ticker, [exact]);
 }
 
 // On-demand: zones for one ticker, formatted as the ticker_levels payload (same
@@ -532,11 +634,11 @@ async function computeZonesPayload(base, ticker) {
   return {
     ticker: apiTicker,
     label: apiTicker,
-    pivot: fmtFuture(z.pivot),
-    buy_near: fmtFuture(z.noShortNear),
-    buy_far: fmtFuture(z.noShortFar),
-    sell_near: fmtFuture(z.noLongNear),
-    sell_far: fmtFuture(z.noLongFar),
+    pivot: fmtZone(sym, z.pivot),
+    buy_near: fmtZone(sym, z.noShortNear),
+    buy_far: fmtZone(sym, z.noShortFar),
+    sell_near: fmtZone(sym, z.noLongNear),
+    sell_far: fmtZone(sym, z.noLongFar),
   };
 }
 
@@ -634,11 +736,11 @@ async function computeAllLevels(base, opts = {}) {
       const apiTicker = DISPLAY_LABEL[z.ticker] ?? z.ticker;
       byTicker[apiTicker] = Object.assign({ ticker: apiTicker, label: apiTicker }, byTicker[apiTicker], {
         ticker: apiTicker, label: apiTicker,
-        pivot: fmtFuture(z.pivot),
-        buy_near: fmtFuture(z.noShortNear),
-        buy_far: fmtFuture(z.noShortFar),
-        sell_near: fmtFuture(z.noLongNear),
-        sell_far: fmtFuture(z.noLongFar),
+        pivot: fmtZone(z.ticker, z.pivot),
+        buy_near: fmtZone(z.ticker, z.noShortNear),
+        buy_far: fmtZone(z.ticker, z.noShortFar),
+        sell_near: fmtZone(z.ticker, z.noLongNear),
+        sell_far: fmtZone(z.ticker, z.noLongFar),
       });
     });
   } catch (e) {
@@ -826,6 +928,9 @@ async function seedUpcomingWeek(base, payloads) {
 async function fetchWeeklyOhlcMap(engine, ticker, daysBack = 1100, count = 170) {
   let bars;
   if (ticker === 'ESM' || ticker === 'NQM') {
+    // Deliberately still Yahoo here: this map is the ~3yr EM hit/miss BACKFILL,
+    // and es_candles only goes back as far as the recorder. Zone publishing uses
+    // fetchWeeklyHistoryFutures (broker bars) — do not "unify" these two.
     const start = Date.now() - (daysBack * 24 * 60 * 60 * 1000);
     const url = `${engine.base}/api/dxlink/candles?symbol=${encodeURIComponent(zoneSymbol(ticker))}&start=${start}&count=${count}`;
     const r = await ifetch(url);

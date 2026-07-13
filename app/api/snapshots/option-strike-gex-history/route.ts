@@ -89,6 +89,11 @@ export async function GET(req: NextRequest) {
           : await getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry)
         : await getOptionStrikeGexSlots(date, expiry);
       const bySlot = new Map<number, Array<{ strike: number; net: number; netVol: number }>>();
+      // SPX spot as of each slot. Strikes are SPX-space; consumers that plot on
+      // an ES axis (ES Candles heatmap) need the spot THAT SLOT WAS TAKEN AT to
+      // rebuild the historical ES−SPX basis, since basis drifts intraday, decays
+      // into expiry, and jumps at the quarterly roll.
+      const spotBySlot = new Map<number, number>();
       for (const r of slots) {
         if (!(r.strike > 0) || !Number.isFinite(r.net_gex)) continue;
         let arr = bySlot.get(r.slot_ts);
@@ -98,6 +103,8 @@ export async function GET(req: NextRequest) {
         // here flips the color on close (positive live → red closed bar).
         const netVol = Number(r.net_vol_gex ?? 0);
         arr.push({ strike: r.strike, net: r.net_gex + (Number.isFinite(netVol) ? netVol : 0), netVol });
+        const spot = Number((r as { spot?: number }).spot ?? 0);
+        if (spot > 0 && !spotBySlot.has(r.slot_ts)) spotBySlot.set(r.slot_ts, spot);
       }
       const columns = [...bySlot.entries()]
         .sort((a, b) => a[0] - b[0])
@@ -105,7 +112,7 @@ export async function GET(req: NextRequest) {
           const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
           const max = absVals.length ? Math.max(...absVals) : 1;
           const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
-          return { slotTs, cells, max, top3 };
+          return { slotTs, cells, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
         });
       return NextResponse.json({ mode: "heatmap", columns });
     }

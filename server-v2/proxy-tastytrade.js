@@ -3358,4 +3358,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient, resolveFrontEsSymbol, resolveFrontNqSymbol };

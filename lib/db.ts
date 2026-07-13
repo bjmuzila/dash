@@ -3691,14 +3691,15 @@ export async function getOptionStrikeRollingNetGex(
 export async function getOptionStrikeGexSlots(
   date: string,
   expiry: string
-): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number; spot: number }>> {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
             (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
             strike,
             net_gex,
-            net_vol_gex
+            net_vol_gex,
+            spot
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
@@ -3710,6 +3711,10 @@ export async function getOptionStrikeGexSlots(
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
     net_vol_gex: Number(row.net_vol_gex ?? 0),
+    // SPX spot AT THE TIME OF THE SNAPSHOT. The ES-Candles heatmap needs this to
+    // rebuild the historical ES−SPX basis per column (basis drifts with carry/
+    // divs and steps at the futures roll — one live basis mis-places old cells).
+    spot: Number(row.spot ?? 0),
   }));
 }
 
@@ -3722,14 +3727,15 @@ export async function getOptionStrikeGexSlots(
 export async function getOptionStrikeGexSlotsWindow(
   sinceTs: number,
   expiry: string
-): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number; spot: number }>> {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
             (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
             strike,
             net_gex,
-            net_vol_gex
+            net_vol_gex,
+            spot
        FROM option_strike_gex_history
       WHERE timestamp >= $1
         AND expiry = $2
@@ -3741,6 +3747,7 @@ export async function getOptionStrikeGexSlotsWindow(
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
     net_vol_gex: Number(row.net_vol_gex ?? 0),
+    spot: Number(row.spot ?? 0),
   }));
 }
 
@@ -3755,14 +3762,15 @@ export async function getOptionStrikeGexSlotsWindow(
  */
 export async function getOptionStrikeGexSlotsWindowAny(
   sinceTs: number
-): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number }>> {
+): Promise<Array<{ slot_ts: number; strike: number; net_gex: number; net_vol_gex: number; spot: number }>> {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
             (FLOOR(timestamp / 60000) * 60000)::bigint AS slot_ts,
             strike,
             net_gex,
-            net_vol_gex
+            net_vol_gex,
+            spot
        FROM option_strike_gex_history
       WHERE timestamp >= $1
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
@@ -3773,6 +3781,7 @@ export async function getOptionStrikeGexSlotsWindowAny(
     strike: Number(row.strike ?? 0),
     net_gex: Number(row.net_gex ?? 0),
     net_vol_gex: Number(row.net_vol_gex ?? 0),
+    spot: Number(row.spot ?? 0),
   }));
 }
 
