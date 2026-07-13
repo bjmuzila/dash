@@ -780,19 +780,27 @@ export default function EsCandlesPage() {
           .map((r: Record<string, unknown>) => {
             // Every CB snapshot stores spxPrice AND esPrice sampled at the SAME
             // instant — an exact basis for that row, better than anything we can
-            // infer from candles or daily closes. Use it when both are present
-            // and the diff is sane; 0/garbage falls back to basisAt(ts) at draw.
+            // infer from candles or daily closes.
             const spxPx = Number(r.spxPrice ?? 0);
             const esPx = Number(r.esPrice ?? 0);
             const b = spxPx > 0 && esPx > 0 ? esPx - spxPx : NaN;
-            return {
-              ts: Number(r.timestamp ?? 0),
-              spx: Number(r.strikeOIVol ?? 0),
-              basis: Number.isFinite(b) && Math.abs(b) < 250 ? b : null,
-            };
+            // A basis of ~0 is NOT a valid reading — it means esPrice was never
+            // populated and fell back to the SPX value (they're equal). Accepting
+            // it plots SPX strikes on the ES axis with no offset at all, which is
+            // exactly the "wrong levels" bug. Demand a real, plausible spread.
+            const usable = Number.isFinite(b) && Math.abs(b) >= 1 && Math.abs(b) <= 250;
+            // Timestamps have arrived as seconds (and as strings) from this table
+            // before — normalize to ms or every day-bucket lookup silently misses.
+            let ts = Number(r.timestamp ?? 0);
+            if (ts > 0 && ts < 1e12) ts *= 1000;
+            return { ts, spx: Number(r.strikeOIVol ?? 0), basis: usable ? b : null };
           })
           .filter((p: { ts: number; spx: number }) => p.ts > 0 && p.spx > 0)
           .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
+        if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugBasis") === "1") {
+          console.log("[basis] raw CB rows (first 3):", rows.slice(0, 3));
+          console.log("[basis] parsed CB pts (first 3):", pts.slice(0, 3));
+        }
         if (cancelled) return;
         setMvcHistory(pts);
         // Latest MVC (SPX points) → the legend chip value.
@@ -1288,10 +1296,14 @@ export default function EsCandlesPage() {
         return (tsMs: number) => {
           const k = etDayKey(tsMs);
           if (k === todayKey) return basis;
-          return heldCb(tsMs)
+          const b = heldCb(tsMs)
             ?? dayBasisRef.current.get(k)
             ?? colBasis.get(k)
-            ?? basis;
+            ?? (basis || prevBasisRef.current);
+          // A ~0 basis is never real for ES vs SPX. If every source came back
+          // empty/zero, prefer the last known good basis over silently drawing
+          // SPX strikes straight onto the ES axis.
+          return Math.abs(b) >= 1 ? b : (basis || prevBasisRef.current || b);
         };
       };
       const basisAt = buildBasisAt();

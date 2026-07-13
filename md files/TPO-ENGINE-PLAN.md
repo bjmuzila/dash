@@ -37,8 +37,12 @@ Returns:
   rows: { price, letters: string[], count: number }[]  // A,B,C… per 30m period
   poc, vah, val, mid                                    // TPO-count based (not volume)
   ibHigh, ibLow, ibRange                                // A+B periods
-  singlePrints: { price, side: 'up'|'down' }[]          // count===1, non-edge
-  tails: { top: number|null, bottom: number|null }      // ≥2 singles at extreme
+  periodCloses: number[]                                // NEW — needed for excess detection
+  singlePrints: { price, zone: 'top'|'bottom'|'mid' }[] // count === 1
+  tails:   { top: Range|null, bottom: Range|null }      // ≥2 consecutive singles at an extreme
+  excess:  { top: boolean, bottom: boolean }            // tail WHOSE period closed back inside
+  poor:    { high: boolean, low: boolean }              // flat stack at extreme, no tail = unfinished
+  holes:   Range[]                                      // mid-profile singles = thin/fast zones
   extension: { up: number, dn: number }                 // range beyond IB
   openType: 'ODD'|'OTD'|'ORR'|'OA'                      // open-drive/test-drive/rejection-reverse/auction
   dayType: 'normal'|'normal-var'|'trend'|'double-dist'|'neutral'
@@ -90,6 +94,61 @@ Every rule is `{ id, label, when(ctx), then: {bias, target, invalidation, confid
 - **If** price enters a prior single-print zone **and** delta/flow confirms → expect **fast traverse** (thin = low resistance), not reaction. Alert type: `thin_zone_traverse`.
 - **If** single prints get *filled* today (repaired) → imbalance resolved, structure neutralized.
 - Tail ≥ 3 TPOs at an extreme = strong rejection → that extreme is a hard reference until broken with acceptance.
+
+### D2. Tails vs Excess vs Single Prints — get the definitions right
+
+These are three different things and traders (and most software) conflate them. Encode them separately:
+
+```ts
+// bin.count === 1  →  a single TPO print
+singlePrint  = bin where count === 1
+tail         = ≥2 CONSECUTIVE single prints at the TOP or BOTTOM extreme of the profile
+excess       = a tail that was created by a REJECTION — i.e. the period that
+               printed it CLOSED back inside the profile body
+buyingTail   = tail at the LOW  (sellers rejected → buyers took control)
+sellingTail  = tail at the HIGH (buyers rejected → sellers took control)
+poorHigh/Low = the OPPOSITE: 2+ TPOs stacked flat at the extreme, NO tail.
+               Unfinished auction. Very high odds of being revisited.
+buyersHole   = single prints in the MIDDLE of the profile (not at an extreme)
+               — a gap in acceptance, price ripped through. A "thin zone."
+```
+
+**Why the distinction matters — the trade is opposite:**
+
+| Structure | Meaning | Rule |
+|---|---|---|
+| **Excess / tail** (2+ singles at extreme, closed back in) | Auction ended properly. A real high/low. | **Level holds.** Fade back toward POC. Only invalidate on acceptance beyond the tail's origin. |
+| **Poor high / poor low** (flat stack at extreme, no tail) | Auction ran out of time, not buyers/sellers. Unfinished. | **Level does NOT hold.** Expect it to be taken out. Trade *toward* it. Log to `tpo_naked_poc`-style table with `repaired_at`. |
+| **Buyer's/seller's hole** (singles mid-profile) | No acceptance, price traversed fast. | **Thin zone.** Price accelerates *through*, doesn't react. Never place a target inside one — targets go on the *far side*. |
+| **Single-print tail base** (first single of a tail) | The origin of the impulse. | Best S/R of the three. Alert `tail_base_retest`. |
+
+**Implementation notes / gotchas:**
+
+- **Excess needs the period's close, not just its range.** `buildTpoProfile` currently only tracks each period's touched high/low. Add `periodClose` so you can test "did this period close back inside the body?" — without it you cannot distinguish real excess from a fast trend leg that simply left singles behind (a trend day's singles are *continuation*, not rejection — opposite trade).
+- **Single prints are bin-size dependent.** At `binSize = 1` ES point you'll get plenty. Too fine → everything's a single; too coarse → none. Sweep `binSize` in the backtest (0.5 / 1 / 2 / 4) and pick by hit rate, not by eye.
+- **Only profile RTH for singles.** The existing ETH→RTH strip is great visually, but ETH single prints are a liquidity artifact, not an auction failure. Compute singles/tails/excess on the **RTH profile only**; keep ETH for context.
+- **Persistence is the whole point.** A tail is worth almost nothing intraday and a LOT as a naked level 3 weeks later. Table:
+  ```sql
+  tpo_structures(
+    id, symbol, session_date,
+    kind,            -- 'tail' | 'excess' | 'poor_high' | 'poor_low' | 'hole' | 'naked_poc'
+    price_lo, price_hi, side,        -- 'up' | 'down'
+    created_ts,
+    tested_at, repaired_at,         -- nullable; recorder fills these forward
+    touches int default 0
+  )
+  ```
+  A nightly job walks new candles and marks `tested_at` / `repaired_at`. **That forward-fill is what turns this into a stats engine** — it gives you "untested tails get tested within N sessions X% of the time," which is the actual tradeable number.
+
+**Stats to produce (these are the deliverable, not the drawing):**
+
+- Excess-high/low **hold rate** — % of sessions where a tail extreme was not exceeded that day / that week.
+- **Poor high/low repair rate + time-to-repair** — the highest-conviction MP stat there is. (Expect high; verify.)
+- **Hole traverse rate** — when price enters a prior single-print hole, % of the time it crosses the entire hole without a >X-pt pause. If this is high, it changes your *target placement rules* everywhere in the app.
+- **Naked POC touch rate** by age bucket (1–5 / 6–20 / 20+ sessions).
+- Confluence lift: hold/repair rate **when the structure sits on a GEX wall or CB level** vs when it doesn't. This is the number that justifies the whole feature.
+
+**UI — "Open Business" rail** (right side of `/tpo`): one row per unrepaired structure, sorted by distance from spot. Columns: kind badge (color-coded — excess = red/green, poor = amber, hole = gray), price, age in sessions, distance, historical touch-rate for that kind+age bucket. Click → drops a line on `/es-candles`.
 
 ### E. Day type (call by 10:30 ET)
 
