@@ -28,12 +28,17 @@ function toChartTime(ts: number): UTCTimestamp {
 // chosen at draw time by gexMetric so the toggle re-renders without new data.
 type GexCell = { strike: number; netOiVol: number; netVol: number };
 // `spot` = SPX at the moment this column's snapshot was taken. Strikes are in
-// SPX space but the chart plots ES, so each column converts with ITS OWN basis
-// (esAtSlot − spot). A single live basis mis-places every historical column:
-// ES−SPX basis drifts with carry/dividends, decays into expiry, and steps at the
-// quarterly roll — easily 10–30pt of error across a 5-day window.
+// SPX space but the chart plots ES, so history is converted with a basis
+// reconstructed PER SESSION from these spots (see basisForCols in the overlay
+// draw). The live basis alone mis-places older columns: ES−SPX drifts with
+// carry/dividends, decays into expiry, and steps at the quarterly roll.
 type GexColumn = { slotTs: number; cells: GexCell[]; spot?: number };
 type GexMetric = "voloi" | "vol";
+
+// ET calendar date (YYYY-MM-DD) for a ms timestamp. Module-level so the overlay
+// draw can group GEX columns into sessions for the per-session basis.
+const ET_DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
+const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
 
 // Volume-by-price profile + value-area levels, derived from candle OHLCV.
 type ProfileBin = { price: number; volume: number };
@@ -1144,17 +1149,20 @@ export default function EsCandlesPage() {
       const ts = chart.timeScale();
       const basis = basisRef.current;
 
-      // ── Per-column ES basis ────────────────────────────────────────────────
+      // ── Per-SESSION ES basis ───────────────────────────────────────────────
       // Strikes live in SPX space; the chart plots ES. The basis (ES − SPX) is
-      // NOT a constant: it drifts with carry/dividends, decays toward 0 into
-      // expiry, and steps at the quarterly roll. Rendering a 5-day heatmap with
-      // one live basis therefore slides every older column off its true level.
+      // not constant across days: it drifts with carry/dividends, decays toward
+      // 0 into expiry, and steps at the quarterly roll. One live basis slides
+      // every older column off its true level (10–30pt over a 5-day window).
       //
-      // Each GEX snapshot already stores the SPX spot it was taken at, so the
-      // truthful basis for column t is (ES close at t) − (SPX spot at t). We
-      // rebuild it per column from the candles we already have on screen and
-      // fall back to the live basis only when a column has no stored spot
-      // (legacy rows written before spot was surfaced).
+      // But it must be resolved PER DAY, not per column. A per-column basis
+      // (esClose(t) − spot(t)) looked right in theory and rendered horribly in
+      // practice: the persisted `spot` doesn't tick on every snapshot, so any
+      // ES move between spot updates leaks straight into the basis and the whole
+      // heatmap bends along with the candles. Taking the MEDIAN of that day's
+      // (esClose − spot) samples throws away the stale-spot noise while keeping
+      // the real day-over-day drift, so bands are flat within a session and step
+      // between sessions — which is the truth.
       const esCloseAt = (tsMs: number): number | null => {
         if (!rows.length) return null;
         // Binary search: last candle at or before this slot.
@@ -1168,20 +1176,31 @@ export default function EsCandlesPage() {
         if (tsMs - rows[found].timestamp > 6 * 60 * 60 * 1000) return null;
         return rows[found].close;
       };
-      // Raw per-column basis, then a median-of-3 smooth across adjacent columns.
-      // ES close and SPX spot are sampled a few seconds apart, so the raw diff
-      // carries a point or two of noise — unsmoothed, cells would wobble
-      // vertically column-to-column. The median kills the jitter without
-      // flattening the real drift/roll steps.
+      // One basis per ET session day = median(esClose − spot) over that day's
+      // columns. Today's session always uses the LIVE server basis (freshest and
+      // consistent with the Call/Put/Flip/CB lines, which are drawn with it) —
+      // only closed days get a reconstructed one. Days with no usable stored
+      // spot fall back to the live basis.
+      const median = (xs: number[]) => {
+        const s = [...xs].sort((a, b) => a - b);
+        return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+      };
       const basisForCols = (cols: GexColumn[]): number[] => {
-        const raw = cols.map((c) => (c.spot && c.spot > 0 ? (() => {
+        const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
+        const samples = new Map<string, number[]>();
+        for (const c of cols) {
+          if (!(c.spot && c.spot > 0)) continue;
+          const k = etDayKey(c.slotTs);
+          if (k === todayKey) continue; // live basis wins for the active session
           const es = esCloseAt(c.slotTs);
-          return es != null ? es - (c.spot as number) : basis;
-        })() : basis));
-        return raw.map((_, i) => {
-          const a = raw[Math.max(0, i - 1)], b = raw[i], c = raw[Math.min(raw.length - 1, i + 1)];
-          return [a, b, c].sort((x, y) => x - y)[1];
-        });
+          if (es == null) continue;
+          const arr = samples.get(k) ?? [];
+          if (!samples.has(k)) samples.set(k, arr);
+          arr.push(es - c.spot);
+        }
+        const dayBasis = new Map<string, number>();
+        for (const [k, xs] of samples) if (xs.length) dayBasis.set(k, median(xs));
+        return cols.map((c) => dayBasis.get(etDayKey(c.slotTs)) ?? basis);
       };
 
       // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
