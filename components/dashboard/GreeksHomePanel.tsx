@@ -103,7 +103,10 @@ export default function GreeksHomePanel() {
       const d = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
       if (type === "snapshot" || type === "gex") {
         if (d.totals) state.totals = d.totals as Record<string, number>;
-        if (type === "snapshot" && d.spot != null) state.spot = Number(d.spot);
+        // Take spot off ANY frame that carries it — not just `snapshot`. Gating it
+        // to snapshot froze spot at its seed value during a stream of `gex` deltas,
+        // which zeroed realized vol in the StateRail.
+        if (d.spot != null && Number(d.spot) > 0) state.spot = Number(d.spot);
         if (d.updatedAt) state.updatedAt = Number(d.updatedAt);
         tryApply();
       } else if (type === "spot") {

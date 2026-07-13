@@ -34,10 +34,15 @@ import { HOME_THEME } from "@/components/shared/homeTheme";
 import { derivePick, type ChainRow as SkewChainRow } from "@/components/greeks/SkewCalculator";
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
+// Calibrated against live SPX 0DTE readings (gex ≈ 68B, dex ≈ 32B, skew ≈ 106%).
+// These sit the CURRENT tape around 0.6–0.7 of full scale, leaving headroom for a
+// genuinely extreme day to peg the bar. Re-check with DEBUG_SCALES after a few
+// sessions — if the bars never leave the middle, shrink these.
 const SCALE = {
-  gex: 4,    // $B net GEX that reads as "fully long gamma"
-  dex: 8,    // $B net DEX that reads as "fully leaned"
-  skew: 12,  // % (put−call)/atm that reads as "puts fully bid"
+  gex: 80,    // $B net GEX that reads as "fully long gamma"
+  dex: 40,    // $B net DEX that reads as "fully leaned"
+  skew: 120,  // % (put−call)/atm that reads as "puts fully bid" — 0DTE wings run HOT,
+              // nothing like the 10–30% textbook equity skew. See note below.
 };
 // How far RV must diverge from IV to peg the convexity bar. ln-ratio units:
 // 0.35 ≈ RV 40% above IV (or ~30% below) reads as full-scale.
@@ -241,24 +246,30 @@ function SegBar({ row }: { row: Row }) {
 export default function StateRail({ gex, dex, spots = [], hasData = true }: StateRailProps) {
   const [skewPct, setSkewPct] = useState<number | null>(null);
   const [atmIv, setAtmIv] = useState<number | null>(null);  // ATM 0DTE IV, % annualized
+  // Own spot series off /api/gex. The WS spot has proven unreliable (frozen at its
+  // seed during `gex`-delta streams → RV of exactly 0), so we don't depend on it:
+  // whichever series has more movement wins below.
+  const [ownSpots, setOwnSpots] = useState<{ ts: number; px: number }[]>([]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  // Same 0DTE chain feed LiveSkewBand uses — one source of truth for skew AND for
-  // the ATM IV that convexity is measured against.
+  // Same 0DTE chain feed LiveSkewBand uses — one source of truth for skew, for the
+  // ATM IV that convexity is measured against, and for the fallback spot series.
   useEffect(() => {
     const load = async () => {
       try {
         const res = await fetch("/api/gex", { cache: "no-store" });
         const j = res.ok ? await res.json() : null;
+        const spot = Number(j?.spotPrice ?? 0);
         const pick = j ? derivePick(
           (Array.isArray(j.chain) ? j.chain : []) as SkewChainRow[],
-          Number(j.spotPrice ?? 0),
+          spot,
           j.expiration ?? null,
         ) : null;
         if (!mounted.current) return;
         setSkewPct(pick && pick.atm > 0 ? ((pick.put - pick.call) / pick.atm) * 100 : null);
         setAtmIv(pick && pick.atm > 0 ? pick.atm : null);
+        if (spot > 0) setOwnSpots(prev => [...prev, { ts: Date.now(), px: spot }].slice(-400));
       } catch { /* leave last value */ }
     };
     load();
@@ -269,24 +280,28 @@ export default function StateRail({ gex, dex, spots = [], hasData = true }: Stat
   const g = Number(gex ?? 0);
   const d = Number(dex ?? 0);
 
-  // RV recomputes only when the sample set actually grows.
-  const rv = useMemo(() => realizedVol(spots), [spots]);
+  // RV from whichever spot series is actually alive. A dead (frozen) series yields
+  // null via realizedVol's degenerate-variance guard, so prefer the one that prints.
+  const rv = useMemo(() => {
+    const fromProps = realizedVol(spots);
+    if (fromProps != null && fromProps > 1) return fromProps;
+    return realizedVol(ownSpots);
+  }, [spots, ownSpots]);
 
   // ── TEMP: scale calibration. Watch these for a session, then set SCALE.* to the
   // magnitude of a NOTABLE reading (not a typical one) so the bars stop saturating.
   // Delete once the scales are tuned. ──
   useEffect(() => {
     if (!DEBUG_SCALES) return;
+    const n = (x: number | null | undefined, d = 2) =>
+      x == null || !Number.isFinite(x) ? "null" : x.toFixed(d);
     const lastPx = spots.length ? spots[spots.length - 1].px : null;
-    console.log("[StateRail]", {
-      gex: g, dex: d, rv, atmIv, skewPct,
-      spotSamples: spots.length, lastSpot: lastPx,
-      bars: {
-        regime: tanh(g / SCALE.gex).toFixed(2),
-        dex: tanh(d / SCALE.dex).toFixed(2),
-        skew: skewPct == null ? null : tanh(skewPct / SCALE.skew).toFixed(2),
-      },
-    });
+    console.log(
+      `[StateRail] gex=${n(g)}B dex=${n(d)}B | rv=${n(rv, 1)} iv=${n(atmIv, 1)} skew=${n(skewPct, 1)}% ` +
+      `| spots=${spots.length} lastSpot=${n(lastPx)} ` +
+      `| bars regime=${n(tanh(g / SCALE.gex))} dex=${n(tanh(d / SCALE.dex))} ` +
+      `skew=${skewPct == null ? "null" : n(tanh(skewPct / SCALE.skew))}`,
+    );
   }, [g, d, rv, atmIv, skewPct, spots]);
 
   const rows: Row[] = [
