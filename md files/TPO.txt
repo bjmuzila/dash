@@ -1,0 +1,90 @@
+**TPO (Time Price Opportunity)** is the foundation of **Market Profile (MP)** analysis, developed by J. Peter Steidlmayer at the Chicago Board of Trade in the 1980s. It visualizes where price spent the most *time* during a trading session (or higher timeframes), revealing value areas, acceptance/rejection, and auction dynamics. Traders on X have discussed and applied it extensively to **ES (E-mini S&P 500 futures)** and **NQ (E-mini Nasdaq-100 futures)** for day trading, swing trading, and higher-timeframe context.
+
+I reviewed recent and historical X discussions (keyword + semantic searches spanning 2021–2026, key accounts, and related educational content). Core logic and rules have remained remarkably consistent over 5+ years (and decades prior), with traders like those at Camelback Trading, Axia Futures, Vtrender-style educators, and independent futures traders sharing similar frameworks. Modern discussions often layer in gamma, orderflow/delta, and volume profile for confluence.
+
+### Core Components of TPO/Market Profile
+Each letter (A, B, C...) typically represents a **30-minute period**. Price levels with many letters = high acceptance (value). Sparse areas = quick movement/rejection (imbalance).
+
+**Key elements**:
+- **Initial Balance (IB)**: First hour (usually A + B periods). Sets the session's opening range and tone. Narrow IB often precedes bigger moves; wide IB suggests more two-sided action early.
+- **Point of Control (POC)**: Price with the most TPOs (fairest value/magnet). Price often returns to or rotates around it.
+- **Value Area (VA)**: ~70% of TPOs around the POC. Bounded by **Value Area High (VAH)** and **Value Area Low (VAL)**. Acceptance *outside* VA often signals continuation.
+- **Single Prints / Tails / Singles**: Areas with only one TPO letter — price moved quickly with little acceptance. These act as future references: potential support/resistance or "thin" zones for fast acceleration/repair later.
+- **Profile Shapes & Day Types**: Bell curve (balanced/range-bound), D-shaped or extended (trend/imbalance), double distribution (two value areas, often transition or strong directional), etc.
+- **Composite / Higher-Timeframe Profiles**: Multi-day, weekly, or monthly views for major structural POC, support, and "unfinished business."
+
+
+
+
+
+
+
+
+
+
+**Auction Market Theory logic** (consistent across years of posts): Markets auction up or down seeking *value* (where most time is spent). Quick moves create imbalances (singles) that may need "repair" later. Acceptance builds balanced profiles; rejection or one-sided control creates trending structures. POC acts as a gravitational center in rotational markets.
+
+### Key Strategies, Rules & Logic from X Discussions (ES/NQ Focus)
+Traders emphasize **context first** (higher TF profiles, balances vs. extensions, POC migration) then **execution** on intraday TPO development. Pure TPO is often discretionary and paired with volume profile, orderflow, or gamma.
+
+**1. Initial Balance (IB) Strategies & Stats** (very commonly cited edge)
+- Break/acceptance of IB high or low signals potential directional control or trend day.
+- Many shared backtests/stats on ES/NQ: High probability the IB range is exceeded during RTH (one post cited **97%** on ES). Specific models track which extreme forms first and target the opposite (e.g., one NQ model showed ~69–77% probability of sweeping the other side depending on which formed first).
+- Rule: Narrow IB + break with acceptance (e.g., 30-min close outside) → higher odds of extension. Target often 1× IB range or next VA/POC. Filter heavy news.
+- Example style: Monitor 9:30–10:30 ET range; use for bias or specific sweeps.
+
+**2. Value Area (VA) Fade or Acceptance**
+- If price opens *outside* prior session's VA (above VAH or below VAL), historical discussions cite **70–80%** probability of return to the VA/POC area within the session (responsive trading by institutions).
+- Long below prior VAL targeting VA/POC (or opposite boundary); short above VAH.
+- Close *outside* VA often leaves "unfinished business" → next session continuation or extension expected.
+- Rule: Responsive at VA edges in balanced markets; initiative buying/selling on breaks with acceptance.
+
+**3. POC as Magnet or Pivot**
+- Price tends to gravitate toward or rotate around the POC in value-building sessions.
+- Migrating POC over days/weeks (e.g., steadily higher in bulls) signals structural shift. One example noted +170 pts POC migration in 5 sessions with value accepted higher.
+- Rule: In rotational/balanced profiles, trade toward POC or fade extremes. In strong trends, POC can be left behind as new value builds.
+
+**4. Single Prints / Tails as References**
+- Prior singles act as magnets or acceleration zones. Price may revisit them for "repair" or auction through thin areas quickly.
+- Example: TPO singles referenced for future targets or support in ES analysis.
+- Rule: Thin areas above/below value = potential fast moves or rejection zones. Confluence with other levels increases edge.
+
+**5. Higher Timeframe Context & Profile Development (Camelback/Paul Asmar style — very active on X)**
+- Weekly/monthly or composite profiles for major balances (e.g., 2-week, 3-month), extensions, one-time framing (consecutive directional bars), gaps, and structural health.
+- Track "scores" or bias from profile development (value accepted higher/lower, POC shifts).
+- Rule: Daily TPO for execution; higher TF for bias and key levels. Look for breaks of multi-session balances with TPO confirmation (acceptance or singles).
+- At ATH or extremes: Supplement with VIX zones, VWAP, or other confluences when pure MP zones are sparse.
+
+**6. Day Type Identification (by ~10 AM ET)**
+- Balanced (bell curve) → range-bound, better fades at edges.
+- Trend/imbalanced (strong one-sided extension from narrow IB) → follow direction, look for pullbacks to value or singles.
+- Double distribution or non-trend → lower conviction, reduce size or stay flexible.
+- Rule: Profile shape + IB width + early acceptance tells you the session character early.
+
+
+
+
+**7. Confluence & Modern Integration**
+- TPO for structure/timing + Volume Profile (HVN/LVN) for volume confirmation + Orderflow/delta or gamma for precision.
+- TPO often described as "finely tuned entry points" vs. broader volume zones.
+- Examples: Weekly TPO read combined with gamma nodes/walls; absorption or dealer positioning.
+
+### Stats & Edge Notes Shared Across Discussions
+- IB exceedance/continuation: Commonly 75–97% range in index futures (varies by exact rule and market conditions).
+- VA return probability: ~70–80% cited in educational contexts when opening outside prior VA.
+- Specific trader models (e.g., NQ IB sweep probabilities ~68–77%).
+- POC migration and value acceptance as ongoing structural signals.
+- These are shared/backtested edges from communities — always verify on your own ES/NQ data and timeframe. Stats degrade in high-news or low-liquidity periods.
+
+### Summary of Logic & Rules (Timeless Across 5+ Years of Tweets)
+Markets build **value** through time spent at prices (TPO). **Imbalances** (singles, tails, narrow profiles) get resolved or extended. **Acceptance** outside value or IB signals control shift. Use **higher TF context** for bias, **intraday TPO** for entries/exits, and **confluence** for edge. Trade what the profile *shows* (acceptance vs. rejection), not predictions.
+
+**Recommendations from active X voices**:
+- Follow **@PaulAsmar5** and **@JPMarketMap** (Camelback Trading) for regular ES/NQ MP recaps, weekly plans, YouTube breakdowns, and Substack details. They emphasize practical application, balances, and profile development.
+- Other active voices: @LexxFutures (IB stats/singles), @MrTopStep (detailed composite + auction notes), and various orderflow/gamma traders integrating TPO.
+- Tools: TradingView Market Profile indicator (set to 30-min TPOs, 70% VA), Sierra Chart, or specialized software like Window Trader. Backtest rules on historical ES/NQ futures data.
+- Education: Camelback Trading resources or similar MP courses for deeper dives.
+
+TPO/Market Profile discussions on X over the past 5+ years (and longer) show a mature, consistent framework focused on **auction dynamics** rather than signals. It excels in liquid instruments like ES and NQ for both intraday and swing context. Like any tool, it works best with strict risk management, journaling, and confluence — never in isolation.
+
+If you'd like me to dive deeper into a specific strategy (e.g., IB models, single-print setups), pull more examples from particular accounts/periods, analyze a recent chart, or help backtest rules in code, just let me know!
