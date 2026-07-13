@@ -194,7 +194,10 @@ function GexScanner() {
   const [sort, setSort] = useState<GexSort>("z");
   const [minZ, setMinZ] = useState(0);
   const [colSort, setColSort] = useState<ColSort>(null);
-  const [dir, setDir] = useState<"all" | "pos" | "neg">("all");
+  // Default "build": only strikes whose OWN side is growing (above spot & Δ↑ = call
+  // wall building; below spot & Δ↓ = put wall building). A huge Δ↓ above spot is
+  // decay, not a signal — it gets excluded.
+  const [dir, setDir] = useState<"all" | "pos" | "neg" | "build">("build");
   const [minOtm, setMinOtm] = useState(0.05);   // default: 5%+ OTM
   const [minExpiry, setMinExpiry] = useState("");
   const [maxExpiry, setMaxExpiry] = useState("");
@@ -285,7 +288,7 @@ function GexScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 16 }}>GEX Change Scanner</span>}
-      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${dir !== "all" ? ` · ${dir === "pos" ? "above spot · Δ↑" : "below spot · Δ↓"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · refreshing…" : ""}`}>
+      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${dir !== "all" ? ` · ${dir === "pos" ? "above spot · Δ↑" : dir === "neg" ? "below spot · Δ↓" : "building walls only"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 6 }}>
@@ -302,10 +305,11 @@ function GexScanner() {
           <button onClick={() => setSort("score")} style={seg(sort === "score")}>Best overall</button>
         </div>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }} title="Positive = OTM strikes above spot with rising GEX (Δ↑) · Negative = OTM strikes below spot with falling GEX (Δ↓)">
+        <div style={{ display: "flex", gap: 6 }} title="Building = the strike's own side is growing: above spot with rising GEX (call wall building) OR below spot with falling GEX (put wall building). A big Δ↓ above spot is decay, not a signal — excluded.">
+          <button onClick={() => setDir("build")} style={{ ...seg(dir === "build"), ...(dir === "build" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Building</button>
           <button onClick={() => setDir("all")} style={seg(dir === "all")}>All</button>
-          <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Positive</button>
-          <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Negative</button>
+          <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Call wall ↑</button>
+          <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Put wall ↑</button>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }} title="How far OTM the strike must sit vs spot">
           min OTM

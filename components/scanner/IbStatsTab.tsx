@@ -288,6 +288,8 @@ function LiveToday({ sym, ds, days, hist }: {
 
   return (
     <>
+      <LiveGauges live={live} days={days} dowName={dowName} />
+
       <Card
         accent="cyan"
         title={`Today — ${sym} · ${dowName}`}
@@ -356,12 +358,10 @@ function LiveToday({ sym, ds, days, hist }: {
       )}
 
       <div style={note}>
-        Live levels are computed from the same {sym} candle feed the rest of the dashboard uses. The historical odds below are from{" "}
-        {ds.sessions.toLocaleString()} sessions ({ds.from} → {ds.to}) — they describe the base rate, not a prediction for today.
+        Live levels are computed from the same {sym} candle feed the rest of the dashboard uses. The historical odds below describe the
+        base rate, not a prediction for today.
       </div>
       </Card>
-
-      <LiveGauges live={live} days={days} dowName={dowName} />
 
       <Playbook live={live} days={days} dowName={dowName} />
     </>
@@ -502,7 +502,7 @@ function LiveGauges({ live, days, dowName }: { live: any; days: SlimDay[]; dowNa
 
   return (
     <Card accent="cyan" title="Live Read — direction, expansion, active rule"
-      subtitle={`Scored on ${g.g.length} matching sessions · ${g.label}${live.ibComplete ? "" : " · IB STILL FORMING"}`}>
+      subtitle={`${g.label}${live.ibComplete ? "" : " · IB STILL FORMING"}`}>
 
       {/* overall verdict */}
       <div style={{
@@ -715,10 +715,9 @@ function Playbook({ live, days, dowName }: { live: any; days: SlimDay[]; dowName
               </span>
               <span style={{ fontSize: 15, color: HOME_THEME.text }}>chance {s.question}</span>
             </div>
-            <div style={{ fontSize: 15, color: HOME_THEME.text }}>
-              {s.hits} of {s.n} matching sessions
-              {s.n < 40 ? " · thin sample" : ""}
-            </div>
+            {s.n < 40 && (
+              <div style={{ fontSize: 15, color: HOME_THEME.text }}>thin sample</div>
+            )}
           </div>
         ))}
       </div>

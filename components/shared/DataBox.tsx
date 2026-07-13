@@ -176,6 +176,23 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
           }
         });
       }
+      // Same treatment for the lightweight-charts canvases themselves. The
+      // comment above says html2canvas copies them BLANK — that is no longer
+      // reliably true, and when it does copy them we end up with the chart TWICE:
+      // once from html2canvas's own copy, and once from the __ltScreenshot bitmap
+      // we composite on top at the target's rect. The two land at slightly
+      // different offsets/scales → two candle series and two price axes in the
+      // PNG. The composite is the trustworthy one (it's the library's own
+      // renderer), so blank the clone's copies and let it be the only chart.
+      if (lt) {
+        const cloneCanvases = Array.from(clone.querySelectorAll("canvas"));
+        const liveAll = Array.from(el.querySelectorAll("canvas"));
+        liveAll.forEach((liveCanvas, i) => {
+          if (!lt.target.contains(liveCanvas)) return;
+          const cloned = cloneCanvases[i] as HTMLElement | undefined;
+          if (cloned) cloned.style.visibility = "hidden";
+        });
+      }
       // Inject overlay text as real DOM so html2canvas renders it natively
       // (drawing text onto the returned canvas no-ops in this browser).
       clone.style.position = "relative";

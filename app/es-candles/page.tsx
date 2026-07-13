@@ -1349,18 +1349,39 @@ export default function EsCandlesPage() {
           if (b != null) cbPts.push({ ts: p.ts, b });
         }
 
-        // Last CB basis at or before t, held flat forward (so ETH inherits the
-        // 16:00 basis and stays pinned there until the next session's first row).
-        // Median of the last 3 so a single bad row can't jump a column.
-        const heldCb = (tsMs: number): number | null => {
-          if (!cbPts.length) return null;
-          let lo = 0, hi = cbPts.length - 1, idx = -1;
+        // ONE basis per ET session = median of that day's readings.
+        //
+        // Do NOT apply these per-row. The basis is a slow carry/dividend function
+        // — it does not wiggle minute to minute — but each individual reading is
+        // noisy: reconstruction (b) pairs a CB row's spxPrice against the 5-MIN ES
+        // BAR CLOSE, so any intrabar ES movement lands in the reading. Applied
+        // per-row that noise turns the CB's flat strike steps into a cloud of
+        // dashes drifting along with price (observed). The per-day median removes
+        // it and keeps the real day-over-day drift.
+        const dayMed = new Map<string, number>();
+        {
+          const byDay = new Map<string, number[]>();
+          for (const p of cbPts) {
+            const k = etDayKey(p.ts);
+            const arr = byDay.get(k) ?? [];
+            if (!byDay.has(k)) byDay.set(k, arr);
+            arr.push(p.b);
+          }
+          for (const [k, xs] of byDay) if (xs.length) dayMed.set(k, median(xs));
+        }
+        const cbDays = [...dayMed.keys()].sort();
+        // Latest session at or before day k — so ETH (and any day with no CB rows,
+        // e.g. a holiday or the pre-open hours) inherits the last session that was
+        // actually measurable, held flat. Never measure a basis against a frozen
+        // SPX; there is no such thing as an overnight basis reading.
+        const heldDay = (k: string): number | null => {
+          if (!cbDays.length) return null;
+          let lo = 0, hi = cbDays.length - 1, idx = -1;
           while (lo <= hi) {
             const mid = (lo + hi) >> 1;
-            if (cbPts[mid].ts <= tsMs) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+            if (cbDays[mid] <= k) { idx = mid; lo = mid + 1; } else hi = mid - 1;
           }
-          if (idx < 0) return cbPts[0].b; // before any snapshot → first known
-          return median(cbPts.slice(Math.max(0, idx - 2), idx + 1).map((p) => p.b));
+          return idx < 0 ? dayMed.get(cbDays[0]) ?? null : dayMed.get(cbDays[idx]) ?? null;
         };
 
         // NOTE: nothing below may be derived from columnsRef. A basis sourced
@@ -1368,8 +1389,11 @@ export default function EsCandlesPage() {
         // which silently MOVED the CB level when the user toggled the range.
         return (tsMs: number) => {
           const k = etDayKey(tsMs);
+          // Today, while cash is OPEN, the live basis is the freshest truth and
+          // matches the level lines. Today while cash is SHUT, `basis` is already
+          // effectiveBasis() → the prior-day close basis, not a stale-spot diff.
           if (k === todayKey) return basis;
-          const b = heldCb(tsMs)
+          const b = heldDay(k)
             ?? dayBasisRef.current.get(k)
             ?? (basis || prevBasisRef.current);
           // A ~0 basis is never real for ES vs SPX. If every source came back
@@ -1572,17 +1596,27 @@ export default function EsCandlesPage() {
                   // the eye actually reads size.
                   const r = rMin + Math.sqrt(ratio) * (rMax - rMin);
                   if (r < 0.35) continue;
-                  const rgb = v >= 0 ? "41,182,246" : "255,71,87";
-                  const alpha = 0.18 + ratio * 0.55;
+                  // SOLID fill, no stroke. Magnitude is carried by the COLOR (a
+                  // dim→hot ramp) and the radius — not by opacity. The previous
+                  // version filled at low alpha and stroked brighter on top, so
+                  // every bubble read as a ring with a different-colored middle.
+                  //
+                  // Ramp: deep/desaturated at small |GEX| → the full cyan/red at
+                  // mid → washed toward white at the session's biggest strikes,
+                  // so the heavy gamma pops the way it does on the heatmap.
+                  const t = Math.pow(ratio, 0.6);
+                  const lo = v >= 0 ? [14, 70, 120] : [92, 22, 34];   // dim
+                  const mid = v >= 0 ? [41, 182, 246] : [255, 71, 87]; // full
+                  const hi = v >= 0 ? [186, 240, 255] : [255, 190, 195]; // hot
+                  const mix = (a: number[], b: number[], f: number) =>
+                    a.map((x, i) => Math.round(x + (b[i] - x) * f));
+                  const c = t <= 0.5
+                    ? mix(lo, mid, t / 0.5)
+                    : mix(mid, hi, (t - 0.5) / 0.5);
                   ctx.beginPath();
                   ctx.arc(x, y, r, 0, Math.PI * 2);
-                  ctx.fillStyle = `rgba(${rgb},${alpha.toFixed(3)})`;
+                  ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.95)`;
                   ctx.fill();
-                  if (r > 2) {
-                    ctx.lineWidth = 0.8;
-                    ctx.strokeStyle = `rgba(${rgb},${Math.min(0.95, alpha + 0.3).toFixed(3)})`;
-                    ctx.stroke();
-                  }
                 }
               }
               ctx.restore();
@@ -1713,7 +1747,11 @@ export default function EsCandlesPage() {
           // row has no usable pair. The live basis is only right for "now" —
           // using it for prior days dragged every historical CB segment off its
           // true ES level, exactly as it did for the heatmap.
-          const y = series.priceToCoordinate(p.spx + (p.basis ?? basisAt(p.ts)));
+          // basisAt() — the SESSION basis, not this row's own reading. A per-row
+          // basis (even the exact esPrice−spxPrice one) carries sampling noise,
+          // and the CB is a STRIKE: it must render as flat steps, not a cloud of
+          // dashes drifting with price.
+          const y = series.priceToCoordinate(p.spx + basisAt(p.ts));
           if (x == null || y == null) { flush(prevX); runStartX = null; runY = null; prevX = null; continue; }
           if (runY == null) { runStartX = x; runY = y; }
           else if (Math.abs(y - runY) > 0.5) {
