@@ -16,8 +16,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import { ScoreInfo } from "@/components/shared/InfoTip";
 
 // ── shared style/format helpers (ported from app/scanner/page.tsx) ──────────
 
@@ -63,57 +64,57 @@ type GexRow = {
   otm_dist: number;
   weighted_chg: number;
   pct_open: number | null;
+  score?: number;
 };
 type Win = 5 | 15 | 30 | 60;
-type GexSort = "z" | "abs" | "otm" | "pct";
-type ColSort = { col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open"; dir: "desc" | "asc" } | null;
+type GexSignal = "very" | "strong" | "relative" | null;
 
+function SignalBadge({ s }: { s: GexSignal }) {
+  if (s === "very")     return <span style={{ color: "#FFD166", fontWeight: 800, fontSize: 12, whiteSpace: "nowrap" }}>★ Very strong</span>;
+  if (s === "strong")   return <span style={{ color: HOME_THEME.cyan, fontWeight: 700, fontSize: 12 }}>Strong</span>;
+  if (s === "relative") return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 12 }}>Big %</span>;
+  return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 12 }}>—</span>;
+}
+
+/**
+ * Home tab = the Top-10 cards from /scanner and nothing else. Same data call,
+ * same "building walls only" default (dir=build), same card look
+ * (classicCardAccentStyle + .card-hover) as the full page — no table.
+ */
 function GexScannerPanel() {
   const [rows, setRows] = useState<GexRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [win, setWin] = useState<Win>(15);
-  const [sort, setSort] = useState<GexSort>("z");
-  const [minZ, setMinZ] = useState(0);
-  const [colSort, setColSort] = useState<ColSort>(null);
-  const [moneyness, setMoneyness] = useState<"all" | "otm">("all");
-  const [minOtm, setMinOtm] = useState(0.02);
 
-  const toggleColSort = (col: "latest_chg" | "mean_chg" | "z" | "otm_dist" | "pct_open") => {
-    setColSort(prev =>
-      prev?.col === col
-        ? { col, dir: prev.dir === "desc" ? "asc" : "desc" }
-        : { col, dir: "desc" }
-    );
+  // Same thresholds/persistence keys the full scanner page uses.
+  const minDollar = typeof window !== "undefined" ? Number(localStorage.getItem("scanner.minDollar")) || 500_000 : 500_000;
+  const minPct    = typeof window !== "undefined" ? Number(localStorage.getItem("scanner.minPct")) || 30 : 30;
+
+  const maxAbs = Math.max(1, ...rows.map(r => Math.abs(r.latest_chg || 0)));
+  const maxPct = Math.max(1, ...rows.map(r => Math.abs(r.pct_open || 0)));
+  const scoreOf = (r: GexRow) =>
+    r.score != null ? r.score
+    : (0.6 * (Math.abs(r.latest_chg || 0) / maxAbs) + 0.4 * (Math.abs(r.pct_open || 0) / maxPct)) * 100;
+  const classify = (r: GexRow): GexSignal => {
+    const bigAbs = Math.abs(r.latest_chg) >= minDollar;
+    const bigPct = r.pct_open != null && Math.abs(r.pct_open) >= minPct;
+    return bigAbs && bigPct ? "very" : bigAbs ? "strong" : bigPct ? "relative" : null;
   };
 
-  const colSortValue = (r: GexRow, col: NonNullable<ColSort>["col"]) => {
-    switch (col) {
-      case "z": return r.z ?? 0;
-      case "latest_chg": return r.latest_chg;
-      case "mean_chg": return r.mean_chg;
-      case "otm_dist": return r.otm_dist ?? 0;
-      case "pct_open": return r.pct_open ?? -Infinity;
-    }
-  };
-
-  const displayRows = colSort
-    ? [...rows].sort((a, b) => {
-        const av = colSortValue(a, colSort.col);
-        const bv = colSortValue(b, colSort.col);
-        return colSort.dir === "desc" ? bv - av : av - bv;
-      })
-    : rows;
+  const topBySize = [...rows]
+    .sort((a, b) => Math.abs(b.latest_chg || 0) - Math.abs(a.latest_chg || 0))
+    .slice(0, 10);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
       const u = new URL("/proxy/strike-growth/scanner", window.location.origin);
       u.searchParams.set("window", String(win));
-      u.searchParams.set("sort", sort);
-      u.searchParams.set("minZ", String(minZ));
+      u.searchParams.set("sort", "score");
       u.searchParams.set("limit", "25");
-      if (moneyness === "otm") u.searchParams.set("minOtm", String(minOtm));
+      u.searchParams.set("dir", "build");   // growing walls only — decay is noise
+      u.searchParams.set("minOtm", "0.05");
       const res = await fetch(u.toString(), { cache: "no-store" });
       const text = await res.text();
       let j: any;
@@ -122,125 +123,73 @@ function GexScannerPanel() {
       setRows(j.rows || []);
     } catch (e: any) { setErr(String(e?.message || e)); }
     finally { setLoading(false); }
-  }, [win, sort, minZ, moneyness, minOtm]);
+  }, [win]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
 
   return (
     <Card variant="budget" padding={12}
-      subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : " by size"}${moneyness === "otm" ? ` · OTM only (≥${(minOtm * 100).toFixed(0)}%)` : ""}${loading ? " · refreshing…" : ""}`}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+      subtitle={`Top 10 · biggest ${win}m size · building walls only${loading ? " · refreshing…" : ""}`}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12 }}>
         <div style={{ display: "flex", gap: 4 }}>
           {([5, 15, 30, 60] as Win[]).map((w) => (
             <button key={w} onClick={() => setWin(w)} style={seg(win === w)}>{w}m</button>
           ))}
         </div>
-        <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => setSort("z")} style={seg(sort === "z")}>Unusual (z)</button>
-          <button onClick={() => setSort("abs")} style={seg(sort === "abs")}>Biggest</button>
-          <button onClick={() => setSort("otm")} style={seg(sort === "otm")}>OTM-wt</button>
-          <button onClick={() => setSort("pct")} style={seg(sort === "pct")}>%vs open</button>
-        </div>
-        <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => setMoneyness("all")} style={seg(moneyness === "all")}>All</button>
-          <button onClick={() => setMoneyness("otm")} style={seg(moneyness === "otm")}>OTM</button>
-        </div>
-        {moneyness === "otm" && (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.orange }}>
-            min OTM
-            <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
-              style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
-              <option value={0.02}>2%+</option>
-              <option value={0.05}>5%+</option>
-              <option value={0.10}>10%+</option>
-              <option value={0.15}>15%+</option>
-              <option value={0.20}>20%+</option>
-            </select>
-          </label>
-        )}
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.green }}>
-          min z
-          <select value={minZ} onChange={(e) => setMinZ(Number(e.target.value))}
-            style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
-            <option value={0}>any</option>
-            <option value={1.5}>1.5+</option>
-            <option value={2}>2.0+</option>
-            <option value={3}>3.0+</option>
-          </select>
-        </label>
         <button onClick={() => load()} style={seg(false)}>↻</button>
+        <a href="/scanner" style={{ ...seg(false), textDecoration: "none", color: LIGHT_BLUE }}>Full scanner →</a>
       </div>
 
       {err && <div style={{ color: HOME_THEME.red, marginBottom: 10, fontSize: 12 }}>{err}</div>}
 
-      <div style={{ overflow: "auto", maxHeight: "100%" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase", position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
-              <th style={{ ...th, textAlign: "left" }}>#</th>
-              <th style={{ ...th, textAlign: "left" }}>Symbol</th>
-              <th style={th}>Spot</th>
-              <th style={th}>Strike</th>
-              <th style={{ ...th, textAlign: "left" }}>Expiry</th>
-              {(["latest_chg", "mean_chg", "z"] as const).map((col) => {
-                const label = col === "latest_chg" ? `${win}m Δ` : col === "mean_chg" ? "Avg Δ" : "z-score";
-                const active = colSort?.col === col;
-                const arrow = active ? (colSort!.dir === "desc" ? " ↓" : " ↑") : " ⇅";
-                return (
-                  <th key={col} onClick={() => toggleColSort(col)} style={{ ...th, cursor: "pointer", color: active ? HOME_THEME.cyan : HOME_THEME.green, userSelect: "none" }}>
-                    {label}<span style={{ opacity: active ? 1 : 0.4 }}>{arrow}</span>
-                  </th>
-                );
-              })}
-              {([
-                { col: "otm_dist" as const, label: "OTM%" },
-                { col: "pct_open" as const, label: "%vsOpen" },
-              ]).map(({ col, label }) => {
-                const active = colSort?.col === col;
-                const arrow = active ? (colSort!.dir === "desc" ? " ↓" : " ↑") : " ⇅";
-                return (
-                  <th key={col} onClick={() => toggleColSort(col)} style={{ ...th, cursor: "pointer", color: active ? HOME_THEME.cyan : HOME_THEME.green, userSelect: "none" }}>
-                    {label}<span style={{ opacity: active ? 1 : 0.4 }}>{arrow}</span>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {displayRows.map((r, i) => {
-              const up = r.latest_chg >= 0;
-              const col = up ? HOME_THEME.green : HOME_THEME.red;
-              const otmPct = (r.otm_dist ?? 0) * 100;
-              return (
-                <tr key={`${r.symbol}-${r.expiry}-${r.strike}`}
-                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
-                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
-                  <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>
-                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot > 0 ? r.spot.toFixed(2) : "—"}</td>
-                  <td style={td}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)" }}>{r.expiry}</td>
-                  <td style={{ ...td, color: col, fontWeight: 800 }}>{fmtB(r.latest_chg)}</td>
-                  <td style={td}>{fmtB(r.mean_chg)}</td>
-                  <td style={{ ...td, color: zColor(r.z), fontWeight: 800 }}>
-                    {r.z == null ? "—" : `${r.z >= 0 ? "+" : ""}${r.z.toFixed(1)}σ`}
-                  </td>
-                  <td style={{ ...td, color: otmPct >= 5 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>{otmPct.toFixed(1)}%</td>
-                  <td style={{ ...td, color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                    {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}%`}
-                  </td>
-                </tr>
-              );
-            })}
-            {!rows.length && !loading && (
-              <tr><td colSpan={10} style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
-                No qualifying moves yet.
-              </td></tr>
-            )}
-          </tbody>
-        </table>
+      {!topBySize.length && !loading && !err && (
+        <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 12 }}>
+          No qualifying moves yet.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+        {topBySize.map((r, i) => {
+          const up = r.latest_chg >= 0;
+          const col = up ? HOME_THEME.green : HOME_THEME.red;
+          const sig = classify(r);
+          const otmPct = (r.otm_dist ?? 0) * 100;
+          return (
+            <div
+              key={`card-${r.symbol}-${r.expiry}-${r.strike}`}
+              className="card-hover"
+              style={{
+                ...classicCardAccentStyle,
+                padding: "10px 12px",
+                borderLeft: `3px solid ${col}`,
+                background: sig === "very" ? "rgba(255,209,102,0.10)" : (classicCardAccentStyle as any).background,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontWeight: 800, fontSize: 14, color: HOME_THEME.text }}>
+                  <span style={{ color: "rgba(255,255,255,0.35)", marginRight: 6 }}>{i + 1}</span>{r.symbol}
+                </span>
+                <span style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>{r.strike}</span>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtB(r.latest_chg)}</div>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
+                {r.expiry} · spot {r.spot > 0 ? r.spot.toFixed(2) : "—"}
+              </div>
+              <div style={{ display: "flex", gap: 8, fontSize: 12, marginTop: 6, flexWrap: "wrap" }}>
+                <span style={{ color: HOME_THEME.orange }}>OTM {otmPct.toFixed(1)}%</span>
+                <span style={{ color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                  {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}% vs open`}
+                </span>
+                <span style={{ color: HOME_THEME.cyan, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  score {scoreOf(r).toFixed(0)}
+                  <ScoreInfo align="left" />
+                </span>
+              </div>
+              <div style={{ marginTop: 6 }}><SignalBadge s={sig} /></div>
+            </div>
+          );
+        })}
       </div>
     </Card>
   );

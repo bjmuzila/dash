@@ -290,6 +290,8 @@ function LiveToday({ sym, ds, days, hist }: {
     <>
       <LiveGauges live={live} days={days} dowName={dowName} />
 
+      <Playbook live={live} days={days} dowName={dowName} />
+
       <Card
         accent="cyan"
         title={`Today — ${sym} · ${dowName}`}
@@ -362,8 +364,6 @@ function LiveToday({ sym, ds, days, hist }: {
         base rate, not a prediction for today.
       </div>
       </Card>
-
-      <Playbook live={live} days={days} dowName={dowName} />
     </>
   );
 }

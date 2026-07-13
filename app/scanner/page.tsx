@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { ScoreInfo } from "@/components/shared/InfoTip";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { computeValueArea } from "@/lib/valueArea";
@@ -411,7 +412,10 @@ function GexScanner() {
                     <span style={{ color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                       {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}% vs open`}
                     </span>
-                    <span style={{ color: HOME_THEME.cyan }}>score {scoreOf(r).toFixed(0)}</span>
+                    <span style={{ color: HOME_THEME.cyan, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      score {scoreOf(r).toFixed(0)}
+                      <ScoreInfo align={i % 5 >= 3 ? "right" : "left"} />
+                    </span>
                   </div>
                   <div style={{ marginTop: 6 }}><SignalBadge s={sig} /></div>
                 </div>
@@ -462,6 +466,7 @@ function GexScanner() {
                     whiteSpace: "nowrap",
                   }}>
                     {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 15 }}>{arrow}</span>
+                    {col === "score" && <> <ScoreInfo align="right" side="bottom" /></>}
                   </th>
                 );
               })}
