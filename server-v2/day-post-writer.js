@@ -26,6 +26,11 @@ const SLOTS = [
   { slot: 'eod',       open: 16 * 60 + 3,  close: 16 * 60 + 40 },
 ];
 
+// Server-to-server auth: these Next routes are owner-gated, so without the
+// shared-secret header middleware redirects to "/" and we parse landing HTML.
+const internalHeaders = () =>
+  (process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {});
+
 // Market holidays (ET dates) — keep in sync with eod-gex-recorder.js
 const MARKET_HOLIDAYS = new Set([
   // 2026
@@ -149,8 +154,12 @@ async function runDayPostOnce(base, slot, opts = {}) {
   }
 
   // 1) Live read (same numbers the tab's Load data pulls).
-  const diRes = await fetch(`${base}/api/social-media/daily-input`, { cache: 'no-store' });
-  if (!diRes.ok) throw new Error(`daily-input ${diRes.status}`);
+  const diRes = await fetch(`${base}/api/social-media/daily-input`, {
+    cache: 'no-store',
+    redirect: 'manual',
+    headers: internalHeaders(),
+  });
+  if (!diRes.ok) throw new Error(`daily-input ${diRes.status}${diRes.status >= 300 && diRes.status < 400 ? ' (auth redirect — INTERNAL_API_TOKEN missing?)' : ''}`);
   const di = (await diRes.json())?.data ?? {};
   if (!(Number(di.spxSpot) > 0)) throw new Error('daily-input has no SPX spot — feed not ready');
 
@@ -159,7 +168,8 @@ async function runDayPostOnce(base, slot, opts = {}) {
   // 2) Anthropic post via the Next route (slot-aware prompt lives there).
   const genRes = await fetch(`${base}/api/social-media/day-post`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    redirect: 'manual',
+    headers: { 'content-type': 'application/json', ...internalHeaders() },
     body: JSON.stringify({
       slot,
       visual: null,

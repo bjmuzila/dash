@@ -44,6 +44,9 @@ const SCALE = {
 const RVIV_SOFT = 0.35;
 const W_RVIV = 0.65;  // weight: what the tape is ACTUALLY doing
 const W_GEX  = 0.35;  // weight: what dealer hedging will DO to it next
+// TEMP: logs the raw feed values + where each bar lands, so SCALE can be tuned
+// against real magnitudes. Flip to false (or delete the effect) once calibrated.
+const DEBUG_SCALES = true;
 const DEAD = 0.15;   // |v| below this = the neutral/mid label
 const CELLS = 28;    // segments per bar
 const SKEW_MS = 60_000;
@@ -128,13 +131,19 @@ export function realizedVol(spots: { ts: number; px: number }[]): number | null 
 function convexityRow(gex: number, rv: number | null, iv: number | null): Row {
   const gexTilt = -clamp1(tanh(gex / SCALE.gex)); // short gamma ⇒ RV expands next
 
-  if (rv == null || iv == null || iv <= 0) {
-    // No RV/IV yet — fall back to the regime tilt alone, at reduced conviction.
+  // RV under 1% annualized means the spot buffer is degenerate (identical samples:
+  // market closed, or spot frozen because the WS is only sending `gex` deltas and
+  // no `snapshot`). Treat that as NO DATA — a zero RV would otherwise pin the bar
+  // hard negative and print a confident, fabricated "SUPPRESSED".
+  const rvUsable = rv != null && rv > 1;
+  if (!rvUsable || iv == null || iv <= 0) {
+    // Fall back to the regime tilt alone, at reduced conviction.
     const v = clamp1(gexTilt * 0.5);
     return {
       key: "CONVEXITY", sub: "volatility expectancy", v,
       label: v > DEAD ? "EXPANSION (EST)" : v < -DEAD ? "SUPPRESSED (EST)" : "FAIR (EST)",
-      color: C.amber, note: "RV warming…",
+      color: C.dim,
+      note: rv != null && rv <= 1 ? "spot frozen — no RV" : "RV warming…",
     };
   }
 
@@ -262,6 +271,23 @@ export default function StateRail({ gex, dex, spots = [], hasData = true }: Stat
 
   // RV recomputes only when the sample set actually grows.
   const rv = useMemo(() => realizedVol(spots), [spots]);
+
+  // ── TEMP: scale calibration. Watch these for a session, then set SCALE.* to the
+  // magnitude of a NOTABLE reading (not a typical one) so the bars stop saturating.
+  // Delete once the scales are tuned. ──
+  useEffect(() => {
+    if (!DEBUG_SCALES) return;
+    const lastPx = spots.length ? spots[spots.length - 1].px : null;
+    console.log("[StateRail]", {
+      gex: g, dex: d, rv, atmIv, skewPct,
+      spotSamples: spots.length, lastSpot: lastPx,
+      bars: {
+        regime: tanh(g / SCALE.gex).toFixed(2),
+        dex: tanh(d / SCALE.dex).toFixed(2),
+        skew: skewPct == null ? null : tanh(skewPct / SCALE.skew).toFixed(2),
+      },
+    });
+  }, [g, d, rv, atmIv, skewPct, spots]);
 
   const rows: Row[] = [
     regimeRow(g),
