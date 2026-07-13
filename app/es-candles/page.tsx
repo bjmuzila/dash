@@ -40,6 +40,26 @@ type GexMetric = "voloi" | "vol";
 const ET_DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
 const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
 
+// Is SPX CASH open (Mon–Fri 09:30–16:00 ET)? Critical for the basis: the live
+// basis is esFut − spot, and when cash is CLOSED, `spot` is a frozen last print
+// while ES keeps trading. The difference is then not a basis at all — it's a
+// stale-price artifact (observed: live basis read 17 when the true ES−SPX close
+// basis was 50.6). Whenever cash is shut we must use the prior-day CLOSE basis
+// (ES 16:00 − SPX 16:00) instead of anything computed against a frozen spot.
+const ET_HM_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+});
+function isCashOpen(ts: number = Date.now()): boolean {
+  const parts = ET_HM_FMT.formatToParts(new Date(ts));
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "";
+  if (wd === "Sat" || wd === "Sun") return false;
+  const hh = Number(parts.find((p) => p.type === "hour")?.value ?? -1);
+  const mm = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  if (hh < 0) return false;
+  const mins = hh * 60 + mm;
+  return mins >= 9 * 60 + 30 && mins < 16 * 60; // 09:30–16:00 ET
+}
+
 // Volume-by-price profile + value-area levels, derived from candle OHLCV.
 type ProfileBin = { price: number; volume: number };
 type VolumeProfile = {
@@ -313,6 +333,11 @@ export default function EsCandlesPage() {
   // Column history keyed by 5-min slot ms. One column per slot; latest slot is
   // updated in place as fresh gex messages arrive within the same 5-min window.
   const columnsRef = useRef<Map<number, GexColumn>>(new Map());
+  // 1-minute resolution snapshots of the SAME per-strike cells (columnsRef is
+  // floored to 5-min heatmap slots — too coarse for the bubble trail).
+  const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
+  const bubbleScaleRef = useRef(1);
+  useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
   const drawOverlayRef = useRef<() => void>(() => {});
@@ -386,7 +411,11 @@ export default function EsCandlesPage() {
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
-  const [showGexLines, setShowGexLines] = useState(false); // horizontal per-strike GEX lines, line weight ∝ |GEX|
+  // Per-strike 1-minute GEX bubbles. Radius ∝ |net GEX|
+  // at that strike in that minute, normalized to the session max so the bubble
+  // trail shows gamma building/bleeding at each level through the day.
+  const [showGexBubbles, setShowGexBubbles] = useState(false);
+  const [bubbleScale, setBubbleScale] = useState(1); // manual radius multiplier (sizing is taste)
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.
@@ -661,6 +690,11 @@ export default function EsCandlesPage() {
           const metric = gexMetricRef.current;
           setRailRows(cells.map((c) => ({ strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol })));
           const slotTs = slotFloorMs(Date.now());
+          // 1-min bucket for the bubble trail (last write in the minute wins).
+          const minTs = Math.floor(Date.now() / 60_000) * 60_000;
+          const mmap = minuteColsRef.current;
+          mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
+          if (mmap.size > 2000) mmap.delete(Math.min(...mmap.keys()));
           const map = columnsRef.current;
           // Stamp the live column with the SPX spot from THIS frame so it ages
           // into history carrying its own basis, exactly like a DB-backfilled one.
@@ -724,6 +758,7 @@ export default function EsCandlesPage() {
     // When the picker or range changes, wipe the existing columns so we don't
     // mix expiries or leave stale far-back columns after switching to 1D.
     columnsRef.current.clear();
+    minuteColsRef.current.clear();
     drawOverlayRef.current();
     (async () => {
       try {
@@ -749,16 +784,28 @@ export default function EsCandlesPage() {
         // DB rows are 1-min granular; snap to the 5-min candle grid. Sort
         // descending so the newest snapshot within each bucket wins (first seen).
         const sortedRaw = [...raw].sort((a, b) => b.slotTs - a.slotTs);
+        // Bubble trail backfill: TODAY only, at native 1-min granularity (no
+        // 5-min flooring). Same rows, different bucket — the heatmap coarsens
+        // them, the bubbles don't.
+        const mmap = minuteColsRef.current;
+        const todayKey = etDayKey(Date.now());
         for (const col of sortedRaw) {
           const slotTs = slotFloorMs(col.slotTs);
-          if (map.has(slotTs)) continue; // live wins on collisions
           const cells: GexCell[] = col.cells
             .filter((c) => c.strike > 0 && Number.isFinite(c.net))
             .map((c) => ({ strike: c.strike, netOiVol: c.net, netVol: Number(c.netVol ?? 0) }));
           // Historical SPX spot for this snapshot → per-column ES basis at draw
           // time. 0/undefined (legacy rows) falls back to the live basis.
           const colSpot = Number(col.spot ?? 0);
-          map.set(slotTs, { slotTs, cells, spot: colSpot > 0 ? colSpot : undefined });
+          const spot = colSpot > 0 ? colSpot : undefined;
+
+          if (etDayKey(col.slotTs) === todayKey && cells.length) {
+            const minTs = Math.floor(col.slotTs / 60_000) * 60_000;
+            if (!mmap.has(minTs)) mmap.set(minTs, { slotTs: minTs, cells, spot });
+          }
+
+          if (map.has(slotTs)) continue; // live wins on collisions
+          map.set(slotTs, { slotTs, cells, spot });
         }
         drawOverlayRef.current();
       } catch { /* live feed still populates the front expiry going forward */ }
@@ -824,12 +871,21 @@ export default function EsCandlesPage() {
   // (ES 16:00 − SPX 16:00) give the correct positive basis, so we PREFER the
   // frozen prior-day basis and only fall back to the live basis if it's missing.
   const effectiveBasis = useCallback(() => {
-    // Live basis (esFut − spot) from the current /ws/gex frame. The frozen
-    // prior-day basis went stale intraday — it quoted SPX ~90pt under ES when
-    // the true basis had drifted to ~70 — so prefer the live value and only
-    // fall back to the frozen prior-day basis when no live frame exists yet.
-    if (basisRef.current) return basisRef.current;
-    return prevBasisRef.current;
+    // The live basis is esFut − spot, and it is ONLY meaningful while SPX cash is
+    // open. Out of hours `spot` is a frozen last print while ES keeps moving, so
+    // the "basis" degrades into a stale-price artifact (measured: 17 when the
+    // true ES−SPX close basis was 50.6 — a 33pt error on every level).
+    //
+    // So: cash open → live basis (it drifts intraday and the frozen prior-day
+    // value goes stale, which was the original reason for preferring live).
+    //     cash shut → prior-day CLOSE basis (ES 16:00 − SPX 16:00), which is the
+    //                 last basis that was actually measurable.
+    if (isCashOpen()) {
+      if (basisRef.current) return basisRef.current;
+      return prevBasisRef.current;
+    }
+    if (prevBasisRef.current) return prevBasisRef.current;
+    return basisRef.current;
   }, []);
 
   useEffect(() => {
@@ -1194,7 +1250,10 @@ export default function EsCandlesPage() {
       ctx.clearRect(0, 0, w, h);
 
       const ts = chart.timeScale();
-      const basis = basisRef.current;
+      // NOT basisRef.current directly: out of hours that's esFut − frozen spot,
+      // which is not a basis at all. effectiveBasis() falls back to the prior-day
+      // CLOSE basis whenever SPX cash is shut. See its comment.
+      const basis = effectiveBasis();
 
       // ── Per-SESSION ES basis ───────────────────────────────────────────────
       // Strikes live in SPX space; the chart plots ES. The basis (ES − SPX) is
@@ -1471,32 +1530,58 @@ export default function EsCandlesPage() {
       // CURRENT (latest) GEX column, line weight + opacity ∝ |net GEX| for the
       // active metric. Same data the heatmap/rail use; cyan = +GEX (calls),
       // red = −GEX (puts). Thicker = larger gamma at that strike.
-      if (showGexLines) {
-        const gexCols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
-        const latest = gexCols.length ? gexCols[gexCols.length - 1] : null;
-        if (latest && latest.cells.length) {
-          const metric = gexMetricRef.current;
-          const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
-          let scaleW = 0;
-          try { scaleW = chart.priceScale("right").width(); } catch {}
-          const plotRight = Math.max(0, w - scaleW - 1);
-          const absVals = latest.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
-          const maxAbs = absVals.length ? Math.max(...absVals) : 1;
-          ctx.save();
-          ctx.lineCap = "butt";
-          for (const cell of latest.cells) {
-            const v = valOf(cell);
-            if (!v) continue;
-            const y = series.priceToCoordinate(cell.strike + basis);
-            if (y == null) continue;
-            const ratio = Math.min(Math.abs(v) / maxAbs, 1);
-            const lw = 1.1 + Math.pow(ratio, 0.82) * 14;         // ~1px … ~15px
-            const alpha = Math.min(0.92, 0.14 + Math.pow(ratio, 0.9) * 0.72);
-            ctx.strokeStyle = `rgba(${v >= 0 ? "41,182,246" : "255,71,87"},${alpha.toFixed(3)})`;
-            ctx.lineWidth = lw;
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotRight, y); ctx.stroke();
+      {
+        // ── 1b) 1-minute per-strike GEX bubbles. One bubble per strike per
+        // minute; radius ∝ |net GEX| at that strike, normalized to the max |GEX|
+        // seen across ALL minutes in the buffer (a session-wide scale) so the
+        // trail reads as gamma building/bleeding over time rather than being
+        // re-normalized every column. bubbleScale is the manual size knob.
+        if (showGexBubbles) {
+          const mins = [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+          if (mins.length) {
+            const metric = gexMetricRef.current;
+            const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
+            // Session-wide max magnitude → shared radius scale.
+            let sessMax = 0;
+            for (const m of mins) for (const c of m.cells) {
+              const a = Math.abs(valOf(c));
+              if (a > sessMax) sessMax = a;
+            }
+            if (sessMax > 0) {
+              const k = bubbleScaleRef.current;
+              const rMax = 9 * k;   // px radius at the session max
+              const rMin = 0.8 * k; // floor so tiny strikes stay dots
+              ctx.save();
+              for (const m of mins) {
+                const x = ts.timeToCoordinate((m.slotTs / 1000) as UTCTimestamp);
+                if (x == null || x < -20 || x > w + 20) continue;
+                const mBasis = basisAt(m.slotTs);
+                for (const cell of m.cells) {
+                  const v = valOf(cell);
+                  if (!v) continue;
+                  const y = series.priceToCoordinate(cell.strike + mBasis);
+                  if (y == null || y < -20 || y > h + 20) continue;
+                  const ratio = Math.min(Math.abs(v) / sessMax, 1);
+                  // sqrt → bubble AREA (not radius) tracks |GEX|, which is how
+                  // the eye actually reads size.
+                  const r = rMin + Math.sqrt(ratio) * (rMax - rMin);
+                  if (r < 0.35) continue;
+                  const rgb = v >= 0 ? "41,182,246" : "255,71,87";
+                  const alpha = 0.18 + ratio * 0.55;
+                  ctx.beginPath();
+                  ctx.arc(x, y, r, 0, Math.PI * 2);
+                  ctx.fillStyle = `rgba(${rgb},${alpha.toFixed(3)})`;
+                  ctx.fill();
+                  if (r > 2) {
+                    ctx.lineWidth = 0.8;
+                    ctx.strokeStyle = `rgba(${rgb},${Math.min(0.95, alpha + 0.3).toFixed(3)})`;
+                    ctx.stroke();
+                  }
+                }
+              }
+              ctx.restore();
+            }
           }
-          ctx.restore();
         }
       }
 
@@ -1683,7 +1768,7 @@ export default function EsCandlesPage() {
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexLines, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
+  }, [showHeatmap, showGexBubbles, bubbleScale, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -1792,7 +1877,16 @@ export default function EsCandlesPage() {
           <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
           <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
           <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
-          <ToggleTile label="GEX Lines" on={showGexLines} onClick={() => setShowGexLines((v) => !v)} accent={LIGHT_BLUE} />
+          {/* 1-min per-strike GEX bubbles */}
+          <ToggleTile
+            label="Bubbles"
+            on={showGexBubbles}
+            onClick={() => setShowGexBubbles((v) => !v)}
+            accent={LIGHT_BLUE}
+          />
+          {showGexBubbles && (
+            <DockSlider label="bubble" value={bubbleScale} min={0.3} max={3} step={0.1} onChange={setBubbleScale} title="Bubble size" />
+          )}
 
           <DockGap />
 

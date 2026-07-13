@@ -19,6 +19,19 @@
 const INTERVAL_MIN = 5;                       // snapshot cadence (minutes)
 const INTERVAL_MS = INTERVAL_MIN * 60 * 1000; // 5 minutes
 
+// Live ES futures price, for the esPrice column. This row is the ONLY place we
+// persist SPX and ES sampled at the same instant, which makes it the only usable
+// source of a HISTORICAL ES−SPX basis — /es-candles needs it to place old GEX /
+// CB levels (SPX-space) on the ES axis. The basis drifts with carry/divs, decays
+// into expiry and steps at the roll, so today's basis can't be used for old data.
+//
+// This used to be written as `esPrice: spot` — i.e. SPX copied into the ES
+// column — so every historical basis came out as exactly 0 and the chart plotted
+// SPX strikes straight onto the ES axis. Read the real ES from market-state, and
+// write 0 (not spot) when it isn't available, so a bad row is REJECTED by the
+// consumer rather than silently meaning "no offset".
+const { getState } = require('./state/market-state');
+
 // Server-to-server calls to the protected /api/* routes must carry the shared
 // internal token, or Clerk middleware redirects them to "/" and returns the
 // landing-page HTML ("Unexpected token '<'"). Same pattern as levels-auto-publish.
@@ -123,6 +136,11 @@ async function collectOnce(base, opts = {}) {
   }
 
   const spot = Number(data.spotPrice) || 0;
+  // ES at (near enough) the same instant as `spot`. Both are RTH values here —
+  // collectOnce only runs during RTH — so esFut − spxPrice is a true basis.
+  let esFutNow = 0;
+  try { esFutNow = Number(getState()?.esFut) || 0; } catch { esFutNow = 0; }
+  if (!(esFutNow > 0)) console.log('[auto-mvc] no live esFut — writing esPrice=0 (row will have no basis)');
   const expiry = data.expiration ?? '—';
   const flipPt = data.gexFlip ?? null;
   const nearestStrike = spot > 0 ? Math.round(spot / 5) * 5 : null;
@@ -167,7 +185,10 @@ async function collectOnce(base, opts = {}) {
     volumeVolOnly: Number(mvcVolRow?.callVolume ?? 0) + Number(mvcVolRow?.putVolume ?? 0),
     totalNetGEX_Vol,
     spxPrice: spot,
-    esPrice: spot,
+    // Real ES print, NOT a copy of spot (see the note at the top of this file).
+    // 0 when market-state has no fresh ES — consumers must reject 0, never treat
+    // it as a zero basis.
+    esPrice: esFutNow,
     netDEXStrike: dexRow?.strike ?? nearestStrike ?? null,
     totalNetDEX_OI,
     totalNetDEX_Vol,

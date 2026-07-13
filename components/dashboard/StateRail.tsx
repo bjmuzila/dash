@@ -6,16 +6,30 @@
 //
 // DATA — all four rows come from feeds the Greeks tab already runs:
 //   REGIME    ← gex  ($B, OI+Vol)  — sign/size of dealer net gamma
-//   CONVEXITY ← vex ($M) + |gex|   — vol expectancy (UNIPOLAR: calm → explosive)
+//   CONVEXITY ← RV vs IV + gamma regime — TRUE volatility expectancy (see below)
 //   DEX LEAN  ← dex  ($B, OI+Vol)  — dealer delta lean
 //   OPT SKEW  ← 25Δ put/call IV via derivePick(/api/gex) — same source as LiveSkewBand
 //
-// NORMALIZATION — raw greeks are squashed to −1..+1 with tanh(x / SCALE). The
+// CONVEXITY = VOLATILITY EXPECTANCY, not "vol sensitivity". Long convexity (long
+// gamma) has positive expectancy only when REALIZED vol beats what was IMPLIED —
+// gamma-scalp P/L ≈ ½·Γ·(realized move)² − θ. So the row is a bipolar RV-vs-IV
+// read, tilted by the dealer gamma regime (positive GEX suppresses future RV via
+// sell-rallies/buy-dips hedging; negative GEX amplifies it):
+//
+//   rvIv    = tanh( ln(RV / IV) / RVIV_SOFT )   >0 ⇒ RV beating IV ⇒ long convexity pays
+//   gexTilt = −tanh( GEX / SCALE.gex )          short gamma ⇒ future RV expands
+//   v       = W_RVIV·rvIv + W_GEX·gexTilt
+//
+// RV is annualized from the panel's own spot samples (close-to-close log returns,
+// RTH-time annualization). IV is the live ATM 0DTE IV from the chain. Rule of 16:
+// IV/16 ≈ the daily move the market is charging for — shown in the row's readout.
+//
+// NORMALIZATION — everything is squashed to −1..+1 with tanh(x / SCALE). The
 // SCALEs below are the "typical full-scale" magnitude for SPX; tune them here
 // and nowhere else. A rolling z-score against gex_levels_history would be the
 // stricter approach — these fixed scales are the v1.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { derivePick, type ChainRow as SkewChainRow } from "@/components/greeks/SkewCalculator";
 
@@ -23,12 +37,19 @@ import { derivePick, type ChainRow as SkewChainRow } from "@/components/greeks/S
 const SCALE = {
   gex: 4,    // $B net GEX that reads as "fully long gamma"
   dex: 8,    // $B net DEX that reads as "fully leaned"
-  vex: 250,  // $M net VEX that reads as "fully vol-sensitive"
   skew: 12,  // % (put−call)/atm that reads as "puts fully bid"
 };
+// How far RV must diverge from IV to peg the convexity bar. ln-ratio units:
+// 0.35 ≈ RV 40% above IV (or ~30% below) reads as full-scale.
+const RVIV_SOFT = 0.35;
+const W_RVIV = 0.65;  // weight: what the tape is ACTUALLY doing
+const W_GEX  = 0.35;  // weight: what dealer hedging will DO to it next
 const DEAD = 0.15;   // |v| below this = the neutral/mid label
 const CELLS = 28;    // segments per bar
 const SKEW_MS = 60_000;
+// RTH seconds per year (252 × 6.5h) — annualize intraday samples in trading time.
+const RTH_SECONDS_PER_YEAR = 252 * 6.5 * 3600;
+const MIN_RV_SAMPLES = 8;
 
 const tanh = (x: number) => Math.tanh(x);
 const clamp1 = (x: number) => Math.max(-1, Math.min(1, x));
@@ -36,17 +57,19 @@ const clamp1 = (x: number) => Math.max(-1, Math.min(1, x));
 export interface StateRailProps {
   gex: number | null;   // billions, OI+Vol
   dex: number | null;   // billions, OI+Vol
-  vex: number | null;   // millions, OI+Vol
+  vex: number | null;   // millions, OI+Vol (kept for the readout; not the convexity driver)
+  /** Spot samples for realized vol. Ascending ts (ms). Panel already has these. */
+  spots?: { ts: number; px: number }[];
   hasData?: boolean;
 }
 
 type Row = {
   key: string;
   sub: string;
-  v: number;            // −1..+1  (unipolar rows use 0..+1)
+  v: number;            // −1..+1
   label: string;
   color: string;
-  unipolar?: boolean;
+  note?: string;        // small mono readout under the label (e.g. RV/IV)
 };
 
 const C = {
@@ -65,14 +88,65 @@ function regimeRow(gex: number): Row {
   return { key: "REGIME", sub: "dealer structure", v, label, color };
 }
 
-// Convexity is unipolar 0..1: high when dealers have little gamma to absorb with
-// (small |gex|) AND the book is vol-sensitive (large |vex|). Explosive = 1.
-function convexityRow(gex: number, vex: number): Row {
-  const volSensitivity = Math.min(1, Math.abs(tanh(vex / SCALE.vex)));
-  const gammaCushion = Math.min(1, Math.abs(tanh(gex / SCALE.gex)));
-  const v = clamp1(volSensitivity * (1 - gammaCushion * 0.7));
-  const label = v < 0.3 ? "CALM" : v < 0.6 ? "COILED" : "EXPLOSIVE";
-  return { key: "CONVEXITY", sub: "volatility expectancy", v, label, color: C.amber, unipolar: true };
+/**
+ * Realized vol, annualized %, from close-to-close log returns of the spot samples.
+ * Annualized in TRADING time (RTH seconds/yr) so it's directly comparable to the
+ * IV the chain quotes. Returns null until there are enough samples to mean anything.
+ */
+export function realizedVol(spots: { ts: number; px: number }[]): number | null {
+  const pts = spots.filter(s => Number.isFinite(s.px) && s.px > 0 && Number.isFinite(s.ts)).sort((a, b) => a.ts - b.ts);
+  if (pts.length < MIN_RV_SAMPLES) return null;
+
+  const rets: number[] = [];
+  const dts: number[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const dt = (pts[i].ts - pts[i - 1].ts) / 1000; // seconds
+    if (dt <= 0 || dt > 3600) continue;            // skip dupes and overnight gaps
+    rets.push(Math.log(pts[i].px / pts[i - 1].px));
+    dts.push(dt);
+  }
+  if (rets.length < MIN_RV_SAMPLES - 1) return null;
+
+  // Zero-mean stdev — intraday drift is noise, not signal, at this horizon.
+  const variance = rets.reduce((s, r) => s + r * r, 0) / rets.length;
+  const sorted = [...dts].sort((a, b) => a - b);
+  const medianDt = sorted[Math.floor(sorted.length / 2)];
+  if (!medianDt) return null;
+
+  const perYear = RTH_SECONDS_PER_YEAR / medianDt;
+  return Math.sqrt(variance * perYear) * 100;
+}
+
+/**
+ * CONVEXITY = volatility expectancy. Bipolar:
+ *   −1  RV running under IV + dealers long gamma  → vol suppressed, SELL convexity
+ *    0  RV ≈ IV                                    → fairly priced
+ *   +1  RV beating IV + dealers short gamma        → expansion, BUY convexity
+ * The gamma-scalp identity (½·Γ·move² − θ) is why this is the right axis: gamma
+ * only pays if the tape delivers more than the premium charged for it.
+ */
+function convexityRow(gex: number, rv: number | null, iv: number | null): Row {
+  const gexTilt = -clamp1(tanh(gex / SCALE.gex)); // short gamma ⇒ RV expands next
+
+  if (rv == null || iv == null || iv <= 0) {
+    // No RV/IV yet — fall back to the regime tilt alone, at reduced conviction.
+    const v = clamp1(gexTilt * 0.5);
+    return {
+      key: "CONVEXITY", sub: "volatility expectancy", v,
+      label: v > DEAD ? "EXPANSION (EST)" : v < -DEAD ? "SUPPRESSED (EST)" : "FAIR (EST)",
+      color: C.amber, note: "RV warming…",
+    };
+  }
+
+  const rvIv = clamp1(tanh(Math.log(Math.max(rv, 0.5) / Math.max(iv, 0.5)) / RVIV_SOFT));
+  const v = clamp1(W_RVIV * rvIv + W_GEX * gexTilt);
+
+  const label = v > DEAD ? "EXPANSION" : v < -DEAD ? "SUPPRESSED" : "FAIRLY PRICED";
+  const color = v > DEAD ? C.amber : v < -DEAD ? C.green : C.dim;
+  // Rule of 16: IV/16 = the daily move the market is charging for.
+  const note = `RV ${rv.toFixed(1)} / IV ${iv.toFixed(1)} · ±${(iv / 16).toFixed(2)}%/d`;
+
+  return { key: "CONVEXITY", sub: "volatility expectancy", v, label, color, note };
 }
 
 function dexRow(dex: number): Row {
@@ -92,38 +166,43 @@ function skewRow(skewPct: number | null): Row {
   return { key: "OPT SKEW", sub: "volatility surface", v, label, color };
 }
 
-// CURRENT PLAY — structure (regime) and flow (dex) must agree, and convexity
-// decides whether it's a fade or a chase. Conflict = stand aside.
+// CURRENT PLAY — regime says what dealers DO, convexity says whether vol is
+// CHEAP or RICH relative to what the tape is delivering. Those two together give
+// the premium decision; DEX only sizes/directs it. Conflict = stand aside.
 function currentPlay(regime: Row, conv: Row, dex: Row) {
   const longGamma = regime.v > DEAD;
   const shortGamma = regime.v < -DEAD;
-  const explosive = conv.v >= 0.6;
-  const dealerBuy = dex.v > DEAD;
-  const dealerSell = dex.v < -DEAD;
+  const expansion = conv.v > DEAD;    // RV beating IV → long convexity has edge
+  const suppressed = conv.v < -DEAD;  // RV under IV → short convexity has edge
+  const leaning = Math.abs(dex.v) > DEAD;
 
   if (!longGamma && !shortGamma) {
     return { text: "Regime in transition — no dealer edge to lean on.", chip: "STAND ASIDE", tone: C.amber };
   }
-  if (longGamma && explosive) {
-    return { text: "Signals conflict — flow fights structure, wait.", chip: "STAND ASIDE", tone: C.amber };
+  if (longGamma && suppressed) {
+    return { text: "Dealers pin and RV is under IV — premium is rich. Sell convexity, fade extremes.", chip: "SELL PREMIUM", tone: C.green };
   }
-  if (longGamma && (dealerBuy || dealerSell)) {
-    return { text: "Long gamma — dealers pin. Fade the extremes into the flip.", chip: "FADE RANGE", tone: C.green };
+  if (shortGamma && expansion) {
+    return { text: "Short gamma and RV beating IV — hedging amplifies. Own convexity, press the move.", chip: "BUY CONVEXITY", tone: C.red };
   }
-  if (shortGamma && explosive) {
-    return { text: "Short gamma + convex — dealers chase. Momentum has legs.", chip: "PRESS TREND", tone: C.red };
+  if (longGamma && expansion) {
+    // The tape is outrunning a book that should be damping it — pin is failing.
+    return { text: "RV outrunning IV against long-gamma dealers — pin is failing, wait for the flip break.", chip: "STAND ASIDE", tone: C.amber };
   }
-  if (shortGamma) {
-    return { text: "Short gamma, calm surface — trend but size it down.", chip: "TREND (LIGHT)", tone: C.amber };
+  if (shortGamma && suppressed) {
+    return { text: "Short gamma but RV under IV — coiled, not moving yet. Wait for the break, don't pay up.", chip: "WAIT / COILED", tone: C.amber };
   }
-  return { text: "Mixed read — wait for structure and flow to line up.", chip: "STAND ASIDE", tone: C.amber };
+  if (longGamma) {
+    return { text: `Long gamma, vol fairly priced${leaning ? " — flow leaning into the pin" : ""}. Range trade, no premium edge.`, chip: "FADE RANGE", tone: C.green };
+  }
+  return { text: "Short gamma, vol fairly priced — trend but size it down.", chip: "TREND (LIGHT)", tone: C.amber };
 }
 
 // ── Bar ───────────────────────────────────────────────────────────────────────
 function SegBar({ row }: { row: Row }) {
   const mag = Math.min(1, Math.abs(row.v));
   const lit = Math.round(mag * CELLS);
-  const fromRight = !row.unipolar && row.v < 0;
+  const fromRight = row.v < 0;
 
   return (
     <div style={{ display: "flex", gap: 2, height: 14 }}>
@@ -150,12 +229,14 @@ function SegBar({ row }: { row: Row }) {
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────────
-export default function StateRail({ gex, dex, vex, hasData = true }: StateRailProps) {
+export default function StateRail({ gex, dex, spots = [], hasData = true }: StateRailProps) {
   const [skewPct, setSkewPct] = useState<number | null>(null);
+  const [atmIv, setAtmIv] = useState<number | null>(null);  // ATM 0DTE IV, % annualized
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  // Same 0DTE chain feed LiveSkewBand uses — one source of truth for skew.
+  // Same 0DTE chain feed LiveSkewBand uses — one source of truth for skew AND for
+  // the ATM IV that convexity is measured against.
   useEffect(() => {
     const load = async () => {
       try {
@@ -168,6 +249,7 @@ export default function StateRail({ gex, dex, vex, hasData = true }: StateRailPr
         ) : null;
         if (!mounted.current) return;
         setSkewPct(pick && pick.atm > 0 ? ((pick.put - pick.call) / pick.atm) * 100 : null);
+        setAtmIv(pick && pick.atm > 0 ? pick.atm : null);
       } catch { /* leave last value */ }
     };
     load();
@@ -177,11 +259,13 @@ export default function StateRail({ gex, dex, vex, hasData = true }: StateRailPr
 
   const g = Number(gex ?? 0);
   const d = Number(dex ?? 0);
-  const v = Number(vex ?? 0);
+
+  // RV recomputes only when the sample set actually grows.
+  const rv = useMemo(() => realizedVol(spots), [spots]);
 
   const rows: Row[] = [
     regimeRow(g),
-    convexityRow(g, v),
+    convexityRow(g, rv, atmIv),
     dexRow(d),
     skewRow(skewPct),
   ];
@@ -203,7 +287,7 @@ export default function StateRail({ gex, dex, vex, hasData = true }: StateRailPr
           key={row.key}
           style={{
             display: "grid",
-            gridTemplateColumns: "150px 1fr 130px",
+            gridTemplateColumns: "150px 1fr 165px",
             alignItems: "center",
             gap: 14,
             padding: "5px 0",
@@ -216,7 +300,12 @@ export default function StateRail({ gex, dex, vex, hasData = true }: StateRailPr
             </span>
           </div>
           <SegBar row={row} />
-          <div style={{ fontSize: 10, letterSpacing: ".1em", color: row.color }}>{row.label}</div>
+          <div>
+            <div style={{ fontSize: 10, letterSpacing: ".1em", color: row.color }}>{row.label}</div>
+            {row.note && (
+              <div style={{ fontSize: 8, letterSpacing: ".04em", color: C.dim, marginTop: 2 }}>{row.note}</div>
+            )}
+          </div>
         </div>
       ))}
 

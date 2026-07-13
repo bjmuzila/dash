@@ -62,6 +62,9 @@ function pointFromTotals(
 // ── Panel ──────────────────────────────────────────────────────────────────────
 export default function GreeksHomePanel() {
   const [latest, setLatest] = useState<GreekPoint | null>(null);
+  // Spot samples for the StateRail's realized-vol leg. Seeded from today's
+  // persisted snapshots, then appended on each live tick that moves the price.
+  const [spots, setSpots] = useState<{ ts: number; px: number }[]>([]);
   const mountedRef = useRef(true);
 
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -75,6 +78,7 @@ export default function GreeksHomePanel() {
         chex: Number(r.chex), vex: Number(r.vex), spot: Number(r.price ?? 0),
       })).filter(p => Number.isFinite(p.ts) && p.ts > 0).sort((a, b) => a.ts - b.ts);
       setLatest(pts[pts.length - 1] ?? null);
+      setSpots(pts.filter(p => p.spot > 0).map(p => ({ ts: p.ts, px: p.spot })));
     }).catch(() => {});
   }, []);
 
@@ -146,6 +150,17 @@ export default function GreeksHomePanel() {
     if (!seededRef.current && latest) { seededRef.current = true; setSnap(latest); }
   }, [latest]);
 
+  // Append each 30s sample's spot to the RV series (regular dt = clean realized
+  // vol). Dedupe on ts; cap the buffer at one RTH session of 30s bars.
+  useEffect(() => {
+    if (!snap || !(snap.spot > 0)) return;
+    setSpots(prev => {
+      const last = prev[prev.length - 1];
+      if (last && Math.abs(last.ts - snap.ts) < 1_000) return prev;
+      return [...prev, { ts: snap.ts, px: snap.spot }].slice(-800);
+    });
+  }, [snap]);
+
   return (
     <div style={{ width: "100%", height: "100%", overflowY: "auto", overflowX: "hidden", padding: 4 }}>
       {/* ── 0. State rail — regime / convexity / dex lean / skew + current play.
@@ -156,6 +171,7 @@ export default function GreeksHomePanel() {
           gex={snap?.gex ?? null}
           dex={snap?.dex ?? null}
           vex={snap?.vex ?? null}
+          spots={spots}
           hasData={!!snap}
         />
       </div>
