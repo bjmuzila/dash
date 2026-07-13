@@ -422,11 +422,18 @@ function evaluateFrame(cur, mem, cfg = {}) {
   }
 
   // ── 2) INITIAL BALANCE ──
-  // ib_formed: once per session, the first frame at/after 10:30 ET. Informational
+  // ib_formed: once per session, in the 10:30–10:45 ET window only. Informational
   // ("stats in play"), so it carries direction 'neutral' and is keyed on the day,
   // not on a level+direction cooldown.
+  //
+  // The window matters: "first frame at/after 10:30" stays TRUE for the rest of
+  // the session, so a container restart at 1pm re-fired it with a 1:15 PM stamp.
+  // mem is per-process and can't be trusted alone — runOnce also hydrates
+  // mem.ibFormedDay from the DB so a redeploy can't re-fire today's signal.
   const ibDay = etDateStr(new Date(ts));
-  if (ctx.ibComplete && ctx.ibh != null && ctx.ibl != null && mem.ibFormedDay !== ibDay) {
+  const ibMins = etMinutesOf(ts);
+  const inIbFireWindow = ibMins >= 630 && ibMins < 645; // 10:30–10:45 ET
+  if (ctx.ibComplete && inIbFireWindow && ctx.ibh != null && ctx.ibl != null && mem.ibFormedDay !== ibDay) {
     mem.ibFormedDay = ibDay;
     const width = ctx.ibh - ctx.ibl;
     const conf = confluenceAt(ctx.ibh, 'IBH').concat(confluenceAt(ctx.ibl, 'IBL'));
@@ -722,7 +729,11 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
   for (const r of rows) {
     if (!r) continue;
     if (r.side !== 'buy') continue;                 // purchases only
-    if (!r.is_otm) continue;                        // OTM only (frozen at print time)
+    // /proxy/flow-history maps the is_otm COLUMN to an isOtm FIELD before it goes
+    // over the wire. Accept both so this detector works against the HTTP tape and
+    // a raw flow_prints row alike.
+    const otm = r.isOtm ?? r.is_otm;
+    if (!otm) continue;                             // OTM only (frozen at print time)
     const premium = Number(r.premium) || 0;
     if (premium < C.WHALE_MIN_PREMIUM) continue;
     const dte = dteOf(r.expiration);
@@ -780,6 +791,9 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
 // a restart mid-session doesn't spam every whale print from earlier in the day.
 let whaleCache = { at: 0, rows: [], seeded: false };
 const WHALE_POLL_MS = Number(process.env.SIGNALS_WHALE_POLL_MS || 20_000);
+// On the seeding pass, prints newer than this still fire (a redeploy shouldn't
+// swallow a whale that printed a minute earlier); anything older is just marked seen.
+const WHALE_SEED_FRESH_MS = Number(process.env.SIGNALS_WHALE_SEED_FRESH_MS || 30 * 60_000);
 async function refreshWhales(base) {
   if (Date.now() - whaleCache.at < WHALE_POLL_MS) return null;
   whaleCache.at = Date.now();
@@ -795,6 +809,30 @@ async function refreshWhales(base) {
     return whaleCache.rows;
   } catch {
     return null;
+  }
+}
+
+// ib_formed is a once-per-day signal, but `mem` is per-process — a redeploy at
+// 1pm would otherwise re-fire today's IB. Before the IB detector can run, ask the
+// DB whether today already has an ib_formed row and seed mem.ibFormedDay from it.
+// Checked at most once per minute, and only until it resolves for the day.
+let ibHydrateAt = 0;
+async function hydrateIbFormedDay() {
+  const today = etDateStr();
+  if (mem.ibFormedDay === today) return;
+  if (Date.now() - ibHydrateAt < 60_000) return;
+  ibHydrateAt = Date.now();
+  const p = getPool();
+  if (!p) return;
+  if (!(await ensureSchema())) return;
+  try {
+    const { rows } = await p.query(
+      `SELECT 1 FROM trade_signals WHERE kind = 'ib_formed' AND session_date = $1 LIMIT 1`,
+      [today]
+    );
+    if (rows.length) mem.ibFormedDay = today;
+  } catch (e) {
+    console.warn('[signals] ib hydrate failed:', e.message);
   }
 }
 
@@ -927,6 +965,7 @@ async function runOnce(base, { force = false } = {}) {
   if (!force && !inSession()) return { skipped: 'off-session' };
   const [, , , whaleRows] = await Promise.all([
     refreshCb(base), refreshIct(base), refreshConfidence(base), refreshWhales(base),
+    hydrateIbFormedDay(),
   ]);
 
   // Whale prints are tape-driven, not frame-driven: they don't need a basis, a
@@ -935,9 +974,15 @@ async function runOnce(base, { force = false } = {}) {
   if (whaleRows) {
     const fired = evaluateWhalePrints(whaleRows, mem);
     if (!whaleCache.seeded) {
-      // First pull of the session/process: prime the dedup set, emit nothing.
+      // First pull of the session/process: prime the dedup set so a restart
+      // doesn't replay the whole day — but still emit anything from the last
+      // WHALE_SEED_FRESH_MS, or a redeploy silently eats a whale that printed
+      // moments before it. Older prints are marked seen and dropped.
       whaleCache.seeded = true;
-      console.log(`[signals] whale tape seeded — ${fired.length} existing print(s) marked seen, not fired`);
+      const cutoff = Date.now() - WHALE_SEED_FRESH_MS;
+      const fresh = fired.filter((s) => s.ts >= cutoff);
+      whaleSigs.push(...fresh);
+      console.log(`[signals] whale tape seeded — ${fired.length} print(s) marked seen, ${fresh.length} still fresh → fired`);
     } else {
       whaleSigs.push(...fired);
     }
