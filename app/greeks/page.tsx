@@ -913,13 +913,25 @@ function GreeksGauge({
 //      before the flip is recorded. A lone spike (count 1) is ignored.
 // The recorded time is the FIRST sample of the confirmed run (true crossing),
 // not the confirming sample.
-const CROSS_BAND_FRAC = 0.08; // must clear 8% of today's |scale| past zero
+const CROSS_BAND_FRAC = 0.08; // must clear 8% of today's typical |scale| past zero
 const CROSS_CONFIRM = 2;      // consecutive samples on the new side to confirm
 const CROSS_HOLD_MS = 60_000; // …or hold the new side this long (sustained flip)
+const CROSS_BAND_PCTL = 0.90; // robust scale = 90th pctile of |value| (not max)
+
+// Robust band. The band MUST NOT key off max|value|: a single bad print (e.g. a
+// −645 DEX spike on a day whose real range is ±45) makes the band wider than the
+// entire series, every sample reads "neutral", and NO crossing can ever be
+// logged. A high percentile ignores the outlier and tracks the real magnitude.
+function crossBand(pts: { value: number }[], fullScale: number): number {
+  const mags = pts.map(p => Math.abs(p.value)).filter(v => isFinite(v) && v > 0).sort((a, b) => a - b);
+  const p = mags.length ? mags[Math.min(mags.length - 1, Math.floor(mags.length * CROSS_BAND_PCTL))] : 0;
+  const scale = p > 0 ? p : (fullScale || 0);
+  return Math.max(1e-9, scale * CROSS_BAND_FRAC);
+}
 
 interface ZeroCross { ts: number; label: string; up: boolean } // up = − → +
 function zeroCrossings(pts: { ts: number; value: number }[], label: string, fullScale: number): ZeroCross[] {
-  const band = Math.max(1e-9, (fullScale || 0) * CROSS_BAND_FRAC);
+  const band = crossBand(pts, fullScale);
   const out: ZeroCross[] = [];
   let committed = 0;                       // -1 / 0 / +1 : the confirmed side
   let pendSign = 0, pendCount = 0, pendTs = 0;

@@ -53,6 +53,20 @@ function isPlausibleBasis(b: number): boolean {
 const ET_HM_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
 });
+// Minutes past ET midnight for a timestamp. Used to fence off the closing auction.
+function etMinutesOfDay(ts: number): number {
+  const parts = ET_HM_FMT.formatToParts(new Date(ts));
+  const hh = Number(parts.find((p) => p.type === "hour")?.value ?? -1);
+  const mm = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  return hh < 0 ? -1 : hh * 60 + mm;
+}
+// 15:30 ET. In the last half hour, dealer gamma collapses onto 2–3 strikes into the
+// close and |GEX| there dwarfs everything printed earlier in the session. Letting
+// those minutes set the bubble scale makes them render enormous and squashes the
+// whole rest of the day to dust — so they're excluded from the normalization and
+// simply CLAMP at the pre-15:30 max instead. See the bubble draw.
+const BUBBLE_SCALE_CUTOFF_MIN = 15 * 60 + 30;
+
 function isCashOpen(ts: number = Date.now()): boolean {
   const parts = ET_HM_FMT.formatToParts(new Date(ts));
   const wd = parts.find((p) => p.type === "weekday")?.value ?? "";
@@ -1674,11 +1688,29 @@ export default function EsCandlesPage() {
           if (mins.length) {
             const metric = gexMetricRef.current;
             const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
-            // Session-wide max magnitude → shared radius scale.
+            // Session-wide max magnitude → shared radius scale, computed from the
+            // minutes BEFORE 15:30 ET only. Into the close, gamma concentrates on 2–3
+            // strikes and their |GEX| dwarfs the rest of the day; including them made
+            // those few bubbles gigantic and normalized every earlier minute down to
+            // nothing. Excluding them means the scale is set by the 15:25-and-earlier
+            // session, and the closing strikes just clamp (ratio caps at 1) — so the
+            // biggest late bubble is exactly as big as the biggest 3:25 one, never more.
             let sessMax = 0;
-            for (const m of mins) for (const c of m.cells) {
-              const a = Math.abs(valOf(c));
-              if (a > sessMax) sessMax = a;
+            for (const m of mins) {
+              if (etMinutesOfDay(m.slotTs) >= BUBBLE_SCALE_CUTOFF_MIN) continue;
+              for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > sessMax) sessMax = a;
+              }
+            }
+            // Fallback: if the buffer holds ONLY post-15:30 minutes (e.g. the page was
+            // opened at 3:45), there's no earlier session to scale against — use those
+            // minutes rather than draw nothing.
+            if (sessMax === 0) {
+              for (const m of mins) for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > sessMax) sessMax = a;
+              }
             }
             if (sessMax > 0) {
               const k = bubbleScaleRef.current;
