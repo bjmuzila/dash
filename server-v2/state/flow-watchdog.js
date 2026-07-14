@@ -78,7 +78,16 @@ function startFlowWatchdog(thetaStream) {
       // simply hasn't printed yet) — cap the age at "minutes since the bell".
       const sinceOpenMs = (mins - OPEN_MINS) * 60_000;
       const age = Math.min(last ? Date.now() - last : Infinity, sinceOpenMs);
-      if (age < SOFT_RECONNECT_AFTER_MS) return; // healthy
+      if (age < SOFT_RECONNECT_AFTER_MS) {
+        // Healthy → clear the episode latches. Without this, `restartedAt` stays
+        // set forever after the first-ever restart, so every later staleness
+        // event short-circuits to Stage 3 (page a human) and Stage 2 never runs
+        // a second time. That was the "watchdog restarts once then just emails
+        // every day" bug.
+        softReconnectedAt = 0;
+        restartedAt = 0;
+        return;
+      }
 
       const ageMin = Math.round(age / 60000);
 
