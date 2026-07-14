@@ -14,8 +14,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ScoreInfo } from "@/components/shared/InfoTip";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
-import { computeValueArea } from "@/lib/valueArea";
-import { classifyDay, backtestQuadrants, sessionDates, rthBarsForDate, CONFIRM_BARS, type Quadrant } from "@/lib/balanceImbalance";
+import { buildTpoStructures, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -53,7 +52,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "oi" | "watch" | "marketquality" | "balance" | "ibstats";
+type MainTab = "overview" | "gex" | "strike" | "oi" | "watch" | "marketquality" | "tpo" | "ibstats";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -110,12 +109,12 @@ const SCAN_META: ScanMeta[] = [
     tells: "Whether the overall tape is a favorable, cautious, or risk-off environment for sizing new trades — a top-down regime check before you drill into any single ticker.",
   },
   {
-    tab: "balance",
-    title: "Balance / Imbalance",
+    tab: "tpo",
+    title: "TPO Structures",
     accent: LIGHT_BLUE,
-    scope: "ESU / NQU · Auction Market Theory",
-    what: "Classifies today's session into 4 quadrants (Balance / Shift / Imbalance / Re-balance) against the prior RTH day's Value Area (POC/VAH/VAL, volume-profile derived).",
-    tells: "Whether price is rangebound in value, breaking value, trending away from it, or hunting new value — plus a historical grade of whether Shifts actually confirm into Imbalance and whether Imbalance actually finds new value.",
+    scope: "ESU / NQU · Market Profile open business",
+    what: "Builds a true TPO profile (one touch per 30-min period, time not volume) for every RTH session, extracts excess/tails, poor highs+lows, thin-zone holes and naked POCs, then forward-fills each one to see whether it was ever tested or repaired.",
+    tells: "Which prior-session levels are still unfinished business — and, per structure type, how often that kind of level actually gets revisited. Excess holds; poor highs get taken out; holes get accelerated through. They are opposite trades.",
   },
   {
     tab: "ibstats",
@@ -2280,36 +2279,74 @@ function MarketQualityScanner() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  BALANCE / IMBALANCE (new tab) — Auction Market Theory quadrant classifier
+//  TPO STRUCTURES — Market Profile "open business"
+//
+//  Replaces the old Balance/Imbalance quadrant classifier. That panel answered
+//  "what state is today in?"; this one answers the question that actually pays:
+//  "which prior-session levels are still unfinished, and how often does THIS KIND
+//  of level get revisited?"
+//
+//  Excess holds. Poor highs get taken out. Holes get accelerated through.
+//  They are opposite trades — see lib/tpo.ts for the full taxonomy.
 // ══════════════════════════════════════════════════════════════════════════════
 
-const QUADRANT_META: Record<Quadrant, { label: string; color: string }> = {
-  balance: { label: "Balance", color: HOME_THEME.green },
-  shift: { label: "Shift", color: HOME_THEME.orange },
-  imbalance: { label: "Imbalance", color: HOME_THEME.red },
-  rebalance: { label: "Re-balance", color: LIGHT_BLUE },
+const KIND_COLOR: Record<StructureKind, string> = {
+  excess_high: HOME_THEME.red,
+  excess_low: HOME_THEME.red,
+  tail_high: HOME_THEME.orange,
+  tail_low: HOME_THEME.orange,
+  poor_high: HOME_THEME.orange,
+  poor_low: HOME_THEME.orange,
+  hole: NEUTRAL,
+  naked_poc: LIGHT_BLUE,
 };
 
-function QuadrantCell({ q, title, sub, active }: { q: Quadrant; title: string; sub: string; active: boolean }) {
-  const meta = QUADRANT_META[q];
+const pctOrDash = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
+
+function StructureRow({ s, spot, touchRate }: { s: TpoStructure; spot: number | null; touchRate: number | null }) {
+  const color = KIND_COLOR[s.kind];
+  const band = s.priceHi > s.priceLo
+    ? `${s.priceLo.toFixed(2)}–${s.priceHi.toFixed(2)}`
+    : s.priceLo.toFixed(2);
+  const mid = (s.priceLo + s.priceHi) / 2;
+  const dist = spot != null ? mid - spot : null;
+
   return (
-    <div style={{
-      borderRadius: 10,
-      padding: "12px 14px",
-      border: `1px solid ${active ? meta.color : "rgba(255,255,255,0.1)"}`,
-      background: active ? `${meta.color}22` : "rgba(255,255,255,0.02)",
-      transition: "all 0.2s",
+    <div title={KIND_MEANING[s.kind]} style={{
+      display: "grid",
+      gridTemplateColumns: "110px 1fr 60px 76px 70px 62px",
+      gap: 8, alignItems: "center",
+      padding: "9px 12px",
+      borderBottom: "1px solid rgba(255,255,255,0.06)",
+      fontSize: 15,
     }}>
-      <div style={{ fontWeight: 800, fontSize: 15, color: active ? meta.color : HOME_THEME.text, marginBottom: 2 }}>
-        {title}{active ? " ●" : ""}
-      </div>
-      <div style={{ fontSize: 15, color: "rgba(255,255,255,0.55)" }}>{sub}</div>
+      <span style={{
+        justifySelf: "start", fontSize: 15, fontWeight: 700,
+        padding: "2px 9px", borderRadius: 999,
+        color, border: `1px solid ${color}55`, background: `${color}1A`,
+      }}>{KIND_LABEL[s.kind]}</span>
+
+      <span style={{ color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{band}</span>
+      <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.ageSessions}d</span>
+      <span style={{
+        color: dist == null ? "rgba(255,255,255,0.4)" : dist >= 0 ? HOME_THEME.green : HOME_THEME.red,
+        fontVariantNumeric: "tabular-nums",
+      }}>
+        {dist == null ? "—" : `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}`}
+      </span>
+      <span style={{ color: HOME_THEME.text }}>
+        {s.kind === "hole" ? "—" : pctOrDash(touchRate)}
+      </span>
+      <span style={{ color: s.testedAt ? HOME_THEME.orange : "rgba(255,255,255,0.35)" }}>
+        {s.testedAt ? `${s.touches}×` : "untested"}
+      </span>
     </div>
   );
 }
 
-function BalanceImbalanceScanner() {
+function TpoStructuresScanner() {
   const [instr, setInstr] = useState<"ESU" | "NQU">("ESU");
+  const [kindFilter, setKindFilter] = useState<"all" | "extremes" | "holes">("all");
 
   const es = useEsCandles(instr === "ESU", 25);
   const nq = useNqCandles(instr === "NQU", 25);
@@ -2328,163 +2365,180 @@ function BalanceImbalanceScanner() {
     return filtered.length ? filtered : allCandles;
   }, [allCandles, instr]);
 
-  // Fine-grained key (reacts to every price tick, not just new bars) — only
-  // used for TODAY's live quadrant read, which should update the instant
-  // price crosses VAH/VAL rather than waiting for the bar to close.
-  const candlesKey = useMemo(() => {
-    const n = candles.length;
-    const last = candles[n - 1];
-    const lc = last ? Math.round(last.close * 4) : 0;
-    return `${n}:${last?.slotKey ?? ""}:${lc}`;
-  }, [candles]);
-
-  // Coarse key — only changes when a bar is ADDED (new 5m bar, or more
-  // history loads), not on every intrabar price tick. The prior-day Value
-  // Area and the multi-day backtest are both static/slow-changing; recomputing
-  // them on every WS tick (the original bug) re-ran a full multi-day scan with
-  // a brand-new Intl.DateTimeFormat per bar comparison, which is what froze
-  // the tab (and, since it's synchronous on the main thread, the whole
-  // dashboard) on click.
+  // Coarse key — the structure scan is a multi-day walk and must NOT re-run on
+  // every intrabar WS tick. (Recomputing a full multi-day profile scan per tick
+  // is what froze this tab the last time; keep it keyed to bar COUNT only.)
   const barCountKey = useMemo(() => {
     const last = candles[candles.length - 1];
     return `${candles.length}:${last?.date ?? ""}`;
   }, [candles]);
 
-  const dates = useMemo(() => sessionDates(candles), [barCountKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const today = dates[dates.length - 1] ?? null;
-  const prevDate = dates.length >= 2 ? dates[dates.length - 2] : null;
   const binSize = instr === "NQU" ? 5 : 1;
 
-  const va = useMemo(() => {
-    if (!prevDate) return null;
-    const prevBars = rthBarsForDate(candles, prevDate);
-    return prevBars.length >= 5 ? computeValueArea(prevBars, binSize) : null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [barCountKey, prevDate, binSize]);
-
-  const day = useMemo(() => {
-    if (!today || !va) return null;
-    return classifyDay(candles, today, va);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candlesKey, today, va]);
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const backtest = useMemo(() => backtestQuadrants(candles, binSize), [barCountKey, binSize]);
+  const res = useMemo(() => buildTpoStructures(candles, binSize), [barCountKey, binSize]);
 
-  const current = day?.current ?? null;
-  const lastClose = candles[candles.length - 1]?.close ?? null;
-  const pct = (n: number) => `${Math.round(n * 100)}%`;
-  const changes = day?.points.filter((p) => p.changed) ?? [];
+  const spot = candles[candles.length - 1]?.close ?? null;
+  const today = res.sessions[res.sessions.length - 1] ?? null;
+
+  const statByKind = useMemo(() => {
+    const m = new Map<StructureKind, number | null>();
+    for (const s of res.stats) m.set(s.kind, s.testRate);
+    return m;
+  }, [res]);
+
+  const open = useMemo(() => {
+    const rows = res.open.filter((s) => {
+      if (kindFilter === "holes") return s.kind === "hole";
+      if (kindFilter === "extremes") return s.kind !== "hole";
+      return true;
+    });
+    if (spot == null) return rows;
+    return [...rows].sort((a, b) => {
+      const da = Math.abs((a.priceLo + a.priceHi) / 2 - spot);
+      const db = Math.abs((b.priceLo + b.priceHi) / 2 - spot);
+      return da - db;
+    });
+  }, [res, kindFilter, spot]);
+
+  const enoughHistory = res.sessions.length >= 2;
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Balance / Imbalance</span>}
-      subtitle={`${instr} · Auction Market Theory vs. prior RTH Value Area${prevDate ? ` (${prevDate})` : ""}`}>
+    <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-        <button onClick={() => setInstr("ESU")} style={seg(instr === "ESU")}>ESU</button>
-        <button onClick={() => setInstr("NQU")} style={seg(instr === "NQU")}>NQU</button>
-      </div>
+      {/* ── Open Business rail ───────────────────────────────────────────── */}
+      <Card variant="budget" title={<span style={{ fontSize: 16 }}>Open business</span>}
+        subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
-      {!va && (
-        <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
-          Needs at least one full prior RTH session of candles to build a Value Area — give the feed a day of history.
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          <button onClick={() => setInstr("ESU")} style={seg(instr === "ESU")}>ESU</button>
+          <button onClick={() => setInstr("NQU")} style={seg(instr === "NQU")}>NQU</button>
+          <span style={{ width: 12 }} />
+          <button onClick={() => setKindFilter("all")} style={seg(kindFilter === "all")}>All</button>
+          <button onClick={() => setKindFilter("extremes")} style={seg(kindFilter === "extremes")}>Extremes</button>
+          <button onClick={() => setKindFilter("holes")} style={seg(kindFilter === "holes")}>Holes</button>
         </div>
-      )}
 
-      {va && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 20, marginBottom: 20 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <QuadrantCell q="balance" title="1. Balance" sub="Efficient market · rangebound · lower vol" active={current?.quadrant === "balance"} />
-              <QuadrantCell q="shift" title="2. Shift" sub="Break of value · buyers/sellers overpower" active={current?.quadrant === "shift"} />
-              <QuadrantCell q="rebalance" title="4. Re-balance" sub="Hunting new value, or revisiting old value" active={current?.quadrant === "rebalance"} />
-              <QuadrantCell q="imbalance" title="3. Imbalance" sub="Trending · OI flushes · disagreement on value" active={current?.quadrant === "imbalance"} />
+        {!enoughHistory && (
+          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+            Needs at least two completed RTH sessions to have any structure to forward-fill.
+          </div>
+        )}
+
+        {enoughHistory && (
+          <>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "110px 1fr 60px 76px 70px 62px",
+              gap: 8, padding: "6px 12px",
+              borderBottom: "1px solid rgba(255,255,255,0.12)",
+              fontSize: 15, color: "rgba(255,255,255,0.45)",
+              textTransform: "uppercase", letterSpacing: "0.05em",
+            }}>
+              <span>kind</span><span>level</span><span>age</span><span>dist</span><span>test %</span><span>hits</span>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, justifyContent: "center" }}>
-              <div style={{ fontSize: 16, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                Prior-day Value Area
+            {open.map((s) => (
+              <StructureRow key={s.id} s={s} spot={spot} touchRate={statByKind.get(s.kind) ?? null} />
+            ))}
+
+            {!open.length && (
+              <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+                No open business — every structure in the loaded history has been repaired.
               </div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text }}>VAH <b style={{ color: HOME_THEME.cyan }}>{va.vah.toFixed(2)}</b></div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text }}>POC <b style={{ color: LIGHT_BLUE }}>{va.poc.toFixed(2)}</b></div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text }}>VAL <b style={{ color: HOME_THEME.cyan }}>{va.val.toFixed(2)}</b></div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>
-                Last <b>{lastClose?.toFixed(2) ?? "—"}</b>
-                {current?.side && (
-                  <span style={{ color: QUADRANT_META[current.quadrant].color, fontWeight: 700, marginLeft: 8 }}>
-                    {current.side === "up" ? "above VAH" : "below VAL"}
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* ── Today's session + stats rollup ──────────────────────────────── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+        <Card variant="budget" title={<span style={{ fontSize: 16 }}>Today&apos;s profile</span>}
+          subtitle={today ? `${today.date} · ${today.periods} periods · ${today.singles.length} single prints` : "—"}>
+          {!today && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 15 }}>No RTH session yet.</div>}
+          {today && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 15 }}>
+              <div>VAH <b style={{ color: HOME_THEME.cyan }}>{today.vah.toFixed(2)}</b></div>
+              <div>IB high <b style={{ color: HOME_THEME.text }}>{today.ibHigh?.toFixed(2) ?? "—"}</b></div>
+              <div>POC <b style={{ color: LIGHT_BLUE }}>{today.poc.toFixed(2)}</b></div>
+              <div>IB low <b style={{ color: HOME_THEME.text }}>{today.ibLow?.toFixed(2) ?? "—"}</b></div>
+              <div>VAL <b style={{ color: HOME_THEME.cyan }}>{today.val.toFixed(2)}</b></div>
+              <div>IB range <b style={{ color: HOME_THEME.text }}>{today.ibRange?.toFixed(2) ?? "—"}</b></div>
+              <div style={{ gridColumn: "1 / -1", marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {today.structures
+                  .filter((s) => s.kind !== "naked_poc")
+                  .map((s) => (
+                    <span key={s.id} title={KIND_MEANING[s.kind]} style={{
+                      fontSize: 15, fontWeight: 700, padding: "3px 9px", borderRadius: 6,
+                      color: KIND_COLOR[s.kind],
+                      border: `1px solid ${KIND_COLOR[s.kind]}55`,
+                      background: `${KIND_COLOR[s.kind]}1A`,
+                    }}>
+                      {KIND_LABEL[s.kind]} {s.priceLo.toFixed(2)}
+                    </span>
+                  ))}
+                {today.structures.filter((s) => s.kind !== "naked_poc").length === 0 && (
+                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+                    No extremes or holes formed today.
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: current ? QUADRANT_META[current.quadrant].color : HOME_THEME.text, marginTop: 4 }}>
-                {current ? QUADRANT_META[current.quadrant].label : "—"}
-              </div>
             </div>
-          </div>
+          )}
+        </Card>
 
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 16, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
-              Today&apos;s quadrant transitions
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {changes.map((p, i) => (
-                <div key={i} style={{
-                  fontSize: 15, padding: "4px 10px", borderRadius: 6,
-                  border: `1px solid ${QUADRANT_META[p.quadrant].color}55`,
-                  color: QUADRANT_META[p.quadrant].color, fontWeight: 700,
-                }}>
-                  {new Date(p.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })}
-                  {" · "}{QUADRANT_META[p.quadrant].label}{" @ "}{p.close.toFixed(2)}
-                </div>
-              ))}
-              {!changes.length && <span style={{ fontSize: 15, color: "rgba(255,255,255,0.4)" }}>No transitions yet today.</span>}
-            </div>
+        <Card variant="budget" title={<span style={{ fontSize: 16 }}>Structure stats</span>}
+          subtitle={`${res.sessions.length} sessions loaded · graded once ≥1 later session exists`}>
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
+            gap: 6, padding: "4px 0 6px",
+            borderBottom: "1px solid rgba(255,255,255,0.12)",
+            fontSize: 15, color: "rgba(255,255,255,0.45)",
+            textTransform: "uppercase", letterSpacing: "0.05em",
+          }}>
+            <span>kind</span><span>n</span><span>test %</span><span>repair %</span><span>med d</span>
           </div>
-
-          <div style={{ paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-            <div style={{ fontSize: 16, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
-              Historical outcome ({backtest.days.length} sessions graded)
+          {res.stats.filter((s) => s.n > 0).map((s) => (
+            <div key={s.kind} style={{
+              display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
+              gap: 6, padding: "7px 0", fontSize: 15,
+              borderBottom: "1px solid rgba(255,255,255,0.06)",
+            }}>
+              <span style={{ color: KIND_COLOR[s.kind], fontWeight: 700 }}>{KIND_LABEL[s.kind]}</span>
+              <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.n}</span>
+              <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.testRate)}</span>
+              <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.repairRate)}</span>
+              <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.medSessionsToTest ?? "—"}</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.5)" }}>Days with a Shift</div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>{backtest.daysWithShift}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.5)" }}>Shift → confirmed Imbalance</div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.orange }}>{pct(backtest.shiftToImbalanceRate)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.5)" }}>Imbalance → closed on new value</div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.red }}>{pct(backtest.imbalanceToNewValueRate)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 15, color: "rgba(255,255,255,0.5)" }}>Imbalance → reverted to Balance</div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: LIGHT_BLUE }}>{pct(backtest.imbalanceToRevertRate)}</div>
-              </div>
+          ))}
+          {!res.stats.some((s) => s.n > 0) && (
+            <div style={{ padding: 16, color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+              Not enough history loaded to grade anything yet.
             </div>
-          </div>
-        </>
-      )}
+          )}
+        </Card>
 
-      <div style={{
-        marginTop: 18, padding: "10px 14px", borderRadius: 10,
-        border: `1px solid ${HOME_THEME.orange}30`, background: `${HOME_THEME.orange}0A`,
-        fontSize: 15, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
-      }}>
-        <b style={{ color: HOME_THEME.orange }}>Approximate volume profile: </b>
-        the feed only gives us one total volume number per 5m bar, not volume-by-price — we don&apos;t actually know
-        where inside the bar&apos;s high-low range that volume traded. The VA/POC above spread each bar&apos;s volume
-        evenly across its H-L range as an estimate, not real per-tick volume-at-price. Once ThetaData adds futures
-        tick data, this switches to a true tick-built profile.
+        <div style={{
+          padding: "10px 14px", borderRadius: 10,
+          border: `1px solid ${HOME_THEME.orange}30`, background: `${HOME_THEME.orange}0A`,
+          fontSize: 15, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+        }}>
+          <b style={{ color: HOME_THEME.orange }}>Small sample: </b>
+          these rates are computed from whatever candle history is currently loaded
+          (~{res.sessions.length} sessions), not a real backtest. They will move a lot as the
+          window fills. The durable version needs a <code>tpo_structures</code> table with a
+          recorder forward-filling <code>tested_at</code>/<code>repaired_at</code> nightly —
+          until then treat every number here as directional, not tradeable.
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 15, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
+          <span>TPO = one touch per 30-min period per {binSize}-pt bin — TIME, not volume. RTH only.</span>
+          <span>Excess = singles at an extreme whose period closed back INSIDE (rejection → level holds). Tail = same singles but the period closed away (trend continuation → do not fade).</span>
+          <span>Poor high/low = flat stack at the extreme, no tail → unfinished, expect it taken out. Hole = mid-profile singles → price accelerates through, never target inside.</span>
+        </div>
       </div>
-
-      <div style={{ marginTop: 12, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
-        <span>VA = 70% volume, POC-centered, built from the prior RTH session&apos;s 5m bars</span>
-        <span>Imbalance confirms after {CONFIRM_BARS} bars sustained beyond VA · Re-balance = leg range contracts vs its own recent bars</span>
-        <span>Heuristic first pass — thresholds tunable in lib/balanceImbalance.ts</span>
-      </div>
-    </Card>
+    </div>
   );
 }
 
@@ -2525,11 +2579,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "marketquality" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
           background: tab === "marketquality" ? `${HOME_THEME.orange}22` : "transparent",
         }}>Market Quality</button>
-        <button onClick={() => setTab("balance")} style={{
-          ...tabStyle(tab === "balance"),
-          border: `1px solid ${tab === "balance" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "balance" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>Balance / Imbalance</button>
+        <button onClick={() => setTab("tpo")} style={{
+          ...tabStyle(tab === "tpo"),
+          border: `1px solid ${tab === "tpo" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
+          background: tab === "tpo" ? `${LIGHT_BLUE}22` : "transparent",
+        }}>TPO Structures</button>
         <button onClick={() => setTab("ibstats")} style={{
           ...tabStyle(tab === "ibstats"),
           border: `1px solid ${tab === "ibstats" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
@@ -2543,7 +2597,7 @@ export default function ScannerPage() {
       {tab === "oi"     && <OiChangeScanner />}
       {tab === "watch"  && <WatchThisScanner />}
       {tab === "marketquality" && <MarketQualityScanner />}
-      {tab === "balance" && <BalanceImbalanceScanner />}
+      {tab === "tpo" && <TpoStructuresScanner />}
       {tab === "ibstats" && <IbStatsTab />}
     </PageShell>
   );
