@@ -777,7 +777,7 @@ export default function IctPage() {
             }}
           >
           <div
-            className="flex flex-wrap items-center gap-1.5"
+            className="ict-toolbar flex flex-wrap items-center gap-1.5"
             style={{
               borderRadius: 998,
               padding: "8px 14px",

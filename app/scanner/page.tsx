@@ -128,12 +128,12 @@ const SCAN_META: ScanMeta[] = [
 
 function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
+    <div className="scanner-overview-grid" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
       {SCAN_META.map((s) => (
         <div
           key={s.tab}
           onClick={() => onSelect(s.tab)}
-          className="card-hover"
+          className="card-hover scanner-overview-card"
           style={{ ...classicCardAccentStyle, cursor: "pointer", padding: "18px 20px" }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
@@ -2700,8 +2700,31 @@ export default function ScannerPage() {
 
   return (
     <PageShell>
+      {/* Mobile-only: the 8 tab buttons take half the screen on a phone, so swap
+          them for a single dropdown (CSS shows exactly one of the two). */}
+      <select
+        className="scanner-tab-select"
+        value={tab}
+        onChange={(e) => setTab(e.target.value as MainTab)}
+        style={{
+          display: "none", width: "100%", padding: "8px 10px", borderRadius: 8,
+          fontSize: 13, fontWeight: 700, marginBottom: 4,
+          border: `1px solid ${HOME_THEME.cyan}`,
+          background: "rgba(0,0,0,0.5)", color: HOME_THEME.text,
+        }}
+      >
+        <option value="overview">Overview</option>
+        <option value="gex">GEX Scanner</option>
+        <option value="strike">Strike Query</option>
+        <option value="oi">OI Change</option>
+        <option value="watch">Watch This</option>
+        <option value="marketquality">Market Quality</option>
+        <option value="tpo">TPO Structures</option>
+        <option value="ibstats">IB Stats</option>
+      </select>
+
       {/* Top-level tabs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+      <div className="scanner-tabs" style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
         <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
         <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
         <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>

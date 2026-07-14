@@ -296,9 +296,26 @@ input.dte-range::-moz-range-track {
     justify-content: flex-start !important;
   }
   .es-candles-toggles > * { flex: 0 0 auto !important; }
-  /* Give the chart + lanes a real height once the page scrolls (flex-1 collapses
-     when the root is auto-height). */
-  .es-candles-root .flex-1 { flex: 0 0 auto !important; min-height: 60vh; }
+  /* Body wrapper is `flex:1; minHeight:0` inline — with the root at auto height it
+     collapses to nothing on mobile (page rendered blank). Force it content-sized. */
+  .es-candles-body { flex: 0 0 auto !important; min-height: 0 !important; width: 100%; }
+  /* Chart + 230px GEX rail sit side-by-side; on a 390px screen that starves the
+     chart to a sliver. Stack them instead. */
+  .es-candles-main {
+    flex-direction: column !important;
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+  }
+  .es-candles-main > * { width: 100% !important; flex: 0 0 auto !important; }
+  .es-candles-chartcol { flex: 0 0 auto !important; width: 100% !important; }
+  /* The canvas host must carry a real height — it's `flex-1` inside an auto-height
+     column, which resolves to 0. */
+  .es-candles-chart {
+    flex: 0 0 auto !important;
+    height: 62vh !important;
+    min-height: 380px !important;
+    width: 100% !important;
+  }
 
   /* Wide data tables: let them scroll sideways inside their own box instead of
      forcing the whole page wider than the screen. */
@@ -351,15 +368,14 @@ input.dte-range::-moz-range-track {
     width: 100% !important;
     margin-top: 0 !important;
   }
-  /* Ticker strip — below the heatmap. */
+  /* Signals feed strip — hidden on mobile. Mobile home is three sections only:
+     GEX chart → heatmap → economic calendar (the tab card, calendar is default). */
   .home-col-right > div:first-of-type {
-    order: 3;
-    flex: 0 0 auto !important;
-    width: 100% !important;
+    display: none !important;
   }
   /* Flow tabs / econ panel — last. */
   .home-col-left > div:last-child {
-    order: 4;
+    order: 3;
     display: flex !important;
     flex: 0 0 auto !important;
     height: 420px !important;
@@ -388,6 +404,93 @@ input.dte-range::-moz-range-track {
     flex: 1 1 auto !important;
     min-height: 240px !important;
   }
+
+  /* ── /flow: the session (expiration) row and the Filters card eat most of the
+     screen before you see any flow. Compress both into toolbar-height strips:
+     one horizontally-scrollable line each, tight controls, no card chrome. ── */
+  .flow-root .flow-topbar {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 8px !important;
+    padding-bottom: 2px;
+  }
+  .flow-root .flow-topbar > * { flex: 0 0 auto !important; }
+
+  /* Filters card → toolbar: kill the padding, title block and subtitle. */
+  .flow-root .flow-filters { gap: 8px !important; }
+  .flow-root .flow-filters .card-hover {
+    padding: 8px 10px !important;
+    border-radius: 10px !important;
+  }
+  .flow-root .flow-filters .card-hover > div:first-child { display: none !important; }
+  /* Watchlist / scope block above the grid — single scrollable line. */
+  .flow-root .flow-filters .card-hover > div:nth-child(2) {
+    margin-bottom: 8px !important;
+    max-height: 84px;
+    overflow-y: auto;
+  }
+  /* Filter controls: 2-up compact grid instead of one row per control. */
+  .flow-root .flow-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  .flow-root .flow-filter-grid label {
+    font-size: 9px !important;
+    margin-bottom: 2px !important;
+  }
+  .flow-root .flow-filter-grid input,
+  .flow-root .flow-filter-grid select,
+  .flow-root .flow-filter-grid button {
+    min-height: 30px !important;
+    padding: 4px 8px !important;
+    font-size: 12px !important;
+  }
+  .flow-root .flow-filter-grid > div[style*="span 2"] { grid-column: span 2 !important; }
+  .flow-root .flow-chip { min-height: 30px !important; }
+
+  /* ── /scanner: 8 big tab buttons → one dropdown. Overview cards → compact
+     single-column list (they were near full-screen each). ── */
+  .scanner-tab-select { display: block !important; }
+  .scanner-tabs { display: none !important; }
+  /* /test — same treatment. */
+  .test-tab-select { display: block !important; }
+  .test-tabs { display: none !important; }
+  .scanner-overview-grid { grid-template-columns: 1fr !important; gap: 8px !important; }
+  .scanner-overview-card { padding: 10px 12px !important; }
+  .scanner-overview-card > div { margin-bottom: 4px !important; }
+  .scanner-overview-card span,
+  .scanner-overview-card div { font-size: 12px !important; line-height: 1.35 !important; }
+
+  /* ── /ict: chart toolbar wrapped to 3 rows on a phone. Keep it one row and let
+     it scroll sideways; drop the `ml-auto` push so the TF group stays inline. ── */
+  .ict-toolbar {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 10px !important;
+  }
+  .ict-toolbar > * { flex: 0 0 auto !important; }
+  .ict-toolbar .ml-auto { margin-left: 0 !important; }
+  .ict-toolbar button { min-height: 26px !important; padding: 3px 7px !important; }
+
+  /* ── /trading (journal): every grid is fixed-column (5 KPI / 4 charts / 1fr 2fr
+     tables) and blows past a phone screen. Reflow to 1–2 columns. ── */
+  .journal-kpis  { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
+  .journal-charts,
+  .journal-tables { grid-template-columns: 1fr !important; gap: 8px !important; }
+  .journal-toolbar { flex-direction: column !important; align-items: stretch !important; gap: 8px !important; }
+  .journal-toolbar > div { width: 100%; }
+  .journal-toolbar button { flex: 1 1 auto; min-height: 34px; }
+  /* Journal Log table: scroll sideways in its own box, don't widen the page. */
+  .journal-tables table { font-size: 12px !important; }
+  /* Calendar: keep 7 columns (a week must stay a week) but shrink the cells. */
+  .journal-cal { gap: 2px !important; }
+  .journal-cal > div { min-height: 40px !important; padding: 3px !important; font-size: 10px !important; }
+  .journal-cal > div > div { font-size: 10px !important; }
+  /* New/Edit modal: 3-up field rows → 1 column, and let it scroll. */
+  .journal-modal { max-height: 88vh; overflow-y: auto; }
+  .journal-form-3 { grid-template-columns: 1fr !important; }
 
   /* ── Multi-Greek: stack the SPX / SPY / QQQ panels vertically. ── */
   .mg-panels {

@@ -740,10 +740,10 @@ export default function FlowPage() {
   }, [view, minPremium]);
 
   return (
-    <PageShell className="no-card-lift">
+    <PageShell className="no-card-lift flow-root">
       {/* ── View tabs + session date (lookback) ─────────────────────── */}
       {!chartOnly && (
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
+      <div className="flow-topbar" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
         <div style={{ ...segWrapStyle, maxWidth: 320 }}>
           <button className="flow-chip" style={segBtn(view === "ticker")} onClick={() => setView("ticker")}>By Ticker</button>
           <button className="flow-chip" style={segBtn(view === "combined")} onClick={() => setView("combined")}>Combined</button>
@@ -790,7 +790,7 @@ export default function FlowPage() {
 
       {/* ── Filters, full window width, above the chart. ── */}
       {!chartOnly && (
-      <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", flexShrink: 0 }}>
+      <div className="flow-filters" style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", flexShrink: 0 }}>
       <div style={{ flex: "1 1 480px", minWidth: 0 }}>
       <Card variant="budget" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0, height: "100%" }}>
         {view === "combined" ? (
@@ -900,7 +900,7 @@ export default function FlowPage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
+        <div className="flow-filter-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
           <div>
             <label style={labelStyle}>Side</label>
             <div style={segWrapStyle}>

@@ -1992,7 +1992,22 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
     { key: "flowgex", label: "Flow GEX History" },
   ];
   return (
-    <div className="tab-strip" style={{ display: "flex", gap: 10 }}>
+    <>
+    {/* Mobile-only: dropdown instead of the oversized button row (CSS shows one). */}
+    <select
+      className="test-tab-select"
+      value={active}
+      onChange={(e) => onChange(e.target.value as TestTab)}
+      style={{
+        display: "none", width: "100%", padding: "8px 10px", borderRadius: 8,
+        fontSize: 13, fontWeight: 700,
+        border: `1px solid ${HOME_THEME.cyan}`,
+        background: "rgba(0,0,0,0.5)", color: HOME_THEME.text,
+      }}
+    >
+      {tabs.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+    </select>
+    <div className="tab-strip test-tabs" style={{ display: "flex", gap: 10 }}>
       {tabs.map((t) => {
         const isActive = t.key === active;
         return (
@@ -2019,6 +2034,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
         );
       })}
     </div>
+    </>
   );
 }
 
