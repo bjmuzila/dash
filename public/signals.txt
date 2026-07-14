@@ -14,7 +14,9 @@
 #  [EM]          ESU/NQU crossed estimated move  (1x per week)
 #  [Flow]        new whale option
 #  [Analytics]   GEX crossed 0  ·  initial balance formed (stats in play)  ·  levels hit/failed
-#  [Greeks]      vanna-charm melt up  ·  theta bleed event  ·  gamma pin risk
+#  [Greeks]      AUTO: net GEX crossed 0  ·  net DEX crossed 0  (server-v2/greeks-cross-alerts.js,
+#                fed by greeks-ts-writer; deadband + 2-poll confirm + 30m cooldown)
+#                vanna-charm melt up  ·  theta bleed event  ·  gamma pin risk
 #  [Scanner]     —
 #  [Watch This]  new watch-this — ticker / strike / expiration (links to page)
 #  [Balance]     today's quadrant transition

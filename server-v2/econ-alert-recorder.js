@@ -14,16 +14,14 @@
  *   require('./econ-alert-recorder').startEconAlertRecorder(PORT);
  */
 
-const fs = require('fs');
-const path = require('path');
+// signals.txt is written through the shared mutexed writer — there is more than
+// one producer now (this file + greeks-cross-alerts.js) and two independent
+// read-modify-write cycles on the same file clobber each other.
+const { appendAutoLines } = require('./signals-file');
 
 const POLL_MS = 20 * 1000;               // check cadence
 const IMPACTS = new Set(['High', 'Medium']); // which events get auto-alerts
 const MAX_AUTO_LINES = 40;                // cap the AUTO block so the file never grows unbounded
-
-const SIGNALS_PATH = path.join(__dirname, '..', 'public', 'signals.txt');
-const BLOCK_START = '# --- AUTO ECON ALERTS (start, do not hand-edit) ---';
-const BLOCK_END = '# --- AUTO ECON ALERTS (end) ---';
 
 // Server-to-server calls to protected /api/* routes need the shared internal
 // token or Clerk/Supabase middleware bounces them to "/" (landing HTML back
@@ -65,33 +63,6 @@ function resetIfNewDay(today) {
     firedDate = today;
     firedToday = new Set();
   }
-}
-
-// Read the file, replace (or append) the AUTO block between the markers,
-// keeping only the most recent MAX_AUTO_LINES auto-generated lines.
-function appendAutoLines(newLines) {
-  if (!newLines.length) return;
-  let content = '';
-  try { content = fs.readFileSync(SIGNALS_PATH, 'utf-8'); } catch { content = ''; }
-
-  const startIdx = content.indexOf(BLOCK_START);
-  const endIdx = content.indexOf(BLOCK_END);
-
-  let existingAuto = [];
-  let head = content;
-  let tail = '';
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    head = content.slice(0, startIdx).replace(/\s*$/, '');
-    tail = content.slice(endIdx + BLOCK_END.length);
-    const inner = content.slice(startIdx + BLOCK_START.length, endIdx);
-    existingAuto = inner.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  }
-
-  const merged = [...existingAuto, ...newLines].slice(-MAX_AUTO_LINES);
-  const block = `${BLOCK_START}\n${merged.join('\n')}\n${BLOCK_END}`;
-  const out = `${head}\n\n${block}${tail}`;
-
-  fs.writeFileSync(SIGNALS_PATH, out, 'utf-8');
 }
 
 async function pollOnce(base) {
@@ -137,7 +108,7 @@ async function pollOnce(base) {
   }
 
   if (newLines.length) {
-    appendAutoLines(newLines);
+    await appendAutoLines('ECON', newLines, MAX_AUTO_LINES);
     newLines.forEach((l) => console.log(`[econ-alert] ${l}`));
   }
 }

@@ -199,6 +199,17 @@ async function writeRow(base) {
   console.log(
     `[greeks-ts] ${date} ${time} — GEX ${gexB >= 0 ? '+' : ''}${gexB.toFixed(2)}B  DEX ${dexB >= 0 ? '+' : ''}${dexB.toFixed(2)}B  CHEX ${chexM.toFixed(1)}M  VEX ${vexM.toFixed(1)}M  spot=${spot.toFixed(2)}`
   );
+
+  // Zero-line cross detection ([Greeks] signals → home feed → Discord). Fed from
+  // here on purpose: this point is downstream of the stale-spot and
+  // populated-strikes guards above, so a frozen index feed cannot manufacture a
+  // false cross — which is exactly what produced the original bogus crosses.
+  // Hysteresis (deadband/confirm/cooldown) lives in the detector.
+  try {
+    require('./greeks-cross-alerts').noteGreeks({ gexB, dexB, spot });
+  } catch (e) {
+    console.warn('[greeks-cross]', e.message); // never let an alert break the write
+  }
 }
 
 /** One collection pass; honours RTH gate unless { force }. */
