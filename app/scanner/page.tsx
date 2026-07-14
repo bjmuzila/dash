@@ -14,7 +14,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ScoreInfo } from "@/components/shared/InfoTip";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
-import { buildTpoStructures, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure } from "@/lib/tpo";
+import { buildTpoStructures, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -2303,6 +2303,106 @@ const KIND_COLOR: Record<StructureKind, string> = {
 
 const pctOrDash = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
 
+// ── 5-day TPO profile strip ──────────────────────────────────────────────────
+// The last 5 RTH sessions side by side on ONE shared price axis, each drawn as a
+// classic left-anchored TPO histogram (box width ∝ how many 30-min periods
+// touched that price). Structures are painted in place, so the read is visual:
+// where price spent time, where it didn't, and what business is still open.
+//
+// Deliberately NOT letters (A/B/C…) — at 5 sessions on a shared axis the rows
+// are only a few px tall, so glyphs would be unreadable. Boxes carry the same
+// information (count = width) at this density.
+
+function TpoProfileStrip({ sessions, spot, binSize }: {
+  sessions: TpoSession[]; spot: number | null; binSize: number;
+}) {
+  const days = sessions.slice(-5);
+  if (!days.length) return null;
+
+  const lo = Math.min(...days.map((d) => d.low));
+  const hi = Math.max(...days.map((d) => d.high));
+  if (!(hi > lo)) return null;
+
+  const H = 520, W = 960, AXIS = 58;
+  const pad = 14;
+  const colW = (W - AXIS) / days.length;
+  const span = hi - lo;
+  const y = (p: number) => pad + (1 - (p - lo) / span) * (H - pad * 2);
+  const rowH = Math.max(2, ((H - pad * 2) / span) * binSize - 0.5);
+
+  const maxCount = Math.max(...days.map((d) => d.maxCount), 1);
+  const unit = Math.min(7, (colW - 26) / maxCount);
+
+  // price-band → structure color, per session
+  const colorFor = (d: TpoSession, price: number): string => {
+    for (const s of d.structures) {
+      if (s.kind === "naked_poc") continue;
+      if (price >= s.priceLo - 1e-9 && price <= s.priceHi + 1e-9) return KIND_COLOR[s.kind];
+    }
+    return "rgba(255,255,255,0.22)";
+  };
+
+  // ~6 price gridlines
+  const step = Math.max(binSize, Math.round(span / 6 / binSize) * binSize);
+  const ticks: number[] = [];
+  for (let p = Math.ceil(lo / step) * step; p <= hi; p += step) ticks.push(p);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      {ticks.map((p) => (
+        <g key={p}>
+          <line x1={AXIS} y1={y(p)} x2={W} y2={y(p)} stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
+          <text x={AXIS - 8} y={y(p) + 4} textAnchor="end" fontSize={11} fill="rgba(255,255,255,0.4)">
+            {p.toFixed(0)}
+          </text>
+        </g>
+      ))}
+
+      {days.map((d, i) => {
+        const x0 = AXIS + i * colW + 8;
+        return (
+          <g key={d.date}>
+            <line x1={AXIS + i * colW} y1={pad} x2={AXIS + i * colW} y2={H - pad}
+              stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
+
+            {d.bins.map((b) => (
+              <rect key={b.price}
+                x={x0} y={y(b.price) - rowH / 2}
+                width={Math.max(2, b.count * unit)} height={rowH}
+                fill={colorFor(d, b.price)} rx={1}
+              >
+                <title>{`${d.date} · ${b.price.toFixed(2)} · ${b.count} TPO`}</title>
+              </rect>
+            ))}
+
+            <line x1={x0 - 4} y1={y(d.poc)} x2={x0 + colW - 20} y2={y(d.poc)}
+              stroke={LIGHT_BLUE} strokeWidth={1.5} opacity={0.9} />
+            <line x1={x0 - 4} y1={y(d.vah)} x2={x0 + colW - 20} y2={y(d.vah)}
+              stroke={HOME_THEME.cyan} strokeWidth={1} opacity={0.45} strokeDasharray="3 3" />
+            <line x1={x0 - 4} y1={y(d.val)} x2={x0 + colW - 20} y2={y(d.val)}
+              stroke={HOME_THEME.cyan} strokeWidth={1} opacity={0.45} strokeDasharray="3 3" />
+
+            <text x={AXIS + i * colW + colW / 2} y={H - 2} textAnchor="middle"
+              fontSize={11} fill="rgba(255,255,255,0.45)">
+              {d.date.slice(5)}
+            </text>
+          </g>
+        );
+      })}
+
+      {spot != null && spot >= lo && spot <= hi && (
+        <>
+          <line x1={AXIS} y1={y(spot)} x2={W} y2={y(spot)}
+            stroke={HOME_THEME.green} strokeWidth={1} strokeDasharray="5 4" opacity={0.8} />
+          <text x={W - 4} y={y(spot) - 5} textAnchor="end" fontSize={11} fill={HOME_THEME.green}>
+            {spot.toFixed(2)}
+          </text>
+        </>
+      )}
+    </svg>
+  );
+}
+
 function StructureRow({ s, spot, touchRate }: { s: TpoStructure; spot: number | null; touchRate: number | null }) {
   const color = KIND_COLOR[s.kind];
   const band = s.priceHi > s.priceLo
@@ -2403,7 +2503,50 @@ function TpoStructuresScanner() {
 
   const enoughHistory = res.sessions.length >= 2;
 
+  const last5 = res.sessions.slice(-5);
+
   return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+      {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
+      <Card variant="budget" title={<span style={{ fontSize: 16 }}>TPO profile — last 5 sessions</span>}
+        subtitle={`${instr} · ${binSize}-pt bins · 30-min periods · RTH only · shared price axis`}>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          <button onClick={() => setInstr("ESU")} style={seg(instr === "ESU")}>ESU</button>
+          <button onClick={() => setInstr("NQU")} style={seg(instr === "NQU")}>NQU</button>
+        </div>
+
+        {!last5.length && (
+          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+            Waiting on RTH candles.
+          </div>
+        )}
+        {!!last5.length && <TpoProfileStrip sessions={last5} spot={spot} binSize={binSize} />}
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 15 }}>
+          {([
+            ["excess_high", "excess — rejection, holds"],
+            ["tail_high", "tail / poor — trend or unfinished"],
+            ["hole", "hole — thin, accelerates through"],
+          ] as [StructureKind, string][]).map(([k, label]) => (
+            <span key={k} style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+              <span style={{ width: 12, height: 12, borderRadius: 3, background: KIND_COLOR[k], display: "inline-block" }} />
+              {label}
+            </span>
+          ))}
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+            <span style={{ width: 12, height: 2, background: LIGHT_BLUE, display: "inline-block" }} /> POC
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+            <span style={{ width: 12, height: 2, background: HOME_THEME.cyan, display: "inline-block" }} /> VAH / VAL
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+            <span style={{ width: 12, height: 2, background: HOME_THEME.green, display: "inline-block" }} /> spot
+          </span>
+        </div>
+      </Card>
+
     <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
 
       {/* ── Open Business rail ───────────────────────────────────────────── */}
@@ -2411,9 +2554,6 @@ function TpoStructuresScanner() {
         subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-          <button onClick={() => setInstr("ESU")} style={seg(instr === "ESU")}>ESU</button>
-          <button onClick={() => setInstr("NQU")} style={seg(instr === "NQU")}>NQU</button>
-          <span style={{ width: 12 }} />
           <button onClick={() => setKindFilter("all")} style={seg(kindFilter === "all")}>All</button>
           <button onClick={() => setKindFilter("extremes")} style={seg(kindFilter === "extremes")}>Extremes</button>
           <button onClick={() => setKindFilter("holes")} style={seg(kindFilter === "holes")}>Holes</button>
@@ -2538,6 +2678,7 @@ function TpoStructuresScanner() {
           <span>Poor high/low = flat stack at the extreme, no tail → unfinished, expect it taken out. Hole = mid-profile singles → price accelerates through, never target inside.</span>
         </div>
       </div>
+    </div>
     </div>
   );
 }

@@ -771,7 +771,10 @@ function glCumulativeByStrike(rows: GexLevelsRow[]): { strike: number; cum: numb
 function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; spot: number; neutral?: number | null }) {
   const W = 720, H = 220, padL = 54, padR = 16, padB = 26, padT = 18;
   const { containerRef, hover, show, hide } = useChartHover();
-  const pan = useChartPan(rows, spot);
+  // windowFrac 1 → winHalf = spot, i.e. the default window is wider than the
+  // whole listed chain: this chart shows ALL strikes on first paint (scroll to
+  // zoom in / drag to pan still work from there).
+  const pan = useChartPan(rows, spot, 1);
   if (!rows.length) return <GlEmpty note="no chain rows" />;
 
   const cumAll = glCumulativeByStrike(rows);
@@ -1493,15 +1496,16 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
 // grabbing anywhere inside a chart still pans it (useChartPan above) — the
 // two gestures would otherwise fight over the same mousedown+drag. Order
 // persists in localStorage so it survives reloads.
-// Right column = the reference/"key levels" stack: OI by expiration, the SPX
-// EOD GEX bar chart, and the daily history of key level changes.
-// Left column = everything else (the continuous by-strike charts + OI by date).
-const RIGHT_CARD_KEYS = ["oiExpiry", "eodGex", "history"] as const;
-type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
-const LEFT_CARD_KEYS = ["netGamma", "callPutGamma", "netDelta", "oiDate"] as const;
+// Left column = the daily/session-history stack: OI by date, SPX EOD GEX by
+// session, and the history of key level changes.
+// Right column = the live-chain stack: OI by expiration + the continuous
+// by-strike charts (net gamma, call/put gamma, net delta).
+const LEFT_CARD_KEYS = ["oiDate", "eodGex", "history"] as const;
 type LeftCardKey = (typeof LEFT_CARD_KEYS)[number];
-const RIGHT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-right-v2";
-const LEFT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-left-v2";
+const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "callPutGamma", "netDelta"] as const;
+type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
+const RIGHT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-right-v3";
+const LEFT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-left-v3";
 
 function useCardOrder<K extends string>(defaultOrder: readonly K[], storageKey: string) {
   const [order, setOrder] = useState<K[]>(() => [...defaultOrder]);
@@ -1702,47 +1706,14 @@ function GexLevelsTab() {
 
       {d && (
         // Two independent, separately-reorderable columns.
-        // Right column: Open Interest by Expiration, SPX EOD GEX (one bar per
-        // session from eod_gex), and the History of key level changes.
-        // Left column: everything else — cumulative Net Gamma (crosses zero at
-        // the flip), Call/Put Gamma by strike, Net Delta, Open Interest by Date.
+        // Left column: Open Interest by Date, SPX EOD GEX (one bar per session
+        // from eod_gex), and the History of key level changes.
+        // Right column: Open Interest by Expiration + the live-chain charts —
+        // cumulative Net Gamma (all strikes), Call/Put Gamma, Net Delta.
         <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
           <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
             {(() => {
               const content: Record<LeftCardKey, ReactNode> = {
-                netGamma: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={leftOrder.handleDragStart("netGamma")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle="Cumulative — crosses zero at the gamma flip (Neutral) · click-drag to pan, double-click to reset"
-                  >
-                    <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
-                    <ChartLegend items={[{ label: "Cumulative Gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
-                  </Card>
-                ),
-                callPutGamma: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={leftOrder.handleDragStart("callPutGamma")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle="Click-drag to pan, double-click to reset"
-                  >
-                    <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
-                    <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
-                  </Card>
-                ),
-                netDelta: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net delta exposure by strike" onDragStart={leftOrder.handleDragStart("netDelta")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle="Click-drag to pan, double-click to reset"
-                  >
-                    <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
-                    <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
-                  </Card>
-                ),
                 oiDate: (
                   <Card
                     variant="budget"
@@ -1751,6 +1722,26 @@ function GexLevelsTab() {
                     subtitle="Total call+put OI, one bar per trading day logged (this browser only)"
                   >
                     <OiByDateChart rows={history} />
+                  </Card>
+                ),
+                eodGex: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="SPX EOD GEX by session" onDragStart={leftOrder.handleDragStart("eodGex")} onDragEnd={leftOrder.handleDragEnd} />}
+                    subtitle={`Total net GEX at the close · last ${EOD_GEX_DAYS} sessions (eod_gex, ${EOD_GEX_SYMBOL})`}
+                  >
+                    <EodGexPanel />
+                  </Card>
+                ),
+                history: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="History of key level changes" onDragStart={leftOrder.handleDragStart("history")} onDragEnd={leftOrder.handleDragEnd} />}
+                    subtitle="One row per trading day — today updates live, prior days stay frozen"
+                  >
+                    {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
                   </Card>
                 ),
               };
@@ -1780,24 +1771,37 @@ function GexLevelsTab() {
                     <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
                   </Card>
                 ),
-                eodGex: (
+                netGamma: (
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="SPX EOD GEX by session" onDragStart={rightOrder.handleDragStart("eodGex")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle={`Total net GEX at the close · last ${EOD_GEX_DAYS} sessions (eod_gex, ${EOD_GEX_SYMBOL})`}
+                    title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={rightOrder.handleDragStart("netGamma")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle="Cumulative across ALL listed strikes — crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
                   >
-                    <EodGexPanel />
+                    <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
+                    <ChartLegend items={[{ label: "Cumulative Gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
                   </Card>
                 ),
-                history: (
+                callPutGamma: (
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="History of key level changes" onDragStart={rightOrder.handleDragStart("history")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="One row per trading day — today updates live, prior days stay frozen"
+                    title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={rightOrder.handleDragStart("callPutGamma")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle="Click-drag to pan, double-click to reset"
                   >
-                    {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
+                    <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
+                    <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
+                  </Card>
+                ),
+                netDelta: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Net delta exposure by strike" onDragStart={rightOrder.handleDragStart("netDelta")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle="Click-drag to pan, double-click to reset"
+                  >
+                    <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
+                    <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
                   </Card>
                 ),
               };
