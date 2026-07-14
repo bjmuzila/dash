@@ -79,6 +79,39 @@ export async function GET(req: NextRequest) {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Resend's rate limit is 10 req/sec. Sending per-recipient in a tight loop
+// blows past that on any list bigger than ~10, coming back as 429
+// rate_limit_exceeded. sendViaResend retries 429s (honoring Retry-After when
+// present) and the caller paces every send with a fixed delay so normal
+// traffic never even hits the limit.
+async function sendViaResend(
+  payload: Record<string, unknown>
+): Promise<{ ok: boolean; detail?: string }> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (r.ok) return { ok: true };
+    if (r.status === 429) {
+      const retryAfterSec = Number(r.headers.get("retry-after")) || 1;
+      await sleep(retryAfterSec * 1000 + attempt * 250);
+      continue;
+    }
+    const detail = await r.text().catch(() => `HTTP ${r.status}`);
+    return { ok: false, detail: detail.slice(0, 500) };
+  }
+  return { ok: false, detail: "rate_limit_exceeded: gave up after 5 retries" };
+}
+
 // POST — owner only. Sends an email broadcast via Resend.
 // Body: { subject, html?, text?, audience?: "all"|"subscribers"|"custom", to?: string[] }
 export async function POST(req: NextRequest) {
@@ -180,20 +213,15 @@ export async function POST(req: NextRequest) {
       if (recipientHtml) payload.html = applyUnsubscribeHtml(recipientHtml, recipient);
       if (recipientText) payload.text = applyUnsubscribeText(recipientText, recipient);
 
-      const r = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-      if (r.ok) {
+      const result = await sendViaResend(payload);
+      if (result.ok) {
         sent.push(recipient);
       } else {
-        const detail = await r.text().catch(() => `HTTP ${r.status}`);
-        failed.push({ batch: [recipient], error: detail.slice(0, 500) });
+        failed.push({ batch: [recipient], error: result.detail || "send failed" });
       }
+
+      // Pace requests to stay comfortably under Resend's 10 req/sec cap.
+      await sleep(120);
     }
 
     // Record the send in the history log (summary only). Non-fatal — a logging

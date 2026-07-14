@@ -148,6 +148,42 @@ export default function IbLevelCanvas() {
       title="Live IB state"
       subtitle={`ES · IB ${ib.low.toFixed(2)}–${ib.high.toFixed(2)} · width ${ib.width.toFixed(2)} pts${ib.complete ? "" : " · still forming"}`}
     >
+      <style>{`@keyframes ibBrokenPulse{0%,100%{opacity:1}50%{opacity:0.35}}`}</style>
+
+      {/* ── status pills ── */}
+      {(() => {
+        const brokeColor = broke === "up" ? HOME_THEME.green : HOME_THEME.red;
+        const pill = (bg: string, brd: string, color: string, extra?: React.CSSProperties): React.CSSProperties => ({
+          display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 11px", borderRadius: 8,
+          fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+          background: bg, border: `1px solid ${brd}`, color, ...extra,
+        });
+        return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+            {broke ? (
+              <span style={pill(`${brokeColor}1F`, `${brokeColor}66`, brokeColor, { animation: "ibBrokenPulse 1.1s ease-in-out infinite" })}>
+                <span style={{ fontSize: 12 }}>▲</span>
+                IB {broke === "up" ? "HIGH" : "LOW"} BROKEN
+              </span>
+            ) : (
+              <span style={pill(`${LIGHT_BLUE}17`, `${LIGHT_BLUE}44`, LIGHT_BLUE)}>IB UNBROKEN</span>
+            )}
+            <span style={pill(
+              ib.complete ? `${HOME_THEME.green}14` : `${HOME_THEME.orange}17`,
+              ib.complete ? `${HOME_THEME.green}44` : `${HOME_THEME.orange}55`,
+              ib.complete ? HOME_THEME.green : HOME_THEME.orange,
+            )}>
+              {ib.complete ? "IB DONE" : "IB FORMING"}
+            </span>
+            {ib.complete && (
+              <span style={pill(`${LIGHT_BLUE}12`, `${LIGHT_BLUE}3B`, LIGHT_BLUE)}>
+                <span style={{ fontSize: 11 }}>🔒</span> LOCKED
+              </span>
+            )}
+          </div>
+        );
+      })()}
+
       <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
         {/* ── the ladder ── */}
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", maxWidth: 560, flex: "1 1 380px" }} role="img" aria-label={`ES initial balance ladder. IB high ${ib.high.toFixed(2)}, low ${ib.low.toFixed(2)}, last ${ib.last.toFixed(2)}.`}>
@@ -202,14 +238,24 @@ export default function IbLevelCanvas() {
           <line x1={BOX_L} y1={y(ib.low)} x2={LINE_R} y2={y(ib.low)} stroke={HOME_THEME.orange} strokeWidth={2.5} />
           <text x={LINE_R + 8} y={y(ib.low) + 4} fontSize={11} fontWeight={800} fill={HOME_THEME.orange}>IB LOW</text>
 
-          {/* live price marker */}
-          <g>
-            <circle cx={BOX_R - 40} cy={y(ib.last)} r={5} fill={HOME_THEME.text} />
-            <rect x={BOX_R - 118} y={y(ib.last) - 28} width={96} height={19} rx={3} fill="rgba(0,0,0,0.75)" stroke={HOME_THEME.text} strokeWidth={0.75} />
-            <text x={BOX_R - 70} y={y(ib.last) - 15} fontSize={10} fontWeight={800} textAnchor="middle" fill={HOME_THEME.text}>
-              {ib.last.toFixed(2)}
-            </text>
-          </g>
+          {/* live price marker — dashboard card language, colored vs IB midpoint */}
+          {(() => {
+            const pxColor = ib.last >= ib.mid ? HOME_THEME.green : HOME_THEME.red;
+            return (
+              <g>
+                <circle cx={BOX_R - 40} cy={y(ib.last)} r={4} fill={pxColor} />
+                <circle cx={BOX_R - 40} cy={y(ib.last)} r={7} fill="none" stroke={pxColor} strokeWidth={1} opacity={0.35} />
+                <line x1={BOX_R - 118} y1={y(ib.last)} x2={BOX_R - 40} y2={y(ib.last)} stroke={pxColor} strokeWidth={1} strokeDasharray="3 3" opacity={0.5} />
+                <rect
+                  x={BOX_R - 124} y={y(ib.last) - 30} width={104} height={22} rx={7}
+                  fill={HOME_THEME.panelBgStrong} stroke={`${pxColor}59`} strokeWidth={1}
+                />
+                <text x={BOX_R - 72} y={y(ib.last) - 15} fontSize={11} fontWeight={800} textAnchor="middle" fill={pxColor} style={{ fontVariantNumeric: "tabular-nums" } as any}>
+                  {ib.last.toFixed(2)}
+                </text>
+              </g>
+            );
+          })()}
         </svg>
 
         {/* ── the level rail ── */}
@@ -269,12 +315,6 @@ export default function IbLevelCanvas() {
             </div>
           )}
         </div>
-      </div>
-
-      <div style={{ marginTop: 14, fontSize: 12, color: HOME_THEME.orange, lineHeight: 1.55 }}>
-        ⚠ These percentages are <strong>conditional on a break happening</strong> — &quot;of the breaks that occurred, X% reached this level.&quot;
-        They are not the odds that price gets there today. {inBox ? "The IB is still unbroken, so the unconditional odds are lower than every number shown." : ""}
-        {ib.complete ? "" : " The IB is still forming — these levels will move until 10:30 ET."}
       </div>
     </Card>
   );

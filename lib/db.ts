@@ -342,6 +342,22 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Drop the old one-row-per-day uniqueness so multiple deliveries can share a date.
     ALTER TABLE budget_amazon DROP CONSTRAINT IF EXISTS budget_amazon_profile_id_work_date_key;
 
+    -- Prop-firm spending log: one row per dated event. A purchase carries
+    -- accounts + cost (payout = 0); a payout carries payout (cost/accounts = 0).
+    CREATE TABLE IF NOT EXISTS budget_prop (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      entry_date TEXT NOT NULL,
+      firm TEXT NOT NULL DEFAULT 'TPT',
+      accounts INTEGER NOT NULL DEFAULT 0,
+      cost REAL NOT NULL DEFAULT 0,
+      payout REAL NOT NULL DEFAULT 0,
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_prop_profile ON budget_prop(profile_id);
+
     CREATE TABLE IF NOT EXISTS waitlist (
       id SERIAL PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -4216,6 +4232,83 @@ export async function deleteAmazonRow(profileId: number, id: number): Promise<vo
 export async function listAmazonRows(profileId: number, fromDate: string, toDate: string): Promise<BudgetAmazonRecord[]> {
   return queryAll<BudgetAmazonRecord>(
     "SELECT * FROM budget_amazon WHERE profile_id = ? AND work_date >= ? AND work_date <= ? ORDER BY work_date ASC, id ASC",
+    [profileId, fromDate, toDate]
+  );
+}
+
+// ── Prop-firm spending log ────────────────────────────────────────────────────
+export interface BudgetPropRecord {
+  id: number;
+  profile_id: number;
+  entry_date: string;
+  firm: string;
+  accounts: number;
+  cost: number;
+  payout: number;
+  note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function insertPropRow(input: {
+  profile_id: number;
+  entry_date: string;
+  firm?: string;
+  accounts?: number;
+  cost?: number;
+  payout?: number;
+  note?: string | null;
+}): Promise<BudgetPropRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_prop (profile_id, entry_date, firm, accounts, cost, payout, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *`,
+    [
+      input.profile_id,
+      input.entry_date,
+      input.firm && input.firm.trim() ? input.firm.trim() : "TPT",
+      Math.round(input.accounts ?? 0),
+      input.cost ?? 0,
+      input.payout ?? 0,
+      input.note ?? null,
+    ]
+  );
+  return result.rows[0] as BudgetPropRecord;
+}
+
+export async function updatePropRow(
+  profileId: number,
+  id: number,
+  patch: { entry_date?: string; firm?: string; accounts?: number; cost?: number; payout?: number; note?: string | null }
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  let i = 1;
+  const add = (col: string, v: unknown) => { sets.push(`${col} = $${i++}`); vals.push(v); };
+  if (patch.entry_date !== undefined) add("entry_date", patch.entry_date);
+  if (patch.firm !== undefined) add("firm", patch.firm.trim() || "TPT");
+  if (patch.accounts !== undefined) add("accounts", Math.round(patch.accounts));
+  if (patch.cost !== undefined) add("cost", patch.cost);
+  if (patch.payout !== undefined) add("payout", patch.payout);
+  if (patch.note !== undefined) add("note", patch.note);
+  if (!sets.length) return;
+  sets.push(`updated_at = CURRENT_TIMESTAMP`);
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE budget_prop SET ${sets.join(", ")} WHERE id = $${i++} AND profile_id = $${i}`,
+    [...vals, id, profileId]
+  );
+}
+
+export async function deletePropRow(profileId: number, id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM budget_prop WHERE id = $1 AND profile_id = $2`, [id, profileId]);
+}
+
+export async function listPropRows(profileId: number, fromDate: string, toDate: string): Promise<BudgetPropRecord[]> {
+  return queryAll<BudgetPropRecord>(
+    "SELECT * FROM budget_prop WHERE profile_id = ? AND entry_date >= ? AND entry_date <= ? ORDER BY entry_date DESC, id DESC",
     [profileId, fromDate, toDate]
   );
 }

@@ -24,6 +24,10 @@ import {
   insertAmazonRow,
   deleteAmazonRow,
   listAmazonRows,
+  insertPropRow,
+  updatePropRow,
+  deletePropRow,
+  listPropRows,
   type RegisterBank,
   type RecurringFrequency,
 } from "@/lib/db";
@@ -71,18 +75,21 @@ export async function GET(req: NextRequest) {
     const month = req.nextUrl.searchParams.get("month") || currentMonth();
     const { from, to } = monthRange(month);
 
+    // Prop ledger is shown for the whole year (monthly grouped), so load it by year.
+    const year = month.slice(0, 4);
     await adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
     const profile = await getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
-    const [categories, entries, register, recurring, amazonRows, dailyBalance] = await Promise.all([
+    const [categories, entries, register, recurring, amazonRows, propRows, dailyBalance] = await Promise.all([
       listBudgetCategories(profile.id),
       listBudgetEntries(profile.id, 500),
       listRegister(profile.id, from, to),
       listRecurring(profile.id),
       listAmazonRows(profile.id, from, to),
+      listPropRows(profile.id, `${year}-01-01`, `${year}-12-31`),
       getLatestDailyBalance(profile.id),
     ]);
     const prevDailyBalance = dailyBalance ? await getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
-    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, dailyBalance, prevDailyBalance });
+    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, propRows, dailyBalance, prevDailyBalance });
   } catch (err) {
     return NextResponse.json({ error: "Budget load failed", detail: String(err) }, { status: 500 });
   }
@@ -267,6 +274,37 @@ export async function POST(req: NextRequest) {
 
     if (action === "deleteAmazon") {
       await deleteAmazonRow(profile.id, Number(body?.id ?? 0));
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── Prop-firm spending (purchase or payout) ──
+    if (action === "propAdd") {
+      const row = await insertPropRow({
+        profile_id: profile.id,
+        entry_date: String(body?.date ?? "").trim(),
+        firm: body?.firm ? String(body.firm) : "TPT",
+        accounts: Number(body?.accounts ?? 0),
+        cost: Number(body?.cost ?? 0),
+        payout: Number(body?.payout ?? 0),
+        note: body?.note ? String(body.note) : null,
+      });
+      return NextResponse.json({ ok: true, prop: row });
+    }
+
+    if (action === "propUpdate") {
+      await updatePropRow(profile.id, Number(body?.id ?? 0), {
+        entry_date: body?.date != null ? String(body.date) : undefined,
+        firm: body?.firm != null ? String(body.firm) : undefined,
+        accounts: body?.accounts != null ? Number(body.accounts) : undefined,
+        cost: body?.cost != null ? Number(body.cost) : undefined,
+        payout: body?.payout != null ? Number(body.payout) : undefined,
+        note: body?.note !== undefined ? (body.note ? String(body.note) : null) : undefined,
+      });
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === "propDelete") {
+      await deletePropRow(profile.id, Number(body?.id ?? 0));
       return NextResponse.json({ ok: true });
     }
 

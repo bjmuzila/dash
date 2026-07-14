@@ -26,6 +26,7 @@ type RegisterRow = {
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type DailyBalance = { day: string; coastal: number; truist: number; secu: number };
 type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
+type PropRow = { id: number; entry_date: string; firm: string; accounts: number; cost: number; payout: number; note?: string | null };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 
@@ -109,11 +110,12 @@ export default function BudgetPage() {
   const [register, setRegister] = useState<RegisterRow[]>([]);
   const [recurring, setRecurring] = useState<RecurringRule[]>([]);
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
+  const [propRows, setPropRows] = useState<PropRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
   const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "yearly">("overview");
+  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "prop" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
@@ -138,6 +140,13 @@ export default function BudgetPage() {
   const [azPay, setAzPay] = useState("");
   const [azGas, setAzGas] = useState("");
 
+  // Prop composer
+  const [ppDate, setPpDate] = useState(todayIso());
+  const [ppFirm, setPpFirm] = useState("TPT");
+  const [ppAccounts, setPpAccounts] = useState("1");
+  const [ppCost, setPpCost] = useState("");
+  const [ppKind, setPpKind] = useState<"cost" | "payout">("cost");
+
   const currency = profile?.currency || "USD";
 
   const refresh = async (m = month) => {
@@ -148,6 +157,7 @@ export default function BudgetPage() {
     setRegister(data.register || []);
     setRecurring(data.recurring || []);
     setAmazonRows(data.amazonRows || []);
+    setPropRows(data.propRows || []);
     setCategories(data.categories || []);
     setDailyBalance(data.dailyBalance || null);
     setPrevDailyBalance(data.prevDailyBalance || null);
@@ -302,6 +312,27 @@ export default function BudgetPage() {
     return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
   }, [amazonRows]);
 
+  // Prop ledger — group the year's rows by month (newest first), with per-month
+  // and year totals. propRows already covers the selected month's whole year.
+  const propComputed = useMemo(() => {
+    const byMonth = new Map<string, PropRow[]>();
+    for (const r of propRows) {
+      const ym = r.entry_date.slice(0, 7);
+      (byMonth.get(ym) || byMonth.set(ym, []).get(ym)!).push(r);
+    }
+    const months = Array.from(byMonth.entries())
+      .map(([ym, rows]) => {
+        const cost = rows.reduce((s, r) => s + (r.cost || 0), 0);
+        const payout = rows.reduce((s, r) => s + (r.payout || 0), 0);
+        const accounts = rows.reduce((s, r) => s + (r.accounts || 0), 0);
+        return { ym, rows, cost, payout, accounts, net: payout - cost };
+      })
+      .sort((a, b) => (a.ym < b.ym ? 1 : -1));
+    const totalCost = months.reduce((s, m) => s + m.cost, 0);
+    const totalPayout = months.reduce((s, m) => s + m.payout, 0);
+    return { months, totalCost, totalPayout, net: totalPayout - totalCost };
+  }, [propRows]);
+
   // Spend per category (this month's expense rows) + the "unsorted" bucket +
   // the actual rows grouped by category (for the per-category detail popup).
   const categoryStats = useMemo(() => {
@@ -411,17 +442,17 @@ export default function BudgetPage() {
   const allBanks = bankNow.coastal + bankNow.truist + bankNow.secu;
   const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
 
-  // "Prop spending" — anything tagged to a category named prop*, or whose label
-  // mentions PROP (prop-firm evals, resets, data fees).
+  // "Prop spending" for the selected month — net cost from the prop ledger
+  // (purchases minus payouts), so the tile matches the Prop tab.
   const propSpend = useMemo(() => {
-    const propCatIds = new Set(categories.filter((c) => /prop/i.test(c.name)).map((c) => c.id));
-    let total = 0;
-    for (const r of register) {
-      if (r.is_beginning || r.amount >= 0) continue;
-      if (/prop/i.test(r.label) || (r.category_id != null && propCatIds.has(r.category_id))) total += Math.abs(r.amount);
+    let cost = 0, payout = 0;
+    for (const r of propRows) {
+      if (r.entry_date.slice(0, 7) !== month) continue;
+      cost += r.cost || 0;
+      payout += r.payout || 0;
     }
-    return total;
-  }, [register, categories]);
+    return cost - payout;
+  }, [propRows, month]);
 
   // Cash-flow buckets (in vs out) at day / week / month resolution.
   const cashflow = useMemo(() => {
@@ -544,6 +575,22 @@ export default function BudgetPage() {
     setAzGas("");
   };
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
+  // Prop ledger.
+  const addProp = async () => {
+    if (ppDate.trim() === "") return;
+    const amt = Math.abs(Number(ppCost || 0));
+    if (!amt) return;
+    await post({
+      action: "propAdd",
+      date: ppDate,
+      firm: ppFirm.trim().toUpperCase() || "TPT",
+      accounts: ppKind === "cost" ? Number(ppAccounts || 0) : 0,
+      cost: ppKind === "cost" ? amt : 0,
+      payout: ppKind === "payout" ? amt : 0,
+    });
+    setPpCost("");
+  };
+  const deleteProp = async (id: number) => post({ action: "propDelete", id });
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
@@ -562,7 +609,7 @@ export default function BudgetPage() {
 
         {/* Tabs (top-level nav) */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
+          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["prop", "Prop"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
@@ -590,16 +637,15 @@ export default function BudgetPage() {
         {/* Top stat row */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
           <StatTile
-            hero
             label="All Banks"
             value={fmtMoney(allBanks, currency)}
             sub={dailyBalance ? "Coastal · Truist · SECU" : "Beginning balances"}
             delta={prevAllBanks !== null ? allBanks - prevAllBanks : null}
             currency={currency}
           />
-          <StatTile label="Income" value={fmtMoney(computed.income, currency)} sub={`${monthLabel.split(" ")[0]} inflows`} valueColor={HOME_THEME.green} />
+          <StatTile label="Income" value={fmtMoney(computed.income + amazonComputed.totalNet, currency)} sub={`${monthLabel.split(" ")[0]} inflows · incl. Amazon`} valueColor={HOME_THEME.green} />
           <StatTile label="Expenses" value={fmtMoney(Math.abs(computed.payments), currency)} sub={`${monthLabel.split(" ")[0]} outflows`} valueColor={SOFT_RED} />
-          <StatTile label="Net Profit" value={fmtMoney(computed.netCashFlow, currency)} sub="Income − expenses" valueColor={computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green} />
+          <StatTile label="Net Profit" value={fmtMoney(computed.netCashFlow + amazonComputed.totalNet, currency)} sub="Income − expenses" valueColor={computed.netCashFlow + amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.green} />
           <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
           <StatTile label="Prop Spending" value={fmtMoney(propSpend, currency)} sub="Evals, resets, data" valueColor={propSpend > 0 ? SOFT_RED : HOME_THEME.text} />
         </div>
@@ -699,6 +745,9 @@ export default function BudgetPage() {
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
           </div>
         )}
+        {tab === "prop" && (
+          <PropPanel data={propComputed} year={Number(month.slice(0, 4))} currency={currency} onDelete={deleteProp} />
+        )}
         {tab === "yearly" && (
           <YearlyPanel data={yearMonths} categories={categories} year={year} onYear={setYear} currency={currency} loading={yearLoading} />
         )}
@@ -720,6 +769,16 @@ export default function BudgetPage() {
             <input value={azPay} onChange={(e) => setAzPay(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Pay" type="number" style={field()} />
             <input value={azGas} onChange={(e) => setAzGas(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Gas" type="number" style={field()} />
             <button onClick={saveAmazon} style={primary()}>Add Day</button>
+          </div>
+        )}
+        {tab === "prop" && (
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 120px 110px 1fr 120px 110px", gap: 10, alignItems: "center" }}>
+            <input type="date" value={ppDate} onChange={(e) => setPpDate(e.target.value)} style={field()} />
+            <input value={ppFirm} onChange={(e) => setPpFirm(e.target.value)} placeholder="Firm" style={field()} />
+            <ThemedSelect value={ppKind} onChange={(v) => setPpKind(v as "cost" | "payout")} options={[{ value: "cost", label: "− Purchase" }, { value: "payout", label: "+ Payout" }]} />
+            <input value={ppAccounts} onChange={(e) => setPpAccounts(e.target.value)} placeholder="Accounts" type="number" disabled={ppKind === "payout"} style={{ ...field(), opacity: ppKind === "payout" ? 0.4 : 1 }} />
+            <input value={ppCost} onChange={(e) => setPpCost(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addProp()} placeholder={ppKind === "payout" ? "Payout $" : "Cost $"} type="number" style={field()} />
+            <button onClick={addProp} style={primary()}>Add</button>
           </div>
         )}
       </div>
@@ -2359,6 +2418,102 @@ function YearlyPanel({
             </tr>
           </tfoot>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// Prop-firm ledger: a year summary + monthly rows that expand to their purchases.
+function PropPanel({
+  data,
+  year,
+  currency,
+  onDelete,
+}: {
+  data: { months: { ym: string; rows: PropRow[]; cost: number; payout: number; accounts: number; net: number }[]; totalCost: number; totalPayout: number; net: number };
+  year: number;
+  currency: string;
+  onDelete: (id: number) => void;
+}) {
+  const [open, setOpen] = useState<string | null>(data.months[0]?.ym ?? null);
+  const monthName = (ym: string) => {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Year summary */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <StatTile label={`${year} Cost`} value={fmtMoney(data.totalCost, currency)} sub="Evals · resets · data" valueColor={SOFT_RED} />
+        <StatTile label="Payouts" value={fmtMoney(data.totalPayout, currency)} sub="Withdrawn" valueColor={HOME_THEME.green} />
+        <StatTile label="Net" value={fmtMoney(data.net, currency)} sub="Payouts − cost" valueColor={data.net < 0 ? SOFT_RED : HOME_THEME.green} />
+      </div>
+
+      {/* Monthly ledger */}
+      <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+          <span>Month</span>
+          <span style={{ textAlign: "center" }}>Accts</span>
+          <span style={{ textAlign: "right" }}>Cost</span>
+          <span style={{ textAlign: "right" }}>Payouts</span>
+          <span style={{ textAlign: "right" }}>Net</span>
+          <span />
+        </div>
+
+        {data.months.length === 0 && (
+          <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>No prop spending logged for {year} yet.</div>
+        )}
+
+        {data.months.map((m) => {
+          const isOpen = open === m.ym;
+          return (
+            <div key={m.ym} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+              <button
+                onClick={() => setOpen(isOpen ? null : m.ym)}
+                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 15 }}
+              >
+                <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
+                <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{m.accounts}</span>
+                <span style={{ textAlign: "right" }}>{fmtMoney(m.cost, currency)}</span>
+                <span style={{ textAlign: "right", color: m.payout > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.payout, currency)}</span>
+                <span style={{ textAlign: "right", fontWeight: 900, color: m.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(m.net, currency)}</span>
+                <span style={{ textAlign: "right", color: HOME_THEME.muted, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s ease" }}>›</span>
+              </button>
+
+              {isOpen && (
+                <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.8fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+                    <span>Date</span><span>Firm</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
+                  </div>
+                  {m.rows.map((r) => {
+                    const isPayout = (r.payout || 0) > 0;
+                    return (
+                      <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.8fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
+                        <span style={{ fontWeight: 700 }}>{shortDate(r.entry_date)} <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>{weekday(r.entry_date)}</span></span>
+                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em" }}>{r.firm}</span>
+                        <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{isPayout ? "—" : r.accounts}</span>
+                        <span style={{ textAlign: "right", fontWeight: 800, color: isPayout ? HOME_THEME.green : SOFT_RED }}>{isPayout ? "+" : "−"}{fmtMoney(isPayout ? r.payout : r.cost, currency)}</span>
+                        <span style={{ textAlign: "right" }}><DeleteButton onClick={() => onDelete(r.id)} /></span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {data.months.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 15, fontWeight: 900 }}>
+            <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
+            <span />
+            <span style={{ textAlign: "right" }}>{fmtMoney(data.totalCost, currency)}</span>
+            <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalPayout, currency)}</span>
+            <span style={{ textAlign: "right", color: data.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(data.net, currency)}</span>
+            <span />
+          </div>
+        )}
       </div>
     </div>
   );
