@@ -1721,11 +1721,14 @@ async function main() {
       }
       // Send the morning budget briefing email right now (bypasses the 08:00 ET
       // gate). POST /proxy/budget-email-run
+      // Fire-and-forget: the run drives a headless browser and takes ~40s, which
+      // is long enough for the client/socket to give up. Ack immediately and let
+      // it finish in the background — watch the logs for the result.
       if (pathname === '/proxy/budget-email-run' && req.method === 'POST') {
         const { runOnce } = require('./budget-email');
+        sendJson(res, 202, { ok: true, queued: true, note: 'sending in background — see [budget-email] in logs' });
         runOnce(`http://localhost:${PORT}`)
-          .then(() => sendJson(res, 200, { ok: true }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+          .catch((e) => console.error('[budget-email] manual run failed:', e?.message || e));
         return;
       }
       // Fire a single /mult-greek static snapshot now (ignores the RTH gate on

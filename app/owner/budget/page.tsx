@@ -29,6 +29,14 @@ type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
 type PropRow = { id: number; entry_date: string; firm: string; accounts: number; cost: number; payout: number; note?: string | null };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
+type Intel = {
+  daysInMonth: number; todayDay: number; daysLeft: number; billsLeft: number;
+  safe: number; safePerDay: number; cum: number[]; budgetTotal: number;
+  paceNow: number; spentMtd: number;
+  week: { date: string; net: number; out: number }[];
+  wkOut: number; prevWkOut: number;
+  slices: { label: string; value: number; color: string }[];
+};
 
 // Red standardized to theme's #EF4444 — amounts, deficits and delete accents.
 const SOFT_RED = HOME_THEME.red;
@@ -37,11 +45,11 @@ const SOFT_RED = HOME_THEME.red;
 // Page-local tokens, one step deeper than HOME_THEME.bg/panel so metrics pop.
 // Cards stay SOLID (no blur/radial) — this deepens, it does not re-skin.
 const INK = "#020308";                         // page background — near-black
-const PANEL = "#0A0E16";                       // solid card fill
-const HAIRLINE = "rgba(255,255,255,0.08)";     // card edge
-const EDGE_LIGHT = "inset 0 1px 0 rgba(255,255,255,0.05)"; // machined top edge
-const CARD_SHADOW = `${EDGE_LIGHT}, 0 1px 2px rgba(0,0,0,0.5), 0 16px 40px -12px rgba(0,0,0,0.55)`;
-const SHELL_GLOW_DEEP = `radial-gradient(1100px 520px at 12% -10%, rgba(33,158,188,0.07) 0%, transparent 60%), radial-gradient(900px 460px at 88% 6%, rgba(125,211,252,0.05) 0%, transparent 55%), ${HOME_THEME.shellGlow}`;
+const PANEL = "#0B101B";                       // solid card fill — lifted off the ink
+const HAIRLINE = "rgba(255,255,255,0.16)";     // card edge — clearly visible
+const EDGE_LIGHT = "inset 0 1px 0 rgba(255,255,255,0.12)"; // machined top edge
+const CARD_SHADOW = `${EDGE_LIGHT}, 0 2px 4px rgba(0,0,0,0.6), 0 24px 60px -16px rgba(0,0,0,0.75)`;
+const SHELL_GLOW_DEEP = `radial-gradient(1100px 520px at 12% -10%, rgba(33,158,188,0.13) 0%, transparent 60%), radial-gradient(900px 460px at 88% 6%, rgba(125,211,252,0.09) 0%, transparent 55%), ${HOME_THEME.shellGlow}`;
 
 // Swatch palette for category dots.
 const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
@@ -450,6 +458,73 @@ export default function BudgetPage() {
     };
   }, [dailyBalance, computed.beginningByBank]);
   const allBanks = bankNow.coastal + bankNow.truist + bankNow.secu;
+
+  // ── Daily/weekly budgeting intelligence (client-computed, no new APIs) ─────
+  // Safe-to-spend, budget pace, category donut slices, 7-day pulse.
+  const intel = useMemo(() => {
+    const today = todayIso();
+    const [iy, im] = month.split("-").map(Number);
+    const daysInMonth = new Date(iy, im, 0).getDate();
+    const todayDay = today.slice(0, 7) === month ? Number(today.split("-")[2]) : today.slice(0, 7) > month ? daysInMonth : 0;
+    const daysLeft = Math.max(1, daysInMonth - todayDay + 1);
+
+    // Bills still due: active negative recurring occurrences from today → EOM,
+    // minus any the user already materialized into real rows.
+    const materialized = new Set(
+      register.filter((r) => !r.is_beginning && !!r.recurring_tag && r.recurring_tag.startsWith("__recur__:")).map((r) => r.recurring_tag as string)
+    );
+    let billsLeft = 0;
+    for (const rule of recurring) {
+      if (!rule.active || rule.amount >= 0) continue;
+      for (const date of occurrencesInMonth(rule, month)) {
+        if (date < today) continue;
+        if (materialized.has(`__recur__:${rule.id}:${date}`)) continue;
+        billsLeft += Math.abs(rule.amount);
+      }
+    }
+    const safe = allBanks - billsLeft;
+    const safePerDay = safe / daysLeft;
+
+    // Cumulative spend by day-of-month (expenses only).
+    const spendByDay = new Array<number>(daysInMonth).fill(0);
+    for (const g of computed.groups) {
+      const d = Number(g.date.split("-")[2]) - 1;
+      if (d < 0 || d >= daysInMonth) continue;
+      for (const r of g.rows) if (r.amount < 0) spendByDay[d] += -r.amount;
+    }
+    const cum: number[] = [];
+    let acc = 0;
+    for (let i = 0; i < daysInMonth; i++) { acc += spendByDay[i]; cum.push(acc); }
+    const budgetTotal = categories.reduce((s, c) => s + (c.amount || 0), 0) || Math.abs(computed.payments) || 1;
+    const paceNow = (budgetTotal * Math.min(Math.max(todayDay, 0), daysInMonth)) / daysInMonth;
+    const spentMtd = todayDay > 0 ? cum[Math.min(todayDay, daysInMonth) - 1] ?? 0 : 0;
+
+    // 7-day pulse vs prior 7 days (days outside the loaded month read as 0).
+    const dayAgg = (iso: string) => {
+      const g = computed.groups.find((gr) => gr.date === iso);
+      let net = 0, out = 0;
+      if (g) for (const r of g.rows) { net += r.amount; if (r.amount < 0) out += -r.amount; }
+      return { net, out };
+    };
+    const week: { date: string; net: number; out: number }[] = [];
+    let wkOut = 0, prevWkOut = 0;
+    for (let i = 6; i >= 0; i--) {
+      const d = addDays(today, -i);
+      const a = dayAgg(d);
+      week.push({ date: d, ...a });
+      wkOut += a.out;
+    }
+    for (let i = 13; i >= 7; i--) prevWkOut += dayAgg(addDays(today, -i)).out;
+
+    // Donut slices: per-category spend + the unsorted bucket.
+    const slices = categories
+      .map((c, i) => ({ label: c.name, value: categoryStats.spent[c.id] || 0, color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length] }))
+      .filter((s) => s.value > 0)
+      .sort((a, b) => b.value - a.value);
+    if (categoryStats.unsortedTotal > 0) slices.push({ label: "Unsorted", value: categoryStats.unsortedTotal, color: "rgba(255,255,255,0.35)" });
+
+    return { daysInMonth, todayDay, daysLeft, billsLeft, safe, safePerDay, cum, budgetTotal, paceNow, spentMtd, week, wkOut, prevWkOut, slices };
+  }, [register, recurring, month, allBanks, categories, categoryStats, computed]);
   const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
 
   // "Prop spending" for the selected month — net cost from the prop ledger
@@ -609,7 +684,7 @@ export default function BudgetPage() {
         <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.28em", color: HOME_THEME.muted, opacity: 0.75 }}>{monthLabel.toUpperCase()}</div>
-            <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4, textShadow: "0 0 32px rgba(125,211,252,0.22)" }}>BUDGET</div>
+            <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4, textShadow: "0 0 34px rgba(125,211,252,0.55), 0 0 80px rgba(33,158,188,0.35)" }}>BUDGET</div>
           </div>
           <div style={{ marginTop: 14 }}>
             <div style={labelCap()}>Month</div>
@@ -658,6 +733,14 @@ export default function BudgetPage() {
           <StatTile label="Net Profit" value={fmtMoney(computed.netCashFlow + amazonComputed.totalNet, currency)} sub="Income − expenses" valueColor={computed.netCashFlow + amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.green} />
           <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
           <StatTile label="Prop Spending" value={fmtMoney(propSpend, currency)} sub="Evals, resets, data" valueColor={propSpend > 0 ? SOFT_RED : HOME_THEME.text} />
+        </div>
+
+        {/* Daily/weekly budgeting intelligence */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
+          <SafeToSpendCard intel={intel} currency={currency} />
+          <SpendPaceCard intel={intel} currency={currency} />
+          <CategoryDonutCard slices={intel.slices} currency={currency} />
+          <WeekPulseCard intel={intel} currency={currency} />
         </div>
 
         {/* Cash flow (D/W/M) + calendar / projection */}
@@ -1028,15 +1111,15 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
         <defs>
           <linearGradient id="projAreaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.18} />
+            <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.32} />
             <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
           </linearGradient>
         </defs>
         <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
         <path d={`${path} L ${x(series.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`} fill="url(#projAreaFill)" stroke="none" />
         {/* soft under-stroke = neon glow without an SVG filter */}
-        <path d={path} fill="none" stroke={bRgba(LIGHT_BLUE, 0.28)} strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" />
-        <path d={path} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={path} fill="none" stroke={bRgba(LIGHT_BLUE, 0.45)} strokeWidth={9} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={path} fill="none" stroke={LIGHT_BLUE} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
         {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
         {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={LIGHT_BLUE} stroke={INK} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
         {ticks.map((p, i) => (
@@ -1368,20 +1451,172 @@ function StatTile({ label, value, sub, valueColor, hero, delta, currency }: { la
         ...(hero
           ? {
               background: "#000000",
-              border: `1px solid ${bRgba(LIGHT_BLUE, 0.35)}`,
-              boxShadow: `${EDGE_LIGHT}, 0 0 28px -8px ${bRgba(LIGHT_BLUE, 0.30)}, 0 16px 40px -12px rgba(0,0,0,0.55)`,
+              border: `1px solid ${bRgba(LIGHT_BLUE, 0.60)}`,
+              boxShadow: `${EDGE_LIGHT}, 0 0 36px -6px ${bRgba(LIGHT_BLUE, 0.55)}, 0 24px 60px -16px rgba(0,0,0,0.75)`,
             }
           : null),
       }}
     >
       <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>{label}</div>
-      <div style={{ marginTop: 8, fontSize: 28, fontWeight: 900, letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", color: hero ? LIGHT_BLUE : (valueColor ?? HOME_THEME.text), textShadow: hero ? `0 0 26px ${bRgba(LIGHT_BLUE, 0.35)}` : "none" }}>{value}</div>
+      <div style={{ marginTop: 8, fontSize: 32, fontWeight: 900, letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", color: hero ? LIGHT_BLUE : (valueColor ?? HOME_THEME.text), textShadow: hero ? `0 0 30px ${bRgba(LIGHT_BLUE, 0.65)}` : "none" }}>{value}</div>
       {sub && <div style={{ marginTop: 4, fontSize: 12, color: HOME_THEME.muted, opacity: 0.55 }}>{sub}</div>}
       {delta != null && delta !== 0 && (
         <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: delta < 0 ? SOFT_RED : HOME_THEME.green }}>
           {delta > 0 ? "↗ +" : "↘ "}{fmtMoney(delta, currency || "USD").replace("-", "")} vs last
         </div>
       )}
+    </div>
+  );
+}
+
+/** Card header used by the intelligence row. */
+function IntelHeader({ title, right }: { title: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>{title}</div>
+      {right}
+    </div>
+  );
+}
+
+/** Safe-to-Spend: what's left per day after every bill still due this month. */
+function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }) {
+  const neg = intel.safePerDay < 0;
+  const pct = Math.min(100, Math.max(0, (intel.todayDay / intel.daysInMonth) * 100));
+  return (
+    <div style={{ ...card(), padding: 16, background: "#000000", border: `1px solid ${bRgba(LIGHT_BLUE, 0.6)}`, boxShadow: `${EDGE_LIGHT}, 0 0 36px -6px ${bRgba(LIGHT_BLUE, 0.55)}, 0 24px 60px -16px rgba(0,0,0,0.75)`, display: "flex", flexDirection: "column" }}>
+      <IntelHeader title="Safe to Spend" />
+      <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
+        {fmtMoney(intel.safePerDay, currency)}<span style={{ fontSize: 15, fontWeight: 800, opacity: 0.7 }}> /day</span>
+      </div>
+      <div style={{ marginTop: 10, display: "grid", gap: 6, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Free this month</span><b style={{ color: intel.safe < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(intel.safe, currency)}</b></div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Bills still due</span><b style={{ color: SOFT_RED }}>{fmtMoney(intel.billsLeft, currency)}</b></div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Days left</span><b>{intel.daysLeft}</b></div>
+      </div>
+      <div style={{ marginTop: "auto", paddingTop: 12 }}>
+        <div style={{ height: 6, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", borderRadius: 999, background: `linear-gradient(90deg, ${HOME_THEME.cyan}, ${LIGHT_BLUE})`, boxShadow: `0 0 12px ${bRgba(LIGHT_BLUE, 0.6)}` }} />
+        </div>
+        <div style={{ marginTop: 5, fontSize: 11, opacity: 0.55 }}>Day {Math.max(intel.todayDay, 0)} of {intel.daysInMonth}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Spend Pace: cumulative month spend vs the straight-line budget pace. */
+function SpendPaceCard({ intel, currency }: { intel: Intel; currency: string }) {
+  const W = 300, H = 132;
+  const maxV = Math.max(intel.budgetTotal, intel.cum[intel.cum.length - 1] || 0, 1);
+  const px = (i: number) => (i / (intel.daysInMonth - 1)) * W;
+  const py = (v: number) => H - (v / maxV) * (H - 10);
+  const upTo = Math.max(1, Math.min(intel.todayDay, intel.daysInMonth));
+  const actual = intel.cum.slice(0, upTo).map((v, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`).join(" ");
+  const area = `${actual} L ${px(upTo - 1).toFixed(1)} ${H} L 0 ${H} Z`;
+  const over = intel.spentMtd > intel.paceNow;
+  const delta = Math.abs(intel.spentMtd - intel.paceNow);
+  return (
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+      <IntelHeader
+        title="Spend Pace"
+        right={<span style={{ fontSize: 11, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>{over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")}</span>}
+      />
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="paceFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={over ? SOFT_RED : LIGHT_BLUE} stopOpacity={0.3} />
+            <stop offset="100%" stopColor={over ? SOFT_RED : LIGHT_BLUE} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        {/* budget pace line */}
+        <line x1={0} y1={py(0)} x2={W} y2={py(intel.budgetTotal)} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
+        <path d={area} fill="url(#paceFill)" />
+        <path d={actual} fill="none" stroke={bRgba(over ? SOFT_RED : LIGHT_BLUE, 0.45)} strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={actual} fill="none" stroke={over ? SOFT_RED : LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        {upTo > 0 && <circle cx={px(upTo - 1)} cy={py(intel.cum[upTo - 1] || 0)} r={4} fill={over ? SOFT_RED : LIGHT_BLUE} stroke={INK} strokeWidth={1.5} />}
+      </svg>
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+        <span style={{ opacity: 0.6 }}>Spent MTD <b style={{ color: HOME_THEME.text }}>{fmtMoney(intel.spentMtd, currency)}</b></span>
+        <span style={{ opacity: 0.6 }}>Budget <b style={{ color: HOME_THEME.text }}>{fmtMoney(intel.budgetTotal, currency)}</b></span>
+      </div>
+    </div>
+  );
+}
+
+/** Category donut — where the month's spend actually went. */
+function CategoryDonutCard({ slices, currency }: { slices: Intel["slices"]; currency: string }) {
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  const R = 44, C = 2 * Math.PI * R;
+  let cumFrac = 0;
+  return (
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+      <IntelHeader title="Where It Went" />
+      {total <= 0 ? (
+        <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 13 }}>No categorized spend yet.</div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 0 }}>
+          <svg viewBox="0 0 120 120" width={128} height={128} style={{ flex: "none", filter: "drop-shadow(0 0 10px rgba(125,211,252,0.25))" }}>
+            <circle cx={60} cy={60} r={R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={16} />
+            {slices.map((s, i) => {
+              const frac = s.value / total;
+              const el = (
+                <circle key={i} cx={60} cy={60} r={R} fill="none" stroke={s.color} strokeWidth={16}
+                  strokeDasharray={`${Math.max(frac * C - 1.5, 0.5)} ${C}`} strokeDashoffset={-cumFrac * C}
+                  transform="rotate(-90 60 60)" strokeLinecap="butt" />
+              );
+              cumFrac += frac;
+              return el;
+            })}
+            <text x={60} y={57} textAnchor="middle" fill={HOME_THEME.text} fontSize={15} fontWeight={900} style={{ fontVariantNumeric: "tabular-nums" }}>{fmtMoney(total, currency).replace(/\.\d+$/, "")}</text>
+            <text x={60} y={72} textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize={9} fontWeight={800} letterSpacing="0.1em">SPENT</text>
+          </svg>
+          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 6, fontSize: 12, fontVariantNumeric: "tabular-nums", overflow: "hidden" }}>
+            {slices.slice(0, 6).map((s, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color, boxShadow: `0 0 8px ${s.color}`, flex: "none" }} />
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }}>{s.label}</span>
+                <b>{Math.round((s.value / total) * 100)}%</b>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 7-Day Pulse: daily net bars for the last week + spend vs the week before. */
+function WeekPulseCard({ intel, currency }: { intel: Intel; currency: string }) {
+  const maxAbs = Math.max(1, ...intel.week.map((d) => Math.abs(d.net)));
+  const deltaPct = intel.prevWkOut > 0 ? ((intel.wkOut - intel.prevWkOut) / intel.prevWkOut) * 100 : null;
+  const worse = (deltaPct ?? 0) > 0;
+  return (
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+      <IntelHeader
+        title="7-Day Pulse"
+        right={deltaPct !== null ? (
+          <span style={{ fontSize: 11, fontWeight: 900, padding: "3px 10px", borderRadius: 999, color: worse ? SOFT_RED : HOME_THEME.green, background: bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.4)}` }}>
+            {worse ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(0)}% vs prior wk
+          </span>
+        ) : undefined}
+      />
+      <div style={{ fontSize: 22, fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(intel.wkOut, currency)}<span style={{ fontSize: 12, fontWeight: 700, opacity: 0.55 }}> spent last 7 days</span></div>
+      <div style={{ marginTop: 12, flex: 1, display: "flex", alignItems: "center", gap: 6, minHeight: 74 }}>
+        {intel.week.map((d, i) => {
+          const h = (Math.abs(d.net) / maxAbs) * 30;
+          const up = d.net >= 0;
+          const c = up ? HOME_THEME.green : SOFT_RED;
+          return (
+            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }} title={`${d.date}: ${fmtMoney(d.net, currency)}`}>
+              <div style={{ width: "100%", maxWidth: 22, height: 64, position: "relative" }}>
+                <div style={{ position: "absolute", left: 0, right: 0, top: 31, height: 2, background: "rgba(255,255,255,0.10)", borderRadius: 1 }} />
+                <div style={{ position: "absolute", left: "15%", right: "15%", ...(up ? { bottom: 33, height: Math.max(h, d.net !== 0 ? 3 : 0) } : { top: 33, height: Math.max(h, d.net !== 0 ? 3 : 0) }), background: `linear-gradient(${up ? 180 : 0}deg, ${c}, ${bRgba(c, 0.4)})`, borderRadius: 3, boxShadow: d.net !== 0 ? `0 0 10px ${bRgba(c, 0.35)}` : "none" }} />
+              </div>
+              <span style={{ fontSize: 10, fontWeight: 800, opacity: i === 6 ? 1 : 0.45, color: i === 6 ? LIGHT_BLUE : HOME_THEME.text }}>{weekday(d.date)[0]}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1438,8 +1673,8 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
                   onMouseLeave={() => setHover(null)}
                   style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 2, position: "relative", background: hover === i ? "rgba(255,255,255,0.03)" : "transparent", borderRadius: 6 }}
                 >
-                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${HOME_THEME.green} 0%, ${bRgba(HOME_THEME.green, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 12px ${bRgba(HOME_THEME.green, 0.35)}` : "none", transition: "box-shadow .15s ease" }} />
-                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${SOFT_RED} 0%, ${bRgba(SOFT_RED, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 12px ${bRgba(SOFT_RED, 0.35)}` : "none", transition: "box-shadow .15s ease" }} />
+                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${HOME_THEME.green} 0%, ${bRgba(HOME_THEME.green, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 16px ${bRgba(HOME_THEME.green, 0.6)}` : `0 0 8px ${bRgba(HOME_THEME.green, 0.18)}`, transition: "box-shadow .15s ease" }} />
+                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${SOFT_RED} 0%, ${bRgba(SOFT_RED, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 16px ${bRgba(SOFT_RED, 0.6)}` : `0 0 8px ${bRgba(SOFT_RED, 0.18)}`, transition: "box-shadow .15s ease" }} />
                   {hover === i && (
                     <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
                       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
@@ -1456,15 +1691,15 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
               <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
                 <defs>
                   <linearGradient id="cfProjFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.26} />
+                    <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.38} />
                     <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 {showZero && <line x1={0} x2={100} y1={lineY(0)} y2={lineY(0)} stroke={bRgba(SOFT_RED, 0.4)} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />}
                 <path d={areaPath} fill="url(#cfProjFill)" stroke="none" />
                 {/* soft under-stroke = neon glow without an SVG filter */}
-                <path d={linePath} fill="none" stroke={bRgba(LIGHT_BLUE, 0.28)} strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-                <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                <path d={linePath} fill="none" stroke={bRgba(LIGHT_BLUE, 0.45)} strokeWidth={9} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
               </svg>
             )}
           </div>
@@ -2701,7 +2936,7 @@ function th(align: "left" | "right" | "center"): React.CSSProperties {
 function card(): React.CSSProperties {
   return {
     // Solid fill + a 1.5% white top wash (sheen, not glass) over the deep panel.
-    background: `linear-gradient(180deg, rgba(255,255,255,0.015) 0%, transparent 34%), ${PANEL}`,
+    background: `linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 34%), ${PANEL}`,
     borderRadius: 16,
     border: `1px solid ${HAIRLINE}`,
     boxShadow: CARD_SHADOW,
@@ -2727,7 +2962,7 @@ function labelCap(): React.CSSProperties {
   return { fontSize: 15, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
-  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.35)", background: "linear-gradient(180deg, rgba(33,158,188,0.18), rgba(33,158,188,0.05))", boxShadow: "0 0 18px rgba(33,158,188,0.18), inset 0 1px 0 rgba(255,255,255,0.08)", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap", transition: "box-shadow .15s ease, border-color .15s ease" };
+  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.60)", background: "linear-gradient(180deg, rgba(33,158,188,0.30), rgba(33,158,188,0.08))", boxShadow: "0 0 24px rgba(33,158,188,0.40), inset 0 1px 0 rgba(255,255,255,0.12)", color: LIGHT_BLUE, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap", transition: "box-shadow .15s ease, border-color .15s ease" };
 }
 function ghost(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HAIRLINE}`, background: "rgba(255,255,255,0.03)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap", transition: "border-color .15s ease, background .15s ease" };
@@ -2736,9 +2971,9 @@ function pill(active: boolean): React.CSSProperties {
   return {
     padding: "8px 16px",
     borderRadius: 999,
-    border: active ? "1px solid rgba(33,158,188,0.45)" : `1px solid ${HAIRLINE}`,
-    background: active ? "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.06))" : "rgba(255,255,255,0.03)",
-    boxShadow: active ? "0 0 16px rgba(33,158,188,0.22), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
+    border: active ? "1px solid rgba(33,158,188,0.75)" : `1px solid ${HAIRLINE}`,
+    background: active ? "linear-gradient(180deg, rgba(33,158,188,0.30), rgba(33,158,188,0.10))" : "rgba(255,255,255,0.03)",
+    boxShadow: active ? "0 0 22px rgba(33,158,188,0.50), inset 0 1px 0 rgba(255,255,255,0.10)" : "none",
     color: active ? HOME_THEME.cyan : "rgba(255,255,255,0.82)",
     fontSize: 15,
     fontWeight: 800,
