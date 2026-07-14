@@ -51,6 +51,13 @@ const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
 // true ES−SPX basis decays only ~a point a day toward expiry, so anything further
 // out than this is a data fault, not a market move. See effectiveBasis().
 const LIVE_BASIS_TOL = 12;
+// ES trades at a POSITIVE carry to SPX (cost of carry − dividends). It is never
+// negative and never a few hundred points. A reading outside this band is a data
+// fault — a mis-scaled/stale SPX spot, or an ES price from the wrong contract —
+// and must never be used, no matter which source produced it.
+function isPlausibleBasis(b: number): boolean {
+  return Number.isFinite(b) && b > 0 && b < 250;
+}
 const ET_HM_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
 });
@@ -909,19 +916,31 @@ export default function EsCandlesPage() {
   // disagrees by more than that is a bad spot print or a contract mismatch, never a
   // real basis move, so it's rejected and the anchor holds.
   const effectiveBasis = useCallback(() => {
-    const anchor = prevBasisRef.current;
+    // Anchor: yesterday's close basis, else the newest day in the per-session map
+    // (same two sources, so it's a free second chance when the prevCloses fetch
+    // hasn't landed or eod_gex is missing yesterday's row).
+    let anchor = prevBasisRef.current;
+    if (!isPlausibleBasis(anchor) && dayBasisRef.current.size) {
+      const days = [...dayBasisRef.current.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      const newest = days[days.length - 1]?.[1] ?? 0;
+      if (isPlausibleBasis(newest)) anchor = newest;
+    }
+
     const es = lastEsCloseRef.current;
     const spx = spotRef.current;
     const live = es > 0 && spx > 0 ? es - spx : 0;
 
-    if (anchor) {
-      if (isCashOpen() && live && Math.abs(live - anchor) <= LIVE_BASIS_TOL) return live;
+    if (isPlausibleBasis(anchor)) {
+      // Live may only DRIFT the anchor, never replace it.
+      if (isCashOpen() && isPlausibleBasis(live) && Math.abs(live - anchor) <= LIVE_BASIS_TOL) return live;
       return anchor;
     }
-    // No anchor yet (first load / no eod_gex row). Best effort: the live candle
-    // basis while cash is open, else whatever the server last published.
-    if (isCashOpen() && live) return live;
-    return basisRef.current;
+    // No usable anchor. Take the live candle basis only if it's physically
+    // possible, then the server's, then give up (0) rather than bend every level
+    // by a bogus number — a wrong basis is worse than an obviously-missing one.
+    if (isCashOpen() && isPlausibleBasis(live)) return live;
+    if (isPlausibleBasis(basisRef.current)) return basisRef.current;
+    return 0;
   }, []);
 
   useEffect(() => {
@@ -1173,7 +1192,14 @@ export default function EsCandlesPage() {
         .filter((c) => Number(c.close) > 0)
         .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
       const esRow = esBars.length ? esBars[esBars.length - 1] : null;
-      if (!esRow) return;
+      if (!esRow) {
+        // No 16:00 bar in the loaded history → no anchor → effectiveBasis() has to
+        // fall back to the live (unreliable) reading. This is never OK silently:
+        // it is the single point of failure behind every "levels are off by ~50pt"
+        // report, so say so out loud.
+        console.warn(`[basis] NO ANCHOR: no 16:00 ES bar in ${historical.length} historical bars`);
+        return;
+      }
       const esClose = Number(esRow.close);
       const esDate = esRow.date ?? (esRow.slotKey ?? "").slice(0, 10);
 
@@ -1181,14 +1207,23 @@ export default function EsCandlesPage() {
       // else the most recent SPX EOD available.
       try {
         const res = await fetch(`/api/eod-gex?symbol=$SPX&limit=30`, { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) { console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${res.status}`); return; }
         const json = await res.json();
         const spxRows: Array<{ date: string; spot: number }> = Array.isArray(json.rows) ? json.rows : [];
         const match = spxRows.find((r) => r.date === esDate) ?? spxRows[0];
         const spxClose = Number(match?.spot ?? 0);
         if (!cancelled && esClose > 0 && spxClose > 0) {
-          prevBasisRef.current = esClose - spxClose;
-          setPrevCloses({ es: esClose, spx: spxClose, date: esDate });
+          const anchor = esClose - spxClose;
+          if (isPlausibleBasis(anchor)) {
+            prevBasisRef.current = anchor;
+            setPrevCloses({ es: esClose, spx: spxClose, date: esDate });
+          } else {
+            // ES close and SPX close disagree impossibly → one of them is from the
+            // wrong contract/day. Refuse it; a bad anchor poisons every level.
+            console.warn(`[basis] REJECTED anchor ${anchor.toFixed(2)} (es=${esClose} spx=${spxClose} date=${esDate})`);
+          }
+        } else if (!cancelled) {
+          console.warn(`[basis] NO ANCHOR: esClose=${esClose} spxClose=${spxClose} esDate=${esDate} eodRows=${spxRows.length} (dates: ${spxRows.slice(0, 3).map((r) => r.date).join(",")})`);
         }
         // Same two sources, but for EVERY day we have both closes for → the
         // per-session basis map used by all historical SPX→ES conversions
@@ -1200,7 +1235,7 @@ export default function EsCandlesPage() {
             const d = bar.date ?? (bar.slotKey ?? "").slice(0, 10);
             const es = Number(bar.close);
             const spx = Number(spxByDate.get(d) ?? 0);
-            if (d && es > 0 && spx > 0) next.set(d, es - spx);
+            if (d && es > 0 && spx > 0 && isPlausibleBasis(es - spx)) next.set(d, es - spx);
           }
           if (next.size) {
             dayBasisRef.current = next;

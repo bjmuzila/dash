@@ -17,7 +17,11 @@
  * sequential dates (each date is one bulk call; keeps the concurrency budget calm).
  *
  * Prereqs: Theta Terminal on 25503 (PRO trial for history), DATABASE_URL set.
- * Run:  node --env-file=../.env.local scripts/theta-backfill-eod.mjs [years=2] [strikeRange=40] [--greeks]
+ * Run:  node --env-file=../.env.local scripts/theta-backfill-eod.mjs [years=2] [strikeRange=500] [--greeks] [--redo]
+ *
+ *   --redo : recompute dates that already have a row (default skips them). Use
+ *            after changing strikeRange — an existing narrow-band row is wrong,
+ *            not done.
  *
  *   --greeks : use Theta's HISTORICAL gamma (history/greeks/eod) instead of
  *              BS-deriving it from the EOD close. PRO-gated; per-strike BS
@@ -33,10 +37,18 @@ const theta = require('../proxy-thetadata.js');
 const { computeGexRows, totalNetGex } = require('../computation/gex-calculator.js');
 const { bsGreeks, impliedVol, yearsToExpiry } = require('../computation/utils.js');
 
-const args = process.argv.slice(2).filter((a) => a !== '--greeks');
-const USE_THETA_GREEKS = process.argv.includes('--greeks'); // gamma from Theta history vs BS
+const FLAGS = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const USE_THETA_GREEKS = FLAGS.has('--greeks'); // gamma from Theta history vs BS
+// --redo: recompute dates that already have a row (default is skip-if-present).
+// Needed after a STRIKE_RANGE change — an existing narrow row is WRONG, not done.
+const REDO = FLAGS.has('--redo');
 const YEARS = Number(args[0] || 2);
-const STRIKE_RANGE = Number(args[1] || 40);
+// Must match the live recorder's band (eod-gex-recorder.js computeHistoricalEodGex
+// uses strikeRange: 500). This defaulted to 40, which truncates the total: the
+// same session came out +0.281B at 40 vs +1.983B at 500. A narrow row is not
+// comparable to a recorder row — never mix bands in one series.
+const STRIKE_RANGE = Number(args[1] || 500);
 const RISK_FREE = Number(process.env.RISK_FREE_RATE || 0.045);
 const SYMBOL = 'SPX';
 
@@ -85,12 +97,22 @@ async function alreadyDone() {
   return new Set(r.rows.map((x) => (x.date instanceof Date ? x.date.toISOString().slice(0, 10) : String(x.date).slice(0, 10))));
 }
 
+// Match the recorder's schema: it self-heals these columns on first write, but
+// the script can run against a cold table, so ensure them here too.
+async function ensureColumns() {
+  await pool.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_flow_gex DOUBLE PRECISION DEFAULT 0`);
+  await pool.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS source TEXT`);
+}
+
+// source='theta': settled-OI history, identical path to the recorder's AM pass.
+// total_flow_gex=0 — history carries no dealer inventory.
 async function upsert(date, total_gex, spot) {
   await pool.query(
-    `INSERT INTO eod_gex (date, symbol, total_gex, spot, computed_at)
-     VALUES ($1,'$SPX',$2,$3,$4)
+    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source)
+     VALUES ($1,'$SPX',$2,0,$3,$4,'theta')
      ON CONFLICT (date, symbol) DO UPDATE SET
-       total_gex=EXCLUDED.total_gex, spot=EXCLUDED.spot, computed_at=EXCLUDED.computed_at`,
+       total_gex=EXCLUDED.total_gex, total_flow_gex=EXCLUDED.total_flow_gex,
+       spot=EXCLUDED.spot, computed_at=EXCLUDED.computed_at, source=EXCLUDED.source`,
     [date, total_gex, spot, new Date().toISOString()],
   );
 }
@@ -146,10 +168,11 @@ async function buildDay(date) {
 
 // --- main -------------------------------------------------------------------
 (async () => {
+  await ensureColumns();
   const days = tradingDays(YEARS);
   const done = await alreadyDone();
-  const todo = days.filter((d) => !done.has(d));
-  console.log(`[backfill] ${YEARS}y = ${days.length} trading days; ${done.size} already done; ${todo.length} to do; strike_range=${STRIKE_RANGE}`);
+  const todo = REDO ? days : days.filter((d) => !done.has(d));
+  console.log(`[backfill] ${YEARS}y = ${days.length} trading days; ${done.size} already present; ${todo.length} to do; strike_range=${STRIKE_RANGE}${REDO ? '  [--redo: OVERWRITING existing rows]' : ''}`);
 
   let ok = 0, skipped = 0, failed = 0;
   for (let i = 0; i < todo.length; i++) {
