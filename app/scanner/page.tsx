@@ -17,7 +17,6 @@ import { useNqCandles } from "@/hooks/useNqCandles";
 import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
-import NetGexPctTab from "@/components/scanner/NetGexPctTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -54,7 +53,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "netgexpct" | "strike" | "oi" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter";
+type MainTab = "overview" | "gex" | "strike" | "oi" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -2935,7 +2934,6 @@ export default function ScannerPage() {
       >
         <option value="overview">Overview</option>
         <option value="gex">GEX Scanner</option>
-        <option value="netgexpct">Net GEX %</option>
         <option value="strike">Strike Query</option>
         <option value="oi">OI Change</option>
         <option value="watch">Watch This</option>
@@ -2949,11 +2947,6 @@ export default function ScannerPage() {
       <div className="scanner-tabs" style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
         <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
         <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
-        <button onClick={() => setTab("netgexpct")} style={{
-          ...tabStyle(tab === "netgexpct"),
-          border: `1px solid ${tab === "netgexpct" ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
-          background: tab === "netgexpct" ? `${HOME_THEME.cyan}22` : "transparent",
-        }}>Net GEX %</button>
         <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
         <button onClick={() => setTab("oi")} style={{
           ...tabStyle(tab === "oi"),
@@ -2989,7 +2982,6 @@ export default function ScannerPage() {
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
       {tab === "gex"    && <GexScanner />}
-      {tab === "netgexpct" && <NetGexPctTab />}
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "oi"     && <OiChangeScanner />}
       {tab === "watch"  && <WatchThisScanner />}

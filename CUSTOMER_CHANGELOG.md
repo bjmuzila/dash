@@ -2,6 +2,14 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 7/14/2026
+
+* Added a 0DTE button to the Options Flow filters — one click jumps the tape and chart to today's expiration (or the nearest contract if there isn't one), and clicking it again goes back to all expirations.
+* Fixed the Recent ticker dropdown on the Flow page hiding behind the Net Drift chart.
+* Replaced the Balance / Imbalance scanner tab with a new **TPO Structures** tab — a classic Market Profile letter chart of the last 5 sessions, so you can see where the market actually spent its time and where it just passed through.
+* The chart is drag-to-pan and zoomable, and a Split view spreads the letters out by time so you can watch the session's auction develop period by period.
+* Alongside it, an "Open business" list tracks the levels the market left unfinished — rejection highs and lows, unfinished extremes it's likely to come back and take out, and thin gaps it tends to race through — showing how old each one is, how far it sits from price, and whether it's ever been retested.
+
 ## Monday 7/13/2026
 
 * Added a market State Rail to the Greeks tab on the home page — four live power bars showing the dealer gamma regime, whether volatility is cheap or expensive right now, which way dealer hedging is leaning, and where the options skew sits, with a plain-English "current play" call underneath (sell premium, buy convexity, fade the range, or stand aside).

@@ -1025,6 +1025,28 @@ export function HomeClient({
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Weekly EM ±1σ for SPX — published levels (up = +1σ, down = −1σ) from
+  // ticker_levels. Frozen weekly, so a 5-min poll is plenty.
+  const [emLevels, setEmLevels] = useState<{ up: number | null; down: number | null }>({ up: null, down: null });
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/levels?ticker=SPX`);
+        if (!res.ok) return;
+        const j = await res.json();
+        const n = (v: unknown) => {
+          const x = Number(String(v ?? "").replace(/[^0-9.\-]/g, ""));
+          return Number.isFinite(x) && x > 0 ? x : null;
+        };
+        if (!cancelled) setEmLevels({ up: n(j?.up), down: n(j?.down) });
+      } catch { /* keep last good value */ }
+    };
+    load();
+    const id = setInterval(load, 300_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   const flipPoint = useMemo(() => findGEXFlip(chartRows, chartSpot) ?? null, [chartRows, chartSpot]);
   // MVC = strike carrying the peak |OI+Vol net GEX| (most valuable concentration).
   // OI+Vol = netGEX (OI-only) + netVolGEX (vol-only) — matches the GexChart MVC
@@ -1183,6 +1205,8 @@ export function HomeClient({
                   { label: "Flip",      value: flipPoint != null ? formatStrikeValue(flipPoint) : "—", color: C.orange },
                   { label: "CB",        value: mvcStrike != null ? formatStrikeValue(mvcStrike) : "—", color: C.purple },
                   { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
+                  { label: "+1σ (EM)",  value: emLevels.up != null ? formatStrikeValue(emLevels.up) : "—", color: C.green },
+                  { label: "−1σ (EM)",  value: emLevels.down != null ? formatStrikeValue(emLevels.down) : "—", color: C.red },
                   { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
                   { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
                 ].map((t) => (
