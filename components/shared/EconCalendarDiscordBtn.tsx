@@ -43,14 +43,6 @@ interface EarnRow {
   market_cap: number;
 }
 
-function fmtCap(v: number): string {
-  if (!v || v <= 0) return "–";
-  if (v >= 1e12) return `$${(v / 1e12).toFixed(1)}T`;
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
-  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
-  return `$${v}`;
-}
-
 // ── Owner gate (cosmetic — matches DataBox/NavMenu) ───────────────────────────
 function useIsOwner(): boolean {
   const { isSignedIn, user } = useAuth();
@@ -243,28 +235,43 @@ function dash(v?: string): string {
 // type (keeps everything on-canvas). 6 rows is the "neutral" baseline: a light
 // day (4-5 events) should read BIG rather than leave the panel half empty.
 function densityScale(n: number): number {
-  const s = 1 + (6 - n) * 0.09;
-  return Math.max(0.85, Math.min(1.45, s));
+  const s = 1 + (6 - n) * 0.07;
+  return Math.max(0.85, Math.min(1.25, s));
 }
 
-function earningsRowsHTML(rows: EarnRow[]): string {
+// Earnings lane mirrors the /economic-calendar page: two labelled groups
+// (Premarket / After hours), each a wrapped strip of logo + ticker chips.
+// No company name, no market cap — the ticker IS the information.
+function earnChipsHTML(rows: EarnRow[], logos: Record<string, string>): string {
   return rows.map(r => {
-    const tag = r.session === "pre"
-      ? { txt: "BMO", c: HT.orange }
-      : r.session === "after"
-        ? { txt: "AMC", c: HT.green }
-        : { txt: "TBD", c: HT.muted };
+    const src = logos[r.symbol];
+    const art = src
+      ? `<img src="${src}" alt="${r.symbol}" />`
+      : `<span class="chip-fb">${r.symbol.slice(0, 4)}</span>`;
     return `
-    <div class="ern-row">
-      <div class="er-sym">${r.symbol}</div>
-      <div class="er-co">${r.company || ""}</div>
-      <div class="er-cap">${fmtCap(r.market_cap)}</div>
-      <div class="er-when"><span class="impact-pill" style="background:${hexA(tag.c, 0.14)};border-color:${hexA(tag.c, 0.4)};color:${tag.c}">${tag.txt}</span></div>
-    </div>`;
+      <div class="ern-chip">
+        <span class="chip-logo">${art}</span>
+        <span class="chip-sym">${r.symbol}</span>
+      </div>`;
   }).join("");
 }
 
-function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", earnings: EarnRow[] = []): string {
+function earnGroupHTML(kind: "pre" | "after", rows: EarnRow[], logos: Record<string, string>): string {
+  if (rows.length === 0) return "";
+  return `
+    <div class="ern-group">
+      <div class="ern-group-label">${kind === "pre" ? "Premarket" : "After hours"}</div>
+      <div class="ern-chips">${earnChipsHTML(rows, logos)}</div>
+    </div>`;
+}
+
+function buildSnapshotHTML(
+  events: CalEvent[],
+  quote: string,
+  logoDataUrl = "",
+  earnings: EarnRow[] = [],
+  tickerLogos: Record<string, string> = {},
+): string {
   const today = etToday();
   const todayEvents = events
     .filter(e => e.date === today && includeTemplateEvent(e))
@@ -295,17 +302,17 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", 
   const presRowPadV = px(14, presScale);
   const presTimeCol = px(92, presScale);
 
-  const econHeadSize = px(12, econScale);
-  const econTimeSize = px(16, econScale);
-  const econEventSize = px(18, econScale);
-  const econNumSize = px(16, econScale);
+  const econHeadSize = px(11, econScale);
+  const econTimeSize = px(14, econScale);
+  const econEventSize = px(16, econScale);
+  const econNumSize = px(15, econScale);
   const econRowPadV = px(12, econScale);
-  const pillFontSize = px(12, econScale);
-  const pillHeight = px(24, econScale);
-  const pillPadH = px(11, econScale);
-  const econTimeCol = px(86, econScale);
-  const econImpactCol = px(88, econScale);
-  const econNumCol = px(74, econScale);
+  const pillFontSize = px(11, econScale);
+  const pillHeight = px(22, econScale);
+  const pillPadH = px(10, econScale);
+  const econTimeCol = px(80, econScale);
+  const econImpactCol = px(80, econScale);
+  const econNumCol = px(66, econScale);
 
   const formattedQuote = (() => {
     const raw = (quote || "").trim();
@@ -338,25 +345,29 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", 
     </div>
   `).join("");
 
-  const ernRows = earnings.slice(0, 8);
+  const preRows = earnings.filter(e => e.session === "pre").slice(0, 12);
+  const afterRows = earnings.filter(e => e.session === "after").slice(0, 12);
+  const ernCount = preRows.length + afterRows.length;
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
 <style>
 :root{--bg:${HT.bg};--panelBg:${HT.panelBg};--border:${HT.border};--cyan:${HT.cyan};--green:${HT.green};--red:${HT.red};--orange:${HT.orange};--text:${HT.text};--muted:${HT.muted};--lblue:${LIGHT_BLUE}}
 *{box-sizing:border-box;margin:0;padding:0}
-body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:'Inter','Helvetica Neue',Arial,sans-serif;background:var(--bg)}
-.snapshot{width:min(1280px,100%);min-height:680px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 50%,${hexA(HT.cyan, 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,rgba(18,103,131,0.07) 0%,transparent 50%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
+/* Fixed 1280x720 — height is LOCKED, not min-height. Anything that overflows
+   must shrink (see densityScale), never push the canvas taller. */
+body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:'Inter','Helvetica Neue',Arial,sans-serif;background:var(--bg)}
+.snapshot{width:1280px;height:672px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 50%,${hexA(HT.cyan, 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,rgba(18,103,131,0.07) 0%,transparent 50%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
 /* html2canvas does NOT vertically center flex text — it renders on the normal
    baseline, which is why pills looked top-heavy. Every pill below is an
    inline-block whose line-height == its inner height. Do not "simplify" these
    back to inline-flex + align-items:center. */
-.badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;letter-spacing:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
+.badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;letter-spacing:0.07em;text-indent:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
-.today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
+.date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-indent:0.06em;text-transform:uppercase;font-size:16px}
+.today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-indent:0.06em;text-transform:uppercase;font-size:16px}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
-.grid{display:grid;grid-template-columns:1.5fr 3fr 1.7fr;gap:18px;margin-top:24px;flex:1;min-height:0}
+.grid{display:grid;grid-template-columns:1.4fr 3.3fr 1.5fr;gap:18px;margin-top:20px;flex:1;min-height:0}
 /* THE card surface (classicCardAccentStyle): frosted fill, hairline edge, faint
    light-blue radial glow, 18px radius. NO per-card accent strip, NO colored
    panel titles — see PageCard.tsx. */
@@ -365,12 +376,15 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .panel-title{font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
 .panel-pct{display:inline-block;height:24px;line-height:24px;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:0 9px}
 .ern-body{display:flex;flex-direction:column;flex:1}
-.ern-row{display:grid;grid-template-columns:64px 1fr 56px 52px;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex:1}
-.ern-row:last-child{border-bottom:none}
-.er-sym{font-size:14px;font-weight:800;color:var(--text)}
-.er-co{font-size:12px;font-weight:600;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.er-cap{font-size:12px;font-weight:700;text-align:right;color:var(--text)}
-.er-when{text-align:right}
+.ern-group{padding:14px 16px;border-bottom:1px solid var(--border);flex:1}
+.ern-group:last-child{border-bottom:none}
+.ern-group-label{font-size:11px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px;line-height:1}
+.ern-chips{display:flex;flex-wrap:wrap;gap:12px}
+.ern-chip{width:48px;text-align:center;flex-shrink:0}
+.chip-logo{display:block;width:36px;height:36px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
+.chip-logo img{width:36px;height:36px;object-fit:contain;display:block}
+.chip-fb{display:block;width:36px;height:36px;line-height:34px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
+.chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 .pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center}
 .pres-row:last-child{border-bottom:none}
@@ -381,11 +395,13 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:8px;padding:${econRowPadV}px 14px;align-items:center;border-bottom:1px solid var(--border);flex:1}
 .econ-row:last-child{border-bottom:none}
 .econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto}
-.ec-time{font-size:${econTimeSize}px;font-weight:700;color:var(--muted)}
-.ec-event{font-size:${econEventSize}px;font-weight:600}
+.ec-time{font-size:${econTimeSize}px;font-weight:700;color:var(--muted);white-space:nowrap}
+.ec-event{font-size:${econEventSize}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ec-num{font-size:${econNumSize}px;font-weight:700;text-align:right;color:var(--text)}
 .ec-impact{text-align:left}
-.impact-pill{display:inline-block;height:${pillHeight}px;line-height:${pillHeight - 2}px;text-align:center;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase}
+/* text-indent cancels the trailing letter-space, which otherwise drags
+   centered uppercase text visibly left inside the pill. */
+.impact-pill{display:inline-block;height:${pillHeight}px;line-height:${pillHeight - 2}px;text-align:center;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-indent:0.04em;text-transform:uppercase}
 .logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:80px;height:80px;object-fit:contain}
 </style></head><body>
@@ -422,9 +438,12 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
     <div class="panel ern">
       <div class="panel-head">
         <div class="panel-title">Earnings</div>
-        <div class="panel-pct">${earnings.length}</div>
+        <div class="panel-pct">${ernCount}</div>
       </div>
-      ${ernRows.length > 0 ? `<div class="ern-body">${earningsRowsHTML(ernRows)}</div>` : `<div class="empty-panel">No earnings today</div>`}
+      ${ernCount > 0 ? `<div class="ern-body">
+        ${earnGroupHTML("pre", preRows, tickerLogos)}
+        ${earnGroupHTML("after", afterRows, tickerLogos)}
+      </div>` : `<div class="empty-panel">No earnings today</div>`}
     </div>
   </div>
   ${logoDataUrl ? `
@@ -513,17 +532,39 @@ async function buildCalendarTemplateImage(): Promise<string> {
     .sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
 
   let logoDataUrl = "";
-  if (logoRes?.ok) {
-    const blob = await logoRes.blob();
-    logoDataUrl = await new Promise<string>(resolve => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.readAsDataURL(blob);
-    });
-  }
+  if (logoRes?.ok) logoDataUrl = await blobToDataUrl(await logoRes.blob());
 
-  const html = buildSnapshotHTML(events, quote, logoDataUrl, earnings);
+  // html2canvas can't reliably wait on <img src="/proxy/..."> inside the
+  // off-screen iframe, so inline every ticker logo as a data URL up front.
+  const tickerLogos: Record<string, string> = {};
+  await Promise.all(
+    earnings.map(async (r) => {
+      try {
+        const res = await fetch(
+          `/proxy/ticker-logo?sym=${encodeURIComponent(r.symbol.toUpperCase())}&name=${encodeURIComponent(r.company || "")}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/") || blob.size === 0) return;
+        tickerLogos[r.symbol] = await blobToDataUrl(blob);
+      } catch {
+        /* chip falls back to the ticker text */
+      }
+    })
+  );
+
+  const html = buildSnapshotHTML(events, quote, logoDataUrl, earnings, tickerLogos);
   return renderAndCapture(html);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ── Discord icon ──────────────────────────────────────────────────────────────

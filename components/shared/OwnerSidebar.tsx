@@ -46,6 +46,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄" },
       { label: "Changelog", href: "/changelog", glyph: "↻" },
       { label: "Social Media", href: "/social-media", glyph: "🗨︎" },
+      { label: "Post Studio", href: "/owner/post-studio", glyph: "✎" },
     ],
   },
   {

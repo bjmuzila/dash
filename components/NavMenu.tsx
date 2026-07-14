@@ -94,6 +94,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Admin", href: "/dev/admin" },
       { label: "Tree", href: "/dev/tree" },
       { label: "Social Media", href: "/social-media" },
+      { label: "Post Studio", href: "/owner/post-studio" },
       { label: "Changelog", href: "/changelog" },
     ],
   },
