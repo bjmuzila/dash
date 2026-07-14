@@ -5,7 +5,14 @@
  * "Net GEX %" scanner — for every ticker on the EM watchlist (same roster the
  * Far-CB watcher uses), computes the signed net-GEX share of total gamma:
  *
- *     netGexPct = Σ netGEX / Σ |netGEX|   × 100      (range −100 … +100)
+ *     netGexPct = Σ netGEX / Σ GROSS gamma   × 100   (range −100 … +100)
+ *
+ * where GROSS gamma = Σ (callGEX + |putGEX|) across every strike/leg. Do NOT
+ * use Σ|per-strike net| as the denominator: netting inside a strike cancels the
+ * call leg against the put leg before the abs, which inflates every ticker to
+ * 80–95% "bullish". Gross keeps the put gamma in the denominator where it
+ * belongs, so the number reads as "what share of all gamma on the board is net
+ * long."
  *
  * ...on the SAME basis as the home-page GEX chart (OI+Vol: netGEX + netVolGEX).
  * +100 = every dollar of gamma on the board is long/positive (pinned, dealers
@@ -37,7 +44,6 @@ const { getActiveRoster } = require('./far-cb-tickers');
 
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
-const oiVolNet = (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
 
 // ── tunables ────────────────────────────────────────────────────────────────
 const SWEEP_MINS       = Number(process.env.NGP_SWEEP_MINS || 30);
@@ -210,12 +216,23 @@ async function scanTicker(symbol) {
     if (!flatRows.length) { await sleep(EXPIRY_DELAY_MS); continue; }
 
     const gexRows = computeGexRows(flatRows, spot);
+    // NUMERATOR = Σ signed net GEX. DENOMINATOR = Σ GROSS gamma (call leg +
+    // |put leg|), NOT Σ|per-strike net| — netting inside a strike first cancels
+    // calls against puts and pushes every ticker toward ±100%.
     let net = 0, abs = 0, netVol = 0, absVol = 0;
     for (const r of gexRows) {
-      const v = oiVolNet(r);
-      net += v; abs += Math.abs(v);
-      const vv = Number(r.netVolGEX ?? 0);
-      netVol += vv; absVol += Math.abs(vv);
+      const cOi = Number(r.callGEX ?? 0);
+      const pOi = Number(r.putGEX ?? 0);              // already negative
+      const cVol = Number(r.callGamma ?? 0) * Number(r.callVolume ?? 0) * spot * spot;
+      const pVol = -(Number(r.putGamma ?? 0) * Number(r.putVolume ?? 0) * spot * spot);
+
+      // OI+Vol basis: both legs, both sources.
+      net += (cOi + pOi) + (cVol + pVol);
+      abs += Math.abs(cOi) + Math.abs(pOi) + Math.abs(cVol) + Math.abs(pVol);
+
+      // Vol-only basis.
+      netVol += cVol + pVol;
+      absVol += Math.abs(cVol) + Math.abs(pVol);
     }
 
     expCount += 1;
