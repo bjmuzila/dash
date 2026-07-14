@@ -420,6 +420,22 @@ var TPL={
     {t:'text',x:90,y:600,w:1200,html:'Real-time gamma, orderflow and key levels — the same read the desks are working with.',fs:34,fw:700,col:'#a9bcd8'},
     {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:'#7b91b4'}
   ]},
+  win:function(){return [
+    {t:'logo',x:80,y:56,w:330,h:110},
+    {t:'text',x:80,y:186,w:900,html:'THE SCANNER FLAGGED IT.',fs:26,fw:700,col:'#7b91b4',ls:3},
+    {t:'text',x:80,y:232,w:920,html:'PLTR 140C <span style="color:'+accent()+'">+129.6%</span>',fs:72,fw:800},
+    {t:'box',x:80,y:350,w:900,h:150,bgc:'#0e1626'},
+    {t:'text',x:112,y:378,w:260,html:'ENTRY',fs:18,fw:700,col:'#7b91b4',ls:2},
+    {t:'text',x:112,y:410,w:260,html:'$1.35',fs:44,fw:800},
+    {t:'text',x:392,y:378,w:260,html:'NOW',fs:18,fw:700,col:'#7b91b4',ls:2},
+    {t:'text',x:392,y:410,w:260,html:'$3.10',fs:44,fw:800,col:accent()},
+    {t:'text',x:672,y:378,w:280,html:'PER CONTRACT',fs:18,fw:700,col:'#7b91b4',ls:2},
+    {t:'text',x:672,y:410,w:280,html:'+$175',fs:44,fw:800,col:accent()},
+    {t:'list',x:80,y:540,w:900,fs:25,items:['$3.2M sweep · 8.2% OTM · +101% vs open','Scanner score 60 — flagged “Very strong”','Jul 24 expiry · spot 129.37 at the print']},
+    {t:'image',x:1010,y:56,w:520,h:400,label:'Scanner card screenshot'},
+    {t:'image',x:1010,y:480,w:520,h:330,label:'Option price chart screenshot'},
+    {t:'text',x:80,y:812,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:'#5c7295'}
+  ]},
   blank:function(){return []}
 };
 
@@ -430,7 +446,8 @@ function customTpls(){ try{return JSON.parse(localStorage.getItem('cbe_tpls')||'
 function refreshT(){
   var sel0=document.getElementById('tpl'), cur=sel0.value;
   var built=[['feature','Feature list + shots'],['hero','Hero screenshot'],['grid','Feature grid'],
-             ['stat','Big stat'],['promo','Pricing / promo'],['quote','Quote / one-liner'],['blank','Blank canvas']];
+             ['stat','Big stat'],['promo','Pricing / promo'],['quote','Quote / one-liner'],
+             ['win','Scanner win / trade result'],['blank','Blank canvas']];
   var c=customTpls();
   sel0.innerHTML=built.map(function(b){return '<option value="'+b[0]+'">'+b[1]+'</option>'}).join('')
     + Object.keys(c).map(function(k){return '<option value="custom:'+k+'">★ '+k+'</option>'}).join('');

@@ -2335,19 +2335,68 @@ const pctOrDash = (n: number | null) => (n == null ? "—" : `${Math.round(n * 1
 const TPO_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const IB_PERIODS = 2; // 09:30–10:30
 
+const VIEW_H = 660;  // fixed viewport; the profile pans/zooms INSIDE it
+
 function TpoLetterProfile({ sessions, spot, binSize }: {
   sessions: TpoSession[]; spot: number | null; binSize: number;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const [w, setW] = useState(1180);
 
+  // ── view state ────────────────────────────────────────────────────────────
+  // `split` is the "expanded profile" mode: instead of collapsing every letter
+  // to the left (a histogram), each letter is drawn in the COLUMN OF ITS OWN
+  // PERIOD — so column 3 is always period C, whether or not C traded there.
+  // That leaves gaps, and the gaps are the point: you can read the auction's
+  // development through TIME, which is the whole reason Steidlmayer used
+  // letters instead of bars.
+  const [split, setSplit] = useState(false);
+  const [zx, setZx] = useState(1);   // horizontal zoom (cell width)
+  const [zy, setZy] = useState(1);   // vertical zoom (price resolution)
+  const [ox, setOx] = useState(0);   // pan offsets, px
+  const [oy, setOy] = useState(0);
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+
+  const reset = useCallback(() => { setZx(1); setZy(1); setOx(0); setOy(0); }, []);
+
   useEffect(() => {
-    const el = ref.current?.parentElement;
+    const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setW(el.clientWidth || 1180));
     ro.observe(el);
     setW(el.clientWidth || 1180);
     return () => ro.disconnect();
+  }, []);
+
+  // Wheel zoom, anchored on the cursor so the price under the pointer stays put.
+  // Registered natively (not via onWheel) because React's synthetic wheel handler
+  // is passive — preventDefault() there is a no-op and the page scrolls instead.
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = cv.getBoundingClientRect();
+      const mx = e.clientX - r.left, my = e.clientY - r.top;
+      const k = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+
+      if (e.shiftKey) {
+        setZx((z) => {
+          const nz = Math.max(0.4, Math.min(6, z * k));
+          setOx((o) => mx - ((mx - o) * nz) / z);
+          return nz;
+        });
+      } else {
+        setZy((z) => {
+          const nz = Math.max(0.4, Math.min(8, z * k));
+          setOy((o) => my - ((my - o) * nz) / z);
+          return nz;
+        });
+      }
+    };
+    cv.addEventListener("wheel", onWheel, { passive: false });
+    return () => cv.removeEventListener("wheel", onWheel);
   }, []);
 
   useEffect(() => {
@@ -2358,93 +2407,95 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
     const hi = Math.max(...sessions.map((d) => d.high));
     if (!(hi > lo)) return;
 
-    const AXIS = 58, TOP = 14, BOT = 30, GUTTER = 116;
+    const AXIS = 58, TOP = 14, BOT = 26, GUTTER = 118;
     const rows = Math.max(1, Math.round((hi - lo) / binSize));
-    const rh = Math.max(6, Math.min(11, 640 / rows));
-    const cw = Math.max(6, rh - 0.5);
-    const H = TOP + BOT + rows * rh;
+
+    const baseRh = Math.max(5, Math.min(11, (VIEW_H - TOP - BOT) / rows));
+    const rh = baseRh * zy;
+    const cw = Math.max(4, (baseRh - 0.5) * zx);
 
     const DPR = Math.min(2, window.devicePixelRatio || 1);
-    cv.width = w * DPR; cv.height = H * DPR;
-    cv.style.width = "100%"; cv.style.height = `${H}px`;
+    cv.width = w * DPR; cv.height = VIEW_H * DPR;
+    cv.style.width = "100%"; cv.style.height = `${VIEW_H}px`;
     const g = cv.getContext("2d");
     if (!g) return;
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
-    g.clearRect(0, 0, w, H);
+    g.clearRect(0, 0, w, VIEW_H);
 
-    const y = (p: number) => TOP + ((hi - p) / binSize) * rh;
+    const y = (p: number) => TOP + oy + ((hi - p) / binSize) * rh;
+    const vis = (py: number) => py > TOP - rh && py < VIEW_H - BOT + rh;
 
-    // price axis
-    g.font = "10px ui-monospace, monospace";
-    g.textBaseline = "middle";
-    g.textAlign = "left";
-    const gridStep = Math.max(binSize, Math.round((hi - lo) / 14 / binSize) * binSize);
-    for (let p = Math.ceil(lo / gridStep) * gridStep; p <= hi; p += gridStep) {
-      g.strokeStyle = "rgba(255,255,255,0.06)";
-      g.beginPath(); g.moveTo(AXIS, y(p)); g.lineTo(w - 4, y(p)); g.stroke();
-      g.fillStyle = "rgba(255,255,255,0.38)";
-      g.fillText(p.toFixed(2), 4, y(p));
-    }
+    // ── plot area is clipped so nothing pans over the price axis ────────────
+    g.save();
+    g.beginPath();
+    g.rect(AXIS, 0, w - AXIS, VIEW_H - BOT + 14);
+    g.clip();
 
-    let x = AXIS + 10;
+    let x = AXIS + 10 + ox;
 
     for (const d of sessions) {
-      const maxN = d.maxCount || 1;
-      const wid = maxN * cw;
-      if (x + wid + GUTTER > w) break; // don't spill past the canvas
+      const cols = split ? d.periods : (d.maxCount || 1);
+      const wid = cols * cw;
 
-      // value area shading
-      g.fillStyle = "rgba(255,255,255,0.055)";
-      g.fillRect(x - 3, y(d.vah) - rh / 2, wid + 8, y(d.val) - y(d.vah) + rh);
+      if (x + wid + GUTTER > 0 && x < w) {
+        if (vis(y(d.vah)) || vis(y(d.val))) {
+          g.fillStyle = "rgba(255,255,255,0.055)";
+          g.fillRect(x - 3, y(d.vah) - rh / 2, wid + 8, y(d.val) - y(d.vah) + rh);
+        }
 
-      // letters
-      g.font = `${Math.max(7, Math.floor(rh - 2))}px ui-monospace, monospace`;
-      g.textAlign = "center";
-      for (const b of d.bins) {
-        const cy = y(b.price);
-        b.periods.forEach((pi, i) => {
-          const cx = x + i * cw;
-          let fill: string, txt: string;
-          if (Math.abs(b.price - d.poc) < 1e-9) { fill = "#F2A93B"; txt = "#3d2405"; }
-          else if (pi < IB_PERIODS) { fill = HOME_THEME.red; txt = "#ffffff"; }
-          else { fill = "#5B9BD5"; txt = "#0b1a26"; }
-          g.fillStyle = fill;
-          g.fillRect(cx, cy - rh / 2 + 0.5, cw - 1.2, rh - 1);
-          g.fillStyle = txt;
-          g.fillText(TPO_LETTERS[pi % TPO_LETTERS.length], cx + (cw - 1.2) / 2, cy);
-        });
+        g.font = `${Math.max(6, Math.floor(Math.min(rh, cw) - 1.5))}px ui-monospace, monospace`;
+        g.textBaseline = "middle";
+        g.textAlign = "center";
+
+        for (const b of d.bins) {
+          const cy = y(b.price);
+          if (!vis(cy)) continue;
+          b.periods.forEach((pi, i) => {
+            // collapsed → pack left by order; split → park in the period's column
+            const cx = x + (split ? pi : i) * cw;
+            let fill: string, txt: string;
+            if (Math.abs(b.price - d.poc) < 1e-9) { fill = "#F2A93B"; txt = "#3d2405"; }
+            else if (pi < IB_PERIODS) { fill = HOME_THEME.red; txt = "#ffffff"; }
+            else { fill = "#5B9BD5"; txt = "#0b1a26"; }
+            g.fillStyle = fill;
+            g.fillRect(cx, cy - rh / 2 + 0.5, cw - 1.2, rh - 1);
+            if (rh >= 7 && cw >= 6) {
+              g.fillStyle = txt;
+              g.fillText(TPO_LETTERS[pi % TPO_LETTERS.length], cx + (cw - 1.2) / 2, cy);
+            }
+          });
+        }
+
+        g.textAlign = "left";
+        g.font = "10px ui-monospace, monospace";
+        const tag = (price: number, color: string, label: string, len: number) => {
+          if (!vis(y(price))) return;
+          g.strokeStyle = color; g.lineWidth = 1;
+          g.beginPath(); g.moveTo(x + wid + 4, y(price)); g.lineTo(x + wid + len, y(price)); g.stroke();
+          g.fillStyle = color;
+          g.fillText(label, x + wid + len + 4, y(price));
+        };
+        tag(d.poc, "#F2A93B", `P: ${d.poc.toFixed(2)}`, 46);
+        tag(d.mid, HOME_THEME.red, `M: ${d.mid.toFixed(2)}`, 34);
+        tag(d.high, "rgba(140,190,235,0.8)", `H: ${d.high.toFixed(2)}`, 26);
+        tag(d.low, "rgba(140,190,235,0.8)", `L: ${d.low.toFixed(2)}`, 26);
+
+        for (const s of d.structures) {
+          if (s.kind === "naked_poc") continue;
+          g.fillStyle = KIND_COLOR[s.kind];
+          g.fillRect(x - 6, y(s.priceHi) - rh / 2, 3, y(s.priceLo) - y(s.priceHi) + rh);
+        }
+
+        g.fillStyle = "rgba(255,255,255,0.45)";
+        g.font = "10px ui-sans-serif, system-ui";
+        g.textAlign = "left";
+        g.fillText(d.date.slice(5), x, VIEW_H - 10);
       }
-
-      // right-hand tags: H / L / P / M
-      g.textAlign = "left";
-      g.font = "10px ui-monospace, monospace";
-      const tag = (price: number, color: string, label: string, len: number) => {
-        g.strokeStyle = color; g.lineWidth = 1;
-        g.beginPath(); g.moveTo(x + wid + 4, y(price)); g.lineTo(x + wid + len, y(price)); g.stroke();
-        g.fillStyle = color;
-        g.fillText(label, x + wid + len + 4, y(price));
-      };
-      tag(d.poc, "#F2A93B", `P: ${d.poc.toFixed(2)}`, 46);
-      tag(d.mid, HOME_THEME.red, `M: ${d.mid.toFixed(2)}`, 34);
-      tag(d.high, "rgba(140,190,235,0.8)", `H: ${d.high.toFixed(2)}`, 26);
-      tag(d.low, "rgba(140,190,235,0.8)", `L: ${d.low.toFixed(2)}`, 26);
-
-      // structures — a thin bracket on the left edge, colored by kind
-      for (const s of d.structures) {
-        if (s.kind === "naked_poc") continue;
-        g.fillStyle = KIND_COLOR[s.kind];
-        g.fillRect(x - 6, y(s.priceHi) - rh / 2, 3, y(s.priceLo) - y(s.priceHi) + rh);
-      }
-
-      g.fillStyle = "rgba(255,255,255,0.45)";
-      g.font = "10px ui-sans-serif, system-ui";
-      g.textAlign = "left";
-      g.fillText(d.date.slice(5), x, H - 14);
 
       x += wid + GUTTER;
     }
 
-    if (spot != null && spot >= lo && spot <= hi) {
+    if (spot != null && vis(y(spot))) {
       g.strokeStyle = HOME_THEME.green;
       g.setLineDash([5, 4]);
       g.beginPath(); g.moveTo(AXIS, y(spot)); g.lineTo(w - 4, y(spot)); g.stroke();
@@ -2454,9 +2505,73 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       g.textAlign = "right";
       g.fillText(spot.toFixed(2), w - 6, y(spot) - 7);
     }
-  }, [sessions, spot, binSize, w]);
 
-  return <canvas ref={ref} style={{ display: "block", width: "100%" }} />;
+    g.restore();
+
+    // ── price axis, drawn OUTSIDE the clip so it never scrolls away ─────────
+    g.fillStyle = "#0b0f14";
+    g.fillRect(0, 0, AXIS, VIEW_H);
+    g.font = "10px ui-monospace, monospace";
+    g.textBaseline = "middle";
+    g.textAlign = "left";
+    const stepBins = Math.max(1, Math.round(28 / rh));
+    for (let i = 0; i <= rows; i += stepBins) {
+      const p = hi - i * binSize;
+      const py = y(p);
+      if (!vis(py)) continue;
+      g.strokeStyle = "rgba(255,255,255,0.05)";
+      g.beginPath(); g.moveTo(AXIS, py); g.lineTo(w - 4, py); g.stroke();
+      g.fillStyle = "rgba(255,255,255,0.38)";
+      g.fillText(p.toFixed(2), 4, py);
+    }
+  }, [sessions, spot, binSize, w, split, zx, zy, ox, oy]);
+
+  const btn = (active: boolean): React.CSSProperties => ({
+    padding: "3px 10px", borderRadius: 6, fontSize: 15, cursor: "pointer", fontWeight: 700,
+    border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
+    background: active ? "rgba(33,158,188,0.15)" : "transparent",
+    color: active ? HOME_THEME.text : "rgba(255,255,255,0.6)",
+  });
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button onClick={() => setSplit(false)} style={btn(!split)}>Collapsed</button>
+        <button onClick={() => setSplit(true)} style={btn(split)}>Split / expanded</button>
+        <span style={{ width: 10 }} />
+        <button onClick={() => setZy((z) => Math.min(8, z * 1.25))} style={btn(false)}>Price +</button>
+        <button onClick={() => setZy((z) => Math.max(0.4, z / 1.25))} style={btn(false)}>Price −</button>
+        <button onClick={() => setZx((z) => Math.min(6, z * 1.25))} style={btn(false)}>Width +</button>
+        <button onClick={() => setZx((z) => Math.max(0.4, z / 1.25))} style={btn(false)}>Width −</button>
+        <button onClick={reset} style={btn(false)}>Reset</button>
+        <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
+          drag to pan · wheel = price zoom · shift+wheel = width zoom
+        </span>
+      </div>
+
+      <canvas
+        ref={ref}
+        onPointerDown={(e) => {
+          (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+          drag.current = { x: e.clientX, y: e.clientY, ox, oy };
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!d) return;
+          setOx(d.ox + (e.clientX - d.x));
+          setOy(d.oy + (e.clientY - d.y));
+        }}
+        onPointerUp={() => { drag.current = null; }}
+        onPointerCancel={() => { drag.current = null; }}
+        style={{
+          display: "block", width: "100%", height: VIEW_H,
+          background: "#0b0f14", borderRadius: 10,
+          cursor: drag.current ? "grabbing" : "grab",
+          touchAction: "none",
+        }}
+      />
+    </div>
+  );
 }
 
 const GRID = "110px 1fr 60px 76px 96px 62px";
