@@ -1511,10 +1511,21 @@ async function main() {
         return;
       }
       // Manual sweep: POST /proxy/net-gex-pct-run (force = bypass RTH gate)
+      // Fire-and-forget — a full roster sweep is 10–20 min, far past any curl /
+      // proxy timeout. Ack immediately; watch progress in the container logs.
+      // ?wait=1 restores the old blocking behavior.
       if (pathname === '/proxy/net-gex-pct-run' && req.method === 'POST') {
+        const ngpU = new URL(req.url, `http://localhost:${PORT}`);
+        if (ngpU.searchParams.get('wait') === '1') {
+          runNetGexPctSweep({ force: true })
+            .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+          return;
+        }
         runNetGexPctSweep({ force: true })
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+          .then((r) => console.log('[net-gex-pct] manual sweep done:', JSON.stringify(r)))
+          .catch((e) => console.warn('[net-gex-pct] manual sweep error:', e.message));
+        sendJson(res, 202, { ok: true, started: true, note: 'sweep running in background — see logs' });
         return;
       }
 
