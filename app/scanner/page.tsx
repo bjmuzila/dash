@@ -53,7 +53,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "oi" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -84,14 +84,6 @@ const SCAN_META: ScanMeta[] = [
     scope: "Any ticker · drill-down",
     what: "Ad-hoc lookup of GEX-now and 15/30/60m change per strike, for one ticker or the whole watchlist, sortable by any column.",
     tells: "A quick manual drill-down into exactly which strikes are gaining or losing GEX right now — the tool for \"what's happening at this specific strike.\"",
-  },
-  {
-    tab: "oi",
-    title: "OI Change Scanner",
-    accent: HOME_THEME.red,
-    scope: "EM watchlist (~380 names)",
-    what: "Compares today's posted open interest to the prior session's, OTM-only, across the full EM watchlist.",
-    tells: "Where new positioning built or unwound overnight — an early read on fresh dealer/positioning changes before the day's price action confirms it.",
   },
   {
     tab: "watch",
@@ -1349,158 +1341,6 @@ function StrikeQueryScanner() {
             )}
           </tbody>
         </table>
-      </div>
-    </Card>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  OI CHANGE SCANNER (new tab) — day-over-day OTM open-interest change, EM watchlist
-// ══════════════════════════════════════════════════════════════════════════════
-
-type OiRow = {
-  symbol: string;
-  expiry: string;
-  strike: number;
-  opt_type: "C" | "P";
-  oi_now: number;
-  oi_prev: number;
-  oi_chg: number;
-  oi_chg_pct: number | null;
-  spot: number;
-  otm_dist_pct: number | null;
-  date: string;
-};
-
-type OiSide = "all" | "call" | "put";
-type OiDir = "all" | "up" | "down";
-
-function OiChangeScanner() {
-  const [rows, setRows] = useState<OiRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [side, setSide] = useState<OiSide>("all");
-  const [dir, setDir] = useState<OiDir>("all");
-  const [limit, setLimit] = useState(100);
-
-  const load = useCallback(async () => {
-    setLoading(true); setErr(null);
-    try {
-      const u = new URL("/proxy/oi-change", window.location.origin);
-      u.searchParams.set("side", side);
-      u.searchParams.set("dir", dir);
-      u.searchParams.set("limit", String(limit));
-      const res = await fetch(u.toString(), { cache: "no-store" });
-      const text = await res.text();
-      let j: any;
-      try { j = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status} (non-JSON).`); }
-      if (!j.ok) throw new Error(j.error || "load failed");
-      setRows(j.rows || []);
-    } catch (e: any) { setErr(String(e?.message || e)); }
-    finally { setLoading(false); }
-  }, [side, dir, limit]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
-
-  const asOfDate = rows[0]?.date;
-
-  return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>OI Change Scanner</span>}
-      subtitle={`Day-over-day OTM open interest · EM watchlist${asOfDate ? ` · as of ${asOfDate}` : ""}${loading ? " · refreshing…" : ""}`}>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setSide("all")} style={seg(side === "all")}>All</button>
-          <button onClick={() => setSide("call")} style={seg(side === "call")}>Calls</button>
-          <button onClick={() => setSide("put")} style={seg(side === "put")}>Puts</button>
-        </div>
-        <span style={{ color: HOME_THEME.border }}>|</span>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => setDir("all")} style={seg(dir === "all")}>Biggest |Δ|</button>
-          <button onClick={() => setDir("up")} style={seg(dir === "up")}>Builds only</button>
-          <button onClick={() => setDir("down")} style={seg(dir === "down")}>Unwinds only</button>
-        </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.green }}>
-          rows
-          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={200}>200</option>
-          </select>
-        </label>
-        <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-      </div>
-
-      {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
-          {err.includes("no DB") || err.includes("503")
-            ? "Recorder hasn't posted today's OI yet — Theta publishes OI ~06:30 ET, retried every 30m."
-            : err}
-        </div>
-      )}
-
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
-          <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
-              <th style={{ ...th, textAlign: "left" }}>#</th>
-              <th style={{ ...th, textAlign: "left" }}>Symbol</th>
-              <th style={{ ...th, textAlign: "left" }}>Type</th>
-              <th style={th}>Strike</th>
-              <th style={{ ...th, textAlign: "left" }}>Expiry</th>
-              <th style={th}>OTM Dist</th>
-              <th style={th}>OI Prev</th>
-              <th style={th}>OI Now</th>
-              <th style={th}>ΔOI</th>
-              <th style={th}>Δ%</th>
-              <th style={th}>Spot</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const up = r.oi_chg >= 0;
-              const chgCol = up ? HOME_THEME.green : HOME_THEME.red;
-              const isCall = r.opt_type === "C";
-              return (
-                <tr key={`${r.symbol}-${r.expiry}-${r.strike}-${r.opt_type}`}
-                  style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
-                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontWeight: 700 }}>{i + 1}</td>
-                  <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
-                  <td style={{ ...td, textAlign: "left", color: isCall ? HOME_THEME.green : HOME_THEME.red, fontWeight: 700 }}>
-                    {isCall ? "CALL" : "PUT"}
-                  </td>
-                  <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 15 }}>{r.expiry}</td>
-                  <td style={{ ...td, color: (r.otm_dist_pct ?? 0) <= 3 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>
-                    {r.otm_dist_pct == null ? "—" : `${r.otm_dist_pct.toFixed(1)}%`}
-                  </td>
-                  <td style={{ ...td, color: "rgba(255,255,255,0.6)" }}>{fmtInt(r.oi_prev)}</td>
-                  <td style={td}>{fmtInt(r.oi_now)}</td>
-                  <td style={{ ...td, color: chgCol, fontWeight: 800 }}>{fmtChg(r.oi_chg)}</td>
-                  <td style={{ ...td, color: r.oi_chg_pct == null ? "rgba(255,255,255,0.4)" : r.oi_chg_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                    {r.oi_chg_pct == null ? "—" : `${r.oi_chg_pct >= 0 ? "+" : ""}${r.oi_chg_pct.toFixed(0)}%`}
-                  </td>
-                  <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot.toFixed(2)}</td>
-                </tr>
-              );
-            })}
-            {!rows.length && !loading && !err && (
-              <tr><td colSpan={11} style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
-                No data yet. OI posts once daily ~06:30 ET — the recorder sweeps the ~380-name EM watchlist and retries every 30m until it's posted.
-              </td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
-        <span>OTM only · calls strike&gt;spot, puts strike&lt;spot</span>
-        <span>ΔOI = today&apos;s posted OI − prior session&apos;s OI</span>
-        <span>Ranked by |ΔOI| · EM watchlist (~380 names) · ≤45 DTE</span>
       </div>
     </Card>
   );
@@ -2935,7 +2775,6 @@ export default function ScannerPage() {
         <option value="overview">Overview</option>
         <option value="gex">GEX Scanner</option>
         <option value="strike">Strike Query</option>
-        <option value="oi">OI Change</option>
         <option value="watch">Watch This</option>
         <option value="marketquality">Market Quality</option>
         <option value="tpo">TPO Structures</option>
@@ -2948,11 +2787,6 @@ export default function ScannerPage() {
         <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
         <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
         <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
-        <button onClick={() => setTab("oi")} style={{
-          ...tabStyle(tab === "oi"),
-          border: `1px solid ${tab === "oi" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "oi" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>OI Change</button>
         <button onClick={() => setTab("watch")} style={{
           ...tabStyle(tab === "watch"),
           border: `1px solid ${tab === "watch" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
@@ -2983,7 +2817,6 @@ export default function ScannerPage() {
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
       {tab === "gex"    && <GexScanner />}
       {tab === "strike" && <StrikeQueryScanner />}
-      {tab === "oi"     && <OiChangeScanner />}
       {tab === "watch"  && <WatchThisScanner />}
       {tab === "marketquality" && <MarketQualityScanner />}
       {tab === "tpo" && <TpoStructuresScanner />}

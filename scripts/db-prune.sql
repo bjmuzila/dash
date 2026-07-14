@@ -65,7 +65,10 @@ DELETE FROM preview_snapshots          WHERE created_at < NOW() - INTERVAL '30 d
 DELETE FROM page_visits                WHERE created_at < NOW() - INTERVAL '14 days';
 DELETE FROM ticker_events              WHERE created_at < NOW() - INTERVAL '14 days';
 
--- Already self-pruning (oi_change_snapshots, far_cb_watch) — no action needed.
+-- Already self-pruning (far_cb_watch) — no action needed.
+
+-- OI Change scanner removed — drop its table:
+DROP TABLE IF EXISTS oi_change_snapshots;
 
 -- Legacy /server (not /server-v2) tables — CONFIRM these are dead before
 -- running; if the old server/proxy-tastytrade.js stack is not deployed,

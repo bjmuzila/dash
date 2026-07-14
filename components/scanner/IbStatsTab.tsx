@@ -23,6 +23,7 @@ import { Card as ThemeCard } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { avg, med, clock, type IbDataset, type SlimDay } from "@/lib/ibStats";
+import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 
 const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
@@ -389,7 +390,10 @@ function LiveToday({ sym, win, ds, days, hist }: {
 
   return (
     <>
-      <LiveGauges live={live} days={days} dowName={dowName} win={win} />
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
+        <LiveGauges live={live} days={days} dowName={dowName} win={win} />
+        <IbLevelCanvas />
+      </div>
 
       <RuleBoard live={live} days={days} dowName={dowName} win={win} />
 

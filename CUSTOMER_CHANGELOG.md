@@ -4,6 +4,9 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Tuesday 7/14/2026
 
+* Added a new **Stat Prompter** tab to the Scanner — a library of ready-made questions about how the opening-hour range behaves, answered on nine years of ES and NQ history with one click. Ask things like "ES broke the high but NQ broke the low — who's usually right?", "when a breakout fails, does it just chop or does it rotate all the way to the other side?", and "if we're still stuck inside the range at 2pm, which way does it break into the close?"
+* The Stat Prompter opens with a live map of today's opening range — your actual high, low and midpoint, with every extension target priced out in points and labelled with how often the market has historically reached it. It tells you plainly that those odds assume a breakout actually happens, so a level with a big number next to it doesn't get over-trusted.
+* Added time-of-day, volatility and trend-vs-chop stats built from nine years of one-minute bars — when the range actually shows up during the day, how big a typical bar is at each hour, and whether the market at your timeframe tends to keep going or snap back.
 * Added a 0DTE button to the Options Flow filters — one click jumps the tape and chart to today's expiration (or the nearest contract if there isn't one), and clicking it again goes back to all expirations.
 * Fixed the Recent ticker dropdown on the Flow page hiding behind the Net Drift chart.
 * Replaced the Balance / Imbalance scanner tab with a new **TPO Structures** tab — a classic Market Profile letter chart of the last 5 sessions, so you can see where the market actually spent its time and where it just passed through.

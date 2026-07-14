@@ -42,7 +42,6 @@ const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
-const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
@@ -1427,53 +1426,6 @@ async function main() {
         return;
       }
 
-      // ── OI Change Scanner ────────────────────────────────────────────────
-      // GET /proxy/oi-change?limit=100&side=all&dir=all
-      // Top day-over-day OTM open-interest changes for the latest recorded
-      // date, across the EM watchlist. side: all|call|put. dir: all|up|down
-      // (up = OI added, down = OI unwound), ranked by |oi_chg|.
-      if (pathname === '/proxy/oi-change' && req.method === 'GET') {
-        (async () => {
-          try {
-            if (!(await oiChangeEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
-            const p = oiChangeGetPool();
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 100)));
-            const side  = (u.searchParams.get('side') || 'all').toLowerCase();
-            const dir   = (u.searchParams.get('dir') || 'all').toLowerCase();
-
-            const where = ['date = (SELECT MAX(date) FROM oi_change_snapshots)', 'otm = TRUE'];
-            const params = [];
-            if (side === 'call' || side === 'put') {
-              params.push(side === 'call' ? 'C' : 'P');
-              where.push(`opt_type = $${params.length}`);
-            }
-            if (dir === 'up') where.push('oi_chg > 0');
-            else if (dir === 'down') where.push('oi_chg < 0');
-            params.push(limit);
-
-            const sql = `
-              SELECT symbol, expiry, strike, opt_type, oi_now, oi_prev, oi_chg, oi_chg_pct,
-                     spot, otm_dist_pct, date
-              FROM oi_change_snapshots
-              WHERE ${where.join(' AND ')}
-              ORDER BY ABS(oi_chg) DESC
-              LIMIT $${params.length}`;
-
-            const { rows } = await p.query(sql, params);
-            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Manual sweep fire: POST /proxy/oi-change-run  (force = bypass the daily window gate)
-      if (pathname === '/proxy/oi-change-run' && req.method === 'POST') {
-        runOiChangeSweep({ force: true })
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-
       // Manual fire: POST /proxy/retention-cleanup-run  (bypasses the 00:05-00:40
       // ET window + the once-per-day gate; for testing the nightly prune on demand)
       if (pathname === '/proxy/retention-cleanup-run' && req.method === 'POST') {
@@ -2088,9 +2040,6 @@ async function main() {
     startGreekScannerRecorder(PORT);
     // Vol-pin snapshots: ATM IV, RV, pin strike, range per equity ticker every 5m.
     startVolPinRecorder();
-    // OI Change scanner: day-over-day open-interest change (OTM only) across
-    // the full EM watchlist, once per day (retried inside 06:00-20:00 ET).
-    startOiChangeRecorder();
     // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
     // strike (within 30d expirations) sits unusually far OTM vs spot.
     startFarCbRecorder();

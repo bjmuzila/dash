@@ -14,7 +14,6 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>CB Edge — X Post Studio</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{--ui:#0b111c;--ui2:#111b2c;--line:#22314c;--mut:#7b91b4;--grn:#00e5a0;--txt:#e8eefb}
   *{box-sizing:border-box}
@@ -572,7 +571,12 @@ document.getElementById('zin').onclick=function(){Z=Math.min(1.5,Z+0.1);applyZoo
 document.getElementById('zout').onclick=function(){Z=Math.max(0.15,Z-0.1);applyZoom()};
 document.getElementById('zfit').onclick=fit;
 
+// html2canvas is NOT loaded from a CDN here: the prod CSP is script-src 'self'
+// (see server-v2/server-with-proxy.js), so a cdnjs tag is blocked. The parent
+// React page imports it from node_modules and assigns it onto this iframe's
+// window once the frame loads. See app/owner/post-studio/page.tsx.
 document.getElementById('dl').onclick=function(){
+  if(typeof html2canvas!=='function'){ alert('Renderer still loading — try again in a second.'); return; }
   select(null);
   stage.classList.add('exp');
   var pz=Z; Z=1; applyZoom();

@@ -481,6 +481,26 @@ export default function BudgetPage() {
     return { items, total, next: items[0] ?? null };
   }, [recurring, register, month]);
 
+  // Rent countdown — rent is paid on the 5th. Amount is read from a recurring
+  // rule whose label contains "rent"; the daily figure is how much extra you'd
+  // need to bank each remaining day to cover the shortfall by the 5th.
+  const rentInfo = useMemo(() => {
+    const RENT_DAY = 5;
+    const rentRule = recurring.find((r) => r.active && r.amount < 0 && /rent/i.test(r.label));
+    const rentAmount = rentRule ? Math.abs(rentRule.amount) : 0;
+    const now = new Date(todayIso() + "T00:00:00");
+    let due = new Date(now.getFullYear(), now.getMonth(), RENT_DAY);
+    if (due.getTime() < now.getTime()) due = new Date(now.getFullYear(), now.getMonth() + 1, RENT_DAY);
+    const daysUntil = Math.round((due.getTime() - now.getTime()) / 86400000);
+    const dueYm = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}`;
+    const dueIso = `${dueYm}-${String(RENT_DAY).padStart(2, "0")}`;
+    const paid = register.some((r) => !r.is_beginning && r.amount < 0 && /rent/i.test(r.label) && r.entry_date.slice(0, 7) === dueYm);
+    const available = allBanks;
+    const shortfall = Math.max(0, rentAmount - available);
+    const perDay = daysUntil > 0 ? shortfall / daysUntil : shortfall;
+    return { rentAmount, daysUntil, dueIso, paid, available, shortfall, perDay };
+  }, [recurring, register, allBanks]);
+
   const monthLabel = (() => {
     const [y, m] = month.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -531,8 +551,8 @@ export default function BudgetPage() {
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.2em", color: HOME_THEME.muted }}>{monthLabel.toUpperCase()}</div>
-            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.18em", marginTop: 2 }}>BUDGET</div>
+            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.28em", color: HOME_THEME.muted, opacity: 0.75 }}>{monthLabel.toUpperCase()}</div>
+            <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4 }}>BUDGET</div>
           </div>
           <div style={{ marginTop: 14 }}>
             <div style={labelCap()}>Month</div>
@@ -628,20 +648,23 @@ export default function BudgetPage() {
 
         {/* Alerts · banks · upcoming pay */}
         <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", gap: 12, alignItems: "start" }}>
-          <SmartAlerts
-            billsDue={billsDue}
-            netCashFlow={computed.netCashFlow}
-            projected={computed.projectedBalance}
-            upcomingTotal={upcomingPay.total}
-            currency={currency}
-            onMarkPaid={markBillPaid}
-          />
+          <RentCountdown info={rentInfo} currency={currency} />
           <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
-          <UpcomingPayCard data={upcomingPay} currency={currency} onMarkPaid={markBillPaid} />
+          <UpcomingPayCard data={upcomingPay} pastDue={billsDue.filter((b) => b.days < 0)} currency={currency} onMarkPaid={markBillPaid} />
         </div>
 
-        {/* Recent transactions */}
-        <RecentTransactions rows={recentPaid} currency={currency} />
+        {/* Recent transactions · category spend */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
+          <RecentTransactions rows={recentPaid} currency={currency} categories={categories} />
+          <CategorySpendCard
+            categories={categories}
+            spent={categoryStats.spent}
+            unsortedCount={categoryStats.unsorted.length}
+            unsortedTotal={categoryStats.unsortedTotal}
+            currency={currency}
+            onOpenCategories={() => setTab("categories")}
+          />
+        </div>
         </>
         )}
         {tab === "register" && (
@@ -841,6 +864,26 @@ function RecurringManager({
 
 type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: number };
 
+// Catmull-Rom → cubic-bezier smoothing for a set of [x,y] points. `t` controls
+// curviness (0 = straight polyline, ~0.2 = gentle, higher = loopier).
+function smoothPath(pts: [number, number][], t = 0.2): string {
+  if (pts.length < 2) return "";
+  if (pts.length === 2) return `M ${pts[0][0]} ${pts[0][1]} L ${pts[1][0]} ${pts[1][1]}`;
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) * t;
+    const c1y = p1[1] + (p2[1] - p0[1]) * t;
+    const c2x = p2[0] - (p3[0] - p1[0]) * t;
+    const c2y = p2[1] - (p3[1] - p1[1]) * t;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
 // SVG line chart of the running combined balance across the month, with a
 // hover guide + tooltip showing the exact date and balance under the cursor.
 function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
@@ -856,7 +899,7 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
   const x = (i: number) => padL + (i / (series.length - 1)) * (W - padL - padR);
   const y = (v: number) => padT + (1 - (v - minY) / span) * (H - padT - padB);
   const zeroY = y(0);
-  const path = series.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.balance).toFixed(1)}`).join(" ");
+  const path = smoothPath(series.map((p, i) => [x(i), y(p.balance)] as [number, number]), 0.22);
   const ticks = series.filter((_, i) => i % Math.ceil(series.length / 8) === 0);
 
   const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -944,7 +987,6 @@ function CalendarGrid({
           >
             <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span>{d}</span>
-              {isToday && <span style={{ fontSize: 15, fontWeight: 800, color: "#FFFFFF", letterSpacing: "0.08em", textTransform: "uppercase" }}>today</span>}
             </div>
             {g && <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
@@ -1226,6 +1268,21 @@ function CashFlowBars({ buckets, currency }: { buckets: { label: string; inflow:
   const max = Math.max(1, ...buckets.map((b) => Math.max(b.inflow, b.outflow)));
   const H = 240;
   const grid = [0, 0.5, 1];
+
+  // Projection overlay: cumulative net (in − out) carried across the buckets,
+  // drawn as a smooth curve on its own scale over the bars.
+  let run = 0;
+  const cum = buckets.map((b) => (run += b.inflow - b.outflow));
+  const cMax = Math.max(...cum, 0);
+  const cMin = Math.min(...cum, 0);
+  const cSpan = Math.max(cMax - cMin, 1);
+  const lineY = (v: number) => 10 + (1 - (v - cMin) / cSpan) * (H - 20);
+  const lineX = (i: number) => (buckets.length === 1 ? 50 : ((i + 0.5) / buckets.length) * 100);
+  const pts = cum.map((v, i) => [lineX(i), lineY(v)] as [number, number]);
+  const linePath = smoothPath(pts, 0.24);
+  const areaPath = pts.length > 1 ? `${linePath} L ${pts[pts.length - 1][0].toFixed(1)} ${H} L ${pts[0][0].toFixed(1)} ${H} Z` : "";
+  const zeroLineY = lineY(0);
+
   return (
     <div style={{ position: "relative", display: "flex", gap: 10 }}>
       {/* y axis */}
@@ -1261,6 +1318,28 @@ function CashFlowBars({ buckets, currency }: { buckets: { label: string; inflow:
               </div>
             ))}
           </div>
+          {/* Projection line overlay (cumulative net) */}
+          {pts.length > 1 && (
+            <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>
+              <defs>
+                <linearGradient id="cfProjFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.22} />
+                  <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <line x1={0} x2={100} y1={zeroLineY} y2={zeroLineY} stroke="rgba(255,255,255,0.14)" strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />
+              <path d={areaPath} fill="url(#cfProjFill)" stroke="none" />
+              <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ filter: `drop-shadow(0 0 4px ${bRgba(LIGHT_BLUE, 0.5)})` }} />
+              {pts.map((p, i) => (
+                <circle key={i} cx={p[0]} cy={p[1]} r={2.5} fill={cum[i] < 0 ? SOFT_RED : LIGHT_BLUE} vectorEffect="non-scaling-stroke" />
+              ))}
+            </svg>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10, fontSize: 11, color: HOME_THEME.muted }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: HOME_THEME.green }} />In</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: SOFT_RED }} />Out</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 2, borderRadius: 2, background: LIGHT_BLUE }} />Running balance</span>
         </div>
         <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 8 }}>
           {buckets.map((b, i) => (
@@ -1274,64 +1353,70 @@ function CashFlowBars({ buckets, currency }: { buckets: { label: string; inflow:
   );
 }
 
-/** Smart alerts — upcoming expenses + state-of-the-month callouts. */
-function SmartAlerts({
-  billsDue,
-  netCashFlow,
-  projected,
-  upcomingTotal,
+/** Rent countdown — days until the 5th + the daily extra needed to cover rent. */
+function RentCountdown({
+  info,
   currency,
-  onMarkPaid,
 }: {
-  billsDue: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[];
-  netCashFlow: number;
-  projected: number;
-  upcomingTotal: number;
+  info: { rentAmount: number; daysUntil: number; dueIso: string; paid: boolean; available: number; shortfall: number; perDay: number };
   currency: string;
-  onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
 }) {
-  const alerts: { tone: "red" | "amber" | "blue" | "green"; text: string; action?: () => void; actionLabel?: string }[] = [];
-  const pastDue = billsDue.filter((b) => b.days < 0);
-  if (pastDue.length) {
-    alerts.push({ tone: "red", text: `${pastDue.length} payment${pastDue.length === 1 ? "" : "s"} past due — ${fmtMoney(pastDue.reduce((s, b) => s + Math.abs(b.amount), 0), currency)}` });
-  }
-  for (const b of billsDue.filter((x) => x.days >= 0).slice(0, 3)) {
-    alerts.push({
-      tone: b.days <= 2 ? "amber" : "blue",
-      text: `${b.label} — ${fmtMoney(Math.abs(b.amount), currency)} ${b.days === 0 ? "due today" : `due in ${b.days} day${b.days === 1 ? "" : "s"}`}`,
-      action: () => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag }),
-      actionLabel: "Mark paid",
-    });
-  }
-  if (upcomingTotal > 0) alerts.push({ tone: "blue", text: `${fmtMoney(upcomingTotal, currency)} of recurring payments still to come this month` });
-  if (projected < 0) alerts.push({ tone: "red", text: `Projected to end the month negative — ${fmtMoney(projected, currency)}` });
-  else if (netCashFlow >= 0) alerts.push({ tone: "green", text: `Net positive this month — ${fmtMoney(netCashFlow, currency)} left over` });
-
-  const TONE: Record<string, { bg: string; border: string; color: string; icon: string }> = {
-    red: { bg: bRgba(HOME_THEME.red, 0.10), border: bRgba(HOME_THEME.red, 0.3), color: SOFT_RED, icon: "!" },
-    amber: { bg: bRgba(HOME_THEME.orange, 0.10), border: bRgba(HOME_THEME.orange, 0.3), color: HOME_THEME.orange, icon: "•" },
-    blue: { bg: bRgba(LIGHT_BLUE, 0.08), border: bRgba(LIGHT_BLUE, 0.25), color: LIGHT_BLUE, icon: "•" },
-    green: { bg: bRgba(HOME_THEME.green, 0.08), border: bRgba(HOME_THEME.green, 0.25), color: HOME_THEME.green, icon: "✓" },
-  };
+  const { rentAmount, daysUntil, dueIso, paid, available, shortfall, perDay } = info;
+  const covered = rentAmount > 0 && shortfall <= 0;
+  const pct = rentAmount > 0 ? Math.min(100, (available / rentAmount) * 100) : 0;
+  const accent = paid || covered ? HOME_THEME.green : shortfall > 0 ? SOFT_RED : LIGHT_BLUE;
 
   return (
     <div style={{ ...card(), padding: 16 }}>
-      <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 14 }}>Smart Alerts</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {alerts.length === 0 && <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>Nothing needs your attention.</div>}
-        {alerts.map((a, i) => {
-          const t = TONE[a.tone];
-          return (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, background: t.bg, border: `1px solid ${t.border}` }}>
-              <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, display: "grid", placeItems: "center", background: bRgba("#000000", 0.3), color: t.color, fontSize: 11, fontWeight: 900 }}>{t.icon}</span>
-              <span style={{ flex: 1, fontSize: 13, color: HOME_THEME.text }}>{a.text}</span>
-              {a.action && (
-                <button onClick={a.action} style={{ ...ghost(), padding: "5px 10px", fontSize: 11, borderRadius: 8 }}>{a.actionLabel}</button>
-              )}
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Rent</div>
+        <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>Due {shortDate(dueIso)} · the 5th</span>
       </div>
+
+      {rentAmount === 0 ? (
+        <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.7, padding: "8px 0" }}>
+          Add a recurring payment with “Rent” in the label to track the countdown.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span style={{ fontSize: 42, fontWeight: 900, letterSpacing: "-0.02em", color: accent, lineHeight: 1 }}>
+              {paid ? "Paid" : daysUntil === 0 ? "Today" : daysUntil}
+            </span>
+            {!paid && daysUntil > 0 && <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.muted }}>day{daysUntil === 1 ? "" : "s"} to rent</span>}
+            {paid && <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.green }}>✓ this month</span>}
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 12 }}>
+            <span>Rent</span>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text }}>{fmtMoney(rentAmount, currency)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 4 }}>
+            <span>Set aside</span>
+            <span style={{ fontWeight: 800, color: available < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(available, currency)}</span>
+          </div>
+
+          <div style={{ height: 8, borderRadius: 99, background: "rgba(255,255,255,0.07)", margin: "12px 0 6px", overflow: "hidden" }}>
+            <div style={{ height: 8, borderRadius: 99, background: accent, width: `${pct}%`, transition: "width 0.2s ease" }} />
+          </div>
+
+          {paid || covered ? (
+            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.green, marginTop: 6 }}>
+              {paid ? "Rent is paid for this month." : "Fully covered — you've got rent."}
+            </div>
+          ) : (
+            <div style={{ marginTop: 8, borderRadius: 10, background: bRgba(SOFT_RED, 0.10), border: `1px solid ${bRgba(SOFT_RED, 0.3)}`, padding: "10px 12px" }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.muted }}>Short by <span style={{ fontWeight: 800, color: SOFT_RED }}>{fmtMoney(shortfall, currency)}</span></div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: SOFT_RED, marginTop: 2 }}>
+                {fmtMoney(perDay, currency)}<span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.muted }}> /day extra</span>
+              </div>
+              <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.7, marginTop: 2 }}>
+                to make rent {daysUntil > 0 ? `over the next ${daysUntil} day${daysUntil === 1 ? "" : "s"}` : "today"}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1400,19 +1485,41 @@ function BankAccountsCard({
 /** Upcoming pay — what's still owed this month (the VAT/MTD slot). */
 function UpcomingPayCard({
   data,
+  pastDue = [],
   currency,
   onMarkPaid,
 }: {
   data: { items: { label: string; amount: number; date: string; bank: Bank; tag: string }[]; total: number; next: { label: string; amount: number; date: string; bank: Bank; tag: string } | null };
+  pastDue?: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[];
   currency: string;
   onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
 }) {
+  const pastDueTotal = pastDue.reduce((s, b) => s + Math.abs(b.amount), 0);
   return (
     <div style={{ ...card(), padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
         <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Upcoming Pay</div>
         <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.55 }}>{data.items.length} left</span>
       </div>
+
+      {pastDue.length > 0 && (
+        <div style={{ marginBottom: 12, borderRadius: 10, background: bRgba(HOME_THEME.red, 0.10), border: `1px solid ${bRgba(HOME_THEME.red, 0.3)}`, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "8px 12px" }}>
+            <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT_RED }}>{pastDue.length} Past due</span>
+            <span style={{ fontSize: 14, fontWeight: 900, color: SOFT_RED }}>{fmtMoney(pastDueTotal, currency)}</span>
+          </div>
+          {pastDue.map((b) => (
+            <div key={b.tag} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: "8px 12px", borderTop: `1px solid ${bRgba(HOME_THEME.red, 0.2)}` }}>
+              <span style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {b.label}
+                <span style={{ fontSize: 11, color: HOME_THEME.muted, fontWeight: 600 }}> · {-b.days}d ago</span>
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
+              <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "4px 8px", fontSize: 11, borderRadius: 8 }}>Pay</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
         <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>Total due</span>
         <span style={{ fontSize: 22, fontWeight: 900, color: data.total > 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(data.total, currency)}</span>
@@ -1436,7 +1543,8 @@ function UpcomingPayCard({
 }
 
 /** Recent transactions — real logged rows, i.e. what has actually been paid. */
-function RecentTransactions({ rows, currency }: { rows: RegisterRow[]; currency: string }) {
+function RecentTransactions({ rows, currency, categories = [] }: { rows: RegisterRow[]; currency: string; categories?: Category[] }) {
+  const catById = new Map(categories.map((c) => [c.id, c]));
   return (
     <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "16px 16px 4px" }}>
@@ -1448,33 +1556,124 @@ function RecentTransactions({ rows, currency }: { rows: RegisterRow[]; currency:
           <tr>
             <th style={th("left")}>Date</th>
             <th style={th("left")}>Item</th>
-            <th style={th("left")}>Bank</th>
+            <th style={th("left")}>Category</th>
             <th style={th("right")}>Amount</th>
-            <th style={th("right")}>Type</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 && (
-            <tr><td colSpan={5} style={{ padding: "22px 16px", color: HOME_THEME.muted, opacity: 0.6, textAlign: "center" }}>Nothing logged this month yet.</td></tr>
+            <tr><td colSpan={4} style={{ padding: "22px 16px", color: HOME_THEME.muted, opacity: 0.6, textAlign: "center" }}>Nothing logged this month yet.</td></tr>
           )}
           {rows.map((r) => {
             const inc = r.amount > 0;
+            const cat = r.category_id != null ? catById.get(r.category_id) : null;
+            const cc = cat?.color || LIGHT_BLUE;
             return (
               <tr key={r.id} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
                 <td style={{ padding: "11px 16px", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap" }}>{shortDate(r.entry_date)} <span style={{ opacity: 0.6 }}>{weekday(r.entry_date)}</span></td>
-                <td style={{ padding: "11px 16px", fontWeight: 700 }}>{r.label}</td>
-                <td style={{ padding: "11px 16px", color: HOME_THEME.muted, opacity: 0.7, letterSpacing: "0.06em", fontSize: 12 }}>{BANK_LABEL[r.bank]}</td>
-                <td style={{ padding: "11px 16px", textAlign: "right", fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(r.amount, currency)}</td>
-                <td style={{ padding: "11px 16px", textAlign: "right" }}>
-                  <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: inc ? HOME_THEME.green : LIGHT_BLUE, background: inc ? bRgba(HOME_THEME.green, 0.10) : bRgba(LIGHT_BLUE, 0.10), border: `1px solid ${inc ? bRgba(HOME_THEME.green, 0.3) : bRgba(LIGHT_BLUE, 0.3)}` }}>
-                    {inc ? "Received" : "Paid"}
-                  </span>
+                <td style={{ padding: "11px 16px", fontWeight: 700 }}>
+                  {r.label}
+                  <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6, fontWeight: 600, letterSpacing: "0.06em" }}>{BANK_LABEL[r.bank]}</div>
                 </td>
+                <td style={{ padding: "11px 16px" }}>
+                  {cat ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: cc, background: bRgba(cc, 0.10), border: `1px solid ${bRgba(cc, 0.3)}` }}>
+                      <span style={{ width: 6, height: 6, borderRadius: 999, background: cc }} />
+                      {cat.name}
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: HOME_THEME.muted, background: bRgba("#ffffff", 0.04), border: `1px solid ${HOME_THEME.border}` }}>Unsorted</span>
+                  )}
+                </td>
+                <td style={{ padding: "11px 16px", textAlign: "right", fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(r.amount, currency)}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Category spend — this month's spend per category from the Categories page. */
+function CategorySpendCard({
+  categories,
+  spent,
+  unsortedCount,
+  unsortedTotal,
+  currency,
+  onOpenCategories,
+}: {
+  categories: Category[];
+  spent: Record<number, number>;
+  unsortedCount: number;
+  unsortedTotal: number;
+  currency: string;
+  onOpenCategories: () => void;
+}) {
+  const rows = categories
+    .map((c) => ({ c, s: spent[c.id] || 0 }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 8);
+  const totalSpent = Object.values(spent).reduce((a, b) => a + b, 0);
+
+  return (
+    <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "16px 16px 12px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Category Spend</div>
+          <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55, marginTop: 2 }}>
+            {fmtMoney(totalSpent, currency)} categorized this month
+          </div>
+        </div>
+        <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 11, borderRadius: 8 }}>Manage</button>
+      </div>
+
+      {unsortedCount > 0 && (
+        <button
+          onClick={onOpenCategories}
+          style={{
+            width: "100%", textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
+            padding: "10px 16px", background: bRgba(HOME_THEME.orange, 0.10),
+            borderTop: `1px solid ${HOME_THEME.border}`, borderBottom: `1px solid ${HOME_THEME.border}`, borderLeft: "none", borderRight: "none",
+            color: HOME_THEME.text,
+          }}
+        >
+          <span style={{ flex: 1, fontSize: 13 }}>
+            {unsortedCount} unsorted transaction{unsortedCount === 1 ? "" : "s"} — {fmtMoney(unsortedTotal, currency)}
+          </span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>Sort now →</span>
+        </button>
+      )}
+
+      <div style={{ padding: "12px 16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+        {rows.length === 0 && (
+          <div style={{ padding: "18px 0", textAlign: "center", fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>
+            No categories yet — add them on the Categories tab.
+          </div>
+        )}
+        {rows.map(({ c, s }) => {
+          const budget = c.amount || 0;
+          const pct = budget > 0 ? Math.min(100, (s / budget) * 100) : 0;
+          const over = budget > 0 && s > budget;
+          const cc = c.color || LIGHT_BLUE;
+          return (
+            <div key={c.id}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: cc, flex: "none" }} />
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 700 }}>{c.name}</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: over ? SOFT_RED : HOME_THEME.text }}>
+                  {fmtMoney(s, currency)}
+                  <span style={{ color: HOME_THEME.muted, fontWeight: 600 }}> / {budget > 0 ? fmtMoney(budget, currency) : "—"}</span>
+                </span>
+              </div>
+              <div style={{ height: 6, borderRadius: 999, background: bRgba("#ffffff", 0.06), overflow: "hidden" }}>
+                <div style={{ width: `${budget > 0 ? pct : 0}%`, height: "100%", borderRadius: 999, background: over ? SOFT_RED : cc, transition: "width 0.2s ease" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

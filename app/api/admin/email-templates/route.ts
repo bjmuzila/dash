@@ -8,6 +8,7 @@ import { subscriberThankYouEmail, subscriberThankYouText, SUBSCRIBER_THANKYOU_SU
 import { pricingApologyEmail, pricingApologyText, PRICING_APOLOGY_SUBJECT } from "@/lib/emails/pricing-apology";
 import { pricingComparisonEmail, pricingComparisonText, PRICING_COMPARISON_SUBJECT } from "@/lib/emails/pricing-comparison";
 import { tryCbEdge30Email, tryCbEdge30Text, TRY_CBEDGE_30_SUBJECT } from "@/lib/emails/try-cbedge-30";
+import { scannerCatchEmail, scannerCatchText, SCANNER_CATCH_SUBJECT } from "@/lib/emails/scanner-catch";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -47,6 +48,13 @@ function buildTemplates(): Template[] {
       subject: TRY_CBEDGE_30_SUBJECT,
       html: tryCbEdge30Email(),
       text: tryCbEdge30Text(),
+    },
+    {
+      id: "scanner-catch",
+      label: "Scanner social proof — PLTR 140C +129.6%",
+      subject: SCANNER_CATCH_SUBJECT,
+      html: scannerCatchEmail(),
+      text: scannerCatchText(),
     },
     {
       id: "founder-thankyou",
