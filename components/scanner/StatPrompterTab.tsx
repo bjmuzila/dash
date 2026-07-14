@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 import { failOutcome, type FailOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
 
 /* ── stat helpers ─────────────────────────────────────────────────────────── */
@@ -49,10 +50,16 @@ type Row = {
   extra?: Record<string, string>;
   emphasis?: boolean;
 };
+/** A stacked composition bar. ONLY valid when the segments are mutually
+ *  exclusive and sum to 100 — a stacked bar is a claim about a partition, and
+ *  drawing overlapping percentages this way is a lie the eye can't detect. */
+type Stack = { label: string; segs: { name: string; pct: number; color: string }[] };
+
 type Result = {
   headline: string;
   cols?: string[];          // names of the `extra` columns, in order
   rows: Row[];
+  stack?: Stack[];          // rendered above the table
   verdict?: string;
   caveat?: string;
 };
@@ -335,20 +342,29 @@ const PROMPTS: Prompt[] = [
     run: ({ es, nq }) => {
       const mk = (days: SlimDay[], label: string): Row[] => {
         const b = days.filter((d) => d.fcb);
+        // Row 1 is a share of ALL sessions; the rest are shares of the BREAKS.
+        // The denominator changes, so it's stated in the label rather than
+        // smuggled into a mystery column.
         return [
-          { label: `${label} — breaks`, n: b.length, k: b.length, extra: { of: pctS(b.length, days.length) } },
-          { label: `${label} — FAILED (back inside ≤30m)`, n: b.length, k: b.filter((d) => d.fcb!.failed).length, extra: { of: "" }, emphasis: true },
-          { label: `${label} — hit 0.5×`, n: b.length, k: b.filter((d) => d.fcb!.hit["0.5"]).length, extra: { of: "" } },
-          { label: `${label} — hit 1.0×`, n: b.length, k: b.filter((d) => d.fcb!.hit["1"]).length, extra: { of: "" } },
-          { label: `${label} — hit 2.0×`, n: b.length, k: b.filter((d) => d.fcb!.hit["2"]).length, extra: { of: "" } },
-          { label: `${label} — full rotation to other extreme`, n: b.length, k: b.filter((d) => d.fcb!.fadeOpp).length, extra: { of: "" } },
+          { label: `${label} — sessions that broke the IB at all`, n: days.length, k: b.length },
+          { label: `${label} — of those breaks: FAILED (back inside ≤30m)`, n: b.length, k: b.filter((d) => d.fcb!.failed).length, emphasis: true },
+          { label: `${label} — of those breaks: hit 0.5× the IB width`, n: b.length, k: b.filter((d) => d.fcb!.hit["0.5"]).length },
+          { label: `${label} — of those breaks: hit 1.0×`, n: b.length, k: b.filter((d) => d.fcb!.hit["1"]).length },
+          { label: `${label} — of those breaks: hit 2.0×`, n: b.length, k: b.filter((d) => d.fcb!.hit["2"]).length },
+          { label: `${label} — of those breaks: full rotation to the other extreme`, n: b.length, k: b.filter((d) => d.fcb!.fadeOpp).length },
         ];
       };
+      // The rows above OVERLAP — a break can be FAILED and still hit 1.0× later
+      // (it recovered). failed + hit1x sums past 100%, so these can never be read
+      // as a partition or charted as one. The exclusive four-way split lives in
+      // the "break failed — what happens next?" prompt. Said plainly here so the
+      // table can't be misread as a composition.
       return {
-        headline: "The unconditional IB-break book. Everything else is a deviation from this.",
-        cols: ["of"],
+        headline: "The unconditional IB-break book. Everything else in this tab is a deviation from these numbers.",
         rows: [...mk(es, "ES"), ...mk(nq, "NQ")],
         verdict: "IB breaks fail most of the time. A cohort is only interesting if it moves the FAIL rate materially off this line.",
+        caveat:
+          "These rows OVERLAP — they are not a partition. A break can fail (close back inside within 30m) and still reach 1.0× afterwards, so FAILED + hit 1.0× sums past 100%. Don't add them up, and don't chart them as parts of a whole. For a real breakdown use \"The break failed — what ACTUALLY happens next?\", whose four outcomes are exclusive.",
       };
     },
   },
@@ -463,9 +479,38 @@ const PROMPTS: Prompt[] = [
       const dead = esFailed.filter((o) => o === "chop" || o === "to_mid").length;
       const rot = esFailed.filter((o) => o === "full_rotation").length;
       const rec = esFailed.filter((o) => o === "recovered").length;
+
+      // Composition bars are legitimate HERE and nowhere else in this tab: these
+      // four states are exclusive and exhaustive, so they genuinely partition the
+      // failed book. COL order = the story: shakeout → nothing → drift → rotation.
+      const COLOR: Record<FailOutcome, string> = {
+        recovered: LIGHT_BLUE,
+        chop: "rgba(255,255,255,0.28)",
+        to_mid: HOME_THEME.orange,
+        full_rotation: HOME_THEME.red,
+      };
+      const SHORT: Record<FailOutcome, string> = {
+        recovered: "Recovered",
+        chop: "Chop",
+        to_mid: "To the mid",
+        full_rotation: "Full rotation",
+      };
+      const stack: Stack[] = ([["ES", es], ["NQ", nq]] as const).map(([label, days]) => {
+        const f = days.filter((d) => d.fcb?.failed).map((d) => failOutcome(d.fcb!, d.width)!);
+        return {
+          label,
+          segs: ORDER.map((o) => ({
+            name: SHORT[o],
+            pct: f.length ? (100 * f.filter((x) => x === o).length) / f.length : 0,
+            color: COLOR[o],
+          })),
+        };
+      });
+
       return {
-        headline: "Only failed breaks. The four outcomes are exclusive and exhaustive — they add to 100% per index.",
+        headline: "Only failed breaks. The four outcomes are exclusive and exhaustive — they add to 100% per index, which is why they can be stacked.",
         cols: ["med ext", "closed mid50", "closed with the break"],
+        stack,
         rows,
         verdict:
           `ES failed breaks: ${pctS(rec, esFailed.length)} recover and go anyway, ${pctS(rot, esFailed.length)} rotate to the far extreme, ` +
@@ -974,17 +1019,17 @@ const PROMPTS: Prompt[] = [
             n: x.n,
             k: Math.round(((x.atr || 0) / hi) * x.n),
             emphasis: (x.atr || 0) >= 0.85 * hi,
-            extra: { "avg range (pts)": fx(x.atr, 2), "p90 range": fx(x.p90, 2), "": "" },
+            extra: { "avg range (pts)": fx(x.atr, 2), "p90 range": fx(x.p90, 2) },
           })),
           ...B.vol.atrByDow.map((x) => ({
             label: `${x.key} (whole session)`,
             n: x.n,
-            extra: { "avg range (pts)": fx(x.atr, 2), "p90 range": fx(x.p90, 2), "": "" },
+            extra: { "avg range (pts)": fx(x.atr, 2), "p90 range": fx(x.p90, 2) },
           })),
         ];
         return {
           headline: `${head} 60-minute bars. Rate column = that hour's range as a share of the biggest hour.`,
-          cols: ["avg range (pts)", "p90 range", ""],
+          cols: ["avg range (pts)", "p90 range"],
           rows,
           verdict: "Size the stop to the hour you're trading in, not to a daily ATR. The last hour and the first hour are different markets.",
         };
@@ -1148,6 +1193,47 @@ function ResultTable({ res }: { res: Result }) {
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 13, color: HOME_THEME.green, marginBottom: 10 }}>{res.headline}</div>
+
+      {res.stack && (
+        <div style={{ marginBottom: 18 }}>
+          {res.stack.map((s) => (
+            <div key={s.label} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.text, marginBottom: 5, letterSpacing: "0.06em" }}>{s.label}</div>
+              <div style={{ display: "flex", height: 30, borderRadius: 6, overflow: "hidden", gap: 2 }}>
+                {s.segs.map((g) => (
+                  <div
+                    key={g.name}
+                    title={`${g.name} — ${g.pct.toFixed(1)}%`}
+                    style={{
+                      width: `${g.pct}%`,
+                      background: g.color,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      color: "#05060A",
+                      fontVariantNumeric: "tabular-nums",
+                      minWidth: g.pct > 0 ? 2 : 0,
+                    }}
+                  >
+                    {g.pct >= 9 ? `${g.pct.toFixed(0)}%` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 8 }}>
+            {res.stack[0]?.segs.map((g) => (
+              <span key={g.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "rgba(255,255,255,0.62)" }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: g.color, display: "inline-block" }} />
+                {g.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -1296,6 +1382,10 @@ export default function StatPrompterTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Today's IB, priced, with the historical reach rate on every level.
+          Sits above the library because it's the thing you look at first. */}
+      <IbLevelCanvas />
+
       <Card title="Stat Prompter" subtitle="Canned questions over the ES + NQ Initial Balance book. Click one, it runs on the real history.">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {CATS.map((c) => (

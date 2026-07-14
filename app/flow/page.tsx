@@ -434,6 +434,14 @@ export default function FlowPage() {
     return [...set].sort();
   }, [mergedCombined, scope]);
 
+  // 0DTE = today's expiration if it exists, else the soonest future one (closest contract).
+  const nearestExpiry = useMemo(() => {
+    const opts = view === "combined" ? combinedExpiryOptions : expiryOptions;
+    if (!opts.length) return null;
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // YYYY-MM-DD ET
+    return opts.find((x) => x >= today) ?? opts[opts.length - 1];
+  }, [view, combinedExpiryOptions, expiryOptions]);
+
   // Whichever list drives the tape + totals + premium split for the active view.
   const tapeRows = view === "combined" ? filteredCombined : filtered;
   // Cap rendered rows (combined can be thousands); totals still span the full set.
@@ -791,7 +799,7 @@ export default function FlowPage() {
       {/* ── Filters, full window width, above the chart. ── */}
       {!chartOnly && (
       <div className="flow-filters" style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap", flexShrink: 0 }}>
-      <div style={{ flex: "1 1 480px", minWidth: 0 }}>
+      <div style={{ flex: "1 1 480px", minWidth: 0, position: "relative", zIndex: recentOpen ? 200 : undefined }}>
       <Card variant="budget" title="Options Flow — Filters" subtitle={view === "combined" ? "Every ticker on one tape. Choose the scope, then filter." : "Live order flow off the /ws/gex feed. Pick a watched ticker to drive the chart + tape."} style={{ flexShrink: 0, height: "100%" }}>
         {view === "combined" ? (
           <div style={{ marginBottom: 18 }}>
@@ -872,7 +880,7 @@ export default function FlowPage() {
                   {recentOpen && (
                     <div
                       style={{
-                        position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 80,
+                        position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
                         minWidth: 120, borderRadius: 6, overflow: "hidden",
                         border: `1px solid ${C.border}`, background: "rgba(6,12,18,0.98)",
                         boxShadow: "0 10px 24px rgba(0,0,0,0.6)",
@@ -935,7 +943,22 @@ export default function FlowPage() {
           </div>
 
           <div>
-            <label style={labelStyle}>Expiry</label>
+            <label style={labelStyle}>
+              Expiry
+              <button
+                className="flow-chip"
+                style={{ ...segBtn(!!nearestExpiry && expiry === nearestExpiry), marginLeft: 8, padding: "1px 8px", fontSize: 10 }}
+                disabled={!nearestExpiry}
+                title={nearestExpiry ? `0DTE / nearest expiry: ${nearestExpiry}` : "no expirations loaded"}
+                onClick={() => {
+                  if (!nearestExpiry) return;
+                  if (expiry === nearestExpiry) { setExpiry("all"); return; }
+                  setExpiry(nearestExpiry);
+                  setDteMin(0);
+                  setDteMax(null);
+                }}
+              >0DTE</button>
+            </label>
             <select style={fieldStyle} value={expiry} onChange={(e) => setExpiry(e.target.value)}>
               <option value="all">All</option>
               {(view === "combined" ? combinedExpiryOptions : expiryOptions).map((x) => <option key={x} value={x}>{x}</option>)}
