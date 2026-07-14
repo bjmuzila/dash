@@ -24,6 +24,12 @@ services:
     environment:
       NODE_ENV: production
       TZ: America/New_York
+    volumes:
+      # discord-relay dedupe state. Must outlive the container: without this the
+      # seen-set resets on every redeploy, the relay re-primes from the current
+      # signals.txt, and any signal that fired while we were down is swallowed.
+      # Dedicated dir (not ./data) so the mount doesn't shadow committed files.
+      - ./state:/app/state
     ports:
       # Bind to localhost only — Cloudflare reaches the origin via cloudflared
       # tunnel (no public port). Do NOT expose to 0.0.0.0 without TLS+firewall.

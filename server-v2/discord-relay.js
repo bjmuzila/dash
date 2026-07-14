@@ -40,7 +40,11 @@ const MAX_SEEN = 500;             // cap the persisted hash set
 const MAX_BURST = 5;              // never post more than this per poll (flood guard)
 
 const SIGNALS_PATH = path.join(__dirname, '..', 'public', 'signals.txt');
-const STATE_PATH = path.join(__dirname, '..', 'data', 'discord-relay-seen.json');
+// Lives in state/, not data/ — state/ is bind-mounted from the host so the
+// dedupe set outlives a redeploy, and it's a dedicated dir so the mount doesn't
+// shadow the committed files in data/.
+const STATE_PATH = process.env.SIGNALS_RELAY_STATE
+  || path.join(__dirname, '..', 'state', 'discord-relay-seen.json');
 
 const WEBHOOK = (process.env.HOME_SIGNALS_DISCORD_WEBHOOK || '').trim();
 const SITE_URL = (process.env.SIGNALS_SITE_URL || 'https://cbedge.net').replace(/\/+$/, '');
@@ -160,10 +164,13 @@ async function post(embeds) {
 
 async function pollOnce() {
   const lines = readSignalLines();
-  if (!lines.length) return;
 
   // Cold start: adopt whatever is already in the file as the baseline and post
   // nothing, so a fresh deploy doesn't dump the whole AUTO block into Discord.
+  // This MUST run before the empty-file check: signals.txt is comments-only when
+  // no signals are live, and if we early-returned we'd never prime — then the
+  // first real signal ever written would be adopted as "baseline" and silently
+  // never posted.
   if (!primed) {
     lines.forEach((l) => seen.add(hash(l)));
     primed = true;
@@ -171,6 +178,8 @@ async function pollOnce() {
     console.log(`[discord-relay] cold start — ${lines.length} existing lines marked seen, not posted`);
     return;
   }
+
+  if (!lines.length) return;
 
   const fresh = lines.filter((l) => !seen.has(hash(l)));
   if (!fresh.length) return;

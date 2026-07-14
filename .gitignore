@@ -40,3 +40,6 @@ strikes.csv
 server-v2/.cash-basis.json
 
 server-v2/.cash-basis.json
+
+# runtime state (bind-mounted into the container; see docker-compose volumes)
+state/
