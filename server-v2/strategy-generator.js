@@ -2,12 +2,12 @@
 /**
  * server-v2/strategy-generator.js
  *
- * Once-a-day (08:20 ET, Mon–Fri) full trade strategy for the Analytics
- * strategy-builder card. Gathers the live inputs that back the Analytics cards
- * (net greeks, EM levels, ES gap, economic calendar, confidence score, peak
- * greeks, pre-market read), hands the consolidated block to the Anthropic
- * Messages API, and writes the structured plan to daily_strategy via
- * POST /api/strategy.
+ * Hourly on the hour, 08:00–14:00 ET Mon–Fri: full trade strategy for the
+ * Analytics strategy-builder card. Gathers the live inputs that back the
+ * Analytics cards (net greeks, EM levels, ES gap, economic calendar, confidence
+ * score, peak greeks, pre-market read), hands the consolidated block to the
+ * Anthropic Messages API, and writes the structured plan to daily_strategy
+ * (current) + daily_strategy_history (intraday trail) via POST /api/strategy.
  *
  * Output contract — Claude returns a single JSON object:
  *   {
@@ -206,10 +206,11 @@ async function generate(base) {
     const post = await fetch(`${base}/api/strategy`, {
       method: 'POST',
       headers: internalHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ date: today, plan }),
+      // hour = ET slot this run belongs to; keys the intraday history row.
+      body: JSON.stringify({ date: today, hour: nowParts().hour, plan }),
     });
     if (!post.ok) { console.warn('[strategy] save failed:', post.status); return; }
-    console.log(`[strategy] ${today} written — bias=${plan.bias || '?'}`);
+    console.log(`[strategy] ${today} ${nowParts().hour}:00 ET written — bias=${plan.bias || '?'}`);
   } catch (e) {
     console.warn('[strategy] save error:', e.message);
   }
@@ -226,7 +227,7 @@ function startStrategyGenerator(port) {
   let lastRunHour = null; // `${date}:${hour}` of the last generation
   const CHECK_MS = 3 * 60 * 1000;
   const START_HOUR = 8;  // first hourly run (ET)
-  const END_HOUR = 16;   // last hourly run (ET), inclusive
+  const END_HOUR = 14;   // last hourly run (ET), inclusive — nothing useful after 14:00
 
   async function check() {
     const { hour, weekday } = nowParts();
@@ -240,7 +241,7 @@ function startStrategyGenerator(port) {
     await generate(base);
   }
 
-  console.log('[strategy] enabled — regenerates the daily strategy hourly on the hour (weekdays, ~07:00–16:00 ET)');
+  console.log('[strategy] enabled — regenerates the daily strategy hourly on the hour (weekdays, 08:00–14:00 ET)');
   setTimeout(() => { void check(); }, 45_000); // startup catch-up probe
   setInterval(() => { void check(); }, CHECK_MS);
 }

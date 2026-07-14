@@ -46,14 +46,25 @@ const MARKET_HOLIDAYS = new Set([
   '2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25',
 ]);
 
+// Enumerate trading days ENTIRELY IN UTC. This used to mix `d.getDay()` (the
+// container's LOCAL weekday) with `toISOString()` (the UTC date): run after
+// 20:00 UTC those disagree by a day, so local-Friday serialized as ISO-Saturday
+// — every Friday was skipped and every Saturday was requested, and Theta 472s on
+// Saturdays. Anchoring each day to 12:00 UTC keeps weekday and ISO string in the
+// same frame. Also stops at the last COMPLETED session: today's EOD data does
+// not exist until after the close, and future dates never do.
 function tradingDays(years) {
   const out = [];
-  const end = new Date();
-  const start = new Date(); start.setFullYear(start.getFullYear() - years);
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const dow = d.getDay();
-    if (dow === 0 || dow === 6) continue;
+  const today = new Date().toISOString().slice(0, 10);
+  const end = new Date(`${today}T12:00:00Z`);
+  const start = new Date(end);
+  start.setUTCFullYear(start.getUTCFullYear() - years);
+
+  for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue;          // Sun / Sat
     const iso = d.toISOString().slice(0, 10);
+    if (iso >= today) continue;                    // today isn't settled yet; tomorrow doesn't exist
     if (MARKET_HOLIDAYS.has(iso)) continue;
     out.push(iso);
   }

@@ -26,8 +26,12 @@ const { dteFromIso } = require('./computation/utils');
 const SYMBOL = (process.env.SYMBOL || 'SPX').toUpperCase();
 // 0DTE/weeklies live on the SPXW root on Theta. Keep SPX (monthly AM-settled)
 // separate. For a generic underlying we pass it through; only SPX maps to SPXW.
+// Callers pass the DASHBOARD ticker, which for the index is '$SPX' (that's the
+// key in eod_gex / EOD_SYMBOLS / market-state). Theta has no '$' in its roots,
+// so strip it first — this used to fall through and request root '$SPX', which
+// Theta answers with nothing, silently breaking every history call.
 function thetaRoot(underlying = SYMBOL) {
-  const u = String(underlying || SYMBOL).toUpperCase();
+  const u = String(underlying || SYMBOL).toUpperCase().replace(/^\$/, '');
   if (u === 'SPX' || u === 'SPXW') return 'SPXW';
   return u;
 }

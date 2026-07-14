@@ -259,19 +259,93 @@ async function fetchChainGex(_base, chainTicker) {
 
 // ── Upsert ────────────────────────────────────────────────────────────────────
 
-async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at) {
+// `source` marks how the row was produced, so a derived row is never mistaken
+// for a real settle:
+//   'live'         — PM window, provisional (intraday) OI
+//   'theta'        — recomputed from Theta history w/ settled OPRA OI (best)
+//   'mvc_snapshot' — LAST RESORT: last MVC/CB 5m snapshot of that session
+//
+// The prod table predates both `total_flow_gex` and `source` — it was created
+// with (date, symbol, total_gex, spot, computed_at) only. Every live PM/AM write
+// referenced total_flow_gex and therefore threw ("column ... does not exist"),
+// which is why the ONLY rows in eod_gex came from the backfill script. Self-heal
+// the schema on first write rather than requiring a manual migration.
+let _colsChecked = false;
+async function ensureColumns(p) {
+  if (_colsChecked) return;
+  _colsChecked = true;
+  try {
+    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_flow_gex DOUBLE PRECISION DEFAULT 0`);
+    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS source TEXT`);
+  } catch (e) {
+    _colsChecked = false; // let a later write retry
+    console.warn('[eod-gex] could not ensure columns:', e.message);
+  }
+}
+
+async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live') {
   const p = getPool();
   if (!p) { console.warn('[eod-gex] no DB — skipping write'); return; }
+  await ensureColumns(p);
   await p.query(
-    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (date, symbol) DO UPDATE SET
        total_gex      = EXCLUDED.total_gex,
        total_flow_gex = EXCLUDED.total_flow_gex,
        spot           = EXCLUDED.spot,
-       computed_at    = EXCLUDED.computed_at`,
-    [date, symbol, total_gex, total_flow_gex, spot, computed_at]
+       computed_at    = EXCLUDED.computed_at,
+       source         = EXCLUDED.source`,
+    [date, symbol, total_gex, total_flow_gex, spot, computed_at, source]
   );
+}
+
+// Dates in [from, to] (inclusive) that are trading days but have NO eod_gex row
+// for `symbol`. Used by the boot catch-up.
+async function missingDates(symbol, fromDate, toDate) {
+  const p = getPool();
+  if (!p) return [];
+  const { rows } = await p.query(
+    `SELECT date FROM eod_gex WHERE symbol = $1 AND date BETWEEN $2 AND $3`,
+    [symbol, fromDate, toDate]
+  );
+  const have = new Set(rows.map((r) => String(r.date).slice(0, 10)));
+  const out = [];
+  const d = new Date(`${fromDate}T12:00:00Z`);
+  const end = new Date(`${toDate}T12:00:00Z`);
+  while (d <= end) {
+    const iso = d.toISOString().slice(0, 10);
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(d);
+    if (isTradingDay(iso, wd) && !have.has(iso)) out.push(iso);
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+// ── MVC/CB snapshot fallback ─────────────────────────────────────────────────
+//
+// The MVC auto-collector writes a snapshot every 5m during RTH, so the LAST row
+// of a session (~15:55 ET) is a close-enough stand-in for an EOD row when Theta
+// has no history for that date. Provisional OI and $SPX only — strictly a
+// fallback, tagged source='mvc_snapshot' so it stays visibly second-class.
+async function fetchMvcFallback(symbol, date) {
+  if (symbol !== '$SPX') throw new Error(`${symbol}: MVC fallback is $SPX-only`);
+  const p = getPool();
+  if (!p) throw new Error('no DB');
+  const { rows } = await p.query(
+    `SELECT "totalNetGEX_OI", "spxPrice", time
+       FROM mvc_snapshots
+      WHERE date = $1 AND "spxPrice" > 0
+      ORDER BY timestamp DESC
+      LIMIT 1`,
+    [date]
+  );
+  const r = rows[0];
+  if (!r) throw new Error(`no MVC snapshot for ${date}`);
+  const tng = Number(r.totalNetGEX_OI);
+  const spot = Number(r.spxPrice);
+  if (!Number.isFinite(tng) || !(spot > 0)) throw new Error(`bad MVC snapshot for ${date}`);
+  return { totalNetGex: tng, spot, snapTime: r.time };
 }
 
 // ── Main collection ───────────────────────────────────────────────────────────
@@ -301,7 +375,7 @@ async function collectEodGex(base, opts = {}) {
         continue;
       }
 
-      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt);
+      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, 'live');
       saved.push(symbol);
       console.log(
         `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`
@@ -325,7 +399,10 @@ async function fetchSettleSpot(symbol, date) {
 // history: settled OPRA OI + EOD greeks + EOD volume + settle spot. Returns
 // { totalNetGex, spot } or throws if data is incomplete.
 async function computeHistoricalEodGex(symbol, date) {
-  const root = symbol === '$SPX' ? '$SPX' : symbol; // thetaRoot handles $SPX→SPXW
+  // thetaRoot() strips the '$' and maps SPX→SPXW. It previously did NOT strip
+  // the '$', so '$SPX' went to Theta verbatim and every history call came back
+  // empty ("no historical rows"). Pass the bare root to be explicit.
+  const root = symbol === '$SPX' ? 'SPX' : symbol;
   // Wide strike band so the EOD TOTAL isn't truncated to ±40 around spot.
   const SR = { strikeRange: 500 };
   const [spot, oiMap, greekMap, eodRows] = await Promise.all([
@@ -436,7 +513,11 @@ async function collectMorningEodGex(opts = {}) {
         continue;
       }
 
-      await upsertEodGex(date, symbol, tng, spot, computedAt);
+      // NOTE: this used to be upsertEodGex(date, symbol, tng, spot, computedAt) —
+      // 5 args into a 6-arg signature, so `spot` landed in total_flow_gex and
+      // computedAt in spot. The settled pass has no flow GEX (history has no
+      // dealer inventory), so pass 0 explicitly.
+      await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta');
 
       // Bake-in: at/after 09:30, if unchanged from the previous poll, freeze it.
       const unchanged = st.last != null && Math.abs(st.last - tng) < 1; // ~$1 of GEX
@@ -459,6 +540,76 @@ async function collectMorningEodGex(opts = {}) {
   return { date, done };
 }
 
+// ── Boot catch-up ────────────────────────────────────────────────────────────
+//
+// The PM pass only fires if the process happens to be up during 3:55–4:05 ET.
+// A redeploy or restart that straddles that window silently loses the day (this
+// is exactly how 2026-07-09 and 07-10 went missing). On boot, look back
+// CATCHUP_DAYS trading days and fill any hole:
+//
+//   1. Theta history (settled OI)  → source='theta'      [preferred]
+//   2. last MVC/CB 5m snapshot     → source='mvc_snapshot' [$SPX only, last resort]
+//
+// Never overwrites an existing row, so it's safe to run on every boot.
+const CATCHUP_DAYS = 5;
+const CATCHUP_DELAY_MS = 90_000; // let Theta finish connecting first
+
+async function catchUpMissing(opts = {}) {
+  const lookback = Number(opts.days || CATCHUP_DAYS);
+  const today = etDateStr();
+
+  // Window = [lookback trading days back, prior trading day]. Today is excluded:
+  // its row is the PM pass's job and isn't "missing" until the close.
+  const to = prevTradingDay(today);
+  if (!to) return;
+  let from = to;
+  for (let i = 1; i < lookback; i++) {
+    const p = prevTradingDay(from);
+    if (!p) break;
+    from = p;
+  }
+
+  const filled = [];
+  for (const { symbol } of EOD_SYMBOLS) {
+    let gaps = [];
+    try { gaps = await missingDates(symbol, from, to); }
+    catch (e) { console.warn(`[eod-gex/catchup] ${symbol} — gap scan failed: ${e.message}`); continue; }
+    if (!gaps.length) continue;
+
+    console.log(`[eod-gex/catchup] ${symbol} — ${gaps.length} missing day(s): ${gaps.join(', ')}`);
+    for (const date of gaps) {
+      const computedAt = new Date().toISOString();
+
+      // 1) Theta history (settled OI) — the real fix.
+      try {
+        const { totalNetGex: tng, spot } = await computeHistoricalEodGex(symbol, date);
+        if (Number.isFinite(tng) && spot > 0) {
+          await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta');
+          filled.push(`${symbol}:${date}(theta)`);
+          console.log(`[eod-gex/catchup] ${symbol} ${date} — theta  GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`);
+          continue;
+        }
+      } catch (e) {
+        console.warn(`[eod-gex/catchup] ${symbol} ${date} — theta failed: ${e.message}`);
+      }
+
+      // 2) MVC/CB snapshot fallback ($SPX only). Provisional OI, ~15:55 ET.
+      try {
+        const { totalNetGex: tng, spot, snapTime } = await fetchMvcFallback(symbol, date);
+        await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'mvc_snapshot');
+        filled.push(`${symbol}:${date}(mvc)`);
+        console.log(`[eod-gex/catchup] ${symbol} ${date} — MVC fallback @ ${snapTime} ET  GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}  [PROVISIONAL OI]`);
+      } catch (e) {
+        console.warn(`[eod-gex/catchup] ${symbol} ${date} — no fallback: ${e.message}`);
+      }
+    }
+  }
+
+  if (filled.length) console.log(`[eod-gex/catchup] filled ${filled.length}: ${filled.join(', ')}`);
+  else console.log('[eod-gex/catchup] no gaps in the last ' + lookback + ' trading days');
+  return { from, to, filled };
+}
+
 // ── Scheduler ────────────────────────────────────────────────────────────────
 // Polls every minute. When inside the 3:55–4:05 ET window on a trading day,
 // records once per symbol. A second tick inside the window upserts (overwrites),
@@ -473,7 +624,13 @@ let _amTimer = null;
 function startEodGexRecorder(port) {
   const base = `http://localhost:${port}`;
 
-  console.log('[eod-gex] enabled — PM: 60s poll in 3:55–4:05 ET (provisional OI); AM: 30min poll 6:30–9:30 ET recomputes prior day w/ settled OI, bakes in at 9:30');
+  console.log('[eod-gex] enabled — PM: 60s poll in 3:55–4:05 ET (provisional OI); AM: 30min poll 6:30–9:30 ET recomputes prior day w/ settled OI, bakes in at 9:30; boot catch-up backfills the last ' + CATCHUP_DAYS + ' trading days');
+
+  // Boot catch-up: a restart that straddled 3:55–4:05 ET loses the day outright.
+  // Delayed so Theta has time to connect before we ask it for history.
+  setTimeout(() => {
+    catchUpMissing().catch((e) => console.warn('[eod-gex/catchup] error:', e.message));
+  }, CATCHUP_DELAY_MS).unref?.();
 
   // PM provisional pass (live intraday OI at the close).
   const pmTick = async () => {
@@ -499,4 +656,11 @@ function startEodGexRecorder(port) {
   };
 }
 
-module.exports = { startEodGexRecorder, collectEodGex, collectMorningEodGex, computeHistoricalEodGex };
+module.exports = {
+  startEodGexRecorder,
+  collectEodGex,
+  collectMorningEodGex,
+  computeHistoricalEodGex,
+  catchUpMissing,
+  missingDates,
+};

@@ -46,6 +46,11 @@ const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
 // stale-price artifact (observed: live basis read 17 when the true ES−SPX close
 // basis was 50.6). Whenever cash is shut we must use the prior-day CLOSE basis
 // (ES 16:00 − SPX 16:00) instead of anything computed against a frozen spot.
+// Max distance a LIVE basis reading may sit from the prior-day close anchor before
+// it's rejected as garbage (bad/mis-scaled SPX spot, or a stale ES contract). The
+// true ES−SPX basis decays only ~a point a day toward expiry, so anything further
+// out than this is a data fault, not a market move. See effectiveBasis().
+const LIVE_BASIS_TOL = 12;
 const ET_HM_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
 });
@@ -883,35 +888,39 @@ export default function EsCandlesPage() {
   // ABOVE ES intraday, producing a wrong negative basis. The prior-day DB closes
   // (ES 16:00 − SPX 16:00) give the correct positive basis, so we PREFER the
   // frozen prior-day basis and only fall back to the live basis if it's missing.
+  // ANCHOR + DRIFT. Three basis sources exist and each fails in its own way:
+  //
+  //   1. server `basis` (esFut − spot) — esFut is written ONLY by the ES
+  //      Quote/Trade stream, which goes silent; marketState's freshness gate then
+  //      HOLDS the last value, so across a quarterly roll it describes the EXPIRED
+  //      contract. That's one calendar spread (~50pt) of error on every level.
+  //      Never used here.
+  //   2. live candle basis (last ES CANDLE close − live SPX spot) — always on the
+  //      charted contract (roll-proof), but the broker/Theta SPX spot is unreliable:
+  //      it can print ABOVE ES intraday (observed: basis −14) and it FREEZES out of
+  //      hours while ES keeps moving.
+  //   3. prior-day CLOSE basis (ES 16:00 − SPX 16:00) — measured when both sides
+  //      were simultaneously real, and rebuilt daily from post-roll closes, so it is
+  //      roll-correct by construction. Its only flaw is that it's up to a day stale,
+  //      and the real basis decays only ~a point a day toward expiry.
+  //
+  // So (3) is the ANCHOR, and (2) may only DRIFT it — accepted while cash is open
+  // and only when it lands within LIVE_BASIS_TOL of the anchor. A live reading that
+  // disagrees by more than that is a bad spot print or a contract mismatch, never a
+  // real basis move, so it's rejected and the anchor holds.
   const effectiveBasis = useCallback(() => {
-    // The live basis is esFut − spot, and it is ONLY meaningful while SPX cash is
-    // open. Out of hours `spot` is a frozen last print while ES keeps moving, so
-    // the "basis" degrades into a stale-price artifact (measured: 17 when the
-    // true ES−SPX close basis was 50.6 — a 33pt error on every level).
-    //
-    // So: cash open → live basis (it drifts intraday and the frozen prior-day
-    // value goes stale, which was the original reason for preferring live).
-    //     cash shut → prior-day CLOSE basis (ES 16:00 − SPX 16:00), which is the
-    //                 last basis that was actually measurable.
-    //
-    // CONTRACT SAFETY (roll bug): the live basis must be measured against the
-    // SAME ES contract the chart plots. The server's `basis` is esFut − spot,
-    // and esFut is published only from the ES Quote/Trade stream — which goes
-    // silent (see _flushEsCandles' "do NOT set esFut here" note), so
-    // marketState._recomputeBasis' freshness gate HOLDS the last good value.
-    // Across a quarterly roll that held value belongs to the EXPIRED contract
-    // and every SPX→ES level lands ~one calendar spread (~50pt) off. So we
-    // derive the live basis from the last ES CANDLE close (definitionally the
-    // charted contract) − live SPX spot, and only fall back to the server /
-    // prior-day values when one of those two is missing.
-    if (isCashOpen()) {
-      const es = lastEsCloseRef.current;
-      const spx = spotRef.current;
-      if (es > 0 && spx > 0) return es - spx;
-      if (prevBasisRef.current) return prevBasisRef.current;
-      return basisRef.current;
+    const anchor = prevBasisRef.current;
+    const es = lastEsCloseRef.current;
+    const spx = spotRef.current;
+    const live = es > 0 && spx > 0 ? es - spx : 0;
+
+    if (anchor) {
+      if (isCashOpen() && live && Math.abs(live - anchor) <= LIVE_BASIS_TOL) return live;
+      return anchor;
     }
-    if (prevBasisRef.current) return prevBasisRef.current;
+    // No anchor yet (first load / no eod_gex row). Best effort: the live candle
+    // basis while cash is open, else whatever the server last published.
+    if (isCashOpen() && live) return live;
     return basisRef.current;
   }, []);
 

@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDailyStrategy, getLatestDailyStrategy, upsertDailyStrategy } from "@/lib/db";
+import {
+  getDailyStrategy,
+  getLatestDailyStrategy,
+  upsertDailyStrategy,
+  insertDailyStrategyHistory,
+  getDailyStrategyHistory,
+} from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -20,6 +26,14 @@ function etDateStr(d = new Date()): string {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function etHour(d = new Date()): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", hour12: false,
+    }).format(d)
+  );
+}
+
 function tokenOk(req: NextRequest): boolean {
   const expected = process.env.INTERNAL_API_TOKEN;
   if (!expected) return true;
@@ -29,6 +43,18 @@ function tokenOk(req: NextRequest): boolean {
 export async function GET(req: NextRequest) {
   try {
     const date = req.nextUrl.searchParams.get("date");
+
+    // ?history=1 → every intraday version of the plan for the day, oldest first.
+    if (req.nextUrl.searchParams.get("history") === "1") {
+      const rows = await getDailyStrategyHistory(date || etDateStr());
+      return NextResponse.json({
+        history: rows.map((r) => ({
+          ...r,
+          plan: typeof r.plan === "string" ? JSON.parse(r.plan) : r.plan,
+        })),
+      });
+    }
+
     const row = date ? await getDailyStrategy(date) : await getLatestDailyStrategy();
     if (!row) return NextResponse.json({ strategy: null });
     // plan is JSONB — already an object from pg, but coerce if it arrives as text.
@@ -48,8 +74,12 @@ export async function POST(req: NextRequest) {
     if (!plan || typeof plan !== "object") {
       return NextResponse.json({ error: "plan object required" }, { status: 400 });
     }
-    await upsertDailyStrategy(date, plan);
-    return NextResponse.json({ ok: true });
+    const hour = Number.isFinite(Number(body?.hour)) && body?.hour != null
+      ? Number(body.hour)
+      : etHour();
+    await upsertDailyStrategy(date, plan);       // current plan (overwritten hourly)
+    await insertDailyStrategyHistory(date, hour, plan); // intraday audit trail
+    return NextResponse.json({ ok: true, date, hour });
   } catch (err) {
     return NextResponse.json({ error: "Save failed", detail: String(err) }, { status: 500 });
   }

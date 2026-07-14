@@ -748,13 +748,26 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
 
     -- Daily AI trade strategy for the Analytics strategy-builder card, written
-    -- weekday mornings by the cron (strategy-generator.js). plan is a JSON object
-    -- (bias, levels, idea, risk, triggers); read by the StrategyBuilder card.
+    -- hourly on weekdays (~08:00-16:00 ET) by the cron (strategy-generator.js).
+    -- plan is a JSON object (bias, levels, idea, risk, triggers); this row is the
+    -- CURRENT plan (overwritten each hour) and is what the StrategyBuilder reads.
     CREATE TABLE IF NOT EXISTS daily_strategy (
       date       TEXT PRIMARY KEY,
       plan       JSONB NOT NULL DEFAULT '{}'::jsonb,
       generated_at BIGINT NOT NULL
     );
+
+    -- Intraday audit trail: one row per hourly regeneration. daily_strategy only
+    -- keeps the latest plan for the day, so this table preserves how the plan
+    -- evolved (the Anthropic API does not retain past completions for us).
+    CREATE TABLE IF NOT EXISTS daily_strategy_history (
+      date         TEXT   NOT NULL,
+      hour         INT    NOT NULL,          -- ET hour slot (8..16)
+      plan         JSONB  NOT NULL DEFAULT '{}'::jsonb,
+      generated_at BIGINT NOT NULL,
+      PRIMARY KEY (date, hour)
+    );
+    CREATE INDEX IF NOT EXISTS idx_strategy_hist_date ON daily_strategy_history(date DESC, hour DESC);
 
     -- /ict glossary card visibility, per Clerk user. hidden_cards is a JSON array
     -- of concept ids (from CONCEPTS in app/ict/page.tsx) the user has toggled OFF.
@@ -1579,6 +1592,30 @@ export async function upsertDailyStrategy(date: string, plan: unknown): Promise<
      ON CONFLICT (date) DO UPDATE SET
        plan = EXCLUDED.plan, generated_at = EXCLUDED.generated_at`,
     [date, JSON.stringify(plan), Date.now()]
+  );
+}
+
+/** Append-only intraday snapshot of the plan, keyed by ET hour slot. */
+export interface DailyStrategyHistoryRow extends DailyStrategy {
+  hour: number;
+}
+
+export async function insertDailyStrategyHistory(date: string, hour: number, plan: unknown): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO daily_strategy_history (date, hour, plan, generated_at)
+     VALUES (?, ?, ?::jsonb, ?)
+     ON CONFLICT (date, hour) DO UPDATE SET
+       plan = EXCLUDED.plan, generated_at = EXCLUDED.generated_at`,
+    [date, hour, JSON.stringify(plan), Date.now()]
+  );
+}
+
+export async function getDailyStrategyHistory(date: string): Promise<DailyStrategyHistoryRow[]> {
+  await getDb();
+  return queryAll<DailyStrategyHistoryRow>(
+    `SELECT * FROM daily_strategy_history WHERE date = ? ORDER BY hour ASC`,
+    [date]
   );
 }
 
