@@ -1026,16 +1026,25 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
   return (
     <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="projAreaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.18} />
+            <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
+          </linearGradient>
+        </defs>
         <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
-        <path d={path} fill="none" stroke={HOME_THEME.text} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={`${path} L ${x(series.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`} fill="url(#projAreaFill)" stroke="none" />
+        {/* soft under-stroke = neon glow without an SVG filter */}
+        <path d={path} fill="none" stroke={bRgba(LIGHT_BLUE, 0.28)} strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={path} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
         {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
-        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={HOME_THEME.text} stroke="#05060A" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
+        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={LIGHT_BLUE} stroke={INK} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
         {ticks.map((p, i) => (
           <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={11} textAnchor="middle">{shortDate(p.date)}</text>
         ))}
       </svg>
       {hp && (
-        <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(10,13,20,0.96)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
+        <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
           <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
           <div style={{ fontSize: 16, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
         </div>
@@ -1447,12 +1456,14 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
               <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
                 <defs>
                   <linearGradient id="cfProjFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.20} />
+                    <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.26} />
                     <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 {showZero && <line x1={0} x2={100} y1={lineY(0)} y2={lineY(0)} stroke={bRgba(SOFT_RED, 0.4)} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />}
                 <path d={areaPath} fill="url(#cfProjFill)" stroke="none" />
+                {/* soft under-stroke = neon glow without an SVG filter */}
+                <path d={linePath} fill="none" stroke={bRgba(LIGHT_BLUE, 0.28)} strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
                 <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
               </svg>
             )}
