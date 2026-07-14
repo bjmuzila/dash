@@ -57,15 +57,86 @@ type Result = {
   caveat?: string;
 };
 
-type Ctx = { es: SlimDay[]; nq: SlimDay[]; paired: { d: string; e: SlimDay; n: SlimDay }[] };
+/* ── bar-level stat book (scripts/build-bar-stats.mjs → public/data/bars-<SYM>.json) ──
+ * Aggregates only — no bars ship to the browser. If the file is absent the Bar
+ * Stats prompts render a "run the script" note instead of failing. */
+type TodCell = { min: number; n: number; ret: number; absRet: number; range: number; up: number; vol: number; drift: number };
+type RangeStat = { mean: number; p50: number; p75: number; p90: number; p95: number; p99: number; bodyPct: number };
+type PatStat = { freq: number; n: number; expand: number; nextUp: number; brokeUp: number; brokeDn: number; bothSides: number };
+export type BarStats = {
+  symbol: string;
+  hours: string;
+  sessions: number;
+  bars: number;
+  from: string;
+  to: string;
+  tod: {
+    min1: TodCell[];
+    min5: TodCell[];
+    min30: TodCell[];
+    hour: TodCell[];
+    hourByDow: Record<string, TodCell[]>;
+    min30ByDow: Record<string, TodCell[]>;
+  };
+  vol: {
+    ranges: Record<string, RangeStat>;
+    patterns: Record<string, { medRange: number; inside: PatStat; outside: PatStat; narrowRange: PatStat }>;
+    atrByHour: { key: string; n: number; atr: number; p90: number }[];
+    atrByDow: { key: string; n: number; atr: number; p90: number }[];
+  };
+  auto: Record<
+    string,
+    {
+      acf: { lag: number; v: number | null }[];
+      acfAbs: { lag: number; v: number | null }[];
+      vr: { q: number; v: number | null }[];
+      streaks: {
+        byRun: { run: number; n: number; cont: number }[];
+        byRunHour: { run: number; hour: number; n: number; cont: number }[];
+      };
+    }
+  >;
+};
+
+type Ctx = {
+  es: SlimDay[];
+  nq: SlimDay[];
+  paired: { d: string; e: SlimDay; n: SlimDay }[];
+  bars: Record<"ES" | "NQ", BarStats | null>;
+};
+
+/** A dropdown attached to a prompt. Lets several near-identical questions
+ *  collapse into one card instead of ten. */
+type Control = { id: string; label: string; options: { value: string; label: string }[] };
+/** Selected control values for a prompt, keyed by control id. */
+type Sel = Record<string, string>;
 
 type Prompt = {
   id: string;
-  cat: "Cross-index" | "Break quality" | "Context" | "Timing" | "Session shape";
+  cat: "Cross-index" | "Break quality" | "Context" | "Timing" | "Session shape" | "Bar stats";
   title: string;
   ask: string;
-  run: (c: Ctx) => Result;
+  controls?: Control[];
+  run: (c: Ctx, s: Sel) => Result;
 };
+
+/* control option sets reused across the bar-stat prompts */
+const SYM_OPT = { id: "sym", label: "Symbol", options: [{ value: "ES", label: "ES" }, { value: "NQ", label: "NQ" }] };
+const TF_OPT = {
+  id: "tf",
+  label: "Timeframe",
+  options: [
+    { value: "1", label: "1 min" },
+    { value: "5", label: "5 min" },
+    { value: "15", label: "15 min" },
+    { value: "30", label: "30 min" },
+  ],
+};
+const MISSING = (sym: string): Result => ({
+  headline: `No bar stats for ${sym} yet.`,
+  rows: [],
+  caveat: `Run:  node scripts/build-bar-stats.mjs --sym ${sym} --in "<path-to-${sym}-1min.csv>"  — it writes public/data/bars-${sym}.json from your raw 1-minute CSV. The browser never loads the CSV itself, only the aggregates.`,
+});
 
 /* small predicates over the slim day */
 const brk = (d: SlimDay) => d.fcb;
@@ -807,11 +878,264 @@ const PROMPTS: Prompt[] = [
       };
     },
   },
+
+  /* ─────────────── Bar stats (needs public/data/bars-<SYM>.json) ─────────────── */
+  {
+    id: "tod",
+    cat: "Bar stats",
+    title: "Time-of-day seasonality — where the range and the drift actually live",
+    ask: "Mean return, absolute return (that's the one that pays), range, volume, up-close probability, and cumulative drift from the open — per clock bucket. The strongest and most persistent futures edge is almost always a time filter, not a signal.",
+    controls: [
+      SYM_OPT,
+      { id: "gran", label: "Bucket", options: [{ value: "hour", label: "Hourly" }, { value: "min30", label: "30 min" }, { value: "min5", label: "5 min" }] },
+      {
+        id: "dow",
+        label: "Day",
+        options: [
+          { value: "all", label: "All days" },
+          { value: "Mon", label: "Monday" },
+          { value: "Tue", label: "Tuesday" },
+          { value: "Wed", label: "Wednesday" },
+          { value: "Thu", label: "Thursday" },
+          { value: "Fri", label: "Friday" },
+        ],
+      },
+    ],
+    run: ({ bars }, s) => {
+      const B = bars[(s.sym || "ES") as "ES" | "NQ"];
+      if (!B) return MISSING(s.sym || "ES");
+      const dow = s.dow || "all";
+      const gran = s.gran || "hour";
+      // Weekday slices are only precomputed at hourly and 30m — a 5m × weekday
+      // cell would be ~40 sessions of noise anyway. Fall back to 30m and say so.
+      const coarse = dow !== "all" && gran === "min5";
+      const cells: TodCell[] =
+        dow === "all"
+          ? gran === "hour" ? B.tod.hour : gran === "min30" ? B.tod.min30 : B.tod.min5
+          : gran === "hour" ? B.tod.hourByDow[dow] ?? [] : B.tod.min30ByDow[dow] ?? [];
+
+      const maxAbs = Math.max(...cells.map((c) => c.absRet || 0), 1e-9);
+      const rows: Row[] = cells.map((c) => ({
+        label: hhmm(c.min),
+        n: c.n,
+        // rate column = share of the day's total "energy" (abs return) in this bucket
+        k: Math.round(((c.absRet || 0) / maxAbs) * c.n),
+        emphasis: (c.absRet || 0) >= 0.85 * maxAbs,
+        extra: {
+          "mean ret (bp)": fx(c.ret, 2),
+          "abs ret (bp)": fx(c.absRet, 2),
+          "avg range (pts)": fx(c.range, 2),
+          "up close": c.up != null ? (100 * c.up).toFixed(1) + "%" : "—",
+          "drift from open": fx(c.drift, 2),
+          "avg vol": c.vol != null ? c.vol.toLocaleString() : "—",
+        },
+      }));
+      return {
+        headline: `${B.symbol} · ${B.hours} · ${B.sessions} sessions (${B.from} → ${B.to})${dow === "all" ? "" : ` · ${dow} only`}. Rate column = that bucket's share of peak volatility; the highlighted rows are where the movement is.`,
+        cols: ["mean ret (bp)", "abs ret (bp)", "avg range (pts)", "up close", "drift from open", "avg vol"],
+        rows,
+        verdict:
+          "Read ABS RET, not MEAN RET. Mean return per bucket is a fraction of a basis point and is noise — a coin flip dressed as a bias. Absolute return and range are stable across years and tell you when to be at the desk and when the market is closed for business.",
+        caveat:
+          (coarse ? "No 5-minute weekday slice — a 5m × single-weekday cell is a few dozen sessions of noise, so this fell back to 30 minutes. " : "") +
+          "Drift-from-open is cumulative, so it inherits everything before it — it shows the shape of the average day, not an entry.",
+      };
+    },
+  },
+  {
+    id: "volstruct",
+    cat: "Bar stats",
+    title: "Range & volatility structure — ATR by clock, and what follows an inside/narrow bar",
+    ask: "Range percentiles per timeframe, ATR by hour and by weekday, and the three bar patterns that supposedly precede expansion: inside bars, outside bars, and narrow-range bars. Does compression really pay?",
+    controls: [
+      SYM_OPT,
+      {
+        id: "view",
+        label: "View",
+        options: [
+          { value: "atr", label: "ATR by clock" },
+          { value: "dist", label: "Range distribution" },
+          { value: "pattern", label: "Bar patterns" },
+        ],
+      },
+      { id: "ptf", label: "Pattern TF", options: [{ value: "5", label: "5 min" }, { value: "15", label: "15 min" }, { value: "30", label: "30 min" }] },
+    ],
+    run: ({ bars }, s) => {
+      const B = bars[(s.sym || "ES") as "ES" | "NQ"];
+      if (!B) return MISSING(s.sym || "ES");
+      const view = s.view || "atr";
+      const head = `${B.symbol} · ${B.hours} · ${B.sessions} sessions (${B.from} → ${B.to}).`;
+
+      if (view === "atr") {
+        const hi = Math.max(...B.vol.atrByHour.map((x) => x.atr || 0), 1e-9);
+        const rows: Row[] = [
+          ...B.vol.atrByHour.map((x) => ({
+            label: `Hour ${String(x.key).padStart(2, "0")}:00`,
+            n: x.n,
+            k: Math.round(((x.atr || 0) / hi) * x.n),
+            emphasis: (x.atr || 0) >= 0.85 * hi,
+            extra: { "avg range (pts)": fx(x.atr, 2), "p90 range": fx(x.p90, 2), "": "" },
+          })),
+          ...B.vol.atrByDow.map((x) => ({
+            label: `${x.key} (whole session)`,
+            n: x.n,
+            extra: { "avg range (pts)": fx(x.atr, 2), "p90 range": fx(x.p90, 2), "": "" },
+          })),
+        ];
+        return {
+          headline: `${head} 60-minute bars. Rate column = that hour's range as a share of the biggest hour.`,
+          cols: ["avg range (pts)", "p90 range", ""],
+          rows,
+          verdict: "Size the stop to the hour you're trading in, not to a daily ATR. The last hour and the first hour are different markets.",
+        };
+      }
+
+      if (view === "dist") {
+        const rows: Row[] = Object.entries(B.vol.ranges).map(([tf, r]) => ({
+          label: `${tf}-minute bar`,
+          n: B.bars,
+          extra: {
+            mean: fx(r.mean, 2),
+            median: fx(r.p50, 2),
+            p75: fx(r.p75, 2),
+            p90: fx(r.p90, 2),
+            p95: fx(r.p95, 2),
+            "body / range": r.bodyPct != null ? (100 * r.bodyPct).toFixed(0) + "%" : "—",
+          },
+        }));
+        return {
+          headline: `${head} Bar range in points, by timeframe.`,
+          cols: ["mean", "median", "p75", "p90", "p95", "body / range"],
+          rows,
+          verdict:
+            "The mean sits well above the median — range is right-skewed, so an 'average' stop gets hit by an ordinary bar. Size off the median and budget for the p90. Body/range under ~50% means most of the bar is wick: your fill is nowhere near the print you're looking at.",
+        };
+      }
+
+      const P = B.vol.patterns[s.ptf || "5"];
+      if (!P) return MISSING(B.symbol);
+      const line = (label: string, p: PatStat, emphasis = false): Row => ({
+        label,
+        n: p.n,
+        k: Math.round(p.expand * p.n),
+        emphasis,
+        extra: {
+          "how often": p.freq != null ? (100 * p.freq).toFixed(1) + "%" : "—",
+          "next bar up": p.nextUp != null ? (100 * p.nextUp).toFixed(1) + "%" : "—",
+          "took the high": p.brokeUp != null ? (100 * p.brokeUp).toFixed(1) + "%" : "—",
+          "took the low": p.brokeDn != null ? (100 * p.brokeDn).toFixed(1) + "%" : "—",
+          "took BOTH": p.bothSides != null ? (100 * p.bothSides).toFixed(1) + "%" : "—",
+        },
+      });
+      return {
+        headline: `${head} ${s.ptf || 5}-minute bars. Rate column = EXPANSION (the next bar's range is >1.5× the median bar). Median bar: ${P.medRange} pts.`,
+        cols: ["how often", "next bar up", "took the high", "took the low", "took BOTH"],
+        rows: [
+          line("Inside bar", P.inside, true),
+          line("Outside bar", P.outside),
+          line("Narrow-range bar (bottom quartile of the last 20)", P.narrowRange, true),
+        ],
+        verdict:
+          "Compression is supposed to precede expansion. Check the rate column against how often expansion happens anyway — if 'took BOTH' is high, the pattern isn't a breakout setup, it's a whipsaw generator that stops you out in both directions before it goes.",
+      };
+    },
+  },
+  {
+    id: "autocorr",
+    cat: "Bar stats",
+    title: "Autocorrelation, variance ratio & streaks — is this thing trending or reverting?",
+    ask: "The regime question, answered three ways: return autocorrelation at lags 1–20, the variance ratio (>1 trends, <1 reverts), volatility clustering on absolute returns, and what actually happens after N consecutive bars in one direction.",
+    controls: [
+      SYM_OPT,
+      TF_OPT,
+      {
+        id: "view",
+        label: "View",
+        options: [
+          { value: "streaks", label: "Streaks" },
+          { value: "acf", label: "Autocorrelation" },
+          { value: "vr", label: "Variance ratio" },
+        ],
+      },
+    ],
+    run: ({ bars }, s) => {
+      const B = bars[(s.sym || "ES") as "ES" | "NQ"];
+      if (!B) return MISSING(s.sym || "ES");
+      const tf = s.tf || "5";
+      const A = B.auto[tf];
+      if (!A) return MISSING(B.symbol);
+      const head = `${B.symbol} · ${tf}-minute bars · ${B.sessions} sessions (${B.from} → ${B.to}).`;
+      const view = s.view || "streaks";
+
+      if (view === "streaks") {
+        return {
+          headline: `${head} Rate column = the next bar CONTINUES the streak. 50% is a coin flip and means the streak carries no information.`,
+          cols: ["edge vs coin flip"],
+          rows: A.streaks.byRun.map((r) => ({
+            label: `After ${r.run} consecutive ${r.run === 1 ? "bar" : "bars"} the same way`,
+            n: r.n,
+            k: Math.round(r.cont * r.n),
+            emphasis: Math.abs(r.cont - 0.5) > 0.02,
+            extra: { "edge vs coin flip": `${r.cont >= 0.5 ? "+" : ""}${(100 * (r.cont - 0.5)).toFixed(1)} pts` },
+          })),
+          verdict:
+            "Almost every streak on index futures lands within a point or two of 50%. That is the honest answer, and it kills most 'three bars up so it keeps going' systems. If a row is meaningfully off 50, check the bar count before you believe it.",
+        };
+      }
+
+      if (view === "vr") {
+        return {
+          headline: `${head} VR(q) = Var(q-bar return) / (q × Var(1-bar return)). Above 1 = trending. Below 1 = mean-reverting. Exactly 1 = random walk.`,
+          cols: ["variance ratio", "read"],
+          rows: A.vr.map((x) => ({
+            label: `VR over ${x.q} bars (${x.q * Number(tf)} min)`,
+            n: B.sessions,
+            emphasis: x.v != null && Math.abs(x.v - 1) > 0.05,
+            extra: {
+              "variance ratio": x.v != null ? x.v.toFixed(3) : "—",
+              read: x.v == null ? "—" : x.v > 1.05 ? "trending" : x.v < 0.95 ? "mean-reverting" : "random walk",
+            },
+          })),
+          verdict:
+            "This is the single most useful number here: it tells you whether to buy breakouts or fade them at this timeframe. A VR near 1 across the board means neither — and that price alone won't give you an edge, so the edge has to come from elsewhere (time of day, positioning, GEX).",
+        };
+      }
+
+      return {
+        headline: `${head} ACF of returns = does direction persist. ACF of |returns| = volatility clustering (does a big bar beget a big bar).`,
+        cols: ["ACF returns", "ACF |returns|"],
+        rows: A.acf.map((x, i) => ({
+          label: `Lag ${x.lag} (${x.lag * Number(tf)} min back)`,
+          n: B.bars,
+          emphasis: x.v != null && Math.abs(x.v) > 0.03,
+          extra: {
+            "ACF returns": x.v != null ? x.v.toFixed(4) : "—",
+            "ACF |returns|": A.acfAbs[i]?.v != null ? A.acfAbs[i].v!.toFixed(4) : "—",
+          },
+        })),
+        verdict:
+          "Return ACF near zero at every lag = price is unpredictable from its own recent direction. |Return| ACF strongly positive and slow to decay = volatility IS predictable. That asymmetry is the real finding: you can forecast HOW MUCH it moves, not WHICH WAY.",
+        caveat:
+          tf === "1"
+            ? "At 1 minute the lag-1 ACF is usually negative because of bid-ask bounce — that's microstructure, not a mean-reversion edge. You cannot trade it through the spread. Look at 5m and 15m instead."
+            : undefined,
+      };
+    },
+  },
 ];
+
+/* time + number formatting for the bar-stat tables */
+function hhmm(min: number): string {
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+function fx(x: number | null | undefined, d = 2): string {
+  return x == null || !Number.isFinite(x) ? "—" : x.toFixed(d);
+}
 
 /* ── UI ───────────────────────────────────────────────────────────────────── */
 
-const CATS = ["All", "Cross-index", "Break quality", "Context", "Timing", "Session shape"] as const;
+const CATS = ["All", "Cross-index", "Break quality", "Context", "Timing", "Session shape", "Bar stats"] as const;
 
 function ResultTable({ res }: { res: Result }) {
   const cols = res.cols ?? [];
@@ -886,11 +1210,15 @@ function ResultTable({ res }: { res: Result }) {
 export default function StatPrompterTab() {
   const [es, setEs] = useState<IbDataset | null>(null);
   const [nq, setNq] = useState<IbDataset | null>(null);
+  const [barEs, setBarEs] = useState<BarStats | null>(null);
+  const [barNq, setBarNq] = useState<BarStats | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [cat, setCat] = useState<(typeof CATS)[number]>("All");
   const [q, setQ] = useState("");
   const [since, setSince] = useState("all");
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  /** per-prompt dropdown selections, keyed `${promptId}.${controlId}` */
+  const [sel, setSel] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let alive = true;
@@ -909,6 +1237,23 @@ export default function StatPrompterTab() {
     };
   }, []);
 
+  // Bar stats are OPTIONAL — the file only exists once build-bar-stats.mjs has
+  // been run against the raw CSV. A 404 here is not an error; the Bar Stats
+  // prompts just render the "run the script" note instead.
+  useEffect(() => {
+    let alive = true;
+    const grab = (s: "ES" | "NQ", set: (b: BarStats | null) => void) =>
+      fetch(`/data/bars-${s}.json`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => alive && set(j))
+        .catch(() => alive && set(null));
+    grab("ES", setBarEs);
+    grab("NQ", setBarNq);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const ctx: Ctx | null = useMemo(() => {
     if (!es || !nq) return null;
     const cut = since === "all" ? "" : `${since}-01-01`;
@@ -916,8 +1261,11 @@ export default function StatPrompterTab() {
     const N = nq.days.filter((d) => d.date >= cut);
     const nqMap = new Map(N.map((d) => [d.date, d]));
     const paired = E.filter((d) => nqMap.has(d.date)).map((e) => ({ d: e.date, e, n: nqMap.get(e.date)! }));
-    return { es: E, nq: N, paired };
-  }, [es, nq, since]);
+    // NOTE: the `since` filter does NOT apply to the bar stats — those are
+    // precomputed over the whole CSV. Re-run the script with a trimmed file if
+    // you need a narrower window. Said plainly in the footer so it can't mislead.
+    return { es: E, nq: N, paired, bars: { ES: barEs, NQ: barNq } };
+  }, [es, nq, since, barEs, barNq]);
 
   const list = useMemo(
     () =>
@@ -986,7 +1334,10 @@ export default function StatPrompterTab() {
 
       {list.map((p) => {
         const isOpen = !!open[p.id];
-        const res = isOpen && ctx ? p.run(ctx) : null;
+        // resolve this prompt's dropdown state, defaulting to each control's first option
+        const s: Sel = {};
+        for (const c of p.controls ?? []) s[c.id] = sel[`${p.id}.${c.id}`] ?? c.options[0].value;
+        const res = isOpen && ctx ? p.run(ctx, s) : null;
         return (
           <div key={p.id} style={{ ...classicCardAccentStyle, padding: 20 }} className="card-hover">
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
@@ -1014,15 +1365,39 @@ export default function StatPrompterTab() {
                 {isOpen ? "Hide" : "Run"}
               </button>
             </div>
+
+            {/* Dropdowns collapse a family of near-identical questions into ONE card.
+                They re-run the prompt live; no second Run click needed. */}
+            {isOpen && p.controls && (
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 14, alignItems: "center" }}>
+                {p.controls.map((c) => (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)" }}>
+                      {c.label}
+                    </span>
+                    <ThemedSelect
+                      value={s[c.id]}
+                      onChange={(v) => setSel((o) => ({ ...o, [`${p.id}.${c.id}`]: v }))}
+                      options={c.options}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
             {res && <ResultTable res={res} />}
           </div>
         );
       })}
 
       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>
-        Source: <code>public/data/ib-ES.json</code> + <code>ib-NQ.json</code> (slim exports from <code>ib-backtest-esu6.html</code>, same files the IB Stats tab reads).
-        Break = first 5m CLOSE outside the 09:30–10:30 IB. Failed = closed back inside within 30m. Extension is measured in IB widths.
-        Every field was stamped at its own confirm bar — no lookahead. Sample sizes aren&apos;t printed, but they still gate the read: a thin cell is badged THIN, and any rate over 85% is flagged to check for bias rather than treated as an edge.
+        <strong style={{ color: "rgba(255,255,255,0.6)" }}>Session prompts</strong> read <code>public/data/ib-ES.json</code> + <code>ib-NQ.json</code> (slim exports from <code>ib-backtest-esu6.html</code>).
+        Break = first 5m CLOSE outside the 09:30–10:30 IB. Failed = closed back inside within 30m. Extension is in IB widths.
+        <br />
+        <strong style={{ color: "rgba(255,255,255,0.6)" }}>Bar Stats prompts</strong> read <code>public/data/bars-ES.json</code> + <code>bars-NQ.json</code>, written by <code>scripts/build-bar-stats.mjs</code> from your raw 1-minute CSV.
+        Returns are log returns in basis points and never cross a session boundary. The <em>Since</em> filter above does <em>not</em> apply to them — they&apos;re precomputed over the whole CSV; re-run the script on a trimmed file for a narrower window.
+        <br />
+        No lookahead anywhere: every field was stamped at its own confirm bar. Sample sizes aren&apos;t printed, but they still gate the read — a thin cell is badged THIN, and any rate over 85% is flagged to check for bias rather than treated as an edge.
       </div>
     </div>
   );
