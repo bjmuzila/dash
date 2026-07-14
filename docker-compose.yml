@@ -52,23 +52,27 @@ services:
       docker-proxy:
         condition: service_started
 
-  # Read-only, locked-down Docker API proxy. Lets the dashboard container query
-  # theta-terminal's live CPU/mem stats (owner page readout) WITHOUT mounting
-  # the raw docker.sock into the app container — a raw socket mount is
-  # root-equivalent host access regardless of any `:ro` flag on the mount
-  # itself. This proxy only allows GET on /containers* (list + stats); POST,
-  # exec, images, volumes, networks, etc. are all off. Not published to the
-  # host — only reachable from sibling containers on the compose network.
+  # Locked-down Docker API proxy. Lets the dashboard container (a) read
+  # theta-terminal's live CPU/mem stats for the owner page and (b) RESTART
+  # theta-terminal when the flow watchdog finds it wedged (state/theta-restart.js)
+  # — WITHOUT mounting the raw docker.sock into the app container, since a raw
+  # socket mount is root-equivalent host access regardless of any `:ro` flag.
+  # Surface is GET /containers* plus POST /containers/*/restart ONLY: start,
+  # stop, exec, images, volumes, networks, etc. all stay off, so the worst this
+  # can do is bounce a container. Not published to the host — only reachable
+  # from sibling containers on the compose network.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: docker-proxy
     restart: unless-stopped
     environment:
       CONTAINERS: 1
-      POST: 0
+      # POST + ALLOW_RESTARTS: required for the watchdog's self-heal restart.
+      # ALLOW_START/ALLOW_STOP stay 0 — restart is the only mutation allowed.
+      POST: 1
+      ALLOW_RESTARTS: 1
       ALLOW_START: 0
       ALLOW_STOP: 0
-      ALLOW_RESTARTS: 0
       EXEC: 0
       IMAGES: 0
       VOLUMES: 0
