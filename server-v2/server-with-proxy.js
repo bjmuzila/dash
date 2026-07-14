@@ -2139,6 +2139,11 @@ async function main() {
     // "5 minutes to <event>" / "1 minute to <event>" lines to public/signals.txt
     // for High/Medium impact events, read by the home SignalsFeed as [Econ] chips.
     require('./econ-alert-recorder').startEconAlertRecorder(PORT);
+    // Discord relay: mirrors public/signals.txt (hand-authored + AUTO econ block)
+    // into the signals Discord channel. Engine signals (/proxy/signals) reach the
+    // same channel via signals-engine.js's own SIGNALS_DISCORD_WEBHOOK — point
+    // both env vars at the same webhook and Discord matches the home feed.
+    require('./discord-relay').startDiscordRelay();
     // Regime Engine persistent-learning trainer: daily 05:00-05:10 ET, refits
     // the same HMM on a 30D window, decodes+validates each day's regime call
     // against the actual next-day return, and stores fit + accuracy metrics
