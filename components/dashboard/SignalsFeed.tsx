@@ -224,11 +224,10 @@ function Chip({ s }: { s: Signal }) {
     alignItems: "center",
     gap: 9,
     flexShrink: 0,
-    padding: "7px 13px 7px 10px",
+    padding: "7px 13px",
     borderRadius: 10,
     background: "rgba(255,255,255,0.03)",
     border: "1px solid rgba(255,255,255,0.08)",
-    borderLeft: `3px solid ${accent}`,
     textDecoration: "none",
     cursor: s.link ? "pointer" : "default",
   };

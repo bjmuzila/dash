@@ -78,6 +78,9 @@ const CASH_BASIS_FILE = path.join(__dirname, '.cash-basis.json');
 // Dev-probe on-demand subscriptions auto-expire after this long.
 const PROBE_TTL_MS = Number(process.env.PROBE_TTL_MS || 15 * 60 * 1000);
 const OI_REFRESH_MS = Number(process.env.OI_REFRESH_MS || 60000);
+// How long the ES Quote/Trade stream may go silent before the 5m candle flush
+// takes over as the esFut writer. See _publishEsFutFromCandle.
+const ES_TICK_STALE_MS = Number(process.env.ES_TICK_STALE_MS || 30000);
 // Volume-only refresh cadence (Theta mode). OI is once-daily (OPRA ~06:30 ET)
 // and never needs re-polling after coverage is ready. Volume builds intraday, so
 // we refresh it separately at a slower rate — no need for every-60s full chain.
@@ -1534,6 +1537,9 @@ class TastytradeProxy {
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
     this.nqQuote = null;          // { bid, ask, mid } for the front NQ future
     this.nqLastTrade = 0;
+    // Last time the ES Quote/Trade stream produced a usable price. 0 = never.
+    // Gates the candle-driven esFut fallback (_publishEsFutFromCandle).
+    this._esTickAt = 0;
     this.expiry = '';
     this.recomputeTimer = null;
     // Dev-probe on-demand subscriptions: streamerSymbol -> { since, timer, gotAt }.
@@ -2332,8 +2338,31 @@ class TastytradeProxy {
     } else if (ask > 0) {
       px = ask;
     }
-    if (px > 0) marketState.setAux({ esFut: Math.round(px * 4) / 4 });
+    if (px > 0) {
+      // Mark the Quote/Trade stream as alive. The 5m candle flush uses this to
+      // decide whether it must publish esFut itself (see _flushEsCandles): the
+      // plain future Quote/Trade subscription can go silent for long stretches,
+      // and a stale esFut freezes marketState.basis on whatever contract was
+      // front when it last ticked — across a quarterly roll that's the EXPIRED
+      // contract, and every SPX→ES level lands one calendar spread (~50pt) off.
+      this._esTickAt = Date.now();
+      marketState.setAux({ esFut: Math.round(px * 4) / 4 });
+    }
     // Display SPX rides on ES off-hours; recompute it whenever ES moves.
+    this._publishSpotDisplay();
+  }
+
+  /**
+   * Fallback esFut writer, driven by the 5m candle stream. Only fires when the
+   * ES Quote/Trade stream hasn't ticked within ES_TICK_STALE_MS — the candle
+   * bars are the same broker feed on the SAME front contract, so this keeps
+   * esFut (and therefore marketState.basis) alive and roll-correct instead of
+   * frozen. A live Quote/Trade always wins; this never fights it.
+   */
+  _publishEsFutFromCandle(lastClose) {
+    if (!(lastClose > 0)) return;
+    if (Date.now() - (this._esTickAt || 0) < ES_TICK_STALE_MS) return; // live stream is healthy
+    marketState.setAux({ esFut: Math.round(lastClose * 4) / 4 });
     this._publishSpotDisplay();
   }
 
@@ -2414,10 +2443,14 @@ class TastytradeProxy {
     if (rows.length) {
       const last = rows[rows.length - 1];
       const lastClose = Number(last.close);
-      // NOTE: do NOT set esFut here. The live ES Quote/Trade handler (_onEvent)
-      // already publishes esFut from the real-time bid/ask mid. Writing it again
-      // from the 5s candle close created two competing writers at different
-      // values → the visible flicker. Candles are used ONLY for the baseline.
+      // esFut is normally owned by the live ES Quote/Trade handler (_onEvent) —
+      // writing it unconditionally from the candle close created two competing
+      // writers at different values → visible flicker. But when that stream goes
+      // SILENT, esFut freezes, marketState._recomputeBasis' freshness gate holds
+      // the last basis, and across a quarterly roll that held basis belongs to the
+      // expired contract (~50pt error on every SPX→ES level). So: candles publish
+      // esFut only as a fallback, gated on the Quote/Trade stream being stale.
+      this._publishEsFutFromCandle(lastClose);
 
       const todayDate = last.date;
 

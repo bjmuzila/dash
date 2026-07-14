@@ -358,6 +358,13 @@ export default function EsCandlesPage() {
   // close. Used to derive SPX from ES on the right axis OVERNIGHT / pre-open,
   // until the 9:30 ET open when the live basis takes over. 0 = not available.
   const prevBasisRef = useRef(0);
+  // Contract-safe live basis inputs. lastEsCloseRef = the last 5m ES CANDLE close,
+  // i.e. the EXACT contract the chart plots; spotRef = live SPX. Never use
+  // marketState.esFut for this: it's fed by a Quote/Trade sub that goes silent, so
+  // the server's `basis` freezes on the PRE-ROLL contract (~1 quarterly spread of
+  // error, ~52pt, after every roll — the ESM→ESU roll bug).
+  const lastEsCloseRef = useRef(0);
+  const spotRef = useRef(0);
   // ET date → that session's ES−SPX basis, built from DAILY closes (ES 16:00
   // candle − SPX 16:00 eod_gex). This is the authoritative historical basis and
   // is deliberately INDEPENDENT of the heatmap backfill window: deriving it from
@@ -886,9 +893,23 @@ export default function EsCandlesPage() {
     // value goes stale, which was the original reason for preferring live).
     //     cash shut → prior-day CLOSE basis (ES 16:00 − SPX 16:00), which is the
     //                 last basis that was actually measurable.
+    //
+    // CONTRACT SAFETY (roll bug): the live basis must be measured against the
+    // SAME ES contract the chart plots. The server's `basis` is esFut − spot,
+    // and esFut is published only from the ES Quote/Trade stream — which goes
+    // silent (see _flushEsCandles' "do NOT set esFut here" note), so
+    // marketState._recomputeBasis' freshness gate HOLDS the last good value.
+    // Across a quarterly roll that held value belongs to the EXPIRED contract
+    // and every SPX→ES level lands ~one calendar spread (~50pt) off. So we
+    // derive the live basis from the last ES CANDLE close (definitionally the
+    // charted contract) − live SPX spot, and only fall back to the server /
+    // prior-day values when one of those two is missing.
     if (isCashOpen()) {
-      if (basisRef.current) return basisRef.current;
-      return prevBasisRef.current;
+      const es = lastEsCloseRef.current;
+      const spx = spotRef.current;
+      if (es > 0 && spx > 0) return es - spx;
+      if (prevBasisRef.current) return prevBasisRef.current;
+      return basisRef.current;
     }
     if (prevBasisRef.current) return prevBasisRef.current;
     return basisRef.current;
@@ -1102,6 +1123,19 @@ export default function EsCandlesPage() {
     chart?.timeScale().subscribeVisibleLogicalRangeChange(onRange);
     return () => { chart?.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); };
   }, [rows, prevCloses, levels.basis, levels.esFut, levels.spx]);
+
+  // Feed the contract-safe basis inputs (see effectiveBasis). lastEsCloseRef is
+  // the charted contract's own price, so a quarterly roll can never desync it
+  // from the candles the way the server's esFut does.
+  useEffect(() => {
+    if (rows.length) {
+      const c = Number(rows[rows.length - 1].close);
+      if (c > 0) lastEsCloseRef.current = c;
+    }
+  }, [rows]);
+  useEffect(() => {
+    if (levels.spx != null && levels.spx > 0) spotRef.current = levels.spx;
+  }, [levels.spx]);
 
   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
   // WS frame has arrived recently. Mirrors the server's authoritative
@@ -1881,9 +1915,9 @@ export default function EsCandlesPage() {
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
             <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
             {(() => {
-              // Server-authoritative basis (see apply()); this badge was reading
-              // the raw independently-timed esFut/spx diff before.
-              const basis = levels.basis ?? effectiveBasis();
+              // effectiveBasis() ONLY — never levels.basis. The server basis is
+              // esFut-derived and freezes on the expired contract across a roll.
+              const basis = effectiveBasis();
               return (
                 <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
                   ES Basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}
@@ -1987,7 +2021,7 @@ export default function EsCandlesPage() {
       <div className="flex flex-col" style={{ flex: 1, minHeight: 0 }}>
       <div className="flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
-          const basis = levels.basis ?? effectiveBasis();
+          const basis = effectiveBasis();
           const es = (v: number | null) => (v != null ? (v + basis).toFixed(2) : "—");
           // Dissolve stat tile: borderless, faint light-blue radial, blur(20px).
           // Value keeps its semantic color; the tile body carries only highlight.
@@ -2076,7 +2110,7 @@ export default function EsCandlesPage() {
               putWall={levels.putWall}
               gexFlip={levels.gexFlip}
               spot={levels.spx}
-              basis={levels.basis ?? effectiveBasis()}
+              basis={effectiveBasis()}
               priceToY={priceToY}
               drawRef={railDrawRef}
             />
