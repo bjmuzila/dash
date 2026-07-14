@@ -4,9 +4,13 @@
  *
  * In-process econ-calendar alert poller. Every 20s, pulls today's (ET) events
  * from GET /api/calendar (same feed EconCalendarPanel renders) and fires two
- * automatic countdown alerts per event — "5 minutes to <event>" and "1 minute
- * to <event>" — appended to public/signals.txt inside a dedicated AUTO block,
+ * automatic countdown alerts per RELEASE SLOT — "5 minutes to <event>" and
+ * "1 minute to <event>" — appended to public/signals.txt in a dedicated AUTO block,
  * so they show up in the home SignalsFeed ([Econ] tag) without a manual edit.
+ *
+ * A "release slot" is one ET clock time, NOT one event row. CPI drops four rows
+ * at 8:30 (CPI m/m, CPI y/y, Core CPI m/m, Core CPI y/y); those collapse into a
+ * single countdown listing them, instead of four duplicate-looking alerts.
  * This is the "wired from EconCalendarPanel" line documented in the
  * signals.txt header/alert vocabulary.
  *
@@ -53,10 +57,24 @@ function etDisplayTime(d = new Date()) {
   }).format(d).replace(/\s?([AP]M)$/i, (m, ap) => ' ' + ap.toUpperCase());
 }
 
-// firedToday: Set of `${date}|${title}|${time}|${kind}` so each event fires its
+// firedToday: Set of `${date}|${time}|${kind}` so each RELEASE SLOT fires its
 // 5m and 1m alert exactly once. Reset whenever the ET calendar date rolls over.
+//
+// Keyed on TIME, not title: a single release prints several series at once (CPI
+// drops as CPI m/m + CPI y/y + Core CPI m/m + Core CPI y/y, all 8:30). Keying on
+// title made that one release emit four identical countdowns, then four more a
+// minute later — eight alerts for one number. There is one event on the tape at
+// 8:30; there should be one alert.
 let firedToday = new Set();
 let firedDate = null;
+
+// Human label for a release slot: "CPI m/m, CPI y/y, Core CPI m/m +1 more".
+const MAX_TITLES = 3;
+function slotLabel(titles) {
+  const uniq = [...new Set(titles)];
+  if (uniq.length <= MAX_TITLES) return uniq.join(', ');
+  return `${uniq.slice(0, MAX_TITLES).join(', ')} +${uniq.length - MAX_TITLES} more`;
+}
 
 function resetIfNewDay(today) {
   if (firedDate !== today) {
@@ -84,26 +102,35 @@ async function pollOnce(base) {
   const nowDisp = etDisplayTime();
   const newLines = [];
 
+  // Bucket every in-window event by release time, so one 8:30 release = one slot
+  // = one alert, no matter how many series it prints.
+  const slots = new Map(); // ev.time -> { untilMin, titles[] }
   for (const ev of events) {
     if (ev.date !== today) continue;
     if (!IMPACTS.has(ev.impact)) continue;
     if (!ev.time || !/^\d{1,2}:\d{2}$/.test(ev.time)) continue;
 
     const [h, m] = ev.time.split(':').map(Number);
-    const evMin = h * 60 + m;
-    const untilMin = evMin - nowMin;
+    const untilMin = (h * 60 + m) - nowMin;
     if (untilMin < 0 || untilMin > 5) continue;
 
-    const key5 = `${today}|${ev.title}|${ev.time}|5m`;
-    const key1 = `${today}|${ev.title}|${ev.time}|1m`;
+    const slot = slots.get(ev.time) || { untilMin, titles: [] };
+    slot.titles.push(ev.title);
+    slots.set(ev.time, slot);
+  }
+
+  for (const [time, { untilMin, titles }] of slots) {
+    const label = slotLabel(titles);
+    const key5 = `${today}|${time}|5m`;
+    const key1 = `${today}|${time}|1m`;
 
     if (untilMin <= 5 && untilMin >= 4 && !firedToday.has(key5)) {
       firedToday.add(key5);
-      newLines.push(`${nowDisp}  [Econ] 5 minutes to ${ev.title} {/analytics}`);
+      newLines.push(`${nowDisp}  [Econ] 5 minutes to ${label} {/analytics}`);
     }
     if (untilMin <= 1 && untilMin >= 0 && !firedToday.has(key1)) {
       firedToday.add(key1);
-      newLines.push(`${nowDisp}  [Econ] 1 minute to ${ev.title} {/analytics}`);
+      newLines.push(`${nowDisp}  [Econ] 1 minute to ${label} {/analytics}`);
     }
   }
 

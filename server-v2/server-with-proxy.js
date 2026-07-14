@@ -44,6 +44,7 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startOiChangeRecorder, runSweep: runOiChangeSweep, ensureSchema: oiChangeEnsureSchema, getPool: oiChangeGetPool } = require('./oi-change-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
+const { startNetGexPctRecorder, runSweep: runNetGexPctSweep, ensureSchema: netGexPctEnsureSchema, getPool: netGexPctGetPool, MAX_DTE_DAYS: NGP_MAX_DTE } = require('./net-gex-pct-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, getLatestFit: getRegimeLatestFit, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
@@ -1483,6 +1484,40 @@ async function main() {
         return;
       }
 
+      // ── Net GEX % ────────────────────────────────────────────────────────
+      // GET /proxy/net-gex-pct?limit=500&basis=oivol|vol
+      // Every EM-watchlist ticker with an option chain, with its signed net-GEX
+      // share of total gamma (ΣnetGEX / Σ|netGEX|) for (a) the nearest expiry
+      // and (b) all expiries within the DTE window.
+      if (pathname === '/proxy/net-gex-pct' && req.method === 'GET') {
+        (async () => {
+          try {
+            if (!(await netGexPctEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = netGexPctGetPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(1000, Math.max(1, Number(u.searchParams.get('limit') || 500)));
+            const { rows } = await p.query(
+              `SELECT symbol, spot, near_expiry, near_dte, near_pct, near_net, near_abs, near_pct_vol,
+                      all_pct, all_net, all_abs, all_pct_vol, exp_count, date, ts
+                 FROM net_gex_pct
+                WHERE date = (SELECT MAX(date) FROM net_gex_pct)
+                ORDER BY all_abs DESC NULLS LAST
+                LIMIT $1`,
+              [limit]
+            );
+            sendJson(res, 200, { ok: true, rows, maxDte: NGP_MAX_DTE, asOf: new Date().toISOString() });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual sweep: POST /proxy/net-gex-pct-run (force = bypass RTH gate)
+      if (pathname === '/proxy/net-gex-pct-run' && req.method === 'POST') {
+        runNetGexPctSweep({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+
       // ── Far CB Watch ─────────────────────────────────────────────────────
       // GET /proxy/far-cb-watch — today's flagged tickers (highest OI+Vol GEX
       // strike within 30d sits > OTM_THRESHOLD_PCT% away from spot), ranked by
@@ -2094,6 +2129,9 @@ async function main() {
     // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
     // strike (within 30d expirations) sits unusually far OTM vs spot.
     startFarCbRecorder();
+    // Net GEX %: signed ΣnetGEX / Σ|netGEX| per EM-watchlist ticker, nearest
+    // expiry + all expiries in the DTE window. Feeds /scanner → "Net GEX %".
+    startNetGexPctRecorder();
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();
