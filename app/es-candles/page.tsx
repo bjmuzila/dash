@@ -916,29 +916,28 @@ export default function EsCandlesPage() {
   // disagrees by more than that is a bad spot print or a contract mismatch, never a
   // real basis move, so it's rejected and the anchor holds.
   const effectiveBasis = useCallback(() => {
-    // Anchor: yesterday's close basis, else the newest day in the per-session map
-    // (same two sources, so it's a free second chance when the prevCloses fetch
-    // hasn't landed or eod_gex is missing yesterday's row).
+    // 1. TRUSTED: /proxy/es-spx-basis — our ES 16:00 close (charted contract, so
+    //    roll-correct) − Yahoo ^GSPC close (independent of the broker). This is the
+    //    only source not poisoned by the broker "SPX" spot, which actually tracks ES
+    //    (measured 2026-07-13: fed 7564.89 when SPX cash was 7515.89, ~+49 hot = one
+    //    whole basis). The real basis decays ~1pt/day, so a daily anchor is plenty —
+    //    a LIVE basis was never needed, and chasing one off a broken spot is what
+    //    produced the +30 / −14 garbage.
+    if (isPlausibleBasis(trustedBasisRef.current)) return trustedBasisRef.current;
+
+    // 2. Prior-day close basis from eod_gex. Same shape, but its SPX column is the
+    //    broker spot, so it inherits the same poison — only a fallback.
     let anchor = prevBasisRef.current;
     if (!isPlausibleBasis(anchor) && dayBasisRef.current.size) {
       const days = [...dayBasisRef.current.entries()].sort((a, b) => a[0].localeCompare(b[0]));
       const newest = days[days.length - 1]?.[1] ?? 0;
       if (isPlausibleBasis(newest)) anchor = newest;
     }
+    if (isPlausibleBasis(anchor)) return anchor;
 
-    const es = lastEsCloseRef.current;
-    const spx = spotRef.current;
-    const live = es > 0 && spx > 0 ? es - spx : 0;
-
-    if (isPlausibleBasis(anchor)) {
-      // Live may only DRIFT the anchor, never replace it.
-      if (isCashOpen() && isPlausibleBasis(live) && Math.abs(live - anchor) <= LIVE_BASIS_TOL) return live;
-      return anchor;
-    }
-    // No usable anchor. Take the live candle basis only if it's physically
-    // possible, then the server's, then give up (0) rather than bend every level
-    // by a bogus number — a wrong basis is worse than an obviously-missing one.
-    if (isCashOpen() && isPlausibleBasis(live)) return live;
+    // 3. Last resort: the server's own basis, and only if it's physically possible.
+    //    Otherwise 0 — a visibly-missing basis beats one that silently bends every
+    //    level by ~50pt.
     if (isPlausibleBasis(basisRef.current)) return basisRef.current;
     return 0;
   }, []);

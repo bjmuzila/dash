@@ -915,6 +915,7 @@ function GreeksGauge({
 // not the confirming sample.
 const CROSS_BAND_FRAC = 0.08; // must clear 8% of today's |scale| past zero
 const CROSS_CONFIRM = 2;      // consecutive samples on the new side to confirm
+const CROSS_HOLD_MS = 60_000; // …or hold the new side this long (sustained flip)
 
 interface ZeroCross { ts: number; label: string; up: boolean } // up = − → +
 function zeroCrossings(pts: { ts: number; value: number }[], label: string, fullScale: number): ZeroCross[] {
@@ -927,7 +928,11 @@ function zeroCrossings(pts: { ts: number; value: number }[], label: string, full
     const v = p.value;
     if (!isFinite(v)) continue;
     const side = v > band ? 1 : v < -band ? -1 : 0; // 0 = inside deadband
-    if (side === 0) { pendSign = 0; pendCount = 0; continue; }
+    // Neutral = inside the deadband = NO INFORMATION. Do not clear a pending
+    // candidate here: a series chopping across zero dips in and out of the band
+    // constantly, so resetting on neutral meant a real, sustained flip could
+    // never accumulate CROSS_CONFIRM consecutive samples and was never logged.
+    if (side === 0) continue;
 
     if (committed === 0) {
       // Establish the initial side (no crossing recorded for the first commit).
@@ -937,12 +942,14 @@ function zeroCrossings(pts: { ts: number; value: number }[], label: string, full
       continue;
     }
 
-    if (side === committed) { pendSign = 0; pendCount = 0; continue; } // still on side
+    // Back on the committed side — that DOES kill the candidate.
+    if (side === committed) { pendSign = 0; pendCount = 0; continue; }
 
-    // Opposing side — candidate flip, needs confirmation.
+    // Opposing side — candidate flip, needs confirmation: either CROSS_CONFIRM
+    // samples out past the band, or the new side simply holding for CROSS_HOLD_MS.
     if (side === pendSign) pendCount++;
     else { pendSign = side; pendCount = 1; pendTs = p.ts; }
-    if (pendCount >= CROSS_CONFIRM) {
+    if (pendCount >= CROSS_CONFIRM || p.ts - pendTs >= CROSS_HOLD_MS) {
       out.push({ ts: pendTs, label, up: side > 0 });
       committed = side; pendSign = 0; pendCount = 0;
     }

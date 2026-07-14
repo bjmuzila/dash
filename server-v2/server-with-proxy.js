@@ -37,6 +37,7 @@ const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = requir
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
+const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
@@ -255,6 +256,19 @@ async function handleProxyRest(req, res) {
     default:
       // Async routes are handled below (return false so they fall through).
       break;
+  }
+
+  // /proxy/es-spx-basis
+  // The ONE trustworthy ES−SPX basis: our es_candles 16:00 ET close (the charted
+  // contract → roll-correct) minus Yahoo ^GSPC's close (independent of the broker
+  // feed, whose "SPX" spot actually tracks ES and poisons every other basis path).
+  // { basis, esClose, spxClose, date } — or { basis: null } when unavailable, which
+  // callers must NOT coerce to 0.
+  if (pathname === '/proxy/es-spx-basis') {
+    getEsSpxBasis()
+      .then((b) => sendJson(res, 200, b ?? { basis: null }))
+      .catch((e) => sendJson(res, 500, { error: 'es-spx-basis failed', detail: String(e?.message || e) }));
+    return true;
   }
 
   // /proxy/gex-history?expiry=YYYY-MM-DD&ages=5,15,30
