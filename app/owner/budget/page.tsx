@@ -693,7 +693,7 @@ export default function BudgetPage() {
         </div>
 
         {/* Alerts · banks · upcoming pay */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", gap: 12, alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
           <RentCountdown info={rentInfo} currency={currency} />
           <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
           <UpcomingPayCard data={upcomingPay} pastDue={billsDue.filter((b) => b.days < 0)} currency={currency} onMarkPaid={markBillPaid} />
@@ -1405,44 +1405,43 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
           {grid.map((g) => (
             <div key={g} style={{ position: "absolute", left: 0, right: 0, top: (1 - g) * H, borderTop: `1px dashed ${HOME_THEME.border}` }} />
           ))}
-          <div style={{ position: "absolute", left: 0, right: 44, top: 0, bottom: 0, display: "flex", alignItems: "flex-end", gap: buckets.length > 20 ? 2 : 8 }}>
-            {buckets.map((b, i) => (
-              <div
-                key={`${b.label}-${i}`}
-                onMouseEnter={() => setHover(i)}
-                onMouseLeave={() => setHover(null)}
-                style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 2, position: "relative", background: hover === i ? "rgba(255,255,255,0.03)" : "transparent", borderRadius: 6 }}
-              >
-                <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: HOME_THEME.green, borderRadius: "4px 4px 0 0" }} />
-                <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: SOFT_RED, borderRadius: "4px 4px 0 0" }} />
-                {hover === i && (
-                  <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green }}>In {fmtMoney(b.inflow, currency)}</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>Out {fmtMoney(b.outflow, currency)}</div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: LIGHT_BLUE, marginTop: 2, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 3 }}>Bal {fmtMoney(balances[i], currency)}</div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-          {/* Running-balance line overlay (real dollars, right axis) */}
-          {pts.length > 1 && (
-            <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ position: "absolute", left: 0, right: 44, top: 0, bottom: 0, pointerEvents: "none", overflow: "visible" }}>
-              <defs>
-                <linearGradient id="cfProjFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.20} />
-                  <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              {showZero && <line x1={0} x2={100} y1={lineY(0)} y2={lineY(0)} stroke={bRgba(SOFT_RED, 0.4)} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />}
-              <path d={areaPath} fill="url(#cfProjFill)" stroke="none" />
-              <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ filter: `drop-shadow(0 0 4px ${bRgba(LIGHT_BLUE, 0.5)})` }} />
-              {pts.map((p, i) => (
-                <circle key={i} cx={p[0]} cy={p[1]} r={2.5} fill={balances[i] < 0 ? SOFT_RED : LIGHT_BLUE} vectorEffect="non-scaling-stroke" />
+          <div style={{ position: "absolute", left: 0, right: 44, top: 0, bottom: 0 }}>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", gap: buckets.length > 20 ? 2 : 8 }}>
+              {buckets.map((b, i) => (
+                <div
+                  key={`${b.label}-${i}`}
+                  onMouseEnter={() => setHover(i)}
+                  onMouseLeave={() => setHover(null)}
+                  style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 2, position: "relative", background: hover === i ? "rgba(255,255,255,0.03)" : "transparent", borderRadius: 6 }}
+                >
+                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: HOME_THEME.green, borderRadius: "4px 4px 0 0" }} />
+                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: SOFT_RED, borderRadius: "4px 4px 0 0" }} />
+                  {hover === i && (
+                    <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green }}>In {fmtMoney(b.inflow, currency)}</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>Out {fmtMoney(b.outflow, currency)}</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: LIGHT_BLUE, marginTop: 2, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 3 }}>Bal {fmtMoney(balances[i], currency)}</div>
+                    </div>
+                  )}
+                </div>
               ))}
-            </svg>
-          )}
+            </div>
+            {/* Running-balance line overlay (real dollars, right axis) */}
+            {pts.length > 1 && (
+              <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
+                <defs>
+                  <linearGradient id="cfProjFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.20} />
+                    <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                {showZero && <line x1={0} x2={100} y1={lineY(0)} y2={lineY(0)} stroke={bRgba(SOFT_RED, 0.4)} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />}
+                <path d={areaPath} fill="url(#cfProjFill)" stroke="none" />
+                <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+              </svg>
+            )}
+          </div>
           {/* Right-hand balance axis (light blue = running balance in $) */}
           {pts.length > 1 && (
             <div style={{ position: "absolute", right: 0, top: 0, width: 42, height: H, pointerEvents: "none" }}>
