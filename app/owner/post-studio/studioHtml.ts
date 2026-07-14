@@ -280,7 +280,20 @@ function inspector(){
   }
   if(t==='image'||t==='logo'){
     h+='<div class="row"><button id="i_load" class="pri" style="flex:1">Load image…</button></div>';
-    if(t==='image') h+='<div class="row"><button id="i_full">Fill canvas</button><button id="i_reset">Reset zoom</button></div>';
+    if(t==='image'){
+      var im0=sel.querySelector('img');
+      var z0=im0?parseFloat(im0.dataset.z||'1'):1;
+      var op0=im0?(im0.style.objectPosition||'50% 50%').split(' '):['50%','50%'];
+      var fit0=im0?(im0.style.objectFit||'cover'):'cover';
+      h+='<label>Fit inside the box</label><div class="row">'
+        +'<button data-fit="cover" class="'+(fit0==='cover'?'on':'')+'">Crop to fill</button>'
+        +'<button data-fit="contain" class="'+(fit0==='contain'?'on':'')+'">Show whole image</button>'
+        +'</div>';
+      h+='<label>Zoom</label><input type="range" id="i_z" min="1" max="4" step="0.02" value="'+z0+'">';
+      h+='<label>Position — horizontal</label><input type="range" id="i_x" min="0" max="100" value="'+parseFloat(op0[0])+'">';
+      h+='<label>Position — vertical</label><input type="range" id="i_y" min="0" max="100" value="'+parseFloat(op0[1])+'">';
+      h+='<div class="row" style="margin-top:8px"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
+    }
   }
   if(t==='box'){
     h+='<div class="f2"><div><label>Fill</label><input type="color" id="b_bg" value="'+sel.dataset.bgc+'"></div><div><label>Border</label><input type="color" id="b_bd" value="'+sel.dataset.bd+'"></div></div>';
@@ -313,8 +326,33 @@ function inspector(){
   if(t==='image'||t==='logo'){
     g('i_load').onclick=function(){pick(sel)};
     if(t==='image'){
+      var im=function(){return sel.querySelector('img')};
+      var opGet=function(){ var m=im(); return (m&&m.style.objectPosition||'50% 50%').split(' '); };
+      var opSet=function(x,y){ var m=im(); if(m) m.style.objectPosition=x+'% '+y+'%'; };
+
+      p.querySelectorAll('[data-fit]').forEach(function(b){
+        b.onclick=function(){
+          var m=im(); if(!m) return;
+          m.style.objectFit=b.dataset.fit;
+          p.querySelectorAll('[data-fit]').forEach(function(o){o.classList.remove('on')});
+          b.classList.add('on');
+        };
+      });
+      g('i_z').oninput=function(){
+        var m=im(); if(!m) return;
+        m.dataset.z=this.value;
+        m.style.width=(this.value*100)+'%'; m.style.height=(this.value*100)+'%';
+      };
+      g('i_x').oninput=function(){ opSet(this.value, parseFloat(opGet()[1])); };
+      g('i_y').oninput=function(){ opSet(parseFloat(opGet()[0]), this.value); };
+
       g('i_full').onclick=function(){sel.style.left='0px';sel.style.top='0px';sel.style.width=px(W);sel.style.height=px(H);sel.style.borderRadius='0';sel.style.border='0'};
-      g('i_reset').onclick=function(){var im=sel.querySelector('img'); if(im){im.dataset.z=1;im.style.width='100%';im.style.height='100%';im.style.objectPosition='50% 50%'}};
+      g('i_reset').onclick=function(){
+        var m=im(); if(!m) return;
+        m.dataset.z=1; m.style.width='100%'; m.style.height='100%';
+        m.style.objectPosition='50% 50%'; m.style.objectFit='cover';
+        inspector();
+      };
     }
   }
   if(t==='box'){
