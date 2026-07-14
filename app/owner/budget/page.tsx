@@ -119,6 +119,9 @@ export default function BudgetPage() {
   const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // Overview: cash-flow bucket size + the right-hand panel's tab.
+  const [cfMode, setCfMode] = useState<"daily" | "weekly" | "monthly">("daily");
+  const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
 
   // Add-row composer
   const [rwDate, setRwDate] = useState(todayIso());
@@ -161,9 +164,10 @@ export default function BudgetPage() {
     setSelectedDate(null);
   }, [month]);
 
-  // Load a whole year of register rows when the Yearly tab is open.
+  // Load a whole year of register rows for the Yearly tab and for the Overview's
+  // monthly cash-flow bucket.
   useEffect(() => {
-    if (tab !== "yearly") return;
+    if (tab !== "yearly" && tab !== "overview") return;
     let cancelled = false;
     (async () => {
       setYearLoading(true);
@@ -393,6 +397,90 @@ export default function BudgetPage() {
     return { months, totals, start: months[0]?.start ?? 0, end: months[11]?.end ?? 0, catSpend, uncategorized };
   }, [yearRows, recurring, year]);
 
+  // ── Overview derived data ────────────────────────────────────────────────
+  // Live "all banks" figure: today's entered opening balance if we have one,
+  // otherwise the month's beginning balances.
+  const bankNow: Record<Bank, number> = useMemo(() => {
+    if (dailyBalance) return { coastal: dailyBalance.coastal, truist: dailyBalance.truist, secu: dailyBalance.secu };
+    return {
+      coastal: computed.beginningByBank.coastal ?? 0,
+      truist: computed.beginningByBank.truist ?? 0,
+      secu: computed.beginningByBank.secu ?? 0,
+    };
+  }, [dailyBalance, computed.beginningByBank]);
+  const allBanks = bankNow.coastal + bankNow.truist + bankNow.secu;
+  const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
+
+  // "Prop spending" — anything tagged to a category named prop*, or whose label
+  // mentions PROP (prop-firm evals, resets, data fees).
+  const propSpend = useMemo(() => {
+    const propCatIds = new Set(categories.filter((c) => /prop/i.test(c.name)).map((c) => c.id));
+    let total = 0;
+    for (const r of register) {
+      if (r.is_beginning || r.amount >= 0) continue;
+      if (/prop/i.test(r.label) || (r.category_id != null && propCatIds.has(r.category_id))) total += Math.abs(r.amount);
+    }
+    return total;
+  }, [register, categories]);
+
+  // Cash-flow buckets (in vs out) at day / week / month resolution.
+  const cashflow = useMemo(() => {
+    if (cfMode === "monthly") {
+      return yearMonths.months.map((mo) => ({
+        label: new Date(2000, mo.m - 1, 1).toLocaleDateString("en-US", { month: "short" }),
+        inflow: mo.income,
+        outflow: mo.expenses,
+      }));
+    }
+    const days = computed.groups.map((g) => {
+      let inflow = 0, outflow = 0;
+      for (const r of g.rows) { if (r.amount > 0) inflow += r.amount; else outflow += Math.abs(r.amount); }
+      return { date: g.date, inflow, outflow };
+    });
+    if (cfMode === "daily") return days.map((d) => ({ label: shortDate(d.date), inflow: d.inflow, outflow: d.outflow }));
+    // weekly — bucket by week-of-month (day 1-7 = W1, …)
+    const weeks = new Map<number, { inflow: number; outflow: number }>();
+    for (const d of days) {
+      const w = Math.floor((Number(d.date.slice(8, 10)) - 1) / 7) + 1;
+      const cur = weeks.get(w) || { inflow: 0, outflow: 0 };
+      cur.inflow += d.inflow;
+      cur.outflow += d.outflow;
+      weeks.set(w, cur);
+    }
+    return Array.from(weeks.entries()).sort((a, b) => a[0] - b[0]).map(([w, v]) => ({ label: `W${w}`, inflow: v.inflow, outflow: v.outflow }));
+  }, [cfMode, computed.groups, yearMonths.months]);
+
+  // Recent transactions = real logged rows (what has actually been paid/received).
+  const recentPaid = useMemo(() => {
+    return register
+      .filter((r) => !r.is_beginning)
+      .slice()
+      .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : b.id - a.id))
+      .slice(0, 8);
+  }, [register]);
+
+  // Upcoming pay — every unlogged recurring outflow left in the month (the alert
+  // strip only covers the next 10 days; this is the full remaining obligation).
+  const upcomingPay = useMemo(() => {
+    const today = todayIso();
+    const materialized = new Set(
+      register.filter((r) => !r.is_beginning && !!r.recurring_tag && r.recurring_tag.startsWith("__recur__:")).map((r) => r.recurring_tag as string)
+    );
+    const items: { label: string; amount: number; date: string; bank: Bank; tag: string }[] = [];
+    for (const rule of recurring) {
+      if (!rule.active || rule.amount >= 0) continue;
+      for (const date of occurrencesInMonth(rule, month)) {
+        if (date < today) continue;
+        const tag = `__recur__:${rule.id}:${date}`;
+        if (materialized.has(tag)) continue;
+        items.push({ label: rule.label, amount: rule.amount, date, bank: rule.bank, tag });
+      }
+    }
+    items.sort((a, b) => (a.date < b.date ? -1 : 1));
+    const total = items.reduce((s, i) => s + Math.abs(i.amount), 0);
+    return { items, total, next: items[0] ?? null };
+  }, [recurring, register, month]);
+
   const monthLabel = (() => {
     const [y, m] = month.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
@@ -476,54 +564,85 @@ export default function BudgetPage() {
           />
         )}
 
-        {/* Stat cards (Overview only) */}
+        {/* ── OVERVIEW ─────────────────────────────────────────────────────── */}
         {tab === "overview" && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
-          {[
-            { label: "Projected Balance", value: computed.projectedBalance, color: computed.projectedBalance < 0 ? SOFT_RED : HOME_THEME.text, icon: "📊" },
-            { label: "Total Inflows", value: computed.income, color: HOME_THEME.green, icon: "📈" },
-            { label: "Total Outflows", value: Math.abs(computed.payments), color: SOFT_RED, icon: "📉" },
-            { label: "Net Cash Flow", value: computed.netCashFlow, color: computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green, icon: "💵" },
-          ].map((t) => (
-            <div key={t.label} style={{ ...dissolveCard(), padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 16 }}>{t.icon}</span>
-                <span style={labelCap()}>{t.label}</span>
+        <>
+        {/* Top stat row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+          <StatTile
+            hero
+            label="All Banks"
+            value={fmtMoney(allBanks, currency)}
+            sub={dailyBalance ? "Coastal · Truist · SECU" : "Beginning balances"}
+            delta={prevAllBanks !== null ? allBanks - prevAllBanks : null}
+            currency={currency}
+          />
+          <StatTile label="Income" value={fmtMoney(computed.income, currency)} sub={`${monthLabel.split(" ")[0]} inflows`} valueColor={HOME_THEME.green} />
+          <StatTile label="Expenses" value={fmtMoney(Math.abs(computed.payments), currency)} sub={`${monthLabel.split(" ")[0]} outflows`} valueColor={SOFT_RED} />
+          <StatTile label="Net Profit" value={fmtMoney(computed.netCashFlow, currency)} sub="Income − expenses" valueColor={computed.netCashFlow < 0 ? SOFT_RED : HOME_THEME.green} />
+          <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
+          <StatTile label="Prop Spending" value={fmtMoney(propSpend, currency)} sub="Evals, resets, data" valueColor={propSpend > 0 ? SOFT_RED : HOME_THEME.text} />
+        </div>
+
+        {/* Cash flow (D/W/M) + calendar / projection */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.55fr 1fr", gap: 12, alignItems: "stretch" }}>
+          <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Cash Flow</div>
+                <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 2 }}>{cfMode === "monthly" ? String(year) : monthLabel}</div>
               </div>
-              <div style={{ marginTop: 8, fontSize: 15, fontWeight: 900, color: t.color }}>{fmtMoney(t.value, currency)}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.green }} /> In
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: SOFT_RED, marginLeft: 8 }} /> Out
+                </span>
+                <Segmented
+                  value={cfMode}
+                  onChange={(v) => setCfMode(v as "daily" | "weekly" | "monthly")}
+                  options={[{ value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]}
+                />
+              </div>
             </div>
-          ))}
-        </div>
-        )}
-
-        {/* Projection chart + cashflow calendar (Overview only, equal width) */}
-        {tab === "overview" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
-          <div style={{ ...dissolveCard(), padding: 16 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BALANCE PROJECTION</div>
-            <ProjectionChart series={computed.series} currency={currency} />
+            <CashFlowBars buckets={cashflow} currency={currency} />
           </div>
-          <div style={{ ...dissolveCard(), padding: 16 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>CASHFLOW CALENDAR</div>
-            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
+
+          <div style={{ ...card(), padding: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>
+                {rightTab === "calendar" ? "Cashflow Calendar" : "Balance Projection"}
+              </div>
+              <Segmented
+                value={rightTab}
+                onChange={(v) => setRightTab(v as "calendar" | "projection")}
+                options={[{ value: "calendar", label: "Calendar" }, { value: "projection", label: "Projection" }]}
+              />
+            </div>
+            {rightTab === "calendar" ? (
+              <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
+            ) : (
+              <ProjectionChart series={computed.series} currency={currency} />
+            )}
           </div>
         </div>
-        )}
 
-        {/* Content */}
-        {tab === "overview" && (
-          <OverviewPanel
-            safeToSpend={computed.netCashFlow}
-            income={computed.income}
-            out={Math.abs(computed.payments)}
-            projected={computed.projectedBalance}
+        {/* Alerts · banks · upcoming pay */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", gap: 12, alignItems: "start" }}>
+          <SmartAlerts
             billsDue={billsDue}
-            dailyBalance={dailyBalance}
-            prevDailyBalance={prevDailyBalance}
-            onSaveDaily={saveDailyBalance}
+            netCashFlow={computed.netCashFlow}
+            projected={computed.projectedBalance}
+            upcomingTotal={upcomingPay.total}
             currency={currency}
             onMarkPaid={markBillPaid}
           />
+          <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
+          <UpcomingPayCard data={upcomingPay} currency={currency} onMarkPaid={markBillPaid} />
+        </div>
+
+        {/* Recent transactions */}
+        <RecentTransactions rows={recentPaid} currency={currency} />
+        </>
         )}
         {tab === "register" && (
           <div style={{ ...cardAccent(2), flex: 1, minHeight: 0, overflow: "visible", padding: 0 }}>
@@ -1032,12 +1151,330 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
   );
 }
 
-// Safe-to-spend overview: hero + this period + bills due (from recurring) + note.
+// ── Overview building blocks ─────────────────────────────────────────────────
+
+/** Label/value row (legacy OverviewPanel below still uses it). */
 function StatLine({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
       <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{label}</span>
       <span style={{ fontSize: 15, fontWeight: 800, color }}>{value}</span>
+    </div>
+  );
+}
+
+/** Segmented tab control (Daily/Weekly/Monthly, Calendar/Projection). */
+function Segmented({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+  return (
+    <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <button
+            key={o.value}
+            onClick={() => onChange(o.value)}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 7,
+              border: "none",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              background: on ? bRgba(HOME_THEME.cyan, 0.18) : "transparent",
+              color: on ? HOME_THEME.cyan : HOME_THEME.muted,
+              opacity: on ? 1 : 0.6,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Top-row metric tile. `hero` inverts it (the All Banks card). */
+function StatTile({ label, value, sub, valueColor, hero, delta, currency }: { label: string; value: string; sub?: string; valueColor?: string; hero?: boolean; delta?: number | null; currency?: string }) {
+  return (
+    <div
+      style={{
+        ...card(),
+        padding: 16,
+        background: hero ? "#000000" : HOME_THEME.panel,
+        border: `1px solid ${hero ? bRgba(LIGHT_BLUE, 0.25) : HOME_THEME.border}`,
+      }}
+    >
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>{label}</div>
+      <div style={{ marginTop: 8, fontSize: 26, fontWeight: 900, letterSpacing: "-0.01em", color: hero ? LIGHT_BLUE : (valueColor ?? HOME_THEME.text) }}>{value}</div>
+      {sub && <div style={{ marginTop: 4, fontSize: 12, color: HOME_THEME.muted, opacity: 0.55 }}>{sub}</div>}
+      {delta != null && delta !== 0 && (
+        <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: delta < 0 ? SOFT_RED : HOME_THEME.green }}>
+          {delta > 0 ? "↗ +" : "↘ "}{fmtMoney(delta, currency || "USD").replace("-", "")} vs last
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Grouped in/out bar chart for the cash-flow card. */
+function CashFlowBars({ buckets, currency }: { buckets: { label: string; inflow: number; outflow: number }[]; currency: string }) {
+  const [hover, setHover] = useState<number | null>(null);
+  if (!buckets.length) {
+    return <div style={{ height: 260, display: "grid", placeItems: "center", color: HOME_THEME.muted, opacity: 0.6, fontSize: 13 }}>No cash flow this period yet.</div>;
+  }
+  const max = Math.max(1, ...buckets.map((b) => Math.max(b.inflow, b.outflow)));
+  const H = 240;
+  const grid = [0, 0.5, 1];
+  return (
+    <div style={{ position: "relative", display: "flex", gap: 10 }}>
+      {/* y axis */}
+      <div style={{ width: 52, height: H, position: "relative", flex: "none" }}>
+        {grid.map((g) => (
+          <div key={g} style={{ position: "absolute", right: 6, top: (1 - g) * H - 7, fontSize: 11, color: HOME_THEME.muted, opacity: 0.5 }}>
+            {g === 0 ? "0" : fmtMoney(max * g, currency).replace(/\.\d+$/, "")}
+          </div>
+        ))}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ position: "relative", height: H }}>
+          {grid.map((g) => (
+            <div key={g} style={{ position: "absolute", left: 0, right: 0, top: (1 - g) * H, borderTop: `1px dashed ${HOME_THEME.border}` }} />
+          ))}
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", gap: buckets.length > 20 ? 2 : 8 }}>
+            {buckets.map((b, i) => (
+              <div
+                key={`${b.label}-${i}`}
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(null)}
+                style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 2, position: "relative", background: hover === i ? "rgba(255,255,255,0.03)" : "transparent", borderRadius: 6 }}
+              >
+                <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: HOME_THEME.green, borderRadius: "4px 4px 0 0" }} />
+                <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: SOFT_RED, borderRadius: "4px 4px 0 0" }} />
+                {hover === i && (
+                  <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green }}>In {fmtMoney(b.inflow, currency)}</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>Out {fmtMoney(b.outflow, currency)}</div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 8 }}>
+          {buckets.map((b, i) => (
+            <div key={`${b.label}-l-${i}`} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 11, color: HOME_THEME.muted, opacity: hover === i ? 1 : 0.5, overflow: "hidden", whiteSpace: "nowrap" }}>
+              {buckets.length > 16 && i % 2 === 1 ? "" : b.label}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Smart alerts — upcoming expenses + state-of-the-month callouts. */
+function SmartAlerts({
+  billsDue,
+  netCashFlow,
+  projected,
+  upcomingTotal,
+  currency,
+  onMarkPaid,
+}: {
+  billsDue: { label: string; amount: number; date: string; days: number; tag: string; bank: Bank }[];
+  netCashFlow: number;
+  projected: number;
+  upcomingTotal: number;
+  currency: string;
+  onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
+}) {
+  const alerts: { tone: "red" | "amber" | "blue" | "green"; text: string; action?: () => void; actionLabel?: string }[] = [];
+  const pastDue = billsDue.filter((b) => b.days < 0);
+  if (pastDue.length) {
+    alerts.push({ tone: "red", text: `${pastDue.length} payment${pastDue.length === 1 ? "" : "s"} past due — ${fmtMoney(pastDue.reduce((s, b) => s + Math.abs(b.amount), 0), currency)}` });
+  }
+  for (const b of billsDue.filter((x) => x.days >= 0).slice(0, 3)) {
+    alerts.push({
+      tone: b.days <= 2 ? "amber" : "blue",
+      text: `${b.label} — ${fmtMoney(Math.abs(b.amount), currency)} ${b.days === 0 ? "due today" : `due in ${b.days} day${b.days === 1 ? "" : "s"}`}`,
+      action: () => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag }),
+      actionLabel: "Mark paid",
+    });
+  }
+  if (upcomingTotal > 0) alerts.push({ tone: "blue", text: `${fmtMoney(upcomingTotal, currency)} of recurring payments still to come this month` });
+  if (projected < 0) alerts.push({ tone: "red", text: `Projected to end the month negative — ${fmtMoney(projected, currency)}` });
+  else if (netCashFlow >= 0) alerts.push({ tone: "green", text: `Net positive this month — ${fmtMoney(netCashFlow, currency)} left over` });
+
+  const TONE: Record<string, { bg: string; border: string; color: string; icon: string }> = {
+    red: { bg: bRgba(HOME_THEME.red, 0.10), border: bRgba(HOME_THEME.red, 0.3), color: SOFT_RED, icon: "!" },
+    amber: { bg: bRgba(HOME_THEME.orange, 0.10), border: bRgba(HOME_THEME.orange, 0.3), color: HOME_THEME.orange, icon: "•" },
+    blue: { bg: bRgba(LIGHT_BLUE, 0.08), border: bRgba(LIGHT_BLUE, 0.25), color: LIGHT_BLUE, icon: "•" },
+    green: { bg: bRgba(HOME_THEME.green, 0.08), border: bRgba(HOME_THEME.green, 0.25), color: HOME_THEME.green, icon: "✓" },
+  };
+
+  return (
+    <div style={{ ...card(), padding: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 14 }}>Smart Alerts</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {alerts.length === 0 && <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>Nothing needs your attention.</div>}
+        {alerts.map((a, i) => {
+          const t = TONE[a.tone];
+          return (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, background: t.bg, border: `1px solid ${t.border}` }}>
+              <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, display: "grid", placeItems: "center", background: bRgba("#000000", 0.3), color: t.color, fontSize: 11, fontWeight: 900 }}>{t.icon}</span>
+              <span style={{ flex: 1, fontSize: 13, color: HOME_THEME.text }}>{a.text}</span>
+              {a.action && (
+                <button onClick={a.action} style={{ ...ghost(), padding: "5px 10px", fontSize: 11, borderRadius: 8 }}>{a.actionLabel}</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Editable bank table — Truist, Coastal, SECU. Writes the daily balance. */
+function BankAccountsCard({
+  value,
+  currency,
+  onSave,
+  fallback,
+}: {
+  value: DailyBalance | null;
+  currency: string;
+  onSave: (day: string, coastal: number, truist: number, secu: number) => void;
+  fallback: Record<Bank, number>;
+}) {
+  const seed = (b: Bank) => String(value ? value[b] : fallback[b] ?? 0);
+  const [vals, setVals] = useState<Record<Bank, string>>({ truist: seed("truist"), coastal: seed("coastal"), secu: seed("secu") });
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    if (value) setVals({ truist: String(value.truist), coastal: String(value.coastal), secu: String(value.secu) });
+  }, [value?.truist, value?.coastal, value?.secu]);
+
+  const total = (Number(vals.truist) || 0) + (Number(vals.coastal) || 0) + (Number(vals.secu) || 0);
+  const today = todayIso();
+  const isToday = value?.day === today;
+  const save = () => {
+    onSave(today, Number(vals.coastal) || 0, Number(vals.truist) || 0, Number(vals.secu) || 0);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+  const ORDER: Bank[] = ["truist", "coastal", "secu"];
+
+  return (
+    <div style={{ ...card(), padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Bank Accounts</div>
+        <span style={{ fontSize: 11, color: isToday ? HOME_THEME.green : HOME_THEME.muted, opacity: isToday ? 1 : 0.55 }}>
+          {value ? (isToday ? "updated today" : `as of ${shortDate(value.day)}`) : "not set today"}
+        </span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {ORDER.map((b) => (
+          <div key={b} style={{ display: "grid", gridTemplateColumns: "1fr 130px", gap: 10, alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.text }}>{BANK_LABEL[b]}</span>
+            <input
+              value={vals[b]}
+              onChange={(e) => setVals((p) => ({ ...p, [b]: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              type="number"
+              placeholder="0"
+              style={{ ...field(), padding: "7px 10px", fontSize: 13, textAlign: "right" }}
+            />
+          </div>
+        ))}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 4px" }}>
+          <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>Total</span>
+          <span style={{ fontSize: 18, fontWeight: 900, color: total < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(total, currency)}</span>
+        </div>
+      </div>
+      <button onClick={save} style={{ ...primary(), marginTop: 10, width: "100%", padding: "9px 14px", fontSize: 12 }}>{saved ? "Saved ✓" : "Save balances"}</button>
+    </div>
+  );
+}
+
+/** Upcoming pay — what's still owed this month (the VAT/MTD slot). */
+function UpcomingPayCard({
+  data,
+  currency,
+  onMarkPaid,
+}: {
+  data: { items: { label: string; amount: number; date: string; bank: Bank; tag: string }[]; total: number; next: { label: string; amount: number; date: string; bank: Bank; tag: string } | null };
+  currency: string;
+  onMarkPaid: (bill: { date: string; label: string; bank: Bank; amount: number; tag: string }) => void;
+}) {
+  return (
+    <div style={{ ...card(), padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Upcoming Pay</div>
+        <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.55 }}>{data.items.length} left</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>Total due</span>
+        <span style={{ fontSize: 22, fontWeight: 900, color: data.total > 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(data.total, currency)}</span>
+      </div>
+      {data.items.length === 0 ? (
+        <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>Nothing left to pay this month.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {data.items.slice(0, 5).map((b) => (
+            <div key={b.tag} style={{ display: "grid", gridTemplateColumns: "48px 1fr auto auto", gap: 8, alignItems: "center", padding: "8px 0", borderTop: `1px solid ${HOME_THEME.border}` }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.muted, opacity: 0.6 }}>{shortDate(b.date)}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label}</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
+              <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "4px 8px", fontSize: 11, borderRadius: 8 }}>Pay</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Recent transactions — real logged rows, i.e. what has actually been paid. */
+function RecentTransactions({ rows, currency }: { rows: RegisterRow[]; currency: string }) {
+  return (
+    <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "16px 16px 4px" }}>
+        <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Recent Transactions</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55, marginTop: 2 }}>Logged this month · what has been paid</div>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr>
+            <th style={th("left")}>Date</th>
+            <th style={th("left")}>Item</th>
+            <th style={th("left")}>Bank</th>
+            <th style={th("right")}>Amount</th>
+            <th style={th("right")}>Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && (
+            <tr><td colSpan={5} style={{ padding: "22px 16px", color: HOME_THEME.muted, opacity: 0.6, textAlign: "center" }}>Nothing logged this month yet.</td></tr>
+          )}
+          {rows.map((r) => {
+            const inc = r.amount > 0;
+            return (
+              <tr key={r.id} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+                <td style={{ padding: "11px 16px", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap" }}>{shortDate(r.entry_date)} <span style={{ opacity: 0.6 }}>{weekday(r.entry_date)}</span></td>
+                <td style={{ padding: "11px 16px", fontWeight: 700 }}>{r.label}</td>
+                <td style={{ padding: "11px 16px", color: HOME_THEME.muted, opacity: 0.7, letterSpacing: "0.06em", fontSize: 12 }}>{BANK_LABEL[r.bank]}</td>
+                <td style={{ padding: "11px 16px", textAlign: "right", fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(r.amount, currency)}</td>
+                <td style={{ padding: "11px 16px", textAlign: "right" }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: inc ? HOME_THEME.green : LIGHT_BLUE, background: inc ? bRgba(HOME_THEME.green, 0.10) : bRgba(LIGHT_BLUE, 0.10), border: `1px solid ${inc ? bRgba(HOME_THEME.green, 0.3) : bRgba(LIGHT_BLUE, 0.3)}` }}>
+                    {inc ? "Received" : "Paid"}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1821,33 +2258,23 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
 function th(align: "left" | "right" | "center"): React.CSSProperties {
   return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
 }
+// SOLID card surface — no gradients, no radial highlights, no backdrop blur.
+// One flat dark panel + hairline edge is the whole visual language of this page.
 function card(): React.CSSProperties {
-  return { background: HOME_THEME.panelBg, backdropFilter: "blur(16px)", borderRadius: 18, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 18px 40px rgba(0,0,0,0.22)" };
+  return { background: HOME_THEME.panel, borderRadius: 16, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 10px 26px rgba(0,0,0,0.28)" };
 }
 // hex → rgba for accent tints.
 function bRgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
-// No accent bar. Keep a soft light-blue highlight on the card body itself.
 const LIGHT_BLUE = "#7dd3fc";
+// Both legacy surfaces now resolve to the same solid card.
 function cardAccent(_i: number): React.CSSProperties {
-  return {
-    ...card(),
-    background: `radial-gradient(circle at 50% 0%, ${bRgba(LIGHT_BLUE, 0.10)} 0%, transparent 60%), ${HOME_THEME.panelBg}`,
-  };
+  return card();
 }
-// Borderless "dissolve" surface (per BUDGET_UI_STYLE) — fill fades toward the
-// edges, heavy frosted blur, no hard boundary. For chart/overview panels + tiles.
 function dissolveCard(): React.CSSProperties {
-  return {
-    background: `radial-gradient(120% 130% at 50% 0%, ${bRgba(LIGHT_BLUE, 0.06)} 0%, rgba(13,17,25,0.30) 30%, rgba(13,17,25,0.16) 60%, rgba(13,17,25,0.04) 85%, transparent 100%)`,
-    backdropFilter: "blur(30px) saturate(1.15)",
-    WebkitBackdropFilter: "blur(30px) saturate(1.15)",
-    borderRadius: 24,
-    border: "none",
-    boxShadow: "0 40px 90px -45px rgba(0,0,0,0.5)",
-  };
+  return card();
 }
 function field(): React.CSSProperties {
   return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 15, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
