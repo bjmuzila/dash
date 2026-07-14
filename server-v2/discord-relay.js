@@ -151,11 +151,16 @@ function toEmbed(raw) {
   return embed;
 }
 
+// Shared identity — keep in sync with signals-engine.js sendDiscord() so the
+// engine's direct posts and this relay render as ONE bot in the channel.
+const DISCORD_USERNAME = 'CB Edge Signals';
+const DISCORD_AVATAR = `${SITE_URL}/cb-edge-logo.png`;
+
 async function post(embeds) {
   const res = await fetch(WEBHOOK, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'CB Edge Signals', embeds }),
+    body: JSON.stringify({ username: DISCORD_USERNAME, avatar_url: DISCORD_AVATAR, embeds }),
     signal: AbortSignal.timeout(15000),
   });
   // 429 = rate limited. Don't mark the lines seen; the next poll retries them.

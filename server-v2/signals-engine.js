@@ -740,15 +740,21 @@ function evaluateFlowDivergence(cur, mem, cfg = {}) {
 // noisiest part of the tape and don't express a directional view worth alerting.
 //   call buy  → LONG   (paying up for upside)
 //   put  buy  → SHORT  (paying up for downside)
-// Dedup is by print identity (ts|symbol|price|size), not the level+direction
-// cooldown the level detectors use — each distinct whale print is its own event,
-// so two $2M buys a minute apart both fire, but a re-poll of the same tape never
-// re-fires one. mem.whaleSeen is capped so a busy session can't grow it forever.
+// Dedup has TWO layers:
+//   1) print identity (ts|symbol|price|size) — a re-poll of the same tape never
+//      re-fires a print already alerted. mem.whaleSeen, capped.
+//   2) per-CONTRACT cooldown (ticker|strike|type) — the coalescer can split one
+//      whale's fills into several blocks seconds apart, each a DISTINCT print id
+//      that rounds to the same "$1.3M" line. Without this, one whale posts 3-4
+//      identical alerts (the SNDK 1750P case). Once a contract fires, further
+//      whale prints on that exact contract are suppressed for WHALE_CONTRACT_COOLDOWN_MS.
 // `rows` = /proxy/flow-history tape shape: { ts, underlying, symbol, expiration,
 // strike, type:'C'|'P', side:'buy'|'sell', premium, is_otm, spot }.
 const WHALE_SEEN_MAX = 4000;
+const WHALE_CONTRACT_COOLDOWN_MS = Number(process.env.SIGNALS_WHALE_CONTRACT_COOLDOWN_MS || 10 * 60_000);
 function evaluateWhalePrints(rows, mem, cfg = {}) {
-  const C = { WHALE_MIN_PREMIUM, WHALE_DTE_MIN, WHALE_DTE_MAX, ...cfg };
+  const C = { WHALE_MIN_PREMIUM, WHALE_DTE_MIN, WHALE_DTE_MAX, WHALE_CONTRACT_COOLDOWN_MS, ...cfg };
+  if (!mem.whaleContractAt) mem.whaleContractAt = new Map(); // contract key -> last fire ms
   const out = [];
   if (!Array.isArray(rows) || !rows.length) return out;
   if (!mem.whaleSeen) mem.whaleSeen = new Set();
@@ -796,6 +802,14 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
     const isCall = r.type === 'C';
     const direction = isCall ? 'long' : 'short';
     const strike = Number(r.strike);
+
+    // Per-contract cooldown: collapse a whale whose fills the coalescer split into
+    // several near-identical blocks down to ONE alert. Keyed on the contract, not
+    // the print, so a genuinely new whale on a different strike still fires.
+    const contractKey = `${ticker}|${Number.isFinite(strike) ? strike : '?'}|${r.type}`;
+    const lastFired = mem.whaleContractAt.get(contractKey) || 0;
+    if (ts - lastFired < C.WHALE_CONTRACT_COOLDOWN_MS) { rej.seen++; continue; }
+    mem.whaleContractAt.set(contractKey, ts);
     const prem = premium >= 1e6 ? `$${(premium / 1e6).toFixed(1)}M` : `$${Math.round(premium / 1e3)}K`;
     // Score by conviction: bigger premium = higher score (3 → 5).
     const score = premium >= 5e6 ? 5 : premium >= 2.5e6 ? 4 : 3;
@@ -838,6 +852,12 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
     const excess = mem.whaleSeen.size - WHALE_SEEN_MAX;
     let i = 0;
     for (const k of mem.whaleSeen) { if (i++ >= excess) break; mem.whaleSeen.delete(k); }
+  }
+  // Evict contract-cooldown entries older than one cooldown window — they can't
+  // suppress anything anymore, so the map stays bounded by active contracts.
+  if (mem.whaleContractAt.size > 512) {
+    const stale = Date.now() - C.WHALE_CONTRACT_COOLDOWN_MS;
+    for (const [k, t] of mem.whaleContractAt) { if (t < stale) mem.whaleContractAt.delete(k); }
   }
   return out;
 }
@@ -960,16 +980,38 @@ async function refreshConfidence(base) {
   } catch { /* keep last */ }
 }
 
+// Shared Discord identity so the engine's posts and the signals.txt relay
+// (discord-relay.js) render as ONE bot, not two. Both MUST use the same username
+// + avatar_url; if the two webhooks also point at the same channel, they're
+// indistinguishable. Keep these in sync with discord-relay.js post().
+const DISCORD_USERNAME = 'CB Edge Signals';
+const DISCORD_AVATAR = `${(process.env.SIGNALS_SITE_URL || 'https://cbedge.net').replace(/\/+$/, '')}/cb-edge-logo.png`;
+
 async function sendDiscord(sig) {
   if (!DISCORD_WEBHOOK) return;
   const dot = sig.direction === 'long' ? '🟢' : sig.direction === 'short' ? '🔴' : '⚪';
   const conf = sig.confluence ? ` • +${sig.confluence}` : '';
-  const content = `${dot} **${sig.direction.toUpperCase()}** • ${sig.setup} → ES ${sig.priceEs.toFixed(2)}`
+  // Price label is instrument-aware. ES-based level signals (walls, flip, CB) live
+  // in ES price space → "→ ES 7596". Whale prints carry an OPTION on any ticker;
+  // priceEs is that underlying's spot, NOT ES — labelling it "ES" was wrong
+  // (e.g. "SPY 748P → ES 751"). Show the ticker instead, or drop the tag entirely.
+  let priceLabel = '';
+  if (Number.isFinite(sig.priceEs) && sig.priceEs > 0) {
+    if (sig.kind === 'whale_print') {
+      const tkr = sig.meta?.ticker || sig.levelName || '';
+      priceLabel = ` → ${tkr} ${sig.priceEs.toFixed(2)}`.replace('  ', ' ');
+    } else {
+      priceLabel = ` → ES ${sig.priceEs.toFixed(2)}`;
+    }
+  }
+  const content = `${dot} **${sig.direction.toUpperCase()}** • ${sig.setup}${priceLabel}`
     + (sig.levelEs != null ? ` @ ${sig.levelName} ${sig.levelEs.toFixed(2)}` : '')
     + ` • score ${sig.score}${conf}`;
   try {
     await fetch(DISCORD_WEBHOOK, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: DISCORD_USERNAME, avatar_url: DISCORD_AVATAR, content }),
     });
   } catch { /* alerts are best-effort */ }
 }
