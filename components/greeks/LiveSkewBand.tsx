@@ -81,7 +81,7 @@ export default function LiveSkewBand() {
 
       {/* Only the band SPX is currently in */}
       {band ? (
-        <div style={{ borderLeft: `3px solid ${tone}`, background: `${tone}12`, borderRadius: 8, padding: "10px 12px" }}>
+        <div style={{ background: `${tone}12`, borderRadius: 8, padding: "10px 12px" }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
             <span style={{ fontSize: 15, fontWeight: 800, color: tone }}>{band.label}</span>
             <span style={{ fontSize: 12, color: "#7e8ea0", fontFamily: "var(--font-mono)" }}>{rangeStr}</span>
