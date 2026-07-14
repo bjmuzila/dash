@@ -34,7 +34,8 @@
 
   .ly{position:absolute;cursor:move}
   .ly.sel{outline:2px solid var(--grn);outline-offset:2px}
-  .ly .hnd{position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--grn);border-radius:3px;cursor:nwse-resize;z-index:9}
+  .ly .hnd{display:none;position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--grn);border-radius:3px;cursor:nwse-resize;z-index:9}
+  .ly.sel .hnd{display:block}
   .ly[data-t=text]{padding:0}
   .ly[data-t=text] .ed{outline:none;white-space:pre-wrap;word-break:break-word}
   .ly[data-t=image]{border-radius:12px;overflow:hidden;background:#101a2c;border:1px solid #2a3c5e}
@@ -213,9 +214,11 @@ function addHandle(d){
   h.addEventListener('mousedown',function(e){
     e.preventDefault(); e.stopPropagation();
     var x0=e.clientX,y0=e.clientY,w0=d.offsetWidth,h0=d.offsetHeight;
+    var ar=h0/w0;
     function mv(ev){
-      d.style.width=px(Math.max(40,w0+(ev.clientX-x0)/Z));
-      d.style.height=px(Math.max(30,h0+(ev.clientY-y0)/Z));
+      var w=Math.max(40,w0+(ev.clientX-x0)/Z);
+      d.style.width=px(w);
+      d.style.height=px(ev.shiftKey ? Math.max(30,w*ar) : Math.max(30,h0+(ev.clientY-y0)/Z));
     }
     function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
     document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
@@ -289,7 +292,8 @@ function inspector(){
       h+='<label>Zoom</label><input type="range" id="i_z" min="1" max="4" step="0.02" value="'+z0+'">';
       h+='<label>Position — horizontal</label><input type="range" id="i_x" min="0" max="100" value="'+parseFloat(op0[0])+'">';
       h+='<label>Position — vertical</label><input type="range" id="i_y" min="0" max="100" value="'+parseFloat(op0[1])+'">';
-      h+='<div class="row" style="margin-top:8px"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
+      h+='<div class="row" style="margin-top:8px"><button id="i_snap" class="pri" style="flex:1">Fit box to image</button></div>';
+      h+='<div class="row"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
     }
   }
   if(t==='box'){
@@ -343,6 +347,15 @@ function inspector(){
       g('i_x').oninput=function(){ opSet(this.value, parseFloat(opGet()[1])); };
       g('i_y').oninput=function(){ opSet(parseFloat(opGet()[0]), this.value); };
 
+      g('i_snap').onclick=function(){
+        var m=im();
+        if(!m||!m.naturalWidth){ alert('Load an image into this box first.'); return; }
+        m.dataset.z=1; m.style.width='100%'; m.style.height='100%';
+        m.style.objectPosition='50% 50%'; m.style.objectFit='contain';
+        var w=sel.offsetWidth;
+        sel.style.height=px(Math.round(w*m.naturalHeight/m.naturalWidth));
+        inspector();
+      };
       g('i_full').onclick=function(){sel.style.left='0px';sel.style.top='0px';sel.style.width=px(W);sel.style.height=px(H);sel.style.borderRadius='0';sel.style.border='0'};
       g('i_reset').onclick=function(){
         var m=im(); if(!m) return;

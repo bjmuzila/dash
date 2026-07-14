@@ -45,7 +45,8 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 
   .ly{position:absolute;cursor:move}
   .ly.sel{outline:2px solid var(--grn);outline-offset:2px}
-  .ly .hnd{position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--grn);border-radius:3px;cursor:nwse-resize;z-index:9}
+  .ly .hnd{display:none;position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--grn);border-radius:3px;cursor:nwse-resize;z-index:9}
+  .ly.sel .hnd{display:block}
   .ly[data-t=text]{padding:0}
   .ly[data-t=text] .ed{outline:none;white-space:pre-wrap;word-break:break-word}
   .ly[data-t=image]{border-radius:12px;overflow:hidden;background:#101a2c;border:1px solid #2a3c5e}
@@ -129,6 +130,11 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 <script>
 var stage=document.getElementById('stage'), W=1600, H=900, Z=0.55, sel=null;
 
+// Every logo layer starts as the real CB Edge mark. Safe for html2canvas: the
+// srcdoc iframe inherits the site origin, so this is a same-origin image and
+// won't taint the export canvas. Double-click a logo layer to swap it.
+var LOGO_SRC='/cb-edge-logo.png';
+
 function px(v){return v+'px'}
 function setSize(){
   stage.style.width=px(W); stage.style.height=px(H);
@@ -175,7 +181,7 @@ function mkLayer(o){
     d.addEventListener('dblclick',function(){pick(d)});
   }
   if(o.t==='logo'){
-    d.innerHTML='<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">';
+    d.innerHTML='<img src="'+LOGO_SRC+'">';
     d.style.background='none'; d.style.border='0';
     d.addEventListener('dblclick',function(){pick(d)});
   }
@@ -216,9 +222,12 @@ function addHandle(d){
   h.addEventListener('mousedown',function(e){
     e.preventDefault(); e.stopPropagation();
     var x0=e.clientX,y0=e.clientY,w0=d.offsetWidth,h0=d.offsetHeight;
+    var ar=h0/w0;
     function mv(ev){
-      d.style.width=px(Math.max(40,w0+(ev.clientX-x0)/Z));
-      d.style.height=px(Math.max(30,h0+(ev.clientY-y0)/Z));
+      var w=Math.max(40,w0+(ev.clientX-x0)/Z);
+      d.style.width=px(w);
+      // Shift while dragging the handle = keep the box's aspect ratio.
+      d.style.height=px(ev.shiftKey ? Math.max(30,w*ar) : Math.max(30,h0+(ev.clientY-y0)/Z));
     }
     function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
     document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
@@ -292,7 +301,8 @@ function inspector(){
       h+='<label>Zoom</label><input type="range" id="i_z" min="1" max="4" step="0.02" value="'+z0+'">';
       h+='<label>Position — horizontal</label><input type="range" id="i_x" min="0" max="100" value="'+parseFloat(op0[0])+'">';
       h+='<label>Position — vertical</label><input type="range" id="i_y" min="0" max="100" value="'+parseFloat(op0[1])+'">';
-      h+='<div class="row" style="margin-top:8px"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
+      h+='<div class="row" style="margin-top:8px"><button id="i_snap" class="pri" style="flex:1">Fit box to image</button></div>';
+      h+='<div class="row"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
     }
   }
   if(t==='box'){
@@ -346,6 +356,18 @@ function inspector(){
       g('i_x').oninput=function(){ opSet(this.value, parseFloat(opGet()[1])); };
       g('i_y').oninput=function(){ opSet(parseFloat(opGet()[0]), this.value); };
 
+      // Reshape the frame to the screenshot's own aspect ratio: keeps the box's
+      // current width, solves for the height that matches naturalWidth/Height,
+      // then resets the crop. No cropping, no letterbox bars.
+      g('i_snap').onclick=function(){
+        var m=im();
+        if(!m||!m.naturalWidth){ alert('Load an image into this box first.'); return; }
+        m.dataset.z=1; m.style.width='100%'; m.style.height='100%';
+        m.style.objectPosition='50% 50%'; m.style.objectFit='contain';
+        var w=sel.offsetWidth;
+        sel.style.height=px(Math.round(w*m.naturalHeight/m.naturalWidth));
+        inspector();
+      };
       g('i_full').onclick=function(){sel.style.left='0px';sel.style.top='0px';sel.style.width=px(W);sel.style.height=px(H);sel.style.borderRadius='0';sel.style.border='0'};
       g('i_reset').onclick=function(){
         var m=im(); if(!m) return;
@@ -477,8 +499,6 @@ var TPL={
   blank:function(){return []}
 };
 
-var BLANKPX='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-
 function customTpls(){ try{return JSON.parse(localStorage.getItem('cbe_tpls')||'{}')}catch(e){return {}} }
 
 function refreshT(){
@@ -514,7 +534,7 @@ document.getElementById('tsave').onclick=function(){
     var lbl=(d.querySelector('.ph')||{}).textContent||'Click to load image';
     d.innerHTML='<div class="ph">'+lbl+'</div>';
   });
-  clone.querySelectorAll('.ly[data-t=logo] img').forEach(function(im){ im.src=BLANKPX; delete im.dataset.url; });
+  clone.querySelectorAll('.ly[data-t=logo] img').forEach(function(im){ im.src=LOGO_SRC; delete im.dataset.url; });
   var t=customTpls();
   t[n]={W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),html:clone.innerHTML};
   try{ localStorage.setItem('cbe_tpls',JSON.stringify(t)); }
