@@ -13,7 +13,9 @@
  * the tape is still open.
  *
  * HONESTY RULES BAKED IN — do not remove:
- *   • Every result carries n and a 95% Wilson CI. n < 30 renders a THIN badge.
+ *   • Sample size is NOT printed as a number (deliberate — the n column was noise
+ *     when reading live). It still governs: n < 30 renders a THIN badge and a
+ *     rate over 85% renders a CHECK FOR BIAS flag. Keep those badges.
  *   • Nothing peeks forward: SlimDay fields were stamped at their own confirm
  *     bar by the exporter. This file only counts and divides.
  *   • A hit rate above ~85% on a directional question is a bug, not an edge —
@@ -24,7 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
-import type { IbDataset, SlimDay } from "@/lib/ibStats";
+import { failOutcome, type FailOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
 
 /* ── stat helpers ─────────────────────────────────────────────────────────── */
 
@@ -34,16 +36,6 @@ const med = (a: number[]) => {
   const s = [...a].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)];
 };
-/** 95% Wilson interval — the honest error bar on a proportion. */
-function wilson(k: number, n: number): [number, number] | null {
-  if (!n) return null;
-  const z = 1.96, p = k / n, d = 1 + (z * z) / n;
-  const c = p + (z * z) / (2 * n);
-  const m = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
-  return [(100 * (c - m)) / d, (100 * (c + m)) / d];
-}
-const clock = (m: number | null | undefined) =>
-  m == null ? "—" : `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}`;
 const dow = (date: string) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(date + "T12:00:00Z").getUTCDay()];
 
 /* ── result model ─────────────────────────────────────────────────────────── */
@@ -363,6 +355,98 @@ const PROMPTS: Prompt[] = [
     },
   },
 
+  {
+    id: "fail-outcome",
+    cat: "Break quality",
+    title: "The break failed — what ACTUALLY happens next?",
+    ask: "ES breaks the IB high and closes back inside within 30 minutes. That's the 85% case, and on its own it's a non-answer. Does it recover and go anyway? Does it drift to the mid? Rotate all the way to the low? Or just die in the middle and chop? Four mutually exclusive outcomes, so they sum to the whole failed book.",
+    run: ({ es, nq }) => {
+      const LBL: Record<FailOutcome, string> = {
+        recovered: "RECOVERED — new extreme past the pre-fail peak (the shakeout)",
+        full_rotation: "FULL ROTATION — reached the opposite IB extreme",
+        to_mid: "TO THE MID — reached the midpoint, no further",
+        chop: "CHOP — never saw the mid, never re-took its high",
+      };
+      const ORDER: FailOutcome[] = ["recovered", "chop", "to_mid", "full_rotation"];
+      const rows: Row[] = [];
+      for (const [label, days] of [["ES", es], ["NQ", nq]] as const) {
+        const failed = days
+          .filter((d) => d.fcb && d.fcb.failed)
+          .map((d) => ({ d, o: failOutcome(d.fcb!, d.width)! }));
+        for (const o of ORDER) {
+          const xs = failed.filter((x) => x.o === o);
+          rows.push({
+            label: `${label} — ${LBL[o]}`,
+            n: failed.length,
+            k: xs.length,
+            emphasis: o === "chop" || o === "full_rotation",
+            extra: {
+              "med ext": (med(xs.map((x) => x.d.fcb!.rExt)) ?? 0).toFixed(2),
+              "closed mid50": pctS(xs.filter((x) => x.d.closeZone === "mid50").length, xs.length),
+              "closed with the break": pctS(xs.filter((x) => worked(x.d)).length, xs.length),
+            },
+          });
+        }
+      }
+      const esFailed = es.filter((d) => d.fcb?.failed).map((d) => failOutcome(d.fcb!, d.width)!);
+      const dead = esFailed.filter((o) => o === "chop" || o === "to_mid").length;
+      const rot = esFailed.filter((o) => o === "full_rotation").length;
+      const rec = esFailed.filter((o) => o === "recovered").length;
+      return {
+        headline: "Only failed breaks. The four outcomes are exclusive and exhaustive — they add to 100% per index.",
+        cols: ["med ext", "closed mid50", "closed with the break"],
+        rows,
+        verdict:
+          `ES failed breaks: ${pctS(rec, esFailed.length)} recover and go anyway, ${pctS(rot, esFailed.length)} rotate to the far extreme, ` +
+          `${pctS(dead, esFailed.length)} go nowhere useful (chop or a drift to the mid). ` +
+          `The fade is only a trade in the rotation slice — the rest of the time you're paying spread in the middle of the range.`,
+        caveat:
+          "RECOVERED uses the wick high, not a close, so it's the loosest bucket — treat it as the ceiling on 'the break was right after all'.",
+      };
+    },
+  },
+  {
+    id: "fail-outcome-by-context",
+    cat: "Break quality",
+    title: "Which failed breaks actually rotate?",
+    ask: "If the fade only pays on full rotation, the question is what a rotation looks like at the moment it fails. Slice the failed book by IB width, volume at the break, and how far it got before it rolled over.",
+    run: ({ es }) => {
+      const failed = es
+        .filter((d) => d.fcb && d.fcb.failed)
+        .map((d) => ({ d, o: failOutcome(d.fcb!, d.width)! }));
+      const line = (label: string, xs: typeof failed, emphasis = false): Row => ({
+        label,
+        n: xs.length,
+        k: xs.filter((x) => x.o === "full_rotation").length,
+        emphasis,
+        extra: {
+          recovered: pctS(xs.filter((x) => x.o === "recovered").length, xs.length),
+          "to mid": pctS(xs.filter((x) => x.o === "to_mid").length, xs.length),
+          chop: pctS(xs.filter((x) => x.o === "chop").length, xs.length),
+        },
+      });
+      const peak = (x: (typeof failed)[number]) => x.d.fcb!.peakBeforeFail / x.d.width;
+      return {
+        headline: `ES failed breaks only. The rate column = FULL ROTATION (reached the opposite IB extreme) — the only outcome the fade actually gets paid on.`,
+        cols: ["recovered", "to mid", "chop"],
+        rows: [
+          line("ALL failed breaks", failed, true),
+          line("IB narrow", failed.filter((x) => x.d.widthBucket === "narrow")),
+          line("IB normal", failed.filter((x) => x.d.widthBucket === "normal")),
+          line("IB wide", failed.filter((x) => x.d.widthBucket === "wide")),
+          line("Volume surge on the break bar", failed.filter((x) => x.d.fcb!.volSurge)),
+          line("No volume surge", failed.filter((x) => !x.d.fcb!.volSurge)),
+          line("Poked <0.25 IB past the level before failing", failed.filter((x) => peak(x) < 0.25)),
+          line("Poked 0.25–0.5 IB past", failed.filter((x) => peak(x) >= 0.25 && peak(x) < 0.5)),
+          line("Poked >0.5 IB past before failing", failed.filter((x) => peak(x) >= 0.5)),
+          line("Broke before 11:00", failed.filter((x) => x.d.fcb!.breakMin < 660)),
+          line("Broke after 12:00", failed.filter((x) => x.d.fcb!.breakMin >= 720)),
+        ],
+        verdict: "Find the slice where FULL ROTATION runs meaningfully above the all-failed baseline. If none of them do, the failed break isn't a fade setup — it's just noise.",
+      };
+    },
+  },
+
   /* ─────────────── Context ─────────────── */
   {
     id: "open-type",
@@ -490,16 +574,148 @@ const PROMPTS: Prompt[] = [
   {
     id: "contained",
     cat: "Timing",
-    title: "Still inside the IB at 2pm — what happens into the close?",
-    ask: "The dead day. Does it stay dead, or is the late break the real move?",
+    title: "Still inside the IB at 2pm — HIGH or LOW into the close?",
+    ask: "The dead day. Price never left the box through 14:00. Does it stay dead, and when it finally goes, which way — and does that break actually pay?",
     run: ({ es, nq }) => {
       const rows: Row[] = [];
       for (const [label, days] of [["ES", es], ["NQ", nq]] as const) {
         const c = days.filter((d) => d.containedAt2);
-        rows.push({ label: `${label} — days fully contained at 14:00`, n: days.length, k: c.length });
-        rows.push({ label: `${label} — of those, broke out LATE`, n: c.length, k: c.filter((d) => d.containedBrokeLate).length, emphasis: true });
+        // On a contained day nothing broke before 14:00 by construction, so the
+        // day's FIRST close-break IS the late break. No extra data needed.
+        const hi = c.filter((d) => side(d) === "H");
+        const lo = c.filter((d) => side(d) === "L");
+        const wick = c.filter((d) => !d.fcb && (d.touchedH || d.touchedL));
+        const dead = c.filter((d) => !d.fcb && !d.touchedH && !d.touchedL);
+        const q = (xs: SlimDay[]) => ({
+          failed: pctS(xs.filter((d) => d.fcb!.failed).length, xs.length),
+          "hit 0.5×": pctS(xs.filter((d) => d.fcb!.hit["0.5"]).length, xs.length),
+          "hit 1×": pctS(xs.filter((d) => d.fcb!.hit["1"]).length, xs.length),
+          "med ext": (med(xs.map((d) => d.fcb!.rExt)) ?? 0).toFixed(2),
+          "closed with it": pctS(xs.filter((d) => worked(d)).length, xs.length),
+        });
+        rows.push({
+          label: `${label} — contained at 14:00 (share of all sessions)`,
+          n: days.length,
+          k: c.length,
+          extra: { failed: "", "hit 0.5×": "", "hit 1×": "", "med ext": "", "closed with it": "" },
+        });
+        rows.push({ label: `${label} — late CLOSE-BREAK of the IB HIGH`, n: c.length, k: hi.length, emphasis: true, extra: q(hi) });
+        rows.push({ label: `${label} — late CLOSE-BREAK of the IB LOW`, n: c.length, k: lo.length, emphasis: true, extra: q(lo) });
+        rows.push({
+          label: `${label} — late WICK only, no close outside`,
+          n: c.length,
+          k: wick.length,
+          extra: { failed: "", "hit 0.5×": "", "hit 1×": "", "med ext": "", "closed with it": "" },
+        });
+        rows.push({
+          label: `${label} — stayed fully inside into the close (dead)`,
+          n: c.length,
+          k: dead.length,
+          extra: { failed: "", "hit 0.5×": "", "hit 1×": "", "med ext": "", "closed with it": "" },
+        });
       }
-      return { headline: "Contained = the entire post-IB session stayed inside the IB through 14:00 ET.", rows };
+      return {
+        headline:
+          "Contained = the whole post-IB session stayed inside the IB through 14:00 ET. The four outcomes below are exclusive and sum to the contained book. All quality columns are the LATE break's own.",
+        cols: ["failed", "hit 0.5×", "hit 1×", "med ext", "closed with it"],
+        rows,
+        verdict:
+          "The question isn't whether it breaks late — it's whether the late break carries. Compare 'hit 1×' and 'failed' here against the unconditional break baseline. A late break has less clock left to work with, so it should be materially worse; if it isn't, that's the finding.",
+        caveat:
+          "'closed with it' = the day's IB close zone agreed with the break side. On a 15:30 break there's barely any session left to be wrong in, so it flatters the late break — read it next to med ext, not alone.",
+      };
+    },
+  },
+  {
+    id: "contained-timing",
+    cat: "Timing",
+    title: "Contained day — WHEN the late break comes, and does the clock kill it?",
+    ask: "A 14:05 break has ninety minutes to work. A 15:40 break has twenty. Bucket the contained-day break by time of day and see where the follow-through dies.",
+    run: ({ es }) => {
+      const c = es.filter((d) => d.containedAt2 && d.fcb);
+      const buckets: [string, (m: number) => boolean][] = [
+        ["14:00–14:30", (m) => m >= 840 && m < 870],
+        ["14:30–15:00", (m) => m >= 870 && m < 900],
+        ["15:00–15:30", (m) => m >= 900 && m < 930],
+        ["15:30–close", (m) => m >= 930],
+      ];
+      const rows: Row[] = buckets.map(([label, f]) => {
+        const xs = c.filter((d) => f(d.fcb!.breakMin));
+        return {
+          label,
+          n: c.length,
+          k: xs.length,
+          extra: {
+            "broke HIGH": pctS(xs.filter((d) => side(d) === "H").length, xs.length),
+            failed: pctS(xs.filter((d) => d.fcb!.failed).length, xs.length),
+            "hit 0.5×": pctS(xs.filter((d) => d.fcb!.hit["0.5"]).length, xs.length),
+            "hit 1×": pctS(xs.filter((d) => d.fcb!.hit["1"]).length, xs.length),
+            "med ext": (med(xs.map((d) => d.fcb!.rExt)) ?? 0).toFixed(2),
+          },
+        };
+      });
+      rows.push({
+        label: "— for reference: ALL ES breaks, any time of day",
+        n: es.filter((d) => d.fcb).length,
+        k: es.filter((d) => d.fcb).length,
+        emphasis: true,
+        extra: {
+          "broke HIGH": pctS(es.filter((d) => side(d) === "H").length, es.filter((d) => d.fcb).length),
+          failed: pctS(es.filter((d) => d.fcb?.failed).length, es.filter((d) => d.fcb).length),
+          "hit 0.5×": pctS(es.filter((d) => d.fcb?.hit["0.5"]).length, es.filter((d) => d.fcb).length),
+          "hit 1×": pctS(es.filter((d) => d.fcb?.hit["1"]).length, es.filter((d) => d.fcb).length),
+          "med ext": (med(es.filter((d) => d.fcb).map((d) => d.fcb!.rExt)) ?? 0).toFixed(2),
+        },
+      });
+      return {
+        headline: "ES contained days only. Rate column = share of contained breaks landing in that window. Quality columns are that window's own.",
+        cols: ["broke HIGH", "failed", "hit 0.5×", "hit 1×", "med ext"],
+        rows,
+        verdict:
+          "The bottom row is the benchmark. If the 14:00–14:30 bucket holds up against it but 15:30 collapses, the trade is a cutoff rule, not a setup: after some hour the late break is untradeable regardless of how clean it looks.",
+      };
+    },
+  },
+  {
+    id: "contained-direction",
+    cat: "Timing",
+    title: "Contained day — can you PREDICT which way it breaks late?",
+    ask: "You're sitting in a dead range at 2pm. Anything in the session so far that tells you which side gives? Test the IB-close bias, the FVG, the open type, and which extreme got probed first.",
+    run: ({ es }) => {
+      const c = es.filter((d) => d.containedAt2 && d.fcb);
+      const line = (label: string, xs: SlimDay[], emphasis = false): Row => ({
+        label,
+        n: xs.length,
+        k: xs.filter((d) => side(d) === "H").length,
+        emphasis,
+        extra: {
+          "then failed": pctS(xs.filter((d) => d.fcb!.failed).length, xs.length),
+          "hit 1×": pctS(xs.filter((d) => d.fcb!.hit["1"]).length, xs.length),
+          "closed with it": pctS(xs.filter((d) => worked(d)).length, xs.length),
+        },
+      });
+      return {
+        headline: "ES contained days that eventually close-broke. Rate column = how often the late break was the HIGH. 50% means the tell is worthless.",
+        cols: ["then failed", "hit 1×", "closed with it"],
+        rows: [
+          line("ALL contained days (the coin-flip baseline)", c, true),
+          line("IB closed ABOVE the IB mid (bullish bias)", c.filter((d) => d.bias === "H")),
+          line("IB closed BELOW the IB mid (bearish bias)", c.filter((d) => d.bias === "L")),
+          line("Bullish FVG inside the IB", c.filter((d) => d.fvg === "bull")),
+          line("Bearish FVG inside the IB", c.filter((d) => d.fvg === "bear")),
+          line("Opened above yesterday's range (OAR-H)", c.filter((d) => d.openType === "OAR-H")),
+          line("Opened below yesterday's range (OAR-L)", c.filter((d) => d.openType === "OAR-L")),
+          line("ORB direction was UP", c.filter((d) => d.orbDir === "H")),
+          line("ORB direction was DOWN", c.filter((d) => d.orbDir === "L")),
+          line("IB high printed first in the IB", c.filter((d) => d.first === "H")),
+          line("IB low printed first in the IB", c.filter((d) => d.first === "L")),
+          line("IB was NARROW", c.filter((d) => d.widthBucket === "narrow")),
+          line("IB was WIDE", c.filter((d) => d.widthBucket === "wide")),
+        ],
+        verdict:
+          "Read this against the baseline row, not against 50 in the abstract. A tell is only real if it moves the HIGH-break rate well off the all-contained line AND doesn't wreck the failure rate in the process.",
+        caveat: "Slicing a subset of a subset. Cells will go thin fast — respect the THIN badges here more than anywhere else in this tab.",
+      };
     },
   },
 
@@ -613,10 +829,7 @@ function ResultTable({ res }: { res: Result }) {
           <thead>
             <tr>
               <th style={th}>Condition</th>
-              <th style={{ ...th, textAlign: "right" }}>n</th>
-              <th style={{ ...th, textAlign: "right" }}>hit</th>
               <th style={{ ...th, textAlign: "right" }}>rate</th>
-              <th style={{ ...th, textAlign: "right" }}>95% CI</th>
               {cols.map((c) => (
                 <th key={c} style={{ ...th, textAlign: "right" }}>{c}</th>
               ))}
@@ -624,7 +837,10 @@ function ResultTable({ res }: { res: Result }) {
           </thead>
           <tbody>
             {res.rows.map((r, i) => {
-              const ci = r.k != null ? wilson(r.k, r.n) : null;
+              // Sample size is deliberately NOT rendered as a number — Brandon reads
+              // these live and the n column was noise. It still GOVERNS: a thin cell
+              // gets the THIN badge and an implausible rate gets the bias flag, so
+              // the warning survives even though the count doesn't show.
               const thin = r.n > 0 && r.n < 30;
               const suspicious = r.k != null && r.n >= 30 && (100 * r.k) / r.n > 85;
               return (
@@ -642,13 +858,8 @@ function ResultTable({ res }: { res: Result }) {
                       </span>
                     )}
                   </td>
-                  <td style={{ ...td, textAlign: "right", color: "rgba(255,255,255,0.6)" }}>{r.n}</td>
-                  <td style={{ ...td, textAlign: "right", color: "rgba(255,255,255,0.6)" }}>{r.k ?? "—"}</td>
-                  <td style={{ ...td, textAlign: "right", fontWeight: 800, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
+                  <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 16, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
                     {r.k != null ? pctS(r.k, r.n) : "—"}
-                  </td>
-                  <td style={{ ...td, textAlign: "right", fontSize: 12, color: "rgba(255,255,255,0.45)" }}>
-                    {ci ? `${ci[0].toFixed(0)}–${ci[1].toFixed(0)}%` : "—"}
                   </td>
                   {cols.map((c) => (
                     <td key={c} style={{ ...td, textAlign: "right", color: HOME_THEME.text }}>{r.extra?.[c] ?? "—"}</td>
@@ -811,7 +1022,7 @@ export default function StatPrompterTab() {
       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>
         Source: <code>public/data/ib-ES.json</code> + <code>ib-NQ.json</code> (slim exports from <code>ib-backtest-esu6.html</code>, same files the IB Stats tab reads).
         Break = first 5m CLOSE outside the 09:30–10:30 IB. Failed = closed back inside within 30m. Extension is measured in IB widths.
-        Every field was stamped at its own confirm bar — no lookahead. Rates under n=30 are marked THIN; anything over 85% is flagged to check for bias, not celebrated.
+        Every field was stamped at its own confirm bar — no lookahead. Sample sizes aren&apos;t printed, but they still gate the read: a thin cell is badged THIN, and any rate over 85% is flagged to check for bias rather than treated as an edge.
       </div>
     </div>
   );

@@ -450,6 +450,48 @@ export type IbDataset = {
   days: SlimDay[];
 };
 
+/* ── failed-break outcome ────────────────────────────────────────────────────
+ * `failed` alone is a re-entry FLAG, not an outcome: it only says price closed
+ * back inside the IB within 30m. It says nothing about what happened after —
+ * which is why the raw fail rate reads ~85% and feels useless.
+ *
+ * This resolves a failed break into ONE of four mutually exclusive outcomes,
+ * checked in priority order (a day that rotates to the far extreme also touched
+ * the mid, so order matters):
+ *
+ *   "recovered"     — went on to make a NEW extreme past its pre-fail peak.
+ *                     The "failure" was a shakeout; the break was right.
+ *   "full_rotation" — reached the opposite IB extreme. The break was a trap and
+ *                     the whole range paid the other way.
+ *   "to_mid"        — reached the IB midpoint but no further.
+ *   "chop"          — never reached the mid, never re-took its high. Died in the
+ *                     dead zone between the broken level and the mid.
+ *
+ * Derived from the SLIM export (no bars needed), so it works on the datasets
+ * already in public/data — no re-export required.
+ *
+ * UNIT NOTE: peakBeforeFail is in POINTS; rExt is in IB WIDTHS. Multiply rExt by
+ * the day's width before comparing them. Getting this backwards silently makes
+ * everything look "recovered".
+ *
+ * CAVEAT: mfe is a wick high, so "recovered" means a new extreme was TOUCHED,
+ * not closed through. It is the loosest of the four — read it as the ceiling.
+ */
+
+export type FailOutcome = "recovered" | "full_rotation" | "to_mid" | "chop";
+
+export function failOutcome(
+  fcb: Pick<SlimBreak, "failed" | "peakBeforeFail" | "fadeMid" | "fadeOpp" | "rExt">,
+  width: number
+): FailOutcome | null {
+  if (!fcb.failed) return null;                 // never failed — not in this population
+  const mfePts = fcb.rExt * width;              // total favorable excursion, in points
+  if (mfePts > fcb.peakBeforeFail + 1e-9) return "recovered";
+  if (fcb.fadeOpp) return "full_rotation";
+  if (fcb.fadeMid) return "to_mid";
+  return "chop";
+}
+
 /* ── small stat helpers used by the UI ───────────────────────────────────── */
 
 export const avg = (a: number[]): number | null => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);

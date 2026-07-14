@@ -45,8 +45,8 @@
  *
  *   5) BZILA CONFLUENCE v2  ("Bzila GEX Confluence System", kind='bzila_confluence')
  *        a separate, independently-scored setup ported from the polished
- *        strategy doc. Triggers only off a Level reaction (Put/Call Wall, CB,
- *        or Flip cross/break — same events as 1-3 above, own touch/reject/break
+ *        strategy doc. Triggers only off a Level reaction (Put/Call Wall, or
+ *        Flip cross/break — same events as 1-3 above, own touch/reject/break
  *        state so it never shares cooldowns with the primary detectors), then
  *        needs ≥ BZ_MIN_SCORE (default 4, out of 6) weighted points:
  *          Regime match (net GEX beyond ±GEX_REGIME_BAND)  +2
@@ -63,6 +63,8 @@
  *        short-gamma regime that is actively STRENGTHENING.
  *        Cooldowns are keyed per LEVEL (not level+direction), so a level that
  *        just fired cannot immediately fire the opposite way.
+ *        CB reactions (hold + break) are DISABLED by default — both variants were
+ *        rejected in live use. SIGNALS_BZ_CB=1 brings them back.
  *
  *   6) FLOW GEX DIVERGENCE  (kind='flow_divergence')
  *        aggregate Flow GEX (Σ per-strike flowGEX) opposes the short-term price
@@ -105,6 +107,9 @@ const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000)
 const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || ''; // NOTE: no longer falls back to DISCORD_WEBHOOK_URL — that's shared w/ calendar/GEX buttons
 const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
 const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
+// CB reactions inside the Bzila detector (hold + break). OFF by default — both
+// variants were rejected in live use. Opt in with SIGNALS_BZ_CB=1.
+const BZ_CB_ENABLED      = process.env.SIGNALS_BZ_CB === '1';
 // Regime deadband ($): |net GEX| must exceed this for a gamma regime to be "on".
 // Matches greeks-cross-alerts.js GREEKS_CROSS_GEX_BAND (0.5B) but wider by
 // default — a regime that can't clear $1B isn't worth staking a break trade on.
@@ -499,7 +504,7 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   const C = {
     WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
     CROSS_BUFFER, TOUCH_WINDOW_MS, COOLDOWN_MS, BZ_MIN_SCORE, BZ_CONFIDENCE_MIN,
-    GEX_REGIME_BAND, ...cfg,
+    GEX_REGIME_BAND, BZ_CB_ENABLED, ...cfg,
   };
   const out = [];
   const { ts, priceEs, basis } = cur;
@@ -635,18 +640,27 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
     onBreak: (dir) => { if (dir === 'up') fire('long', 'Trend breakout long (Call Wall break)', 'Call Wall', callEs, negativeGexRegime, { requireGexMomentum: true }); },
   });
 
-  // ── CB key-level reaction ──
-  reactLevel('bz_cb', cbEs, {
-    touch: C.CB_TOUCH, rej: C.CB_REJECT, brk: C.CB_BREAK,
-    onReject: (from) => {
-      if (from === 'from_above') fire('long', 'CB support hold', 'CB', cbEs, positiveGexRegime);
-      else fire('short', 'CB resistance hold', 'CB', cbEs, positiveGexRegime);
-    },
-    // A break is a TREND setup: it only pays in a short-gamma regime that is
-    // actively STRENGTHENING. Same gate the Flip cross already carried — without
-    // it, breaks fired into a decaying regime and reversed within the hour.
-    onBreak: (dir) => fire(dir === 'up' ? 'long' : 'short', `CB break ${dir === 'up' ? '↑' : '↓'}`, 'CB', cbEs, negativeGexRegime, { requireGexMomentum: true }),
-  });
+  // ── CB key-level reaction — DISABLED by default (SIGNALS_BZ_CB=1 to re-enable) ──
+  // Both variants were rejected in live use:
+  //   - CB break ↑/↓  : whipsawed around a moving CB on a 2pt threshold
+  //   - CB hold       : fired constantly, scored high (6/6) on both sides of the
+  //                     same level, and carried no edge worth acting on
+  // The detector is left intact (not deleted) so it can be backtested off the
+  // trade_signals history before anyone decides to bring it back. Do NOT re-enable
+  // without a win-rate number to point at.
+  if (C.BZ_CB_ENABLED) {
+    reactLevel('bz_cb', cbEs, {
+      touch: C.CB_TOUCH, rej: C.CB_REJECT, brk: C.CB_BREAK,
+      onReject: (from) => {
+        if (from === 'from_above') fire('long', 'CB support hold', 'CB', cbEs, positiveGexRegime);
+        else fire('short', 'CB resistance hold', 'CB', cbEs, positiveGexRegime);
+      },
+      // A break is a TREND setup: it only pays in a short-gamma regime that is
+      // actively STRENGTHENING. Same gate the Flip cross already carried — without
+      // it, breaks fired into a decaying regime and reversed within the hour.
+      onBreak: (dir) => fire(dir === 'up' ? 'long' : 'short', `CB break ${dir === 'up' ? '↑' : '↓'}`, 'CB', cbEs, negativeGexRegime, { requireGexMomentum: true }),
+    });
+  }
 
   mem.bzPrev = { priceEs, flipEs, ts, totalNetGex: cur.totalNetGex, dex: cur.dex };
   return out;
