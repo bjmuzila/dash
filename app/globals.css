@@ -282,7 +282,18 @@ input.dte-range::-moz-range-track {
 
   /* ES Candles: make the page root scroll vertically on mobile (it's h-full flex
      w/o scroll). Layout is kept as-is per request. */
-  .es-candles-root { overflow-y: auto !important; height: auto !important; min-height: 100%; }
+  /* The root is a flex ITEM of <main> (flex column). With height:auto its content
+     (~1600px) exceeds main, and default flex-shrink:1 squeezed it back to the
+     viewport — the squeeze landed on the header, so the chart toolbar collapsed
+     to 16px (padding only) and looked missing. flex:0 0 auto = no shrink; main
+     scrolls instead. */
+  .es-candles-root {
+    flex: 0 0 auto !important;
+    overflow-y: visible !important;
+    height: auto !important;
+    min-height: 100%;
+  }
+  .es-candles-root > div:first-child { flex: 0 0 auto !important; }
   /* Toggle row: one horizontally-scrollable strip instead of wrapping into many
      rows that crush the chart. Children keep their size and scroll sideways. */
   .es-candles-toggles {
@@ -338,6 +349,11 @@ input.dte-range::-moz-range-track {
      ── */
   .home-split {
     flex-direction: column !important;
+    /* MUST stay nowrap: the split inherits flex-wrap:wrap, and a column flexbox
+       with wrap + a viewport-bound height pushes the overflowing panels into a
+       SECOND column off-screen to the right — which is why mobile only ever
+       showed the GEX chart. nowrap makes them overflow downward and scroll. */
+    flex-wrap: nowrap !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
     height: auto !important;
