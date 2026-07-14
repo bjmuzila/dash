@@ -20,7 +20,9 @@
 
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || '').trim();
 const FROM_EMAIL = (process.env.EMAIL_FROM || 'CB Edge <hello@cbedge.net>').trim();
-const TO_EMAIL = (process.env.BUDGET_EMAIL_TO || 'bjmuzila@gmail.com').trim();
+// Comma-separated list of recipients, e.g. "a@x.com, b@y.com".
+const TO_EMAILS = (process.env.BUDGET_EMAIL_TO || 'bjmuzila@gmail.com')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 const INTERNAL_API_TOKEN = (process.env.INTERNAL_API_TOKEN || '').trim();
 const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
 
@@ -151,7 +153,7 @@ async function send(html, label, shots) {
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: FROM_EMAIL, to: [TO_EMAIL], subject: `Budget briefing — ${label}`, html, attachments }),
+    body: JSON.stringify({ from: FROM_EMAIL, to: TO_EMAILS, subject: `Budget briefing — ${label}`, html, attachments }),
   });
   if (!r.ok) throw new Error(`resend ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
 }
@@ -164,7 +166,7 @@ async function runOnce(base) {
   const { html, label } = await buildWriteup(base, cookie, month);
   const shots = await captureShots(base, cookie);
   await send(html, label, shots);
-  console.log(`[budget-email] sent ${label} → ${TO_EMAIL}`);
+  console.log(`[budget-email] sent ${label} → ${TO_EMAILS.join(', ')}`);
 }
 
 // ── daily 08:00 ET scheduler (60s tick + once-per-day guard) ────────────────
