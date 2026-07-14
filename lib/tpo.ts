@@ -44,7 +44,17 @@ import type { EsCandle } from "@/hooks/useEsCandles";
 
 export const TPO_PERIOD_MS = 30 * 60_000;
 
-export interface TpoBin { price: number; count: number }
+export interface TpoBin {
+  price: number;
+  count: number;
+  /**
+   * Which 30-min periods touched this bin, in order. Index 0 = the 09:30 period
+   * ("A"), 1 = 10:00 ("B"), and so on. This is what lets the UI draw real TPO
+   * LETTERS instead of anonymous boxes — and it makes the Initial Balance free,
+   * since IB is just periods 0 and 1.
+   */
+  periods: number[];
+}
 
 export type StructureKind =
   | "excess_high" | "excess_low"
@@ -97,11 +107,56 @@ export interface KindStat {
   medSessionsToTest: number | null;
 }
 
+/** Age buckets — a 2-day-old excess is a very different bet than a 3-week-old one. */
+export type AgeBucket = "0-5d" | "6-20d" | "20d+";
+
+export function ageBucket(ageSessions: number): AgeBucket {
+  return ageSessions <= 5 ? "0-5d" : ageSessions <= 20 ? "6-20d" : "20d+";
+}
+
+export interface BucketStat {
+  kind: StructureKind;
+  bucket: AgeBucket;
+  n: number;
+  tested: number;
+  testRate: number | null;
+}
+
+/**
+ * The base rate to show next to a live row: "of all structures of this KIND at
+ * this AGE, what share were ever tested?"
+ *
+ * This is a PRIOR ON THE TYPE, not a probability for that specific level — the
+ * distinction matters and the UI must say so, because three excess-lows sitting
+ * at three different prices will all show the same number.
+ *
+ * `MIN_N` guards the obvious trap: 0% off a sample of one is noise, not a
+ * finding. Below the threshold we fall back to the kind-level rate, and if THAT
+ * is also empty we return null so the UI renders a dash instead of a fake 0%.
+ */
+const MIN_N = 5;
+
+export function baseRateFor(
+  res: TpoResult,
+  kind: StructureKind,
+  ageSessions: number,
+): { rate: number | null; n: number; scope: "bucket" | "kind" | "none" } {
+  const b = ageBucket(ageSessions);
+  const bs = res.buckets.find((x) => x.kind === kind && x.bucket === b);
+  if (bs && bs.n >= MIN_N && bs.testRate != null) return { rate: bs.testRate, n: bs.n, scope: "bucket" };
+
+  const ks = res.stats.find((x) => x.kind === kind);
+  if (ks && ks.n >= MIN_N && ks.testRate != null) return { rate: ks.testRate, n: ks.n, scope: "kind" };
+
+  return { rate: null, n: (bs?.n ?? 0) || (ks?.n ?? 0), scope: "none" };
+}
+
 export interface TpoResult {
   sessions: TpoSession[];
   structures: TpoStructure[];   // ALL structures, forward-filled, newest last
   open: TpoStructure[];         // repairedAt === null — the Open Business rail
-  stats: KindStat[];
+  stats: KindStat[];            // per kind, all ages
+  buckets: BucketStat[];        // per kind × age bucket
   binSize: number;
 }
 
@@ -142,14 +197,18 @@ export function buildTpoSession(
   const periods = [...byPeriod.values()].sort((a, b) => a.ts - b.ts);
   if (!periods.length) return null;
 
-  // One touch per bin per period — this is TPO (time), not volume.
-  const counts = new Map<number, number>();
-  for (const p of periods) {
+  // One touch per bin per period — this is TPO (time), not volume. We record the
+  // period INDEX (not just a tally) so the UI can render letters A/B/C…
+  const touched = new Map<number, number[]>();
+  periods.forEach((p, idx) => {
     const b0 = floorBin(p.lo), b1 = floorBin(p.hi);
-    for (let b = b0; b <= b1 + 1e-9; b += binSize) counts.set(b, (counts.get(b) ?? 0) + 1);
-  }
-  const bins: TpoBin[] = [...counts.entries()]
-    .map(([price, count]) => ({ price, count }))
+    for (let b = b0; b <= b1 + 1e-9; b += binSize) {
+      const arr = touched.get(b);
+      if (arr) arr.push(idx); else touched.set(b, [idx]);
+    }
+  });
+  const bins: TpoBin[] = [...touched.entries()]
+    .map(([price, ps]) => ({ price, count: ps.length, periods: ps }))
     .sort((a, b) => a.price - b.price);
   if (bins.length < 3) return null;
 
@@ -329,11 +388,25 @@ export function buildTpoStructures(candles: EsCandle[], binSize = 1): TpoResult 
     };
   });
 
+  const BUCKETS: AgeBucket[] = ["0-5d", "6-20d", "20d+"];
+  const buckets: BucketStat[] = [];
+  for (const kind of kinds) {
+    for (const bucket of BUCKETS) {
+      const g = gradable.filter((s) => s.kind === kind && ageBucket(s.ageSessions) === bucket);
+      const tested = g.filter((s) => s.testedAt != null).length;
+      buckets.push({
+        kind, bucket, n: g.length, tested,
+        testRate: g.length ? tested / g.length : null,
+      });
+    }
+  }
+
   return {
     sessions,
     structures: all,
     open: all.filter((s) => s.repairedAt == null).sort((a, b) => b.createdTs - a.createdTs),
     stats,
+    buckets,
     binSize,
   };
 }

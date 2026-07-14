@@ -7,14 +7,14 @@
  *   Vol Pin             — IV-RV spread contraction + price range tightening → pin candidates
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ScoreInfo } from "@/components/shared/InfoTip";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
-import { buildTpoStructures, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
+import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 import NetGexPctTab from "@/components/scanner/NetGexPctTab";
 
@@ -2304,107 +2304,159 @@ const KIND_COLOR: Record<StructureKind, string> = {
 
 const pctOrDash = (n: number | null) => (n == null ? "—" : `${Math.round(n * 100)}%`);
 
-// ── 5-day TPO profile strip ──────────────────────────────────────────────────
-// The last 5 RTH sessions side by side on ONE shared price axis, each drawn as a
-// classic left-anchored TPO histogram (box width ∝ how many 30-min periods
-// touched that price). Structures are painted in place, so the read is visual:
-// where price spent time, where it didn't, and what business is still open.
+// ── 5-day TPO letter profile ─────────────────────────────────────────────────
+// The last 5 RTH sessions, side by side on ONE shared price axis, drawn as real
+// TPO letter charts (MotiveWave / Sierra style):
 //
-// Deliberately NOT letters (A/B/C…) — at 5 sessions on a shared axis the rows
-// are only a few px tall, so glyphs would be unreadable. Boxes carry the same
-// information (count = width) at this density.
+//   • one cell per period per price bin, lettered A, B, C… from the 09:30 open
+//   • periods 0–1 (the Initial Balance, 09:30–10:30) are RED
+//   • every later period is BLUE
+//   • the POC row is ORANGE
+//   • the 70% value area is shaded
+//   • H / L / P (POC) / M (mid) tagged off the right of each profile
+//
+// RTH only — Globex is deliberately excluded. Overnight single prints are a thin
+// -book artifact, not an auction failure, and folding them in poisons the tails/
+// excess/poor-high stats that the rest of this tab is built on.
+//
+// Canvas, not SVG: 5 sessions × ~14 periods × ~60 bins is several thousand cells,
+// and that many DOM nodes re-rendering on every WS tick is exactly the kind of
+// main-thread stall that froze this tab before.
 
-function TpoProfileStrip({ sessions, spot, binSize }: {
+const TPO_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const IB_PERIODS = 2; // 09:30–10:30
+
+function TpoLetterProfile({ sessions, spot, binSize }: {
   sessions: TpoSession[]; spot: number | null; binSize: number;
 }) {
-  const days = sessions.slice(-5);
-  if (!days.length) return null;
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  const [w, setW] = useState(1180);
 
-  const lo = Math.min(...days.map((d) => d.low));
-  const hi = Math.max(...days.map((d) => d.high));
-  if (!(hi > lo)) return null;
+  useEffect(() => {
+    const el = ref.current?.parentElement;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setW(el.clientWidth || 1180));
+    ro.observe(el);
+    setW(el.clientWidth || 1180);
+    return () => ro.disconnect();
+  }, []);
 
-  const H = 520, W = 960, AXIS = 58;
-  const pad = 14;
-  const colW = (W - AXIS) / days.length;
-  const span = hi - lo;
-  const y = (p: number) => pad + (1 - (p - lo) / span) * (H - pad * 2);
-  const rowH = Math.max(2, ((H - pad * 2) / span) * binSize - 0.5);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv || !sessions.length) return;
 
-  const maxCount = Math.max(...days.map((d) => d.maxCount), 1);
-  const unit = Math.min(7, (colW - 26) / maxCount);
+    const lo = Math.min(...sessions.map((d) => d.low));
+    const hi = Math.max(...sessions.map((d) => d.high));
+    if (!(hi > lo)) return;
 
-  // price-band → structure color, per session
-  const colorFor = (d: TpoSession, price: number): string => {
-    for (const s of d.structures) {
-      if (s.kind === "naked_poc") continue;
-      if (price >= s.priceLo - 1e-9 && price <= s.priceHi + 1e-9) return KIND_COLOR[s.kind];
+    const AXIS = 58, TOP = 14, BOT = 30, GUTTER = 116;
+    const rows = Math.max(1, Math.round((hi - lo) / binSize));
+    const rh = Math.max(6, Math.min(11, 640 / rows));
+    const cw = Math.max(6, rh - 0.5);
+    const H = TOP + BOT + rows * rh;
+
+    const DPR = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = w * DPR; cv.height = H * DPR;
+    cv.style.width = "100%"; cv.style.height = `${H}px`;
+    const g = cv.getContext("2d");
+    if (!g) return;
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    g.clearRect(0, 0, w, H);
+
+    const y = (p: number) => TOP + ((hi - p) / binSize) * rh;
+
+    // price axis
+    g.font = "10px ui-monospace, monospace";
+    g.textBaseline = "middle";
+    g.textAlign = "left";
+    const gridStep = Math.max(binSize, Math.round((hi - lo) / 14 / binSize) * binSize);
+    for (let p = Math.ceil(lo / gridStep) * gridStep; p <= hi; p += gridStep) {
+      g.strokeStyle = "rgba(255,255,255,0.06)";
+      g.beginPath(); g.moveTo(AXIS, y(p)); g.lineTo(w - 4, y(p)); g.stroke();
+      g.fillStyle = "rgba(255,255,255,0.38)";
+      g.fillText(p.toFixed(2), 4, y(p));
     }
-    return "rgba(255,255,255,0.22)";
-  };
 
-  // ~6 price gridlines
-  const step = Math.max(binSize, Math.round(span / 6 / binSize) * binSize);
-  const ticks: number[] = [];
-  for (let p = Math.ceil(lo / step) * step; p <= hi; p += step) ticks.push(p);
+    let x = AXIS + 10;
 
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
-      {ticks.map((p) => (
-        <g key={p}>
-          <line x1={AXIS} y1={y(p)} x2={W} y2={y(p)} stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
-          <text x={AXIS - 8} y={y(p) + 4} textAnchor="end" fontSize={11} fill="rgba(255,255,255,0.4)">
-            {p.toFixed(0)}
-          </text>
-        </g>
-      ))}
+    for (const d of sessions) {
+      const maxN = d.maxCount || 1;
+      const wid = maxN * cw;
+      if (x + wid + GUTTER > w) break; // don't spill past the canvas
 
-      {days.map((d, i) => {
-        const x0 = AXIS + i * colW + 8;
-        return (
-          <g key={d.date}>
-            <line x1={AXIS + i * colW} y1={pad} x2={AXIS + i * colW} y2={H - pad}
-              stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
+      // value area shading
+      g.fillStyle = "rgba(255,255,255,0.055)";
+      g.fillRect(x - 3, y(d.vah) - rh / 2, wid + 8, y(d.val) - y(d.vah) + rh);
 
-            {d.bins.map((b) => (
-              <rect key={b.price}
-                x={x0} y={y(b.price) - rowH / 2}
-                width={Math.max(2, b.count * unit)} height={rowH}
-                fill={colorFor(d, b.price)} rx={1}
-              >
-                <title>{`${d.date} · ${b.price.toFixed(2)} · ${b.count} TPO`}</title>
-              </rect>
-            ))}
+      // letters
+      g.font = `${Math.max(7, Math.floor(rh - 2))}px ui-monospace, monospace`;
+      g.textAlign = "center";
+      for (const b of d.bins) {
+        const cy = y(b.price);
+        b.periods.forEach((pi, i) => {
+          const cx = x + i * cw;
+          let fill: string, txt: string;
+          if (Math.abs(b.price - d.poc) < 1e-9) { fill = "#F2A93B"; txt = "#3d2405"; }
+          else if (pi < IB_PERIODS) { fill = HOME_THEME.red; txt = "#ffffff"; }
+          else { fill = "#5B9BD5"; txt = "#0b1a26"; }
+          g.fillStyle = fill;
+          g.fillRect(cx, cy - rh / 2 + 0.5, cw - 1.2, rh - 1);
+          g.fillStyle = txt;
+          g.fillText(TPO_LETTERS[pi % TPO_LETTERS.length], cx + (cw - 1.2) / 2, cy);
+        });
+      }
 
-            <line x1={x0 - 4} y1={y(d.poc)} x2={x0 + colW - 20} y2={y(d.poc)}
-              stroke={LIGHT_BLUE} strokeWidth={1.5} opacity={0.9} />
-            <line x1={x0 - 4} y1={y(d.vah)} x2={x0 + colW - 20} y2={y(d.vah)}
-              stroke={HOME_THEME.cyan} strokeWidth={1} opacity={0.45} strokeDasharray="3 3" />
-            <line x1={x0 - 4} y1={y(d.val)} x2={x0 + colW - 20} y2={y(d.val)}
-              stroke={HOME_THEME.cyan} strokeWidth={1} opacity={0.45} strokeDasharray="3 3" />
+      // right-hand tags: H / L / P / M
+      g.textAlign = "left";
+      g.font = "10px ui-monospace, monospace";
+      const tag = (price: number, color: string, label: string, len: number) => {
+        g.strokeStyle = color; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(x + wid + 4, y(price)); g.lineTo(x + wid + len, y(price)); g.stroke();
+        g.fillStyle = color;
+        g.fillText(label, x + wid + len + 4, y(price));
+      };
+      tag(d.poc, "#F2A93B", `P: ${d.poc.toFixed(2)}`, 46);
+      tag(d.mid, HOME_THEME.red, `M: ${d.mid.toFixed(2)}`, 34);
+      tag(d.high, "rgba(140,190,235,0.8)", `H: ${d.high.toFixed(2)}`, 26);
+      tag(d.low, "rgba(140,190,235,0.8)", `L: ${d.low.toFixed(2)}`, 26);
 
-            <text x={AXIS + i * colW + colW / 2} y={H - 2} textAnchor="middle"
-              fontSize={11} fill="rgba(255,255,255,0.45)">
-              {d.date.slice(5)}
-            </text>
-          </g>
-        );
-      })}
+      // structures — a thin bracket on the left edge, colored by kind
+      for (const s of d.structures) {
+        if (s.kind === "naked_poc") continue;
+        g.fillStyle = KIND_COLOR[s.kind];
+        g.fillRect(x - 6, y(s.priceHi) - rh / 2, 3, y(s.priceLo) - y(s.priceHi) + rh);
+      }
 
-      {spot != null && spot >= lo && spot <= hi && (
-        <>
-          <line x1={AXIS} y1={y(spot)} x2={W} y2={y(spot)}
-            stroke={HOME_THEME.green} strokeWidth={1} strokeDasharray="5 4" opacity={0.8} />
-          <text x={W - 4} y={y(spot) - 5} textAnchor="end" fontSize={11} fill={HOME_THEME.green}>
-            {spot.toFixed(2)}
-          </text>
-        </>
-      )}
-    </svg>
-  );
+      g.fillStyle = "rgba(255,255,255,0.45)";
+      g.font = "10px ui-sans-serif, system-ui";
+      g.textAlign = "left";
+      g.fillText(d.date.slice(5), x, H - 14);
+
+      x += wid + GUTTER;
+    }
+
+    if (spot != null && spot >= lo && spot <= hi) {
+      g.strokeStyle = HOME_THEME.green;
+      g.setLineDash([5, 4]);
+      g.beginPath(); g.moveTo(AXIS, y(spot)); g.lineTo(w - 4, y(spot)); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = HOME_THEME.green;
+      g.font = "10px ui-monospace, monospace";
+      g.textAlign = "right";
+      g.fillText(spot.toFixed(2), w - 6, y(spot) - 7);
+    }
+  }, [sessions, spot, binSize, w]);
+
+  return <canvas ref={ref} style={{ display: "block", width: "100%" }} />;
 }
 
-function StructureRow({ s, spot, touchRate }: { s: TpoStructure; spot: number | null; touchRate: number | null }) {
+const GRID = "110px 1fr 60px 76px 96px 62px";
+
+function StructureRow({ s, spot, base }: {
+  s: TpoStructure;
+  spot: number | null;
+  base: { rate: number | null; n: number; scope: "bucket" | "kind" | "none" };
+}) {
   const color = KIND_COLOR[s.kind];
   const band = s.priceHi > s.priceLo
     ? `${s.priceLo.toFixed(2)}–${s.priceHi.toFixed(2)}`
@@ -2412,18 +2464,28 @@ function StructureRow({ s, spot, touchRate }: { s: TpoStructure; spot: number | 
   const mid = (s.priceLo + s.priceHi) / 2;
   const dist = spot != null ? mid - spot : null;
 
+  // The base rate describes the KIND at this AGE — never this specific level.
+  // Spelling that out in the tooltip because the old column ("TEST %") read like
+  // a per-level probability, which it never was.
+  const baseTip =
+    base.scope === "none"
+      ? `Not enough graded ${KIND_LABEL[s.kind]} structures yet to quote a rate (n=${base.n}).`
+      : `${Math.round((base.rate ?? 0) * 100)}% of ${KIND_LABEL[s.kind]} structures ${
+          base.scope === "bucket" ? `aged ${ageBucket(s.ageSessions)}` : "(all ages)"
+        } were eventually tested — n=${base.n}. This is a base rate for the TYPE, not a probability for this level.`;
+
   return (
-    <div title={KIND_MEANING[s.kind]} style={{
+    <div style={{
       display: "grid",
-      gridTemplateColumns: "110px 1fr 60px 76px 70px 62px",
+      gridTemplateColumns: GRID,
       gap: 8, alignItems: "center",
       padding: "9px 12px",
       borderBottom: "1px solid rgba(255,255,255,0.06)",
       fontSize: 15,
     }}>
-      <span style={{
+      <span title={KIND_MEANING[s.kind]} style={{
         justifySelf: "start", fontSize: 15, fontWeight: 700,
-        padding: "2px 9px", borderRadius: 999,
+        padding: "2px 9px", borderRadius: 999, cursor: "help",
         color, border: `1px solid ${color}55`, background: `${color}1A`,
       }}>{KIND_LABEL[s.kind]}</span>
 
@@ -2435,9 +2497,16 @@ function StructureRow({ s, spot, touchRate }: { s: TpoStructure; spot: number | 
       }}>
         {dist == null ? "—" : `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}`}
       </span>
-      <span style={{ color: HOME_THEME.text }}>
-        {s.kind === "hole" ? "—" : pctOrDash(touchRate)}
+
+      <span title={baseTip} style={{ cursor: "help", display: "flex", alignItems: "baseline", gap: 5 }}>
+        <span style={{ color: base.rate == null ? "rgba(255,255,255,0.35)" : HOME_THEME.text }}>
+          {s.kind === "hole" ? "—" : pctOrDash(base.rate)}
+        </span>
+        {s.kind !== "hole" && base.rate != null && (
+          <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)" }}>n={base.n}</span>
+        )}
       </span>
+
       <span style={{ color: s.testedAt ? HOME_THEME.orange : "rgba(255,255,255,0.35)" }}>
         {s.testedAt ? `${s.touches}×` : "untested"}
       </span>
@@ -2482,12 +2551,6 @@ function TpoStructuresScanner() {
   const spot = candles[candles.length - 1]?.close ?? null;
   const today = res.sessions[res.sessions.length - 1] ?? null;
 
-  const statByKind = useMemo(() => {
-    const m = new Map<StructureKind, number | null>();
-    for (const s of res.stats) m.set(s.kind, s.testRate);
-    return m;
-  }, [res]);
-
   const open = useMemo(() => {
     const rows = res.open.filter((s) => {
       if (kindFilter === "holes") return s.kind === "hole";
@@ -2523,27 +2586,26 @@ function TpoStructuresScanner() {
             Waiting on RTH candles.
           </div>
         )}
-        {!!last5.length && <TpoProfileStrip sessions={last5} spot={spot} binSize={binSize} />}
+        {!!last5.length && <TpoLetterProfile sessions={last5} spot={spot} binSize={binSize} />}
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 15 }}>
-          {([
-            ["excess_high", "excess — rejection, holds"],
-            ["tail_high", "tail / poor — trend or unfinished"],
-            ["hole", "hole — thin, accelerates through"],
-          ] as [StructureKind, string][]).map(([k, label]) => (
-            <span key={k} style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
-              <span style={{ width: 12, height: 12, borderRadius: 3, background: KIND_COLOR[k], display: "inline-block" }} />
-              {label}
-            </span>
-          ))}
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
-            <span style={{ width: 12, height: 2, background: LIGHT_BLUE, display: "inline-block" }} /> POC
+            <span style={{ width: 12, height: 12, borderRadius: 2, background: HOME_THEME.red, display: "inline-block" }} />
+            A–B · initial balance (09:30–10:30)
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
-            <span style={{ width: 12, height: 2, background: HOME_THEME.cyan, display: "inline-block" }} /> VAH / VAL
+            <span style={{ width: 12, height: 12, borderRadius: 2, background: "#5B9BD5", display: "inline-block" }} />
+            C+ · later periods
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
-            <span style={{ width: 12, height: 2, background: HOME_THEME.green, display: "inline-block" }} /> spot
+            <span style={{ width: 12, height: 12, borderRadius: 2, background: "#F2A93B", display: "inline-block" }} /> POC row
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+            <span style={{ width: 12, height: 12, borderRadius: 2, background: "rgba(255,255,255,0.1)", display: "inline-block" }} /> value area (70%)
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+            <span style={{ width: 4, height: 12, background: HOME_THEME.orange, display: "inline-block" }} />
+            left bracket = structure (excess / tail / poor / hole)
           </span>
         </div>
       </Card>
@@ -2570,17 +2632,21 @@ function TpoStructuresScanner() {
           <>
             <div style={{
               display: "grid",
-              gridTemplateColumns: "110px 1fr 60px 76px 70px 62px",
+              gridTemplateColumns: GRID,
               gap: 8, padding: "6px 12px",
               borderBottom: "1px solid rgba(255,255,255,0.12)",
               fontSize: 15, color: "rgba(255,255,255,0.45)",
               textTransform: "uppercase", letterSpacing: "0.05em",
             }}>
-              <span>kind</span><span>level</span><span>age</span><span>dist</span><span>test %</span><span>hits</span>
+              <span>kind</span><span>level</span><span>age</span><span>dist</span>
+              <span title="Historical test rate for this KIND of structure at this AGE — a base rate for the type, NOT a probability for this specific level.">
+                base %
+              </span>
+              <span>hits</span>
             </div>
 
             {open.map((s) => (
-              <StructureRow key={s.id} s={s} spot={spot} touchRate={statByKind.get(s.kind) ?? null} />
+              <StructureRow key={s.id} s={s} spot={spot} base={baseRateFor(res, s.kind, s.ageSessions)} />
             ))}
 
             {!open.length && (
@@ -2640,25 +2706,54 @@ function TpoStructuresScanner() {
           }}>
             <span>kind</span><span>n</span><span>test %</span><span>repair %</span><span>med d</span>
           </div>
-          {res.stats.filter((s) => s.n > 0).map((s) => (
-            <div key={s.kind} style={{
-              display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
-              gap: 6, padding: "7px 0", fontSize: 15,
-              borderBottom: "1px solid rgba(255,255,255,0.06)",
-            }}>
-              <span style={{ color: KIND_COLOR[s.kind], fontWeight: 700 }}>{KIND_LABEL[s.kind]}</span>
-              <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.n}</span>
-              <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.testRate)}</span>
-              <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.repairRate)}</span>
-              <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.medSessionsToTest ?? "—"}</span>
-            </div>
-          ))}
+          {res.stats.filter((s) => s.n > 0).map((s) => {
+            const bks = res.buckets.filter((b) => b.kind === s.kind && b.n > 0);
+            return (
+              <div key={s.kind} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "7px 0" }}>
+                <div style={{
+                  display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
+                  gap: 6, fontSize: 15,
+                }}>
+                  <span style={{ color: KIND_COLOR[s.kind], fontWeight: 700 }}>{KIND_LABEL[s.kind]}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.n}</span>
+                  <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.testRate)}</span>
+                  <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.repairRate)}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.medSessionsToTest ?? "—"}</span>
+                </div>
+                {/* age buckets — a 2-day-old excess is a different bet than a 3-week-old one */}
+                <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+                  {bks.map((b) => (
+                    <span key={b.bucket} style={{ fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
+                      {b.bucket}{" "}
+                      <b style={{ color: b.n >= 5 ? HOME_THEME.text : "rgba(255,255,255,0.4)" }}>
+                        {pctOrDash(b.testRate)}
+                      </b>{" "}
+                      <span style={{ color: "rgba(255,255,255,0.3)" }}>n={b.n}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
           {!res.stats.some((s) => s.n > 0) && (
             <div style={{ padding: 16, color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
               Not enough history loaded to grade anything yet.
             </div>
           )}
         </Card>
+
+        <div style={{
+          padding: "10px 14px", borderRadius: 10,
+          border: `1px solid ${LIGHT_BLUE}30`, background: `${LIGHT_BLUE}0A`,
+          fontSize: 15, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+        }}>
+          <b style={{ color: LIGHT_BLUE }}>Base % is a prior on the TYPE, not this level. </b>
+          It answers &ldquo;how often does a structure of this kind, at this age, eventually get
+          tested?&rdquo; — so three excess lows at three different prices will all show the same
+          number. It is not a probability that <i>this</i> level gets hit. Rates fall back to the
+          all-ages figure below n=5, and render a dash rather than a fake 0% when the sample is
+          empty. The row&apos;s own status is the <b>hits</b> column.
+        </div>
 
         <div style={{
           padding: "10px 14px", borderRadius: 10,

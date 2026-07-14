@@ -45,7 +45,7 @@ type SortKey = "all_abs" | "all_pct" | "near_pct" | "symbol" | "spot";
 type Filter = "all" | "pos" | "neg";
 
 const fmtPct = (n: number | null | undefined) =>
-  n == null || !Number.isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+  n == null || !Number.isFinite(n) ? "—" : `${n.toFixed(1)}%`;
 
 const fmtB = (n: number | null | undefined) => {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -56,15 +56,17 @@ const fmtB = (n: number | null | undefined) => {
   return `$${n.toFixed(0)}`;
 };
 
+// Same threshold the home stat bar uses: ≥50 = net long gamma (green).
 const pctColor = (n: number | null | undefined) => {
   if (n == null || !Number.isFinite(n)) return "rgba(255,255,255,0.35)";
-  return n >= 0 ? HOME_THEME.green : HOME_THEME.red;
+  return n >= 50 ? HOME_THEME.green : HOME_THEME.red;
 };
 
-/** −100…+100 → a centered bar: negative fills left of center, positive right. */
+/** 0…100 pos-share → bar filling from a 50% neutral tick. */
 function PctBar({ pct }: { pct: number | null }) {
-  const v = pct == null || !Number.isFinite(pct) ? 0 : Math.max(-100, Math.min(100, pct));
-  const half = Math.abs(v) / 2; // % of full width, each side is 50%
+  const v = pct == null || !Number.isFinite(pct) ? 50 : Math.max(0, Math.min(100, pct));
+  const from = Math.min(v, 50);
+  const width = Math.abs(v - 50);
   const color = pctColor(pct);
   return (
     <div style={{ position: "relative", height: 8, width: "100%", background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
@@ -74,8 +76,8 @@ function PctBar({ pct }: { pct: number | null }) {
           position: "absolute",
           top: 0,
           bottom: 0,
-          left: v >= 0 ? "50%" : `${50 - half}%`,
-          width: `${half}%`,
+          left: `${from}%`,
+          width: `${width}%`,
           background: color,
           opacity: 0.85,
           borderRadius: 4,
@@ -147,16 +149,16 @@ export default function NetGexPctTab() {
     let out = rows.filter((r) => {
       if (needle && !r.symbol.includes(needle)) return false;
       const a = allOf(r);
-      if (filter === "pos" && !(a != null && a > 0)) return false;
-      if (filter === "neg" && !(a != null && a < 0)) return false;
+      if (filter === "pos" && !(a != null && a >= 50)) return false;
+      if (filter === "neg" && !(a != null && a < 50)) return false;
       return true;
     });
     const val = (r: Row): number | string => {
       switch (sortKey) {
         case "symbol": return r.symbol;
         case "spot": return r.spot ?? 0;
-        case "near_pct": return nearOf(r) ?? -999;
-        case "all_pct": return allOf(r) ?? -999;
+        case "near_pct": return nearOf(r) ?? -1;
+        case "all_pct": return allOf(r) ?? -1;
         default: return r.all_abs ?? 0;
       }
     };
@@ -174,8 +176,8 @@ export default function NetGexPctTab() {
   };
   const caret = (k: SortKey) => (sortKey === k ? (asc ? " ▲" : " ▼") : "");
 
-  const posCount = view.filter((r) => (allOf(r) ?? 0) > 0).length;
-  const negCount = view.filter((r) => (allOf(r) ?? 0) < 0).length;
+  const posCount = rows.filter((r) => (allOf(r) ?? 50) >= 50).length;
+  const negCount = rows.filter((r) => (allOf(r) ?? 50) < 50).length;
   const asOf = rows[0]?.ts ? new Date(rows[0].ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : null;
 
   const chip = (active: boolean, color = LIGHT_BLUE): React.CSSProperties => ({
@@ -192,7 +194,7 @@ export default function NetGexPctTab() {
   return (
     <ThemeCard
       title="Net GEX %"
-      subtitle={`Optionable EM-watchlist tickers · Σ netGEX ÷ Σ|netGEX| · ${basis === "vol" ? "vol-only" : "OI+Vol"} basis · all-expiry window ≤ ${maxDte}d${asOf ? ` · as of ${asOf}` : ""}${loading ? " · loading…" : ""}`}
+      subtitle={`Optionable EM-watchlist tickers · +GEX % = Σ(+netGEX) ÷ Σ|netGEX| · 50 = neutral · same stat as the home GEX chart · ${basis === "vol" ? "vol-only" : "OI+Vol"} basis · all-expiry window ≤ ${maxDte}d${asOf ? ` · as of ${asOf}` : ""}${loading ? " · loading…" : ""}`}
     >
       {/* controls */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
@@ -210,8 +212,8 @@ export default function NetGexPctTab() {
         <button onClick={() => setBasis("vol")} style={chip(basis === "vol")}>Vol-only</button>
         <span style={{ width: 8 }} />
         <button onClick={() => setFilter("all")} style={chip(filter === "all")}>All ({rows.length})</button>
-        <button onClick={() => setFilter("pos")} style={chip(filter === "pos", HOME_THEME.green)}>Positive ({posCount})</button>
-        <button onClick={() => setFilter("neg")} style={chip(filter === "neg", HOME_THEME.red)}>Negative ({negCount})</button>
+        <button onClick={() => setFilter("pos")} style={chip(filter === "pos", HOME_THEME.green)}>Long γ ≥50 ({posCount})</button>
+        <button onClick={() => setFilter("neg")} style={chip(filter === "neg", HOME_THEME.red)}>Short γ &lt;50 ({negCount})</button>
         <span style={{ flex: 1 }} />
         <button onClick={load} style={chip(false)}>Refresh</button>
       </div>
@@ -236,9 +238,9 @@ export default function NetGexPctTab() {
                 <th style={{ ...th, textAlign: "left" }} onClick={() => toggle("symbol")}>Ticker{caret("symbol")}</th>
                 <th style={th} onClick={() => toggle("spot")}>Spot{caret("spot")}</th>
                 <th style={{ ...th, cursor: "default" }}>Front exp</th>
-                <th style={th} onClick={() => toggle("near_pct")}>Front ± GEX %{caret("near_pct")}</th>
+                <th style={th} onClick={() => toggle("near_pct")}>Front +GEX %{caret("near_pct")}</th>
                 <th style={{ ...th, textAlign: "left", cursor: "default", width: 110 }}> </th>
-                <th style={th} onClick={() => toggle("all_pct")}>All-exp ± GEX %{caret("all_pct")}</th>
+                <th style={th} onClick={() => toggle("all_pct")}>All-exp +GEX %{caret("all_pct")}</th>
                 <th style={{ ...th, textAlign: "left", cursor: "default", width: 110 }}> </th>
                 <th style={th} onClick={() => toggle("all_abs")}>Total |GEX|{caret("all_abs")}</th>
                 <th style={{ ...th, cursor: "default" }}>Exps</th>

@@ -748,23 +748,34 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
     return Math.round((exp - today) / 86_400_000);
   };
 
+  // Funnel counters — when nothing fires, this is the ONLY way to know which
+  // gate ate the tape. Logged below on any poll that produces no signal.
+  const rej = { total: 0, side: 0, otm: 0, premium: 0, dte: 0, seen: 0 };
+
   for (const r of rows) {
     if (!r) continue;
-    if (r.side !== 'buy') continue;                 // purchases only
+    rej.total++;
+    // Purchases only. NOTE: flow-processor coerces mid/unknown-side prints to
+    // side='buy' when writing the tape (tapeSide), so `side` alone would let
+    // unclassifiable prints through as "purchases". A real buy also carries a
+    // directional action ('BUY CALL'/'BUY PUT') and a non-neutral bucket — the
+    // neutral collapse is what tells the two apart.
+    if (r.side !== 'buy') { rej.side++; continue; }
+    if (r.bucket === 'neutral' || !String(r.action || '').startsWith('BUY')) { rej.side++; continue; }
     // /proxy/flow-history maps the is_otm COLUMN to an isOtm FIELD before it goes
     // over the wire. Accept both so this detector works against the HTTP tape and
     // a raw flow_prints row alike.
     const otm = r.isOtm ?? r.is_otm;
-    if (!otm) continue;                             // OTM only (frozen at print time)
+    if (!otm) { rej.otm++; continue; }              // OTM only (frozen at print time)
     const premium = Number(r.premium) || 0;
-    if (premium < C.WHALE_MIN_PREMIUM) continue;
+    if (premium < C.WHALE_MIN_PREMIUM) { rej.premium++; continue; }
     const dte = dteOf(r.expiration);
-    if (dte == null || dte < C.WHALE_DTE_MIN || dte > C.WHALE_DTE_MAX) continue;
+    if (dte == null || dte < C.WHALE_DTE_MIN || dte > C.WHALE_DTE_MAX) { rej.dte++; continue; }
 
     const ts = Number(r.ts);
     if (!Number.isFinite(ts)) continue;
     const id = `${ts}|${r.symbol || ''}|${r.price ?? ''}|${r.size ?? ''}`;
-    if (mem.whaleSeen.has(id)) continue;
+    if (mem.whaleSeen.has(id)) { rej.seen++; continue; }
     mem.whaleSeen.add(id);
 
     const ticker = String(r.underlying || r.symbol || '').toUpperCase();
@@ -796,6 +807,18 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
     });
   }
 
+  // Whales are rare, so "no signal" is the normal case and indistinguishable
+  // from "the detector is broken" — which is exactly the hole we've been stuck
+  // in. Print the funnel whenever a non-empty tape yields nothing, so the logs
+  // name the gate instead of us guessing at it.
+  if (!out.length && rej.total > 0) {
+    console.log(
+      `[signals] whale funnel — ${rej.total} print(s) in, 0 fired ` +
+      `(side/neutral ${rej.side}, not-OTM ${rej.otm}, <$${(C.WHALE_MIN_PREMIUM / 1e6).toFixed(1)}M ${rej.premium}, ` +
+      `dte outside ${C.WHALE_DTE_MIN}-${C.WHALE_DTE_MAX} ${rej.dte}, already-seen ${rej.seen})`
+    );
+  }
+
   // Cap the dedup set (drop oldest inserts — Set preserves insertion order).
   if (mem.whaleSeen.size > WHALE_SEEN_MAX) {
     const excess = mem.whaleSeen.size - WHALE_SEEN_MAX;
@@ -825,11 +848,16 @@ async function refreshWhales(base) {
       headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
       cache: 'no-store',
     });
-    if (!res.ok) return null;
+    if (!res.ok) { console.log(`[signals] whale tape — /proxy/flow-history ${res.status}`); return null; }
     const j = await res.json().catch(() => ({}));
     whaleCache.rows = Array.isArray(j.tape) ? j.tape : [];
+    // An empty tape at the $1M SQL floor is itself the answer (nothing that big
+    // printed, or flow_prints isn't being written) — distinguish it from "rows
+    // came back and every one was filtered out", which the funnel log covers.
+    if (!whaleCache.rows.length) console.log('[signals] whale tape — 0 rows ≥ $1M premium today');
     return whaleCache.rows;
-  } catch {
+  } catch (e) {
+    console.log(`[signals] whale tape — fetch failed: ${e.message}`);
     return null;
   }
 }

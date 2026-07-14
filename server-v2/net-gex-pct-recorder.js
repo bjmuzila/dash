@@ -5,14 +5,12 @@
  * "Net GEX %" scanner — for every ticker on the EM watchlist (same roster the
  * Far-CB watcher uses), computes the signed net-GEX share of total gamma:
  *
- *     netGexPct = Σ netGEX / Σ GROSS gamma   × 100   (range −100 … +100)
+ *     +GEX % = Σ (net GEX where > 0) ÷ Σ |net GEX|   × 100     (0 … 100)
  *
- * where GROSS gamma = Σ (callGEX + |putGEX|) across every strike/leg. Do NOT
- * use Σ|per-strike net| as the denominator: netting inside a strike cancels the
- * call leg against the put leg before the abs, which inflates every ticker to
- * 80–95% "bullish". Gross keeps the put gamma in the denominator where it
- * belongs, so the number reads as "what share of all gamma on the board is net
- * long."
+ * This is BYTE-FOR-BYTE the home page's "+GEX %" stat (HomeClient.tsx
+ * `posGexPct`): per-STRIKE net first, then abs. 50 = neutral, 100 = pure long
+ * gamma, 0 = pure short gamma. If you change the formula here, change it there
+ * too — the whole point is that SPX reads the same on both surfaces.
  *
  * ...on the SAME basis as the home-page GEX chart (OI+Vol: netGEX + netVolGEX).
  * +100 = every dollar of gamma on the board is long/positive (pinned, dealers
@@ -216,24 +214,22 @@ async function scanTicker(symbol) {
     if (!flatRows.length) { await sleep(EXPIRY_DELAY_MS); continue; }
 
     const gexRows = computeGexRows(flatRows, spot);
-    // NUMERATOR = Σ signed net GEX. DENOMINATOR = Σ GROSS gamma (call leg +
-    // |put leg|), NOT Σ|per-strike net| — netting inside a strike first cancels
-    // calls against puts and pushes every ticker toward ±100%.
-    let net = 0, abs = 0, netVol = 0, absVol = 0;
+    // IDENTICAL to the home page's "+GEX %" (HomeClient.tsx posGexPct):
+    //   pos-share = Σ (net GEX where net > 0) ÷ Σ |net GEX|   × 100   → 0…100
+    // Per-STRIKE net, then abs. 50 = neutral, 100 = pure long gamma, 0 = pure
+    // short gamma. Keep this in lockstep with HomeClient or the two surfaces
+    // will disagree on the same ticker.
+    let pos = 0, abs = 0, posVol = 0, absVol = 0;
     for (const r of gexRows) {
-      const cOi = Number(r.callGEX ?? 0);
-      const pOi = Number(r.putGEX ?? 0);              // already negative
-      const cVol = Number(r.callGamma ?? 0) * Number(r.callVolume ?? 0) * spot * spot;
-      const pVol = -(Number(r.putGamma ?? 0) * Number(r.putVolume ?? 0) * spot * spot);
+      const v = Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0); // OI+Vol basis
+      if (v > 0) pos += v;
+      abs += Math.abs(v);
 
-      // OI+Vol basis: both legs, both sources.
-      net += (cOi + pOi) + (cVol + pVol);
-      abs += Math.abs(cOi) + Math.abs(pOi) + Math.abs(cVol) + Math.abs(pVol);
-
-      // Vol-only basis.
-      netVol += cVol + pVol;
-      absVol += Math.abs(cVol) + Math.abs(pVol);
+      const vv = Number(r.netVolGEX ?? 0);                        // vol-only basis
+      if (vv > 0) posVol += vv;
+      absVol += Math.abs(vv);
     }
+    const net = pos, netVol = posVol; // stored in near_net/all_net as the +GEX numerator
 
     expCount += 1;
     allNet += net; allAbs += abs; allNetVol += netVol; allAbsVol += absVol;

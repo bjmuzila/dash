@@ -57,8 +57,13 @@ const METRICS = {
   dex: {
     label: 'DEX',
     band: Number(process.env.GREEKS_CROSS_DEX_BAND || 0.25),
-    up: 'dealer delta flipped positive',
-    down: 'dealer delta flipped negative',
+    // Same dealer-signed convention as GEX above, so say what the hedge FLOW
+    // does — "dealer delta flipped positive" just restates the arrow and tells
+    // you nothing you can trade.
+    //   +DEX → dealers hold long delta → they SELL underlying to stay hedged
+    //   -DEX → dealers hold short delta → they BUY underlying to stay hedged
+    up: 'dealers long delta — hedging SELLS into strength, rallies get faded',
+    down: 'dealers short delta — hedging BUYS into weakness, dips get supported',
   },
 };
 
