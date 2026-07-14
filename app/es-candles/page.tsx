@@ -40,24 +40,16 @@ type GexMetric = "voloi" | "vol";
 const ET_DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
 const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
 
-// Is SPX CASH open (Mon–Fri 09:30–16:00 ET)? Critical for the basis: the live
-// basis is esFut − spot, and when cash is CLOSED, `spot` is a frozen last print
-// while ES keeps trading. The difference is then not a basis at all — it's a
-// stale-price artifact (observed: live basis read 17 when the true ES−SPX close
-// basis was 50.6). Whenever cash is shut we must use the prior-day CLOSE basis
-// (ES 16:00 − SPX 16:00) instead of anything computed against a frozen spot.
-// Max distance a LIVE basis reading may sit from the prior-day close anchor before
-// it's rejected as garbage (bad/mis-scaled SPX spot, or a stale ES contract). The
-// true ES−SPX basis decays only ~a point a day toward expiry, so anything further
-// out than this is a data fault, not a market move. See effectiveBasis().
-const LIVE_BASIS_TOL = 12;
 // ES trades at a POSITIVE carry to SPX (cost of carry − dividends). It is never
-// negative and never a few hundred points. A reading outside this band is a data
-// fault — a mis-scaled/stale SPX spot, or an ES price from the wrong contract —
-// and must never be used, no matter which source produced it.
+// negative and never a few hundred points. Anything outside this band is a data
+// fault, whatever produced it — refuse it rather than bend every level by it.
 function isPlausibleBasis(b: number): boolean {
   return Number.isFinite(b) && b > 0 && b < 250;
 }
+
+// Is SPX CASH open (Mon–Fri 09:30–16:00 ET)? The live basis (ES − spot) is only
+// measurable while cash trades. Out of hours `spot` is a frozen last print while ES
+// keeps moving, so their difference stops being a basis at all.
 const ET_HM_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
 });
@@ -370,13 +362,20 @@ export default function EsCandlesPage() {
   // close. Used to derive SPX from ES on the right axis OVERNIGHT / pre-open,
   // until the 9:30 ET open when the live basis takes over. 0 = not available.
   const prevBasisRef = useRef(0);
-  // Contract-safe live basis inputs. lastEsCloseRef = the last 5m ES CANDLE close,
-  // i.e. the EXACT contract the chart plots; spotRef = live SPX. Never use
-  // marketState.esFut for this: it's fed by a Quote/Trade sub that goes silent, so
-  // the server's `basis` freezes on the PRE-ROLL contract (~1 quarterly spread of
-  // error, ~52pt, after every roll — the ESM→ESU roll bug).
+  // Live basis inputs, both sampled from sources VERIFIED good (2026-07-13):
+  //   lastEsCloseRef — last 5m ES CANDLE close. Definitionally the contract the chart
+  //                    plots, so it can't desync across a quarterly roll the way
+  //                    marketState.esFut does (esFut is written only by a Quote/Trade
+  //                    stream that goes silent, freezing on the EXPIRED contract).
+  //   spotRef        — live SPX from the feed. CONFIRMED accurate: published 7515.34
+  //                    against a 7515.89 cash close. Sampled together these give
+  //                    7563.25 − 7515.34 = +47.9, the true basis.
   const lastEsCloseRef = useRef(0);
   const spotRef = useRef(0);
+  // Off-hours fallback: /proxy/es-spx-basis (ES 16:00 close − Yahoo ^GSPC close).
+  // Needed because `spot` FREEZES when cash shuts while ES keeps trading, so the live
+  // difference stops being a basis. NOT sourced from eod_gex — see below.
+  const trustedBasisRef = useRef(0);
   // ET date → that session's ES−SPX basis, built from DAILY closes (ES 16:00
   // candle − SPX 16:00 eod_gex). This is the authoritative historical basis and
   // is deliberately INDEPENDENT of the heatmap backfill window: deriving it from
@@ -890,43 +889,30 @@ export default function EsCandlesPage() {
   }, []);
 
 
-  // Basis used to derive SPX from ES on the right axis.
-  // The live feed's `spot` (broker SPX) is unreliable / mis-scaled — it can quote
-  // ABOVE ES intraday, producing a wrong negative basis. The prior-day DB closes
-  // (ES 16:00 − SPX 16:00) give the correct positive basis, so we PREFER the
-  // frozen prior-day basis and only fall back to the live basis if it's missing.
-  // ANCHOR + DRIFT. Three basis sources exist and each fails in its own way:
-  //
-  //   1. server `basis` (esFut − spot) — esFut is written ONLY by the ES
-  //      Quote/Trade stream, which goes silent; marketState's freshness gate then
-  //      HOLDS the last value, so across a quarterly roll it describes the EXPIRED
-  //      contract. That's one calendar spread (~50pt) of error on every level.
-  //      Never used here.
-  //   2. live candle basis (last ES CANDLE close − live SPX spot) — always on the
-  //      charted contract (roll-proof), but the broker/Theta SPX spot is unreliable:
-  //      it can print ABOVE ES intraday (observed: basis −14) and it FREEZES out of
-  //      hours while ES keeps moving.
-  //   3. prior-day CLOSE basis (ES 16:00 − SPX 16:00) — measured when both sides
-  //      were simultaneously real, and rebuilt daily from post-roll closes, so it is
-  //      roll-correct by construction. Its only flaw is that it's up to a day stale,
-  //      and the real basis decays only ~a point a day toward expiry.
-  //
-  // So (3) is the ANCHOR, and (2) may only DRIFT it — accepted while cash is open
-  // and only when it lands within LIVE_BASIS_TOL of the anchor. A live reading that
-  // disagrees by more than that is a bad spot print or a contract mismatch, never a
-  // real basis move, so it's rejected and the anchor holds.
+  // THE basis used for every SPX→ES conversion on this page (levels, rail, heatmap,
+  // CB line, right-axis SPX). Strictly ordered, most-trustworthy first — see the
+  // numbered notes inline. The rule that fixes this page: never compute the basis
+  // against the broker "SPX" spot, because that spot tracks ES, not cash.
   const effectiveBasis = useCallback(() => {
-    // 1. TRUSTED: /proxy/es-spx-basis — our ES 16:00 close (charted contract, so
-    //    roll-correct) − Yahoo ^GSPC close (independent of the broker). This is the
-    //    only source not poisoned by the broker "SPX" spot, which actually tracks ES
-    //    (measured 2026-07-13: fed 7564.89 when SPX cash was 7515.89, ~+49 hot = one
-    //    whole basis). The real basis decays ~1pt/day, so a daily anchor is plenty —
-    //    a LIVE basis was never needed, and chasing one off a broken spot is what
-    //    produced the +30 / −14 garbage.
+    // 1. LIVE, while cash is open: last ES CANDLE close − live SPX spot. Both sides
+    //    verified good (spot published 7515.34 vs a 7515.89 cash close), both sampled
+    //    now, and the ES side is the charted contract — so this is roll-proof AND
+    //    current. This is the primary source.
+    if (isCashOpen()) {
+      const live = lastEsCloseRef.current > 0 && spotRef.current > 0
+        ? lastEsCloseRef.current - spotRef.current
+        : 0;
+      if (isPlausibleBasis(live)) return live;
+    }
+
+    // 2. Cash shut (or no live pair): /proxy/es-spx-basis — ES 16:00 close − Yahoo
+    //    ^GSPC close. The basis decays only ~1pt/day, so a daily anchor is fine here.
     if (isPlausibleBasis(trustedBasisRef.current)) return trustedBasisRef.current;
 
-    // 2. Prior-day close basis from eod_gex. Same shape, but its SPX column is the
-    //    broker spot, so it inherits the same poison — only a fallback.
+    // 3. eod_gex prior-day anchor. LAST resort, and deliberately below Yahoo: its
+    //    rows are written by a recorder that has historically only ever backfilled
+    //    (Jul 9/10 2026 were stamped 00:34/00:49 UTC — hours after the close), so its
+    //    `spot` is not a 4pm print. That is what produced the bogus −14 basis.
     let anchor = prevBasisRef.current;
     if (!isPlausibleBasis(anchor) && dayBasisRef.current.size) {
       const days = [...dayBasisRef.current.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -935,9 +921,8 @@ export default function EsCandlesPage() {
     }
     if (isPlausibleBasis(anchor)) return anchor;
 
-    // 3. Last resort: the server's own basis, and only if it's physically possible.
-    //    Otherwise 0 — a visibly-missing basis beats one that silently bends every
-    //    level by ~50pt.
+    // 4. The server's own basis — only if physically possible. Otherwise 0: a visibly
+    //    missing basis beats one that silently bends every level by ~50pt.
     if (isPlausibleBasis(basisRef.current)) return basisRef.current;
     return 0;
   }, []);
@@ -1151,9 +1136,8 @@ export default function EsCandlesPage() {
     return () => { chart?.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); };
   }, [rows, prevCloses, levels.basis, levels.esFut, levels.spx]);
 
-  // Feed the contract-safe basis inputs (see effectiveBasis). lastEsCloseRef is
-  // the charted contract's own price, so a quarterly roll can never desync it
-  // from the candles the way the server's esFut does.
+  // Feed the LIVE basis inputs (see effectiveBasis §1). lastEsCloseRef is the charted
+  // contract's own price, so a roll can never desync it from the candles.
   useEffect(() => {
     if (rows.length) {
       const c = Number(rows[rows.length - 1].close);
@@ -1163,6 +1147,45 @@ export default function EsCandlesPage() {
   useEffect(() => {
     if (levels.spx != null && levels.spx > 0) spotRef.current = levels.spx;
   }, [levels.spx]);
+
+  // Pull the off-hours fallback basis (see effectiveBasis §2). Refreshed every 30 min:
+  // the real basis decays ~a point a day, so that's ample resolution.
+  useEffect(() => {
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const res = await fetch("/proxy/es-spx-basis", { cache: "no-store" });
+        if (!res.ok) { console.warn(`[basis] trusted basis HTTP ${res.status}`); return; }
+        const j = await res.json();
+        const b = Number(j?.basis);
+        if (cancelled) return;
+        if (isPlausibleBasis(b)) {
+          trustedBasisRef.current = b;
+          // Per-session map for the HISTORICAL heatmap/CB conversions. Overwrites the
+          // eod_gex-derived map, whose SPX closes are backfill artifacts, not 4pm
+          // prints — the same bad data that produced the −14 basis.
+          const days = j?.days;
+          if (days && typeof days === "object") {
+            const next = new Map<string, number>();
+            for (const [d, v] of Object.entries(days)) {
+              const n = Number(v);
+              if (isPlausibleBasis(n)) next.set(d, n);
+            }
+            if (next.size) dayBasisRef.current = next;
+          }
+          drawOverlayRef.current();
+          railDrawRef.current();
+        } else {
+          console.warn(`[basis] trusted basis unusable:`, j);
+        }
+      } catch (e) {
+        console.warn("[basis] trusted basis fetch failed:", e);
+      }
+    };
+    void pull();
+    const id = setInterval(pull, 1_800_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
   // WS frame has arrived recently. Mirrors the server's authoritative
@@ -1236,7 +1259,10 @@ export default function EsCandlesPage() {
             const spx = Number(spxByDate.get(d) ?? 0);
             if (d && es > 0 && spx > 0 && isPlausibleBasis(es - spx)) next.set(d, es - spx);
           }
-          if (next.size) {
+          // Only if the trusted (Yahoo-based) map hasn't already populated it. eod_gex's
+          // SPX closes are backfill artifacts — this is the weaker source and must not
+          // clobber the good one on its 5-min refresh.
+          if (next.size && !isPlausibleBasis(trustedBasisRef.current)) {
             dayBasisRef.current = next;
             drawOverlayRef.current(); // repaint with the corrected historical basis
           }

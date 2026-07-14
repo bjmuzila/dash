@@ -117,8 +117,12 @@ async function getEsSpxBasis() {
     return cache.value;
   }
 
-  // Newest ET date where BOTH closes exist. Both are 16:00 ET prints, i.e.
-  // simultaneous — the only condition under which a basis is actually measurable.
+  // One basis PER ET SESSION, for every date where both closes exist. Both are 16:00
+  // ET prints, i.e. simultaneous — the only condition under which a basis is actually
+  // measurable. `days` drives the historical heatmap's per-column SPX→ES conversion;
+  // `basis` (the newest day) is the current anchor.
+  const days = {};
+  let latest = null;
   for (const r of rows) {
     const date = String(r.date).slice(0, 10);
     const esClose = Number(r.close);
@@ -129,12 +133,17 @@ async function getEsSpxBasis() {
       console.warn(`[es-spx-basis] REJECTED ${basis} on ${date} (es=${esClose} spx=${spxClose})`);
       continue;
     }
-    cache = { at: Date.now(), value: { basis, esClose, spxClose, date } };
-    console.log(`[es-spx-basis] ${date} basis=${basis} (ES ${esClose} − ^GSPC ${spxClose})`);
-    return cache.value;
+    days[date] = basis;
+    // rows are DESC, so the first survivor is the newest.
+    if (!latest) latest = { basis, esClose, spxClose, date };
   }
 
-  console.warn('[es-spx-basis] no date has both an ES 16:00 close and a ^GSPC close');
+  if (!latest) {
+    console.warn('[es-spx-basis] no date has both an ES 16:00 close and a ^GSPC close');
+    return cache.value;
+  }
+  cache = { at: Date.now(), value: { ...latest, days } };
+  console.log(`[es-spx-basis] ${latest.date} basis=${latest.basis} (ES ${latest.esClose} − ^GSPC ${latest.spxClose}), ${Object.keys(days).length} days`);
   return cache.value;
 }
 

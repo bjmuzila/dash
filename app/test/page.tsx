@@ -1210,173 +1210,142 @@ function OiByExpirationPanel({ symbol, expirations }: { symbol: string; expirati
   );
 }
 
-// Bar-underlay helper for the strike table — same left-anchored, magnitude-
-// scaled gradient bar treatment as the home page's GEX table (see
-// app/home/HomeClient.tsx `barEl`). Drawn behind the cell's text (z-index 0),
-// text sits on top (z-index 1). This is where the old standalone "Call/Put OI
-// & volume by strike" heatmap card's data now lives — as underlays in the
-// Call OI / Call Vol / Put OI / Put Vol columns instead of a separate chart.
-function slBarEl(value: number | null | undefined, max: number, positiveColor: string, negativeColor?: string): ReactNode {
-  if (value == null || !Number.isFinite(value) || !max) return null;
-  const ratio = Math.min(Math.abs(value) / max, 1);
-  const pct = ratio * 92;
-  if (!pct) return null;
-  const isNeg = value < 0 && negativeColor;
-  const color = isNeg ? negativeColor! : positiveColor;
-  const a = (0.16 + ratio * 0.22).toFixed(2);
+// ── SPX EOD GEX by date ─────────────────────────────────────────────────────
+// Same once-a-day bar-chart treatment as "Open interest by expiration" above,
+// but the x-axis is trading DATE and the bar is that session's total net GEX
+// from the eod_gex table (written by server-v2/eod-gex-recorder.js). Read via
+// GET /api/eod-gex?symbol=$SPX&limit=N — same endpoint /es-candles uses for the
+// prior-day SPX close. Positive net GEX = light blue, negative = red.
+type EodGexRow = { date: string; totalGex: number; spot: number };
+
+const EOD_GEX_SYMBOL = "$SPX";
+const EOD_GEX_DAYS = 30;
+
+function useEodGex(days: number) {
+  const [rows, setRows] = useState<EodGexRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  const run = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/eod-gex?symbol=${encodeURIComponent(EOD_GEX_SYMBOL)}&limit=${days}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const raw: unknown[] = Array.isArray(json?.rows) ? json.rows : [];
+      const next: EodGexRow[] = raw
+        .map((r) => {
+          const o = r as { date?: string; total_gex?: number | string; spot?: number | string };
+          return {
+            date: String(o.date ?? "").slice(0, 10),
+            totalGex: Number(o.total_gex ?? 0) || 0,
+            spot: Number(o.spot ?? 0) || 0,
+          };
+        })
+        .filter((r) => r.date)
+        // API returns newest-first; chart wants oldest → newest left → right.
+        .sort((a, b) => a.date.localeCompare(b.date));
+      setRows(next);
+      setLoadedAt(Date.now());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [days]);
+
+  useEffect(() => { void run(); }, [run]);
+
+  return { rows, loading, err, loadedAt, refresh: run };
+}
+
+function EodGexBarChart({ rows }: { rows: EodGexRow[] }) {
+  const W = 700, H = 240, padL = 52, padR = 12, padB = 34, padT = 16;
+  const { containerRef, hover, show, hide } = useChartHover();
+  if (!rows.length) return <GlEmpty note="no eod_gex rows" />;
+  const n = rows.length;
+  const maxAbs = Math.max(1, ...rows.map((r) => Math.abs(r.totalGex)));
+  const slotW = (W - padL - padR) / n;
+  const barW = Math.max(3, slotW * 0.6);
+  const plotH = H - padT - padB;
+  // Zero line sits proportionally between the +max and −max extremes so a
+  // sign flip is visible instead of being squashed against the axis.
+  const hasNeg = rows.some((r) => r.totalGex < 0);
+  const hasPos = rows.some((r) => r.totalGex > 0);
+  const yZero = hasNeg && hasPos ? padT + plotH / 2 : hasNeg ? padT : padT + plotH;
+  const half = hasNeg && hasPos ? plotH / 2 : plotH;
+  const barH = (v: number) => (Math.abs(v) / maxAbs) * half;
+
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: 3,
-        bottom: 3,
-        left: 0,
-        width: `${pct}%`,
-        background: `${color}${Math.round(Number(a) * 255).toString(16).padStart(2, "0")}`,
-        borderRadius: 3,
-        pointerEvents: "none",
-      }}
-    />
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }} onMouseLeave={hide}>
+        <line x1={padL} x2={W - padR} y1={yZero} y2={yZero} stroke={HOME_THEME.border} strokeWidth={1} />
+        {rows.map((r, i) => {
+          const cx = padL + slotW * (i + 0.5);
+          const h = Math.max(1, barH(r.totalGex));
+          const pos = r.totalGex >= 0;
+          return (
+            <rect
+              key={r.date}
+              x={cx - barW / 2}
+              y={pos ? yZero - h : yZero}
+              width={barW}
+              height={h}
+              fill={pos ? LIGHT_BLUE : HOME_THEME.red}
+              opacity={hover?.idx === i ? 1 : 0.85}
+              style={{ cursor: "crosshair" }}
+              onMouseMove={(e) => show(i, e)}
+            />
+          );
+        })}
+        {rows.map((r, i) => (
+          (n <= 10 || i % Math.ceil(n / 10) === 0) && (
+            <text key={r.date} x={padL + slotW * (i + 0.5)} y={H - padB + 16} textAnchor="middle" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>
+              {glFmtExpiryLabel(r.date)}
+            </text>
+          )
+        ))}
+        <text x={padL - 6} y={padT + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(hasPos ? maxAbs : 0)}</text>
+        <text x={padL - 6} y={yZero + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>0</text>
+        {hasNeg && hasPos && (
+          <text x={padL - 6} y={padT + plotH + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(-maxAbs)}</text>
+        )}
+      </svg>
+      {hover && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(rows[hover.idx].date)}</div>
+          <div>Net GEX: {glFmtBn(rows[hover.idx].totalGex)}</div>
+          <div>SPX close: {glFmt2(rows[hover.idx].spot)}</div>
+        </ChartTooltip>
+      )}
+    </div>
   );
 }
 
-function StrikeLevelTable({
-  rows, spot,
-}: { rows: GexLevelsRow[]; spot: number }) {
-  const sorted = useMemo(() => rows.slice().sort((a, b) => b.strike - a.strike), [rows]);
-  // Default visible window = spot ± $300 (rest of the chain reachable by
-  // scrolling) — sized off the actual row count in that band so it works for
-  // both $25-wide and $50-wide strike spacing without a hardcoded row count.
-  const ROW_H = 34;
-  const nearCount = useMemo(() => {
-    const n = sorted.filter((r) => Math.abs(r.strike - spot) <= 300).length;
-    return n > 0 ? n : 6;
-  }, [sorted, spot]);
-  const visibleHeight = nearCount * ROW_H;
-  // Nearest listed strike to spot = the ATM row we highlight + auto-center on.
-  const atmStrike = useMemo(() => {
-    if (!sorted.length) return null;
-    let best = sorted[0].strike, bestD = Math.abs(best - spot);
-    for (const r of sorted) { const dd = Math.abs(r.strike - spot); if (dd < bestD) { bestD = dd; best = r.strike; } }
-    return best;
-  }, [sorted, spot]);
-  // Center the ATM strike in the scroll viewport on first load (default view).
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const atmRef = useRef<HTMLTableRowElement | null>(null);
-  const centeredRef = useRef(false);
-  useEffect(() => {
-    if (centeredRef.current || atmStrike == null) return;
-    const cont = scrollRef.current, row = atmRef.current;
-    if (!cont || !row) return;
-    const cRect = cont.getBoundingClientRect(), rRect = row.getBoundingClientRect();
-    cont.scrollTop += (rRect.top - cRect.top) - cont.clientHeight / 2 + rRect.height / 2;
-    centeredRef.current = true;
-  }, [atmStrike]);
-  const totals = rows.reduce(
-    (acc, r) => ({
-      netGEX: acc.netGEX + glOiVolNet(r),
-      netDEX: acc.netDEX + (r.netDEX ?? 0),
-      callOI: acc.callOI + (r.callOI ?? 0),
-      callVolume: acc.callVolume + (r.callVolume ?? 0),
-      putOI: acc.putOI + (r.putOI ?? 0),
-      putVolume: acc.putVolume + (r.putVolume ?? 0),
-    }),
-    { netGEX: 0, netDEX: 0, callOI: 0, callVolume: 0, putOI: 0, putVolume: 0 }
-  );
-
-  const th: CSSProperties = { textAlign: "right", padding: "8px 10px", fontSize: 16, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, whiteSpace: "nowrap" };
-  const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, position: "relative", overflow: "hidden" };
-  const cellText: CSSProperties = { position: "relative", zIndex: 1 };
-
-  // Column maxes for the bar underlays — magnitude-scaled against the whole
-  // chain (not just the windowed/visible rows), same convention as the charts.
-  const maxNetGEX = Math.max(1, ...rows.map((r) => Math.abs(glOiVolNet(r))));
-  const maxNetDEX = Math.max(1, ...rows.map((r) => Math.abs(r.netDEX ?? 0)));
-  const maxCallOI = Math.max(1, ...rows.map((r) => r.callOI ?? 0));
-  const maxCallVol = Math.max(1, ...rows.map((r) => r.callVolume ?? 0));
-  const maxPutOI = Math.max(1, ...rows.map((r) => r.putOI ?? 0));
-  const maxPutVol = Math.max(1, ...rows.map((r) => r.putVolume ?? 0));
-
-  // Column widths shared between the fixed header table and the scrollable
-  // body table below it, so the two line up regardless of cell content.
-  const colWidths = ["13%", "19%", "17%", "12%", "13%", "12%", "14%"];
-  const Cols = () => (
-    <colgroup>
-      {colWidths.map((w, i) => (
-        <col key={i} style={{ width: w }} />
-      ))}
-    </colgroup>
-  );
-
+function EodGexPanel() {
+  const { rows, loading, err, loadedAt, refresh } = useEodGex(EOD_GEX_DAYS);
+  const updatedLabel = loadedAt
+    ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).format(new Date(loadedAt))
+    : null;
   return (
-    <div style={{ borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, overflow: "hidden", display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      {/* Header lives in its own non-scrolling table above the body — avoids
-          the sticky-thead ghosting/ overlap glitch from rows showing through
-          a sticky header while scrolling. */}
-      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-        <Cols />
-        <thead>
-          <tr>
-            <th style={{ ...th, textAlign: "left" }}>Strike</th>
-            <th style={th}>Net Gamma</th>
-            <th style={th}>Net Delta</th>
-            <th style={th}>Call OI</th>
-            <th style={th}>Call Vol</th>
-            <th style={th}>Put OI</th>
-            <th style={th}>Put Vol</th>
-          </tr>
-        </thead>
-      </table>
-      <div ref={scrollRef} style={{ maxHeight: visibleHeight, overflow: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-          <Cols />
-          <tbody>
-            {sorted.map((r) => {
-              const netG = glOiVolNet(r);
-              return (
-                <tr key={r.strike} ref={r.strike === atmStrike ? atmRef : undefined} style={{ background: r.strike === atmStrike ? `${LIGHT_BLUE}14` : "transparent" }}>
-                  <td style={{ ...td, textAlign: "left", fontWeight: 700 }}><span style={cellText}>{glFmt2(r.strike)}</span></td>
-                  <td style={{ ...td, color: netG >= 0 ? LIGHT_BLUE : HOME_THEME.red }}>
-                    {slBarEl(netG, maxNetGEX, LIGHT_BLUE, HOME_THEME.red)}
-                    <span style={cellText}>{glFmt0(netG)}</span>
-                  </td>
-                  <td style={td}>
-                    {slBarEl(r.netDEX, maxNetDEX, LIGHT_BLUE, HOME_THEME.red)}
-                    <span style={cellText}>{glFmt0(r.netDEX)}</span>
-                  </td>
-                  <td style={td}>
-                    {slBarEl(r.callOI, maxCallOI, LIGHT_BLUE)}
-                    <span style={cellText}>{glFmt0(r.callOI)}</span>
-                  </td>
-                  <td style={td}>
-                    {slBarEl(r.callVolume, maxCallVol, LIGHT_BLUE)}
-                    <span style={cellText}>{glFmt0(r.callVolume)}</span>
-                  </td>
-                  <td style={td}>
-                    {slBarEl(r.putOI, maxPutOI, HOME_THEME.red)}
-                    <span style={cellText}>{glFmt0(r.putOI)}</span>
-                  </td>
-                  <td style={td}>
-                    {slBarEl(r.putVolume, maxPutVol, HOME_THEME.red)}
-                    <span style={cellText}>{glFmt0(r.putVolume)}</span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>Total</td>
-              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.netGEX)}</td>
-              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.netDEX)}</td>
-              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.callOI)}</td>
-              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.callVolume)}</td>
-              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.putOI)}</td>
-              <td style={{ ...td, fontWeight: 800 }}>{glFmt0(totals.putVolume)}</td>
-            </tr>
-          </tfoot>
-        </table>
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+          {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · one bar per session (eod_gex)` : "—"}
+        </div>
+        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 15, marginLeft: "auto" }}>Refresh</button>
       </div>
+      {err && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 8 }}>EOD GEX error: {err}</div>}
+      {!rows.length && !err ? (
+        <GlEmpty note={loading ? "loading eod_gex…" : "no data yet"} />
+      ) : (
+        <>
+          <EodGexBarChart rows={rows} />
+          <ChartLegend items={[{ label: "Positive net GEX", color: LIGHT_BLUE }, { label: "Negative net GEX", color: HOME_THEME.red }]} />
+        </>
+      )}
     </div>
   );
 }
@@ -1524,17 +1493,23 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
 // grabbing anywhere inside a chart still pans it (useChartPan above) — the
 // two gestures would otherwise fight over the same mousedown+drag. Order
 // persists in localStorage so it survives reloads.
-const RIGHT_CARD_KEYS = ["history", "oiExpiry", "netGamma", "callPutGamma", "netDelta", "oiDate"] as const;
+// Right column = the reference/"key levels" stack: OI by expiration, the SPX
+// EOD GEX bar chart, and the daily history of key level changes.
+// Left column = everything else (the continuous by-strike charts + OI by date).
+const RIGHT_CARD_KEYS = ["oiExpiry", "eodGex", "history"] as const;
 type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
-const CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-v1";
+const LEFT_CARD_KEYS = ["netGamma", "callPutGamma", "netDelta", "oiDate"] as const;
+type LeftCardKey = (typeof LEFT_CARD_KEYS)[number];
+const RIGHT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-right-v2";
+const LEFT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-left-v2";
 
-function useCardOrder<K extends string>(defaultOrder: readonly K[]) {
+function useCardOrder<K extends string>(defaultOrder: readonly K[], storageKey: string) {
   const [order, setOrder] = useState<K[]>(() => [...defaultOrder]);
   const [draggingId, setDraggingId] = useState<K | null>(null);
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(CARD_ORDER_STORAGE_KEY);
+      const raw = localStorage.getItem(storageKey);
       if (!raw) return;
       const saved = JSON.parse(raw) as string[];
       const known = saved.filter((k): k is K => (defaultOrder as readonly string[]).includes(k));
@@ -1548,8 +1523,8 @@ function useCardOrder<K extends string>(defaultOrder: readonly K[]) {
 
   const persist = useCallback((next: K[]) => {
     setOrder(next);
-    try { localStorage.setItem(CARD_ORDER_STORAGE_KEY, JSON.stringify(next)); } catch {}
-  }, []);
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+  }, [storageKey]);
 
   const handleDragStart = useCallback((id: K) => (e: DragEvent) => {
     setDraggingId(id);
@@ -1608,23 +1583,9 @@ function CardTitleRow({ label, onDragStart, onDragEnd }: { label: string; onDrag
 function GexLevelsTab() {
   const { snap, err, load } = useGexLevels();
   const { trigger, label, style: refreshStyle } = useRefreshButton(load);
-  const cardOrder = useCardOrder(RIGHT_CARD_KEYS);
+  const rightOrder = useCardOrder(RIGHT_CARD_KEYS, RIGHT_CARD_ORDER_STORAGE_KEY);
+  const leftOrder = useCardOrder(LEFT_CARD_KEYS, LEFT_CARD_ORDER_STORAGE_KEY);
   const [history, setHistory] = useState<GlHistoryEntry[]>([]);
-
-  // Measures the right column's rendered height so the left strike table can
-  // be stretched to match it (full-length card instead of its old fixed cap).
-  const rightColRef = useRef<HTMLDivElement | null>(null);
-  const [rightColHeight, setRightColHeight] = useState<number | null>(null);
-  useEffect(() => {
-    const el = rightColRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect?.height;
-      if (h) setRightColHeight(h);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
 
@@ -1740,53 +1701,20 @@ function GexLevelsTab() {
       </Card>
 
       {d && (
-        // Left half: strike-level table, stretched to match the full height
-        // of the stacked right column (measured via ResizeObserver above).
-        // Right half: History of key level changes on top, then in
-        // reference-mock order: Open Interest by Expiration, Net Gamma
-        // (cumulative — crosses zero at the flip), Call/Put Gamma by strike,
-        // then Net Delta + Open Interest by Date underneath (real,
-        // already-working panels kept below the 3-panel reference layout).
+        // Two independent, separately-reorderable columns.
+        // Right column: Open Interest by Expiration, SPX EOD GEX (one bar per
+        // session from eod_gex), and the History of key level changes.
+        // Left column: everything else — cumulative Net Gamma (crosses zero at
+        // the flip), Call/Put Gamma by strike, Net Delta, Open Interest by Date.
         <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
-          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column" }}>
-            <Card
-              variant="budget"
-              accent={LIGHT_BLUE}
-              title={<span style={{ fontSize: 16 }}>Strike level net gamma &amp; call/put OI positioning</span>}
-              style={{ display: "flex", flexDirection: "column", height: rightColHeight ?? undefined }}
-            >
-              <StrikeLevelTable rows={d.rows} spot={d.spot} />
-            </Card>
-          </div>
-
-          <div ref={rightColRef} style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
             {(() => {
-              const content: Record<RightCardKey, ReactNode> = {
-                history: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="History of key level changes" onDragStart={cardOrder.handleDragStart("history")} onDragEnd={cardOrder.handleDragEnd} />}
-                    subtitle="One row per trading day (this browser only) — today updates live, prior days stay frozen"
-                  >
-                    {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
-                  </Card>
-                ),
-                oiExpiry: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Open interest by expiration" onDragStart={cardOrder.handleDragStart("oiExpiry")} onDragEnd={cardOrder.handleDragEnd} />}
-                    subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}
-                  >
-                    <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
-                  </Card>
-                ),
+              const content: Record<LeftCardKey, ReactNode> = {
                 netGamma: (
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={cardOrder.handleDragStart("netGamma")} onDragEnd={cardOrder.handleDragEnd} />}
+                    title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={leftOrder.handleDragStart("netGamma")} onDragEnd={leftOrder.handleDragEnd} />}
                     subtitle="Cumulative — crosses zero at the gamma flip (Neutral) · click-drag to pan, double-click to reset"
                   >
                     <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
@@ -1797,7 +1725,7 @@ function GexLevelsTab() {
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={cardOrder.handleDragStart("callPutGamma")} onDragEnd={cardOrder.handleDragEnd} />}
+                    title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={leftOrder.handleDragStart("callPutGamma")} onDragEnd={leftOrder.handleDragEnd} />}
                     subtitle="Click-drag to pan, double-click to reset"
                   >
                     <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
@@ -1808,7 +1736,7 @@ function GexLevelsTab() {
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net delta exposure by strike" onDragStart={cardOrder.handleDragStart("netDelta")} onDragEnd={cardOrder.handleDragEnd} />}
+                    title={<CardTitleRow label="Net delta exposure by strike" onDragStart={leftOrder.handleDragStart("netDelta")} onDragEnd={leftOrder.handleDragEnd} />}
                     subtitle="Click-drag to pan, double-click to reset"
                   >
                     <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
@@ -1819,19 +1747,66 @@ function GexLevelsTab() {
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Open interest by date" onDragStart={cardOrder.handleDragStart("oiDate")} onDragEnd={cardOrder.handleDragEnd} />}
+                    title={<CardTitleRow label="Open interest by date" onDragStart={leftOrder.handleDragStart("oiDate")} onDragEnd={leftOrder.handleDragEnd} />}
                     subtitle="Total call+put OI, one bar per trading day logged (this browser only)"
                   >
                     <OiByDateChart rows={history} />
                   </Card>
                 ),
               };
-              return cardOrder.order.map((key) => (
+              return leftOrder.order.map((key) => (
                 <div
                   key={key}
-                  onDragOver={cardOrder.cardDragOver(key)}
-                  onDrop={cardOrder.cardDrop(key)}
-                  style={{ opacity: cardOrder.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
+                  onDragOver={leftOrder.cardDragOver(key)}
+                  onDrop={leftOrder.cardDrop(key)}
+                  style={{ opacity: leftOrder.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
+                >
+                  {content[key]}
+                </div>
+              ));
+            })()}
+          </div>
+
+          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
+            {(() => {
+              const content: Record<RightCardKey, ReactNode> = {
+                oiExpiry: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Open interest by expiration" onDragStart={rightOrder.handleDragStart("oiExpiry")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}
+                  >
+                    <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
+                  </Card>
+                ),
+                eodGex: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="SPX EOD GEX by session" onDragStart={rightOrder.handleDragStart("eodGex")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle={`Total net GEX at the close · last ${EOD_GEX_DAYS} sessions (eod_gex, ${EOD_GEX_SYMBOL})`}
+                  >
+                    <EodGexPanel />
+                  </Card>
+                ),
+                history: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="History of key level changes" onDragStart={rightOrder.handleDragStart("history")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle="One row per trading day — today updates live, prior days stay frozen"
+                  >
+                    {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
+                  </Card>
+                ),
+              };
+              return rightOrder.order.map((key) => (
+                <div
+                  key={key}
+                  onDragOver={rightOrder.cardDragOver(key)}
+                  onDrop={rightOrder.cardDrop(key)}
+                  style={{ opacity: rightOrder.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
                 >
                   {content[key]}
                 </div>
@@ -1876,7 +1851,7 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     blurb: "SqueezeMetrics-style GEX dashboard for the live 0DTE symbol.",
     points: [
       "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
-      "Strike-level table with hover-bar underlays for gamma, delta, and call/put OI &amp; volume",
+      "SPX EOD GEX bar chart — total net GEX at the close, one bar per session (eod_gex)",
       "Open interest by expiration (real, once/day), cumulative net gamma, call/put gamma, net delta, and OI-by-date charts",
       "Daily history of level changes persisted forever in Postgres (gex_levels_history)",
     ],
