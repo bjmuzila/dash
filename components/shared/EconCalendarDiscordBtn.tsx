@@ -33,11 +33,14 @@ function hexA(hex: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+// Shape returned by /proxy/earnings-week — same source the /economic-calendar
+// page uses. (The old /api/earnings-today Yahoo scrape returns [] now.)
 interface EarnRow {
+  date: string;                 // YYYY-MM-DD (ET)
   symbol: string;
   company: string;
-  callTime: string;
-  marketCap: number;
+  session: "pre" | "after" | "unknown";
+  market_cap: number;
 }
 
 function fmtCap(v: number): string {
@@ -237,21 +240,25 @@ function dash(v?: string): string {
 }
 
 // Fewer rows in a lane -> bigger type (fills the panel); more rows -> smaller
-// type (keeps everything on-canvas). 4 rows is the "neutral" baseline.
+// type (keeps everything on-canvas). 6 rows is the "neutral" baseline: a light
+// day (4-5 events) should read BIG rather than leave the panel half empty.
 function densityScale(n: number): number {
-  const s = 1 + (4 - n) * 0.12;
-  return Math.max(0.7, Math.min(1.55, s));
+  const s = 1 + (6 - n) * 0.09;
+  return Math.max(0.85, Math.min(1.45, s));
 }
 
 function earningsRowsHTML(rows: EarnRow[]): string {
   return rows.map(r => {
-    const t = (r.callTime || "").toUpperCase();
-    const tag = t === "BMO" ? { txt: "BMO", c: HT.orange } : t === "AMC" ? { txt: "AMC", c: HT.green } : { txt: "TNS", c: HT.muted };
+    const tag = r.session === "pre"
+      ? { txt: "BMO", c: HT.orange }
+      : r.session === "after"
+        ? { txt: "AMC", c: HT.green }
+        : { txt: "TBD", c: HT.muted };
     return `
     <div class="ern-row">
       <div class="er-sym">${r.symbol}</div>
       <div class="er-co">${r.company || ""}</div>
-      <div class="er-cap">${fmtCap(r.marketCap)}</div>
+      <div class="er-cap">${fmtCap(r.market_cap)}</div>
       <div class="er-when"><span class="impact-pill" style="background:${hexA(tag.c, 0.14)};border-color:${hexA(tag.c, 0.4)};color:${tag.c}">${tag.txt}</span></div>
     </div>`;
   }).join("");
@@ -274,9 +281,10 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", 
     .sort((a, b) => a.time.localeCompare(b.time))
     .slice(0, 6);
 
-  const totalCount = economicEvents.length + presidentEvents.length;
-  const econPct = totalCount > 0 ? Math.round((economicEvents.length / totalCount) * 100) : 0;
-  const presPct = totalCount > 0 ? 100 - econPct : 0;
+  // Panel badges are plain counts — a "% of today's events" figure told you
+  // nothing and just looked like a stat.
+  const econCount = economicEvents.length;
+  const presCount = presidentEvents.length;
 
   const presScale = densityScale(Math.max(presidentEvents.length, 1));
   const econScale = densityScale(Math.max(economicEvents.length, 1));
@@ -285,19 +293,19 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", 
   const presTimeSize = px(15, presScale);
   const presTitleSize = px(16, presScale);
   const presRowPadV = px(14, presScale);
-  const presTimeCol = px(90, presScale);
+  const presTimeCol = px(92, presScale);
 
-  const econHeadSize = px(11, econScale);
-  const econTimeSize = px(14, econScale);
-  const econEventSize = px(15, econScale);
-  const econNumSize = px(14, econScale);
+  const econHeadSize = px(12, econScale);
+  const econTimeSize = px(16, econScale);
+  const econEventSize = px(18, econScale);
+  const econNumSize = px(16, econScale);
   const econRowPadV = px(12, econScale);
-  const pillFontSize = px(11, econScale);
-  const pillPadV = px(3, econScale);
-  const pillPadH = px(10, econScale);
-  const econTimeCol = px(78, econScale);
-  const econImpactCol = px(84, econScale);
-  const econNumCol = px(68, econScale);
+  const pillFontSize = px(12, econScale);
+  const pillHeight = px(24, econScale);
+  const pillPadH = px(11, econScale);
+  const econTimeCol = px(86, econScale);
+  const econImpactCol = px(88, econScale);
+  const econNumCol = px(74, econScale);
 
   const formattedQuote = (() => {
     const raw = (quote || "").trim();
@@ -339,10 +347,14 @@ function buildSnapshotHTML(events: CalEvent[], quote: string, logoDataUrl = "", 
 body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:'Inter','Helvetica Neue',Arial,sans-serif;background:var(--bg)}
 .snapshot{width:min(1280px,100%);min-height:680px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 50%,${hexA(HT.cyan, 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,rgba(18,103,131,0.07) 0%,transparent 50%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
-.badge{display:inline-flex;align-items:center;justify-content:center;line-height:1;height:56px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;letter-spacing:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
+/* html2canvas does NOT vertically center flex text — it renders on the normal
+   baseline, which is why pills looked top-heavy. Every pill below is an
+   inline-block whose line-height == its inner height. Do not "simplify" these
+   back to inline-flex + align-items:center. */
+.badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;letter-spacing:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{display:inline-flex;align-items:center;line-height:1;height:40px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
-.today-pill{display:inline-flex;align-items:center;line-height:1;height:40px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
+.date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
+.today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;font-size:16px}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
 .grid{display:grid;grid-template-columns:1.5fr 3fr 1.7fr;gap:18px;margin-top:24px;flex:1;min-height:0}
 /* THE card surface (classicCardAccentStyle): frosted fill, hairline edge, faint
@@ -351,7 +363,7 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .panel{border-radius:18px;border:1px solid var(--border);background:radial-gradient(circle at 50% 0%,rgba(126,211,252,0.10) 0%,transparent 60%),var(--panelBg);box-shadow:0 18px 40px rgba(0,0,0,0.22);overflow:hidden;height:100%;display:flex;flex-direction:column}
 .panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
 .panel-title{font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
-.panel-pct{display:inline-flex;align-items:center;line-height:1;font-size:12px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:5px 10px}
+.panel-pct{display:inline-block;height:24px;line-height:24px;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:0 9px}
 .ern-body{display:flex;flex-direction:column;flex:1}
 .ern-row{display:grid;grid-template-columns:64px 1fr 56px 52px;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex:1}
 .ern-row:last-child{border-bottom:none}
@@ -373,7 +385,7 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
 .ec-event{font-size:${econEventSize}px;font-weight:600}
 .ec-num{font-size:${econNumSize}px;font-weight:700;text-align:right;color:var(--text)}
 .ec-impact{text-align:left}
-.impact-pill{display:inline-flex;align-items:center;justify-content:center;line-height:1;border:1px solid;border-radius:8px;padding:${pillPadV}px ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase}
+.impact-pill{display:inline-block;height:${pillHeight}px;line-height:${pillHeight - 2}px;text-align:center;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase}
 .logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:80px;height:80px;object-fit:contain}
 </style></head><body>
@@ -390,14 +402,14 @@ body{width:1280px;min-height:720px;display:grid;place-items:center;padding:24px;
     <div class="panel pres">
       <div class="panel-head">
         <div class="panel-title">Presidential Schedule</div>
-        <div class="panel-pct">${presPct}%</div>
+        <div class="panel-pct">${presCount}</div>
       </div>
       ${presidentEvents.length > 0 ? `<div class="pres-body">${presRowsHTML}</div>` : `<div class="empty-panel">No political events today</div>`}
     </div>
     <div class="panel econ">
       <div class="panel-head">
         <div class="panel-title">Economic Calendar</div>
-        <div class="panel-pct">${econPct}%</div>
+        <div class="panel-pct">${econCount}</div>
       </div>
       ${economicEvents.length > 0 ? `
       <div class="econ-table">
@@ -484,7 +496,7 @@ async function buildCalendarTemplateImage(): Promise<string> {
     fetch("/api/calendar", { cache: "no-store" }),
     fetch("/api/calendar-quote", { cache: "no-store" }).catch(() => null),
     fetch("/cb-edge-square.png", { cache: "no-store" }).catch(() => null),
-    fetch("/api/earnings-today", { cache: "no-store" }).catch(() => null),
+    fetch("/proxy/earnings-week", { cache: "no-store" }).catch(() => null),
   ]);
   const calJson = calRes.ok ? await calRes.json() : {};
   const quoteJson = quoteRes?.ok ? await quoteRes.json() : {};
@@ -492,7 +504,13 @@ async function buildCalendarTemplateImage(): Promise<string> {
 
   const events: CalEvent[] = calJson.events ?? [];
   const quote: string = quoteJson.quote ?? "";
-  const earnings: EarnRow[] = ernJson.earnings ?? [];
+
+  // /proxy/earnings-week returns the whole week — keep today only, biggest first.
+  const today = etToday();
+  const allEarn: EarnRow[] = Array.isArray(ernJson.rows) ? ernJson.rows : [];
+  const earnings: EarnRow[] = allEarn
+    .filter(r => r.date === today)
+    .sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
 
   let logoDataUrl = "";
   if (logoRes?.ok) {

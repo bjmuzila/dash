@@ -9,7 +9,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, ToggleTile, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
@@ -429,6 +429,30 @@ export default function EsCandlesPage() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [dteOpen]);
 
+  // Overlays dropdown. The six overlay toggles used to sit inline in the dock
+  // and overflowed it (FitScale shrank everything to unreadable); they live in
+  // a checklist menu now.
+  const [ovlOpen, setOvlOpen] = useState(false);
+  const [ovlRect, setOvlRect] = useState<{ left: number; top: number } | null>(null);
+  const ovlBoxRef = useRef<HTMLDivElement>(null);
+  const ovlMenuRef = useRef<HTMLDivElement>(null);
+  const openOvl = useCallback(() => {
+    const r = ovlBoxRef.current?.getBoundingClientRect();
+    if (r) setOvlRect({ left: r.left, top: r.bottom + 4 });
+    setOvlOpen((v) => !v);
+  }, []);
+  useEffect(() => {
+    if (!ovlOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (ovlBoxRef.current?.contains(t)) return;
+      if (ovlMenuRef.current?.contains(t)) return;
+      setOvlOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [ovlOpen]);
+
   // DTE relative to today ET (today's expiry = 0DTE, not −1).
   const dteOf = (exp: string): number => {
     const todayEt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -450,7 +474,8 @@ export default function EsCandlesPage() {
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
   const [showGexBubbles, setShowGexBubbles] = useState(false);
-  const [bubbleScale, setBubbleScale] = useState(1); // manual radius multiplier (sizing is taste)
+  // 0.3 is the sweet spot, so the slider is centered on it (0.1–0.5).
+  const [bubbleScale, setBubbleScale] = useState(0.3); // manual radius multiplier (sizing is taste)
   // Mirrored into a ref so the imperative overlay draw reads it without
   // re-subscribing. Must stay BELOW the useState above (see bubbleScaleRef).
   useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
@@ -2071,32 +2096,75 @@ export default function EsCandlesPage() {
 
           <DockGap />
 
-          {/* overlay toggles — each keeps its accent color */}
-          <ToggleTile label="Heatmap" on={showHeatmap}  onClick={() => setShowHeatmap((v) => !v)}  accent={LIGHT_BLUE} />
-          {/* Heatmap backfill range, right next to the Heatmap toggle it
-              controls. 5D pulls/renders far more history and visibly slows
-              the chart, so it's opt-in rather than default. */}
-          <div title="Heatmap backfill range">
-            <SegGroup
-              options={[{ label: "1D", value: "1" }, { label: "5D", value: "5" }]}
-              active={String(heatmapDays)}
-              onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
-            />
+          {/* Overlays checklist dropdown (was 6 inline tiles — overflowed the dock) */}
+          <div ref={ovlBoxRef} style={{ flexShrink: 0 }}>
+            <DockButton onClick={openOvl} title="Chart overlays">
+              <span>Overlays</span>
+              {(() => {
+                const n = [showHeatmap, showProfile, showTpo, showLevels, showSessions, showRail, showGexBubbles].filter(Boolean).length;
+                return n ? (
+                  <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 999, background: DOCK_THEME.activeTile, border: `1px solid ${DOCK_THEME.activeBorder}`, color: HOME_THEME.cyan }}>{n}</span>
+                ) : null;
+              })()}
+              <span style={{ opacity: 0.5, transform: ovlOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+            </DockButton>
           </div>
-<ToggleTile label="Profile" on={showProfile}  onClick={() => setShowProfile((v) => !v)}  accent={LIGHT_BLUE} />
-          <ToggleTile label="TPO"     on={showTpo}      onClick={() => setShowTpo((v) => !v)}       accent={LIGHT_BLUE} />
-          <ToggleTile label="Levels"  on={showLevels}    onClick={() => setShowLevels((v) => !v)}   accent={LIGHT_BLUE} />
-          <ToggleTile label="PDH/ON"  on={showSessions}  onClick={() => setShowSessions((v) => !v)} accent={LIGHT_BLUE} />
-          <ToggleTile label="GEX Rail" on={showRail}     onClick={() => setShowRail((v) => !v)}     accent={LIGHT_BLUE} />
-          {/* 1-min per-strike GEX bubbles */}
-          <ToggleTile
-            label="Bubbles"
-            on={showGexBubbles}
-            onClick={() => setShowGexBubbles((v) => !v)}
-            accent={LIGHT_BLUE}
-          />
-          {showGexBubbles && (
-            <DockSlider label="bubble" value={bubbleScale} min={0.3} max={3} step={0.1} onChange={setBubbleScale} title="Bubble size" />
+          {ovlOpen && ovlRect && createPortal(
+            <div
+              ref={ovlMenuRef}
+              className="w-56 py-1"
+              style={{ position: "fixed", left: ovlRect.left, top: ovlRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
+            >
+              {([
+                { label: "Heatmap", on: showHeatmap, toggle: () => setShowHeatmap((v) => !v) },
+                { label: "Profile", on: showProfile, toggle: () => setShowProfile((v) => !v) },
+                { label: "TPO", on: showTpo, toggle: () => setShowTpo((v) => !v) },
+                { label: "Levels", on: showLevels, toggle: () => setShowLevels((v) => !v) },
+                { label: "PDH/ON", on: showSessions, toggle: () => setShowSessions((v) => !v) },
+                { label: "GEX Rail", on: showRail, toggle: () => setShowRail((v) => !v) },
+                { label: "Bubbles", on: showGexBubbles, toggle: () => setShowGexBubbles((v) => !v) },
+              ] as const).map((o) => (
+                <button
+                  key={o.label}
+                  onClick={o.toggle}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs"
+                  style={{ borderRadius: 8, border: o.on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: o.on ? DOCK_THEME.activeTile : "transparent", color: o.on ? HOME_THEME.cyan : HOME_THEME.text, fontWeight: 600 }}
+                  onMouseEnter={(e) => { if (!o.on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+                  onMouseLeave={(e) => { if (!o.on) e.currentTarget.style.background = "transparent"; }}
+                >
+                  <span
+                    style={{
+                      width: 14, height: 14, flexShrink: 0, borderRadius: 4,
+                      border: `1px solid ${o.on ? HOME_THEME.cyan : HOME_THEME.border}`,
+                      background: o.on ? HOME_THEME.cyan : "transparent",
+                      color: DOCK_THEME.bg, fontSize: 10, lineHeight: "12px", textAlign: "center", fontWeight: 900,
+                    }}
+                  >
+                    {o.on ? "✓" : ""}
+                  </span>
+                  <span>{o.label}</span>
+                </button>
+              ))}
+
+              {/* Sub-controls only make sense when their overlay is on */}
+              {showHeatmap && (
+                <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }} title="Heatmap backfill range">
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Heatmap range</div>
+                  <SegGroup
+                    options={[{ label: "1D", value: "1" }, { label: "5D", value: "5" }]}
+                    active={String(heatmapDays)}
+                    onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
+                  />
+                </div>
+              )}
+              {showGexBubbles && (
+                <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble size</div>
+                  <DockSlider label="bubble" value={bubbleScale} min={0.1} max={0.5} step={0.02} onChange={setBubbleScale} title="Bubble size" />
+                </div>
+              )}
+            </div>,
+            document.body
           )}
 
           <DockGap />

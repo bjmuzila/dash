@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CB Edge — X post mockups</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+  :root{ --bg:#070b12; --panel:#0e1626; --line:#1e2b44; --mut:#7b91b4; --grn:#00e5a0; --blu:#37b6ff; --red:#ff4d6d; }
+  *{box-sizing:border-box}
+  body{margin:0;background:#05080e;color:#e8eefb;font-family:"Segoe UI",-apple-system,Helvetica,Arial,sans-serif;padding:28px}
+  h2{font-weight:600;font-size:18px;margin:34px 0 12px;color:#c6d4ec}
+  .hint{color:#7b91b4;font-size:13px;margin:0 0 18px}
+  .slots{display:flex;gap:12px;flex-wrap:wrap;background:#0b111c;border:1px solid var(--line);border-radius:12px;padding:16px}
+  .slot{width:170px;height:96px;border:1px dashed #33456a;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;color:#7b91b4;text-align:center;overflow:hidden;background:#0e1626;position:relative}
+  .slot img{width:100%;height:100%;object-fit:cover}
+  .slot span{position:absolute;padding:6px}
+  button{background:var(--grn);color:#05140e;border:0;padding:10px 20px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin:12px 0 0}
+  button:hover{filter:brightness(1.12)}
+
+  .card{width:1600px;height:900px;position:relative;overflow:hidden;background:var(--bg);transform-origin:top left}
+  .scaler{width:100%;overflow:hidden;border:1px solid var(--line);border-radius:12px}
+  .grid{position:absolute;inset:0;background-image:linear-gradient(#121c2f 1px,transparent 1px),linear-gradient(90deg,#121c2f 1px,transparent 1px);background-size:100px 100px;opacity:.5}
+  .accentbar{position:absolute;left:0;bottom:0;width:100%;height:12px;background:linear-gradient(90deg,var(--grn),var(--blu))}
+  .logo{height:150px;object-fit:contain;object-position:left center;display:block;filter:brightness(1.15)}
+  .tag{color:var(--mut);letter-spacing:3.5px;font-size:16px;font-weight:600;margin-top:2px}
+  .h1{font-size:62px;font-weight:800;line-height:1.08;margin:0}
+  .h1 .g{color:var(--grn)}
+  .feat{list-style:none;padding:0;margin:26px 0 0}
+  .feat li{display:flex;align-items:center;gap:14px;font-size:28px;font-weight:700;margin:0 0 16px}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--grn);flex:none}
+  .ph{background:#101a2c;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;color:#3f5375;font-size:15px;font-weight:600}
+  .shot{position:absolute;border:1px solid #2a3c5e;border-radius:12px;overflow:hidden;box-shadow:0 30px 70px rgba(0,0,0,.65);cursor:move}
+  .shot img,.shot .ph{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+  .shot.sel{outline:2px solid var(--grn);outline-offset:2px}
+  .hnd{position:absolute;right:0;bottom:0;width:30px;height:30px;background:var(--grn);cursor:nwse-resize;border-radius:12px 0 0 0;z-index:5}
+  .exporting .hnd{display:none}
+  .exporting .shot{cursor:default}
+  .exporting .shot.sel{outline:0}
+  .scrim{position:absolute;inset:0;background:linear-gradient(90deg,rgba(5,9,16,.97) 0%,rgba(5,9,16,.92) 38%,rgba(5,9,16,.35) 68%,rgba(5,9,16,.1) 100%)}
+</style>
+</head>
+<body>
+
+<h2 style="margin-top:0">1 · Load your images</h2>
+<p class="hint">Click each slot and choose a file. You must load the logo here too — pick <code>public/cb-edge-logo.png</code>. (Images can't be auto-loaded from disk without tainting the canvas and breaking the PNG export.)</p>
+<div class="slots">
+  <div class="slot" data-k="logo"><span>Logo (cb-edge-logo.png)</span></div>
+  <div class="slot" data-k="s1"><span>Shot 1 — GEX chart</span></div>
+  <div class="slot" data-k="s2"><span>Shot 2 — Options flow</span></div>
+  <div class="slot" data-k="s3"><span>Shot 3 — Heatmap / stats</span></div>
+  <label style="display:flex;flex-direction:column;justify-content:center;gap:8px;color:#7b91b4;font-size:13px;padding-left:8px">
+    Logo size <span id="lv">150px</span>
+    <input id="logoSize" type="range" min="70" max="280" value="150" style="width:180px">
+  </label>
+</div>
+
+<h2>2 · Position them</h2>
+<p class="hint">Drag a screenshot to move it · drag the green corner to resize · scroll over it to zoom the image · shift+drag to pan the crop · arrow keys to nudge (shift = 10px). Handles are hidden automatically on export.</p>
+
+<h2>Layout A — Screenshot collage</h2>
+<div class="scaler" id="wrapA">
+  <div class="card" id="cardA">
+    <div class="grid"></div>
+    <div style="position:absolute;left:90px;top:78px;width:780px">
+      <img class="logo" data-slot="logo" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="">
+      <div class="tag">OPTIONS INTELLIGENCE PLATFORM</div>
+      <p class="h1" style="margin-top:52px">The data desks pay for.<br><span class="g">Built for retail.</span></p>
+      <ul class="feat">
+        <li><i class="dot"></i>IB stats — 8 years historical</li>
+        <li><i class="dot"></i>3 years historical estimated move</li>
+        <li><i class="dot"></i>Live GEX charts &amp; full greeks</li>
+        <li><i class="dot"></i>400+ stock options flow</li>
+        <li><i class="dot"></i>Heatmaps, stats &amp; more</li>
+      </ul>
+    </div>
+    <div class="shot" style="left:900px;top:70px;width:640px;height:340px"><div class="ph" data-slot="s1">Shot 1 — GEX chart</div></div>
+    <div class="shot" style="left:840px;top:340px;width:520px;height:290px"><div class="ph" data-slot="s2">Shot 2 — Options flow</div></div>
+    <div class="shot" style="left:1000px;top:560px;width:540px;height:290px"><div class="ph" data-slot="s3">Shot 3 — Heatmap</div></div>
+    <div class="accentbar"></div>
+  </div>
+</div>
+<button data-dl="cardA">Download layout A (1600×900)</button>
+
+<h2>Layout B — Single hero shot</h2>
+<div class="scaler" id="wrapB">
+  <div class="card" id="cardB">
+    <div class="shot" style="left:0;top:0;width:1600px;height:900px;border:0;border-radius:0;box-shadow:none"><div class="ph" data-slot="s1">Shot 1 — full dashboard</div></div>
+    <div class="scrim"></div>
+    <div style="position:absolute;left:90px;top:80px;width:840px">
+      <img class="logo" data-slot="logo" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="">
+      <div class="tag">OPTIONS INTELLIGENCE PLATFORM</div>
+      <p class="h1" style="margin-top:52px">The data desks pay for.<br><span class="g">Built for retail.</span></p>
+      <ul class="feat">
+        <li><i class="dot"></i>IB stats — 8 years historical</li>
+        <li><i class="dot"></i>3 years historical estimated move</li>
+        <li><i class="dot"></i>Live GEX charts &amp; full greeks</li>
+        <li><i class="dot"></i>400+ stock options flow</li>
+        <li><i class="dot"></i>Heatmaps, stats &amp; more</li>
+      </ul>
+    </div>
+    <div class="accentbar"></div>
+  </div>
+</div>
+<button data-dl="cardB">Download layout B (1600×900)</button>
+
+<h2>Layout C — Feature grid</h2>
+<div class="scaler" id="wrapC">
+  <div class="card" id="cardC">
+    <div class="grid"></div>
+    <div style="position:absolute;left:90px;top:70px;display:flex;align-items:center;gap:28px">
+      <img class="logo" data-slot="logo" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="" style="height:120px">
+      <div style="width:1px;height:80px;background:#26364f"></div>
+      <div>
+        <div style="font-size:32px;font-weight:800">The data desks pay for. <span style="color:var(--grn)">Built for retail.</span></div>
+        <div class="tag" style="letter-spacing:3px;font-size:15px">OPTIONS INTELLIGENCE PLATFORM</div>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:90px;top:230px;display:grid;grid-template-columns:repeat(3,460px);grid-template-rows:250px 250px;gap:24px">
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column">
+        <div style="flex:1"><div class="ph" data-slot="s1" style="width:100%;height:100%">Shot 1</div></div>
+        <div style="padding:16px 20px;font-size:23px;font-weight:700">Live GEX charts &amp; greeks</div>
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column">
+        <div style="flex:1"><div class="ph" data-slot="s2" style="width:100%;height:100%">Shot 2</div></div>
+        <div style="padding:16px 20px;font-size:23px;font-weight:700">400+ stock options flow</div>
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column">
+        <div style="flex:1"><div class="ph" data-slot="s3" style="width:100%;height:100%">Shot 3</div></div>
+        <div style="padding:16px 20px;font-size:23px;font-weight:700">Heatmaps, stats &amp; more</div>
+      </div>
+      <div style="grid-column:span 2;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:34px 40px;display:flex;flex-direction:column;justify-content:center">
+        <div style="font-size:60px;font-weight:800;color:var(--grn);line-height:1">8 YEARS</div>
+        <div style="font-size:27px;font-weight:700;margin-top:10px">of historical IB stats</div>
+        <div style="color:var(--mut);font-size:20px;margin-top:8px">Backtested context on every single session.</div>
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:34px 40px;display:flex;flex-direction:column;justify-content:center">
+        <div style="font-size:60px;font-weight:800;color:var(--blu);line-height:1">3 YEARS</div>
+        <div style="font-size:27px;font-weight:700;margin-top:10px">historical est. move</div>
+        <div style="color:var(--mut);font-size:20px;margin-top:8px">Know what's priced in.</div>
+      </div>
+    </div>
+    <div class="accentbar"></div>
+  </div>
+</div>
+<button data-dl="cardC">Download layout C (1600×900)</button>
+
+<script>
+function fit(id){
+  var w=document.getElementById(id), c=w.firstElementChild;
+  var s=w.clientWidth/1600;
+  c.style.transform='scale('+s+')';
+  w.style.height=(900*s)+'px';
+}
+['wrapA','wrapB','wrapC'].forEach(fit);
+window.addEventListener('resize',function(){['wrapA','wrapB','wrapC'].forEach(fit)});
+
+document.getElementById('logoSize').oninput=function(){
+  document.getElementById('lv').textContent=this.value+'px';
+  document.querySelectorAll('.logo').forEach(function(l){ l.style.height=this.value+'px'; }.bind(this));
+};
+
+document.querySelectorAll('.slot').forEach(function(slot){
+  slot.onclick=function(){
+    var inp=document.createElement('input');
+    inp.type='file'; inp.accept='image/*';
+    inp.onchange=function(){
+      var f=inp.files[0]; if(!f) return;
+      var r=new FileReader();
+      r.onload=function(){
+        var url=r.result;
+        slot.innerHTML='<img src="'+url+'">';
+        document.querySelectorAll('[data-slot="'+slot.dataset.k+'"]').forEach(function(t){
+          if(t.tagName==='IMG'){ t.src=url; }
+          else{
+            var im=document.createElement('img');
+            im.src=url; im.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+            t.replaceWith(im);
+          }
+        });
+      };
+      r.readAsDataURL(f);
+    };
+    inp.click();
+  };
+});
+
+var SC=1;
+function scaleOf(el){ var c=el.closest('.card'); return c.getBoundingClientRect().width/1600; }
+
+document.querySelectorAll('.shot').forEach(function(sh){
+  var h=document.createElement('div'); h.className='hnd'; sh.appendChild(h);
+
+  h.addEventListener('mousedown',function(e){
+    e.preventDefault(); e.stopPropagation();
+    var s=scaleOf(sh), x0=e.clientX, y0=e.clientY;
+    var w0=parseFloat(sh.style.width), h0=parseFloat(sh.style.height);
+    function mv(ev){
+      sh.style.width=Math.max(120,w0+(ev.clientX-x0)/s)+'px';
+      sh.style.height=Math.max(80,h0+(ev.clientY-y0)/s)+'px';
+    }
+    function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
+    document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+  });
+
+  sh.addEventListener('mousedown',function(e){
+    if(e.target.classList.contains('hnd')) return;
+    e.preventDefault();
+    document.querySelectorAll('.shot').forEach(function(o){o.classList.remove('sel')});
+    sh.classList.add('sel');
+    var img=sh.querySelector('img');
+    var s=scaleOf(sh), x0=e.clientX, y0=e.clientY;
+
+    if(e.shiftKey && img){
+      var op=(img.style.objectPosition||'50% 50%').split(' ');
+      var px=parseFloat(op[0]), py=parseFloat(op[1]);
+      function pmv(ev){
+        var nx=Math.min(100,Math.max(0,px-(ev.clientX-x0)/s/4));
+        var ny=Math.min(100,Math.max(0,py-(ev.clientY-y0)/s/4));
+        img.style.objectPosition=nx+'% '+ny+'%';
+      }
+      function pup(){document.removeEventListener('mousemove',pmv);document.removeEventListener('mouseup',pup)}
+      document.addEventListener('mousemove',pmv); document.addEventListener('mouseup',pup);
+      return;
+    }
+
+    var l0=parseFloat(sh.style.left), t0=parseFloat(sh.style.top);
+    function mv(ev){
+      sh.style.left=(l0+(ev.clientX-x0)/s)+'px';
+      sh.style.top=(t0+(ev.clientY-y0)/s)+'px';
+    }
+    function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
+    document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+  });
+
+  sh.addEventListener('wheel',function(e){
+    var img=sh.querySelector('img'); if(!img) return;
+    e.preventDefault();
+    var cur=parseFloat(img.dataset.z||'1');
+    var z=Math.min(4,Math.max(1,cur+(e.deltaY<0?0.08:-0.08)));
+    img.dataset.z=z;
+    img.style.width=(z*100)+'%'; img.style.height=(z*100)+'%';
+    img.style.objectFit='cover';
+  },{passive:false});
+});
+
+document.addEventListener('keydown',function(e){
+  var sh=document.querySelector('.shot.sel'); if(!sh) return;
+  var k={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
+  if(!k) return;
+  e.preventDefault();
+  var step=e.shiftKey?10:1;
+  sh.style.left=(parseFloat(sh.style.left)+k[0]*step)+'px';
+  sh.style.top=(parseFloat(sh.style.top)+k[1]*step)+'px';
+});
+
+document.querySelectorAll('[data-dl]').forEach(function(b){
+  b.onclick=function(){
+    var el=document.getElementById(b.dataset.dl);
+    el.classList.add('exporting');
+    var prev=el.style.transform; el.style.transform='none';
+    html2canvas(el,{width:1600,height:900,backgroundColor:'#070b12',scale:1,useCORS:true,allowTaint:false}).then(function(cv){
+      el.style.transform=prev; el.classList.remove('exporting');
+      var a=document.createElement('a');
+      a.download='cb-edge-'+b.dataset.dl.slice(-1).toLowerCase()+'.png';
+      a.href=cv.toDataURL('image/png'); a.click();
+    }).catch(function(e){ el.style.transform=prev; el.classList.remove('exporting'); alert('Export failed: '+e); });
+  };
+});
+</script>
+</body>
+</html>
