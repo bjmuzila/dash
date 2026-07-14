@@ -16,6 +16,7 @@ import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
+import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import NetGexPctTab from "@/components/scanner/NetGexPctTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "netgexpct" | "strike" | "oi" | "watch" | "marketquality" | "tpo" | "ibstats";
+type MainTab = "overview" | "gex" | "netgexpct" | "strike" | "oi" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -124,6 +125,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "ES · 3 years of 5m RTH",
     what: "Backtests every Initial Balance (09:30–10:30) rule — midpoint bias, formation order, single-break continuation, width-based day type, failed-break fades, 0.25 fib pullbacks, extension targets, break timing — over a baked-in 3-year ES dataset.",
     tells: "Which IB rules actually have an edge and which are coin flips, with hit rates, sample sizes, average break time, and MFE/MAE sizing for each — ranked best to worst.",
+  },
+  {
+    tab: "statprompter",
+    title: "Stat Prompter",
+    accent: LIGHT_BLUE,
+    scope: "ES + NQ · paired IB sessions",
+    what: "A library of canned questions over the ES and NQ Initial Balance book — cross-index divergence (ES breaks high while NQ breaks low), confirm-vs-diverge break quality, follow-the-first-breaker, width/open-type/ORB/FVG context, break timing, and trend-day filters. Click one and it runs on the real history.",
+    tells: "The base rate for whatever shape today just printed, in one click — with n, a 95% confidence interval, a THIN badge under n=30, and a bias flag on anything above 85%.",
   },
 ];
 
@@ -2818,6 +2827,7 @@ export default function ScannerPage() {
         <option value="marketquality">Market Quality</option>
         <option value="tpo">TPO Structures</option>
         <option value="ibstats">IB Stats</option>
+        <option value="statprompter">Stat Prompter</option>
       </select>
 
       {/* Top-level tabs */}
@@ -2855,6 +2865,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "ibstats" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
           background: tab === "ibstats" ? `${HOME_THEME.green}22` : "transparent",
         }}>IB Stats</button>
+        <button onClick={() => setTab("statprompter")} style={{
+          ...tabStyle(tab === "statprompter"),
+          border: `1px solid ${tab === "statprompter" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
+          background: tab === "statprompter" ? `${LIGHT_BLUE}22` : "transparent",
+        }}>Stat Prompter</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -2866,6 +2881,7 @@ export default function ScannerPage() {
       {tab === "marketquality" && <MarketQualityScanner />}
       {tab === "tpo" && <TpoStructuresScanner />}
       {tab === "ibstats" && <IbStatsTab />}
+      {tab === "statprompter" && <StatPrompterTab />}
     </PageShell>
   );
 }
