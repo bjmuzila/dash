@@ -125,7 +125,17 @@ function noteGreeks(obs) {
     // a cross. Nothing crossed; we just now know where we are.
     if (prevSide === null) continue;
 
-    if (now - st.lastFiredAt < COOLDOWN_MS) continue;
+    // Every line that reaches here IS a confirmed sign flip (same-side readings
+    // were already `continue`d above) — so the old blanket cooldown could ONLY
+    // ever suppress a real regime change. That's how the feed ended up showing
+    // two consecutive "crossed 0 ↑ positive" alerts with the intervening ↓ cross
+    // missing: a long-gamma tape that never existed.
+    //
+    // Keep the cooldown as a spam damper for WEAK flips that are still hugging
+    // the deadband (|value| < 2× band = the value is oscillating, not committing),
+    // but a decisive flip always fires. Regime changes are never suppressed.
+    const decisive = Math.abs(value) >= cfg.band * 2;
+    if (!decisive && now - st.lastFiredAt < COOLDOWN_MS) continue;
     st.lastFiredAt = now;
 
     const dir = side === 'pos' ? 'positive' : 'negative';
