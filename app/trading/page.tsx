@@ -288,8 +288,20 @@ export default function TradingPage() {
     const losses = visible.filter((j) => j.net_pnl < 0);
     const totalPnl = visible.reduce((s, j) => s + j.net_pnl, 0);
     const totalTrades = visible.reduce((s, j) => s + j.trades, 0);
-    const avgWin = wins.length ? wins.reduce((s, j) => s + j.net_pnl, 0) / wins.length : 0;
-    const avgLoss = losses.length ? losses.reduce((s, j) => s + j.net_pnl, 0) / losses.length : 0;
+    // Trade-level win/loss stats, aggregated from each day's stored per-trade
+    // averages (weighted by that day's win/loss counts). Day-level net_pnl can't
+    // surface avg loss or profit factor when every journal DAY is green while
+    // individual trades still lost — exactly the single-import all-win-day case.
+    let grossWin = 0, grossLoss = 0, winCt = 0, lossCt = 0;
+    for (const j of visible) {
+      const lc = Math.round(j.trades * (1 - j.win_rate / 100));
+      const wc = j.trades - lc;
+      winCt += wc; lossCt += lc;
+      grossWin += (j.avg_win || 0) * wc;
+      grossLoss += Math.abs(j.avg_loss || 0) * lc;
+    }
+    const avgWin = winCt ? grossWin / winCt : 0;
+    const avgLoss = lossCt ? -grossLoss / lossCt : 0;
     // Streaks
     let bestW = 0, bestL = 0, curW = 0, curL = 0;
     for (const j of visible) {
@@ -315,11 +327,7 @@ export default function TradingPage() {
       // Profit factor across the whole filtered set: gross wins / gross losses.
       // This replaced the old "capture efficiency" score, which was defined
       // against avg MFE — a per-trade excursion stat the journal no longer keeps.
-      profitFactor: (() => {
-        const gw = wins.reduce((s, j) => s + j.net_pnl, 0);
-        const gl = Math.abs(losses.reduce((s, j) => s + j.net_pnl, 0));
-        return gl > 0 ? gw / gl : null;
-      })(),
+      profitFactor: grossLoss > 0 ? grossWin / grossLoss : null,
       // Hoverable series — each point carries its date + a context line so the
       // tooltip can say WHY the number is what it is, not just what it is.
       pfSeries: visible.map((j) => ({

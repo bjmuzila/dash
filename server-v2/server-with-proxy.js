@@ -1719,6 +1719,15 @@ async function main() {
         })().catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Send the morning budget briefing email right now (bypasses the 08:00 ET
+      // gate). POST /proxy/budget-email-run
+      if (pathname === '/proxy/budget-email-run' && req.method === 'POST') {
+        const { runOnce } = require('./budget-email');
+        runOnce(`http://localhost:${PORT}`)
+          .then(() => sendJson(res, 200, { ok: true }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // Fire a single /mult-greek static snapshot now (ignores the RTH gate on
       // force). POST /proxy/mult-greek-snapshot?force=1
       if (pathname === '/proxy/mult-greek-snapshot' && req.method === 'POST') {
@@ -2061,6 +2070,10 @@ async function main() {
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
     require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
+    // Morning budget briefing: daily 08:00 ET, emails the owner a written
+    // summary + screenshots of /owner/budget (Overview + Prop). Force a send
+    // any time via POST /proxy/budget-email-run.
+    require('./budget-email').startBudgetEmail(PORT);
     // Overnight ES gap tracker: DISABLED — CPU cost not worth it (5-min RTH cron).
     // Re-enable by uncommenting: require('./es-gap-tracker').startEsGapTracker(PORT);
     // In-process ICT setup recorder: every 5m during RTH detects every live ICT

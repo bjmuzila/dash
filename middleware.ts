@@ -20,6 +20,9 @@ const PUBLIC_PATTERNS: RegExp[] = [
   // Enforced auth endpoints must be reachable while signed OUT (they're how you
   // sign in). They do their own Turnstile + rate-limit gating internally.
   /^\/api\/auth\/(login|signup|logout|me|forgot-password|reset-password)$/,
+  // Internal automation session minter — reachable without a cookie because it
+  // does its own INTERNAL_API_TOKEN gating (used by the morning budget email).
+  /^\/api\/auth\/internal-session$/,
   /^\/api\/auth\/google(\/.*)?$/,
   /^\/api\/waitlist(\/.*)?$/,
   /^\/api\/unsubscribe(\/.*)?$/,

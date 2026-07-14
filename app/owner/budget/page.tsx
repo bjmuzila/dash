@@ -33,6 +33,16 @@ type RecurringRule = { id: number; label: string; bank: Bank; amount: number; fr
 // Red standardized to theme's #EF4444 — amounts, deficits and delete accents.
 const SOFT_RED = HOME_THEME.red;
 
+// ── Elevated dark surface set (premium contrast pass) ────────────────────────
+// Page-local tokens, one step deeper than HOME_THEME.bg/panel so metrics pop.
+// Cards stay SOLID (no blur/radial) — this deepens, it does not re-skin.
+const INK = "#020308";                         // page background — near-black
+const PANEL = "#0A0E16";                       // solid card fill
+const HAIRLINE = "rgba(255,255,255,0.08)";     // card edge
+const EDGE_LIGHT = "inset 0 1px 0 rgba(255,255,255,0.05)"; // machined top edge
+const CARD_SHADOW = `${EDGE_LIGHT}, 0 1px 2px rgba(0,0,0,0.5), 0 16px 40px -12px rgba(0,0,0,0.55)`;
+const SHELL_GLOW_DEEP = `radial-gradient(1100px 520px at 12% -10%, rgba(33,158,188,0.07) 0%, transparent 60%), radial-gradient(900px 460px at 88% 6%, rgba(125,211,252,0.05) 0%, transparent 55%), ${HOME_THEME.shellGlow}`;
+
 // Swatch palette for category dots.
 const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
 
@@ -593,13 +603,13 @@ export default function BudgetPage() {
   const deleteProp = async (id: number) => post({ action: "propDelete", id });
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: INK, backgroundImage: SHELL_GLOW_DEEP, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
       <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.28em", color: HOME_THEME.muted, opacity: 0.75 }}>{monthLabel.toUpperCase()}</div>
-            <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4 }}>BUDGET</div>
+            <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4, textShadow: "0 0 32px rgba(125,211,252,0.22)" }}>BUDGET</div>
           </div>
           <div style={{ marginTop: 14 }}>
             <div style={labelCap()}>Month</div>
@@ -1346,15 +1356,20 @@ function StatTile({ label, value, sub, valueColor, hero, delta, currency }: { la
       style={{
         ...card(),
         padding: 16,
-        background: hero ? "#000000" : HOME_THEME.panel,
-        border: `1px solid ${hero ? bRgba(LIGHT_BLUE, 0.25) : HOME_THEME.border}`,
+        ...(hero
+          ? {
+              background: "#000000",
+              border: `1px solid ${bRgba(LIGHT_BLUE, 0.35)}`,
+              boxShadow: `${EDGE_LIGHT}, 0 0 28px -8px ${bRgba(LIGHT_BLUE, 0.30)}, 0 16px 40px -12px rgba(0,0,0,0.55)`,
+            }
+          : null),
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>{label}</div>
-      <div style={{ marginTop: 8, fontSize: 26, fontWeight: 900, letterSpacing: "-0.01em", color: hero ? LIGHT_BLUE : (valueColor ?? HOME_THEME.text) }}>{value}</div>
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>{label}</div>
+      <div style={{ marginTop: 8, fontSize: 28, fontWeight: 900, letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", color: hero ? LIGHT_BLUE : (valueColor ?? HOME_THEME.text), textShadow: hero ? `0 0 26px ${bRgba(LIGHT_BLUE, 0.35)}` : "none" }}>{value}</div>
       {sub && <div style={{ marginTop: 4, fontSize: 12, color: HOME_THEME.muted, opacity: 0.55 }}>{sub}</div>}
       {delta != null && delta !== 0 && (
-        <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: delta < 0 ? SOFT_RED : HOME_THEME.green }}>
+        <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: delta < 0 ? SOFT_RED : HOME_THEME.green }}>
           {delta > 0 ? "↗ +" : "↘ "}{fmtMoney(delta, currency || "USD").replace("-", "")} vs last
         </div>
       )}
@@ -1414,10 +1429,10 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
                   onMouseLeave={() => setHover(null)}
                   style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 2, position: "relative", background: hover === i ? "rgba(255,255,255,0.03)" : "transparent", borderRadius: 6 }}
                 >
-                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: HOME_THEME.green, borderRadius: "4px 4px 0 0" }} />
-                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: SOFT_RED, borderRadius: "4px 4px 0 0" }} />
+                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.inflow / max) * 100}%`, minHeight: b.inflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${HOME_THEME.green} 0%, ${bRgba(HOME_THEME.green, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 12px ${bRgba(HOME_THEME.green, 0.35)}` : "none", transition: "box-shadow .15s ease" }} />
+                  <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${SOFT_RED} 0%, ${bRgba(SOFT_RED, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 12px ${bRgba(SOFT_RED, 0.35)}` : "none", transition: "box-shadow .15s ease" }} />
                   {hover === i && (
-                    <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
+                    <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
                       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
                       <div style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green }}>In {fmtMoney(b.inflow, currency)}</div>
                       <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>Out {fmtMoney(b.outflow, currency)}</div>
@@ -2673,7 +2688,13 @@ function th(align: "left" | "right" | "center"): React.CSSProperties {
 // SOLID card surface — no gradients, no radial highlights, no backdrop blur.
 // One flat dark panel + hairline edge is the whole visual language of this page.
 function card(): React.CSSProperties {
-  return { background: HOME_THEME.panel, borderRadius: 16, border: `1px solid ${HOME_THEME.border}`, boxShadow: "0 10px 26px rgba(0,0,0,0.28)" };
+  return {
+    // Solid fill + a 1.5% white top wash (sheen, not glass) over the deep panel.
+    background: `linear-gradient(180deg, rgba(255,255,255,0.015) 0%, transparent 34%), ${PANEL}`,
+    borderRadius: 16,
+    border: `1px solid ${HAIRLINE}`,
+    boxShadow: CARD_SHADOW,
+  };
 }
 // hex → rgba for accent tints.
 function bRgba(hex: string, a: number): string {
@@ -2689,17 +2710,28 @@ function dissolveCard(): React.CSSProperties {
   return card();
 }
 function field(): React.CSSProperties {
-  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.30)", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 15, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
+  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.45)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.45)", transition: "border-color .15s ease, box-shadow .15s ease", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 15, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
 }
 function labelCap(): React.CSSProperties {
   return { fontSize: 15, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
-  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.25)", background: "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.05))", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap" };
+  return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.35)", background: "linear-gradient(180deg, rgba(33,158,188,0.18), rgba(33,158,188,0.05))", boxShadow: "0 0 18px rgba(33,158,188,0.18), inset 0 1px 0 rgba(255,255,255,0.08)", color: HOME_THEME.cyan, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap", transition: "box-shadow .15s ease, border-color .15s ease" };
 }
 function ghost(): React.CSSProperties {
-  return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" };
+  return { padding: "10px 14px", borderRadius: 10, border: `1px solid ${HAIRLINE}`, background: "rgba(255,255,255,0.03)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)", color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap", transition: "border-color .15s ease, background .15s ease" };
 }
 function pill(active: boolean): React.CSSProperties {
-  return { padding: "8px 16px", borderRadius: 999, border: active ? "1px solid rgba(33,158,188,0.35)" : `1px solid ${HOME_THEME.border}`, background: active ? "rgba(33,158,188,0.12)" : "rgba(255,255,255,0.04)", color: active ? HOME_THEME.cyan : HOME_THEME.text, fontSize: 15, fontWeight: 800, cursor: "pointer" };
+  return {
+    padding: "8px 16px",
+    borderRadius: 999,
+    border: active ? "1px solid rgba(33,158,188,0.45)" : `1px solid ${HAIRLINE}`,
+    background: active ? "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.06))" : "rgba(255,255,255,0.03)",
+    boxShadow: active ? "0 0 16px rgba(33,158,188,0.22), inset 0 1px 0 rgba(255,255,255,0.06)" : "none",
+    color: active ? HOME_THEME.cyan : "rgba(255,255,255,0.82)",
+    fontSize: 15,
+    fontWeight: 800,
+    cursor: "pointer",
+    transition: "border-color .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease",
+  };
 }

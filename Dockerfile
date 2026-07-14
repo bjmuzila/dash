@@ -6,17 +6,22 @@ ENV DEBIAN_FRONTEND=noninteractive
 # System deps:
 #  - tzdata: ET-gated schedulers (MVC/EOD/weekly publishers) gate on America/
 #    New_York wall-clock time, so the container MUST have tz data + TZ set.
-# NOTE: puppeteer/tesseract/html2canvas are declared in package.json but are NOT
-# imported anywhere in the running app (verified by grep). The server does not
-# need chromium, so we skip ~400MB of browser libs. If you later add a script
-# that launches puppeteer, re-add chromium + its libs here.
+#  - chromium + fonts + libs: server-v2/budget-email.js launches headless
+#    Chromium to screenshot /owner/budget for the daily briefing. Puppeteer uses
+#    the system chromium (PUPPETEER_EXECUTABLE_PATH) rather than downloading its
+#    own, so we skip the bundled download but must ship the browser + its libs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates tzdata \
+      chromium fonts-liberation fonts-noto-color-emoji \
+      libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
+      libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+      libpango-1.0-0 libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV TZ=America/New_York
-# Skip puppeteer's bundled chromium download (the dep is unused at runtime).
+# Use the system chromium above; don't download puppeteer's bundled build.
 ENV PUPPETEER_SKIP_DOWNLOAD=1
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
