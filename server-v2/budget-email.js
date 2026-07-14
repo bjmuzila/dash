@@ -67,7 +67,6 @@ async function buildWriteup(base, cookie, month) {
   const d = await r.json();
 
   const register = Array.isArray(d.register) ? d.register : [];
-  const propRows = Array.isArray(d.propRows) ? d.propRows : [];
   const db = d.dailyBalance || null;
 
   let income = 0, expenses = 0;
@@ -77,12 +76,6 @@ async function buildWriteup(base, cookie, month) {
   }
   const allBanks = db ? (db.coastal || 0) + (db.truist || 0) + (db.secu || 0) : null;
 
-  let propCost = 0, propPayout = 0;
-  for (const p of propRows) {
-    if (String(p.entry_date || '').slice(0, 7) !== month) continue;
-    propCost += p.cost || 0; propPayout += p.payout || 0;
-  }
-
   const label = new Date(`${month}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const net = income - expenses;
   const rows = [
@@ -90,7 +83,6 @@ async function buildWriteup(base, cookie, month) {
     ['Income (mo)', fmt(income)],
     ['Expenses (mo)', fmt(expenses)],
     ['Net (mo)', fmt(net)],
-    ['Prop spend (mo)', fmt(propCost - propPayout)],
   ];
   const cells = rows.map(([k, v]) =>
     `<tr><td style="padding:6px 14px;color:#8b94a7;font:600 13px system-ui">${k}</td>` +
@@ -102,16 +94,18 @@ async function buildWriteup(base, cookie, month) {
     `<div style="font:800 18px system-ui;color:#e8ecf4;letter-spacing:.02em">Budget briefing — ${label}</div>` +
     `<div style="font:500 13px system-ui;color:#8b94a7;margin:4px 0 14px">Good morning. Snapshot as of 8:00 AM ET.</div>` +
     `<table style="width:100%;border-collapse:collapse;background:#111726;border-radius:10px;overflow:hidden">${cells}</table>` +
-    `<div style="font:600 13px system-ui;color:#8b94a7;margin:16px 0 6px">Overview</div>` +
-    `<img src="cid:overview" style="width:100%;border-radius:10px;border:1px solid #1c2333" />` +
-    `<div style="font:600 13px system-ui;color:#8b94a7;margin:16px 0 6px">Prop spending</div>` +
-    `<img src="cid:prop" style="width:100%;border-radius:10px;border:1px solid #1c2333" />` +
+    `<img src="cid:overview" style="width:100%;border-radius:10px;border:1px solid #1c2333;margin-top:16px" />` +
     `</div>`;
   return { html, label };
 }
 
-// ── screenshots via headless chromium ───────────────────────────────────────
-async function captureShots(base, cookie) {
+// ── screenshot via headless chromium ────────────────────────────────────────
+// Captures ONLY the budget Overview content: the app chrome (GlobalToolbar +
+// OwnerSidebar) are siblings of <main>, so we hide every sibling of <main> and
+// of each of its ancestors, then unlock the page's internal scroll container
+// (the budget root is overflowY:auto inside a height-capped <main>) so a
+// fullPage shot captures the whole thing rather than one viewport.
+async function captureShot(base, cookie) {
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.launch({
     headless: true,
@@ -120,35 +114,54 @@ async function captureShots(base, cookie) {
   });
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1500, height: 2400, deviceScaleFactor: 1 });
+    await page.setViewport({ width: 1600, height: 1200, deviceScaleFactor: 1 });
     const host = new URL(base).host.split(':')[0];
     await page.setCookie({ name: cookie.name, value: cookie.value, domain: host, path: '/', httpOnly: true });
 
     await page.goto(`${base}/owner/budget`, { waitUntil: 'networkidle2', timeout: 45_000 });
     // Let the client-side data + charts settle.
     await new Promise((r) => setTimeout(r, 6000));
-    const overview = await page.screenshot({ type: 'png' });
 
-    // Switch to the Prop tab (button labelled "Prop") and shoot again.
-    const clicked = await page.evaluate(() => {
-      const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent.trim() === 'Prop');
-      if (b) { b.click(); return true; }
-      return false;
+    await page.evaluate(() => {
+      const main = document.querySelector('main');
+      if (!main) return;
+      // Hide toolbar / sidebar / docks: anything that isn't on main's ancestry.
+      let node = main;
+      while (node.parentElement && node !== document.body) {
+        const parent = node.parentElement;
+        for (const sib of Array.from(parent.children)) {
+          if (sib !== node) sib.style.display = 'none';
+        }
+        parent.style.overflow = 'visible';
+        parent.style.height = 'auto';
+        parent.style.maxHeight = 'none';
+        node = parent;
+      }
+      // Let every internal scroll container grow to its full content height.
+      const unlock = (el) => {
+        el.style.overflow = 'visible';
+        el.style.height = 'auto';
+        el.style.maxHeight = 'none';
+      };
+      unlock(main);
+      for (const el of main.querySelectorAll('*')) {
+        const s = getComputedStyle(el);
+        if (s.overflowY === 'auto' || s.overflowY === 'scroll') unlock(el);
+      }
+      for (const el of [document.documentElement, document.body]) unlock(el);
     });
-    if (clicked) await new Promise((r) => setTimeout(r, 2500));
-    const prop = await page.screenshot({ type: 'png' });
+    await new Promise((r) => setTimeout(r, 800));
 
-    return { overview, prop };
+    return await page.screenshot({ type: 'png', fullPage: true });
   } finally {
     await browser.close().catch(() => {});
   }
 }
 
 // ── send via Resend (inline cid attachments) ────────────────────────────────
-async function send(html, label, shots) {
+async function send(html, label, shot) {
   const attachments = [
-    { filename: 'overview.png', content: shots.overview.toString('base64'), content_id: 'overview' },
-    { filename: 'prop.png', content: shots.prop.toString('base64'), content_id: 'prop' },
+    { filename: 'budget.png', content: Buffer.from(shot).toString('base64'), content_id: 'overview' },
   ];
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -164,8 +177,8 @@ async function runOnce(base) {
   const { month } = etParts();
   const cookie = await mintOwnerSession(base);
   const { html, label } = await buildWriteup(base, cookie, month);
-  const shots = await captureShots(base, cookie);
-  await send(html, label, shots);
+  const shot = await captureShot(base, cookie);
+  await send(html, label, shot);
   console.log(`[budget-email] sent ${label} → ${TO_EMAILS.join(', ')}`);
 }
 
