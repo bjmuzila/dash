@@ -335,13 +335,11 @@ export default function AuthForm({
       {error && <div style={{ color: T.red, fontSize: 12, marginTop: 12 }}>{error}</div>}
       {notice && <div style={{ color: T.green, fontSize: 12, marginTop: 12 }}>{notice}</div>}
 
-      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 20, textAlign: "center" }}>
-        {isSignup ? (
-          <>Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link></>
-        ) : (
-          <>No account? <Link href="/pricing" style={{ color: T.cyan }}>Join the beta</Link></>
-        )}
-      </div>
+      {isSignup && (
+        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 20, textAlign: "center" }}>
+          Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link>
+        </div>
+      )}
     </div>
   );
 }

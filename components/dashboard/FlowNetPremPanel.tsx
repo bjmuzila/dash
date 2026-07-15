@@ -323,6 +323,12 @@ export default function FlowNetPremPanel() {
           <div
             style={{
               position: "absolute", top: 40, right: 8, zIndex: 30, width: 260,
+              // The panel's content (~400px of controls) is taller than a short
+              // dock tile, and its offset parent is that tile (height:100%), so
+              // an unbounded panel spills past the bottom and gets clipped —
+              // Moneyness/Reset became unreachable. Bound it to whatever room is
+              // left under the header and scroll the overflow instead.
+              maxHeight: "calc(100% - 48px)", overflowY: "auto", overscrollBehavior: "contain",
               background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.10) 0%, transparent 60%), rgba(10,13,20,0.97)",
               border: `1px solid ${C.border}`, borderTop: "2px solid rgba(33,158,188,0.5)",
               borderRadius: 12, boxShadow: "0 20px 44px -14px rgba(0,0,0,0.75), 0 6px 16px rgba(0,0,0,0.45)",
