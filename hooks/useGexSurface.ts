@@ -68,7 +68,10 @@ export function useGexSurface(
     let cancelled = false;
     const load = async () => {
       try {
-        const qs = new URLSearchParams({ mode: "series", basis, window: "13", buckets: "30", minutes: "1" });
+        // minutes=1 is NOT requested: the 3D map draws towers only now (the
+        // 1-min bubble layer was removed), so pulling ~390 extra rows per poll
+        // would be dead weight. The server still supports it for future callers.
+        const qs = new URLSearchParams({ mode: "series", basis, window: "13", buckets: "30" });
         if (expiry) qs.set("expiry", expiry);
         const r = await fetch(`/proxy/gex-history?${qs}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`gex-history ${r.status}`);

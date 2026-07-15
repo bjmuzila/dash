@@ -1,9 +1,12 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /gex-3d — GEX heatmap + bubbles rendered as a 3D perspective terrain map.
+// /gex-3d — GEX heatmap rendered as a 3D perspective terrain of towers.
 // Positive (call-wall) GEX extrudes UP as blue "ice walls"; negative (put) GEX
-// extrudes DOWN as red "magma cliffs". Strikes on X, session time on Z.
+// extrudes DOWN as red "magma cliffs" — or up too, via "Flip −GEX up", which
+// raises both signs from a common baseline and lets color carry the sign.
+// Strikes on X, session time on Z. Strength reads as BOTH height and luminance
+// (two-stop color ramps), so a dominant wall is obvious even end-on or flat.
 //
 // DATA: useGexSurface → /proxy/gex-history?mode=series (today's ET session out
 // of option_strike_gex_history). Polls every 30 MINUTES on purpose — this is a
@@ -37,13 +40,41 @@ function shade(hex: string, f: number, a = 1): string {
   const c = (v: number) => Math.round(Math.min(255, v * f));
   return `rgba(${c(r)},${c(g)},${c(b)},${a})`;
 }
+/** Blend two theme hexes; t=0 → a, t=1 → b. Returns [r,g,b]. */
+function mixRgb(a: string, b: string, t: number): [number, number, number] {
+  const [r1, g1, b1] = hexToRgb(a);
+  const [r2, g2, b2] = hexToRgb(b);
+  const k = Math.max(0, Math.min(1, t));
+  return [r1 + (r2 - r1) * k, g1 + (g2 - g1) * k, b1 + (b2 - b1) * k];
+}
+/** Apply a light factor to an [r,g,b] and return a css rgb string. */
+function litRgb([r, g, b]: [number, number, number], f: number, a = 1): string {
+  const c = (v: number) => Math.round(Math.max(0, Math.min(255, v * f)));
+  return `rgba(${c(r)},${c(g)},${c(b)},${a})`;
+}
 
-const ICE = HOME_THEME.cyan;      // +GEX call walls
-const ICE_HI = LIGHT_BLUE;        // glint on tall call walls
-const MAGMA = HOME_THEME.red;     // −GEX put cliffs
-const MAGMA_HI = HOME_THEME.orange;
+// Two-stop ramps: weak strikes sit at the DEEP end, dominant walls climb to the
+// BRIGHT end. Strength therefore reads as luminance, not just height — which is
+// what makes the big walls pop when the map is tilted flat or viewed end-on.
+const ICE_DEEP = HOME_THEME.purple;   // weak +GEX
+const ICE = HOME_THEME.cyan;          // mid +GEX
+const ICE_HI = LIGHT_BLUE;            // dominant call wall
+const MAGMA_DEEP = "#7f1d1d";         // weak −GEX (deep ember; no theme token this dark)
+const MAGMA = HOME_THEME.red;         // mid −GEX
+const MAGMA_HI = HOME_THEME.orange;   // dominant put wall (white-hot magma)
 const SPOT = HOME_THEME.orange;
 const AXIS = HOME_THEME.text;
+
+/** |normalized GEX| at/above which a strike counts as a "strong" wall. */
+const CROSS_THRESHOLD = 0.45;
+
+/** Signed GEX → ramp color at that magnitude. mag is 0…1. */
+function rampFor(v: number, mag: number): [number, number, number] {
+  const t = Math.min(1, mag);
+  return v >= 0
+    ? (t < 0.5 ? mixRgb(ICE_DEEP, ICE, t / 0.5) : mixRgb(ICE, ICE_HI, (t - 0.5) / 0.5))
+    : (t < 0.5 ? mixRgb(MAGMA_DEEP, MAGMA, t / 0.5) : mixRgb(MAGMA, MAGMA_HI, (t - 0.5) / 0.5));
+}
 
 // ── data ────────────────────────────────────────────────────────────────────
 /** Renderer-local shape: the live surface flattened to what draw() needs. */
@@ -57,17 +88,10 @@ type Surface = {
   spotPath: number[];
   /** Epoch ms per column. */
   times: number[];
-  /** 1-min grid for the bubbles: minuteNorm[m][s] (~±1). */
-  minuteRows: number[][];
-  /** Epoch ms per 1-min sample. */
-  minuteTimes: number[];
   peak: number;
 };
 
-const EMPTY_SURFACE: Surface = {
-  strikes: [], rows: [], raw: [], spotPath: [], times: [],
-  minuteRows: [], minuteTimes: [], peak: 0,
-};
+const EMPTY_SURFACE: Surface = { strikes: [], rows: [], raw: [], spotPath: [], times: [], peak: 0 };
 
 function fmtClock(ms: number): string {
   return new Date(ms).toLocaleTimeString("en-US", {
@@ -104,14 +128,14 @@ export default function Gex3DPage() {
   const [relief, setRelief] = useState(110);
   const [tilt, setTilt] = useState(34);
   const [heading, setHeading] = useState(-36); // degrees, wrapped to [-180, 180]
-  const [bubbles, setBubbles] = useState(true);
+  const [absMode, setAbsMode] = useState(false);
   const [spin, setSpin] = useState(false);
 
   const reliefRef = useRef(relief);
-  const bubblesRef = useRef(bubbles);
+  const absRef = useRef(absMode);
   const spinRef = useRef(spin);
   reliefRef.current = relief;
-  bubblesRef.current = bubbles;
+  absRef.current = absMode;
   spinRef.current = spin;
 
   const flipIdx = useRef<number | null>(null);
@@ -175,11 +199,16 @@ export default function Gex3DPage() {
     }
 
     // build + depth-sort columns
+    // "abs" mode raises BOTH signs above the floor at their magnitude — put
+    // walls stop hanging below the plane where they're hard to compare against
+    // call walls. Sign still drives color, so nothing is lost; it's the same
+    // data, just measured from a common baseline.
+    const absMode = absRef.current;
     const cells: Cell[] = [];
     for (let z = 0; z < NZ; z++)
       for (let x = 0; x < NX; x++) {
         const v = rows[z]?.[x] ?? 0;
-        cells.push({ x, z, v, h: v * rel, depth: proj(x, 0, z).depth });
+        cells.push({ x, z, v, h: (absMode ? Math.abs(v) : v) * rel, depth: proj(x, 0, z).depth });
       }
     cells.sort((a, b) => b.depth - a.depth);
     cellsRef.current = cells;
@@ -213,29 +242,43 @@ export default function Gex3DPage() {
     const w = 0.46;
     for (const c of cells) {
       if (Math.abs(c.v) < 0.035) continue;
-      const base = c.v >= 0 ? ICE : MAGMA;
-      // intensity ramp: weak strikes wash out, dominant walls saturate
       const mag = Math.min(1, Math.abs(c.v));
-      const lift = 0.75 + mag * 0.65;
+      const rgb = rampFor(c.v, mag);
       const x0 = c.x - w, x1 = c.x + w, z0 = c.z - w, z1 = c.z + w;
       const tA = proj(x0, c.h, z0), tB = proj(x1, c.h, z0), tC = proj(x1, c.h, z1), tD = proj(x0, c.h, z1);
       const bA = proj(x0, 0, z0), bB = proj(x1, 0, z0), bC = proj(x1, 0, z1), bD = proj(x0, 0, z1);
       const faces = [
-        { p: [tA, tB, bB, bA], d: (tA.depth + tB.depth) / 2, f: lambert(0, -1) },
-        { p: [tB, tC, bC, bB], d: (tB.depth + tC.depth) / 2, f: lambert(1, 0) },
-        { p: [tC, tD, bD, bC], d: (tC.depth + tD.depth) / 2, f: lambert(0, 1) },
-        { p: [tD, tA, bA, bD], d: (tD.depth + tA.depth) / 2, f: lambert(-1, 0) },
+        { p: [tA, tB, bB, bA], t: tA, b: bA, d: (tA.depth + tB.depth) / 2, f: lambert(0, -1) },
+        { p: [tB, tC, bC, bB], t: tB, b: bB, d: (tB.depth + tC.depth) / 2, f: lambert(1, 0) },
+        { p: [tC, tD, bD, bC], t: tC, b: bC, d: (tC.depth + tD.depth) / 2, f: lambert(0, 1) },
+        { p: [tD, tA, bA, bD], t: tD, b: bD, d: (tD.depth + tA.depth) / 2, f: lambert(-1, 0) },
       ].sort((a, b) => b.d - a.d);
-      for (const f of faces) poly(f.p, shade(base, f.f * lift), canvasRgba(HOME_THEME.bg, 0.35));
-      poly([tA, tB, tC, tD], shade(base, 1.1 * lift), canvasRgba(AXIS, 0.16));
 
-      if (c.v > 0.55) { ctx.save(); ctx.globalAlpha = 0.18; poly([tA, tB, tC, tD], ICE_HI); ctx.restore(); }
-      if (c.v < -0.5) {
+      // Each side face carries a base→crest gradient: the tower darkens into the
+      // floor and brightens at the cap, so height and strength reinforce each
+      // other instead of every tower being one flat slab of color.
+      for (const f of faces) {
+        let fill: string | CanvasGradient;
+        if (Math.abs(f.t.y - f.b.y) > 1) {
+          const g = ctx.createLinearGradient(f.b.x, f.b.y, f.t.x, f.t.y);
+          g.addColorStop(0, litRgb(rgb, f.f * 0.5));
+          g.addColorStop(1, litRgb(rgb, f.f * 1.25));
+          fill = g;
+        } else {
+          fill = litRgb(rgb, f.f);
+        }
+        poly(f.p, fill, canvasRgba(HOME_THEME.bg, 0.35));
+      }
+      // Cap: brightest surface, scaled by strength.
+      poly([tA, tB, tC, tD], litRgb(rgb, 1.15 + mag * 0.2), canvasRgba(AXIS, 0.16));
+
+      // Dominant walls get a bloom so they're unmistakable at any angle.
+      if (mag > 0.55) {
         ctx.save();
-        ctx.globalAlpha = 0.22;
-        ctx.shadowColor = canvasRgba(MAGMA_HI, 0.9);
-        ctx.shadowBlur = 14;
-        poly([tA, tB, tC, tD], MAGMA_HI);
+        ctx.globalAlpha = 0.1 + (mag - 0.55) * 0.5;
+        ctx.shadowColor = canvasRgba(c.v >= 0 ? ICE_HI : MAGMA_HI, 0.9);
+        ctx.shadowBlur = 10 + mag * 14;
+        poly([tA, tB, tC, tD], c.v >= 0 ? ICE_HI : MAGMA_HI);
         ctx.restore();
       }
     }
@@ -330,43 +373,46 @@ export default function Gex3DPage() {
       ctx.fillText(spotPath[NZ - 1].toFixed(0), p.x + 8, p.y - 6);
     }
 
-    // ── 1-minute per-strike GEX bubbles ────────────────────────────────────
-    // AREA ∝ |GEX| (so radius ∝ √|GEX| — sizing by radius would cube the visual
-    // weight of the big walls). These read the UNDOWNSAMPLED minute grid, so
-    // they resolve intra-column detail the 30 terrain columns smooth away: a
-    // wall that stacked on hard for 3 minutes shows as a bead of fat bubbles
-    // sitting on an otherwise unremarkable ridge.
-    const { minuteRows, minuteTimes } = surfRef.current;
-    if (bubblesRef.current && minuteRows.length && times.length > 1) {
-      // Minute timestamp → fractional Z on the terrain's column axis.
-      const t0 = times[0], t1 = times[times.length - 1];
-      const span = t1 - t0 || 1;
-      const zOf = (ts: number) => ((ts - t0) / span) * (NZ - 1);
-
-      const bl: { p: ReturnType<typeof proj>; r: number; v: number }[] = [];
-      for (let m = 0; m < minuteRows.length; m++) {
-        const ts = minuteTimes[m];
-        if (!Number.isFinite(ts)) continue;
-        const gz = zOf(ts);
-        if (gz < -0.5 || gz > NZ - 0.5) continue;
-        const row = minuteRows[m];
-        for (let x = 0; x < NX; x++) {
-          const v = row?.[x] ?? 0;
-          if (Math.abs(v) < 0.12) continue; // floor: don't fog the map with dust
-          const p = proj(x, v * rel + 22, gz);
-          bl.push({ p, r: Math.sqrt(Math.abs(v)) * 6 * p.s, v });
-        }
-      }
-      bl.sort((a, b) => b.p.depth - a.p.depth);
-      for (const b of bl) {
-        ctx.beginPath();
-        ctx.arc(b.p.x, b.p.y, Math.max(0.8, b.r), 0, Math.PI * 2);
-        ctx.fillStyle = b.v > 0 ? canvasRgba(ICE_HI, 0.22) : canvasRgba(MAGMA_HI, 0.22);
-        ctx.fill();
-        ctx.strokeStyle = b.v > 0 ? canvasRgba(ICE_HI, 0.4) : canvasRgba(MAGMA_HI, 0.4);
-        ctx.lineWidth = 0.7;
-        ctx.stroke();
-      }
+    // ── price-through-wall markers ─────────────────────────────────────────
+    // Flag the columns where spot was sitting ON a strong strike — i.e. price
+    // walked into/through a wall. Detected as: the strike nearest spot at that
+    // minute carries |GEX| over the threshold. That's the moment worth looking
+    // at on this map, so it gets a beacon rather than leaving you to eyeball
+    // where the ribbon happens to intersect a ridge.
+    const crossings: { z: number; x: number; v: number }[] = [];
+    for (let z = 0; z < NZ; z++) {
+      const gx = gxAt(z);
+      const xi = Math.round(gx);
+      if (xi < 0 || xi >= NX) continue;
+      const v = rows[z]?.[xi] ?? 0;
+      if (Math.abs(v) < CROSS_THRESHOLD) continue;
+      // Only mark the ENTRY into the wall, not every column parked inside it —
+      // otherwise a pinned session becomes a solid wall of beacons.
+      const prevXi = z > 0 ? Math.round(gxAt(z - 1)) : xi;
+      const prevV = z > 0 ? rows[z - 1]?.[prevXi] ?? 0 : 0;
+      if (z > 0 && Math.abs(prevV) >= CROSS_THRESHOLD && prevXi === xi) continue;
+      crossings.push({ z, x: xi, v });
+    }
+    for (const cr of crossings) {
+      const top = (absMode ? Math.abs(cr.v) : cr.v) * rel;
+      const a = proj(cr.x, 0, cr.z);
+      const b = proj(cr.x, top + 40, cr.z);
+      ctx.save();
+      // vertical beacon up the tower
+      ctx.strokeStyle = canvasRgba(SPOT, 0.5);
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.setLineDash([]);
+      // ring at the crest
+      ctx.strokeStyle = canvasRgba(SPOT, 0.95);
+      ctx.lineWidth = 1.6;
+      ctx.shadowColor = canvasRgba(SPOT, 0.8);
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, Math.max(2.5, 4.5 * b.s), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
 
     // axes
@@ -445,8 +491,6 @@ export default function Gex3DPage() {
       raw: live.rows,
       spotPath,
       times: live.times,
-      minuteRows: live.minuteNorm,
-      minuteTimes: live.minuteTimes,
       peak: live.peak,
     };
     dimsRef.current = { nx: live.strikes.length, nz: live.norm.length };
@@ -461,7 +505,7 @@ export default function Gex3DPage() {
     draw();
   }, [live, draw]);
 
-  useEffect(() => { draw(); }, [relief, bubbles, draw]);
+  useEffect(() => { draw(); }, [relief, absMode, draw]);
   useEffect(() => { camRef.current.pitch = (tilt * Math.PI) / 180; draw(); }, [tilt, draw]);
 
   // Orbit drag is wired with NATIVE window listeners (see useEffect below), not
@@ -525,10 +569,12 @@ export default function Gex3DPage() {
         camRef.current.panY = d.panY + (e.clientY - d.y);
       } else {
         // Yaw is deliberately UNBOUNDED — you can lap the map as many times as
-        // you like; it's normalized to [-π, π] on release. Pitch clamp matches
-        // the slider's 2°–88° so drag and scrub reach the same stations.
+        // you like; it's normalized to [-π, π] on release. Pitch spans −88°…88°:
+        // NEGATIVE pitch puts the camera under the floor plane looking up, which
+        // is the only way to read +GEX towers from below. The old 2° floor was
+        // what made the map feel like it wouldn't actually rotate all the way.
         camRef.current.yaw = d.yaw + (e.clientX - d.x) * 0.006;
-        camRef.current.pitch = Math.max(0.035, Math.min(1.535, d.pitch - (e.clientY - d.y) * 0.005));
+        camRef.current.pitch = Math.max(-1.535, Math.min(1.535, d.pitch - (e.clientY - d.y) * 0.005));
       }
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
     };
@@ -607,9 +653,15 @@ export default function Gex3DPage() {
         padding={20}
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center", marginBottom: 12 }}>
-          <span style={legendItem}><span style={legendDot(HOME_THEME.cyan)} />Call wall (+GEX)</span>
-          <span style={legendItem}><span style={legendDot(HOME_THEME.red)} />Put wall (−GEX)</span>
-          <span style={legendItem}><span style={legendDot(HOME_THEME.orange, true)} />Spot track</span>
+          <span style={legendItem}>
+            <span style={{ ...legendDot(HOME_THEME.cyan), width: 26, background: `linear-gradient(90deg, ${HOME_THEME.purple}, ${HOME_THEME.cyan}, ${LIGHT_BLUE})` }} />
+            +GEX (weak → strong)
+          </span>
+          <span style={legendItem}>
+            <span style={{ ...legendDot(HOME_THEME.red), width: 26, background: `linear-gradient(90deg, ${MAGMA_DEEP}, ${HOME_THEME.red}, ${HOME_THEME.orange})` }} />
+            −GEX (weak → strong)
+          </span>
+          <span style={legendItem}><span style={legendDot(HOME_THEME.orange, true)} />Spot track / wall crossing</span>
 
           {/* Basis toggle — every GEX surface is OI+Vol default + Vol-only. */}
           <span style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
@@ -689,7 +741,9 @@ export default function Gex3DPage() {
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             Tilt
-            <input type="range" min={2} max={88} value={tilt} onChange={(e) => setTilt(+e.target.value)} style={{ width: 120, accentColor: HOME_THEME.cyan }} />
+            {/* negative = camera below the floor plane, looking up at the towers */}
+            <input type="range" min={-88} max={88} value={tilt} onChange={(e) => setTilt(+e.target.value)} style={{ width: 120, accentColor: HOME_THEME.cyan }} />
+            <span style={{ width: 34, opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>{tilt}°</span>
           </label>
           {/* Full 360° orbit — the drag already wraps; this is the scrub version. */}
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -709,10 +763,9 @@ export default function Gex3DPage() {
             />
             <span style={{ width: 34, opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>{heading}°</span>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input type="checkbox" checked={bubbles} onChange={(e) => setBubbles(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
-            1-min bubbles
-            <span style={{ opacity: 0.5 }}>({live.minuteTimes.length})</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Raise put walls above the floor too — sign still drives color">
+            <input type="checkbox" checked={absMode} onChange={(e) => setAbsMode(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
+            Flip −GEX up
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={spin} onChange={(e) => setSpin(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
@@ -725,6 +778,7 @@ export default function Gex3DPage() {
             { label: "Side", yaw: -90, pitch: 22 },
             { label: "Behind", yaw: 180, pitch: 24 },
             { label: "Top", yaw: -36, pitch: 82 },
+            { label: "Under", yaw: -36, pitch: -40 }, // below the floor, looking up
           ] as const).map((v) => (
             <button
               key={v.label}
@@ -760,9 +814,9 @@ export default function Gex3DPage() {
         <p style={{ fontSize: 12, color: HOME_THEME.green, marginTop: 14, marginBottom: 0, lineHeight: 1.6 }}>
           Live from <code>/proxy/gex-history?mode=series</code> — today&apos;s recorded per-strike net GEX
           ({basis === "net" ? "OI+Vol composite" : "volume-only"}), RTH only (9:30–16:00 ET), ±13 strikes
-          around spot. Terrain = up to 30 downsampled columns; bubbles = the full 1-minute grid with
-          area ∝ |GEX|. Both share one scale, normalized to the day&apos;s peak |GEX| — heights compare
-          within the session but not across days.
+          around spot, up to 30 columns. Tower height and color ramp are both normalized to the
+          day&apos;s peak |GEX| — comparable within the session, not across days. Rings mark where spot
+          entered a strike carrying |GEX| ≥ {CROSS_THRESHOLD}× the day&apos;s peak.
         </p>
       </Card>
     </PageShell>
