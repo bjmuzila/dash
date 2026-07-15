@@ -342,7 +342,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Drop the old one-row-per-day uniqueness so multiple deliveries can share a date.
     ALTER TABLE budget_amazon DROP CONSTRAINT IF EXISTS budget_amazon_profile_id_work_date_key;
 
-    -- Bzila business ledger: one row per dated event. `source` splits the two
+    -- Bzila business ledger: one row per dated event. The source column splits the two
     -- streams entered here — 'prop' (firm evals/resets + payouts) and 'cbedge'
     -- (CB Edge earnings + spending). The third Bzila stream, contracts, is NOT
     -- stored here: it lives in the register (Payments) under a Contracts
@@ -4243,10 +4243,13 @@ export async function listAmazonRows(profileId: number, fromDate: string, toDate
 }
 
 // ── Prop-firm spending log ────────────────────────────────────────────────────
+export type BudgetPropSource = "prop" | "cbedge";
+
 export interface BudgetPropRecord {
   id: number;
   profile_id: number;
   entry_date: string;
+  source: BudgetPropSource;
   firm: string;
   accounts: number;
   cost: number;
@@ -4256,9 +4259,14 @@ export interface BudgetPropRecord {
   updated_at?: string | null;
 }
 
+function normSource(v: unknown): BudgetPropSource {
+  return v === "cbedge" ? "cbedge" : "prop";
+}
+
 export async function insertPropRow(input: {
   profile_id: number;
   entry_date: string;
+  source?: string;
   firm?: string;
   accounts?: number;
   cost?: number;
@@ -4267,12 +4275,13 @@ export async function insertPropRow(input: {
 }): Promise<BudgetPropRecord> {
   const pool = await getDb();
   const result = await pool.query(
-    `INSERT INTO budget_prop (profile_id, entry_date, firm, accounts, cost, payout, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO budget_prop (profile_id, entry_date, source, firm, accounts, cost, payout, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING *`,
     [
       input.profile_id,
       input.entry_date,
+      normSource(input.source),
       input.firm && input.firm.trim() ? input.firm.trim() : "TPT",
       Math.round(input.accounts ?? 0),
       input.cost ?? 0,
@@ -4286,13 +4295,14 @@ export async function insertPropRow(input: {
 export async function updatePropRow(
   profileId: number,
   id: number,
-  patch: { entry_date?: string; firm?: string; accounts?: number; cost?: number; payout?: number; note?: string | null }
+  patch: { entry_date?: string; source?: string; firm?: string; accounts?: number; cost?: number; payout?: number; note?: string | null }
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
   let i = 1;
   const add = (col: string, v: unknown) => { sets.push(`${col} = $${i++}`); vals.push(v); };
   if (patch.entry_date !== undefined) add("entry_date", patch.entry_date);
+  if (patch.source !== undefined) add("source", normSource(patch.source));
   if (patch.firm !== undefined) add("firm", patch.firm.trim() || "TPT");
   if (patch.accounts !== undefined) add("accounts", Math.round(patch.accounts));
   if (patch.cost !== undefined) add("cost", patch.cost);
