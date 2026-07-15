@@ -434,6 +434,38 @@ export const KIND_LABEL: Record<StructureKind, string> = {
   naked_poc: "naked poc",
 };
 
+/**
+ * Plain-English headline for on-chart callouts and rail rows.
+ *
+ * KIND_LABEL is the terse badge ("excess hi"). That reads fine once you already
+ * know the taxonomy and is useless the first fifty times you don't — which is
+ * the whole reason the structures went unread. KIND_TITLE names the structure
+ * the way a profile trader would say it out loud, and KIND_NOTE is the one-line
+ * "so what" that goes under it.
+ */
+export const KIND_TITLE: Record<StructureKind, string> = {
+  excess_high: "Excess high — selling tail",
+  excess_low: "Excess low — buying tail",
+  tail_high: "Tail high — trend leg",
+  tail_low: "Tail low — trend leg",
+  poor_high: "Poor high — unfinished",
+  poor_low: "Poor low — unfinished",
+  hole: "Hole — thin zone",
+  naked_poc: "Naked POC — magnet",
+};
+
+/** Second line of a callout: what it means + what to do, in one breath. */
+export const KIND_NOTE: Record<StructureKind, string> = {
+  excess_high: "Singles at the high, period closed back inside. Fade it.",
+  excess_low: "Singles at the low, period closed back inside. Fade it.",
+  tail_high: "Singles left by a trend leg, closed at the high. Don't fade.",
+  tail_low: "Singles left by a trend leg, closed at the low. Don't fade.",
+  poor_high: "Flat stack, no tail. Expect it to get taken out.",
+  poor_low: "Flat stack, no tail. Expect it to get taken out.",
+  hole: "Mid-profile singles. Price accelerates through.",
+  naked_poc: "Untested fair value. Strong magnet.",
+};
+
 /** What the structure implies — the if/then, one line, for the rail tooltip. */
 export const KIND_MEANING: Record<StructureKind, string> = {
   excess_high: "Rejection — auction ended properly. Level holds; fade back toward POC.",

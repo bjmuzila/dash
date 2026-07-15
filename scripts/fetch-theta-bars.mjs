@@ -49,6 +49,7 @@ const SYM = (arg("sym") || "").toUpperCase();
 const IVL = +arg("ivl", 60000);
 const RTH = has("rth");
 const PROBE = has("probe");
+const DAILY = has("daily");
 const BASE = (process.env.THETA_BASE_URL || "http://127.0.0.1:25503").replace(/\/+$/, "");
 
 if (!SYM) {
@@ -58,19 +59,50 @@ if (!SYM) {
 
 const today = new Date();
 const ymd = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+
+// Theta writes intraday history at EOD, so TODAY returns 472 "No data found"
+// even when everything is configured correctly — an infuriating false negative
+// when you're trying to establish whether the endpoint works at all. Default the
+// end date to the last weekday that is at least 1 day old.
+function lastSettled(from) {
+  const d = new Date(from);
+  d.setDate(d.getDate() - 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d;
+}
+const DEFAULT_END = ymd(lastSettled(today));
 const twoYrAgo = new Date(today); twoYrAgo.setFullYear(today.getFullYear() - 2);
 const START = arg("start", ymd(twoYrAgo));
-const END = arg("end", ymd(today));
-const OUT = arg("out", path.join(process.cwd(), "public", "data", `${SYM}_1min.csv`));
+const END = arg("end", DEFAULT_END);
+const OUT = arg("out", path.join(process.cwd(), "public", "data", `${SYM}_${DAILY ? "daily" : "1min"}.csv`));
 
 async function get(q) {
   const url = `${BASE}${q}${q.includes("?") ? "&" : "?"}format=json`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: "application/json" } });
+  } catch (e) {
+    // fetch() throws a bare "fetch failed" on connection errors — the cause is
+    // nested and node hides it. Surface it; "fetch failed" tells you nothing.
+    const cause = e?.cause?.code || e?.cause?.message || e.message;
+    throw new Error(
+      `CANNOT REACH THETA at ${BASE}  (${cause})\n\n` +
+      `  The Terminal runs on the VPS, published to ITS loopback only.\n` +
+      `  Open the tunnel in a separate window and leave it running:\n\n` +
+      `    ssh -i C:\\Users\\Brandon\\.ssh\\cbedge -N -L 25503:127.0.0.1:25503 root@178.156.137.36\n\n` +
+      `  Verify it's up:  curl http://127.0.0.1:25503/v3/system/mdds/status\n` +
+      `  Or point at another host:  $env:THETA_BASE_URL="http://..."\n`
+    );
+  }
   const text = await res.text();
   if (!res.ok) {
     throw new Error(
       `${res.status} ${res.statusText}\n  ${url}\n  ${text.slice(0, 400)}\n\n` +
-      (res.status === 472 ? "  472 = NOT_FOUND: wrong path, or no data for that range.\n" : "") +
+      (res.status === 472
+        ? "  472 = NOT_FOUND. The route EXISTS (Theta answered) — so this is almost\n" +
+          "  always the DATE, not the path. Intraday history is written at EOD, so\n" +
+          "  today/weekends/holidays return 472. Try an older session: --end 20260710\n"
+        : "") +
       (res.status === 474 || res.status === 403 ? "  Looks like a TIER GATE — your Theta plan may not include intraday stock history.\n" : "") +
       (/ECONNREFUSED/.test(text) ? "" : "  Terminal reachable? Locally you need the SSH tunnel (see memory: local-dev-setup).\n")
     );
@@ -91,21 +123,75 @@ function rows(json) {
   return r;
 }
 
-const PATH_ = (s, e) =>
-  `/v3/stock/history/ohlc?symbol=${encodeURIComponent(SYM)}&start_date=${s}&end_date=${e}&interval_size=${IVL}`;
+// The interval param name is EMPIRICAL, not documented-and-trusted: v3 silently
+// IGNORES an unknown interval param and returns 1-second bars instead of
+// erroring. `interval_size` produced 23,401 rows for one session (= 23,400
+// seconds of RTH) — a plausible-looking response that is completely wrong. Never
+// assume a param took effect; verify by row count.
+const IVL_PARAM = arg("ivlparam", "ivl");
+const PATH_ = (s, e, ivlParam = IVL_PARAM, ivl = IVL) =>
+  DAILY
+    // /v3/stock/history/eod is the one stock-history route already proven in
+    // this repo (proxy-thetadata.js:588). No interval param, no ambiguity.
+    ? `/v3/stock/history/eod?symbol=${encodeURIComponent(SYM)}&start_date=${s}&end_date=${e}`
+    : `/v3/stock/history/ohlc?symbol=${encodeURIComponent(SYM)}&start_date=${s}&end_date=${e}` +
+      (ivlParam ? `&${ivlParam}=${ivl}` : "");
+
+if (PROBE && DAILY) {
+  console.log(`probing DAILY ${BASE}${PATH_("20260101", END)}\n`);
+  const r = rows(await get(PATH_("20260101", END)));
+  console.log(`parsed ${r.length} rows (expect ~130 for Jan→Jul). first 3 RAW:\n`);
+  console.log(JSON.stringify(r.slice(0, 3), null, 2));
+  console.log(`\nkeys: ${r[0] ? Object.keys(r[0]).join(", ") : "(none)"}`);
+  process.exit(0);
+}
 
 if (PROBE) {
-  console.log(`probing ${BASE}${PATH_(END, END)}\n`);
-  const json = await get(PATH_(END, END));
-  const r = rows(json);
-  console.log(`parsed ${r.length} rows. first 3 RAW:\n`);
-  console.log(JSON.stringify(r.slice(0, 3), null, 2));
-  console.log(`\nkeys: ${r[0] ? Object.keys(r[0]).join(", ") : "(none — paste the above to Claude)"}`);
+  console.log(`probing ${BASE} for ${SYM} on ${END}\n`);
+
+  // Baseline: no interval param at all. Whatever this returns is the default,
+  // and any candidate that MATCHES it was ignored.
+  const base = rows(await get(PATH_(END, END, null)));
+  console.log(`  (no interval param)      ${String(base.length).padStart(6)} rows  ← default`);
+
+  const want = 390; // RTH minutes
+  let winner = null;
+  for (const p of ["ivl", "interval_size", "interval", "interval_ms", "ivl_ms"]) {
+    let n = "ERR";
+    try { n = rows(await get(PATH_(END, END, p, 60000))).length; } catch { /* 472 = rejected */ }
+    const ignored = n === base.length;
+    const ok = typeof n === "number" && Math.abs(n - want) <= 30;
+    if (ok && !winner) winner = p;
+    console.log(
+      `  ${(p + "=60000").padEnd(24)} ${String(n).padStart(6)} rows` +
+      (ok ? "  ✓ THIS ONE (≈390 = RTH minutes)" : ignored ? "  ✗ ignored (same as default)" : "")
+    );
+  }
+  console.log(`\nfirst 3 RAW (default granularity):\n`);
+  console.log(JSON.stringify(base.slice(0, 3), null, 2));
+  console.log(`\nkeys: ${base[0] ? Object.keys(base[0]).join(", ") : "(none)"}`);
+  console.log(
+    winner
+      ? `\n→ use: --ivlparam ${winner}`
+      : `\n→ NO param produced ~390 rows. Paste this output — we may have to pull the\n` +
+        `  1-second default and resample locally (expensive: ~23k rows/session).`
+  );
   process.exit(0);
 }
 
 /* ── pull, chunked by month (a multi-year 1m pull in one request will time out) ── */
 function* months(start, end) {
+  // Daily bars are ~250 rows/yr — chunk by YEAR. Intraday 1m is ~8k rows/month,
+  // so chunk by month or the request times out.
+  if (DAILY) {
+    let y = +start.slice(0, 4);
+    const ey = +end.slice(0, 4);
+    for (; y <= ey; y++) {
+      const s = `${y}0101`, e = `${y}1231`;
+      yield [s < start ? start : s, e > end ? end : e];
+    }
+    return;
+  }
   let y = +start.slice(0, 4), m = +start.slice(4, 6);
   const ey = +end.slice(0, 4), em = +end.slice(4, 6);
   while (y < ey || (y === ey && m <= em)) {
@@ -126,15 +212,34 @@ for (const [s, e] of months(START, END)) {
   catch (err) { console.error(`\n${err.message}`); process.exit(1); }
 
   for (const x of r) {
-    const date = String(x.date ?? "");
-    const ms = Number(x.ms_of_day);
+    // v3 returns `timestamp` as a NAIVE ISO string already in ET wall-clock
+    // ("2026-07-10T09:30:00.000" = the open). Do NOT feed that to Date() — node
+    // would read it as local time and shift every bar by your UTC offset, which
+    // silently rotates the whole session and wrecks any time-of-day analysis.
+    // String-slice it instead. (ms_of_day/date branch kept for other endpoints.)
+    let date, hh, mm;
+    const ts = String(x.timestamp ?? "");
+    const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+    if (DAILY) {
+      // One bar per session. Stamp it 16:00 so it lands inside any RTH filter
+      // downstream and sorts correctly; the time carries no meaning here.
+      const dm = m ? m[1] + m[2] + m[3] : String(x.date ?? "");
+      if (dm.length !== 8) { bad++; continue; }
+      date = dm; hh = "16"; mm = "00";
+    } else if (m) {
+      date = m[1] + m[2] + m[3]; hh = m[4]; mm = m[5];
+    } else if (String(x.date ?? "").length === 8 && Number.isFinite(Number(x.ms_of_day))) {
+      date = String(x.date);
+      const mins = Math.floor(Number(x.ms_of_day) / 60000);
+      hh = String(Math.floor(mins / 60)).padStart(2, "0");
+      mm = String(mins % 60).padStart(2, "0");
+    } else { bad++; continue; }
+
     const o = Number(x.open), h = Number(x.high), l = Number(x.low), c = Number(x.close);
     const v = Number(x.volume ?? 0);
-    if (date.length !== 8 || !Number.isFinite(ms) || !(c > 0)) { bad++; continue; }
-    const mins = Math.floor(ms / 60000);
+    if (!(c > 0) || !Number.isFinite(o) || !Number.isFinite(h) || !Number.isFinite(l)) { bad++; continue; }
+    const mins = +hh * 60 + +mm;
     if (RTH && (mins < 570 || mins >= 960)) continue;
-    const hh = String(Math.floor(mins / 60)).padStart(2, "0");
-    const mm = String(mins % 60).padStart(2, "0");
     out.push(`${date} ${hh}${mm}00,${o},${h},${l},${c},${v}`);
   }
   process.stderr.write(`${r.length}\n`);

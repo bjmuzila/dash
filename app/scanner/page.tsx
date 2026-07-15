@@ -14,7 +14,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ScoreInfo } from "@/components/shared/InfoTip";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
-import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
+import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_TITLE, KIND_NOTE, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 
@@ -2191,6 +2191,11 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
   // development through TIME, which is the whole reason Steidlmayer used
   // letters instead of bars.
   const [split, setSplit] = useState(false);
+  // On-chart structure callouts for the CURRENT session. The 3px colored spine
+  // next to each profile was technically the same information and nobody could
+  // read it — an excess high and a poor high are opposite trades and looked
+  // identical. Named boxes with leader lines, MotiveWave-annotation style.
+  const [labels, setLabels] = useState(true);
   const [zx, setZx] = useState(1);   // horizontal zoom (cell width)
   const [zy, setZy] = useState(1);   // vertical zoom (price resolution)
   const [ox, setOx] = useState(0);   // pan offsets, px
@@ -2272,6 +2277,12 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
 
     let x = AXIS + 10 + ox;
 
+    // Callouts are collected during the session walk and painted AFTER it, so a
+    // box never ends up under the next session's letters.
+    type Callout = { s: TpoStructure; color: string; yTop: number; yBot: number; x0: number; x1: number };
+    const callouts: Callout[] = [];
+    const lastDate = sessions[sessions.length - 1]?.date;
+
     for (const d of sessions) {
       const cols = split ? d.periods : (d.maxCount || 1);
       const wid = cols * cw;
@@ -2323,6 +2334,14 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
           if (s.kind === "naked_poc") continue;
           g.fillStyle = KIND_COLOR[s.kind];
           g.fillRect(x - 6, y(s.priceHi) - rh / 2, 3, y(s.priceLo) - y(s.priceHi) + rh);
+
+          if (labels && d.date === lastDate) {
+            const yTop = y(s.priceHi) - rh / 2;
+            const yBot = y(s.priceLo) + rh / 2;
+            if (yBot > TOP - rh && yTop < VIEW_H - BOT + rh) {
+              callouts.push({ s, color: KIND_COLOR[s.kind], yTop, yBot, x0: x - 8, x1: x + wid + 4 });
+            }
+          }
         }
 
         g.fillStyle = "rgba(255,255,255,0.45)";
@@ -2332,6 +2351,89 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       }
 
       x += wid + GUTTER;
+    }
+
+    // ── structure callouts for the current session ──────────────────────────
+    // Drawn last so they sit on top, and laid out with a simple downward
+    // de-collide pass: two structures 3 points apart would otherwise stack
+    // their boxes on the exact same pixels and neither would be readable.
+    if (callouts.length) {
+      const BOX_W = 268, PAD = 9, TITLE_H = 14, LINE_H = 12, GAP = 8;
+
+      const wrap = (text: string, maxW: number) => {
+        const out: string[] = [];
+        let line = "";
+        for (const word of text.split(" ")) {
+          const t = line ? `${line} ${word}` : word;
+          if (g.measureText(t).width > maxW && line) { out.push(line); line = word; }
+          else line = t;
+        }
+        if (line) out.push(line);
+        return out;
+      };
+
+      const anchorX = Math.max(...callouts.map((c) => c.x1));
+      let boxX = anchorX + 150;
+      if (boxX + BOX_W > w - 8) boxX = w - 8 - BOX_W;
+
+      const laid = callouts
+        .map((c) => {
+          g.font = "10px ui-sans-serif, system-ui";
+          const lines = wrap(KIND_NOTE[c.s.kind], BOX_W - PAD * 2);
+          const h = PAD * 2 + TITLE_H + lines.length * LINE_H;
+          return { ...c, lines, h, anchorY: (c.yTop + c.yBot) / 2, top: 0 };
+        })
+        .sort((a, b) => a.anchorY - b.anchorY);
+
+      let cursor = -Infinity;
+      for (const c of laid) {
+        c.top = Math.max(c.anchorY - c.h / 2, cursor + GAP);
+        cursor = c.top + c.h;
+      }
+
+      for (const c of laid) {
+        const midY = c.top + c.h / 2;
+
+        // band highlight on the profile itself
+        g.strokeStyle = c.color;
+        g.lineWidth = 1.5;
+        g.fillStyle = `${c.color}1F`;
+        const bh = Math.max(4, c.yBot - c.yTop);
+        g.beginPath();
+        g.roundRect(c.x0, c.yTop, c.x1 - c.x0, bh, 4);
+        g.fill();
+        g.stroke();
+
+        // leader: profile → box, with one elbow so a de-collided box still
+        // clearly points at its own band
+        g.strokeStyle = `${c.color}99`;
+        g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(c.x1, c.anchorY);
+        g.lineTo(boxX - 18, c.anchorY);
+        g.lineTo(boxX - 18, midY);
+        g.lineTo(boxX, midY);
+        g.stroke();
+
+        // box
+        g.fillStyle = "rgba(11,15,20,0.94)";
+        g.beginPath(); g.roundRect(boxX, c.top, BOX_W, c.h, 7); g.fill();
+        g.fillStyle = `${c.color}26`;
+        g.beginPath(); g.roundRect(boxX, c.top, BOX_W, c.h, 7); g.fill();
+        g.strokeStyle = c.color;
+        g.lineWidth = 1.25;
+        g.beginPath(); g.roundRect(boxX, c.top, BOX_W, c.h, 7); g.stroke();
+
+        g.textAlign = "left";
+        g.textBaseline = "top";
+        g.fillStyle = c.color;
+        g.font = "700 12px ui-sans-serif, system-ui";
+        g.fillText(KIND_TITLE[c.s.kind], boxX + PAD, c.top + PAD);
+        g.fillStyle = "rgba(255,255,255,0.62)";
+        g.font = "10px ui-sans-serif, system-ui";
+        c.lines.forEach((ln, i) => g.fillText(ln, boxX + PAD, c.top + PAD + TITLE_H + i * LINE_H));
+      }
+      g.textBaseline = "middle";
     }
 
     if (spot != null && vis(y(spot))) {
@@ -2363,7 +2465,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       g.fillStyle = "rgba(255,255,255,0.38)";
       g.fillText(p.toFixed(2), 4, py);
     }
-  }, [sessions, spot, binSize, w, split, zx, zy, ox, oy]);
+  }, [sessions, spot, binSize, w, split, labels, zx, zy, ox, oy]);
 
   const btn = (active: boolean): React.CSSProperties => ({
     padding: "3px 10px", borderRadius: 6, fontSize: 15, cursor: "pointer", fontWeight: 700,
@@ -2377,6 +2479,8 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
         <button onClick={() => setSplit(false)} style={btn(!split)}>Collapsed</button>
         <button onClick={() => setSplit(true)} style={btn(split)}>Split / expanded</button>
+        <span style={{ width: 10 }} />
+        <button onClick={() => setLabels((v) => !v)} style={btn(labels)}>Labels</button>
         <span style={{ width: 10 }} />
         <button onClick={() => setZy((z) => Math.min(8, z * 1.25))} style={btn(false)}>Price +</button>
         <button onClick={() => setZy((z) => Math.max(0.4, z / 1.25))} style={btn(false)}>Price −</button>
@@ -2413,7 +2517,10 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
   );
 }
 
-const GRID = "110px 1fr 60px 76px 96px 62px";
+// Badge column widened from 110px: the rail now carries the plain-English
+// KIND_TITLE ("Poor low — unfinished") instead of the terse "poor lo", so the
+// row states the trade without a hover.
+const GRID = "210px 1fr 60px 76px 96px 62px";
 
 function StructureRow({ s, spot, base }: {
   s: TpoStructure;
@@ -2447,10 +2554,11 @@ function StructureRow({ s, spot, base }: {
       fontSize: 15,
     }}>
       <span title={KIND_MEANING[s.kind]} style={{
-        justifySelf: "start", fontSize: 15, fontWeight: 700,
+        justifySelf: "start", fontSize: 13, fontWeight: 700,
         padding: "2px 9px", borderRadius: 999, cursor: "help",
+        whiteSpace: "nowrap",
         color, border: `1px solid ${color}55`, background: `${color}1A`,
-      }}>{KIND_LABEL[s.kind]}</span>
+      }}>{KIND_TITLE[s.kind]}</span>
 
       <span style={{ color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{band}</span>
       <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.ageSessions}d</span>
