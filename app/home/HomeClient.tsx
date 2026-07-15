@@ -7,7 +7,11 @@ import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
-import EsCandlesFullPanel from "@/components/dashboard/EsCandlesFullPanel";
+// The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
+// (same pattern as the Chain tab reusing /options-chain below) rather than the
+// trimmed EsCandlesFullPanel embed — that panel has no dock, and no bubbles /
+// TPO / profile / VSA, which is precisely what the toolbar is for.
+import EsCandlesPage from "@/app/es-candles/page";
 import SignalsFeed from "@/components/dashboard/SignalsFeed";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
@@ -510,8 +514,7 @@ export function HomeClient({
   // the union so its now-unreachable render branch stays valid without a refactor.)
   const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
   // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
-  // place. Moved here from the bottom tab strip — it reads against the levels
-  // strip directly above it, which stays mounted in both views.
+  // place. Moved here from the bottom tab strip.
   const [gexView, setGexView] = useState<"gex" | "escandles">("gex");
   // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
   // is the raw text field. Both revert to SPX on any tab change (see effect below).
@@ -1112,6 +1115,39 @@ export function HomeClient({
     red: "#EF4444",
   };
 
+  // GEX|ES Candles switch. An element, not a component — it gets handed to
+  // whichever dock is mounted (GexToolbar's or the embedded ES Candles page's)
+  // via their `leading` slot, so switching views never costs a toolbar row.
+  // Declared here, below the state it closes over and above the JSX that uses it.
+  const gexViewSwitch = (
+    <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
+      {([
+        { id: "gex", label: "GEX" },
+        { id: "escandles", label: "ES Candles" },
+      ] as const).map((v) => (
+        <button
+          key={v.id}
+          onClick={() => setGexView(v.id)}
+          style={{
+            padding: "7px 12px",
+            fontSize: 11,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            whiteSpace: "nowrap",
+            cursor: "pointer",
+            border: "none",
+            fontFamily: "inherit",
+            background: gexView === v.id ? "rgba(33,158,188,0.16)" : "transparent",
+            color: gexView === v.id ? C.cyan : "#5a7a98",
+          }}
+        >
+          {v.label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div style={{ flex: 1, minHeight: 0, width: "100%", overflow: "hidden", backgroundColor: C.bg, backgroundImage: "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.02) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.03) 0%, transparent 50%)", fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif", color: "#fff", display: "flex", flexDirection: "column" }}>
       {isStatic && (
@@ -1166,13 +1202,15 @@ export function HomeClient({
                   min is deliberately low: at 0.6 the bar still overflowed on
                   ~1280px-wide windows and fell back to a hidden scrollbar,
                   which read as "cut off".
-                  Hidden in ES Candles view: every control on it (gex mode, data
-                  mode, OI/DEX/flip, ghosts, expiry, snap target) drives the bar
-                  chart only. The view switcher lives in the levels strip below,
-                  which stays mounted in both views. */}
+                  Unmounted in ES Candles view: every control on it (gex mode,
+                  data mode, OI/DEX/flip, ghosts, expiry, snap target) drives the
+                  bar chart only. The embedded ES Candles page brings its own
+                  dock, and the view switcher rides inside whichever of the two is
+                  showing — so neither view pays for an extra toolbar row. */}
               {gexView === "gex" && (
               <FitScale min={0.42}>
               <GexToolbar
+                leading={gexViewSwitch}
                 gexMode={gexMode}
                 dataMode={dataMode}
                 showOI={showOI}
@@ -1202,37 +1240,8 @@ export function HomeClient({
                   empty band above the chart, right-aligned. Same in-scope live
                   values as the heatmap stat bar so it always agrees with the
                   chart. (Pop-up alerts will hook off these tiles later.) */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "0 10px 6px", flexShrink: 0 }}>
-                {/* GEX|ES Candles switch. Lives here rather than in GexToolbar
-                    because the toolbar unmounts in candles view — this strip is
-                    the only chrome common to both, so the way back always shows. */}
-                <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden", flexShrink: 0 }}>
-                  {([
-                    { id: "gex", label: "GEX" },
-                    { id: "escandles", label: "ES Candles" },
-                  ] as const).map((v) => (
-                    <button
-                      key={v.id}
-                      onClick={() => setGexView(v.id)}
-                      style={{
-                        padding: "3px 10px",
-                        fontSize: 9,
-                        fontWeight: 700,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.08em",
-                        whiteSpace: "nowrap",
-                        cursor: "pointer",
-                        border: "none",
-                        fontFamily: "inherit",
-                        background: gexView === v.id ? "rgba(33,158,188,0.14)" : "transparent",
-                        color: gexView === v.id ? "#219EBC" : "#5a7a98",
-                      }}
-                    >
-                      {v.label}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
+              {gexView === "gex" && (
+              <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, padding: "0 10px 6px", flexShrink: 0 }}>
                 {[
                   { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
                   { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
@@ -1250,14 +1259,14 @@ export function HomeClient({
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 800, color: t.color }}>{t.value}</span>
                   </div>
                 ))}
-                </div>
               </div>
+              )}
               {/* Chart canvas — uses fast gex-chain data. Held behind a loader
                   until the server reports OI + greeks are warm, so a half-built
                   / inflated frame never renders. */}
               <div ref={gexChartRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
                 {gexView === "escandles" ? (
-                  <EsCandlesFullPanel />
+                  <EsCandlesPage leading={gexViewSwitch} />
                 ) : chartReady && chartRows.length > 0 ? (
                   <GexChart
                     chain={chartRows}

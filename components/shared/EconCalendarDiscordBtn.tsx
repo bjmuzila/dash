@@ -362,7 +362,8 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
    baseline, which is why pills looked top-heavy. Every pill below is an
    inline-block whose line-height == its inner height. Do not "simplify" these
    back to inline-flex + align-items:center. */
-.badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;letter-spacing:0.07em;text-indent:0.07em;font-weight:800;border-radius:10px;text-transform:uppercase}
+.badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
+.badge-inner{display:inline-block;letter-spacing:0.07em;margin-right:-0.07em}
 .date-group{display:flex;gap:10px;align-items:center}
 .date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-indent:0.06em;text-transform:uppercase;font-size:16px}
 .today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-indent:0.06em;text-transform:uppercase;font-size:16px}
@@ -396,7 +397,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .econ-row:last-child{border-bottom:none}
 .econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto}
 .ec-time{font-size:${econTimeSize}px;font-weight:700;color:var(--muted);white-space:nowrap}
-.ec-event{font-size:${econEventSize}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ec-event{font-size:${econEventSize}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .ec-num{font-size:${econNumSize}px;font-weight:700;text-align:right;color:var(--text)}
 .ec-impact{text-align:left}
 /* text-indent cancels the trailing letter-space, which otherwise drags
@@ -407,7 +408,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 </style></head><body>
 <div class="snapshot" id="root">
   <div class="topbar">
-    <div class="badge">Economic Calendar</div>
+    <div class="badge"><span class="badge-inner">Economic Calendar</span></div>
     <div class="date-group">
       <div class="date-pill">${todayLong()}</div>
       <div class="today-pill">TODAY</div>

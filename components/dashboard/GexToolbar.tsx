@@ -1,6 +1,6 @@
 "use client";
 
-import { type RefObject } from "react";
+import { type RefObject, type ReactNode } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, type SegOption } from "@/components/shared/DockToolbar";
@@ -28,6 +28,12 @@ interface GexToolbarProps {
   onToggleGhost15: () => void;
   onToggleGhost30: () => void;
   onRefresh:     () => Promise<void>;
+  /**
+   * Rendered as the FIRST item inside the dock, before the DTE picker. Exists so
+   * a host can put a view switcher in the toolbar it already has rather than
+   * stacking another bar above it.
+   */
+  leading?: ReactNode;
   /** Ref to the GEX chart container — used for snap/discord screenshot */
   containerRef?: RefObject<HTMLElement | null>;
   /** Message text sent to Discord (title + expiry) */
@@ -52,6 +58,7 @@ export default function GexToolbar({
   onToggleOI, onToggleDex, onToggleFlip,
   onToggleGhost5, onToggleGhost15, onToggleGhost30,
   onRefresh,
+  leading,
   containerRef, discordMessage, ticker = "SPX",
 }: GexToolbarProps) {
   // Title baked into the top-left of the screenshot: "SPX GEX • Fri 6/26"
@@ -71,6 +78,8 @@ export default function GexToolbar({
   return (
     <div style={{ display: "flex", padding: "6px 8px 2px", flexShrink: 0 }}>
       <Dock className="dock-noscroll" style={{ width: "100%", gap: 8 }} fullWidth flat noScroll>
+        {leading}
+        {leading && <DockGap />}
         {/* DTE / Expiry picker */}
         {dteOptions.length > 0 && (
           <>

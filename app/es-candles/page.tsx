@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
@@ -292,7 +292,14 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 // there, not on the chart page. See app/test/page.tsx OptionsPositioningTab.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function EsCandlesPage() {
+/**
+ * `leading` renders as the first item in the dock, before the "ES 5m Candles"
+ * title. Routed as /es-candles it receives nothing (Next passes params /
+ * searchParams, which we ignore) so the page is unchanged; the home dashboard
+ * embeds this same component and passes its GEX|ES Candles switcher in, which
+ * is why the embed costs no extra toolbar row.
+ */
+export default function EsCandlesPage({ leading }: { leading?: ReactNode } = {}) {
   const esShouldConnect = useWsLifecycle();
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
@@ -504,7 +511,7 @@ export default function EsCandlesPage() {
   // Per-strike 1-minute GEX bubbles. Radius ∝ |net GEX|
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
-  const [showGexBubbles, setShowGexBubbles] = useState(false);
+  const [showGexBubbles, setShowGexBubbles] = useState(true);
   // 0.3 is the sweet spot, so the slider is centered on it (0.1–0.5).
   const [bubbleScale, setBubbleScale] = useState(0.3); // manual radius multiplier (sizing is taste)
   // Mirrored into a ref so the imperative overlay draw reads it without
@@ -2100,6 +2107,8 @@ export default function EsCandlesPage() {
       <div className="px-4 pt-3 pb-1" data-capture-hide style={{ position: "relative", zIndex: 30 }}>
         <FitScale align="center" min={0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
+          {leading}
+          {leading && <DockGap />}
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
             <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
             {(() => {

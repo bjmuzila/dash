@@ -253,7 +253,26 @@ function* months(start, end) {
 }
 
 const out = [];
-let bad = 0;
+let bad = 0, padded = 0;
+const volByDate = new Map(); // date → total volume, for the holiday filter
+
+/**
+ * Theta PADS non-trading days: it returns a full 391-bar RTH session for every
+ * CALENDAR day, weekends and holidays included (31 × 391 = 12,121 rows for a
+ * 31-day month, vs the ~8,200 a real month has). The padded bars are not
+ * malformed — they carry a plausible price — so no field-level validation
+ * catches them. In a streak study they'd show up as ties or fake flat bars that
+ * break genuine runs.
+ *
+ * Weekends are structural: kill by day-of-week. Use Date.UTC to derive it —
+ * new Date("2015-01-03") parses as UTC midnight but .getDay() reads it in LOCAL
+ * time, which shifts the day backwards for anyone west of Greenwich and would
+ * silently delete Fridays.
+ */
+function isWeekend(ymd) {
+  const dow = new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8))).getUTCDay();
+  return dow === 0 || dow === 6;
+}
 for (const [s, e] of months(START, END)) {
   process.stderr.write(`  ${s}..${e} `);
   let r;
@@ -302,11 +321,14 @@ for (const [s, e] of months(START, END)) {
       mm = String(mins % 60).padStart(2, "0");
     } else { bad++; continue; }
 
+    if (!DAILY && isWeekend(date)) { padded++; continue; } // Theta pads Sat/Sun
+
     const o = Number(x.open), h = Number(x.high), l = Number(x.low), c = Number(x.close);
     const v = Number(x.volume ?? 0);
     if (!(c > 0) || !Number.isFinite(o) || !Number.isFinite(h) || !Number.isFinite(l)) { bad++; continue; }
     const mins = +hh * 60 + +mm;
     if (RTH && (mins < 570 || mins >= 960)) continue;
+    volByDate.set(date, (volByDate.get(date) || 0) + v);
     out.push(`${date} ${hh}${mm}00,${o},${h},${l},${c},${v}`);
   }
   process.stderr.write(`${r.length}\n`);
@@ -340,6 +362,29 @@ if (RESAMPLE_1S) {
   out.length = 0; out.push(...folded);
 }
 
+/* ── HOLIDAY FILTER ───────────────────────────────────────────────────────── */
+// Weekends are killed structurally by day-of-week, but market holidays fall on
+// weekdays and Theta pads those identically. There's no calendar to check
+// against and hardcoding US holidays rots (see memory: mvc-rth-holiday-gate).
+// Volume is the honest tell: a padded session trades ZERO shares. A real NVDA
+// RTH session trades tens of millions, so the threshold isn't close.
+if (!DAILY) {
+  const dead = new Set([...volByDate].filter(([, v]) => v <= 0).map(([d]) => d));
+  if (dead.size) {
+    const before = out.length;
+    const kept = out.filter((line) => !dead.has(line.slice(0, 8)));
+    console.error(`  holidays: dropped ${dead.size} zero-volume sessions (${(before - kept.length).toLocaleString()} padded bars)`);
+    out.length = 0; out.push(...kept);
+  }
+  // Half-days (July 3, day after Thanksgiving, Christmas Eve) are REAL sessions
+  // that legitimately end at 13:00 — ~211 bars, not 391. They must survive. Flag
+  // anything else short, since a truncated normal session means missing data.
+  const cnt = new Map();
+  for (const line of out) cnt.set(line.slice(0, 8), (cnt.get(line.slice(0, 8)) || 0) + 1);
+  const odd = [...cnt].filter(([, n]) => n < 380 && n > 250);
+  if (odd.length) console.error(`  ⚠ ${odd.length} session(s) with 250-380 bars — partial data, not half-days. e.g. ${odd.slice(0, 3).map(([d, n]) => d + ":" + n).join(", ")}`);
+}
+
 /* ── SPLIT CHECK ──────────────────────────────────────────────────────────── */
 // A raw (unadjusted) series prints a fake -75%/-90% bar on the split date and a
 // streak study would happily count it. Cheap to detect, fatal to miss.
@@ -360,5 +405,13 @@ fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, out.join("\n") + "\n");
 const days = new Set(out.map((l) => l.slice(0, 8)));
 console.log(`\nwrote ${OUT}`);
-console.log(`  ${out.length.toLocaleString()} bars over ${days.size} sessions  (${bad} unparseable)`);
+console.log(`  ${out.length.toLocaleString()} bars over ${days.size} sessions  (${bad} unparseable, ${padded.toLocaleString()} weekend-padded dropped)`);
 console.log(`  ${(fs.statSync(OUT).size / 1024 / 1024).toFixed(1)} MB`);
+// ~252 sessions/yr is the sanity anchor. Materially more means padding survived;
+// materially fewer means chunks are missing.
+if (!DAILY) {
+  const yrs = (new Date(`${END.slice(0, 4)}-${END.slice(4, 6)}-${END.slice(6, 8)}`) -
+               new Date(`${START.slice(0, 4)}-${START.slice(4, 6)}-${START.slice(6, 8)}`)) / 3.156e10;
+  const perYr = days.size / Math.max(yrs, 0.1);
+  console.log(`  ${perYr.toFixed(0)} sessions/yr  ${perYr > 265 ? "← ⚠ TOO MANY: padding survived the filter" : perYr < 240 ? "← ⚠ TOO FEW: missing data" : "✓"}`);
+}
