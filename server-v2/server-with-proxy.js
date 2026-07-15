@@ -412,6 +412,23 @@ async function ensureFlowPrintsSchema(pool) {
 }
 
 /**
+ * True when an epoch-ms timestamp falls inside the RTH cash session
+ * (09:30–16:00 America/New_York). Uses Intl in the ET zone rather than a UTC
+ * offset so DST is handled — a hardcoded -5/-4 gets this wrong twice a year.
+ * Half-days (13:00 close) still pass; they're just short, not misaligned.
+ */
+function isRthEt(ms) {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date(ms));
+  const hh = Number(p.find((x) => x.type === 'hour')?.value);
+  const mm = Number(p.find((x) => x.type === 'minute')?.value);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return false;
+  const mins = hh * 60 + mm;
+  return mins >= 9 * 60 + 30 && mins <= 16 * 60;
+}
+
+/**
  * mode=series — the whole session as a strike × time grid, for the /gex-3d
  * terrain map. The default (mode=point) answers "what was strike K N minutes
  * ago"; this answers "what did the entire surface do all day", which is a
@@ -453,9 +470,22 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
     if (!e) { e = { ts, spot: Number(r.spot), vals: new Map() }; byTs.set(ts, e); }
     e.vals.set(Number(r.strike), Number(r.val));
   }
-  let cols = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+  // RTH only (09:30–16:00 ET). The writer runs whenever the feed is up, so
+  // without this the terrain grows a long overnight/premarket tail of near-flat
+  // columns that squeezes the actual session into a sliver of the Z axis.
+  const rth = [...byTs.values()].filter((c) => isRthEt(c.ts)).sort((a, b) => a.ts - b.ts);
+  if (!rth.length) return sendJson(res, 200, empty);
 
-  // Evenly downsample to at most maxCols columns, always keeping the newest.
+  // The writer persists once per 60s, so the RTH columns ARE the 1-minute
+  // series — snapped to the minute here to absorb the few seconds of jitter in
+  // when each write actually lands (dedupe keeps the last write in a minute).
+  const byMinute = new Map();
+  for (const c of rth) byMinute.set(Math.floor(c.ts / 60_000), c);
+  const minuteCols = [...byMinute.values()].sort((a, b) => a.ts - b.ts);
+
+  // Terrain gets an evenly downsampled view (≤ maxCols) so the extruded columns
+  // stay renderable; bubbles read minuteCols at full resolution below.
+  let cols = minuteCols;
   if (cols.length > maxCols) {
     const picked = [];
     for (let i = 0; i < maxCols; i++) picked.push(cols[Math.round((i * (cols.length - 1)) / (maxCols - 1))]);
@@ -478,7 +508,12 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
     return Number.isFinite(v) ? v : null;
   }));
 
-  sendJson(res, 200, {
+  // minutes=1 → also return the UNDOWNSAMPLED 1-minute grid. The 3D map's
+  // bubbles are a per-minute per-strike |GEX| plot (same idea as the ES Candles
+  // bubbles: area ∝ |GEX|); drawing them off the downsampled terrain columns
+  // made them a redundant restatement of the terrain instead of their own,
+  // finer-grained read of the session. ~390 RTH minutes × ~27 strikes.
+  const payload = {
     mode: 'series',
     basis,
     expiry,
@@ -488,7 +523,17 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
     rows,
     spotPath: cols.map((c) => (Number.isFinite(Number(c.spot)) ? Number(c.spot) : null)),
     updatedAt: latest.ts,
-  });
+  };
+
+  if (searchParams.get('minutes') === '1') {
+    payload.minuteTimes = minuteCols.map((c) => c.ts);
+    payload.minuteRows = minuteCols.map((c) => strikes.map((k) => {
+      const v = c.vals.get(k);
+      return Number.isFinite(v) ? v : null;
+    }));
+  }
+
+  sendJson(res, 200, payload);
 }
 
 async function handleGexHistory(req, res) {

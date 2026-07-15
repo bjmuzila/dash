@@ -5,8 +5,10 @@
 // Positive (call-wall) GEX extrudes UP as blue "ice walls"; negative (put) GEX
 // extrudes DOWN as red "magma cliffs". Strikes on X, session time on Z.
 //
-// DATA: live, via useGexSurface → /proxy/gex-history?mode=series (today's ET
-// session out of option_strike_gex_history, one column per 60s snapshot).
+// DATA: useGexSurface → /proxy/gex-history?mode=series (today's ET session out
+// of option_strike_gex_history). Polls every 30 MINUTES on purpose — this is a
+// session-shape view, not a live tape, and there's a manual Refresh for when
+// you want it now.
 // Basis follows the dashboard convention: OI+Vol default + a Vol-only toggle.
 // The grid is normalized by the DAY's peak |GEX| in the hook, so terrain height
 // is comparable across the session but NOT across days.
@@ -55,10 +57,17 @@ type Surface = {
   spotPath: number[];
   /** Epoch ms per column. */
   times: number[];
+  /** 1-min grid for the bubbles: minuteNorm[m][s] (~±1). */
+  minuteRows: number[][];
+  /** Epoch ms per 1-min sample. */
+  minuteTimes: number[];
   peak: number;
 };
 
-const EMPTY_SURFACE: Surface = { strikes: [], rows: [], raw: [], spotPath: [], times: [], peak: 0 };
+const EMPTY_SURFACE: Surface = {
+  strikes: [], rows: [], raw: [], spotPath: [], times: [],
+  minuteRows: [], minuteTimes: [], peak: 0,
+};
 
 function fmtClock(ms: number): string {
   return new Date(ms).toLocaleTimeString("en-US", {
@@ -91,6 +100,7 @@ export default function Gex3DPage() {
 
   const [relief, setRelief] = useState(110);
   const [tilt, setTilt] = useState(34);
+  const [heading, setHeading] = useState(-36); // degrees, wrapped to [-180, 180]
   const [bubbles, setBubbles] = useState(true);
   const [spin, setSpin] = useState(false);
 
@@ -128,7 +138,7 @@ export default function Gex3DPage() {
     const ctx = cv?.getContext("2d");
     if (!cv || !ctx) return;
     const { w: W, h: H } = sizeRef.current;
-    const { strikes, rows, spotPath } = surfRef.current;
+    const { strikes, rows, spotPath, times } = surfRef.current;
     const { nx: NX, nz: NZ } = dimsRef.current;
     const rel = reliefRef.current;
 
@@ -179,6 +189,22 @@ export default function Gex3DPage() {
       if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 0.5; ctx.stroke(); }
     };
 
+    // Fixed WORLD-SPACE sun. Faces used to carry constant shade factors keyed on
+    // face index, which meant the light rode along with the camera — orbit past
+    // 90° and the lit face was still the one facing you, so the terrain looked
+    // painted-on instead of solid. Now each side's normal is rotated by yaw and
+    // lambert-shaded against a sun that stays put, so going 360° reads as
+    // walking around real geometry.
+    const { yaw } = camRef.current;
+    const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+    const SUN = { x: -0.55, z: -0.83 }; // horizontal sun direction, unit-ish
+    const lambert = (nx: number, nz: number) => {
+      const wx = nx * cyaw - nz * syaw;   // rotate the face normal into world space
+      const wz = nx * syaw + nz * cyaw;
+      const d = wx * SUN.x + wz * SUN.z;  // −1 (facing away) … 1 (facing the sun)
+      return 0.42 + 0.46 * Math.max(0, d);
+    };
+
     const w = 0.46;
     for (const c of cells) {
       if (Math.abs(c.v) < 0.035) continue;
@@ -190,10 +216,10 @@ export default function Gex3DPage() {
       const tA = proj(x0, c.h, z0), tB = proj(x1, c.h, z0), tC = proj(x1, c.h, z1), tD = proj(x0, c.h, z1);
       const bA = proj(x0, 0, z0), bB = proj(x1, 0, z0), bC = proj(x1, 0, z1), bD = proj(x0, 0, z1);
       const faces = [
-        { p: [tA, tB, bB, bA], d: (tA.depth + tB.depth) / 2, f: 0.62 },
-        { p: [tB, tC, bC, bB], d: (tB.depth + tC.depth) / 2, f: 0.78 },
-        { p: [tC, tD, bD, bC], d: (tC.depth + tD.depth) / 2, f: 0.55 },
-        { p: [tD, tA, bA, bD], d: (tD.depth + tA.depth) / 2, f: 0.7 },
+        { p: [tA, tB, bB, bA], d: (tA.depth + tB.depth) / 2, f: lambert(0, -1) },
+        { p: [tB, tC, bC, bB], d: (tB.depth + tC.depth) / 2, f: lambert(1, 0) },
+        { p: [tC, tD, bD, bC], d: (tC.depth + tD.depth) / 2, f: lambert(0, 1) },
+        { p: [tD, tA, bA, bD], d: (tD.depth + tA.depth) / 2, f: lambert(-1, 0) },
       ].sort((a, b) => b.d - a.d);
       for (const f of faces) poly(f.p, shade(base, f.f * lift), canvasRgba(HOME_THEME.bg, 0.35));
       poly([tA, tB, tC, tD], shade(base, 1.1 * lift), canvasRgba(AXIS, 0.16));
@@ -299,24 +325,41 @@ export default function Gex3DPage() {
       ctx.fillText(spotPath[NZ - 1].toFixed(0), p.x + 8, p.y - 6);
     }
 
-    // per-strike |GEX| bubbles floating above the terrain
-    if (bubblesRef.current) {
+    // ── 1-minute per-strike GEX bubbles ────────────────────────────────────
+    // AREA ∝ |GEX| (so radius ∝ √|GEX| — sizing by radius would cube the visual
+    // weight of the big walls). These read the UNDOWNSAMPLED minute grid, so
+    // they resolve intra-column detail the 30 terrain columns smooth away: a
+    // wall that stacked on hard for 3 minutes shows as a bead of fat bubbles
+    // sitting on an otherwise unremarkable ridge.
+    const { minuteRows, minuteTimes } = surfRef.current;
+    if (bubblesRef.current && minuteRows.length && times.length > 1) {
+      // Minute timestamp → fractional Z on the terrain's column axis.
+      const t0 = times[0], t1 = times[times.length - 1];
+      const span = t1 - t0 || 1;
+      const zOf = (ts: number) => ((ts - t0) / span) * (NZ - 1);
+
       const bl: { p: ReturnType<typeof proj>; r: number; v: number }[] = [];
-      for (let z = 0; z < NZ; z += 2)
+      for (let m = 0; m < minuteRows.length; m++) {
+        const ts = minuteTimes[m];
+        if (!Number.isFinite(ts)) continue;
+        const gz = zOf(ts);
+        if (gz < -0.5 || gz > NZ - 0.5) continue;
+        const row = minuteRows[m];
         for (let x = 0; x < NX; x++) {
-          const v = rows[z]?.[x] ?? 0;
-          if (Math.abs(v) < 0.28) continue;
-          const p = proj(x, v * rel + 22, z);
-          bl.push({ p, r: Math.sqrt(Math.abs(v)) * 7 * p.s, v });
+          const v = row?.[x] ?? 0;
+          if (Math.abs(v) < 0.12) continue; // floor: don't fog the map with dust
+          const p = proj(x, v * rel + 22, gz);
+          bl.push({ p, r: Math.sqrt(Math.abs(v)) * 6 * p.s, v });
         }
+      }
       bl.sort((a, b) => b.p.depth - a.p.depth);
       for (const b of bl) {
         ctx.beginPath();
-        ctx.arc(b.p.x, b.p.y, Math.max(1.2, b.r), 0, Math.PI * 2);
-        ctx.fillStyle = b.v > 0 ? canvasRgba(ICE_HI, 0.3) : canvasRgba(MAGMA_HI, 0.3);
+        ctx.arc(b.p.x, b.p.y, Math.max(0.8, b.r), 0, Math.PI * 2);
+        ctx.fillStyle = b.v > 0 ? canvasRgba(ICE_HI, 0.22) : canvasRgba(MAGMA_HI, 0.22);
         ctx.fill();
-        ctx.strokeStyle = b.v > 0 ? canvasRgba(ICE_HI, 0.55) : canvasRgba(MAGMA_HI, 0.55);
-        ctx.lineWidth = 0.8;
+        ctx.strokeStyle = b.v > 0 ? canvasRgba(ICE_HI, 0.4) : canvasRgba(MAGMA_HI, 0.4);
+        ctx.lineWidth = 0.7;
         ctx.stroke();
       }
     }
@@ -325,18 +368,25 @@ export default function Gex3DPage() {
     ctx.font = "10px var(--font-inter), Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = canvasRgba(AXIS, 0.6);
+    // Axis labels ride the edge CURRENTLY nearest the camera. Pinned to a fixed
+    // edge they'd end up buried behind the terrain the moment you orbit past 90°.
+    // Lower depth = closer to the viewer (see proj).
+    const strikeEdgeFar = proj(0, 0, NZ - 1).depth < proj(0, 0, 0).depth;
+    const strikeEdgeZ = strikeEdgeFar ? NZ + 0.6 : -1.6;
+
     const labelStride = Math.max(1, Math.round(NX / 7)); // ~7 strike labels, any ladder width
     for (let x = 0; x < NX; x += labelStride) {
-      const p = proj(x, 0, NZ + 0.6);
+      const p = proj(x, 0, strikeEdgeZ);
       ctx.fillText(String(strikes[x]), p.x, p.y);
     }
-    // time axis — real recorded clock times, not an assumed 9:30→16:00 span
-    const { times } = surfRef.current;
+    // time axis — real recorded clock times, on whichever X edge faces us
     if (times.length) {
-      ctx.textAlign = "left";
+      const timeEdgeRight = proj(NX - 1, 0, 0).depth < proj(0, 0, 0).depth;
+      const timeEdgeX = timeEdgeRight ? NX + 1.2 : -2.2;
+      ctx.textAlign = timeEdgeRight ? "left" : "right";
       ctx.fillStyle = canvasRgba(AXIS, 0.5);
-      const a = proj(NX + 1.2, 0, 0);
-      const b = proj(NX + 1.2, 0, NZ - 1);
+      const a = proj(timeEdgeX, 0, 0);
+      const b = proj(timeEdgeX, 0, NZ - 1);
       ctx.fillText(fmtClock(times[0]), a.x, a.y);
       ctx.fillText(fmtClock(times[times.length - 1]), b.x, b.y);
     }
@@ -390,6 +440,8 @@ export default function Gex3DPage() {
       raw: live.rows,
       spotPath,
       times: live.times,
+      minuteRows: live.minuteNorm,
+      minuteTimes: live.minuteTimes,
       peak: live.peak,
     };
     dimsRef.current = { nx: live.strikes.length, nz: live.norm.length };
@@ -452,15 +504,23 @@ export default function Gex3DPage() {
       const d = dragRef.current;
       if (!d) return;
       e.preventDefault();
+      // Yaw is deliberately UNBOUNDED — you can lap the map as many times as you
+      // like; it's normalized to [-π, π] on release. Pitch clamp matches the
+      // slider's 2°–88° so drag and scrub can reach the same stations.
       camRef.current.yaw = d.yaw + (e.clientX - d.x) * 0.006;
-      camRef.current.pitch = Math.max(0.12, Math.min(1.35, d.pitch - (e.clientY - d.y) * 0.005));
+      camRef.current.pitch = Math.max(0.035, Math.min(1.535, d.pitch - (e.clientY - d.y) * 0.005));
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
     };
     const up = () => {
       if (!dragRef.current) return;
       dragRef.current = null;
       cv.style.cursor = "grab";
+      // Wrap yaw into [-π, π] so repeated 360° laps don't accumulate an
+      // ever-growing float (and so the heading readout stays sane).
+      const TAU = Math.PI * 2;
+      camRef.current.yaw = ((camRef.current.yaw + Math.PI) % TAU + TAU) % TAU - Math.PI;
       setTilt(Math.round((camRef.current.pitch * 180) / Math.PI)); // sync slider once
+      setHeading(Math.round((camRef.current.yaw * 180) / Math.PI));
     };
     window.addEventListener("pointermove", move, { passive: false });
     window.addEventListener("pointerup", up);
@@ -501,7 +561,8 @@ export default function Gex3DPage() {
             ? "Loading today's recorded surface…"
             : live.error
             ? `History unavailable — ${live.error}`
-            : `${live.expiry || "—"} · ${live.times.length} snapshots · ${live.date} · peak ${fmtGex(live.peak)}`
+            : `${live.expiry || "—"} · ${live.times.length} RTH snapshots · ${live.date} · peak ${fmtGex(live.peak)}` +
+              (live.fetchedAt ? ` · pulled ${fmtClock(live.fetchedAt)}` : "")
         }
         padding={20}
       >
@@ -523,7 +584,14 @@ export default function Gex3DPage() {
             ))}
           </span>
 
-          <span style={{ ...legendItem, opacity: 0.6, marginLeft: "auto" }}>drag to orbit · scroll to zoom</span>
+          <button
+            style={{ ...homeSecondaryButtonStyle, padding: "5px 10px", marginLeft: "auto" }}
+            onClick={live.refresh}
+            disabled={live.loading}
+          >
+            Refresh
+          </button>
+          <span style={{ ...legendItem, opacity: 0.6 }}>drag to orbit · scroll to zoom</span>
         </div>
 
         <div
@@ -578,22 +646,65 @@ export default function Gex3DPage() {
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             Tilt
-            <input type="range" min={8} max={75} value={tilt} onChange={(e) => setTilt(+e.target.value)} style={{ width: 120, accentColor: HOME_THEME.cyan }} />
+            <input type="range" min={2} max={88} value={tilt} onChange={(e) => setTilt(+e.target.value)} style={{ width: 120, accentColor: HOME_THEME.cyan }} />
+          </label>
+          {/* Full 360° orbit — the drag already wraps; this is the scrub version. */}
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            Orbit
+            <input
+              type="range"
+              min={-180}
+              max={180}
+              value={heading}
+              onChange={(e) => {
+                const deg = +e.target.value;
+                setHeading(deg);
+                camRef.current.yaw = (deg * Math.PI) / 180;
+                draw();
+              }}
+              style={{ width: 140, accentColor: HOME_THEME.cyan }}
+            />
+            <span style={{ width: 34, opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>{heading}°</span>
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={bubbles} onChange={(e) => setBubbles(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
-            Bubbles
+            1-min bubbles
+            <span style={{ opacity: 0.5 }}>({live.minuteTimes.length})</span>
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={spin} onChange={(e) => setSpin(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
             Auto-orbit
           </label>
+
+          {/* Preset camera stations around the map. */}
+          {([
+            { label: "Front", yaw: 0, pitch: 24 },
+            { label: "Side", yaw: -90, pitch: 22 },
+            { label: "Behind", yaw: 180, pitch: 24 },
+            { label: "Top", yaw: -36, pitch: 82 },
+          ] as const).map((v) => (
+            <button
+              key={v.label}
+              style={{ ...homeSecondaryButtonStyle, padding: "5px 10px" }}
+              onClick={() => {
+                camRef.current.yaw = (v.yaw * Math.PI) / 180;
+                camRef.current.pitch = (v.pitch * Math.PI) / 180;
+                setHeading(v.yaw);
+                setTilt(v.pitch);
+                draw();
+              }}
+            >
+              {v.label}
+            </button>
+          ))}
+
           <button
             style={{ ...homeButtonStyle, padding: "6px 12px" }}
             onClick={() => {
               camRef.current = { yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1 };
               setRelief(110);
               setTilt(34);
+              setHeading(-36);
               draw();
             }}
           >
@@ -603,8 +714,9 @@ export default function Gex3DPage() {
 
         <p style={{ fontSize: 12, color: HOME_THEME.green, marginTop: 14, marginBottom: 0, lineHeight: 1.6 }}>
           Live from <code>/proxy/gex-history?mode=series</code> — today&apos;s recorded per-strike net GEX
-          ({basis === "net" ? "OI+Vol composite" : "volume-only"}), one column per snapshot, ±13 strikes
-          around spot. Terrain height is normalized to the day&apos;s peak |GEX|, so heights compare
+          ({basis === "net" ? "OI+Vol composite" : "volume-only"}), RTH only (9:30–16:00 ET), ±13 strikes
+          around spot. Terrain = up to 30 downsampled columns; bubbles = the full 1-minute grid with
+          area ∝ |GEX|. Both share one scale, normalized to the day&apos;s peak |GEX| — heights compare
           within the session but not across days.
         </p>
       </Card>

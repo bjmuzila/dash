@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Full-session GEX surface (strike × time) for the /gex-3d terrain map.
@@ -24,31 +24,51 @@ export interface GexSurface {
   norm: number[][];
   /** Spot at each column. */
   spotPath: (number | null)[];
+  /** Epoch ms per 1-minute sample (undownsampled) — bubbles. */
+  minuteTimes: number[];
+  /** minuteRaw[m][s] raw net GEX at full 1-min resolution. */
+  minuteRaw: (number | null)[][];
+  /** minuteRows scaled by the SAME peak as `norm` so both layers agree. */
+  minuteNorm: number[][];
   /** Peak |GEX| used for the scaling, in raw units. */
   peak: number;
   expiry: string;
   date: string;
   loading: boolean;
   error: string | null;
+  /** Epoch ms of the last successful pull (not of the data itself). */
+  fetchedAt: number;
 }
 
 const EMPTY: GexSurface = {
   strikes: [], times: [], rows: [], norm: [], spotPath: [],
-  peak: 0, expiry: "", date: "", loading: true, error: null,
+  minuteTimes: [], minuteRaw: [], minuteNorm: [],
+  peak: 0, expiry: "", date: "", loading: true, error: null, fetchedAt: 0,
 };
+
+/**
+ * Deliberately a SLOW poll. This is a session-shape view, not a tape — the
+ * underlying writer only persists once a minute, and a 30-column terrain
+ * doesn't visibly change between minutes anyway, so a fast poll would just
+ * re-download ~400 minutes × 27 strikes to redraw the same picture. Callers
+ * wanting a fresh pull on demand use the returned `refresh`.
+ */
+export const GEX_SURFACE_POLL_MS = 30 * 60_000; // 30 minutes
 
 export function useGexSurface(
   basis: "net" | "vol" = "net",
   expiry?: string,
-  pollMs = 60_000
-): GexSurface {
+  pollMs = GEX_SURFACE_POLL_MS
+): GexSurface & { refresh: () => void } {
   const [surface, setSurface] = useState<GexSurface>(EMPTY);
+  const [nonce, setNonce] = useState(0);
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const qs = new URLSearchParams({ mode: "series", basis, window: "13", buckets: "30" });
+        const qs = new URLSearchParams({ mode: "series", basis, window: "13", buckets: "30", minutes: "1" });
         if (expiry) qs.set("expiry", expiry);
         const r = await fetch(`/proxy/gex-history?${qs}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`gex-history ${r.status}`);
@@ -56,26 +76,35 @@ export function useGexSurface(
         if (cancelled) return;
 
         const rows: (number | null)[][] = Array.isArray(j?.rows) ? j.rows : [];
+        const minuteRaw: (number | null)[][] = Array.isArray(j?.minuteRows) ? j.minuteRows : [];
+
         // Scale by the day's peak |GEX| — NOT by each column's own max, which
         // would flatten the session into a uniform ridge and hide the whole
-        // point of the view (walls growing/decaying through the day).
+        // point of the view (walls growing/decaying through the day). The peak
+        // is taken over the 1-min grid (a superset of the terrain columns) so
+        // both layers share one scale and a bubble can't out-scale its ridge.
         let peak = 0;
-        for (const row of rows) for (const v of row) {
+        for (const row of (minuteRaw.length ? minuteRaw : rows)) for (const v of row) {
           if (v != null && Number.isFinite(v)) peak = Math.max(peak, Math.abs(v));
         }
-        const norm = rows.map((row) => row.map((v) => (peak > 0 && v != null && Number.isFinite(v) ? v / peak : 0)));
+        const scale = (g: (number | null)[][]) =>
+          g.map((row) => row.map((v) => (peak > 0 && v != null && Number.isFinite(v) ? v / peak : 0)));
 
         setSurface({
           strikes: Array.isArray(j?.strikes) ? j.strikes : [],
           times: Array.isArray(j?.times) ? j.times : [],
           rows,
-          norm,
+          norm: scale(rows),
           spotPath: Array.isArray(j?.spotPath) ? j.spotPath : [],
+          minuteTimes: Array.isArray(j?.minuteTimes) ? j.minuteTimes : [],
+          minuteRaw,
+          minuteNorm: scale(minuteRaw),
           peak,
           expiry: j?.expiry || "",
           date: j?.date || "",
           loading: false,
           error: null,
+          fetchedAt: Date.now(),
         });
       } catch (e) {
         if (cancelled) return;
@@ -85,7 +114,7 @@ export function useGexSurface(
     load();
     const id = setInterval(load, pollMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, [basis, expiry, pollMs]);
+  }, [basis, expiry, pollMs, nonce]);
 
-  return surface;
+  return { ...surface, refresh };
 }
