@@ -76,22 +76,44 @@ const START = arg("start", ymd(twoYrAgo));
 const END = arg("end", DEFAULT_END);
 const OUT = arg("out", path.join(process.cwd(), "public", "data", `${SYM}_${DAILY ? "daily" : "1min"}.csv`));
 
-async function get(q) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let everConnected = false;
+
+async function get(q, attempt = 0) {
   const url = `${BASE}${q}${q.includes("?") ? "&" : "?"}format=json`;
   let res;
   try {
     res = await fetch(url, { headers: { Accept: "application/json" } });
+    everConnected = true;
   } catch (e) {
-    // fetch() throws a bare "fetch failed" on connection errors — the cause is
-    // nested and node hides it. Surface it; "fetch failed" tells you nothing.
+    // fetch() throws a bare "fetch failed" on connection errors — the real cause
+    // is nested in e.cause and node hides it by default.
     const cause = e?.cause?.code || e?.cause?.message || e.message;
+
+    // A long pull over an SSH tunnel WILL drop sockets. That's transient, not
+    // misconfiguration — retry it. Only claim "tunnel is down" if we never
+    // connected at all; otherwise the advice is actively misleading (you'd go
+    // check a tunnel that's working fine).
+    const transient = /UND_ERR_SOCKET|ECONNRESET|EPIPE|ETIMEDOUT|other side closed/i.test(String(cause));
+    if (transient && attempt < 5) {
+      const wait = 1000 * 2 ** attempt;
+      process.stderr.write(`\n    ${cause} — retry ${attempt + 1}/5 in ${wait / 1000}s `);
+      await sleep(wait);
+      return get(q, attempt + 1);
+    }
+
     throw new Error(
-      `CANNOT REACH THETA at ${BASE}  (${cause})\n\n` +
-      `  The Terminal runs on the VPS, published to ITS loopback only.\n` +
-      `  Open the tunnel in a separate window and leave it running:\n\n` +
-      `    ssh -i C:\\Users\\Brandon\\.ssh\\cbedge -N -L 25503:127.0.0.1:25503 root@178.156.137.36\n\n` +
-      `  Verify it's up:  curl http://127.0.0.1:25503/v3/system/mdds/status\n` +
-      `  Or point at another host:  $env:THETA_BASE_URL="http://..."\n`
+      everConnected
+        ? `THETA CONNECTION DROPPED after ${attempt} retries  (${cause})\n\n` +
+          `  Earlier requests SUCCEEDED, so the tunnel/config is fine — the socket\n` +
+          `  died mid-pull. Restart the tunnel and re-run; --start from where it\n` +
+          `  stopped. If it dies repeatedly at the same year, that year is the problem.\n`
+        : `CANNOT REACH THETA at ${BASE}  (${cause})\n\n` +
+          `  The Terminal runs on the VPS, published to ITS loopback only.\n` +
+          `  Open the tunnel in a separate window and leave it running:\n\n` +
+          `    ssh -i C:\\Users\\Brandon\\.ssh\\cbedge -N -L 25503:127.0.0.1:25503 root@178.156.137.36\n\n` +
+          `  Verify it's up:  curl http://127.0.0.1:25503/v3/system/mdds/status\n` +
+          `  Or point at another host:  $env:THETA_BASE_URL="http://..."\n`
     );
   }
   const text = await res.text();
@@ -209,7 +231,20 @@ for (const [s, e] of months(START, END)) {
   process.stderr.write(`  ${s}..${e} `);
   let r;
   try { r = rows(await get(PATH_(s, e))); }
-  catch (err) { console.error(`\n${err.message}`); process.exit(1); }
+  catch (err) {
+    // Don't throw away the chunks that already worked. Write what we have and
+    // report the resume point — re-pulling 10 good years because year 11 blipped
+    // is how you end up not running the study at all.
+    console.error(`\n${err.message}`);
+    if (out.length) {
+      const partial = OUT.replace(/\.csv$/, ".partial.csv");
+      fs.mkdirSync(path.dirname(partial), { recursive: true });
+      fs.writeFileSync(partial, out.join("\n") + "\n");
+      console.error(`  Kept ${out.length.toLocaleString()} rows → ${partial}`);
+      console.error(`  Resume with:  --start ${s}\n`);
+    }
+    process.exit(1);
+  }
 
   for (const x of r) {
     // v3 returns `timestamp` as a NAIVE ISO string already in ET wall-clock
@@ -221,10 +256,15 @@ for (const [s, e] of months(START, END)) {
     const ts = String(x.timestamp ?? "");
     const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
     if (DAILY) {
-      // One bar per session. Stamp it 16:00 so it lands inside any RTH filter
-      // downstream and sorts correctly; the time carries no meaning here.
-      const dm = m ? m[1] + m[2] + m[3] : String(x.date ?? "");
+      // The /eod route carries NO `date` and NO `timestamp` — the session date
+      // lives inside `created` / `last_trade` ISO strings. Same fallback chain
+      // proxy-thetadata.js:561 already uses. Take only the DATE portion: those
+      // stamps read ~17:15 (consolidated-tape finalisation, after the 16:00
+      // close), so the clock time is meaningless and Date() would shift it.
+      const iso = String(x.date ?? x.created ?? x.last_trade ?? "");
+      const dm = iso.length === 8 ? iso : (iso.match(/^(\d{4})-(\d{2})-(\d{2})/) || []).slice(1, 4).join("");
       if (dm.length !== 8) { bad++; continue; }
+      // One bar per session. Stamp 16:00 so it survives any RTH filter downstream.
       date = dm; hh = "16"; mm = "00";
     } else if (m) {
       date = m[1] + m[2] + m[3]; hh = m[4]; mm = m[5];
