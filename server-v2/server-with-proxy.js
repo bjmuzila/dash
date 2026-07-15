@@ -1867,30 +1867,36 @@ async function main() {
           return;
         }
         try {
+          // Both branches select strikes by `strike_range` (dollars around that
+          // day's spot), so both need a cushion wide enough to keep a far-OTM
+          // strike inside the window. Compute spot once for either path.
+          const spot = await fetchUnderlyingQuotes([ticker])
+            .then((m) => Number(m.get(ticker)?.last || m.get(ticker)?.mark) || 0)
+            .catch(() => 0);
+          const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
+
           if (tf === '1d') {
             const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
-            const bars = await fetchOptionIntradayTheta(ticker, expiry, strike, type, date, 300000);
-            sendJson(res, 200, { bars, tf, interval: '5m', elapsedMs: Date.now() - t0 });
+            const bars = await fetchOptionIntradayTheta(ticker, expiry, strike, type, date, '5m', cushion);
+            sendJson(res, 200, { bars, tf, interval: '5m', spot, elapsedMs: Date.now() - t0 });
           } else {
             const days = tf === '30d' ? 30 : 90;
             const end = new Date();
             const start = new Date(end.getTime() - days * 86_400_000);
-            // strike_range must be wide enough to keep the strike inside Theta's
-            // ±range-around-spot window on every day in the range — the strike
-            // may have been far OTM when the range starts.
-            const spot = await fetchUnderlyingQuotes([ticker])
-              .then((m) => Number(m.get(ticker)?.last || m.get(ticker)?.mark) || 0)
-              .catch(() => 0);
-            const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
             const bars = await fetchOptionDailyHistoryTheta(
               ticker, expiry, strike, type,
               start.toISOString().slice(0, 10), end.toISOString().slice(0, 10),
               cushion,
             );
-            sendJson(res, 200, { bars, tf, interval: '1d', elapsedMs: Date.now() - t0 });
+            sendJson(res, 200, { bars, tf, interval: '1d', spot, elapsedMs: Date.now() - t0 });
           }
         } catch (e) {
-          sendJson(res, 502, { error: String(e?.message || e), elapsedMs: Date.now() - t0 });
+          // Log the upstream Theta message server-side — the browser only sees
+          // the status, and "502" alone tells you nothing about which param the
+          // terminal rejected.
+          const msg = String(e?.message || e);
+          console.warn('[OPTION-HISTORY]', ticker, expiry, strike, type, tf, '->', msg.slice(0, 300));
+          sendJson(res, 502, { error: msg, ticker, expiry, strike, type, tf, elapsedMs: Date.now() - t0 });
         }
         return;
       }

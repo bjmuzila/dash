@@ -331,7 +331,7 @@ function buildSnapshotHTML(
     <div class="econ-row">
       <div class="ec-time">${fmtTime(ev)}</div>
       <div class="ec-event">${ev.title}</div>
-      <div class="ec-impact"><span class="impact-pill" style="background:${badge.bg};border-color:${badge.border};color:${badge.text}">${ev.impact}</span></div>
+      <div class="ec-impact"><span class="impact-pill" style="background:${badge.bg};border-color:${badge.border};color:${badge.text}"><span class="pill-inner-04">${ev.impact}</span></span></div>
       <div class="ec-num">${dash(ev.actual)}</div>
       <div class="ec-num">${dash(ev.forecast)}</div>
       <div class="ec-num">${dash(ev.previous)}</div>
@@ -365,8 +365,9 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
 .badge-inner{display:inline-block;letter-spacing:0.07em;margin-right:-0.07em}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-indent:0.06em;text-transform:uppercase;font-size:16px}
-.today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;letter-spacing:0.06em;text-indent:0.06em;text-transform:uppercase;font-size:16px}
+.date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.pill-inner-06{display:inline-block;letter-spacing:0.06em;margin-right:-0.06em}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
 .grid{display:grid;grid-template-columns:1.4fr 3.3fr 1.5fr;gap:18px;margin-top:20px;flex:1;min-height:0}
 /* THE card surface (classicCardAccentStyle): frosted fill, hairline edge, faint
@@ -387,22 +388,21 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .chip-fb{display:block;width:36px;height:36px;line-height:34px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
 .chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
-.pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center}
+.pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
 .pres-row:last-child{border-bottom:none}
 .pr-time{color:var(--lblue);font-weight:700;font-size:${presTimeSize}px}
-.pr-title{font-size:${presTitleSize}px;font-weight:600;line-height:1.3}
+.pr-title{font-size:${presTitleSize}px;font-weight:600;line-height:1.3;min-width:0}
 .empty-panel{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:rgba(255,255,255,0.35);font-size:14px}
 .econ-table{display:flex;flex-direction:column;flex:1}
-.econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:8px;padding:${econRowPadV}px 14px;align-items:center;border-bottom:1px solid var(--border);flex:1}
+.econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:8px;padding:${econRowPadV}px 14px;align-items:center;border-bottom:1px solid var(--border);flex:1;min-width:0}
 .econ-row:last-child{border-bottom:none}
 .econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto}
 .ec-time{font-size:${econTimeSize}px;font-weight:700;color:var(--muted);white-space:nowrap}
 .ec-event{font-size:${econEventSize}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .ec-num{font-size:${econNumSize}px;font-weight:700;text-align:right;color:var(--text)}
 .ec-impact{text-align:left}
-/* text-indent cancels the trailing letter-space, which otherwise drags
-   centered uppercase text visibly left inside the pill. */
-.impact-pill{display:inline-block;height:${pillHeight}px;line-height:${pillHeight - 2}px;text-align:center;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;letter-spacing:0.04em;text-indent:0.04em;text-transform:uppercase}
+.impact-pill{display:inline-block;height:${pillHeight}px;line-height:${pillHeight - 2}px;text-align:center;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase}
+.pill-inner-04{display:inline-block;letter-spacing:0.04em;margin-right:-0.04em}
 .logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:80px;height:80px;object-fit:contain}
 </style></head><body>
@@ -410,8 +410,8 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
   <div class="topbar">
     <div class="badge"><span class="badge-inner">Economic Calendar</span></div>
     <div class="date-group">
-      <div class="date-pill">${todayLong()}</div>
-      <div class="today-pill">TODAY</div>
+      <div class="date-pill"><span class="pill-inner-06">${todayLong()}</span></div>
+      <div class="today-pill"><span class="pill-inner-06">TODAY</span></div>
     </div>
   </div>
   ${formattedQuote ? `<div class="quote">${formattedQuote}</div>` : ""}

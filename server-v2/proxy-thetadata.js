@@ -631,33 +631,48 @@ async function fetchOptionDailyHistoryTheta(underlying, expiry, strike, type, st
 // since-fill peak/trough meaningless for a same-day whale print; this returns
 // per-interval bars so the drawer can find the real high/low since the fill.
 //
-// `intervalMs` is Theta's `interval` param (60000 = 1m, 300000 = 5m).
-// Returns [{ time(ms), open, high, low, close, volume }] ascending.
+// Shape is copied from two things in this repo that are KNOWN to work, because
+// the first cut of this function guessed and 502'd:
+//   • option/* history routes select strikes with `strike_range` (dollars around
+//     that day's spot) and return a NESTED body — response[].contract +
+//     response[].data[] — not flat rows. See fetchOptionDailyHistoryTheta above.
+//     There is no `strike=`/`right=` param; you filter the response yourself.
+//   • */history/ohlc takes `interval=5m` (a duration STRING, not milliseconds)
+//     plus start_time/end_time, and stamps each bar with `timestamp` as a bare
+//     ET wall-clock string with no offset. See scripts/backtest-orb-spx-theta.mjs.
 //
-// NOTE: the v3 intraday-ohlc row shape is mapped defensively (ms_of_day + date,
-// falling back to a timestamp column) because this route is not yet exercised
-// anywhere else in the codebase — verify field keys against a live terminal.
-async function fetchOptionIntradayTheta(underlying, expiry, strike, type, date, intervalMs = 300000) {
+// `strikeRangeDollars` must be wide enough to keep the target strike inside
+// Theta's ±range-around-spot window — callers pass |strike − spot| + a cushion.
+// Returns [{ time(ms), open, high, low, close, volume }] ascending, RTH only.
+// An unmatched contract returns [] (a legitimately empty session), never throws.
+async function fetchOptionIntradayTheta(underlying, expiry, strike, type, date, interval = '5m', strikeRangeDollars = 200) {
   const root = thetaRoot(underlying);
-  const right = type === 'C' ? 'C' : 'P';
   const ymd = ymdCompact(date);
   const json = await thetaGet(
     `/v3/option/history/ohlc?symbol=${encodeURIComponent(root)}`
-    + `&expiration=${ymdCompact(expiry)}&strike=${toThetaStreamStrike(strike)}&right=${right}`
-    + `&start_date=${ymd}&end_date=${ymd}&interval=${Math.max(60000, Number(intervalMs) || 300000)}`,
+    + `&expiration=${ymdCompact(expiry)}&start_date=${ymd}&end_date=${ymd}`
+    + `&interval=${encodeURIComponent(interval)}&start_time=09:30:00&end_time=16:00:00`
+    + `&strike_range=${Math.max(40, Math.ceil(strikeRangeDollars))}`,
   );
-  const dayBase = ymd.length === 8
-    ? Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00.000-05:00`)
-    : NaN;
-  return rowsFromV3(json)
+  const resp = json?.response || [];
+  if (!Array.isArray(resp)) return [];
+  const wantedRight = type === 'C' ? 'C' : 'P';
+  const wantedStrike = Number(strike);
+  const entry = resp.find(
+    (e) => e?.contract && Math.abs(Number(e.contract.strike) - wantedStrike) < 0.01 && rightToType(e.contract.right) === wantedRight,
+  );
+  if (!entry || !Array.isArray(entry.data)) return [];
+  return entry.data
     .map((r) => {
-      // Theta intraday rows carry ms_of_day alongside the date; some responses
-      // instead carry a full ISO timestamp. Accept either.
-      const msOfDay = Number(r.ms_of_day ?? r.msOfDay);
-      let time = Number.isFinite(msOfDay) && Number.isFinite(dayBase) ? dayBase + msOfDay : NaN;
+      // `timestamp` is exchange-local ET with no offset ("2026-07-15T09:35:00").
+      // Pin it to -05:00/-04:00 via the ET date rather than letting the runtime
+      // parse it as local/UTC — the VPS runs UTC, which would shift every bar.
+      let time = _parseEtWallClock(String(r.timestamp ?? ''));
       if (!Number.isFinite(time)) {
-        const ts = Date.parse(String(r.timestamp ?? r.created ?? ''));
-        if (Number.isFinite(ts)) time = ts;
+        // Fallback: some builds emit date + ms_of_day instead of a timestamp.
+        const msOfDay = Number(r.ms_of_day ?? r.msOfDay);
+        const base = _etMidnightMs(String(r.date ?? ymd));
+        if (Number.isFinite(msOfDay) && Number.isFinite(base)) time = base + msOfDay;
       }
       return {
         time,
@@ -670,6 +685,34 @@ async function fetchOptionIntradayTheta(underlying, expiry, strike, type, date, 
     })
     .filter((b) => Number.isFinite(b.time) && Number.isFinite(b.close) && b.close > 0)
     .sort((a, b) => a.time - b.time);
+}
+
+// ET wall-clock -> epoch ms. ET is UTC-5 in winter, UTC-4 during DST; picking the
+// wrong one shifts every intraday bar by an hour on a UTC host. Resolve the real
+// offset for that instant via Intl rather than hardcoding -05:00.
+function _etOffsetMinutes(utcGuessMs) {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', timeZoneName: 'shortOffset',
+  }).formatToParts(new Date(utcGuessMs));
+  const name = p.find((x) => x.type === 'timeZoneName')?.value || 'GMT-5';
+  const m = name.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+  if (!m) return -300;
+  return Number(m[1]) * 60 + (m[1].startsWith('-') ? -1 : 1) * Number(m[2] || 0);
+}
+
+function _parseEtWallClock(s) {
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return NaN;
+  const [, Y, Mo, D, h, mi, se] = m.map(Number);
+  // Treat the wall clock as UTC first, then subtract ET's offset at that instant.
+  const asUtc = Date.UTC(Y, Mo - 1, D, h, mi, se);
+  return asUtc - _etOffsetMinutes(asUtc) * 60_000;
+}
+
+function _etMidnightMs(ymdish) {
+  const s = String(ymdish);
+  const iso = s.length === 8 ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : s.slice(0, 10);
+  return _parseEtWallClock(`${iso}T00:00:00`);
 }
 
 // ---------------------------------------------------------------------------

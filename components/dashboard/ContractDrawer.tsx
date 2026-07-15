@@ -89,7 +89,13 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
       params.set("date", new Date(order.ts).toLocaleDateString("en-CA", { timeZone: "America/New_York" }));
     }
     fetch(`/proxy/option-history?${params}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      // The route puts the upstream Theta message in `error` on a 502 — surface
+      // it instead of a bare "HTTP 502", which says nothing about what broke.
+      .then(async (r) => {
+        const j = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(j?.error ? String(j.error).slice(0, 160) : `HTTP ${r.status}`);
+        return j;
+      })
       .then((j) => {
         if (cancelled) return;
         setBars(Array.isArray(j?.bars) ? j.bars : []);
