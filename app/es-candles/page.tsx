@@ -389,6 +389,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // session view and never backfills past days.
   const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
   const bubbleScaleRef = useRef(1);
+  const bubbleVarRef = useRef(1);
+  const bubbleMinsRef = useRef(5);
   // NOTE: the effect that syncs this ref lives next to the bubbleScale useState
   // below — NOT here. A `[bubbleScale]` dep array is evaluated during render, and
   // the state is declared further down, so putting it here threw a TDZ
@@ -528,9 +530,23 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [showGexBubbles, setShowGexBubbles] = useState(true);
   // 0.3 is the sweet spot, so the slider is centered on it (0.1–0.5).
   const [bubbleScale, setBubbleScale] = useState(0.3); // manual radius multiplier (sizing is taste)
-  // Mirrored into a ref so the imperative overlay draw reads it without
+  // Contrast/variance exponent on the size ramp: r ∝ ratio^var.
+  //   0.5 = sqrt  → area ∝ |GEX|, but it LIFTS the low end (a strike at 1% of the
+  //                 session max still renders at 10% of the range), so everything
+  //                 clusters mid-size and the trail reads as flat tubes.
+  //   1.0 = linear
+  //   >1  = the small strikes collapse toward the floor and only real gamma
+  //         renders big — more visible spread between levels.
+  const [bubbleVar, setBubbleVar] = useState(1.3);
+  // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
+  // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
+  // 5m spaces them one per candle, which is why it's the default.
+  const [bubbleMins, setBubbleMins] = useState<1 | 5>(5);
+  // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing. Must stay BELOW the useState above (see bubbleScaleRef).
   useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
+  useEffect(() => { bubbleVarRef.current = bubbleVar; }, [bubbleVar]);
+  useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.
@@ -1804,7 +1820,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // trail reads as gamma building/bleeding over time rather than being
         // re-normalized every column. bubbleScale is the manual size knob.
         if (showGexBubbles) {
-          const mins = [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+          // Aggregate the 1-min store into the selected bucket. At 5m we keep the
+          // LAST minute in each bucket (the freshest read of that strike's gamma),
+          // not a mean — averaging smears the very spikes we're trying to show.
+          const bucketMs = bubbleMinsRef.current * 60_000;
+          const byBucket = new Map<number, GexColumn>();
+          for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
+            byBucket.set(Math.floor(m.slotTs / bucketMs) * bucketMs, m);
+          }
+          const mins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
           if (mins.length) {
             const metric = gexMetricRef.current;
             const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
@@ -1868,7 +1892,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   // they separate from the field even when the whole column is
                   // small relative to the session max.
                   const rankBoost = rk === 0 ? 1.55 : rk === 1 ? 1.32 : rk === 2 ? 1.16 : 1;
-                  const r = (rMin + Math.sqrt(ratio) * (rMax - rMin)) * rankBoost;
+                  // Was hardcoded Math.sqrt(ratio) (= exponent 0.5). sqrt lifts the
+                  // low end so hard that a 1%-of-session strike still drew at 10% of
+                  // the radius range — every level landed mid-size and the trail read
+                  // as uniform tubes. The exponent is now the "variance" knob: higher
+                  // pushes small strikes to the floor and leaves the real gamma big.
+                  const r = (rMin + Math.pow(ratio, bubbleVarRef.current) * (rMax - rMin)) * rankBoost;
                   if (r < 0.35) continue;
                   // SOLID fill, no stroke. Magnitude is carried by the COLOR (a
                   // dim→hot ramp) and the radius — not by opacity. Filling at low
@@ -2102,7 +2131,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexBubbles, bubbleScale, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
+  }, [showHeatmap, showGexBubbles, bubbleScale, bubbleVar, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -2265,6 +2294,17 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble size</div>
                   <DockSlider label="bubble" value={bubbleScale} min={0.1} max={0.5} step={0.02} onChange={setBubbleScale} title="Bubble size" />
+                  <DockSlider
+                    label="variance" value={bubbleVar} min={0.5} max={2.5} step={0.1}
+                    format={(v) => v.toFixed(1)} onChange={setBubbleVar}
+                    title="Size contrast — low = all bubbles similar, high = only real gamma renders big"
+                  />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble time</div>
+                  <SegGroup
+                    options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
+                    active={String(bubbleMins)}
+                    onChange={(v) => setBubbleMins(Number(v) === 1 ? 1 : 5)}
+                  />
                 </div>
               )}
               {showVsa && (

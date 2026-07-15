@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ScoreInfo } from "@/components/shared/InfoTip";
+import ProbeButton from "@/components/scanner/ProbeButton";
 
 // ── shared style/format helpers (ported from app/scanner/page.tsx) ──────────
 
@@ -186,6 +187,8 @@ function GexScannerPanel() {
                 </span>
               </div>
               <div style={{ marginTop: 6 }}><SignalBadge s={sig} /></div>
+              {/* Owner-only: record this strike into the watch tracker */}
+              <ProbeButton symbol={r.symbol} expiry={r.expiry} strike={r.strike} spot={r.spot} compact />
             </div>
           );
         })}

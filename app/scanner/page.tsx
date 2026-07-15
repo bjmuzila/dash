@@ -16,6 +16,7 @@ import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_TITLE, KIND_NOTE, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
+import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -417,6 +418,8 @@ function GexScanner() {
                     </span>
                   </div>
                   <div style={{ marginTop: 6 }}><SignalBadge s={sig} /></div>
+                  {/* Owner-only: record this strike into the watch tracker */}
+                  <ProbeButton symbol={r.symbol} expiry={r.expiry} strike={r.strike} spot={r.spot} />
                 </div>
               );
             })}
