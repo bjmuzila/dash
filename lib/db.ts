@@ -701,8 +701,6 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Set once when the founder thank-you auto-welcome has been emailed to this
     -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
-    ALTER TABLE td_overview ADD COLUMN IF NOT EXISTS movers JSONB NOT NULL DEFAULT '[]'::jsonb;
-    ALTER TABLE td_user_prefs ADD COLUMN IF NOT EXISTS links JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
@@ -713,6 +711,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       tasks         JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    -- Added after the table shipped. MUST stay after the CREATE above: an ALTER
+    -- placed earlier in this script throws "relation does not exist" on a fresh
+    -- DB and aborts every table after it (IF NOT EXISTS covers the column, not
+    -- the table).
+    ALTER TABLE td_user_prefs ADD COLUMN IF NOT EXISTS links JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     -- Traders Dashboard "Words from Bzila" owner note. Single global row (id=1),
     -- shown to every visitor of the Traders Dashboard page; only the owner can
@@ -759,6 +762,9 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       drivers    JSONB NOT NULL DEFAULT '[]'::jsonb,
       generated_at BIGINT NOT NULL
     );
+    -- Added after the table shipped. MUST stay after the CREATE above (see the
+    -- td_user_prefs note).
+    ALTER TABLE td_overview ADD COLUMN IF NOT EXISTS movers JSONB NOT NULL DEFAULT '[]'::jsonb;
 
     -- Pre-market AI 5-bullet read of the global overnight tape, written daily by
     -- the cron (premarket-summary-generator.js). bullets is a JSON array of
