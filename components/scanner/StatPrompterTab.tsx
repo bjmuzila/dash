@@ -1426,9 +1426,9 @@ export default function StatPrompterTab() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           gap: 16,
-          alignItems: "start",
+          alignItems: "stretch",
         }}
       >
       {list.map((p) => {
@@ -1438,7 +1438,13 @@ export default function StatPrompterTab() {
         for (const c of p.controls ?? []) s[c.id] = sel[`${p.id}.${c.id}`] ?? c.options[0].value;
         const res = isOpen && ctx ? p.run(ctx, s) : null;
         return (
-          <div key={p.id} style={{ ...classicCardAccentStyle, padding: 20 }} className="card-hover">
+          // Collapsed cards sit 2-up; an open card spans the full row so its
+          // result table has room instead of getting clipped in a half-width column.
+          <div
+            key={p.id}
+            style={{ ...classicCardAccentStyle, padding: 20, gridColumn: isOpen ? "1 / -1" : "auto" }}
+            className="card-hover"
+          >
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
