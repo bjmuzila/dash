@@ -2,6 +2,18 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Wednesday 7/15/2026
+
+* The ES candle chart is now a tab right on the main GEX chart on the home page — click **ES Candles** to swap the gamma bars for the live 5-minute chart, and click **GEX** to swap back. It's the full chart with its own toolbar, and it opens with the gamma bubbles already turned on.
+* ES Candles has moved off the bottom of the home page, out of the Economic Calendar row.
+* Added an optional **VSA** overlay to the ES candle chart that highlights candles where the effort and the result don't match — heavy volume that went nowhere (absorption), or a big move nobody showed up for (a run through thin liquidity). Flagged candles are drawn hollow so they stand out at a glance. Volume for each bar is compared against what's normal *for that time of day*, so the 9:30 open isn't judged against lunch. Five sliders let you tune how strict it is — start loose, then tighten until only the genuinely unusual bars get marked.
+
+## Wednesday 7/15/2026
+
+* The TPO Structures tab now labels today's profile in plain English — the levels the market left behind are outlined right on the chart, and hovering one tells you what it is and what it usually means ("Excess high — selling tail. Singles at the high, period closed back inside. Fade it.") instead of a colored tick mark you had to decode.
+* The "Open business" list now names each level the same way, so a rejection high and an unfinished high no longer look alike at a glance — they're opposite trades.
+* Added 5 / 10 / 30-session views to the TPO profile. The chart opens on today's profile centered on price, and the 30-session view also gives the historical hit rates a much deeper sample to work from.
+
 ## Tuesday 7/14/2026
 
 * Added a new **Stat Prompter** tab to the Scanner — a library of ready-made questions about how the opening-hour range behaves, answered on nine years of ES and NQ history with one click. Ask things like "ES broke the high but NQ broke the low — who's usually right?", "when a breakout fails, does it just chop or does it rotate all the way to the other side?", and "if we're still stuck inside the range at 2pm, which way does it break into the close?"

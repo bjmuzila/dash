@@ -501,6 +501,99 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
   };
 }
 
+// ── live contract quote for the tracked-results table ─────────────────────────
+
+/**
+ * The Tracked-results table shows the flagged OTM contract's own price and its
+ * % change since today's open, so the stats are readable without opening the
+ * per-row detail popup.
+ *
+ * price  = live NBBO mid from the greeks snapshot (same `mark` the strike-detail
+ *          popup uses — one call per (symbol, expiry) group, not per row).
+ * open   = today's open from the option EOD bar (one call per row).
+ * Rows whose expiry has already passed have no live contract → both null.
+ *
+ * Type convention matches computeOutcomeDetail: gex_value_at_flag >= 0 → call.
+ *
+ * Cached 60s per contract — /proxy/far-cb-outcomes is polled by every open
+ * scanner tab and Theta must not eat one call per row per poll.
+ */
+const QUOTE_TTL_MS = 60_000;
+const _quoteCache = new Map(); // `${symbol}|${expiry}|${strike}|${type}` -> { ts, price, open }
+
+async function computeOutcomeQuotes(rows) {
+  const today = etDateStr();
+  const live = rows.filter((r) => r.expiry >= today);
+  if (!live.length) return new Map();
+
+  const out = new Map();
+  const now = Date.now();
+  const stale = [];
+  for (const r of live) {
+    const type = Number(r.gex_value_at_flag) >= 0 ? 'C' : 'P';
+    const ck = `${r.symbol}|${r.expiry}|${Number(r.strike)}|${type}`;
+    const hit = _quoteCache.get(ck);
+    if (hit && now - hit.ts < QUOTE_TTL_MS) out.set(ck, hit);
+    else stale.push({ ...r, type, ck });
+  }
+  if (!stale.length) return out;
+
+  // One greeks snapshot per (symbol, expiry) covers every stale row in it.
+  const groups = new Map();
+  for (const r of stale) {
+    const gk = `${r.symbol}|${r.expiry}`;
+    if (!groups.has(gk)) groups.set(gk, []);
+    groups.get(gk).push(r);
+  }
+
+  for (const [gk, groupRows] of groups) {
+    const [symbol, expiry] = gk.split('|');
+    const greekMap = await fetchGreeksTheta(symbol, expiry).catch(() => new Map());
+    for (const r of groupRows) {
+      const mark = Number(greekMap.get(keyOf(expiry, Number(r.strike), r.type))?.mark ?? 0);
+      let open = null;
+      try {
+        // strike_range must be wide enough to keep a far-OTM strike inside
+        // Theta's ±range window around today's spot — reuse the flag distance.
+        const bars = await fetchOptionDailyHistoryTheta(
+          symbol, expiry, Number(r.strike), r.type, today, today,
+          Math.abs(Number(r.strike) - Number(r.spot_at_flag)) + 50
+        );
+        const o = Number(bars?.[0]?.open);
+        if (Number.isFinite(o) && o > 0) open = o;
+      } catch { /* no bar yet (pre-open, or no trade) → null */ }
+      const entry = { ts: Date.now(), price: mark > 0 ? mark : null, open };
+      _quoteCache.set(r.ck, entry);
+      out.set(r.ck, entry);
+      await sleep(120);
+    }
+  }
+  return out;
+}
+
+/** Attach opt_price / opt_open / opt_pct_open to outcome rows in place. */
+async function enrichOutcomesWithQuotes(rows) {
+  let quotes;
+  try { quotes = await computeOutcomeQuotes(rows); }
+  catch (e) {
+    console.warn('[far-cb] outcome quote enrich failed:', e.message);
+    return rows.map((r) => ({ ...r, opt_price: null, opt_open: null, opt_pct_open: null }));
+  }
+  return rows.map((r) => {
+    const type = Number(r.gex_value_at_flag) >= 0 ? 'C' : 'P';
+    const q = quotes.get(`${r.symbol}|${r.expiry}|${Number(r.strike)}|${type}`);
+    const price = q?.price ?? null;
+    const open = q?.open ?? null;
+    return {
+      ...r,
+      opt_type: type,
+      opt_price: price,
+      opt_open: open,
+      opt_pct_open: price != null && open != null && open > 0 ? ((price - open) / open) * 100 : null,
+    };
+  });
+}
+
 // ── scheduler ─────────────────────────────────────────────────────────────────
 
 let _timer = null;
@@ -554,6 +647,7 @@ module.exports = {
   getPool,
   scanTicker,
   computeOutcomeDetail,
+  enrichOutcomesWithQuotes,
   toYmd,
   OTM_THRESHOLD_PCT,
   MAX_DTE_DAYS,

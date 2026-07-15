@@ -625,6 +625,53 @@ async function fetchOptionDailyHistoryTheta(underlying, expiry, strike, type, st
     .sort((a, b) => a.time - b.time);
 }
 
+// Intraday OHLCV bars for ONE contract — powers the /flow tape's contract
+// drawer, where the fill being tracked is usually a print from TODAY. The daily
+// EOD series above collapses a session to a single close, which would make
+// since-fill peak/trough meaningless for a same-day whale print; this returns
+// per-interval bars so the drawer can find the real high/low since the fill.
+//
+// `intervalMs` is Theta's `interval` param (60000 = 1m, 300000 = 5m).
+// Returns [{ time(ms), open, high, low, close, volume }] ascending.
+//
+// NOTE: the v3 intraday-ohlc row shape is mapped defensively (ms_of_day + date,
+// falling back to a timestamp column) because this route is not yet exercised
+// anywhere else in the codebase — verify field keys against a live terminal.
+async function fetchOptionIntradayTheta(underlying, expiry, strike, type, date, intervalMs = 300000) {
+  const root = thetaRoot(underlying);
+  const right = type === 'C' ? 'C' : 'P';
+  const ymd = ymdCompact(date);
+  const json = await thetaGet(
+    `/v3/option/history/ohlc?symbol=${encodeURIComponent(root)}`
+    + `&expiration=${ymdCompact(expiry)}&strike=${toThetaStreamStrike(strike)}&right=${right}`
+    + `&start_date=${ymd}&end_date=${ymd}&interval=${Math.max(60000, Number(intervalMs) || 300000)}`,
+  );
+  const dayBase = ymd.length === 8
+    ? Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00.000-05:00`)
+    : NaN;
+  return rowsFromV3(json)
+    .map((r) => {
+      // Theta intraday rows carry ms_of_day alongside the date; some responses
+      // instead carry a full ISO timestamp. Accept either.
+      const msOfDay = Number(r.ms_of_day ?? r.msOfDay);
+      let time = Number.isFinite(msOfDay) && Number.isFinite(dayBase) ? dayBase + msOfDay : NaN;
+      if (!Number.isFinite(time)) {
+        const ts = Date.parse(String(r.timestamp ?? r.created ?? ''));
+        if (Number.isFinite(ts)) time = ts;
+      }
+      return {
+        time,
+        open: Number(r.open),
+        high: Number(r.high),
+        low: Number(r.low),
+        close: Number(r.close),
+        volume: Number(r.volume ?? r.count) || 0,
+      };
+    })
+    .filter((b) => Number.isFinite(b.time) && Number.isFinite(b.close) && b.close > 0)
+    .sort((a, b) => a.time - b.time);
+}
+
 // ---------------------------------------------------------------------------
 // Streaming symbology helpers
 // ---------------------------------------------------------------------------
@@ -1042,6 +1089,7 @@ module.exports = {
   fetchIndexDailyHistoryTheta,
   fetchStockDailyHistoryTheta,
   fetchOptionDailyHistoryTheta,
+  fetchOptionIntradayTheta,
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,

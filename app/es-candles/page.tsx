@@ -247,11 +247,14 @@ function buildTpoProfile(
 
 // Floor a ms timestamp to its 5-minute candle slot, returned as a UTC ms boundary
 // aligned to the candle grid (candles use raw ms flooring of /ES bars).
-// Snap snapshot timestamps to the chart's 5-minute candle grid. Snapshots
-// arrive every ~30s, but the candles are 5m — bucketing to 1m left each column
-// only a sliver wide (and gaps between candles) because timeToCoordinate only
-// resolves at candle times. 5m buckets align one column per candle, full width.
-const SLOT_MS = 300_000;
+// The chart's candle grid. timeToCoordinate ONLY resolves at these timestamps,
+// which is why sub-candle buckets used to vanish. Anything finer than this must
+// go through xAt() (see the draw), which interpolates within a bar.
+const CANDLE_MS = 300_000;
+// Heatmap column bucket. 1-min: snapshots arrive every ~30s, so each column is
+// the latest snapshot in that minute. Columns are ~barSpacing/5 px wide and are
+// carried forward to the next column's left edge, so the band stays continuous.
+const SLOT_MS = 60_000;
 function slotFloorMs(ts: number): number {
   return Math.floor(ts / SLOT_MS) * SLOT_MS;
 }
@@ -378,11 +381,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [gexMetric, setGexMetric] = useState<GexMetric>("voloi");
   const gexMetricRef = useRef<GexMetric>("voloi");
   gexMetricRef.current = gexMetric;
-  // Column history keyed by 5-min slot ms. One column per slot; latest slot is
-  // updated in place as fresh gex messages arrive within the same 5-min window.
+  // Column history keyed by SLOT_MS (1-min) slot ms. One column per slot; the
+  // latest slot is updated in place as fresh gex messages arrive within the
+  // same minute. Spans the full heatmapDays range (1D/5D).
   const columnsRef = useRef<Map<number, GexColumn>>(new Map());
-  // 1-minute resolution snapshots of the SAME per-strike cells (columnsRef is
-  // floored to 5-min heatmap slots — too coarse for the bubble trail).
+  // Same 1-min resolution as columnsRef, but TODAY only — the bubble trail is a
+  // session view and never backfills past days.
   const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
   const bubbleScaleRef = useRef(1);
   // NOTE: the effect that syncs this ref lives next to the bubbleScale useState
@@ -1666,13 +1670,28 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         console.table(table);
       }
 
+      // ms → screen px, INTERPOLATED INSIDE a candle. timeToCoordinate resolves
+      // only at candle timestamps (CANDLE_MS grid) and returns null everywhere
+      // else — that's why 1-min data only rendered every 5 minutes. Anchor on the
+      // containing candle, then offset by the sub-bar fraction × barSpacing.
+      const barSpacing = (() => {
+        try { return ts.options().barSpacing ?? 6; } catch { return 6; }
+      })();
+      const xAt = (tMs: number): number | null => {
+        const grid = Math.floor(tMs / CANDLE_MS) * CANDLE_MS;
+        const c0 = ts.timeToCoordinate((grid / 1000) as UTCTimestamp);
+        if (c0 == null) return null; // no candle there (gap / off-screen)
+        const frac = (tMs - grid) / CANDLE_MS;
+        return c0 + frac * barSpacing;
+      };
+
       // Slot → [leftX, width] in screen px. Null if the slot isn't on screen.
       const slotX = (slotTs: number): { left: number; w: number } | null => {
-        const x0 = ts.timeToCoordinate((slotTs / 1000) as UTCTimestamp);
-        const xEndRaw = ts.timeToCoordinate(((slotTs + SLOT_MS) / 1000) as UTCTimestamp);
+        const x0 = xAt(slotTs);
         if (x0 == null) return null;
-        const x1 = xEndRaw != null ? xEndRaw : x0 + 8;
-        return { left: Math.min(x0, x1), w: Math.max(2, Math.abs(x1 - x0)) };
+        const xEndRaw = xAt(slotTs + SLOT_MS);
+        const x1 = xEndRaw != null ? xEndRaw : x0 + barSpacing / (CANDLE_MS / SLOT_MS);
+        return { left: Math.min(x0, x1), w: Math.max(1, Math.abs(x1 - x0)) };
       };
 
       // ── 1) GEX heatmap cells ──
@@ -1819,7 +1838,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               const rMin = 0.8 * k; // floor so tiny strikes stay dots
               ctx.save();
               for (const m of mins) {
-                const x = ts.timeToCoordinate((m.slotTs / 1000) as UTCTimestamp);
+                // xAt, not timeToCoordinate: these are 1-min buckets and the
+                // chart grid is 5-min, so a raw lookup returned null for 4 of
+                // every 5 minutes and the trail only drew on candle boundaries.
+                const x = xAt(m.slotTs);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
                 // Rank THIS minute's strikes by |net GEX|. The top 3 are what the

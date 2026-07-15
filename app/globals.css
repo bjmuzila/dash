@@ -464,6 +464,8 @@ input.dte-range::-moz-range-track {
   }
   .flow-root .flow-filter-grid > div[style*="span 2"] { grid-column: span 2 !important; }
   .flow-root .flow-chip { min-height: 30px !important; }
+  /* Contract drawer (expanded whale row): chart over KPIs instead of beside. */
+  .contract-drawer-grid { grid-template-columns: 1fr !important; }
 
   /* ── /scanner: 8 big tab buttons → one dropdown. Overview cards → compact
      single-column list (they were near full-screen each). ── */

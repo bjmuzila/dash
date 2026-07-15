@@ -1377,6 +1377,12 @@ type OutcomeRow = {
   touched: boolean;
   touched_date: string | null;
   status: "open" | "touched" | "expired";
+  // The flagged OTM contract itself — live mid + % vs today's open, so the
+  // table carries the stats the row popup used to hide. Null once expired.
+  opt_type?: "C" | "P" | null;
+  opt_price?: number | null;
+  opt_open?: number | null;
+  opt_pct_open?: number | null;
 };
 
 type OutcomeDetailDay = {
@@ -1611,7 +1617,7 @@ function WatchThisScanner() {
             ))}
           </div>
           <span style={{ fontSize: 15, color: HOME_THEME.text }}>
-            Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike
+            Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract&apos;s NBBO mid, % since its own open (live rows only)
           </span>
         </div>
 
@@ -1623,6 +1629,8 @@ function WatchThisScanner() {
                 <th style={th}>Strike</th>
                 <th style={{ ...th, textAlign: "left" }}>Expiry</th>
                 <th style={{ ...th, textAlign: "left" }}>Flagged</th>
+                <th style={th}>Opt Price</th>
+                <th style={th}>% Since Open</th>
                 <th style={th}>Flagged Spot</th>
                 <th style={th}>OTM at flag</th>
                 <th style={th}>Closest</th>
@@ -1643,6 +1651,19 @@ function WatchThisScanner() {
                   <td style={{ ...td, fontWeight: 700, color: o.side === "above" ? HOME_THEME.green : HOME_THEME.red }}>${o.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.expiry}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.first_flagged}</td>
+                  <td style={{ ...td, fontWeight: 700, color: o.opt_price != null ? LIGHT_BLUE : HOME_THEME.text }}>
+                    {o.opt_price != null
+                      ? `$${o.opt_price.toFixed(2)}${o.opt_type ? ` ${o.opt_type}` : ""}`
+                      : "—"}
+                  </td>
+                  <td style={{
+                    ...td, fontWeight: 700,
+                    color: o.opt_pct_open == null ? HOME_THEME.text : o.opt_pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red,
+                  }}>
+                    {o.opt_pct_open == null
+                      ? "—"
+                      : `${o.opt_pct_open >= 0 ? "▲" : "▼"} ${Math.abs(o.opt_pct_open).toFixed(1)}%`}
+                  </td>
                   <td style={td}>${o.spot_at_flag.toFixed(2)}</td>
                   <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
                   <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
@@ -1659,7 +1680,7 @@ function WatchThisScanner() {
                 </tr>
               ))}
               {!outcomes.length && (
-                <tr><td colSpan={8} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
+                <tr><td colSpan={10} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
                 </td></tr>
               )}

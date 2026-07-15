@@ -35,14 +35,15 @@ const marketState = require('./state/market-state');
 const { getFlowGexHistoryWindow } = require('./state/flow-gex-history');
 const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = require('./state/ticker-wall-recorder');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
-const { TastytradeProxy, probeRest, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
+const { fetchOptionDailyHistoryTheta, fetchOptionIntradayTheta } = require('./proxy-thetadata');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
-const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
+const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
 const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, getLatestFit: getRegimeLatestFit, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
@@ -1497,7 +1498,10 @@ async function main() {
               touched_date: farCbToYmd(r.touched_date),
               last_checked: farCbToYmd(r.last_checked),
             }));
-            sendJson(res, 200, { ok: true, rows: fmtRows, asOf: new Date().toISOString() });
+            // Attach the flagged contract's live price + % since today's open so
+            // the Tracked-results table shows it without opening the row popup.
+            const quoted = await farCbEnrichOutcomes(fmtRows);
+            sendJson(res, 200, { ok: true, rows: quoted, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;
@@ -1813,6 +1817,80 @@ async function main() {
           sendJson(res, 200, { ...probe, ticker, expiry, elapsedMs: Date.now() - t0 });
         } catch (e) {
           sendJson(res, 502, { error: String(e?.message || e), ticker, expiry, source: 'rest', elapsedMs: Date.now() - t0 });
+        }
+        return;
+      }
+      // Batched per-contract Vol / OI / IV for the /flow tape columns. The tape
+      // has hundreds of rows but only a handful of distinct expiries, so this
+      // takes GROUPS (ticker:expiry) rather than contracts and returns every
+      // strike|type in each group for the client to join against.
+      // GET /proxy/contract-stats?groups=SPX:2026-07-24,NVDA:2026-08-15
+      if (pathname === '/proxy/contract-stats' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const raw = url.searchParams.get('groups') || '';
+        const groups = raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((s) => {
+            const [ticker, expiry] = s.split(':');
+            return { ticker, expiry };
+          });
+        if (!groups.length) {
+          sendJson(res, 400, { error: 'groups required, e.g. groups=SPX:2026-07-24' });
+          return;
+        }
+        const t0 = Date.now();
+        try {
+          const out = await contractStats(groups);
+          sendJson(res, 200, { ...out, elapsedMs: Date.now() - t0 });
+        } catch (e) {
+          sendJson(res, 502, { error: String(e?.message || e), elapsedMs: Date.now() - t0 });
+        }
+        return;
+      }
+      // Price history for ONE contract — feeds the /flow tape's contract drawer
+      // chart. `tf=1d` returns intraday bars for one session (whale prints are
+      // usually same-day, so since-fill peak/trough needs intraday granularity);
+      // `tf=30d|90d` returns daily EOD closes.
+      // GET /proxy/option-history?ticker=SPX&expiry=2026-07-24&strike=6400&type=C&tf=1d
+      if (pathname === '/proxy/option-history' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const ticker = (url.searchParams.get('ticker') || '').toUpperCase();
+        const expiry = url.searchParams.get('expiry') || '';
+        const type = (url.searchParams.get('type') || 'C').toUpperCase() === 'P' ? 'P' : 'C';
+        const strike = Number(url.searchParams.get('strike'));
+        const tf = (url.searchParams.get('tf') || '90d').toLowerCase();
+        const t0 = Date.now();
+        if (!ticker || !expiry || !(strike > 0)) {
+          sendJson(res, 400, { error: 'ticker, expiry and strike required' });
+          return;
+        }
+        try {
+          if (tf === '1d') {
+            const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+            const bars = await fetchOptionIntradayTheta(ticker, expiry, strike, type, date, 300000);
+            sendJson(res, 200, { bars, tf, interval: '5m', elapsedMs: Date.now() - t0 });
+          } else {
+            const days = tf === '30d' ? 30 : 90;
+            const end = new Date();
+            const start = new Date(end.getTime() - days * 86_400_000);
+            // strike_range must be wide enough to keep the strike inside Theta's
+            // ±range-around-spot window on every day in the range — the strike
+            // may have been far OTM when the range starts.
+            const spot = await fetchUnderlyingQuotes([ticker])
+              .then((m) => Number(m.get(ticker)?.last || m.get(ticker)?.mark) || 0)
+              .catch(() => 0);
+            const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
+            const bars = await fetchOptionDailyHistoryTheta(
+              ticker, expiry, strike, type,
+              start.toISOString().slice(0, 10), end.toISOString().slice(0, 10),
+              cushion,
+            );
+            sendJson(res, 200, { bars, tf, interval: '1d', elapsedMs: Date.now() - t0 });
+          }
+        } catch (e) {
+          sendJson(res, 502, { error: String(e?.message || e), elapsedMs: Date.now() - t0 });
         }
         return;
       }

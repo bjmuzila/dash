@@ -739,6 +739,105 @@ async function probeRest({ ticker, expiry, type, strike }) {
 }
 
 // ---------------------------------------------------------------------------
+// Batched per-contract stats for the /flow tape's Vol / OI / IV columns.
+//
+// probeRest() is the single-contract path: it pulls the whole OI + greeks + vol
+// snapshot for an expiry just to read ONE strike out of it. The tape needs the
+// same three numbers for hundreds of rows at once, so calling probeRest per row
+// would re-pull the same expiry snapshot hundreds of times.
+//
+// Instead we group by (root, expiry) — the natural unit of a Theta snapshot —
+// pull each group's three maps ONCE, and return every strike|type in it. The
+// caller then joins client-side. One tape render = one call per distinct expiry,
+// not one per print.
+//
+// Snapshots are cached for CONTRACT_STATS_TTL_MS so a 15s client poll across
+// several expiries doesn't hammer Theta; in-flight promises are shared so a
+// burst of concurrent requests collapses into one upstream fetch per group.
+// ---------------------------------------------------------------------------
+
+const CONTRACT_STATS_TTL_MS = 20_000;
+const CONTRACT_STATS_MAX_GROUPS = 16; // guard: one request can't fan out forever
+
+const _statsCache = new Map();    // `${root}|${expiry}` -> { at, byKey }
+const _statsInFlight = new Map(); // `${root}|${expiry}` -> Promise<byKey>
+
+async function _statsForGroup(root, expiry) {
+  const key = `${root}|${expiry}`;
+  const hit = _statsCache.get(key);
+  if (hit && Date.now() - hit.at < CONTRACT_STATS_TTL_MS) return hit.byKey;
+
+  const inFlight = _statsInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const p = (async () => {
+    const [oiMap, greekMap, volMap] = await Promise.all([
+      thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
+      thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
+      thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
+    ]);
+
+    // Union the three maps' keys: a contract can have volume but no greeks yet
+    // (pre-open), or OI but no trades today. Missing legs stay null rather than
+    // 0 so the UI can render "—" instead of a misleading zero.
+    const byKey = {};
+    const keys = new Set([...oiMap.keys(), ...greekMap.keys(), ...volMap.keys()]);
+    for (const k of keys) {
+      // Theta keys are `exp|strike|type` — same shape _probeKeyOf builds.
+      const [, strike, type] = String(k).split('|');
+      const g = greekMap.get(k) || {};
+      const oi = oiMap.get(k)?.oi;
+      const vol = volMap.get(k);
+      byKey[`${strike}|${type}`] = {
+        vol: Number.isFinite(vol) ? vol : null,
+        oi: Number.isFinite(oi) ? oi : null,
+        // Theta reports IV as a decimal (0.184). Keep it decimal here; the UI
+        // owns the ×100 so the API stays unit-consistent with greeks.
+        iv: Number.isFinite(g.iv) && g.iv > 0 ? g.iv : null,
+        mark: Number.isFinite(g.mark) && g.mark > 0 ? g.mark : null,
+      };
+    }
+    _statsCache.set(key, { at: Date.now(), byKey });
+    return byKey;
+  })().finally(() => _statsInFlight.delete(key));
+
+  _statsInFlight.set(key, p);
+  return p;
+}
+
+/**
+ * Batched contract stats.
+ * @param {Array<{ticker:string, expiry:string}>} groups
+ * @returns {Promise<Object>} { "ROOT|EXPIRY": { "strike|type": {vol,oi,iv,mark} } }
+ */
+async function contractStats(groups) {
+  // Normalize + dedupe: the tape sends one group per visible row, and most rows
+  // share an expiry. chainTicker() folds SPXW -> SPX so streamer roots and chip
+  // tickers collapse onto the same snapshot.
+  const seen = new Map();
+  for (const g of groups || []) {
+    const root = chainTicker(String(g?.ticker || '').toUpperCase());
+    const expiry = String(g?.expiry || '');
+    if (!root || !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) continue;
+    seen.set(`${root}|${expiry}`, { root, expiry });
+  }
+  const wanted = [...seen.values()].slice(0, CONTRACT_STATS_MAX_GROUPS);
+
+  const out = {};
+  await Promise.all(
+    wanted.map(async ({ root, expiry }) => {
+      // allSettled semantics per group: one bad expiry must not blank the tape.
+      try {
+        out[`${root}|${expiry}`] = await _statsForGroup(root, expiry);
+      } catch {
+        out[`${root}|${expiry}`] = {};
+      }
+    }),
+  );
+  return { stats: out, groups: wanted.length, truncated: seen.size > wanted.length };
+}
+
+// ---------------------------------------------------------------------------
 // Full nested chain for the React pages (/api/chains, /api/expirations)
 // The options-chain and mult-greek pages expect the legacy nested shape:
 //   { data: { items: [{ "expiration-date", strikes: [{ "strike-price",
@@ -3391,4 +3490,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory, probeRest, getAccessToken, getQuoteToken, DxLinkClient, resolveFrontEsSymbol, resolveFrontNqSymbol };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory, probeRest, contractStats, getAccessToken, getQuoteToken, DxLinkClient, resolveFrontEsSymbol, resolveFrontNqSymbol };

@@ -24,9 +24,15 @@ import { HOME_THEME, homeInputStyle, DOCK_THEME } from "@/components/shared/home
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useContractStats, useLiveSpots } from "@/hooks/useContractStats";
+import ContractDrawer from "@/components/dashboard/ContractDrawer";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 
 const C = HOME_THEME;
+
+// Premium at or above which a print is a "whale": rendered bold, and the only
+// rows that expand into a ContractDrawer. Matches the Big-OTM preset's floor.
+const WHALE_FLOOR = 500_000;
 const BUY_GREEN = "#22c55e";
 const BULLISH = BUY_GREEN; // calls / buys
 const BEARISH = C.red; //     puts / sells
@@ -57,6 +63,16 @@ function fmtTime(ts: number): string {
 function fmtSpot(spot: number | undefined): string {
   if (!spot) return "—";
   return spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Vol / OI cells. null means "the chain snapshot hasn't produced this contract
+// yet" (pre-open, or a strike outside the snapshot) — render "—" rather than 0,
+// which would read as a real "no interest here".
+function fmtStat(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 10_000) return `${(v / 1_000).toFixed(1)}K`;
+  return v.toLocaleString();
 }
 
 // Cost to buy ONE contract (option price × 100 shares) — distinct from the
@@ -448,6 +464,24 @@ export default function FlowPage() {
   const MAX_TAPE_ROWS = 800;
   const visibleRows = tapeRows.slice(0, MAX_TAPE_ROWS);
 
+  // ── Live per-contract Vol / OI / IV for the tape columns. Driven by the
+  // VISIBLE rows only: the fetch is grouped by (ticker, expiry), so this is a
+  // few calls regardless of how many prints are on screen. ──
+  const lookupStat = useContractStats(visibleRows, shouldConnect);
+
+  // Live underlying spot per ticker for % OTM. FlowOrder.spot is frozen at print
+  // time, so a strike that has since gone ITM would still read as OTM without
+  // this. Only fetches the tickers actually on screen.
+  const visibleTickers = useMemo(
+    () => [...new Set(visibleRows.map((o) => normTicker(o.underlying)).filter(Boolean))],
+    [visibleRows],
+  );
+  const spotByTicker = useLiveSpots(visibleTickers, shouldConnect);
+
+  // ── Expanded whale row (variant D: expands in place, no modal). Keyed by the
+  // same identity the row key uses so it survives a tape refresh. ──
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
   // ── Net Premium (Net Drift) series for the active ticker. ──
   // Cumulative signed premium: buy = +, sell = −. One point per minute (last
   // cumulative value in that bin) to satisfy lightweight-charts' unique/
@@ -698,9 +732,10 @@ export default function FlowPage() {
     };
   }
 
-  const GRID = "78px 56px 90px 74px 80px 90px 80px 100px 90px 74px";
+  // Columns: Time Side Strike Spot Type Size Cost/Ctr Premium | Vol OI IV %OTM DTE | Expiry Bias
+  const GRID = "78px 56px 84px 72px 46px 74px 88px 96px 74px 68px 58px 66px 44px 88px 74px";
   // Combined tape adds a leading Ticker column.
-  const GRID_COMBINED = "64px 78px 56px 90px 74px 80px 90px 80px 100px 90px 74px";
+  const GRID_COMBINED = `64px ${GRID}`;
 
   // Premium split — four cards: buy/sell × call/put, colored & heat-barred by
   // directional bias (buy calls / sell puts = bullish). Shared by both views.
@@ -1057,6 +1092,8 @@ export default function FlowPage() {
           </span>
         </div>
 
+        <div style={{ overflowX: "auto" }}>
+        <div style={{ minWidth: view === "combined" ? 1180 : 1116 }}>
         <div style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
           {view === "combined" && <span>Ticker</span>}
           <span>Time</span>
@@ -1067,6 +1104,11 @@ export default function FlowPage() {
           <span style={{ textAlign: "right" }}>Size</span>
           <span style={{ textAlign: "right" }} title="Cost of one contract (price × 100)">Cost/Ctr</span>
           <span style={{ textAlign: "right" }}>Premium</span>
+          <span style={{ textAlign: "right" }} title="Contract's traded volume TODAY (live, not at print time)">Vol</span>
+          <span style={{ textAlign: "right" }} title="Contract's current open interest">OI</span>
+          <span style={{ textAlign: "right" }} title="Current implied volatility">IV</span>
+          <span style={{ textAlign: "right" }} title="Strike vs LIVE underlying spot. + = OTM, − = now ITM">% OTM</span>
+          <span style={{ textAlign: "right" }} title="Calendar days to expiration">DTE</span>
           <span style={{ textAlign: "right" }}>Expiry</span>
           <span style={{ textAlign: "center" }}>Bias</span>
         </div>
@@ -1081,24 +1123,88 @@ export default function FlowPage() {
               const sideColor = o.side === "buy" ? BULLISH : BEARISH;
               const bull = isBullish(o.side, o.type);
               const biasColor = bull ? BULLISH : BEARISH;
+              const ticker = normTicker(o.underlying);
+              // React key may use the index, but the EXPANDED key must not: the
+              // tape re-sorts on every refresh, and an index-keyed drawer would
+              // silently re-point at whatever print landed in that slot.
+              // `ts|symbol|side` is the same identity the merge dedupes on.
+              const rowKey = `${o.ts}-${o.symbol}-${i}`;
+              const identity = `${o.ts}|${o.symbol}|${o.side}`;
+
+              // Whale = a print big enough to be worth inspecting. Only these get
+              // bold premium and the click-to-expand drawer; making every row
+              // expandable would invite a chain fetch for $50K noise.
+              const whale = Number(o.premium || 0) >= WHALE_FLOOR;
+              const open = expandedKey === identity;
+
+              const stat = lookupStat(o);
+              const d = dteOf(o);
+              // Live moneyness: + = still OTM, − = has gone ITM since the print.
+              const liveSpot = spotByTicker[ticker] ?? o.spot ?? 0;
+              const otmPct = liveSpot > 0 && o.strike
+                ? ((o.type === "C" ? o.strike - liveSpot : liveSpot - o.strike) / liveSpot) * 100
+                : null;
+
               return (
-                <div key={`${o.ts}-${o.symbol}-${i}`} style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center" }}>
-                  {view === "combined" && <span style={{ color: C.cyan, fontWeight: 700 }}>{normTicker(o.underlying)}</span>}
-                  <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
-                  <span style={{ color: sideColor, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
-                  <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
-                  <span style={{ textAlign: "right", color: C.muted }}>{fmtSpot(o.spot)}</span>
-                  <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
-                  <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
-                    {o.size.toLocaleString()}
-                    {o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 11 }}> ×{o.fills}</span> : null}
-                  </span>
-                  <span style={{ textAlign: "right", color: C.text }}>{fmtContractCost(o.price)}</span>
-                  <span style={{ textAlign: "right", color: sideColor, fontWeight: 700 }}>{fmtPremium(o.premium)}</span>
-                  <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
-                  <span style={{ textAlign: "center", fontWeight: 800, fontSize: 15, color: biasColor }}>
-                    {bull ? "▲ BULL" : "▼ BEAR"}
-                  </span>
+                <div key={rowKey}>
+                  <div
+                    onClick={whale ? () => setExpandedKey(open ? null : identity) : undefined}
+                    role={whale ? "button" : undefined}
+                    tabIndex={whale ? 0 : undefined}
+                    onKeyDown={whale ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedKey(open ? null : identity); }
+                    } : undefined}
+                    title={whale ? "Click to expand contract detail" : undefined}
+                    style={{
+                      display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID,
+                      gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`,
+                      fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center",
+                      cursor: whale ? "pointer" : "default",
+                      background: open ? "rgba(33,158,188,0.10)" : "transparent",
+                      outline: open ? `1px solid rgba(33,158,188,0.4)` : "none",
+                    }}
+                  >
+                    {view === "combined" && <span style={{ color: C.cyan, fontWeight: 700 }}>{ticker}</span>}
+                    <span style={{ color: C.muted }}>{fmtTime(o.ts)}</span>
+                    <span style={{ color: sideColor, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
+                    <span style={{ textAlign: "right", color: C.text }}>{o.strike.toLocaleString()}</span>
+                    <span style={{ textAlign: "right", color: C.muted }}>{fmtSpot(o.spot)}</span>
+                    <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
+                    <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
+                      {o.size.toLocaleString()}
+                      {o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 11 }}> ×{o.fills}</span> : null}
+                    </span>
+                    <span style={{ textAlign: "right", color: C.text }}>{fmtContractCost(o.price)}</span>
+                    {/* Whale premium reads bold — the one column you scan for. */}
+                    <span style={{ textAlign: "right", color: sideColor, fontWeight: whale ? 900 : 700, fontSize: whale ? 16 : 15 }}>
+                      {whale ? "▸ " : ""}{fmtPremium(o.premium)}
+                    </span>
+                    <span style={{ textAlign: "right", color: C.text }}>{fmtStat(stat?.vol)}</span>
+                    <span style={{ textAlign: "right", color: C.muted }}>{fmtStat(stat?.oi)}</span>
+                    <span style={{ textAlign: "right", color: C.text }}>
+                      {stat?.iv != null ? `${(stat.iv * 100).toFixed(1)}%` : "—"}
+                    </span>
+                    <span
+                      style={{ textAlign: "right", fontWeight: 700, color: otmPct == null ? C.muted : otmPct >= 0 ? C.cyan : BEARISH }}
+                      title={liveSpot > 0 ? `Strike ${o.strike} vs live spot ${liveSpot.toFixed(2)} — ${otmPct != null && otmPct < 0 ? "now ITM" : "OTM"}` : "No live spot yet"}
+                    >
+                      {otmPct == null ? "—" : `${otmPct.toFixed(1)}%`}
+                    </span>
+                    <span style={{ textAlign: "right", color: C.muted }}>{d == null ? "—" : `${d}d`}</span>
+                    <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
+                    <span style={{ textAlign: "center", fontWeight: 800, fontSize: 15, color: biasColor }}>
+                      {bull ? "▲ BULL" : "▼ BEAR"}
+                    </span>
+                  </div>
+                  {open && (
+                    <ContractDrawer
+                      order={o}
+                      ticker={ticker}
+                      stat={stat}
+                      liveSpot={liveSpot}
+                      onClose={() => setExpandedKey(null)}
+                    />
+                  )}
                 </div>
               );
             })
@@ -1108,6 +1214,8 @@ export default function FlowPage() {
               Showing newest {MAX_TAPE_ROWS.toLocaleString()} of {tapeRows.length.toLocaleString()} — tighten filters to narrow.
             </p>
           )}
+        </div>
+        </div>
         </div>
       </Card>
       )}

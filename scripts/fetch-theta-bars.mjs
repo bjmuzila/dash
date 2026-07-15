@@ -89,10 +89,16 @@ let everConnected = false;
 
 async function get(q, attempt = 0) {
   const url = `${BASE}${q}${q.includes("?") ? "&" : "?"}format=json`;
-  let res;
+  let res, text;
   try {
     res = await fetch(url, { headers: { Accept: "application/json" } });
     everConnected = true;
+    // MUST stay inside the try. fetch() resolves as soon as HEADERS arrive; the
+    // body streams afterwards, and that's the phase an SSH tunnel actually dies
+    // in on a long pull. undici throws a bare "terminated" from res.text() — when
+    // this line sat outside the catch it bypassed the retry below entirely and
+    // killed an 11-year NVDA pull at 2019 with no retry attempted.
+    text = await res.text();
   } catch (e) {
     // fetch() throws a bare "fetch failed" on connection errors — the real cause
     // is nested in e.cause and node hides it by default.
@@ -102,7 +108,10 @@ async function get(q, attempt = 0) {
     // misconfiguration — retry it. Only claim "tunnel is down" if we never
     // connected at all; otherwise the advice is actively misleading (you'd go
     // check a tunnel that's working fine).
-    const transient = /UND_ERR_SOCKET|ECONNRESET|EPIPE|ETIMEDOUT|other side closed/i.test(String(cause));
+    // "terminated" = undici's body-stream abort (see res.text() above). It is the
+    // single most common failure on a multi-year tunnelled pull, and it was NOT
+    // in this list — so it fell straight through to the fatal throw.
+    const transient = /UND_ERR_SOCKET|ECONNRESET|EPIPE|ETIMEDOUT|other side closed|terminated/i.test(String(cause));
     if (transient && attempt < 5) {
       const wait = 1000 * 2 ** attempt;
       process.stderr.write(`\n    ${cause} — retry ${attempt + 1}/5 in ${wait / 1000}s `);

@@ -68,7 +68,10 @@ export default function EsCandlesFullPanel() {
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const priceLinesRef = useRef<IPriceLine[]>([]);
+  // Keyed by title so a level can be UPDATED in place (applyOptions) instead of
+  // destroyed + recreated — recreating relays out the price axis and nudged the
+  // whole chart on every frame.
+  const priceLinesRef = useRef<Map<string, IPriceLine>>(new Map());
   const didFitRef = useRef(false);
   const lastFitDayRef = useRef("");
 
@@ -195,6 +198,10 @@ export default function EsCandlesFullPanel() {
       chart.remove();
       chartApiRef.current = null;
       candleSeriesRef.current = null;
+      // chart.remove() destroys the series and every price line with it. Drop the
+      // handles too — otherwise a remount would applyOptions() onto dead lines and
+      // never re-create them.
+      priceLinesRef.current.clear();
       didFitRef.current = false;
     };
   }, []);
@@ -324,36 +331,80 @@ export default function EsCandlesFullPanel() {
     };
   }, [esShouldConnect]);
 
+  // ── Price-line values: ES-tick quantized, republished at most once a minute ──
+  // `levels` gets a NEW object identity on every /ws/gex frame because spx/esFut
+  // tick continuously — even when the walls and flip haven't moved. That churned
+  // the price lines (and the axis labels, which resize the price scale → the plot
+  // width shifts → the chart visibly nudges). These levels don't move fast enough
+  // to justify sub-minute updates, so: snap to 0.25 (the ES tick — a level between
+  // ticks isn't tradeable anyway), recompute on a 1-min cadence, and only publish
+  // when a quantized value actually CHANGED.
+  const ES_TICK = 0.25;
+  const toTick = (v: number) => Math.round(v / ES_TICK) * ES_TICK;
+
+  const [lineLevels, setLineLevels] = useState<{ callWall: number | null; putWall: number | null; gexFlip: number | null }>(
+    { callWall: null, putWall: null, gexFlip: null }
+  );
+  const levelsRef = useRef(levels);
+  useEffect(() => { levelsRef.current = levels; }, [levels]);
+
+  // Flips false→true exactly once, when the first real level lands — that
+  // re-runs the effect below so the lines paint immediately instead of waiting
+  // out the first 60s interval.
+  const hasLevels = levels.callWall != null || levels.putWall != null || levels.gexFlip != null;
+
+  useEffect(() => {
+    const publish = () => {
+      const l = levelsRef.current;
+      const b = effectiveBasis();
+      const es = (spxLevel: number | null) => (spxLevel != null ? toTick(spxLevel + b) : null);
+      const next = { callWall: es(l.callWall), putWall: es(l.putWall), gexFlip: es(l.gexFlip) };
+      // Identity-stable when nothing moved → the draw effect doesn't re-fire.
+      setLineLevels((prev) =>
+        prev.callWall === next.callWall && prev.putWall === next.putWall && prev.gexFlip === next.gexFlip
+          ? prev
+          : next
+      );
+    };
+    publish();
+    const id = setInterval(publish, 60_000);
+    return () => clearInterval(id);
+  }, [effectiveBasis, hasLevels]);
+
   // ── Draw GEX level price lines (Call Wall / Put Wall / Flip) ────────────
+  // Update in place; only create/remove when a level appears or disappears.
   useEffect(() => {
     const series = candleSeriesRef.current;
     if (!series) return;
 
-    for (const pl of priceLinesRef.current) { try { series.removePriceLine(pl); } catch {} }
-    priceLinesRef.current = [];
-
-    const basis = effectiveBasis();
-    const toEs = (spxLevel: number | null) => (spxLevel != null ? spxLevel + basis : null);
-
     const defs: Array<{ price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [
-      { price: toEs(levels.callWall), color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
-      { price: toEs(levels.putWall), color: "#ff5b5b", title: "Put Wall", style: LineStyle.Dashed, width: 1 },
-      { price: toEs(levels.gexFlip), color: "#f5c518", title: "Flip", style: LineStyle.Dashed, width: 1 },
+      { price: lineLevels.callWall, color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
+      { price: lineLevels.putWall, color: "#ff5b5b", title: "Put Wall", style: LineStyle.Dashed, width: 1 },
+      { price: lineLevels.gexFlip, color: "#f5c518", title: "Flip", style: LineStyle.Dashed, width: 1 },
     ];
 
+    const lines = priceLinesRef.current;
     for (const d of defs) {
-      if (d.price == null || !(d.price > 0)) continue;
-      const pl = series.createPriceLine({
-        price: d.price,
+      const live = d.price != null && d.price > 0;
+      const existing = lines.get(d.title);
+      if (!live) {
+        if (existing) { try { series.removePriceLine(existing); } catch {} lines.delete(d.title); }
+        continue;
+      }
+      if (existing) {
+        try { existing.applyOptions({ price: d.price as number }); } catch {}
+        continue;
+      }
+      lines.set(d.title, series.createPriceLine({
+        price: d.price as number,
         color: d.color,
         lineWidth: d.width,
         lineStyle: d.style,
         axisLabelVisible: true,
         title: d.title,
-      });
-      priceLinesRef.current.push(pl);
+      }));
     }
-  }, [levels, effectiveBasis]);
+  }, [lineLevels]);
 
   // ── Heatmap history backfill (front/current expiry, 1 day) ────────────────
   // Seeded once the live feed reports its front expiry. Uses anyExpiry=1 so the

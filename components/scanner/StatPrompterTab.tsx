@@ -199,6 +199,59 @@ const PROMPTS: Prompt[] = [
     },
   },
   {
+    id: "nq-leads-does-es-follow",
+    cat: "Cross-index",
+    title: "NQ breaks IB high FIRST — does ES follow?",
+    ask: "Mirror of the above with NQ as the leader. Population is every NQ IB-high break; cohorts are what ES did. Grades NQ's own break quality, so the 'ES never broke' cohort still has numbers. Tells you whether NQ leading is a reason to buy ES, or whether NQ just runs alone.",
+    run: ({ paired }) => {
+      const pop = paired.filter(({ n }) => side(n) === "H");
+      const coh = {
+        "ES followed (NQ led)": pop.filter(({ e, n }) => side(e) === "H" && e.fcb!.breakMin > n.fcb!.breakMin),
+        "ES broke first": pop.filter(({ e, n }) => side(e) === "H" && e.fcb!.breakMin <= n.fcb!.breakMin),
+        "ES DIVERGED (broke low)": pop.filter(({ e }) => side(e) === "L"),
+        "ES never broke": pop.filter(({ e }) => side(e) == null),
+      };
+      const rows: Row[] = Object.entries(coh).map(([label, xs]) => ({
+        label,
+        n: xs.length,
+        k: xs.filter(({ n }) => n.fcb!.hit["1"]).length,
+        extra: {
+          "of all": pctS(xs.length, pop.length),
+          "med ES lag": (() => {
+            const l = med(xs.filter(({ e }) => side(e) === "H").map(({ e, n }) => e.fcb!.breakMin - n.fcb!.breakMin));
+            return l == null ? "—" : `${l.toFixed(0)}m`;
+          })(),
+          failed: pctS(xs.filter(({ n }) => n.fcb!.failed).length, xs.length),
+          "→ mid": pctS(xs.filter(({ n }) => n.fcb!.fadeMid).length, xs.length),
+          "→ IB low": pctS(xs.filter(({ n }) => n.fcb!.fadeOpp).length, xs.length),
+          "med ext": (med(xs.map(({ n }) => n.fcb!.rExt)) ?? 0).toFixed(2),
+          "ES closed top25": pctS(xs.filter(({ e }) => e.closeZone === "top25").length, xs.length),
+        },
+        emphasis: label.startsWith("ES followed"),
+      }));
+      const led = coh["ES followed (NQ led)"];
+      const alone = [...coh["ES DIVERGED (broke low)"], ...coh["ES never broke"]];
+      const ledHit = led.filter(({ n }) => n.fcb!.hit["1"]).length;
+      const aloneHit = alone.filter(({ n }) => n.fcb!.hit["1"]).length;
+      const delta = (100 * ledHit) / (led.length || 1) - (100 * aloneHit) / (alone.length || 1);
+      const esTop = led.filter(({ e }) => e.closeZone === "top25").length;
+      return {
+        headline: `${pop.length} NQ IB-high breaks. "hit" column = NQ reached 1.0× the IB width.`,
+        cols: ["of all", "med ES lag", "failed", "→ mid", "→ IB low", "med ext", "ES closed top25"],
+        rows,
+        verdict:
+          led.length < 30
+            ? `NQ-led cohort n=${led.length} — too thin to trade off.`
+            : `NQ leads and ES follows ${pctS(led.length, pop.length)} of the time (median lag ${
+                med(led.map(({ e, n }) => e.fcb!.breakMin - n.fcb!.breakMin))?.toFixed(0) ?? "—"
+              }m). NQ hits 1× ${pctS(ledHit, led.length)} when ES follows vs ${pctS(
+                aloneHit,
+                alone.length,
+              )} when it runs alone — ${delta.toFixed(1)} pts. ES closed top25 in ${pctS(esTop, led.length)} of NQ-led days.`,
+      };
+    },
+  },
+  {
     id: "diverge-mix",
     cat: "Cross-index",
     title: "How often do ES and NQ break OPPOSITE sides?",
