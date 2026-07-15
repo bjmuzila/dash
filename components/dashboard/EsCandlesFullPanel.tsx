@@ -2,7 +2,8 @@
 
 // EsCandlesFullPanel — the "exact chart" from the full /es-candles page,
 // self-contained for the HOME2 dashboard tab grid: live ES 5m candlesticks
-// PLUS the GEX overlay (Call Wall / Put Wall / Gamma Flip price lines), the
+// PLUS the GEX overlay (Call Wall / Put Wall from the live feed; Gamma Flip and
+// CB from the mvc_snapshots recorder — see snapLevels), the
 // GEX heatmap behind the candles, and the vertical GEX-by-strike rail, fed by
 // the same useEsCandles hook + the same /ws/gex level stream the full page
 // uses. No toolbar / Dock / nav chrome, and no TPO/volume-profile/session-H-L
@@ -17,7 +18,8 @@ import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } f
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
-import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
+// findGEXFlip is intentionally NOT imported: the flip is no longer recomputed
+// from live gexRows on this panel — it (and CB) come from the CB snapshot below.
 import { HOME_THEME } from "@/components/shared/homeTheme";
 
 function toChartTime(ts: number): UTCTimestamp {
@@ -87,14 +89,23 @@ export default function EsCandlesFullPanel() {
   const [feedExpiry, setFeedExpiry] = useState(""); // live front expiry → drives backfill
 
   // GEX levels + basis, mirrors app/es-candles/page.tsx `levels` state.
+  // Walls only — the flip and CB come from the snapshot (see snapLevels).
   const [levels, setLevels] = useState<{
     callWall: number | null;
     putWall: number | null;
-    gexFlip: number | null;
     spx: number | null;
     esFut: number | null;
     basis: number | null;
-  }>({ callWall: null, putWall: null, gexFlip: null, spx: null, esFut: null, basis: null });
+  }>({ callWall: null, putWall: null, spx: null, esFut: null, basis: null });
+
+  // Flip + CB, sourced from the CB snapshot table (mvc_snapshots) rather than
+  // recomputed from live gexRows on every WS frame. These are slow structural
+  // levels — the recorder writes them every 30m RTH, so a 60s poll is already
+  // finer than the data. strikeOIVol = the CB strike, gexFlip = the flip, both
+  // in SPX space (converted to ES at publish time with effectiveBasis).
+  const [snapLevels, setSnapLevels] = useState<{ cb: number | null; gexFlip: number | null }>(
+    { cb: null, gexFlip: null }
+  );
   const basisRef = useRef(0);
 
   const effectiveBasis = useCallback(() => basisRef.current, []);
@@ -254,10 +265,6 @@ export default function EsCandlesFullPanel() {
       const exp = typeof d.expiry === "string" ? d.expiry : "";
       if (exp) setFeedExpiry((cur) => cur || exp);
 
-      let computedFlip: number | null = null;
-      if (Array.isArray(d.gexRows) && d.gexRows.length) {
-        computedFlip = findGEXFlip(d.gexRows as ChainRow[], spx > 0 ? spx : undefined);
-      }
       setLevels((prev) => {
         const nextSpx = spx > 0 ? spx : prev.spx;
         const nextEs = esFut > 0 ? esFut : prev.esFut;
@@ -267,7 +274,6 @@ export default function EsCandlesFullPanel() {
         return {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall: d.putWall != null ? Number(d.putWall) || null : prev.putWall,
-          gexFlip: computedFlip != null ? computedFlip : (d.gexFlip != null ? Number(d.gexFlip) || null : prev.gexFlip),
           basis: nextBasis,
           spx: nextSpx,
           esFut: nextEs,
@@ -342,26 +348,54 @@ export default function EsCandlesFullPanel() {
   const ES_TICK = 0.25;
   const toTick = (v: number) => Math.round(v / ES_TICK) * ES_TICK;
 
-  const [lineLevels, setLineLevels] = useState<{ callWall: number | null; putWall: number | null; gexFlip: number | null }>(
-    { callWall: null, putWall: null, gexFlip: null }
+  const [lineLevels, setLineLevels] = useState<{ callWall: number | null; putWall: number | null; gexFlip: number | null; cb: number | null }>(
+    { callWall: null, putWall: null, gexFlip: null, cb: null }
   );
   const levelsRef = useRef(levels);
   useEffect(() => { levelsRef.current = levels; }, [levels]);
+  const snapLevelsRef = useRef(snapLevels);
+  useEffect(() => { snapLevelsRef.current = snapLevels; }, [snapLevels]);
+
+  // ── CB snapshot poll: the flip + CB source of truth ───────────────────────
+  // limit=1 because getMvcSnapshots is ORDER BY timestamp DESC — row[0] is the
+  // newest. No live recompute: these levels are structural, and deriving the
+  // flip per-frame off gexRows is what made it twitch.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/snapshots/mvc?limit=1", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const r = Array.isArray(json.rows) && json.rows.length ? json.rows[0] : null;
+        if (!r || cancelled) return;
+        const num = (v: unknown) => { const n = Number(v ?? 0); return n > 0 ? n : null; };
+        const next = { cb: num(r.strikeOIVol), gexFlip: num(r.gexFlip) };
+        setSnapLevels((prev) => (prev.cb === next.cb && prev.gexFlip === next.gexFlip ? prev : next));
+      } catch { /* keep last */ }
+    };
+    void load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // Flips false→true exactly once, when the first real level lands — that
   // re-runs the effect below so the lines paint immediately instead of waiting
   // out the first 60s interval.
-  const hasLevels = levels.callWall != null || levels.putWall != null || levels.gexFlip != null;
+  const hasLevels =
+    levels.callWall != null || levels.putWall != null || snapLevels.cb != null || snapLevels.gexFlip != null;
 
   useEffect(() => {
     const publish = () => {
       const l = levelsRef.current;
+      const s = snapLevelsRef.current;
       const b = effectiveBasis();
       const es = (spxLevel: number | null) => (spxLevel != null ? toTick(spxLevel + b) : null);
-      const next = { callWall: es(l.callWall), putWall: es(l.putWall), gexFlip: es(l.gexFlip) };
+      const next = { callWall: es(l.callWall), putWall: es(l.putWall), gexFlip: es(s.gexFlip), cb: es(s.cb) };
       // Identity-stable when nothing moved → the draw effect doesn't re-fire.
       setLineLevels((prev) =>
-        prev.callWall === next.callWall && prev.putWall === next.putWall && prev.gexFlip === next.gexFlip
+        prev.callWall === next.callWall && prev.putWall === next.putWall &&
+        prev.gexFlip === next.gexFlip && prev.cb === next.cb
           ? prev
           : next
       );
@@ -381,6 +415,7 @@ export default function EsCandlesFullPanel() {
       { price: lineLevels.callWall, color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
       { price: lineLevels.putWall, color: "#ff5b5b", title: "Put Wall", style: LineStyle.Dashed, width: 1 },
       { price: lineLevels.gexFlip, color: "#f5c518", title: "Flip", style: LineStyle.Dashed, width: 1 },
+      { price: lineLevels.cb, color: "#ffffff", title: "CB", style: LineStyle.Solid, width: 1 },
     ];
 
     const lines = priceLinesRef.current;

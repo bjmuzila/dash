@@ -1849,54 +1849,54 @@ async function main() {
         }
         return;
       }
-      // Price history for ONE contract — feeds the /flow tape's contract drawer
-      // chart. `tf=1d` returns intraday bars for one session (whale prints are
-      // usually same-day, so since-fill peak/trough needs intraday granularity);
-      // `tf=30d|90d` returns daily EOD closes.
-      // GET /proxy/option-history?ticker=SPX&expiry=2026-07-24&strike=6400&type=C&tf=1d
+      // Price history for ONE contract — feeds the /flow tape's contract drawer.
+      //
+      // Always INTRADAY, and always anchored to the alert: `start` is the print's
+      // session, `end` is either that same session ("Today") or the current one
+      // ("All"). There is no pre-alert history by design — bars from before the
+      // order printed can't say anything about how it did, and they stretch the
+      // price axis until the part you care about is a flat line.
+      //
+      // Interval scales with the span so a long-dated print can't ask for tens of
+      // thousands of 5m bars.
+      // GET /proxy/option-history?ticker=SPX&expiry=2026-07-24&strike=6400&type=C&start=2026-07-15&end=2026-07-15
       if (pathname === '/proxy/option-history' && req.method === 'GET') {
         const url = new URL(req.url || '/', 'http://localhost');
         const ticker = (url.searchParams.get('ticker') || '').toUpperCase();
         const expiry = url.searchParams.get('expiry') || '';
         const type = (url.searchParams.get('type') || 'C').toUpperCase() === 'P' ? 'P' : 'C';
         const strike = Number(url.searchParams.get('strike'));
-        const tf = (url.searchParams.get('tf') || '90d').toLowerCase();
+        const todayEt = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        const start = url.searchParams.get('start') || todayEt;
+        const end = url.searchParams.get('end') || start;
         const t0 = Date.now();
         if (!ticker || !expiry || !(strike > 0)) {
           sendJson(res, 400, { error: 'ticker, expiry and strike required' });
           return;
         }
         try {
-          // Both branches select strikes by `strike_range` (dollars around that
-          // day's spot), so both need a cushion wide enough to keep a far-OTM
-          // strike inside the window. Compute spot once for either path.
+          // Strikes are selected by `strike_range` (dollars around that day's
+          // spot), so a far-OTM strike needs a cushion wide enough to stay inside
+          // the window — a default range would simply not return the contract.
           const spot = await fetchUnderlyingQuotes([ticker])
             .then((m) => Number(m.get(ticker)?.last || m.get(ticker)?.mark) || 0)
             .catch(() => 0);
           const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
 
-          if (tf === '1d') {
-            const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
-            const bars = await fetchOptionIntradayTheta(ticker, expiry, strike, type, date, '5m', cushion);
-            sendJson(res, 200, { bars, tf, interval: '5m', spot, elapsedMs: Date.now() - t0 });
-          } else {
-            const days = tf === '30d' ? 30 : 90;
-            const end = new Date();
-            const start = new Date(end.getTime() - days * 86_400_000);
-            const bars = await fetchOptionDailyHistoryTheta(
-              ticker, expiry, strike, type,
-              start.toISOString().slice(0, 10), end.toISOString().slice(0, 10),
-              cushion,
-            );
-            sendJson(res, 200, { bars, tf, interval: '1d', spot, elapsedMs: Date.now() - t0 });
-          }
+          const spanDays = Math.max(0, Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000));
+          const interval = spanDays <= 3 ? '5m' : spanDays <= 10 ? '15m' : spanDays <= 30 ? '1h' : '4h';
+
+          const bars = await fetchOptionIntradayTheta(
+            ticker, expiry, strike, type, start, interval, cushion, end,
+          );
+          sendJson(res, 200, { bars, start, end, interval, spot, elapsedMs: Date.now() - t0 });
         } catch (e) {
           // Log the upstream Theta message server-side — the browser only sees
           // the status, and "502" alone tells you nothing about which param the
           // terminal rejected.
           const msg = String(e?.message || e);
-          console.warn('[OPTION-HISTORY]', ticker, expiry, strike, type, tf, '->', msg.slice(0, 300));
-          sendJson(res, 502, { error: msg, ticker, expiry, strike, type, tf, elapsedMs: Date.now() - t0 });
+          console.warn('[OPTION-HISTORY]', ticker, expiry, strike, type, start, end, '->', msg.slice(0, 300));
+          sendJson(res, 502, { error: msg, ticker, expiry, strike, type, start, end, elapsedMs: Date.now() - t0 });
         }
         return;
       }

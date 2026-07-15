@@ -643,14 +643,16 @@ async function fetchOptionDailyHistoryTheta(underlying, expiry, strike, type, st
 //
 // `strikeRangeDollars` must be wide enough to keep the target strike inside
 // Theta's ±range-around-spot window — callers pass |strike − spot| + a cushion.
+// `endDate` defaults to `date` (one session); pass a later date to span several.
 // Returns [{ time(ms), open, high, low, close, volume }] ascending, RTH only.
 // An unmatched contract returns [] (a legitimately empty session), never throws.
-async function fetchOptionIntradayTheta(underlying, expiry, strike, type, date, interval = '5m', strikeRangeDollars = 200) {
+async function fetchOptionIntradayTheta(underlying, expiry, strike, type, date, interval = '5m', strikeRangeDollars = 200, endDate = null) {
   const root = thetaRoot(underlying);
   const ymd = ymdCompact(date);
+  const ymdEnd = endDate ? ymdCompact(endDate) : ymd;
   const json = await thetaGet(
     `/v3/option/history/ohlc?symbol=${encodeURIComponent(root)}`
-    + `&expiration=${ymdCompact(expiry)}&start_date=${ymd}&end_date=${ymd}`
+    + `&expiration=${ymdCompact(expiry)}&start_date=${ymd}&end_date=${ymdEnd}`
     + `&interval=${encodeURIComponent(interval)}&start_time=09:30:00&end_time=16:00:00`
     + `&strike_range=${Math.max(40, Math.ceil(strikeRangeDollars))}`,
   );

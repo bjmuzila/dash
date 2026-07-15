@@ -8,12 +8,14 @@
 // can compare the print you're inspecting against the ones around it.
 //
 // Contents:
-//   • contract price line + volume bars (/proxy/option-history)
+//   • contract price line (/proxy/option-history), fill / peak / trough guides
 //   • since-fill tracking — the print's price vs current / peak / trough
-//   • aggressor split, when the order carries bid/ask classification
+//   • Vol/OI and IV·%OTM tiles, fed live from useContractStats
 //
-// Since-fill only means something at intraday granularity for a same-day print,
-// so the 1D timeframe is the default; 30D/90D fall back to daily EOD closes.
+// Both timeframes are anchored to the alert — Today (its session) and All (its
+// session → now) — and both are intraday. There is deliberately no 30D/90D:
+// history from before the order printed says nothing about how the order did,
+// and it drags the price axis until the interesting part is a flat line.
 //
 // Theme: HOME_THEME only — no color literals beyond the true-green buy accent
 // (HOME_THEME.green is a light blue).
@@ -37,8 +39,17 @@ export interface Bar {
   volume?: number;
 }
 
-type TF = "1d" | "30d" | "90d";
-const TFS: TF[] = ["1d", "30d", "90d"];
+// Only two timeframes, both anchored to the print:
+//   today = the alert's own session
+//   all   = the alert's session → now
+// There is deliberately no 30D/90D: history from before the order printed can't
+// say anything about how the order did, and it drags the price axis to a scale
+// that flattens the part you're actually looking at.
+type TF = "today" | "all";
+const TFS: { id: TF; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "all", label: "All" },
+];
 
 function fmtUsd(v: number): string {
   const a = Math.abs(v);
@@ -63,14 +74,24 @@ export interface ContractDrawerProps {
   onClose: () => void;
 }
 
+const etDate = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+
 export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose }: ContractDrawerProps) {
-  const [tf, setTf] = useState<TF>("1d");
+  const [tf, setTf] = useState<TF>("today");
   const [bars, setBars] = useState<Bar[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
   // The fill we're tracking: this print's own option price.
   const fillPrice = Number(order.price) || 0;
+
+  // The alert's session — the anchor for BOTH timeframes. Note this is the
+  // print's own date, not literally today: a tape loaded for a past date must
+  // chart that date's session.
+  const fillDate = etDate(order.ts);
+  const todayEt = etDate(Date.now());
+  // With a same-day print the two timeframes are identical, so don't offer All.
+  const sameDay = fillDate === todayEt;
 
   useEffect(() => {
     let cancelled = false;
@@ -81,13 +102,9 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
       expiry: order.expiration ?? "",
       strike: String(order.strike),
       type: order.type,
-      tf,
+      start: fillDate,
+      end: tf === "today" ? fillDate : todayEt,
     });
-    // Intraday is anchored to the print's own session, not "today" — a tape
-    // loaded for a past date must chart that date, not the current one.
-    if (tf === "1d") {
-      params.set("date", new Date(order.ts).toLocaleDateString("en-CA", { timeZone: "America/New_York" }));
-    }
     fetch(`/proxy/option-history?${params}`)
       // The route puts the upstream Theta message in `error` on a 502 — surface
       // it instead of a bare "HTTP 502", which says nothing about what broke.
@@ -108,16 +125,15 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [ticker, order.expiration, order.strike, order.type, order.ts, tf]);
+  }, [ticker, order.expiration, order.strike, order.type, fillDate, todayEt, tf]);
 
   // ── Since-fill: current / peak / trough over bars AT OR AFTER the print.
   //
-  // Granularity caveat, deliberately surfaced rather than hidden: daily bars are
-  // anchored at midnight ET, so for a print made TODAY the 30D/90D series has no
-  // bar strictly after the fill. Rather than silently reporting the whole 90-day
-  // range as "since fill" (which would invent a peak from before the order even
-  // existed), we fall back to the latest close only and flag it. The 1D view is
-  // the one that can actually answer peak/trough for a same-day whale print.
+  // Both timeframes start AT the alert, so the series can't contain pre-order
+  // history — but it can still contain the part of the session before the print
+  // landed, so the >= fill-time filter stays. If nothing is at/after the fill
+  // (an alert in the last bar of the day), fall back to the latest close and
+  // flag it rather than reporting a peak that predates the order.
   const track = useMemo(() => {
     if (!bars.length || !(fillPrice > 0)) return null;
     const after = bars.filter((b) => b.time >= order.ts - 60_000);
@@ -175,21 +191,27 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
           <span style={{ color: bull ? BULL : BEAR, marginLeft: 8 }}>{bull ? "▲ BULL" : "▼ BEAR"}</span>
         </span>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          {TFS.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTf(t)}
-              style={{
-                fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
-                letterSpacing: "0.04em", textTransform: "uppercase",
-                border: `1px solid ${tf === t ? C.cyan : C.border}`,
-                background: tf === t ? DOCK_THEME.activeTile : "rgba(0,0,0,0.4)",
-                color: tf === t ? C.cyan : C.text,
-              }}
-            >
-              {t}
-            </button>
-          ))}
+          {TFS.map((t) => {
+            // A same-day print has nothing beyond its own session, so All would
+            // be a no-op button that redraws the identical chart.
+            if (t.id === "all" && sameDay) return null;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTf(t.id)}
+                title={t.id === "today" ? "The session this alert printed in" : `Since the alert (${fillDate}) → now`}
+                style={{
+                  fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+                  letterSpacing: "0.04em", textTransform: "uppercase",
+                  border: `1px solid ${tf === t.id ? C.cyan : C.border}`,
+                  background: tf === t.id ? DOCK_THEME.activeTile : "rgba(0,0,0,0.4)",
+                  color: tf === t.id ? C.cyan : C.text,
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
           <button
             onClick={onClose}
             title="Collapse"
@@ -205,14 +227,14 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
 
       {/* ── Chart + KPI rail ── */}
       <div className="contract-drawer-grid" style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 12 }}>
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.35)", padding: 8, minHeight: 220 }}>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.35)", padding: 8, minHeight: 276 }}>
           {loading ? (
             <p style={{ fontSize: 12, color: C.muted, opacity: 0.6, padding: 20 }}>Loading contract history…</p>
           ) : err ? (
             <p style={{ fontSize: 12, color: C.red, padding: 20 }}>Contract history unavailable ({err}).</p>
           ) : !bars.length ? (
             <p style={{ fontSize: 12, color: C.muted, opacity: 0.6, padding: 20 }}>
-              No {tf.toUpperCase()} bars for this contract.
+              No traded bars for this contract {tf === "today" ? "this session" : "since the alert"}.
             </p>
           ) : (
             <ContractChart bars={bars} fillPrice={fillPrice} fillTs={order.ts} track={track} />
@@ -227,7 +249,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
             </div>
             <div style={note}>
               {fmtUsd(fillPrice)}{track ? ` → ${fmtUsd(track.current)}` : ""}
-              {track?.noPostFill ? " · latest close (try 1D)" : ""}
+              {track?.noPostFill ? " · latest close" : ""}
             </div>
           </div>
 
@@ -241,7 +263,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
             <div style={note}>
               {track
                 ? track.noPostFill
-                  ? "no bars after fill on this timeframe"
+                  ? "no bars after the alert yet"
                   : `${fmtUsd(track.peak)} / ${fmtUsd(track.trough)}`
                 : "no bars since fill"}
             </div>
@@ -275,10 +297,11 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
   );
 }
 
-// ── Inline SVG chart: price line + volume bars + fill/peak/trough guides. ──
+// ── Inline SVG chart: contract close line + fill / peak / trough guides. ──
 // Deliberately hand-rolled rather than lightweight-charts: the drawer mounts and
-// unmounts on every row click, and a full chart instance per expand is heavy for
-// a ~200px sparkline.
+// unmounts on every row click, and a full chart instance per expand is heavy.
+// Note the guides come from bar HIGHS/LOWS while the line is CLOSES, so the peak
+// guide sitting above the line is correct, not a bug — it's the intraday extreme.
 function ContractChart({
   bars, fillPrice, fillTs, track,
 }: {
@@ -298,54 +321,49 @@ function ContractChart({
     return () => ro.disconnect();
   }, []);
 
-  const H = 210, PADL = 6, PADR = 62, PADT = 8, PADB = 24;
+  // No volume bars: this chart answers one question — what did the contract do
+  // since the alert — and volume was competing with the price line for the same
+  // pixels while carrying none of that answer. (Contract volume still lives in
+  // the Vol/OI tile, where it's a live number rather than a shape.) Price gets
+  // the whole box.
+  const H = 260, PADL = 6, PADR = 62, PADT = 10, PADB = 24;
   const iw = Math.max(80, w - PADL - PADR);
   const ih = H - PADT - PADB;
 
   const closes = bars.map((b) => b.close);
-  const highs = bars.map((b) => b.high ?? b.close);
-  const lows = bars.map((b) => b.low ?? b.close);
-  // Include the fill line in the domain so it's never clipped off-chart.
-  const rawMax = Math.max(...highs, fillPrice, track?.peak ?? 0);
-  const rawMin = Math.min(...lows, fillPrice, track?.trough ?? Infinity);
-  const pad = (rawMax - rawMin) * 0.08 || rawMax * 0.1 || 1;
+  // Domain spans only what's drawn — the close line and the three guide levels.
+  // Using bar high/low here would reserve headroom for wicks that aren't
+  // rendered, which is part of why the line sat squashed in the middle.
+  const rawMax = Math.max(...closes, fillPrice, ...(track && Number.isFinite(track.peak) ? [track.peak] : []));
+  const rawMin = Math.min(...closes, fillPrice, ...(track && Number.isFinite(track.trough) ? [track.trough] : []));
+  // Small breathing room only — and NOT clamped to 0. Clamping to zero on a
+  // contract trading at $30 handed ~90% of the box to empty space below the
+  // line; the axis starts near the data instead.
+  const span = rawMax - rawMin;
+  const pad = span > 0 ? span * 0.06 : Math.max(rawMax * 0.05, 0.05);
   const max = rawMax + pad;
-  const min = Math.max(0, rawMin - pad);
-  const vmax = Math.max(1, ...bars.map((b) => b.volume ?? 0));
+  const min = rawMin - pad;
 
   const X = (i: number) => PADL + (bars.length === 1 ? iw / 2 : (i / (bars.length - 1)) * iw);
   const Y = (p: number) => PADT + ih - ((p - min) / (max - min || 1)) * ih;
 
   const path = closes.map((c, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(c).toFixed(1)}`).join("");
   const fillIdx = bars.findIndex((b) => b.time >= fillTs - 60_000);
-  const barW = Math.max(1.5, (iw / Math.max(1, bars.length)) * 0.55);
 
+  // Bars are always intraday now, but "All" can span several sessions — a bare
+  // clock time would then repeat 09:30 once per day and read as nonsense.
+  const multiDay = bars.length > 1 && bars[bars.length - 1].time - bars[0].time > 86_400_000;
   const tickFmt = (t: number) =>
     new Date(t).toLocaleString("en-US", {
       timeZone: "America/New_York",
-      ...(bars.length && bars[bars.length - 1].time - bars[0].time > 2 * 86_400_000
-        ? { month: "short", day: "numeric" }
+      ...(multiDay
+        ? { month: "short", day: "numeric", hour: "numeric" }
         : { hour: "numeric", minute: "2-digit" }),
     });
 
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
       <svg width={w} height={H} style={{ display: "block" }}>
-        {/* volume */}
-        {bars.map((b, i) => {
-          const bh = ((b.volume ?? 0) / vmax) * ih * 0.85;
-          return (
-            <rect
-              key={i}
-              x={X(i) - barW / 2}
-              y={PADT + ih - bh}
-              width={barW}
-              height={bh}
-              rx={1}
-              fill={i === fillIdx ? "rgba(142,202,230,0.75)" : "rgba(255,255,255,0.14)"}
-            />
-          );
-        })}
         {/* peak / trough guides */}
         {track && Number.isFinite(track.peak) && (
           <line x1={PADL} x2={PADL + iw} y1={Y(track.peak)} y2={Y(track.peak)} stroke={BULL} strokeWidth={1} strokeDasharray="5 4" opacity={0.5} />
@@ -357,6 +375,7 @@ function ContractChart({
         {fillPrice > 0 && (
           <line x1={PADL} x2={PADL + iw} y1={Y(fillPrice)} y2={Y(fillPrice)} stroke={C.orange} strokeWidth={1} strokeDasharray="5 4" opacity={0.7} />
         )}
+        {/* The alert's moment. */}
         {fillIdx >= 0 && (
           <line x1={X(fillIdx)} x2={X(fillIdx)} y1={PADT} y2={PADT + ih} stroke={C.orange} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.85} />
         )}
