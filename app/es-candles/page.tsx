@@ -312,16 +312,6 @@ export default function EsCandlesPage() {
   }, [historical, liveRows]);
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
-  // VSA classification for the visible bars. Baseline comes from `historical`
-  // (20 sessions from SQLite) rather than `rows` (5 days) so the per-slot median
-  // has enough prior sessions to mean anything. Recomputed only when the tuning
-  // or the bars change — it is a pure pass over data already in memory.
-  const vsaMap = useMemo(() => {
-    if (!showVsa) return new Map<string, VsaResult>();
-    // The bar covering "now" has partial volume and would always read as thin.
-    const formingBefore = Date.now() - 5 * 60 * 1000;
-    return classifyBars(rows, historical, vsaTuning, formingBefore);
-  }, [showVsa, rows, historical, vsaTuning]);
 
   const chartRef = useRef<HTMLDivElement>(null);
   // Capture target for the Snap / Discord buttons (chart + lanes panel).
@@ -494,6 +484,19 @@ export default function EsCandlesPage() {
   // classification saturated the streamer last time. See lib/vsa.ts.
   const [showVsa, setShowVsa] = useState(false);
   const [vsaTuning, setVsaTuning] = useState<VsaTuning>(VSA_DEFAULTS);
+  // VSA classification for the visible bars. MUST stay below the showVsa /
+  // vsaTuning declarations above: it closes over both, and hoisting it up beside
+  // the other `rows` memos put it in their temporal dead zone — which typechecks
+  // and dev-renders fine, then dies only in the prerender as
+  // "Cannot access 'aA' before initialization".
+  // Baseline comes from `historical` (20 sessions from SQLite) rather than `rows`
+  // (5 days) so the per-slot median has enough prior sessions to mean anything.
+  const vsaMap = useMemo(() => {
+    if (!showVsa) return new Map<string, VsaResult>();
+    // The bar covering "now" has partial volume and would always read as thin.
+    const formingBefore = Date.now() - 5 * 60 * 1000;
+    return classifyBars(rows, historical, vsaTuning, formingBefore);
+  }, [showVsa, rows, historical, vsaTuning]);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail

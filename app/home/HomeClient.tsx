@@ -367,12 +367,6 @@ const ScannerIcon = () => (
     <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
   </svg>
 );
-const CandlesIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="6" y1="3" x2="6" y2="8" /><rect x="3.5" y="8" width="5" height="8" rx="1" /><line x1="6" y1="16" x2="6" y2="21" />
-    <line x1="18" y1="2" x2="18" y2="10" /><rect x="15.5" y="10" width="5" height="6" rx="1" /><line x1="18" y1="16" x2="18" y2="22" />
-  </svg>
-);
 const LayersIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" />
@@ -438,7 +432,8 @@ export function HomeClient({
   const flowFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastFlowAppliedRef = useRef(0);
 
-  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner" | "escandles">("calendar");
+  // "escandles" left the strip — it now lives on the GEX panel's view switcher.
+  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner">("calendar");
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
   // the column with the GEX chart above it, "full" = fills the whole left column
   // (chart hidden). Replaces the old econCollapsed boolean.
@@ -511,9 +506,16 @@ export function HomeClient({
   // Rolling window for the VOL GEX SPEED column + movers rail.
   const [speedWin, setSpeedWin] = useState<SpeedWindow>(60);
   // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
-  // option chain. ("table" divergent-bars view retired from the switcher; kept in
-  // the union so its now-unreachable render branch stays valid without a refactor.)
-  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
+  // option chain; "escandles" = the full ES 5m chart (moved up here from the
+  // bottom Economic Calendar tab strip — it belongs next to the GEX surfaces it
+  // is read against, not next to the calendar). ("table" divergent-bars view
+  // retired from the switcher; kept in the union so its now-unreachable render
+  // branch stays valid without a refactor.)
+  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain" | "escandles">("heatmap");
+  // The heatmap-only header controls (intensity, speed, expiry, refresh, snap)
+  // are meaningless in the chain + candles views. One predicate so a future view
+  // can't half-inherit them the way `!== "chain"` was starting to.
+  const isGexGrid = heatmapView === "heatmap" || heatmapView === "table";
   // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
   // is the raw text field. Both revert to SPX on any tab change (see effect below).
   const [chainTicker, setChainTicker] = useState("SPX");
@@ -1261,7 +1263,6 @@ export function HomeClient({
                   { id: "whale", label: "Whale", icon: <WhaleIcon /> },
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
                   { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
-                  { id: "escandles", label: "ES Candles", icon: <CandlesIcon /> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
@@ -1325,11 +1326,6 @@ export function HomeClient({
                     <ScannerHomePanel />
                   </div>
                 )}
-                {activeTab === "escandles" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <EsCandlesFullPanel />
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -1352,7 +1348,7 @@ export function HomeClient({
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
+                    {heatmapView === "chain" ? "Option Chain" : heatmapView === "escandles" ? "ES Candles" : "Live GEX Heatmap"}
                     {heatmapView === "chain" && (
                     <>
                       <input
@@ -1372,7 +1368,7 @@ export function HomeClient({
                       </datalist>
                     </>
                     )}
-                    {heatmapView !== "chain" && (
+                    {isGexGrid && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
@@ -1409,7 +1405,7 @@ export function HomeClient({
                     )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
-                    {heatmapView !== "chain" && (
+                    {isGexGrid && (
                     <>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
@@ -1418,28 +1414,33 @@ export function HomeClient({
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     </>
                     )}
-                    {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
-                        panel's right edge and never shifts when the heatmap-only controls
-                        above it hide in Chain view. */}
+                    {/* Heatmap|Chain|ES Candles switch — pinned as the LAST child so it
+                        sits at the panel's right edge and never shifts when the
+                        heatmap-only controls above it hide in the other views. */}
                     <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                      {(["heatmap", "chain"] as const).map((v) => (
+                      {([
+                        { id: "heatmap", label: "Heatmap" },
+                        { id: "chain", label: "Chain" },
+                        { id: "escandles", label: "ES Candles" },
+                      ] as const).map((v) => (
                         <button
-                          key={v}
-                          onClick={() => setHeatmapView(v)}
+                          key={v.id}
+                          onClick={() => setHeatmapView(v.id)}
                           style={{
                             padding: "2px 10px",
                             fontSize: 9,
                             fontWeight: 700,
                             textTransform: "uppercase",
                             letterSpacing: "0.08em",
+                            whiteSpace: "nowrap",
                             cursor: "pointer",
                             border: "none",
                             fontFamily: "inherit",
-                            background: heatmapView === v ? "rgba(33,158,188,0.14)" : "transparent",
-                            color: heatmapView === v ? "#219EBC" : "#5a7a98",
+                            background: heatmapView === v.id ? "rgba(33,158,188,0.14)" : "transparent",
+                            color: heatmapView === v.id ? "#219EBC" : "#5a7a98",
                           }}
                         >
-                          {v}
+                          {v.label}
                         </button>
                       ))}
                     </div>
@@ -1449,7 +1450,9 @@ export function HomeClient({
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
-                {heatmapView === "chain" ? (
+                {heatmapView === "escandles" ? (
+                  <EsCandlesFullPanel />
+                ) : heatmapView === "chain" ? (
                   <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
                 ) : (
                 <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
