@@ -1422,6 +1422,15 @@ export default function StatPrompterTab() {
         </div>
       </Card>
 
+      {/* Two prompt cards per row; collapses to one column on narrow viewports. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))",
+          gap: 16,
+          alignItems: "start",
+        }}
+      >
       {list.map((p) => {
         const isOpen = !!open[p.id];
         // resolve this prompt's dropdown state, defaulting to each control's first option
@@ -1479,6 +1488,7 @@ export default function StatPrompterTab() {
           </div>
         );
       })}
+      </div>
 
       <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>
         <strong style={{ color: "rgba(255,255,255,0.6)" }}>Session prompts</strong> read <code>public/data/ib-ES.json</code> + <code>ib-NQ.json</code> (slim exports from <code>ib-backtest-esu6.html</code>).

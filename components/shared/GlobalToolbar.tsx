@@ -118,13 +118,13 @@ function QuickCircle({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 40,
-        height: 40,
+        width: 30,
+        height: 30,
         borderRadius: "50%",
         border: `1px solid ${cyanA(0.3)}`,
         background: "rgba(255,255,255,0.04)",
         color: HOME_THEME.text,
-        fontSize: 21,
+        fontSize: 15,
         lineHeight: 1,
         fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
         transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
@@ -139,7 +139,7 @@ function QuickCircle({
       <span
         style={{
           maxWidth: NAV_ITEM_W,
-          fontSize: 9,
+          fontSize: 8,
           fontWeight: 600,
           color: HOME_THEME.text,
           opacity: 0.8,
@@ -158,7 +158,8 @@ function QuickCircle({
     display: "inline-flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: 3,
+    justifyContent: "center",
+    gap: 2,
     flexShrink: 0,
     width: NAV_ITEM_W,
     textDecoration: "none",
@@ -233,12 +234,12 @@ const NAV_ORDER_KEY = "cb-toolbar-nav-order-v1";
 
 // ── Responsive sizing for the left-side nav strip ─────────────────────────────
 // Each QuickCircle is a fixed-width column so we can compute how many fit.
-const NAV_ITEM_W = 56;   // px, column width (circle is 40px, label ellipsises)
-const NAV_GAP = 8;       // px, gap between columns
+const NAV_ITEM_W = 44;   // px, column width (circle is 30px, label ellipsises)
+const NAV_GAP = 6;       // px, gap between columns
 // Everything else in the pill that is NOT the nav strip: hamburger, logo, bell,
 // ticker (min), divider, clock, notes, user menu, gaps + pill padding + band
 // padding. The nav strip only gets what's left over.
-const NAV_RESERVED_PX = 640;
+const NAV_RESERVED_PX = 700;
 
 /**
  * useNavCapacity — how many nav circles fit on screen right now.
@@ -522,7 +523,7 @@ export default function GlobalToolbar() {
 
           {/* ── Live ticker (ESU / NQU + dropdown) — now sits just left of the
               clock; shrinks/clips on narrow screens ── */}
-          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: isMobile ? "40vw" : "clamp(160px, 24vw, 380px)", display: "flex", alignItems: "center", overflow: "hidden" }}>
+          <div style={{ position: "relative", zIndex: 1, flexShrink: 1, minWidth: 0, maxWidth: isMobile ? "40vw" : "clamp(200px, 28vw, 460px)", display: "flex", alignItems: "center", overflow: "hidden" }}>
             <ToolbarTicker />
           </div>
 
