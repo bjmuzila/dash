@@ -94,8 +94,11 @@ export default function Gex3DPage() {
   const surfRef = useRef<Surface>(EMPTY_SURFACE);
   const dimsRef = useRef({ nx: 0, nz: 0 });
   const cellsRef = useRef<Cell[]>([]);
-  const camRef = useRef({ yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1 });
-  const dragRef = useRef<{ x: number; y: number; yaw: number; pitch: number } | null>(null);
+  const camRef = useRef({ yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1, panX: 0, panY: 0 });
+  /** mode "orbit" = left-drag; "pan" = right/middle-drag or shift+left-drag. */
+  const dragRef = useRef<
+    { mode: "orbit" | "pan"; x: number; y: number; yaw: number; pitch: number; panX: number; panY: number } | null
+  >(null);
   const sizeRef = useRef({ w: 0, h: 0 });
 
   const [relief, setRelief] = useState(110);
@@ -114,7 +117,7 @@ export default function Gex3DPage() {
   const flipIdx = useRef<number | null>(null);
 
   const proj = useCallback((gx: number, gy: number, gz: number) => {
-    const { yaw, pitch, zoom } = camRef.current;
+    const { yaw, pitch, zoom, panX, panY } = camRef.current;
     const { w: W, h: H } = sizeRef.current;
     const { nx, nz } = dimsRef.current;
     // Grid spacing shrinks as the ladder widens so a 40-strike day still fits.
@@ -130,7 +133,9 @@ export default function Gex3DPage() {
     const rz2 = gy * sp + rz * cp;
     const d = 1400;
     const s = (d / (d + rz2 * 0.9)) * zoom;
-    return { x: W / 2 + rx * s, y: H / 2 + 40 - ry * s, s, depth: rz2 };
+    // pan is applied in SCREEN space (after projection) so dragging the map
+    // moves it 1:1 under the cursor at any yaw/pitch/zoom.
+    return { x: W / 2 + panX + rx * s, y: H / 2 + 40 + panY - ry * s, s, depth: rz2 };
   }, []);
 
   const draw = useCallback(() => {
@@ -465,8 +470,18 @@ export default function Gex3DPage() {
   // every mousemove and fought the draw loop). Tilt state syncs on pointerup.
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault(); // stop text-selection / native image-drag swallowing it
-    dragRef.current = { x: e.clientX, y: e.clientY, yaw: camRef.current.yaw, pitch: camRef.current.pitch };
-    e.currentTarget.style.cursor = "grabbing";
+    // Left = orbit. Right / middle / shift+left = pan.
+    const mode: "orbit" | "pan" = e.button === 2 || e.button === 1 || e.shiftKey ? "pan" : "orbit";
+    dragRef.current = {
+      mode,
+      x: e.clientX,
+      y: e.clientY,
+      yaw: camRef.current.yaw,
+      pitch: camRef.current.pitch,
+      panX: camRef.current.panX,
+      panY: camRef.current.panY,
+    };
+    e.currentTarget.style.cursor = mode === "pan" ? "move" : "grabbing";
     if (tipRef.current) tipRef.current.style.opacity = "0";
   };
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -504,17 +519,25 @@ export default function Gex3DPage() {
       const d = dragRef.current;
       if (!d) return;
       e.preventDefault();
-      // Yaw is deliberately UNBOUNDED — you can lap the map as many times as you
-      // like; it's normalized to [-π, π] on release. Pitch clamp matches the
-      // slider's 2°–88° so drag and scrub can reach the same stations.
-      camRef.current.yaw = d.yaw + (e.clientX - d.x) * 0.006;
-      camRef.current.pitch = Math.max(0.035, Math.min(1.535, d.pitch - (e.clientY - d.y) * 0.005));
+      if (d.mode === "pan") {
+        // 1:1 with the cursor — pan lives in screen space (see proj).
+        camRef.current.panX = d.panX + (e.clientX - d.x);
+        camRef.current.panY = d.panY + (e.clientY - d.y);
+      } else {
+        // Yaw is deliberately UNBOUNDED — you can lap the map as many times as
+        // you like; it's normalized to [-π, π] on release. Pitch clamp matches
+        // the slider's 2°–88° so drag and scrub reach the same stations.
+        camRef.current.yaw = d.yaw + (e.clientX - d.x) * 0.006;
+        camRef.current.pitch = Math.max(0.035, Math.min(1.535, d.pitch - (e.clientY - d.y) * 0.005));
+      }
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
     };
     const up = () => {
       if (!dragRef.current) return;
+      const wasPan = dragRef.current.mode === "pan";
       dragRef.current = null;
       cv.style.cursor = "grab";
+      if (wasPan) return; // pan doesn't touch yaw/pitch — nothing to sync
       // Wrap yaw into [-π, π] so repeated 360° laps don't accumulate an
       // ever-growing float (and so the heading readout stays sane).
       const TAU = Math.PI * 2;
@@ -539,7 +562,24 @@ export default function Gex3DPage() {
     if (!cv) return;
     const onNativeWheel = (e: WheelEvent) => {
       e.preventDefault();
-      camRef.current.zoom = Math.max(0.5, Math.min(2.4, camRef.current.zoom * (e.deltaY > 0 ? 0.92 : 1.08)));
+      const cam = camRef.current;
+      const prev = cam.zoom;
+      // Wide range: 0.2× (whole session in frame) to 8× (single strike filling
+      // the view). The old 0.5–2.4 clamp made "full zoom" impossible.
+      const next = Math.max(0.2, Math.min(8, prev * (e.deltaY > 0 ? 0.9 : 1.111)));
+      if (next === prev) return;
+
+      // Zoom toward the CURSOR, not the canvas center: scale the pan offset
+      // about the pointer so whatever is under the mouse stays under the mouse.
+      // Without this, zooming in on an off-center wall walks it off screen and
+      // you have to re-pan after every scroll.
+      const r = cv.getBoundingClientRect();
+      const mx = e.clientX - r.left - (sizeRef.current.w / 2 + cam.panX);
+      const my = e.clientY - r.top - (sizeRef.current.h / 2 + 40 + cam.panY);
+      const k = next / prev;
+      cam.panX -= mx * (k - 1);
+      cam.panY -= my * (k - 1);
+      cam.zoom = next;
       draw();
     };
     cv.addEventListener("wheel", onNativeWheel, { passive: false });
@@ -591,7 +631,9 @@ export default function Gex3DPage() {
           >
             Refresh
           </button>
-          <span style={{ ...legendItem, opacity: 0.6 }}>drag to orbit · scroll to zoom</span>
+          <span style={{ ...legendItem, opacity: 0.6 }}>
+            drag = orbit 360° · right/shift-drag = pan · scroll = zoom
+          </span>
         </div>
 
         <div
@@ -608,6 +650,7 @@ export default function Gex3DPage() {
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerLeave={() => { if (tipRef.current) tipRef.current.style.opacity = "0"; }}
+            onContextMenu={(e) => e.preventDefault()} // right-drag is pan, not a menu
             style={{ display: "block", width: "100%", height: 560, cursor: "grab", touchAction: "none", userSelect: "none" }}
           />
           {!live.loading && !live.error && !live.times.length && (
@@ -689,6 +732,8 @@ export default function Gex3DPage() {
               onClick={() => {
                 camRef.current.yaw = (v.yaw * Math.PI) / 180;
                 camRef.current.pitch = (v.pitch * Math.PI) / 180;
+                camRef.current.panX = 0; // recenter — a preset with stale pan can land off-screen
+                camRef.current.panY = 0;
                 setHeading(v.yaw);
                 setTilt(v.pitch);
                 draw();
@@ -701,7 +746,7 @@ export default function Gex3DPage() {
           <button
             style={{ ...homeButtonStyle, padding: "6px 12px" }}
             onClick={() => {
-              camRef.current = { yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1 };
+              camRef.current = { yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1, panX: 0, panY: 0 };
               setRelief(110);
               setTilt(34);
               setHeading(-36);
