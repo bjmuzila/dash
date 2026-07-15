@@ -22,13 +22,14 @@ const dissolveCard = dissolveCardStyle;
 
 // VSA candle palette. The default series colors live on the series options
 // (addSeries below); these are the per-bar overrides for the two inefficient
-// classes only. Churn = theme orange. Thin = the normal up/down at ~40% against
-// the panel, i.e. a ghost of the move it failed to earn.
+// classes only. Both classes render HOLLOW — transparent body, colored outline —
+// so a signal bar is legible as a signal at a glance and the heatmap / GEX
+// bubbles behind the chart stay readable through it. Churn = theme orange,
+// thin = its own direction outlined.
 const VSA_UP = "#30d158";
 const VSA_DOWN = "#ff5b5b";
 const VSA_CHURN = HOME_THEME.orange;
-const VSA_UP_GHOST = "rgba(48,209,88,0.32)";
-const VSA_DOWN_GHOST = "rgba(255,91,91,0.32)";
+const VSA_HOLLOW = "rgba(0,0,0,0)";
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
@@ -1059,7 +1060,15 @@ export default function EsCandlesPage() {
         upColor: "#30d158",
         wickDownColor: "#ff5b5b",
         downColor: "#ff5b5b",
-        borderVisible: false,
+        // Borders ON, in the SAME color as the fills. Normal candles look
+        // identical to the old borderVisible:false rendering (a 1px border over
+        // a matching body is invisible), but a per-bar `color: transparent` +
+        // `borderColor` can now render a hollow candle — which is how the VSA
+        // signal bars are drawn. borderVisible:false would swallow the outline
+        // and leave those bars as empty gaps.
+        borderVisible: true,
+        borderUpColor: "#30d158",
+        borderDownColor: "#ff5b5b",
       });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
@@ -1164,17 +1173,17 @@ export default function EsCandlesPage() {
       // eye instead of every bar shouting.
       if (!v || v.cls === "normal") return base;
       if (v.cls === "churn") {
-        // Effort with no ground: orange body. The wick carries WHO WON the bar —
-        // close near the low on heavy volume = supply absorbed the buyers. That
-        // is inference from close position, NOT a measured aggressor side.
-        const wick = v.closePos >= 0.6 ? VSA_UP : v.closePos <= 0.4 ? VSA_DOWN : VSA_CHURN;
-        return { ...base, color: VSA_CHURN, wickColor: wick };
+        // Effort with no ground: hollow orange. NOTE the wick is orange too, not
+        // tinted by closePos as it was when the body was solid — a churn bar is
+        // small-body BY DEFINITION (bodyPct <= smallBody), so once hollow it is
+        // almost all wick. A green/red wick would have made the bar read as a
+        // normal candle and buried the one thing it is there to say.
+        return { ...base, color: VSA_HOLLOW, borderColor: VSA_CHURN, wickColor: VSA_CHURN };
       }
-      // Ground with no effort: keep direction, ghost it. A thin move is a weak
-      // version of the move, so it reads as a dimmer candle, not a new color.
-      const up = row.close >= row.open;
-      const ghost = up ? VSA_UP_GHOST : VSA_DOWN_GHOST;
-      return { ...base, color: ghost, wickColor: ghost };
+      // Ground with no effort: hollow, in its own direction. This is the classic
+      // hollow-candle idiom — same move, no one behind it.
+      const dir = row.close >= row.open ? VSA_UP : VSA_DOWN;
+      return { ...base, color: VSA_HOLLOW, borderColor: dir, wickColor: dir };
     });
 
     candleSeries.setData(candleData);
@@ -2223,9 +2232,9 @@ export default function EsCandlesPage() {
                     VSA — effort vs result
                   </div>
                   <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.65, lineHeight: 1.4, marginBottom: 6 }}>
-                    <span style={{ color: VSA_CHURN, fontWeight: 800 }}>■</span> churn: heavy vol, no ground (absorption)<br />
-                    <span style={{ color: "rgba(48,209,88,0.6)", fontWeight: 800 }}>■</span> ghost: ground, no vol (unopposed)<br />
-                    <span style={{ opacity: 0.7 }}>Volume-based, not delta — no aggressor side.</span>
+                    <span style={{ color: VSA_CHURN, fontWeight: 800 }}>▢</span> churn: heavy vol, no ground (absorption)<br />
+                    <span style={{ color: VSA_UP, fontWeight: 800 }}>▢</span> hollow: ground, no vol (unopposed)<br />
+                    <span style={{ opacity: 0.7 }}>Signal bars are hollow. Volume-based, not delta — no aggressor side.</span>
                   </div>
                   <DockSlider label="hi rvol" value={vsaTuning.hiRvol} min={1.2} max={3} step={0.1} width={70} format={(v) => `${v.toFixed(1)}x`}
                     onChange={(v) => setVsaTuning((t) => ({ ...t, hiRvol: v }))} title="Churn: RVOL at/above this = heavy effort" />

@@ -167,15 +167,27 @@ console.log(`  → if these swing a lot, a pooled p(up) is a fiction and so is e
 console.log(`\nRUN LENGTH  (consecutive up bars before a down bar) — the literal question`);
 const totalRuns = runLens.length;
 const mean = runLens.reduce((a, b) => a + b, 0) / (totalRuns || 1);
+// A memoryless (coin-flip) series with this base rate gives E[L | L>=1] = 1/(1-p).
+// This single comparison IS the answer to "how many up bars until a down bar" —
+// everything below is just showing the shape.
+const meanNull = 1 / (1 - p);
 console.log(`  ${totalRuns.toLocaleString()} completed runs   mean ${f(mean, 2)}   median ${f(engine.pct(runLens, 0.5), 0)}   max ${Math.max(...runLens)}`);
+console.log(`  a memoryless coin at p=${f(p * 100, 2)}% gives mean ${f(meanNull, 2)}  →  observed/null = ×${f(mean / meanNull, 3)}`);
 console.log(`  ${"len".padStart(4)} ${"count".padStart(7)} ${"share".padStart(7)}   ${"vs geometric null".padStart(17)}`);
 for (const [len, n] of [...dist].sort((a, b) => a[0] - b[0])) {
   if (len > 12) continue;
   const share = n / totalRuns;
-  // Null: runs of length L occur with prob p^L(1-p) — a GEOMETRIC distribution
-  // driven by the base rate. If observed ≈ expected, streaks are memoryless and
-  // there is nothing here.
-  const exp = Math.pow(p, len) * (1 - p);
+  // Null: geometric, driven by the base rate. But we only ever RECORD runs of
+  // length >= 1 (a run of 0 isn't a run), so the null must be CONDITIONED on
+  // L>=1 too:
+  //     P(L=k)         = p^k     * (1-p)      ... sums to 1 over k=0,1,2,...
+  //     P(L>=1)        = p
+  //     P(L=k | L>=1)  = p^(k-1) * (1-p)      ... sums to 1 over k=1,2,3,...
+  // Using the unconditional form against a conditional sample inflates EVERY
+  // ratio by 1/p (=1.84 here) — which looked like "runs are 2x more common than
+  // chance" across the board. A uniform multiplier on every row is the
+  // signature of a normalisation bug, never of a real effect.
+  const exp = Math.pow(p, len - 1) * (1 - p);
   const ratio = share / exp;
   console.log(
     `  ${String(len).padStart(4)} ${String(n).padStart(7)} ${f(share * 100, 2).padStart(6)}%   ` +

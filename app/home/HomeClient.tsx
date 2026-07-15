@@ -506,16 +506,13 @@ export function HomeClient({
   // Rolling window for the VOL GEX SPEED column + movers rail.
   const [speedWin, setSpeedWin] = useState<SpeedWindow>(60);
   // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
-  // option chain; "escandles" = the full ES 5m chart (moved up here from the
-  // bottom Economic Calendar tab strip — it belongs next to the GEX surfaces it
-  // is read against, not next to the calendar). ("table" divergent-bars view
-  // retired from the switcher; kept in the union so its now-unreachable render
-  // branch stays valid without a refactor.)
-  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain" | "escandles">("heatmap");
-  // The heatmap-only header controls (intensity, speed, expiry, refresh, snap)
-  // are meaningless in the chain + candles views. One predicate so a future view
-  // can't half-inherit them the way `!== "chain"` was starting to.
-  const isGexGrid = heatmapView === "heatmap" || heatmapView === "table";
+  // option chain. ("table" divergent-bars view retired from the switcher; kept in
+  // the union so its now-unreachable render branch stays valid without a refactor.)
+  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
+  // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
+  // place. Moved here from the bottom tab strip — it reads against the levels
+  // strip directly above it, which stays mounted in both views.
+  const [gexView, setGexView] = useState<"gex" | "escandles">("gex");
   // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
   // is the raw text field. Both revert to SPX on any tab change (see effect below).
   const [chainTicker, setChainTicker] = useState("SPX");
@@ -1168,7 +1165,12 @@ export function HomeClient({
               {/* Full-featured toolbar — scales to fit instead of scrolling.
                   min is deliberately low: at 0.6 the bar still overflowed on
                   ~1280px-wide windows and fell back to a hidden scrollbar,
-                  which read as "cut off". */}
+                  which read as "cut off".
+                  Hidden in ES Candles view: every control on it (gex mode, data
+                  mode, OI/DEX/flip, ghosts, expiry, snap target) drives the bar
+                  chart only. The view switcher lives in the levels strip below,
+                  which stays mounted in both views. */}
+              {gexView === "gex" && (
               <FitScale min={0.42}>
               <GexToolbar
                 gexMode={gexMode}
@@ -1195,11 +1197,42 @@ export function HomeClient({
                 discordMessage={`NET GEX • ${selectedExpiry}`}
               />
               </FitScale>
+              )}
               {/* Levels strip — NET GEX / walls / flip / CB / max pain, in the
                   empty band above the chart, right-aligned. Same in-scope live
                   values as the heatmap stat bar so it always agrees with the
                   chart. (Pop-up alerts will hook off these tiles later.) */}
-              <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, padding: "0 10px 6px", flexShrink: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "0 10px 6px", flexShrink: 0 }}>
+                {/* GEX|ES Candles switch. Lives here rather than in GexToolbar
+                    because the toolbar unmounts in candles view — this strip is
+                    the only chrome common to both, so the way back always shows. */}
+                <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden", flexShrink: 0 }}>
+                  {([
+                    { id: "gex", label: "GEX" },
+                    { id: "escandles", label: "ES Candles" },
+                  ] as const).map((v) => (
+                    <button
+                      key={v.id}
+                      onClick={() => setGexView(v.id)}
+                      style={{
+                        padding: "3px 10px",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        whiteSpace: "nowrap",
+                        cursor: "pointer",
+                        border: "none",
+                        fontFamily: "inherit",
+                        background: gexView === v.id ? "rgba(33,158,188,0.14)" : "transparent",
+                        color: gexView === v.id ? "#219EBC" : "#5a7a98",
+                      }}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
                 {[
                   { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
                   { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
@@ -1217,12 +1250,15 @@ export function HomeClient({
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 800, color: t.color }}>{t.value}</span>
                   </div>
                 ))}
+                </div>
               </div>
               {/* Chart canvas — uses fast gex-chain data. Held behind a loader
                   until the server reports OI + greeks are warm, so a half-built
                   / inflated frame never renders. */}
               <div ref={gexChartRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-                {chartReady && chartRows.length > 0 ? (
+                {gexView === "escandles" ? (
+                  <EsCandlesFullPanel />
+                ) : chartReady && chartRows.length > 0 ? (
                   <GexChart
                     chain={chartRows}
                     spotPrice={chartSpot}
@@ -1348,7 +1384,7 @@ export function HomeClient({
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    {heatmapView === "chain" ? "Option Chain" : heatmapView === "escandles" ? "ES Candles" : "Live GEX Heatmap"}
+                    {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
                     {heatmapView === "chain" && (
                     <>
                       <input
@@ -1368,7 +1404,7 @@ export function HomeClient({
                       </datalist>
                     </>
                     )}
-                    {isGexGrid && (
+                    {heatmapView !== "chain" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
@@ -1405,7 +1441,7 @@ export function HomeClient({
                     )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
-                    {isGexGrid && (
+                    {heatmapView !== "chain" && (
                     <>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
@@ -1414,33 +1450,28 @@ export function HomeClient({
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     </>
                     )}
-                    {/* Heatmap|Chain|ES Candles switch — pinned as the LAST child so it
-                        sits at the panel's right edge and never shifts when the
-                        heatmap-only controls above it hide in the other views. */}
+                    {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
+                        panel's right edge and never shifts when the heatmap-only controls
+                        above it hide in Chain view. */}
                     <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                      {([
-                        { id: "heatmap", label: "Heatmap" },
-                        { id: "chain", label: "Chain" },
-                        { id: "escandles", label: "ES Candles" },
-                      ] as const).map((v) => (
+                      {(["heatmap", "chain"] as const).map((v) => (
                         <button
-                          key={v.id}
-                          onClick={() => setHeatmapView(v.id)}
+                          key={v}
+                          onClick={() => setHeatmapView(v)}
                           style={{
                             padding: "2px 10px",
                             fontSize: 9,
                             fontWeight: 700,
                             textTransform: "uppercase",
                             letterSpacing: "0.08em",
-                            whiteSpace: "nowrap",
                             cursor: "pointer",
                             border: "none",
                             fontFamily: "inherit",
-                            background: heatmapView === v.id ? "rgba(33,158,188,0.14)" : "transparent",
-                            color: heatmapView === v.id ? "#219EBC" : "#5a7a98",
+                            background: heatmapView === v ? "rgba(33,158,188,0.14)" : "transparent",
+                            color: heatmapView === v ? "#219EBC" : "#5a7a98",
                           }}
                         >
-                          {v.label}
+                          {v}
                         </button>
                       ))}
                     </div>
@@ -1450,9 +1481,7 @@ export function HomeClient({
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
-                {heatmapView === "escandles" ? (
-                  <EsCandlesFullPanel />
-                ) : heatmapView === "chain" ? (
+                {heatmapView === "chain" ? (
                   <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
                 ) : (
                 <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
