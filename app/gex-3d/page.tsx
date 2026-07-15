@@ -8,10 +8,12 @@
 // Strikes on X, session time on Z. Strength reads as BOTH height and luminance
 // (two-stop color ramps), so a dominant wall is obvious even end-on or flat.
 //
-// DATA: useGexSurface → /proxy/gex-history?mode=series (today's ET session out
-// of option_strike_gex_history). Polls every 30 MINUTES on purpose — this is a
-// session-shape view, not a live tape, and there's a manual Refresh for when
-// you want it now.
+// DATA: useGexSurface → /proxy/gex-history?mode=series, out of
+// option_strike_gex_history. The session ROLLS AT 08:00 ET, not midnight: the
+// finished session's terrain stays up all night and hands over to the new
+// contract in the morning, rather than blanking at midnight. Polls every 30
+// MINUTES on purpose — this is a session-shape view, not a live tape — with a
+// manual Refresh for when you want it now.
 // Basis follows the dashboard convention: OI+Vol default + a Vol-only toggle.
 // The grid is normalized by the DAY's peak |GEX| in the hook, so terrain height
 // is comparable across the session but NOT across days.
@@ -111,7 +113,10 @@ type Cell = { x: number; z: number; v: number; h: number; depth: number };
 
 export default function Gex3DPage() {
   const [basis, setBasis] = useState<"net" | "vol">("net");
-  const live = useGexSurface(basis);
+  // Column resolution. 30 = every ~13th minute (fast, readable); 400 = every
+  // recorded minute (~390 towers × 27 strikes — heavier, but nothing dropped).
+  const [buckets, setBuckets] = useState(30);
+  const live = useGexSurface(basis, buckets);
 
   const cvRef = useRef<HTMLCanvasElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
@@ -373,45 +378,97 @@ export default function Gex3DPage() {
       ctx.fillText(spotPath[NZ - 1].toFixed(0), p.x + 8, p.y - 6);
     }
 
-    // ── price-through-wall markers ─────────────────────────────────────────
-    // Flag the columns where spot was sitting ON a strong strike — i.e. price
-    // walked into/through a wall. Detected as: the strike nearest spot at that
-    // minute carries |GEX| over the threshold. That's the moment worth looking
-    // at on this map, so it gets a beacon rather than leaving you to eyeball
-    // where the ribbon happens to intersect a ridge.
-    const crossings: { z: number; x: number; v: number }[] = [];
-    for (let z = 0; z < NZ; z++) {
-      const gx = gxAt(z);
-      const xi = Math.round(gx);
+    // ── wall impacts: rejection vs break-through ───────────────────────────
+    // Two very different events, so they get two very different marks:
+    //
+    //   REJECTION — price closed on a strong strike, touched it, and turned
+    //     back the SAME side it came from. Drawn as an impact splash on the
+    //     wall face: concentric shockwave arcs + spall lines, sized by |GEX|.
+    //     This is price hitting something solid and bouncing off it.
+    //
+    //   BREAK — price went straight through to the other side. Drawn as a
+    //     pierced ring + a breach line through the tower. The wall failed.
+    //
+    // Detected on the spot ribbon vs the strike nearest it at each column.
+    const impacts: { z: number; x: number; v: number; kind: "reject" | "break"; force: number }[] = [];
+    const stepPts = strikes.length > 1 ? Math.abs(strikes[1] - strikes[0]) : 5;
+    for (let z = 1; z < NZ - 1; z++) {
+      const xi = Math.round(gxAt(z));
       if (xi < 0 || xi >= NX) continue;
       const v = rows[z]?.[xi] ?? 0;
-      if (Math.abs(v) < CROSS_THRESHOLD) continue;
-      // Only mark the ENTRY into the wall, not every column parked inside it —
-      // otherwise a pinned session becomes a solid wall of beacons.
-      const prevXi = z > 0 ? Math.round(gxAt(z - 1)) : xi;
-      const prevV = z > 0 ? rows[z - 1]?.[prevXi] ?? 0 : 0;
-      if (z > 0 && Math.abs(prevV) >= CROSS_THRESHOLD && prevXi === xi) continue;
-      crossings.push({ z, x: xi, v });
+      if (Math.abs(v) < CROSS_THRESHOLD) continue; // only STRONG walls count
+
+      const k = strikes[xi];
+      const d0 = spotPath[z - 1] - k;  // signed distance to the wall, before
+      const d1 = spotPath[z] - k;      //                              at
+      const d2 = spotPath[z + 1] - k;  //                              after
+      if (Math.abs(d1) > stepPts) continue; // never actually reached the wall
+
+      const closed = Math.abs(d1) < Math.abs(d0); // was approaching
+      if (!closed) continue;
+
+      const crossed = Math.sign(d0) !== 0 && Math.sign(d2) !== 0 && Math.sign(d0) !== Math.sign(d2);
+      const turned = Math.abs(d2) > Math.abs(d1); // moving back away
+      if (crossed) impacts.push({ z, x: xi, v, kind: "break", force: Math.min(1, Math.abs(v)) });
+      else if (turned) impacts.push({ z, x: xi, v, kind: "reject", force: Math.min(1, Math.abs(v)) });
     }
-    for (const cr of crossings) {
-      const top = (absMode ? Math.abs(cr.v) : cr.v) * rel;
-      const a = proj(cr.x, 0, cr.z);
-      const b = proj(cr.x, top + 40, cr.z);
+
+    for (const im of impacts) {
+      const top = (absMode ? Math.abs(im.v) : im.v) * rel;
+      // Contact point: where the ribbon meets the tower, not the tower's crest —
+      // the impact reads as price hitting the wall's FACE.
+      const contactY = Math.max(0, Math.min(Math.abs(top), RIBBON_Y));
+      const hit = proj(gxAt(im.z), im.v >= 0 ? contactY : -contactY, im.z);
+      const wallCol = im.v >= 0 ? ICE_HI : MAGMA_HI;
+
       ctx.save();
-      // vertical beacon up the tower
-      ctx.strokeStyle = canvasRgba(SPOT, 0.5);
-      ctx.lineWidth = 1.2;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      ctx.setLineDash([]);
-      // ring at the crest
-      ctx.strokeStyle = canvasRgba(SPOT, 0.95);
-      ctx.lineWidth = 1.6;
-      ctx.shadowColor = canvasRgba(SPOT, 0.8);
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, Math.max(2.5, 4.5 * b.s), 0, Math.PI * 2);
-      ctx.stroke();
+      if (im.kind === "reject") {
+        // shockwave: 3 arcs radiating back the way price came from
+        const away = Math.sign(spotPath[im.z - 1] - strikes[im.x]) || 1;
+        const baseR = (4 + im.force * 7) * hit.s;
+        ctx.lineWidth = 1.4;
+        ctx.shadowColor = canvasRgba(wallCol, 0.9);
+        ctx.shadowBlur = 12;
+        for (let i = 0; i < 3; i++) {
+          const r = baseR * (1 + i * 0.55);
+          ctx.strokeStyle = canvasRgba(wallCol, 0.75 - i * 0.2);
+          ctx.beginPath();
+          // half-arc opening back toward the side price came from
+          const a0 = away > 0 ? -Math.PI / 2 : Math.PI / 2;
+          ctx.arc(hit.x, hit.y, r, a0, a0 + Math.PI);
+          ctx.stroke();
+        }
+        // spall: short spikes kicking off the face
+        ctx.strokeStyle = canvasRgba(SPOT, 0.85);
+        ctx.lineWidth = 1;
+        for (let i = -2; i <= 2; i++) {
+          const ang = (i * 0.32) + (away > 0 ? 0 : Math.PI);
+          const L = baseR * (1.1 + Math.abs(i) * 0.12);
+          ctx.beginPath();
+          ctx.moveTo(hit.x, hit.y);
+          ctx.lineTo(hit.x + Math.cos(ang) * L, hit.y + Math.sin(ang) * L * 0.6);
+          ctx.stroke();
+        }
+        // hot core at the point of contact
+        ctx.beginPath();
+        ctx.arc(hit.x, hit.y, Math.max(1.6, 2.6 * hit.s), 0, Math.PI * 2);
+        ctx.fillStyle = canvasRgba(SPOT, 0.95);
+        ctx.fill();
+      } else {
+        // BREAK: pierced ring + breach line straight through the tower
+        const a = proj(im.x, 0, im.z);
+        const b = proj(im.x, top, im.z);
+        ctx.strokeStyle = canvasRgba(SPOT, 0.45);
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = canvasRgba(SPOT, 0.9);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(hit.x, hit.y, Math.max(2.5, (3 + im.force * 4) * hit.s), 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -647,7 +704,10 @@ export default function Gex3DPage() {
             ? "Loading today's recorded surface…"
             : live.error
             ? `History unavailable — ${live.error}`
-            : `${live.expiry || "—"} · ${live.times.length} RTH snapshots · ${live.date} · peak ${fmtGex(live.peak)}` +
+            : (live.stale ? "Last session · " : "") +
+              `${live.expiry || "—"} · ${live.times.length} towers` +
+              (live.strideMin > 1 ? ` (every ${live.strideMin}th min of ${live.minutesAvailable})` : " (every min)") +
+              ` · ${live.date} · peak ${fmtGex(live.peak)}` +
               (live.fetchedAt ? ` · pulled ${fmtClock(live.fetchedAt)}` : "")
         }
         padding={20}
@@ -672,6 +732,24 @@ export default function Gex3DPage() {
                 style={basis === b ? { ...homeButtonStyle, padding: "5px 12px" } : { ...homeSecondaryButtonStyle, padding: "5px 12px" }}
               >
                 {b === "net" ? "OI+Vol" : "Vol only"}
+              </button>
+            ))}
+          </span>
+
+          {/* Column resolution — every tower is one minute either way; this only
+              controls how many of those minutes survive. */}
+          <span style={{ display: "inline-flex", gap: 6 }}>
+            {([
+              { label: "30 cols", n: 30 },
+              { label: "5-min", n: 80 },
+              { label: "1-min", n: 400 },
+            ] as const).map((r) => (
+              <button
+                key={r.n}
+                onClick={() => setBuckets(r.n)}
+                style={buckets === r.n ? { ...homeButtonStyle, padding: "5px 12px" } : { ...homeSecondaryButtonStyle, padding: "5px 12px" }}
+              >
+                {r.label}
               </button>
             ))}
           </span>
@@ -705,6 +783,19 @@ export default function Gex3DPage() {
             onContextMenu={(e) => e.preventDefault()} // right-drag is pan, not a menu
             style={{ display: "block", width: "100%", height: 560, cursor: "grab", touchAction: "none", userSelect: "none" }}
           />
+          {live.stale && !!live.times.length && (
+            <div
+              style={{
+                position: "absolute", top: 10, left: 10, fontSize: 10, fontWeight: 700,
+                letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 8px",
+                borderRadius: 4, color: HOME_THEME.orange,
+                border: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panelBgStrong,
+                pointerEvents: "none",
+              }}
+            >
+              Last session · rolls at 8:00 AM ET
+            </div>
+          )}
           {!live.loading && !live.error && !live.times.length && (
             <div
               style={{
@@ -712,7 +803,7 @@ export default function Gex3DPage() {
                 textAlign: "center", fontSize: 13, color: HOME_THEME.text, opacity: 0.7, padding: 24,
               }}
             >
-              No GEX snapshots recorded for today yet — the writer persists one column per
+              No GEX snapshots recorded for this session yet — the writer persists one column per
               minute during RTH. The terrain fills in as the session runs.
             </div>
           )}
@@ -814,9 +905,12 @@ export default function Gex3DPage() {
         <p style={{ fontSize: 12, color: HOME_THEME.green, marginTop: 14, marginBottom: 0, lineHeight: 1.6 }}>
           Live from <code>/proxy/gex-history?mode=series</code> — today&apos;s recorded per-strike net GEX
           ({basis === "net" ? "OI+Vol composite" : "volume-only"}), RTH only (9:30–16:00 ET), ±13 strikes
-          around spot, up to 30 columns. Tower height and color ramp are both normalized to the
-          day&apos;s peak |GEX| — comparable within the session, not across days. Rings mark where spot
-          entered a strike carrying |GEX| ≥ {CROSS_THRESHOLD}× the day&apos;s peak.
+          around spot. <b>Every tower is one minute&apos;s snapshot</b> — the resolution buttons only
+          change how many of those minutes survive (30 cols ≈ every 13th minute; 1-min drops
+          nothing). Nothing is averaged. Height and color ramp are normalized to the day&apos;s peak
+          |GEX| — comparable within the session, not across days. Where spot reached a strike holding
+          |GEX| ≥ {CROSS_THRESHOLD}× peak: a <b>shockwave splash</b> means price turned back
+          (rejection), a <b>pierced ring</b> means it broke through.
         </p>
       </Card>
     </PageShell>

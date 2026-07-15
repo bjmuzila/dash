@@ -429,6 +429,30 @@ function isRthEt(ms) {
 }
 
 /**
+ * The trading session the 3D map should be showing, rolling at 08:00 ET rather
+ * than midnight. Between the close and 08:00 the next morning there is nothing
+ * new worth showing — the new contract has no recorded surface yet — so a
+ * midnight rollover would blank the map overnight and then show a 1-tower stub
+ * through the pre-market. Holding the finished session until 08:00 keeps the
+ * last real terrain up, then hands over to the new contract.
+ *
+ * Returns YYYY-MM-DD in ET. Weekends/holidays are NOT special-cased here; the
+ * caller falls back to the most recent date that actually has rows, which
+ * covers them (and any day the feed was down) without a holiday calendar.
+ */
+function sessionYmdET(now = Date.now()) {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, hour: '2-digit',
+  }).formatToParts(new Date(now));
+  const hh = Number(p.find((x) => x.type === 'hour')?.value);
+  // Before 08:00 ET we're still "yesterday's session" — step back a day.
+  const anchor = Number.isFinite(hh) && hh < 8 ? now - 24 * 3600_000 : now;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(anchor));
+}
+
+/**
  * mode=series — the whole session as a strike × time grid, for the /gex-3d
  * terrain map. The default (mode=point) answers "what was strike K N minutes
  * ago"; this answers "what did the entire surface do all day", which is a
@@ -445,20 +469,53 @@ function isRthEt(ms) {
  */
 async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
-  const date = searchParams.get('date') || todayYmdET();
+  const dateParam = searchParams.get('date');
   const windowSize = Math.max(4, Math.min(60, Number(searchParams.get('window')) || 13));
-  const maxCols = Math.max(4, Math.min(120, Number(searchParams.get('buckets')) || 30));
+  // Cap raised to 400 so a caller can ask for TRUE 1-minute columns (a full RTH
+  // session is ~390 minutes). The old 120 cap silently downsampled and the
+  // client had no way to tell it was looking at every-Nth-minute point samples.
+  const maxCols = Math.max(4, Math.min(400, Number(searchParams.get('buckets')) || 30));
 
   const pool = getHistPool();
-  const empty = { mode: 'series', basis, expiry, date, strikes: [], times: [], rows: [], spotPath: [] };
-  if (!pool || !expiry) return sendJson(res, 200, empty);
+  const empty = { mode: 'series', basis, expiry, date: dateParam || null, strikes: [], times: [], rows: [], spotPath: [] };
+  if (!pool) return sendJson(res, 200, empty);
+
+  // Resolve the session to show. Explicit ?date wins; otherwise take the 08:00-ET
+  // session anchor and walk back to the most recent date that actually HAS rows
+  // (covers weekends, holidays, and feed outages without a holiday calendar).
+  let date = dateParam;
+  if (!date) {
+    const anchor = sessionYmdET();
+    const { rows: dr } = await pool.query(
+      `SELECT date FROM option_strike_gex_history
+        WHERE date <= $1 ORDER BY date DESC LIMIT 1`,
+      [anchor]
+    );
+    date = dr[0]?.date || anchor;
+  }
+
+  // Resolve the contract. Explicit ?expiry wins; otherwise the expiry with the
+  // most rows on that date — NOT marketState's live expiry, which has already
+  // rolled to the new 0DTE by the time we're still displaying yesterday's map.
+  let useExpiry = expiry;
+  if (!searchParams.get('expiry')) {
+    const { rows: er } = await pool.query(
+      `SELECT expiry, COUNT(*) AS n FROM option_strike_gex_history
+        WHERE date = $1 GROUP BY expiry ORDER BY n DESC LIMIT 1`,
+      [date]
+    );
+    if (er[0]?.expiry) useExpiry = er[0].expiry;
+  }
+  empty.date = date;
+  empty.expiry = useExpiry;
+  if (!useExpiry) return sendJson(res, 200, empty);
 
   const { rows: raw } = await pool.query(
     `SELECT timestamp, strike, spot, ${col} AS val
        FROM option_strike_gex_history
       WHERE date = $1 AND expiry = $2 AND ${col} IS NOT NULL
       ORDER BY timestamp ASC, strike ASC`,
-    [date, expiry]
+    [date, useExpiry]
   );
   if (!raw.length) return sendJson(res, 200, empty);
 
@@ -483,14 +540,19 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
   for (const c of rth) byMinute.set(Math.floor(c.ts / 60_000), c);
   const minuteCols = [...byMinute.values()].sort((a, b) => a.ts - b.ts);
 
-  // Terrain gets an evenly downsampled view (≤ maxCols) so the extruded columns
-  // stay renderable; bubbles read minuteCols at full resolution below.
+  // Downsample to ≤ maxCols. NOTE this PICKS every-Nth minute rather than
+  // averaging the ones between — a tower is always exactly one minute's
+  // snapshot, never a blend. `strideMin` is echoed so the client can say so
+  // honestly instead of implying each tower spans that many minutes.
   let cols = minuteCols;
   if (cols.length > maxCols) {
     const picked = [];
     for (let i = 0; i < maxCols; i++) picked.push(cols[Math.round((i * (cols.length - 1)) / (maxCols - 1))]);
     cols = picked;
   }
+  const strideMin = cols.length > 1
+    ? Math.max(1, Math.round((cols[1].ts - cols[0].ts) / 60_000))
+    : 1;
 
   // Strike window centered on the LATEST spot, snapped to the strike grid that
   // actually has data (SPX records 5s and 10s — don't assume a step).
@@ -516,13 +578,19 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
   const payload = {
     mode: 'series',
     basis,
-    expiry,
+    expiry: useExpiry,
     date,
+    /** True when this is a finished session being held up until 08:00 ET. */
+    stale: date !== sessionYmdET(),
     strikes,
     times: cols.map((c) => c.ts),
     rows,
     spotPath: cols.map((c) => (Number.isFinite(Number(c.spot)) ? Number(c.spot) : null)),
     updatedAt: latest.ts,
+    // Each column is ONE minute's snapshot; strideMin is the gap between the
+    // minutes that survived downsampling (1 = every minute, nothing dropped).
+    strideMin,
+    minutesAvailable: minuteCols.length,
   };
 
   if (searchParams.get('minutes') === '1') {

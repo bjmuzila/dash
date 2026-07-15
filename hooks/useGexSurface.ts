@@ -38,12 +38,27 @@ export interface GexSurface {
   error: string | null;
   /** Epoch ms of the last successful pull (not of the data itself). */
   fetchedAt: number;
+  /**
+   * Minutes between the columns that survived downsampling. Each column is
+   * still ONE minute's snapshot — stride 13 means you're seeing every 13th
+   * minute, NOT 13-minute averages.
+   */
+  strideMin: number;
+  /** How many 1-min columns exist for the session before downsampling. */
+  minutesAvailable: number;
+  /**
+   * True when the map is showing a FINISHED session rather than the current
+   * one. The server holds the last completed session up until 08:00 ET before
+   * rolling to the new contract, so this is expected overnight — not an error.
+   */
+  stale: boolean;
 }
 
 const EMPTY: GexSurface = {
   strikes: [], times: [], rows: [], norm: [], spotPath: [],
   minuteTimes: [], minuteRaw: [], minuteNorm: [],
   peak: 0, expiry: "", date: "", loading: true, error: null, fetchedAt: 0,
+  strideMin: 1, minutesAvailable: 0, stale: false,
 };
 
 /**
@@ -57,6 +72,8 @@ export const GEX_SURFACE_POLL_MS = 30 * 60_000; // 30 minutes
 
 export function useGexSurface(
   basis: "net" | "vol" = "net",
+  /** Max columns to render. 30 ≈ every ~13th minute; 400 = every minute. */
+  buckets = 30,
   expiry?: string,
   pollMs = GEX_SURFACE_POLL_MS
 ): GexSurface & { refresh: () => void } {
@@ -71,7 +88,7 @@ export function useGexSurface(
         // minutes=1 is NOT requested: the 3D map draws towers only now (the
         // 1-min bubble layer was removed), so pulling ~390 extra rows per poll
         // would be dead weight. The server still supports it for future callers.
-        const qs = new URLSearchParams({ mode: "series", basis, window: "13", buckets: "30" });
+        const qs = new URLSearchParams({ mode: "series", basis, window: "13", buckets: String(buckets) });
         if (expiry) qs.set("expiry", expiry);
         const r = await fetch(`/proxy/gex-history?${qs}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`gex-history ${r.status}`);
@@ -108,6 +125,9 @@ export function useGexSurface(
           loading: false,
           error: null,
           fetchedAt: Date.now(),
+          strideMin: Number(j?.strideMin) || 1,
+          minutesAvailable: Number(j?.minutesAvailable) || 0,
+          stale: Boolean(j?.stale),
         });
       } catch (e) {
         if (cancelled) return;
@@ -117,7 +137,7 @@ export function useGexSurface(
     load();
     const id = setInterval(load, pollMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, [basis, expiry, pollMs, nonce]);
+  }, [basis, buckets, expiry, pollMs, nonce]);
 
   return { ...surface, refresh };
 }
