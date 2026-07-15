@@ -84,6 +84,7 @@ export default function EsCandlesFullPanel() {
   const columnsRef = useRef<Map<number, GexColumn>>(new Map()); // keyed by 5-min slot
   const drawOverlayRef = useRef<() => void>(() => {});
   const hmScaleWRef = useRef(0);            // cached right-axis gutter width
+  const hmBufRef = useRef<HTMLCanvasElement | null>(null); // reused offscreen heatmap buffer
   const candleBandRef = useRef<{ lo: number; hi: number } | null>(null); // visible ES band
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [feedExpiry, setFeedExpiry] = useState(""); // live front expiry → drives backfill
@@ -528,11 +529,21 @@ export default function EsCandlesFullPanel() {
       const lastSlotTs = cols[cols.length - 1].slotTs;
 
       // Draw to an offscreen buffer, then composite through a blur so adjacent
-      // cells melt into smooth bands instead of hard tiles.
-      const buf = document.createElement("canvas");
-      buf.width = Math.max(1, Math.round(w));
-      buf.height = Math.max(1, Math.round(h));
+      // cells melt into smooth bands instead of hard tiles. The buffer is
+      // allocated ONCE and reused — a fresh full-viewport canvas per rAF was pure
+      // allocation + GC churn while panning. Setting width/height clears it, so
+      // only touch those on a real size change; otherwise clearRect.
+      const bw = Math.max(1, Math.round(w));
+      const bh = Math.max(1, Math.round(h));
+      if (!hmBufRef.current) hmBufRef.current = document.createElement("canvas");
+      const buf = hmBufRef.current;
       const bctx = buf.getContext("2d");
+      if (buf.width !== bw || buf.height !== bh) {
+        buf.width = bw;
+        buf.height = bh;
+      } else {
+        bctx?.clearRect(0, 0, bw, bh);
+      }
       if (bctx) {
         const band = candleBandRef.current;
         const fadeSpan = 30; // ES points to fade to ~floor past the band edge
@@ -555,6 +566,12 @@ export default function EsCandlesFullPanel() {
             const nextX = slotX(cols[ci + 1].slotTs);
             if (nextX && nextX.left > sx.left) sx.w = nextX.left - sx.left;
           }
+          // CULL to the visible plot. slotX only returns null for times the chart
+          // doesn't know about — a column scrolled off-screen still resolves to an
+          // off-screen coordinate, so without this every stored column ran its full
+          // per-cell loop to paint nothing. Must come AFTER the carry-forward above
+          // (that's what sets the real width).
+          if (sx.left + sx.w < -2 || sx.left > hmPlotRight + 2) continue;
           const absVals = col.cells.map((c) => Math.abs(c.netOiVol)).filter((v) => v > 0);
           const colMax = absVals.length ? Math.max(...absVals) : 1;
           const colTop3 = [...absVals].sort((a, b) => b - a).slice(0, 3);

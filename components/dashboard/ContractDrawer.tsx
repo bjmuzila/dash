@@ -8,7 +8,8 @@
 // can compare the print you're inspecting against the ones around it.
 //
 // Contents:
-//   • contract price line (/proxy/option-history), fill / peak / trough guides
+//   • contract price line (/proxy/option-history), fill / peak / trough guides,
+//     traded volume in its own pane at the bottom
 //   • since-fill tracking — the print's price vs current / peak / trough
 //   • Vol/OI and IV·%OTM tiles, fed live from useContractStats
 //
@@ -297,7 +298,8 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
   );
 }
 
-// ── Inline SVG chart: contract close line + fill / peak / trough guides. ──
+// ── Inline SVG chart: contract close line + fill/peak/trough guides, over a
+// volume pane pinned to the bottom. ──
 // Deliberately hand-rolled rather than lightweight-charts: the drawer mounts and
 // unmounts on every row click, and a full chart instance per expand is heavy.
 // Note the guides come from bar HIGHS/LOWS while the line is CLOSES, so the peak
@@ -321,14 +323,15 @@ function ContractChart({
     return () => ro.disconnect();
   }, []);
 
-  // No volume bars: this chart answers one question — what did the contract do
-  // since the alert — and volume was competing with the price line for the same
-  // pixels while carrying none of that answer. (Contract volume still lives in
-  // the Vol/OI tile, where it's a live number rather than a shape.) Price gets
-  // the whole box.
+  // Volume lives in its OWN pane pinned to the bottom, not overlaid on price:
+  // overlaid, it fought the price line for the same pixels and its height meant
+  // nothing against a dollar axis.
   const H = 260, PADL = 6, PADR = 62, PADT = 10, PADB = 24;
+  const VOL_H = 46;   // volume pane, pinned to the bottom of the card
+  const GAP = 10;     // separation between panes
   const iw = Math.max(80, w - PADL - PADR);
-  const ih = H - PADT - PADB;
+  const ih = H - PADT - PADB - VOL_H - GAP; // price pane
+  const volTop = PADT + ih + GAP;
 
   const closes = bars.map((b) => b.close);
   // Domain spans only what's drawn — the close line and the three guide levels.
@@ -350,6 +353,19 @@ function ContractChart({
   const path = closes.map((c, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(c).toFixed(1)}`).join("");
   const fillIdx = bars.findIndex((b) => b.time >= fillTs - 60_000);
 
+  // Volume scale: the 95th percentile, NOT the max. A whale print is by
+  // definition a volume outlier, so scaling to the max makes that one bar full
+  // height and squashes every other bar to ~1px — which reads as "no volume on
+  // the chart". Bars above p95 simply clip to full height; they're already
+  // obviously the biggest, and the fill bar is colour-coded anyway.
+  const vols = bars.map((b) => b.volume ?? 0);
+  const nonZero = vols.filter((v) => v > 0).sort((a, b) => a - b);
+  const p95 = nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * 0.95))] : 0;
+  const vmax = Math.max(1, p95);
+  const barW = Math.max(1.5, (iw / Math.max(1, bars.length)) * 0.6);
+  // Any real trade gets at least 1.5px so it's visible at all.
+  const volH = (v: number) => (v > 0 ? Math.max(1.5, Math.min(1, v / vmax) * VOL_H) : 0);
+
   // Bars are always intraday now, but "All" can span several sessions — a bare
   // clock time would then repeat 09:30 once per day and read as nonsense.
   const multiDay = bars.length > 1 && bars[bars.length - 1].time - bars[0].time > 86_400_000;
@@ -364,6 +380,32 @@ function ContractChart({
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
       <svg width={w} height={H} style={{ display: "block" }}>
+        {/* ── volume pane, pinned to the bottom of the card ── */}
+        <line x1={PADL} x2={PADL + iw} y1={volTop + VOL_H} y2={volTop + VOL_H} stroke={C.border} strokeWidth={1} />
+        {bars.map((b, i) => {
+          const v = b.volume ?? 0;
+          const bh = volH(v);
+          if (!bh) return null;
+          return (
+            <rect
+              key={i}
+              x={X(i) - barW / 2}
+              y={volTop + VOL_H - bh}
+              width={barW}
+              height={bh}
+              rx={1}
+              fill={i === fillIdx ? C.orange : "rgba(142,202,230,0.45)"}
+            >
+              <title>{`${tickFmt(b.time)} — ${v.toLocaleString()} contracts`}</title>
+            </rect>
+          );
+        })}
+        <text x={PADL + iw + 8} y={volTop + 9} fill="rgba(255,255,255,0.4)" fontSize={9} fontFamily="var(--font-mono)">
+          {vmax >= 1000 ? `${(vmax / 1000).toFixed(1)}K` : vmax.toFixed(0)}
+        </text>
+        <text x={PADL + iw + 8} y={volTop + VOL_H} fill="rgba(255,255,255,0.3)" fontSize={9} fontFamily="var(--font-mono)">
+          vol
+        </text>
         {/* peak / trough guides */}
         {track && Number.isFinite(track.peak) && (
           <line x1={PADL} x2={PADL + iw} y1={Y(track.peak)} y2={Y(track.peak)} stroke={BULL} strokeWidth={1} strokeDasharray="5 4" opacity={0.5} />
@@ -375,9 +417,10 @@ function ContractChart({
         {fillPrice > 0 && (
           <line x1={PADL} x2={PADL + iw} y1={Y(fillPrice)} y2={Y(fillPrice)} stroke={C.orange} strokeWidth={1} strokeDasharray="5 4" opacity={0.7} />
         )}
-        {/* The alert's moment. */}
+        {/* The alert's moment — spans both panes so the print's volume bar lines
+            up with the price it printed at. */}
         {fillIdx >= 0 && (
-          <line x1={X(fillIdx)} x2={X(fillIdx)} y1={PADT} y2={PADT + ih} stroke={C.orange} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.85} />
+          <line x1={X(fillIdx)} x2={X(fillIdx)} y1={PADT} y2={volTop + VOL_H} stroke={C.orange} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.85} />
         )}
         {/* price */}
         <path d={path} fill="none" stroke={C.green} strokeWidth={2} strokeLinejoin="round" />
@@ -394,7 +437,7 @@ function ContractChart({
         {bars.length > 1 && [0, 0.33, 0.66, 1].map((f) => {
           const i = Math.round(f * (bars.length - 1));
           return (
-            <text key={f} x={X(i)} y={PADT + ih + 15} fill="rgba(255,255,255,0.35)" fontSize={9.5} textAnchor="middle" fontFamily="var(--font-mono)">
+            <text key={f} x={X(i)} y={volTop + VOL_H + 15} fill="rgba(255,255,255,0.35)" fontSize={9.5} textAnchor="middle" fontFamily="var(--font-mono)">
               {tickFmt(bars[i].time)}
             </text>
           );

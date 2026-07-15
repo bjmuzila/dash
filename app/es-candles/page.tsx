@@ -401,6 +401,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Cached right price-axis gutter width (px). Updated only on >=1px change so
   // the heatmap's right edge doesn't shimmer with sub-pixel label wobble.
   const hmScaleWRef = useRef(0);
+  // Offscreen heatmap buffer, reused across draws. Was allocated fresh inside
+  // draw() on every frame — a full-viewport canvas per rAF during a pan/zoom,
+  // which is pure allocation + GC churn. Resized only when the canvas size
+  // actually changes; otherwise just cleared.
+  const hmBufRef = useRef<HTMLCanvasElement | null>(null);
   // Visible candle price band (ES) — min low / max high of the loaded bars.
   // Heatmap cells fade with distance from this band so far-away GEX walls read
   // as faint context instead of loud bars floating in the dead zone above price.
@@ -1730,11 +1735,20 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         const lastSlotTs = cols.length ? cols[cols.length - 1].slotTs : -1;
 
         // Offscreen buffer at the same CSS size (the main ctx is already DPR-
-        // scaled, so we draw in CSS px here too).
-        const buf = document.createElement("canvas");
-        buf.width = Math.max(1, Math.round(w));
-        buf.height = Math.max(1, Math.round(h));
+        // scaled, so we draw in CSS px here too). Allocated ONCE and reused;
+        // setting width/height is what clears it, so only touch those when the
+        // size really changed — otherwise clearRect.
+        const bw = Math.max(1, Math.round(w));
+        const bh = Math.max(1, Math.round(h));
+        if (!hmBufRef.current) hmBufRef.current = document.createElement("canvas");
+        const buf = hmBufRef.current;
         const bctx = buf.getContext("2d");
+        if (buf.width !== bw || buf.height !== bh) {
+          buf.width = bw;
+          buf.height = bh;
+        } else {
+          bctx?.clearRect(0, 0, bw, bh);
+        }
         if (bctx) {
           // Active metric, read from the ref so live WS draws pick it up.
           const metric = gexMetricRef.current;
@@ -1768,6 +1782,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               const nextX = slotX(cols[ci + 1].slotTs);
               if (nextX && nextX.left > sx.left) sx.w = nextX.left - sx.left;
             }
+            // CULL to the visible plot. slotX only returns null for times the
+            // chart doesn't know about — a column scrolled off the left edge still
+            // resolves to an off-screen coordinate, so without this every stored
+            // column ran the full per-cell loop (~200 strikes × 2 priceToCoordinate
+            // + a fillRect each) to paint nothing. At 5D/1-min that's ~1950 columns
+            // of work per frame to show the ~40 on screen. Must come AFTER the
+            // carry-forward above (that's what sets the real width).
+            if (sx.left + sx.w < -2 || sx.left > hmPlotRight + 2) continue;
             // Per-column max + top-3 magnitudes for THIS metric (drives color/rank).
             const absVals = col.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
             const colMax = absVals.length ? Math.max(...absVals) : 1;
