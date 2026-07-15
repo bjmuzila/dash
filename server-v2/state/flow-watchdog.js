@@ -79,11 +79,22 @@ function startFlowWatchdog(thetaStream) {
       const sinceOpenMs = (mins - OPEN_MINS) * 60_000;
       const age = Math.min(last ? Date.now() - last : Infinity, sinceOpenMs);
       if (age < SOFT_RECONNECT_AFTER_MS) {
-        // Healthy → clear the episode latches. Without this, `restartedAt` stays
-        // set forever after the first-ever restart, so every later staleness
-        // event short-circuits to Stage 3 (page a human) and Stage 2 never runs
-        // a second time. That was the "watchdog restarts once then just emails
-        // every day" bug.
+        // Healthy → close out the episode and clear the latches. Without this,
+        // `restartedAt` stays set forever after the first-ever restart, so every
+        // later staleness event short-circuits to Stage 3 (page a human) and
+        // Stage 2 never runs a second time. That was the "watchdog restarts once
+        // then just emails every day while the tape flatlines" bug.
+        if (restartedAt) {
+          // Confirm the self-heal actually worked — otherwise the only mail this
+          // ever sends is bad news, and a silent recovery is indistinguishable
+          // from a restart that did nothing.
+          sendAlert({
+            key: 'flow-recovered',
+            subject: 'CB Edge: flow feed recovered after auto-restart',
+            message: `SPX OTM prints resumed ${Math.round((Date.now() - restartedAt) / 60000)} min after the `
+              + 'automatic theta-terminal restart. Self-heal worked — no action needed.',
+          }).catch(() => {});
+        }
         softReconnectedAt = 0;
         restartedAt = 0;
         return;
