@@ -39,6 +39,10 @@ const IN = arg("in");
 const HORIZON = +arg("horizon", 20);
 const TP = arg("tp") != null ? +arg("tp") : null;
 const SL = arg("sl") != null ? +arg("sl") : null;
+// Round-turn cost in POINTS. ES default: 0.25 spread + ~0.08 commission ($4/RT
+// ÷ $50/pt). Every number in this file was cost-free until now, i.e. optimistic.
+// A strategy that clears zero gross and dies at 0.33 pts is not a strategy.
+const COST = arg("cost") != null ? +arg("cost") : 0.33;
 const AS_JSON = argv.includes("--json");
 
 if (!SPEC_PATH || !IN) {
@@ -90,8 +94,82 @@ console.log(`${spec.name || spec.id}   [${spec.symbol} ${tf}m ${spec.side} ${spe
 console.log(bar);
 
 console.log(`\nSIGNALS  ${trades.length}   over ${[...new Set(trades.map((t) => t.date))].length} sessions`);
+console.log(`COSTS    ${f(COST)} pts round-turn (--cost 0 to see gross)`);
 if (trades.length < 200) {
   console.log(`  ⚠ under 200 trades — treat every number below as directional, not decisive.`);
+}
+
+if (diag) {
+  console.log(`\nFUNNEL  (which gate ate the setups)`);
+  console.log(`  penetrations       ${String(diag.setups).padStart(6)}`);
+  console.log(`  → no reversal bar  ${String(diag.noReversal).padStart(6)}   (no opposite-colour candle in time)`);
+  console.log(`  reversal found     ${String(diag.reversalFound).padStart(6)}`);
+  console.log(`  → invalidated      ${String(diag.invalidated).padStart(6)}   (new low before trigger)`);
+  console.log(`  → no trigger       ${String(diag.noTrigger).padStart(6)}   (never closed above reversal close)`);
+  console.log(`  triggered          ${String(diag.triggered).padStart(6)}`);
+  console.log(`  filled             ${String(diag.filled).padStart(6)}`);
+}
+
+if (isPattern && trades.length) {
+  console.log(`\nSTRUCTURAL STOP  (reversal bar's low — the pattern's own risk, no fitting)`);
+  const risks = trades.map((t) => t.structStop).filter((x) => x > 0);
+  console.log(`  median ${f(engine.pct(risks, 0.5))} pts   p25 ${f(engine.pct(risks, 0.25))}   p75 ${f(engine.pct(risks, 0.75))}`);
+  console.log(`  ${"".padEnd(5)} ${"win%".padStart(6)} ${"need".padStart(6)} ${"W".padStart(5)} ${"L".padStart(5)} ${"flat".padStart(5)} ${"exp R".padStart(7)} ${"ambig".padStart(6)} ${"optim".padStart(7)}`);
+  let sym = null;
+  for (const R of [1, 1.5, 2, 3]) {
+    const scored = engine.scoreStructural(trades, R, HORIZON, COST);
+    const s = engine.summarizeR(scored); // r is continuous now (timeouts mark to market)
+    const amb = scored.filter((t) => t.ambiguous).length;
+    const opt = engine.summarize(engine.scoreStructuralOptimistic(trades, R, HORIZON));
+    if (R === 1) sym = s;
+    const breakeven = 100 / (1 + R);
+    const flag = s.expectancy > 0 ? "✓" : " ";
+    console.log(
+      `  ${flag}${String(R).padStart(3)}R ${f(s.winRate * 100, 1).padStart(6)} ${f(breakeven, 1).padStart(6)} ` +
+      `${String(s.wins).padStart(5)} ${String(s.losses).padStart(5)} ${String(s.flat).padStart(5)} ${f(s.expectancy).padStart(7)} ` +
+      `${String(amb).padStart(6)} ${f(opt.expectancy).padStart(7)}`
+    );
+  }
+  console.log(`  ambig = bars containing BOTH barriers (order unknowable from OHLC).`);
+  console.log(`  exp R assumes stop-first; optim assumes target-first. TRUTH IS BETWEEN THEM.`);
+  console.log(`  If those two straddle zero, this data can't resolve the strategy — you need ticks.`);
+  console.log(`  → this is the setup on its OWN terms, before any optimization.`);
+  console.log(`     If no R multiple clears breakeven here, tuning won't save it.`);
+
+  console.log(`\nTRAILING STOP  (ratchet to each prior bar's low; no TP, risk = reversal low)`);
+  console.log(`  ${"delay".padEnd(7)} ${"win%".padStart(6)} ${"avgW".padStart(6)} ${"avgL".padStart(6)} ${"bars".padStart(5)} ${"bestR".padStart(6)} ${"exp R".padStart(7)}`);
+  for (const startAfter of [0, 1, 2, 3]) {
+    const s = engine.summarizeR(engine.scoreTrailing(trades, { startAfter, costPts: COST }));
+    if (!s.n) continue;
+    const flag = s.expectancy > 0 ? "✓" : " ";
+    console.log(
+      `  ${flag}${String(startAfter + " bar").padEnd(6)} ${f(s.winRate * 100, 1).padStart(6)} ` +
+      `${f(s.avgWin).padStart(6)} ${f(s.avgLoss).padStart(6)} ${f(s.medBars, 0).padStart(5)} ` +
+      `${f(s.bestR, 1).padStart(6)} ${f(s.expectancy).padStart(7)}`
+    );
+  }
+  console.log(`  → "delay" = bars before the trail activates (0 = from entry).`);
+  console.log(`     Expect low win%, small avgL, fat avgW. Judge on exp R, nothing else.`);
+  console.log(`     A 3m ES bar is ~2-3 pts, so a 0-bar trail stops out almost instantly.`);
+
+  // ── SANITY GUARD ────────────────────────────────────────────────────────
+  // At 1R the barriers are SYMMETRIC (+risk / -risk). A driftless series must
+  // produce wins ≈ losses. A large skew means one of two things, and you have
+  // to rule out the second before believing the first:
+  //   1. the setup has real directional drift, or
+  //   2. the scorer is broken.
+  // A previous version of this file scored "both barriers touched in the
+  // window" as a loss, which manufactured exactly this skew out of nothing.
+  if (sym && sym.wins + sym.losses > 30) {
+    const skew = (sym.losses - sym.wins) / (sym.wins + sym.losses);
+    if (Math.abs(skew) > 0.15) {
+      console.log(
+        `\n  ⚠ SANITY: at 1R the barriers are symmetric, but W/L is ${sym.wins}/${sym.losses} ` +
+        `(${f(skew * 100, 0)}% skew ${skew > 0 ? "toward losses" : "toward wins"}).`
+      );
+      console.log(`     Either the setup has genuine drift, or the scorer is lying. Rule out #2 first.`);
+    }
+  }
 }
 
 console.log(`\nEXCURSION CURVE (points, median across all signals)`);

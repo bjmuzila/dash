@@ -273,19 +273,77 @@ const GRID = [1, 3, 5, 10, 15, 20, 30, 45, 60];
 function walkPath(bars, signalIdx, entry, side, tf) {
   let mfe = 0, mae = 0;
   const path = {};
+  const seq = []; // PER-BAR excursion, not running max — preserves ORDER.
   let gi = 0;
+  const maxMin = GRID[GRID.length - 1];
   for (let j = signalIdx + 1; j < bars.length && bars[j].date === bars[signalIdx].date; j++) {
     const fav = side === 1 ? bars[j].h - entry : entry - bars[j].l;
     const adv = side === 1 ? entry - bars[j].l : bars[j].h - entry;
+    const elapsed = (j - signalIdx) * tf;
+    // hi/lo/cl are ABSOLUTE prices — a trailing stop ratchets to real bar lows,
+    // which excursion-from-entry can't express.
+    seq.push({ t: elapsed, fav, adv, hi: bars[j].h, lo: bars[j].l, cl: bars[j].c });
     mfe = Math.max(mfe, fav);
     mae = Math.max(mae, adv);
-    const elapsed = (j - signalIdx) * tf;
     while (gi < GRID.length && GRID[gi] <= elapsed) { path[GRID[gi]] = { mfe, mae }; gi++; }
-    if (gi >= GRID.length) break;
+    if (elapsed >= maxMin) break;
   }
   // pad unfilled grid points (trade ran into the session close)
   while (gi < GRID.length) { path[GRID[gi]] = { mfe, mae }; gi++; }
-  return { mfe, mae, path };
+  return { mfe, mae, path, seq };
+}
+
+/**
+ * Resolve a tp/sl against the ORDERED bar sequence. `mfe`/`mae` are running
+ * maxima and carry no ordering — scoring against them counts "hit TP at +4min,
+ * sagged to -1R at +19min" as a LOSS, because both extremes appear in the
+ * window. That is not pessimism, it is a scoring bug: the TP filled and the
+ * trade was closed before the drawdown ever happened.
+ *
+ * Order ACROSS bars is knowable, so we walk them. Order WITHIN one bar is not
+ * knowable from OHLC — if a single bar spans both levels we assume the stop
+ * filled first. That is the only place pessimism is honest.
+ */
+function resolveFirstTouch(seq, tp, sl, horizonMin) {
+  for (const s of seq) {
+    if (horizonMin && s.t > horizonMin) break;
+    const hitSl = sl != null && s.adv >= sl;
+    const hitTp = tp != null && s.fav >= tp;
+    // Both levels inside ONE bar: OHLC cannot tell us which came first. We
+    // assume the stop. That is defensible but it is NOT neutral — it is a
+    // systematic negative bias, so it must be COUNTED, not waved through. If
+    // `ambiguous` is a large share of trades, a small negative expectancy is
+    // this assumption, not the market.
+    if (hitSl && hitTp) return { outcome: "loss", ambiguous: true };
+    if (hitSl) return { outcome: "loss", ambiguous: false };
+    if (hitTp) return { outcome: "win", ambiguous: false };
+  }
+  return { outcome: "flat", ambiguous: false };
+}
+
+/**
+ * Re-score with the ambiguous bars resolved OPTIMISTICALLY (target first). The
+ * truth is bracketed by the two runs. If the pessimistic and optimistic
+ * expectancies straddle zero, the backtest cannot resolve this strategy at this
+ * bar resolution and you need tick data to answer it — say that rather than
+ * picking whichever number you prefer.
+ */
+function scoreStructuralOptimistic(trades, rMultiple = 2, horizonMin = 20) {
+  return trades
+    .filter((t) => t.structStop > 0)
+    .map((t) => {
+      const risk = t.structStop, tp = risk * rMultiple;
+      let outcome = "flat";
+      for (const s of t.seq) {
+        if (horizonMin && s.t > horizonMin) break;
+        const hitSl = s.adv >= risk, hitTp = s.fav >= tp;
+        if (hitSl && hitTp) { outcome = "win"; break; } // optimistic
+        if (hitSl) { outcome = "loss"; break; }
+        if (hitTp) { outcome = "win"; break; }
+      }
+      const r = outcome === "win" ? rMultiple : outcome === "loss" ? -1 : 0;
+      return { ...t, outcome, r };
+    });
 }
 
 /**
@@ -445,20 +503,97 @@ function runPattern(rows, spec) {
  * multiple, instead of a fitted TP/SL. This is the honest first test: does the
  * setup work on its own terms, before any optimization touches it?
  */
-function scoreStructural(trades, rMultiple = 2, horizonMin = 20) {
+function scoreStructural(trades, rMultiple = 2, horizonMin = 20, costPts = 0) {
   const scored = trades.map((t) => {
-    const g = t.path[horizonMin] || t;
     const risk = t.structStop;
     if (!(risk > 0)) return { ...t, outcome: "skip", r: 0 };
-    const tp = risk * rMultiple;
-    const hitSl = g.mae >= risk;
-    const hitTp = g.mfe >= tp;
-    if (hitSl && hitTp) return { ...t, outcome: "loss", r: -1 }; // pessimistic
-    if (hitTp) return { ...t, outcome: "win", r: rMultiple };
-    if (hitSl) return { ...t, outcome: "loss", r: -1 };
-    return { ...t, outcome: "flat", r: 0 };
+    const side = t.side === "short" ? -1 : 1;
+    const { outcome, ambiguous } = resolveFirstTouch(t.seq, risk * rMultiple, risk, horizonMin);
+
+    let r;
+    if (outcome === "win") r = rMultiple;
+    else if (outcome === "loss") r = -1;
+    else {
+      // TIMEOUT — mark to MARKET at the horizon, not to zero. Scoring a timed-out
+      // trade as breakeven is fiction: you exit at whatever price is there. At
+      // high R multiples most trades time out, so r=0 was silently deciding the
+      // whole column and made far targets look catastrophic when the real story
+      // was just a 20-minute horizon.
+      let last = null;
+      for (const s of t.seq) { if (horizonMin && s.t > horizonMin) break; last = s; }
+      r = last ? ((last.cl - t.entry) * side) / risk : 0;
+    }
+    return { ...t, outcome, r: r - costPts / risk, ambiguous };
   });
   return scored.filter((t) => t.outcome !== "skip");
+}
+
+/**
+ * Bar-by-bar trailing stop: after each bar closes, ratchet the stop to that
+ * bar's low (long) / high (short). Never loosens. No take-profit — the trail
+ * is the exit, which is the point: winners run until structure breaks.
+ *
+ * Ordering, and it matters: during bar j the stop in force is bar (j-1)'s low.
+ * Trailing to bar j's OWN low while bar j is live would stop you out on every
+ * single bar by construction — the low is always touched. Off-by-one here
+ * silently produces a -1R-every-trade result that looks like a real finding.
+ *
+ * The initial stop is the pattern's structural stop (reversal bar low).
+ *
+ * @param {number} startAfter  bars to wait before the trail activates. 0 = trail
+ *                             from the entry bar. Raising this gives the trade
+ *                             room to breathe before structure can stop it.
+ */
+function scoreTrailing(trades, { horizonMin = null, startAfter = 0, costPts = 0 } = {}) {
+  return trades
+    .filter((t) => t.structStop > 0 && t.seq.length)
+    .map((t) => {
+      const side = t.side === "short" ? -1 : 1;
+      const risk0 = t.structStop;
+      let stop = side === 1 ? t.entry - risk0 : t.entry + risk0;
+      let exit = null, bars = 0;
+
+      for (let k = 0; k < t.seq.length; k++) {
+        const s = t.seq[k];
+        if (horizonMin && s.t > horizonMin) break;
+        bars = k + 1;
+        // 1. is the stop in force (set by the PREVIOUS bar) hit during this bar?
+        if (side === 1 ? s.lo <= stop : s.hi >= stop) { exit = stop; break; }
+        // 2. bar closed — now ratchet. Monotone: never widens.
+        if (k >= startAfter) {
+          stop = side === 1 ? Math.max(stop, s.lo) : Math.min(stop, s.hi);
+        }
+      }
+      // never stopped inside the window → mark out at the last close we saw
+      if (exit == null) {
+        const last = t.seq[Math.min(bars, t.seq.length) - 1];
+        exit = last ? last.cl : t.entry;
+      }
+      const r = ((exit - t.entry) * side) / risk0 - costPts / risk0;
+      return { ...t, exit, r, bars, outcome: r > 0.05 ? "win" : r < -0.05 ? "loss" : "flat" };
+    });
+}
+
+/** Expectancy for trailing exits, where r is continuous rather than ±1/±R. */
+function summarizeR(scored) {
+  const n = scored.length;
+  if (!n) return { n: 0 };
+  const rs = scored.map((t) => t.r);
+  const wins = rs.filter((r) => r > 0.05);
+  const losses = rs.filter((r) => r < -0.05);
+  const total = rs.reduce((a, b) => a + b, 0);
+  return {
+    n,
+    wins: wins.length,
+    losses: losses.length,
+    flat: n - wins.length - losses.length,
+    winRate: wins.length / n,
+    avgWin: wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : 0,
+    avgLoss: losses.length ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length) : 0,
+    expectancy: total / n, // mean R per trade — the only number that pays rent
+    bestR: Math.max(...rs),
+    medBars: pct(scored.map((t) => t.bars), 0.5),
+  };
 }
 
 /* ── stats ────────────────────────────────────────────────────────────────── */
@@ -478,18 +613,9 @@ function pct(arr, p) {
  */
 function applyExits(trades, tp, sl, horizonMin) {
   return trades.map((t) => {
-    const g = horizonMin ? t.path[horizonMin] || t : t;
-    const hitSl = sl != null && g.mae >= sl;
-    const hitTp = tp != null && g.mfe >= tp;
-    let r, outcome;
-    if (hitSl && hitTp) { r = -1; outcome = "loss"; }        // pessimistic
-    else if (hitTp) { r = tp / (sl || tp); outcome = "win"; }
-    else if (hitSl) { r = -1; outcome = "loss"; }
-    else {
-      // timed out — mark to the excursion we actually had at the horizon
-      r = 0; outcome = "flat";
-    }
-    return { ...t, r, outcome };
+    const { outcome, ambiguous } = resolveFirstTouch(t.seq, tp, sl, horizonMin);
+    const r = outcome === "win" ? tp / (sl || tp) : outcome === "loss" ? -1 : 0;
+    return { ...t, r, outcome, ambiguous };
   });
 }
 
@@ -610,7 +736,11 @@ module.exports = {
   runStrategy,
   runPattern,
   walkPath,
+  resolveFirstTouch,
   scoreStructural,
+  scoreStructuralOptimistic,
+  scoreTrailing,
+  summarizeR,
   applyExits,
   summarize,
   suggestExits,
