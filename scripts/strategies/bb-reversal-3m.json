@@ -1,0 +1,43 @@
+{
+  "id": "bb-reversal-3m",
+  "name": "3m Bollinger 2.3x reversal (long)",
+  "symbol": "ES",
+  "tf": "3",
+  "session": "RTH",
+  "side": "long",
+  "engine": "pattern",
+
+  "pattern": {
+    "setup": {
+      "left": { "ind": "close" },
+      "cmp": "<",
+      "right": { "ind": "bb", "len": 20, "mult": 2.3, "band": "lower", "src": "close" }
+    },
+    "reversal": { "type": "firstOppositeColor", "withinBars": 3 },
+    "trigger": { "type": "closeBeyond", "ref": "reversal.close" },
+    "withinBars": 3,
+    "invalidate": { "type": "beyond", "ref": "reversal.low" }
+  },
+
+  "_definition": [
+    "Bar 1  PENETRATION : 3m close < lower BB(20, 2.3). Colour is recorded.",
+    "Bar 2  REVERSAL    : first candle of the OPPOSITE colour, within 3 bars.",
+    "                     Dojis (close == open) are neither colour and are skipped.",
+    "Bar 3  BUY TRIGGER : first bar closing ABOVE the reversal bar's CLOSE,",
+    "                     within 3 bars of the reversal bar.",
+    "       FILL        : the OPEN of the bar after the trigger. Never the",
+    "                     trigger bar's own close — you don't know a close until",
+    "                     it has closed.",
+    "       INVALIDATE  : any bar printing a low < reversal bar's low kills the",
+    "                     setup. Checked BEFORE the trigger on the same bar, so a",
+    "                     bar that runs the low and closes back up is a stop-run,",
+    "                     not a confirmation.",
+    "",
+    "No cooldown needed here: the state machine can't re-arm mid-pattern and",
+    "advances past the trigger, so the duplicate-fire problem that killed",
+    "flip_cross (memory: signals-flip-cross-disabled) can't occur.",
+    "",
+    "STOP is structural — the reversal bar's low — not a fitted percentile.",
+    "Mirror for shorts: band->upper, side->short, invalidate ref->reversal.high."
+  ]
+}

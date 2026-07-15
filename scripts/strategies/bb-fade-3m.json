@@ -1,0 +1,33 @@
+{
+  "id": "bb-fade-3m",
+  "name": "3m Bollinger 2.3x fade",
+  "symbol": "ES",
+  "tf": "3",
+  "session": "RTH",
+  "side": "short",
+  "cooldownMin": 15,
+  "entry": {
+    "op": "and",
+    "rules": [
+      {
+        "left": { "ind": "close" },
+        "cmp": ">",
+        "right": { "ind": "bb", "len": 20, "mult": 2.3, "band": "upper", "src": "close" }
+      },
+      {
+        "left": { "ind": "close", "offset": 1 },
+        "cmp": "<=",
+        "right": { "ind": "bb", "len": 20, "mult": 2.3, "band": "upper", "src": "close", "offset": 1 }
+      }
+    ]
+  },
+  "_notes": [
+    "Rule 2 is the CROSS condition and it is not optional. Without it the strategy",
+    "re-fires on every bar price stays outside the band, and your sample becomes",
+    "~10 duplicates of the same market moment. That is exactly the bug that made",
+    "flip_cross unusable (see memory: signals-flip-cross-disabled).",
+    "cooldownMin is the second layer of the same defense.",
+    "",
+    "Mirror this for the long side by flipping band->lower, cmp-> < / >=, side->long."
+  ]
+}

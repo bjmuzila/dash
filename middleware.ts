@@ -213,7 +213,13 @@ export const runtime = "nodejs";
 
 export const config = {
   matcher: [
-    "/((?!_next|proxy|ws|.*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // Video/audio extensions belong here for the same reason the image ones do:
+    // a <video src> on the PUBLIC landing page is fetched by the browser as a
+    // plain asset request. Without an exclusion it hits the auth gate, isn't a
+    // PUBLIC_PATTERN, and gets 307'd to "/" — the element then receives HTML
+    // instead of video and silently falls back to its poster. The asset looks
+    // "missing" while actually being deployed and gated.
+    "/((?!_next|proxy|ws|.*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm|mov|m4v|ogg|mp3)).*)",
     "/(api)(.*)",
   ],
 };
