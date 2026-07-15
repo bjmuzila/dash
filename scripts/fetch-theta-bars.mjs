@@ -38,6 +38,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { detectSplits, applySplits, reportSplits } from "./lib/splits.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (k, d = null) => {
@@ -56,6 +57,7 @@ const RTH = has("rth");
 const PROBE = has("probe");
 const DAILY = has("daily");
 const RESAMPLE_1S = has("resample1s");
+const NO_ADJUST = has("no-adjust");
 const BASE = (process.env.THETA_BASE_URL || "http://127.0.0.1:25503").replace(/\/+$/, "");
 
 if (!SYM) {
@@ -385,20 +387,34 @@ if (!DAILY) {
   if (odd.length) console.error(`  ⚠ ${odd.length} session(s) with 250-380 bars — partial data, not half-days. e.g. ${odd.slice(0, 3).map(([d, n]) => d + ":" + n).join(", ")}`);
 }
 
-/* ── SPLIT CHECK ──────────────────────────────────────────────────────────── */
-// A raw (unadjusted) series prints a fake -75%/-90% bar on the split date and a
-// streak study would happily count it. Cheap to detect, fatal to miss.
-const closes = out.map((l) => +l.split(",")[4]);
-const jumps = [];
-for (let i = 1; i < closes.length; i++) {
-  const ch = closes[i] / closes[i - 1] - 1;
-  if (Math.abs(ch) > 0.35) jumps.push({ line: out[i], ch });
-}
-if (jumps.length) {
-  console.error(`\n⚠ ${jumps.length} bar(s) moved >35% — almost certainly UNADJUSTED SPLITS:`);
-  for (const j of jumps.slice(0, 6)) console.error(`    ${j.line.split(",")[0]}  ${(j.ch * 100).toFixed(1)}%`);
-  console.error(`  NVDA split 4:1 on 2021-07-20 and 10:1 on 2024-06-10.`);
-  console.error(`  DO NOT run a streak study on this — those are fake down bars. Tell Claude.`);
+/* ── SPLIT ADJUSTMENT ─────────────────────────────────────────────────────── */
+// CONFIRMED: Theta returns RAW prices. NVDA daily came back with 2015 at $20.13
+// (vs ~$0.50 adjusted) and fake -75% / -89.9% bars on the 4:1 and 10:1 split
+// dates. Detect and back-adjust by default — an unadjusted series is simply
+// wrong for anything measuring returns, and warning-and-continuing just means
+// the warning gets scrolled past (it did).
+if (!NO_ADJUST) {
+  // Splits are corporate actions on the DAY, so detect on daily closes. On an
+  // intraday file, testing bar-to-bar would fire on every overnight gap and miss
+  // the split entirely — collapse to one close per session first.
+  const perDay = new Map();
+  for (const l of out) { const p = l.split(","); perDay.set(p[0].slice(0, 8), +p[4]); }
+  const dayBars = [...perDay].sort().map(([date, c]) => ({ date, c }));
+
+  const splits = detectSplits(dayBars);
+  if (splits.length) { console.error(`\nSPLITS`); reportSplits(splits); }
+
+  if (splits.some((s) => s.ratio)) {
+    const parsed = out.map((l) => {
+      const p = l.split(",");
+      return { stamp: p[0], date: p[0].slice(0, 8), o: +p[1], h: +p[2], l: +p[3], c: +p[4], v: +p[5] || 0 };
+    });
+    const n = applySplits(parsed, splits);
+    const dp = (x) => (Math.abs(x) < 1 ? x.toFixed(6) : x.toFixed(4));
+    out.length = 0;
+    out.push(...parsed.map((b) => `${b.stamp},${dp(b.o)},${dp(b.h)},${dp(b.l)},${dp(b.c)},${Math.round(b.v)}`));
+    console.error(`  ${n.toLocaleString()} bars back-adjusted  (--no-adjust to keep raw)`);
+  }
 }
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });

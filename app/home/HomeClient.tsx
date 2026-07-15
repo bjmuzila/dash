@@ -1266,7 +1266,7 @@ export function HomeClient({
                   / inflated frame never renders. */}
               <div ref={gexChartRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
                 {gexView === "escandles" ? (
-                  <EsCandlesPage leading={gexViewSwitch} />
+                  <EsCandlesPage embedded leading={gexViewSwitch} />
                 ) : chartReady && chartRows.length > 0 ? (
                   <GexChart
                     chain={chartRows}

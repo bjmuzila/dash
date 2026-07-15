@@ -1984,19 +1984,6 @@ const DP_EMB_H = 800;
 interface DayPost { id: string; ts: string; slot: DaySlot; tweet: string }
 const DAY_POSTS_KEY = "cb-edge-day-posts";
 
-// Auto-generated rows written server-side by day-post-writer at slot times.
-interface AutoDayPost { date: string; slot: string; tweet: string; created_at: string }
-const AUTO_SLOT_TIMES: Record<string, string> = { premarket: "~8:40 AM", midday: "~12:25 PM", eod: "~4:03 PM" };
-// Actual generation time (row.created_at) rendered in ET — the schedule above is
-// the window's open, this is when the writer really landed the row.
-function autoRunTimeET(iso: string): string {
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "";
-  return d.toLocaleTimeString("en-US", {
-    timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
-  });
-}
-
 function DayPosts({ form }: { form: FormState }) {
   const [slot, setSlot] = useState<DaySlot>("premarket");
   const [visual, setVisual] = useState<DayVisual>("gex");
@@ -2233,74 +2220,9 @@ function DayPosts({ form }: { form: FormState }) {
     }
   };
 
-  // ── Auto list (server-generated at slot times) ──
-  const [autoPosts, setAutoPosts] = useState<AutoDayPost[]>([]);
-  const [autoLoading, setAutoLoading] = useState(false);
-  const [autoCopied, setAutoCopied] = useState("");
-  const loadAutoList = useCallback(async () => {
-    setAutoLoading(true);
-    try {
-      const res = await fetch("/api/social-media/day-list", { cache: "no-store" });
-      const json = await res.json();
-      if (res.ok && Array.isArray(json.rows)) setAutoPosts(json.rows as AutoDayPost[]);
-    } catch (e) {
-      console.error("[day-posts auto-list]", e);
-    } finally {
-      setAutoLoading(false);
-    }
-  }, []);
-  useEffect(() => { loadAutoList(); }, [loadAutoList]);
-  const copyAuto = (tweet: string, key: string) => {
-    navigator.clipboard.writeText(tweet).then(() => {
-      setAutoCopied(key);
-      setTimeout(() => setAutoCopied(""), 1500);
-    });
-  };
-
   return (
     <div className="dp-wrap">
       <style>{DP_CSS}</style>
-
-      {/* 0 · today's auto posts — written server-side at slot times */}
-      <div className="dp-panel">
-        <div className="dp-row" style={{ justifyContent: "space-between" }}>
-          <span className="dp-label">Today's auto posts · generated on schedule, just copy &amp; paste</span>
-          <button type="button" className="dp-btn" onClick={loadAutoList} disabled={autoLoading}>
-            {autoLoading ? "Loading…" : "↻ Refresh"}
-          </button>
-        </div>
-        {(["premarket", "midday", "eod"] as const).map((s) => {
-          const row = autoPosts.find((r) => r.slot === s);
-          const label = DAY_SLOTS.find((d) => d.v === s)?.label ?? s;
-          return (
-            <div key={s} className="dp-row" style={{ alignItems: "flex-start", borderBottom: "1px solid var(--sm-border)", paddingBottom: 10 }}>
-              <span className="dp-label" style={{ color: "var(--cyan)", minWidth: 130, paddingTop: 2, display: "flex", flexDirection: "column", gap: 2 }}>
-                {label}
-                {row && (
-                  <span className="dp-hint" style={{ fontSize: 11 }}>ran {autoRunTimeET(row.created_at)} ET</span>
-                )}
-              </span>
-              {row ? (
-                <>
-                  <span style={{ flex: 1, fontSize: 15, color: "var(--text1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{row.tweet}</span>
-                  <button type="button" className={`dp-btn${autoCopied === s ? " on" : ""}`} onClick={() => copyAuto(row.tweet, s)}>
-                    {autoCopied === s ? "✓ Copied" : "Copy"}
-                  </button>
-                  <a
-                    className="dp-btn"
-                    style={{ textDecoration: "none" }}
-                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(row.tweet)}`}
-                    target="_blank" rel="noopener noreferrer"
-                  >Open X</a>
-                  <button type="button" className="dp-btn" onClick={() => setCaption(row.tweet)} title="Load into the editor below to tweak / attach an image">Use</button>
-                </>
-              ) : (
-                <span className="dp-hint" style={{ flex: 1 }}>Not generated yet — auto-writes {AUTO_SLOT_TIMES[s]} ET.</span>
-              )}
-            </div>
-          );
-        })}
-      </div>
 
       {/* 1 · slot */}
       <div className="dp-panel">

@@ -298,8 +298,18 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
  * searchParams, which we ignore) so the page is unchanged; the home dashboard
  * embeds this same component and passes its GEX|ES Candles switcher in, which
  * is why the embed costs no extra toolbar row.
+ *
+ * `embedded` = rendered inside the home GEX card rather than as its own route:
+ *  - dock pins LEFT instead of centering. Centered, the dock indents by however
+ *    wide it happens to be, so the switcher in `leading` lands in a different
+ *    place than the GexToolbar's copy of it — the button jumps sideways out from
+ *    under the cursor on every click.
+ *  - overlays start at bubbles-only. The full route opens with heatmap + rail +
+ *    bubbles, which is three layers of GEX on top of a card that is already
+ *    sitting next to the GEX chart and the heatmap panel.
+ * Both are first-render defaults only — every overlay stays toggleable.
  */
-export default function EsCandlesPage({ leading }: { leading?: ReactNode } = {}) {
+export default function EsCandlesPage({ leading, embedded = false }: { leading?: ReactNode; embedded?: boolean } = {}) {
   const esShouldConnect = useWsLifecycle();
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
@@ -349,7 +359,7 @@ export default function EsCandlesPage({ leading }: { leading?: ReactNode } = {})
   // tracks the current /ESU price — not the stale per-row esPrice.
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; spxPx: number; basis: number | null }>>([]);
   const showMvcLine = true; // CB level always on
-  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showHeatmap, setShowHeatmap] = useState(!embedded);
   // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
   // profile OFF (user can still toggle it on). Done as an effect, not a lazy
   // initializer, so it applies client-side after SSR hydration.
@@ -507,7 +517,7 @@ export default function EsCandlesPage({ leading }: { leading?: ReactNode } = {})
   }, [showVsa, rows, historical, vsaTuning]);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
-  const [showRail, setShowRail] = useState(true); // right-side vertical GEX-by-strike rail
+  const [showRail, setShowRail] = useState(!embedded); // right-side vertical GEX-by-strike rail
   // Per-strike 1-minute GEX bubbles. Radius ∝ |net GEX|
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
@@ -2105,7 +2115,7 @@ export default function EsCandlesPage({ leading }: { leading?: ReactNode } = {})
           drops it from the Snap/Discord PNG and shifts the chart up to close
           the gap — the exported image is chart + title band only. */}
       <div className="px-4 pt-3 pb-1" data-capture-hide style={{ position: "relative", zIndex: 30 }}>
-        <FitScale align="center" min={0.2}>
+        <FitScale align={embedded ? "left" : "center"} min={0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
           {leading}
           {leading && <DockGap />}
