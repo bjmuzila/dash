@@ -29,6 +29,14 @@ export default function LandingClient() {
     <div
       className="explore-root"
       style={{
+        // Same ownership rule as /pricing: the bare LayoutShell wrapper is a
+        // flex column with overflow:hidden, so THIS root must own the scroll.
+        // Without it the card is trapped in a clipped box and any growth (the
+        // hero + receipts) pushes the logo up under the sticky toolbar with no
+        // way to scroll back to it.
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
         fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
         color: T.text,
       }}
@@ -94,17 +102,20 @@ export default function LandingClient() {
         <PublicNav active="Overview" />
       </div>
 
-      {/* Centered explainer card */}
+      {/* Centered explainer card.
+          minHeight (not height) + no inner overflow: the container grows past
+          the viewport instead of clipping, and the root above does the
+          scrolling. Centered when it fits, fully reachable when it doesn't.
+          No manual top padding — PublicNav is sticky and holds its own space. */}
       <div
         style={{
           position: "relative",
           zIndex: 2,
-          height: "100%",
+          minHeight: "100%",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           padding: "20px 20px 76px",
-          overflowY: "auto",
         }}
       >
         <div style={card} className="landing-card">

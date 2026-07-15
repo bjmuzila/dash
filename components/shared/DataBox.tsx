@@ -97,6 +97,22 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     (c) => !(lt && lt.target.contains(c))
   ) as HTMLCanvasElement[];
 
+  // Elements tagged [data-capture-hide] are live-page chrome (toolbars, control
+  // docks) that shouldn't appear in the PNG. They're dropped from the clone at
+  // the END of onclone (after the index-paired children loop, so pairing stays
+  // exact). Any tagged DIRECT child sitting ABOVE the chart also removes its own
+  // height from the flow, so everything below shifts up by that much — which the
+  // canvas composites below must mirror, since they position off LIVE rects.
+  const hideEls = Array.from(el.querySelectorAll("[data-capture-hide]")) as HTMLElement[];
+  const elTop = el.getBoundingClientRect().top;
+  const chartTop = lt ? lt.target.getBoundingClientRect().top : Infinity;
+  let hiddenShift = 0;
+  for (const h of hideEls) {
+    if (h.parentElement !== el) continue; // only direct children affect the flow
+    if (h.getBoundingClientRect().bottom > chartTop) continue; // not above the chart
+    hiddenShift += h.offsetHeight;
+  }
+
   let contentH: number;
   if (inner) {
     contentH = inner.scrollHeight;
@@ -106,6 +122,7 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     let h = 0;
     Array.from(el.children).forEach((c) => {
       const ch = c as HTMLElement;
+      if (ch.hasAttribute("data-capture-hide")) return; // dropped from the clone
       h += ch.scrollHeight > ch.clientHeight ? ch.scrollHeight : ch.offsetHeight;
     });
     contentH = h || el.scrollHeight;
@@ -118,6 +135,7 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     const r = el.getBoundingClientRect();
     const last = el.lastElementChild?.getBoundingClientRect();
     if (last && last.bottom > r.top) contentH = Math.ceil(last.bottom - r.top);
+    contentH -= hiddenShift;
   }
   // Reserve room for the title band for every path. Canvas charts used to skip
   // this (band overlaid the top of the bitmap instead), back when html2canvas
@@ -257,6 +275,10 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
       band.appendChild(t1);
       band.appendChild(t2);
       clone.appendChild(band);
+      // Drop live-page chrome LAST — the children loop above pairs clone kids to
+      // live kids by index, so removing anything before it would desync them.
+      // The attribute survives cloneNode, so no index matching is needed here.
+      clone.querySelectorAll("[data-capture-hide]").forEach((n) => n.remove());
     },
   });
 
@@ -269,9 +291,11 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
     const tRect = lt.target.getBoundingClientRect();
     // Offset of the chart layer within the captured element, in canvas px.
     // The clone reserves 44px of paddingTop for the title band, so shift the
-    // composited candle bitmap down by that same amount.
+    // composited candle bitmap down by that same amount — and back UP by any
+    // [data-capture-hide] chrome above the chart that the clone dropped, since
+    // these rects come from the LIVE tree where that chrome still occupies space.
     const dx = (tRect.left - elRect.left) * scale;
-    const dy = (tRect.top - elRect.top + 44) * scale;
+    const dy = (tRect.top - elRect.top + 44 - hiddenShift) * scale;
     const dw = tRect.width * scale;
     const dh = tRect.height * scale;
     const ctx = base.getContext("2d");
@@ -289,7 +313,7 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
       for (const liveCanvas of otherLiveCanvases) {
         const cRect = liveCanvas.getBoundingClientRect();
         const dx = (cRect.left - elRect.left) * scale;
-        const dy = (cRect.top - elRect.top + 44) * scale;
+        const dy = (cRect.top - elRect.top + 44 - hiddenShift) * scale;
         const dw = cRect.width * scale;
         const dh = cRect.height * scale;
         ctx.drawImage(liveCanvas, dx, dy, dw, dh);

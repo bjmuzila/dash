@@ -2035,7 +2035,10 @@ export default function EsCandlesPage() {
 
   return (
     <div ref={captureRef} className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
-      <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
+      {/* data-capture-hide: live-only control chrome. DataBox's captureElement
+          drops it from the Snap/Discord PNG and shifts the chart up to close
+          the gap — the exported image is chart + title band only. */}
+      <div className="px-4 pt-3 pb-1" data-capture-hide style={{ position: "relative", zIndex: 30 }}>
         <FitScale align="center" min={0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
@@ -2233,13 +2236,23 @@ export default function EsCandlesPage() {
           {/* SPX equivalent of the live ES price, pinned at the right gutter. */}
           {liveSpx ? (
             <div
-              className="pointer-events-none absolute z-10 rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+              className="pointer-events-none absolute z-10 rounded font-mono font-medium"
               style={{
                 top: Math.max(2, liveSpx.y - 9),
                 right: 64,
                 background: "rgba(41,182,246,.92)",
                 color: "#001018",
                 whiteSpace: "nowrap",
+                // Explicit font/line-height/padding instead of Tailwind's
+                // text-[11px] + py-0.5. text-[11px] sets font-size ONLY, leaving
+                // line-height inherited — html2canvas then resolves the text
+                // baseline from that inherited value and the glyphs sit off-centre
+                // in the pill in the Snap/Discord PNG (fine in the browser, which
+                // centres the line box). Pinning both makes the box 18px tall
+                // (12 + 3 + 3), matching the -9 half-height offset above.
+                fontSize: 11,
+                lineHeight: "12px",
+                padding: "3px 6px",
               }}
             >
               SPX {liveSpx.spx.toFixed(2)}
@@ -2248,13 +2261,17 @@ export default function EsCandlesPage() {
           {/* SPX at the crosshair, follows the cursor's y on the right gutter. */}
           {crossSpx ? (
             <div
-              className="pointer-events-none absolute z-10 rounded px-1.5 py-0.5 font-mono text-[11px]"
+              className="pointer-events-none absolute z-10 rounded font-mono"
               style={{
                 top: Math.max(2, crossSpx.y - 9),
                 right: 64,
                 background: "rgba(255,255,255,.85)",
                 color: "#001018",
                 whiteSpace: "nowrap",
+                // Same explicit metrics as the live badge above — see note there.
+                fontSize: 11,
+                lineHeight: "12px",
+                padding: "3px 6px",
               }}
             >
               SPX {crossSpx.spx.toFixed(2)}
