@@ -2202,7 +2202,19 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
   const [oy, setOy] = useState(0);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
 
-  const reset = useCallback(() => { setZx(1); setZy(1); setOx(0); setOy(0); }, []);
+  type Hit = { s: TpoStructure; color: string; x0: number; x1: number; yTop: number; yBot: number };
+  const hitsRef = useRef<Hit[]>([]);
+  const [hover, setHover] = useState<{ hit: Hit; x: number; y: number } | null>(null);
+
+  // Re-anchor on Reset and whenever the session count changes — "Reset" that
+  // dumps you on a 30-day-old profile isn't a reset.
+  const anchorRef = useRef(true);
+  useEffect(() => { anchorRef.current = true; }, [sessions.length, split]);
+
+  const reset = useCallback(() => {
+    anchorRef.current = true;
+    setZx(1); setZy(1); setOx(0); setOy(0);
+  }, []);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -2270,6 +2282,27 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
     const vis = (py: number) => py > TOP - rh && py < VIEW_H - BOT + rh;
 
     // ── plot area is clipped so nothing pans over the price axis ────────────
+    // ── anchor pass ─────────────────────────────────────────────────────────
+    // At 30 sessions the strip is several canvases wide and ~a year of price
+    // range tall, so ox/oy = 0 opens on the OLDEST profile with spot nowhere on
+    // screen. Whenever the session count changes (or Reset is hit) we jump the
+    // view to the newest profile, vertically centered on spot, then bail — the
+    // state change re-runs this effect and the real draw happens on that pass.
+    if (anchorRef.current) {
+      anchorRef.current = false;
+      const totalW = sessions.reduce(
+        (a, d) => a + (split ? d.periods : (d.maxCount || 1)) * cw + GUTTER, 0,
+      );
+      const wantOx = Math.min(0, w - AXIS - 10 - totalW);
+      const wantOy = spot != null
+        ? VIEW_H / 2 - TOP - ((hi - spot) / binSize) * rh
+        : 0;
+      if (Math.abs(wantOx - ox) > 0.5 || Math.abs(wantOy - oy) > 0.5) {
+        setOx(wantOx); setOy(wantOy);
+        return;
+      }
+    }
+
     g.save();
     g.beginPath();
     g.rect(AXIS, 0, w - AXIS, VIEW_H - BOT + 14);
@@ -2279,7 +2312,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
 
     // Callouts are collected during the session walk and painted AFTER it, so a
     // box never ends up under the next session's letters.
-    type Callout = { s: TpoStructure; color: string; yTop: number; yBot: number; x0: number; x1: number };
+    type Callout = { s: TpoStructure; color: string; yTop: number; yBot: number; x0: number; x1: number; today: boolean };
     const callouts: Callout[] = [];
     const lastDate = sessions[sessions.length - 1]?.date;
 
@@ -2335,12 +2368,15 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
           g.fillStyle = KIND_COLOR[s.kind];
           g.fillRect(x - 6, y(s.priceHi) - rh / 2, 3, y(s.priceLo) - y(s.priceHi) + rh);
 
-          if (labels && d.date === lastDate) {
-            const yTop = y(s.priceHi) - rh / 2;
-            const yBot = y(s.priceLo) + rh / 2;
-            if (yBot > TOP - rh && yTop < VIEW_H - BOT + rh) {
-              callouts.push({ s, color: KIND_COLOR[s.kind], yTop, yBot, x0: x - 8, x1: x + wid + 4 });
-            }
+          const yTop = y(s.priceHi) - rh / 2;
+          const yBot = y(s.priceLo) + rh / 2;
+          if (yBot > TOP - rh && yTop < VIEW_H - BOT + rh) {
+            // Hover regions for EVERY session (the spine is already drawn for
+            // all of them); the outlined band is only painted on today's.
+            callouts.push({
+              s, color: KIND_COLOR[s.kind], yTop, yBot,
+              x0: x - 8, x1: x + wid + 4, today: d.date === lastDate,
+            });
           }
         }
 
@@ -2353,48 +2389,14 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       x += wid + GUTTER;
     }
 
-    // ── structure callouts for the current session ──────────────────────────
-    // Drawn last so they sit on top, and laid out with a simple downward
-    // de-collide pass: two structures 3 points apart would otherwise stack
-    // their boxes on the exact same pixels and neither would be readable.
-    if (callouts.length) {
-      const BOX_W = 268, PAD = 9, TITLE_H = 14, LINE_H = 12, GAP = 8;
-
-      const wrap = (text: string, maxW: number) => {
-        const out: string[] = [];
-        let line = "";
-        for (const word of text.split(" ")) {
-          const t = line ? `${line} ${word}` : word;
-          if (g.measureText(t).width > maxW && line) { out.push(line); line = word; }
-          else line = t;
-        }
-        if (line) out.push(line);
-        return out;
-      };
-
-      const anchorX = Math.max(...callouts.map((c) => c.x1));
-      let boxX = anchorX + 150;
-      if (boxX + BOX_W > w - 8) boxX = w - 8 - BOX_W;
-
-      const laid = callouts
-        .map((c) => {
-          g.font = "10px ui-sans-serif, system-ui";
-          const lines = wrap(KIND_NOTE[c.s.kind], BOX_W - PAD * 2);
-          const h = PAD * 2 + TITLE_H + lines.length * LINE_H;
-          return { ...c, lines, h, anchorY: (c.yTop + c.yBot) / 2, top: 0 };
-        })
-        .sort((a, b) => a.anchorY - b.anchorY);
-
-      let cursor = -Infinity;
-      for (const c of laid) {
-        c.top = Math.max(c.anchorY - c.h / 2, cursor + GAP);
-        cursor = c.top + c.h;
-      }
-
-      for (const c of laid) {
-        const midY = c.top + c.h / 2;
-
-        // band highlight on the profile itself
+    // ── structure bands ─────────────────────────────────────────────────────
+    // The BOX stays on the chart; the text card moved to hover. Five sessions'
+    // worth of always-on cards was more annotation than profile — and the cards
+    // had to be de-collided away from their own bands to fit, which is exactly
+    // when a label stops pointing at the thing it labels.
+    if (labels) {
+      for (const c of callouts) {
+        if (!c.today) continue;
         g.strokeStyle = c.color;
         g.lineWidth = 1.5;
         g.fillStyle = `${c.color}1F`;
@@ -2403,38 +2405,14 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
         g.roundRect(c.x0, c.yTop, c.x1 - c.x0, bh, 4);
         g.fill();
         g.stroke();
-
-        // leader: profile → box, with one elbow so a de-collided box still
-        // clearly points at its own band
-        g.strokeStyle = `${c.color}99`;
-        g.lineWidth = 1;
-        g.beginPath();
-        g.moveTo(c.x1, c.anchorY);
-        g.lineTo(boxX - 18, c.anchorY);
-        g.lineTo(boxX - 18, midY);
-        g.lineTo(boxX, midY);
-        g.stroke();
-
-        // box
-        g.fillStyle = "rgba(11,15,20,0.94)";
-        g.beginPath(); g.roundRect(boxX, c.top, BOX_W, c.h, 7); g.fill();
-        g.fillStyle = `${c.color}26`;
-        g.beginPath(); g.roundRect(boxX, c.top, BOX_W, c.h, 7); g.fill();
-        g.strokeStyle = c.color;
-        g.lineWidth = 1.25;
-        g.beginPath(); g.roundRect(boxX, c.top, BOX_W, c.h, 7); g.stroke();
-
-        g.textAlign = "left";
-        g.textBaseline = "top";
-        g.fillStyle = c.color;
-        g.font = "700 12px ui-sans-serif, system-ui";
-        g.fillText(KIND_TITLE[c.s.kind], boxX + PAD, c.top + PAD);
-        g.fillStyle = "rgba(255,255,255,0.62)";
-        g.font = "10px ui-sans-serif, system-ui";
-        c.lines.forEach((ln, i) => g.fillText(ln, boxX + PAD, c.top + PAD + TITLE_H + i * LINE_H));
       }
-      g.textBaseline = "middle";
     }
+
+    // Hit regions in CSS px, read by the pointer-move handler. Stored in a ref
+    // (not state) on purpose: hover must not re-run this draw.
+    hitsRef.current = callouts.map((c) => ({
+      s: c.s, color: c.color, x0: c.x0, x1: c.x1, yTop: c.yTop, yBot: c.yBot,
+    }));
 
     if (spot != null && vis(y(spot))) {
       g.strokeStyle = HOME_THEME.green;
@@ -2488,7 +2466,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
         <button onClick={() => setZx((z) => Math.max(0.4, z / 1.25))} style={btn(false)}>Width −</button>
         <button onClick={reset} style={btn(false)}>Reset</button>
         <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
-          drag to pan · wheel = price zoom · shift+wheel = width zoom
+          drag to pan · wheel = price zoom · shift+wheel = width zoom · hover a structure for detail
         </span>
       </div>
 
@@ -2500,19 +2478,59 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
         }}
         onPointerMove={(e) => {
           const d = drag.current;
-          if (!d) return;
-          setOx(d.ox + (e.clientX - d.x));
-          setOy(d.oy + (e.clientY - d.y));
+          if (d) {
+            if (hover) setHover(null);
+            setOx(d.ox + (e.clientX - d.x));
+            setOy(d.oy + (e.clientY - d.y));
+            return;
+          }
+          const r = (e.target as HTMLCanvasElement).getBoundingClientRect();
+          const mx = e.clientX - r.left, my = e.clientY - r.top;
+          // 3px pad: a 1-pt poor high is ~5px tall and otherwise un-hoverable.
+          const hit = hitsRef.current.find(
+            (h) => mx >= h.x0 - 3 && mx <= h.x1 + 3 && my >= h.yTop - 3 && my <= h.yBot + 3,
+          );
+          if (!hit) { if (hover) setHover(null); return; }
+          if (hover?.hit.s.id !== hit.s.id || hover.x !== mx) setHover({ hit, x: mx, y: my });
         }}
+        onPointerLeave={() => setHover(null)}
         onPointerUp={() => { drag.current = null; }}
         onPointerCancel={() => { drag.current = null; }}
         style={{
           display: "block", width: "100%", height: VIEW_H,
           background: "#0b0f14", borderRadius: 10,
-          cursor: drag.current ? "grabbing" : "grab",
+          cursor: drag.current ? "grabbing" : hover ? "pointer" : "grab",
           touchAction: "none",
         }}
       />
+
+      {hover && (
+        <div style={{
+          position: "absolute", pointerEvents: "none", zIndex: 5,
+          left: Math.min(hover.x + 14, Math.max(0, w - 290)),
+          top: Math.min(hover.y + 12, VIEW_H - 92),
+          width: 268, padding: "9px 11px", borderRadius: 8,
+          background: "rgba(11,15,20,0.96)",
+          border: `1px solid ${hover.hit.color}`,
+          boxShadow: `0 6px 20px rgba(0,0,0,0.5), inset 0 0 0 999px ${hover.hit.color}1A`,
+        }}>
+          <div style={{ color: hover.hit.color, fontWeight: 700, fontSize: 12 }}>
+            {KIND_TITLE[hover.hit.s.kind]}
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 3, lineHeight: 1.35 }}>
+            {KIND_NOTE[hover.hit.s.kind]}
+          </div>
+          <div style={{
+            color: "rgba(255,255,255,0.45)", fontSize: 11, marginTop: 5,
+            fontVariantNumeric: "tabular-nums",
+          }}>
+            {hover.hit.s.date} ·{" "}
+            {hover.hit.s.priceHi > hover.hit.s.priceLo
+              ? `${hover.hit.s.priceLo.toFixed(2)}–${hover.hit.s.priceHi.toFixed(2)}`
+              : hover.hit.s.priceLo.toFixed(2)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2588,9 +2606,16 @@ function StructureRow({ s, spot, base }: {
 function TpoStructuresScanner() {
   const [instr, setInstr] = useState<"ESU" | "NQU">("ESU");
   const [kindFilter, setKindFilter] = useState<"all" | "extremes" | "holes">("all");
+  const [nSessions, setNSessions] = useState<5 | 10 | 30>(5);
 
-  const es = useEsCandles(instr === "ESU", 25);
-  const nq = useNqCandles(instr === "NQU", 25);
+  // CALENDAR days to pull vs RTH SESSIONS to draw — not the same number. 30
+  // sessions needs ~45 calendar days once weekends and holidays are removed;
+  // asking for 30 quietly hands back ~21 profiles. Scaled with the selector so
+  // the 5-day view doesn't drag a month of bars out of SQLite for nothing.
+  const historyDays = nSessions <= 5 ? 14 : nSessions <= 10 ? 22 : 46;
+
+  const es = useEsCandles(instr === "ESU", historyDays);
+  const nq = useNqCandles(instr === "NQU", historyDays);
   const { candles: liveCandles, historical } = instr === "ESU" ? es : nq;
 
   const allCandles = useMemo(() => {
@@ -2638,26 +2663,36 @@ function TpoStructuresScanner() {
 
   const enoughHistory = res.sessions.length >= 2;
 
-  const last5 = res.sessions.slice(-5);
+  const shown = res.sessions.slice(-nSessions);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
       {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
-      <Card variant="budget" title={<span style={{ fontSize: 16 }}>TPO profile — last 5 sessions</span>}
-        subtitle={`${instr} · ${binSize}-pt bins · 30-min periods · RTH only · shared price axis`}>
+      <Card variant="budget"
+        title={<span style={{ fontSize: 16 }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
+        subtitle={`${instr} · ${binSize}-pt bins (4 ticks) · 30-min periods · RTH only · shared price axis`}>
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
           <button onClick={() => setInstr("ESU")} style={seg(instr === "ESU")}>ESU</button>
           <button onClick={() => setInstr("NQU")} style={seg(instr === "NQU")}>NQU</button>
+          <span style={{ width: 12 }} />
+          {([5, 10, 30] as const).map((n) => (
+            <button key={n} onClick={() => setNSessions(n)} style={seg(nSessions === n)}>{n}D</button>
+          ))}
+          {nSessions === 30 && shown.length < 30 && (
+            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>
+              {shown.length} loaded — SQLite history only goes back so far
+            </span>
+          )}
         </div>
 
-        {!last5.length && (
+        {!shown.length && (
           <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
             Waiting on RTH candles.
           </div>
         )}
-        {!!last5.length && <TpoLetterProfile sessions={last5} spot={spot} binSize={binSize} />}
+        {!!shown.length && <TpoLetterProfile sessions={shown} spot={spot} binSize={binSize} />}
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 15 }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>

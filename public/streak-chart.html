@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<!--
+  public/streak-chart.html — pivot-normalised streak / wave chart.
+
+  Standalone, no build. Open it directly (file://) and drop a CSV on it, or
+  serve it and it will auto-load public/data/NVDA_daily.csv.
+
+  ─────────────────────────────────────────────────────────────────────────────
+  WHAT IT DRAWS
+
+  A streak = consecutive bars closing in the same direction.
+      up bar  := close > previous close      → H, counted 1,2,3...
+      down bar:= close < previous close      → L, counted 1,2,3...
+      tie     := breaks the streak, belongs to neither (5 of 2896 in NVDA)
+
+  Every streak gets its OWN pivot: the close the streak launched FROM (i.e. the
+  last close before the first bar of the streak). Bars plot as % from that pivot,
+  so each leg departs from the 0% line and the basis SWITCHES on every flip.
+
+  WHY % AND NOT PRICE: NVDA ran ~$0.50 → $188 over this file. A 2015 bar and a
+  2026 bar are not comparable in dollars — a $2 move is a 400% event in 2015 and
+  noise now. Normalising per-streak is what makes legs across 11 years mean the
+  same thing. This is the same reason the pooled p(up) was suspect: price level
+  is a confound, and % from the leg's own origin removes it.
+
+  READ THE SAWTOOTH HONESTLY: the discontinuity at each flip is real, not a
+  rendering artifact. Leg N ends at +6% from ITS pivot; leg N+1 starts at -1%
+  from a DIFFERENT pivot. The y-axis is not a continuous price series and the
+  chart is not meant to be read left-to-right as one. Vertical rules mark flips.
+  ─────────────────────────────────────────────────────────────────────────────
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Streak Chart — pivot normalised</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #11151f; --line: #1e2532; --txt: #e6edf3;
+    --dim: #7d8590; --up: #26a69a; --dn: #ef5350; --acc: #8b5cf6;
+    --pivot: #e6edf3; --grid: #171d29;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt);
+         font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding: 10px 14px; border-bottom: 1px solid var(--line);
+           display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .04em; }
+  .meta { color: var(--dim); font-size: 12px; }
+  .ctl { display: flex; gap: 6px; align-items: center; }
+  label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  input[type=range] { width: 130px; accent-color: var(--acc); }
+  button, select { background: var(--panel); color: var(--txt); border: 1px solid var(--line);
+           border-radius: 5px; padding: 4px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+  button:hover { border-color: var(--acc); }
+  #wrap { padding: 10px 14px; }
+  canvas { display: block; width: 100%; border: 1px solid var(--line);
+           border-radius: 8px; background: var(--panel); cursor: crosshair; }
+  #stats { padding: 0 14px 24px; }
+  table { border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th, td { padding: 3px 12px 3px 0; text-align: right; }
+  th { color: var(--dim); font-weight: 500; border-bottom: 1px solid var(--line); }
+  td:first-child, th:first-child { text-align: left; }
+  .note { color: var(--dim); font-size: 11px; margin-top: 10px; max-width: 900px; line-height: 1.6; }
+  #drop { position: fixed; inset: 0; background: #000c; display: none;
+          align-items: center; justify-content: center; font-size: 18px; z-index: 9; }
+  #drop.on { display: flex; }
+  .pill { display: inline-block; padding: 1px 7px; border: 1px solid var(--line);
+          border-radius: 99px; color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="drop">drop a CSV — YYYYMMDD HHMMSS,o,h,l,c,v</div>
+
+<header>
+  <h1>STREAK CHART</h1>
+  <span class="meta" id="meta">loading…</span>
+  <span class="ctl"><label>zoom</label><input type="range" id="zoom" min="3" max="26" value="9"></span>
+  <span class="ctl"><label>pan</label><input type="range" id="pan" min="0" max="100" value="100"></span>
+  <span class="ctl"><label>labels</label>
+    <select id="lab"><option value="all">all</option><option value="2">≥2</option><option value="3">≥3</option><option value="0">none</option></select>
+  </span>
+  <span class="ctl"><label>S/R pivots</label><input type="range" id="sr" min="0" max="40" value="12"><span class="pill" id="srn">12</span></span>
+  <span class="ctl"><label>TF</label>
+    <select id="tf">
+      <option value="0">as-is</option><option value="1">1m</option><option value="3">3m</option>
+      <option value="5">5m</option><option value="15">15m</option><option value="30">30m</option>
+      <option value="60">60m</option>
+    </select>
+  </span>
+  <button id="load">load CSV…</button>
+  <input type="file" id="file" accept=".csv" hidden>
+</header>
+
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="stats"></div>
+
+<script>
+/* ── streak model ─────────────────────────────────────────────────────────── */
+
+function parseCsv(text) {
+  const out = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const s = raw.trim(); if (!s) continue;
+    const p = s.split(","); if (p.length < 5) continue;
+    // Capture the CLOCK too — without minute-of-day we can't resample, which is
+    // why this chart previously forced you to pre-build a 30m file.
+    const m = p[0].trim().match(/^(\d{4})(\d{2})(\d{2})[ T](\d{2}):?(\d{2})/);
+    if (!m) continue;
+    const o = +p[1], h = +p[2], l = +p[3], c = +p[4];
+    if (![o, h, l, c].every(Number.isFinite) || !(c > 0)) continue;
+    out.push({ date: `${m[1]}-${m[2]}-${m[3]}`, min: +m[4] * 60 + +m[5], o, h, l, c, v: +p[5] || 0 });
+  }
+  return out;
+}
+
+const RTH_OPEN = 570; // 09:30 ET
+
+/**
+ * Resample to `tf` minutes, anchored to the RTH open and never spanning a
+ * session — same contract as server-v2/strategy-engine.js resample(). Anchoring
+ * matters: 3m buckets must fall on 9:30/9:33/9:36 to match what a chart shows,
+ * and a bucket that straddles the overnight gap is not a bar.
+ */
+function resample(rows, tf) {
+  if (!tf) return rows;
+  const byDay = new Map();
+  for (const r of rows) { if (!byDay.has(r.date)) byDay.set(r.date, []); byDay.get(r.date).push(r); }
+  const out = [];
+  for (const date of [...byDay.keys()].sort()) {
+    const day = byDay.get(date).sort((a, b) => a.min - b.min);
+    const buck = new Map();
+    for (const r of day) {
+      const k = Math.floor((r.min - RTH_OPEN) / tf);
+      if (!buck.has(k)) buck.set(k, []);
+      buck.get(k).push(r);
+    }
+    for (const k of [...buck.keys()].sort((a, b) => a - b)) {
+      const g = buck.get(k);
+      out.push({
+        date, min: RTH_OPEN + k * tf,
+        o: g[0].o,
+        h: Math.max(...g.map((x) => x.h)),
+        l: Math.min(...g.map((x) => x.l)),
+        c: g[g.length - 1].c,
+        v: g.reduce((s, x) => s + x.v, 0),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Tag every bar with its streak direction, count, and the streak's pivot.
+ * The pivot is the close the streak LAUNCHED FROM — bars[i-1].c where i is the
+ * streak's first bar. Not the first bar's own open/close: the leg is defined by
+ * how far it has travelled from where it started, and it started at the prior
+ * close.
+ */
+function tagStreaks(bars) {
+  const out = [];
+  let dir = 0, run = 0, pivot = null, legId = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const d = bars[i].c - bars[i - 1].c;
+    // Ties break the streak and belong to no leg — folding them into "down"
+    // would fake an exhaustion effect that is really just flat closes.
+    if (d === 0) { dir = 0; run = 0; pivot = null; out.push({ ...bars[i], dir: 0, run: 0, pivot: bars[i - 1].c, legId: -1 }); continue; }
+    const nd = d > 0 ? 1 : -1;
+    if (nd !== dir) { dir = nd; run = 1; pivot = bars[i - 1].c; legId++; } // FLIP: new pivot
+    else run++;
+    out.push({ ...bars[i], dir, run, pivot, legId });
+  }
+  return out;
+}
+
+const pctOf = (v, pivot) => ((v - pivot) / pivot) * 100;
+
+/**
+ * Collapse tagged bars into legs, and derive the S/R pivots from them.
+ *
+ * A leg's pivot is the close the PREVIOUS leg ended on — i.e. every pivot is a
+ * turning point. Which kind depends on the direction of the leg it launched:
+ *     up-leg's pivot   → price turned UP there   → swing LOW  → SUPPORT
+ *     down-leg's pivot → price turned DOWN there → swing HIGH → RESISTANCE
+ * That's not a convention I picked; it falls out of the definition.
+ */
+function buildLegs(tag) {
+  const legs = [];
+  for (let i = 0; i < tag.length; i++) {
+    const b = tag[i];
+    if (b.legId < 0) continue;
+    let L = legs[legs.length - 1];
+    if (!L || L.id !== b.legId) {
+      L = { id: b.legId, dir: b.dir, pivot: b.pivot, i0: i, i1: i, len: 0, last: b.c, lo: Infinity, hi: -Infinity };
+      legs.push(L);
+    }
+    L.i1 = i; L.len = b.run; L.last = b.c;
+    L.lo = Math.min(L.lo, b.l); L.hi = Math.max(L.hi, b.h);
+  }
+  // The S/R level is the leg's EXTREME, not the close it launched from. Price
+  // gets rejected at wicks — that's where the level is. A down-leg bottoms at
+  // its min(low) → SUPPORT; an up-leg tops at its max(high) → RESISTANCE.
+  for (const L of legs) {
+    L.kind = L.dir > 0 ? "R" : "S";
+    L.level = L.dir > 0 ? L.hi : L.lo;
+  }
+  return legs;
+}
+
+/**
+ * Mark, for every leg, which earlier levels are still UNBROKEN at that point.
+ *
+ * A level is consumed the moment price trades through it:
+ *     support @ P  dies when any subsequent bar prints low  < P
+ *     resistance@P dies when any subsequent bar prints high > P
+ *
+ * Without this filter you'd carry all 740 levels forever — a graveyard of dead
+ * lines that price already walked through, which is worse than useless because
+ * enough of them will sit near any future price by sheer density.
+ *
+ * Forward sweep: a level can only be killed by bars AFTER it forms, so we test
+ * each leg's bars against the live set once and drop the casualties.
+ */
+function markUnbroken(tag, legs) {
+  let active = [];
+  for (let li = 0; li < legs.length; li++) {
+    const prev = legs[li - 1];
+    if (prev) {
+      active = active.filter((P) => {
+        for (let i = prev.i0; i <= prev.i1; i++) {
+          if (P.kind === "S" ? tag[i].l < P.level : tag[i].h > P.level) return false;
+        }
+        return true;
+      });
+      active.push(prev);
+    }
+    legs[li].active = active.slice(); // snapshot: what was still alive HERE
+  }
+  return legs;
+}
+
+/* ── state ────────────────────────────────────────────────────────────────── */
+let RAW = [], BARS = [], TAG = [], LEGS = [], SYM = "NVDA";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const $ = (id) => document.getElementById(id);
+
+function fmt(x, d = 2) { return (x == null || !isFinite(x)) ? "—" : x.toFixed(d); }
+function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+/* ── render ───────────────────────────────────────────────────────────────── */
+function draw() {
+  if (!TAG.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = 560;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const bw = +$("zoom").value;            // px per bar
+  const RAIL = 78;                         // right-hand % rail
+  const plotW = W - RAIL - 8;
+  const n = Math.max(10, Math.floor(plotW / bw));
+  const maxStart = Math.max(0, TAG.length - n);
+  const start = Math.round((+$("pan").value / 100) * maxStart);
+  const view = TAG.slice(start, start + n);
+  if (!view.length) return;
+
+  // y-scale from the % extremes IN VIEW, symmetric around 0 so up and down legs
+  // are visually comparable. An asymmetric scale would make a -3% leg look
+  // bigger than a +3% leg, which is exactly the kind of thing that makes people
+  // "see" patterns that aren't there.
+  let mx = 0;
+  for (const b of view) {
+    if (b.legId < 0) continue;
+    mx = Math.max(mx, Math.abs(pctOf(b.h, b.pivot)), Math.abs(pctOf(b.l, b.pivot)));
+  }
+  mx = Math.max(mx * 1.15, 1);
+  const PAD_T = 14, PAD_B = 26;
+  const y = (p) => PAD_T + ((mx - p) / (2 * mx)) * (H - PAD_T - PAD_B);
+
+  // grid + right rail: % from THIS LEG's pivot
+  ctx.font = "11px ui-monospace, monospace";
+  const step = mx > 12 ? 3 : mx > 6 ? 2 : mx > 3 ? 1 : 0.5;
+  for (let p = -Math.floor(mx / step) * step; p <= mx; p += step) {
+    const yy = y(p);
+    ctx.strokeStyle = Math.abs(p) < 1e-9 ? css("--pivot") : css("--grid");
+    ctx.lineWidth = Math.abs(p) < 1e-9 ? 1.4 : 1;
+    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(plotW, yy); ctx.stroke();
+    ctx.fillStyle = Math.abs(p) < 1e-9 ? css("--pivot") : css("--dim");
+    ctx.textAlign = "left";
+    ctx.fillText(Math.abs(p) < 1e-9 ? "PIVOT 0%" : (p > 0 ? "+" : "") + fmt(p, step < 1 ? 1 : 0) + "%", plotW + 8, yy + 3.5);
+  }
+
+  /* ── previous pivots as S/R ────────────────────────────────────────────────
+     Each old pivot is a PRICE. The y-axis is % from the CURRENT leg's pivot, so
+     the same level maps to a different y on every leg — it must be re-projected
+     per leg and drawn as a segment spanning that leg's bars, not as one flat
+     line across the chart. A flat line would be silently wrong: it would imply a
+     single basis that doesn't exist here.
+     The stepping you see IS the information — a level drifting toward 0% means
+     the current leg is closing in on it. */
+  const look = +$("sr").value;
+  const lastLegId = view[view.length - 1].legId;
+  if (look > 0) {
+    const legsInView = [...new Set(view.filter((b) => b.legId >= 0).map((b) => b.legId))];
+    ctx.setLineDash([1, 3]); ctx.lineWidth = 1;
+    for (const legId of legsInView) {
+      const L = LEGS.find((l) => l.id === legId);
+      if (!L || !L.active) continue;
+      const xs = [];
+      for (let i = 0; i < view.length; i++) if (view[i].legId === legId) xs.push(i * bw);
+      if (!xs.length) continue;
+      const x0 = xs[0], x1 = xs[xs.length - 1] + bw;
+      const isLast = legId === lastLegId;
+
+      // only levels STILL UNBROKEN at this leg, most recent `look` of them
+      const live = L.active.slice(-look);
+      for (const P of live) {
+        const p = pctOf(P.level, L.pivot);
+        if (Math.abs(p) > mx) continue; // off-chart
+        const sup = P.kind === "S";
+        ctx.strokeStyle = sup ? "#2e7d5b" : "#8c3b39";
+        // On the rightmost leg, run the level out to the edge and price it —
+        // those are the levels that are actually still live RIGHT NOW.
+        ctx.beginPath();
+        ctx.moveTo(x0, y(p));
+        ctx.lineTo(isLast ? plotW : Math.min(x1, plotW), y(p));
+        ctx.stroke();
+        if (isLast) {
+          ctx.setLineDash([]);
+          ctx.fillStyle = sup ? "#4ec08a" : "#e0736f";
+          ctx.textAlign = "right";
+          ctx.font = "10px ui-monospace, monospace";
+          // Price AND % — the price is what you trade, the % is what this axis
+          // shows. Printing only one of them makes the chart unusable for the
+          // other purpose.
+          ctx.fillText(`${P.level.toFixed(2)}  ${p > 0 ? "+" : ""}${p.toFixed(2)}%`, plotW - 4, y(p) - 3);
+          ctx.font = "11px ui-monospace, monospace";
+          ctx.setLineDash([1, 3]);
+        }
+      }
+    }
+    ctx.setLineDash([]);
+  }
+
+  const labMode = $("lab").value;
+  let prevLeg = view[0].legId;
+
+  for (let i = 0; i < view.length; i++) {
+    const b = view[i];
+    const x = i * bw + bw / 2;
+
+    // vertical rule at every FLIP — the y-axis basis changes here. Without this
+    // the sawtooth reads as a continuous price series, which it is not.
+    if (b.legId !== prevLeg) {
+      ctx.strokeStyle = "#2a3242"; ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(x - bw / 2, PAD_T); ctx.lineTo(x - bw / 2, H - PAD_B); ctx.stroke();
+      ctx.setLineDash([]);
+      prevLeg = b.legId;
+    }
+    if (b.legId < 0) continue; // tie bar — no pivot, nothing meaningful to plot
+
+    const O = pctOf(b.o, b.pivot), Hh = pctOf(b.h, b.pivot),
+          L = pctOf(b.l, b.pivot), C = pctOf(b.c, b.pivot);
+    const col = b.dir > 0 ? css("--up") : css("--dn");
+
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, y(Hh)); ctx.lineTo(x, y(L)); ctx.stroke();
+    const bt = y(Math.max(O, C)), bb = y(Math.min(O, C));
+    ctx.fillRect(x - bw * 0.36, bt, Math.max(1, bw * 0.72), Math.max(1, bb - bt));
+
+    // H/L count label
+    const show = labMode === "all" || (labMode !== "0" && b.run >= +labMode);
+    if (show && bw >= 6) {
+      ctx.fillStyle = b.dir > 0 ? css("--up") : css("--dn");
+      ctx.textAlign = "center";
+      const ly = b.dir > 0 ? y(Hh) - 5 : y(L) + 12;
+      ctx.fillText((b.dir > 0 ? "H" : "L") + b.run, x, ly);
+    }
+  }
+
+  // leg-close marker: where each leg ENDED, in % from its own pivot
+  ctx.textAlign = "left";
+  const tf = +$("tf").value;
+  $("meta").innerHTML =
+    `<span class="pill">${SYM}${tf ? " " + tf + "m" : ""}</span> ${BARS.length.toLocaleString()} bars · ` +
+    `${BARS[0]?.date} → ${BARS[BARS.length - 1]?.date} · ` +
+    `${LEGS.length.toLocaleString()} legs · showing ${start + 1}–${start + view.length} · ±${fmt(mx, 1)}%`;
+}
+
+/* ── stats ────────────────────────────────────────────────────────────────── */
+function stats() {
+  // Total % travelled by each completed leg, bucketed by leg length. The streak
+  // COUNT is memoryless (mean 2.13 vs coin 2.19) — but that says nothing about
+  // MAGNITUDE. This table asks the different question: does a longer streak
+  // travel proportionally further, or does each additional bar add less?
+  const legs = new Map();
+  for (const b of TAG) {
+    if (b.legId < 0) continue;
+    const cur = legs.get(b.legId) || { dir: b.dir, len: 0, pivot: b.pivot, last: b.c };
+    cur.len = Math.max(cur.len, b.run); cur.last = b.c;
+    legs.set(b.legId, cur);
+  }
+  const byLen = new Map();
+  for (const [, L] of legs) {
+    const move = pctOf(L.last, L.pivot);
+    const k = `${L.dir > 0 ? "H" : "L"}${Math.min(L.len, 8)}`;
+    if (!byLen.has(k)) byLen.set(k, []);
+    byLen.get(k).push(move);
+  }
+  const med = (a) => { const s = [...a].sort((x, z) => x - z); return s[Math.floor(s.length / 2)]; };
+  const rows = [...byLen].sort((a, b) => (a[0][0] === b[0][0] ? +a[0].slice(1) - +b[0].slice(1) : a[0] < b[0] ? -1 : 1));
+
+  let h = `<table><tr><th>leg</th><th>n</th><th>median</th><th>mean</th><th>per bar</th><th>vs H1/L1</th></tr>`;
+  const base = {}; // per-bar of the 1-bar leg, per side — the yardstick
+  for (const [k, arr] of rows) {
+    const len = +k.slice(1);
+    if (len === 1) base[k[0]] = arr.reduce((a, b) => a + b, 0) / arr.length;
+  }
+  for (const [k, arr] of rows) {
+    const m = med(arr), mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const len = +k.slice(1);
+    const perBar = mean / len;
+    // Ratio to the FIRST bar's move. 1.00 = every bar in the leg travels as far
+    // as the first one did = memoryless. >1 = accelerating, <1 = decaying.
+    const rel = base[k[0]] ? perBar / base[k[0]] : null;
+    h += `<tr><td>${k}${len === 8 ? "+" : ""}</td><td>${arr.length}</td>` +
+         `<td style="color:${m > 0 ? css("--up") : css("--dn")}">${fmt(m)}%</td>` +
+         `<td>${fmt(mean)}%</td><td style="color:var(--dim)">${fmt(perBar)}%</td>` +
+         `<td style="color:${rel && Math.abs(rel - 1) > 0.25 ? css("--acc") : "var(--dim)"}">` +
+         `${rel == null ? "—" : "×" + fmt(rel)}</td></tr>`;
+  }
+  h += `</table>`;
+  h += `<div class="note" style="margin-top:14px">
+    <b>S/R lines.</b> <span style="color:#2e7d5b">■ green = support</span> (an up-leg's pivot —
+    price turned up there, so it's a swing low). <span style="color:#8c3b39">■ red = resistance</span>
+    (a down-leg's pivot — a swing high). Each is re-projected onto every leg's own pivot basis,
+    which is why they step at each flip rather than running flat across the chart. That stepping
+    is not a glitch: a level drifting toward the 0% line means the current leg is closing on it.
+    <br><br><b>Before you trade off these:</b> nothing here has been tested. We showed NVDA's
+    streak <i>counts</i> are memoryless, which says these pivots are just where a random walk
+    happened to turn. Whether price actually respects them is a separate question — and the way
+    to answer it is to feed them to the backtester as a spec, not to eyeball the chart. Levels
+    look predictive to the human eye essentially always; that's what the eye is for.</div>`;
+  h += `<div class="note"><b>Read "per bar", not "median %".</b> Longer legs travel further
+    trivially — more bars, more distance. The question is whether each ADDITIONAL bar adds as
+    much as the first one did. If <i>per bar</i> is flat across H1→H8, the leg is just a random
+    walk and its length tells you nothing about its speed. If <i>per bar</i> rises with length,
+    that's genuine momentum — moves that persist also accelerate. If it falls, later bars in a
+    streak are smaller: the leg is running out of gas even while it continues.<br><br>
+    Sample sizes collapse as length grows (~half at each step), so H6+ is a handful of legs.
+    A dramatic number on n=9 is noise. The NVDA daily streak <i>count</i> was already shown to
+    be memoryless — mean 2.13 vs a 54.4% coin's 2.19 — so the prior here is that per-bar is
+    flat too. Worth checking; don't expect a miracle.</div>`;
+  $("stats").innerHTML = h;
+}
+
+/* ── load ─────────────────────────────────────────────────────────────────── */
+function rebuild() {
+  const tf = +$("tf").value;
+  BARS = resample(RAW, tf);
+  TAG = tagStreaks(BARS);
+  LEGS = markUnbroken(TAG, buildLegs(TAG));
+  draw(); stats();
+}
+
+function ingest(text, name) {
+  RAW = parseCsv(text);
+  if (!RAW.length) { $("meta").textContent = "no bars parsed — need YYYYMMDD HHMMSS,o,h,l,c,v"; return; }
+  RAW.sort((a, b) => (a.date === b.date ? a.min - b.min : a.date < b.date ? -1 : 1));
+  SYM = (name || "").replace(/_daily|_1min|\.csv/gi, "") || "CSV";
+  // Daily files have one bar per session — resampling them is meaningless, so
+  // pin to as-is rather than silently producing garbage buckets.
+  const perDay = RAW.length / new Set(RAW.map((r) => r.date)).size;
+  if (perDay < 1.5) { $("tf").value = "0"; $("tf").disabled = true; }
+  else $("tf").disabled = false;
+  rebuild();
+}
+
+for (const id of ["zoom", "pan", "lab", "sr"]) $(id).addEventListener("input", draw);
+$("sr").addEventListener("input", () => { $("srn").textContent = $("sr").value; });
+$("tf").addEventListener("change", rebuild); // TF changes the BARS, not just the view
+window.addEventListener("resize", draw);
+$("load").onclick = () => $("file").click();
+$("file").onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  f.text().then((t) => ingest(t, f.name));
+};
+const dz = $("drop");
+window.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("on"); });
+dz.addEventListener("dragleave", () => dz.classList.remove("on"));
+window.addEventListener("drop", (e) => {
+  e.preventDefault(); dz.classList.remove("on");
+  const f = e.dataTransfer.files[0]; if (f) f.text().then((t) => ingest(t, f.name));
+});
+
+// Served → auto-load. file:// → fetch is blocked by CORS, so fall back to the
+// picker rather than showing a broken chart.
+fetch("data/NVDA_daily.csv")
+  .then((r) => (r.ok ? r.text() : Promise.reject()))
+  .then((t) => ingest(t, "NVDA_daily"))
+  .catch(() => { $("meta").textContent = "drop a CSV here, or click “load CSV…”"; });
+</script>
+</body>
+</html>

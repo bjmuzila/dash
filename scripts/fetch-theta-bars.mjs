@@ -9,13 +9,14 @@
  *   node scripts/fetch-theta-bars.mjs --sym NVDA --probe
  *
  *   # 2. then pull for real
- *   node scripts/fetch-theta-bars.mjs --sym NVDA --start 20200101 --end 20260710 --ivl 60000
+ *   node scripts/fetch-theta-bars.mjs --sym NVDA --start 20200101 --end 20260710 --rth
  *
  * FLAGS
  *   --sym <SYM>        stock symbol (required)
- *   --start/--end      YYYYMMDD (default: last ~2y → today)
- *   --ivl <ms>         interval size in MS. 60000 = 1min (default), 180000 = 3min.
- *                      Pull 1min and resample downstream — one fetch, any TF.
+ *   --start/--end      YYYYMMDD (default: last ~2y → last settled weekday)
+ *   --ivl <dur>        DURATION STRING: 1m (default), 3m, 5m, 1h. NOT milliseconds.
+ *                      Pull 1m and resample downstream — one fetch, any TF.
+ *   --ivlparam <name>  default `interval`. Only change if Theta's API moves.
  *   --out <path>       default public/data/<SYM>_1min.csv
  *   --rth              RTH only (09:30–16:00 ET). Default: keep everything.
  *   --probe            fetch ONE day, print raw JSON, write nothing.
@@ -46,10 +47,15 @@ const arg = (k, d = null) => {
 const has = (k) => argv.includes(`--${k}`);
 
 const SYM = (arg("sym") || "").toUpperCase();
-const IVL = +arg("ivl", 60000);
+// SOLVED 2026-07-15 by probe: v3 wants a DURATION STRING on `interval`, not ms.
+//   interval=1m   → 391 rows ✓        ivl=<anything>        → 410 Gone
+//   interval=60   → 500 Server Error  interval_size/_ms/... → silently IGNORED
+// Keep as a string — `+arg()` would coerce "1m" to NaN.
+const IVL = arg("ivl", "1m");
 const RTH = has("rth");
 const PROBE = has("probe");
 const DAILY = has("daily");
+const RESAMPLE_1S = has("resample1s");
 const BASE = (process.env.THETA_BASE_URL || "http://127.0.0.1:25503").replace(/\/+$/, "");
 
 if (!SYM) {
@@ -150,7 +156,7 @@ function rows(json) {
 // erroring. `interval_size` produced 23,401 rows for one session (= 23,400
 // seconds of RTH) — a plausible-looking response that is completely wrong. Never
 // assume a param took effect; verify by row count.
-const IVL_PARAM = arg("ivlparam", "ivl");
+const IVL_PARAM = arg("ivlparam", "interval");
 const PATH_ = (s, e, ivlParam = IVL_PARAM, ivl = IVL) =>
   DAILY
     // /v3/stock/history/eod is the one stock-history route already proven in
@@ -178,25 +184,46 @@ if (PROBE) {
 
   const want = 390; // RTH minutes
   let winner = null;
-  for (const p of ["ivl", "interval_size", "interval", "interval_ms", "ivl_ms"]) {
-    let n = "ERR";
-    try { n = rows(await get(PATH_(END, END, p, 60000))).length; } catch { /* 472 = rejected */ }
-    const ignored = n === base.length;
-    const ok = typeof n === "number" && Math.abs(n - want) <= 30;
-    if (ok && !winner) winner = p;
-    console.log(
-      `  ${(p + "=60000").padEnd(24)} ${String(n).padStart(6)} rows` +
-      (ok ? "  ✓ THIS ONE (≈390 = RTH minutes)" : ignored ? "  ✗ ignored (same as default)" : "")
-    );
+
+  // An UNKNOWN param is silently ignored (row count == default). A param that
+  // ERRORS is RECOGNISED — the name is right and the VALUE is wrong. So the
+  // error text is the most informative thing here, and swallowing it with a
+  // bare catch{} (as this did) throws away the answer. Print it.
+  const names = ["ivl", "interval", "interval_size", "interval_ms", "ivl_ms"];
+  const values = [60000, 60, "1m", "1min", "60s"];
+
+  for (const p of names) {
+    for (const v of values) {
+      let n = null, err = null;
+      try { n = rows(await get(PATH_(END, END, p, v))).length; }
+      catch (e) { err = String(e.message).split("\n").find((l) => /\w/.test(l.replace(/^\s*\d+\s*$/, ""))) || e.message; }
+
+      if (err) {
+        // Theta's error body usually NAMES the acceptable values. That's the payload.
+        const body = err.replace(/\s+/g, " ").slice(0, 150);
+        console.log(`  ${(p + "=" + v).padEnd(24)} ${"ERR".padStart(6)}  ${body}`);
+        continue;
+      }
+      const ignored = n === base.length;
+      const ok = Math.abs(n - want) <= 30;
+      if (ok && !winner) winner = { p, v };
+      console.log(
+        `  ${(p + "=" + v).padEnd(24)} ${String(n).padStart(6)} rows` +
+        (ok ? `  ✓ THIS ONE (≈390 = RTH minutes)` : ignored ? "  ✗ ignored (unknown param)" : "  ? unexpected count")
+      );
+      if (ok) break; // found it for this name, stop hammering the terminal
+    }
   }
   console.log(`\nfirst 3 RAW (default granularity):\n`);
   console.log(JSON.stringify(base.slice(0, 3), null, 2));
   console.log(`\nkeys: ${base[0] ? Object.keys(base[0]).join(", ") : "(none)"}`);
   console.log(
     winner
-      ? `\n→ use: --ivlparam ${winner}`
-      : `\n→ NO param produced ~390 rows. Paste this output — we may have to pull the\n` +
-        `  1-second default and resample locally (expensive: ~23k rows/session).`
+      ? `\n→ use: --ivlparam ${winner.p} --ivl ${winner.v}`
+      : `\n→ No combination produced ~390 rows.\n` +
+        `  Read the ERR bodies above — a recognised-but-invalid param usually names\n` +
+        `  its legal values. If nothing works, --resample1s pulls the 1-second default\n` +
+        `  and folds it to 1m locally (~23k rows/session, so years will be slow).`
   );
   process.exit(0);
 }
@@ -288,6 +315,29 @@ for (const [s, e] of months(START, END)) {
 if (!out.length) {
   console.error(`\nZERO rows. Run --probe and paste the output — the field names are wrong.`);
   process.exit(1);
+}
+
+/* ── local 1s → 1m fold ───────────────────────────────────────────────────── */
+// Last resort if Theta won't bucket server-side. Correct, just wasteful: we pay
+// to move 23,400 rows/session over the wire to keep 390 of them.
+if (RESAMPLE_1S) {
+  const byKey = new Map(); // "YYYYMMDD HHMM" → rows
+  for (const line of out) {
+    const [stamp, o, h, l, c, v] = line.split(",");
+    const key = stamp.slice(0, 13); // "YYYYMMDD HHMM"
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push({ o: +o, h: +h, l: +l, c: +c, v: +v });
+  }
+  const folded = [];
+  for (const key of [...byKey.keys()].sort()) {
+    const g = byKey.get(key);
+    folded.push(
+      `${key}00,${g[0].o},${Math.max(...g.map((x) => x.h))},${Math.min(...g.map((x) => x.l))},` +
+      `${g[g.length - 1].c},${g.reduce((s, x) => s + x.v, 0)}`
+    );
+  }
+  console.error(`  folded ${out.length.toLocaleString()} 1s bars → ${folded.length.toLocaleString()} 1m bars`);
+  out.length = 0; out.push(...folded);
 }
 
 /* ── SPLIT CHECK ──────────────────────────────────────────────────────────── */
