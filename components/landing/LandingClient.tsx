@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import PublicNav from "@/components/landing/PublicNav";
+import HeroVideo from "@/components/landing/HeroVideo";
+import ReceiptsStrip from "@/components/landing/ReceiptsStrip";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
@@ -15,36 +17,13 @@ const FEATURES = [
 ];
 
 export default function LandingClient() {
-  const [email, setEmail] = useState("");
   const [xHover, setXHover] = useState(false);
-  const [status, setStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
-  const [msg, setMsg] = useState("");
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (status === "loading") return;
-    setStatus("loading");
-    setMsg("");
-    try {
-      const res = await fetch("/api/waitlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, source: "landing" }),
-      });
-      const data = await res.json();
-      if (res.ok && data.ok) {
-        setStatus("ok");
-        setMsg(data.message || "You're on the list.");
-        setEmail("");
-      } else {
-        setStatus("err");
-        setMsg(data.error || "Something went wrong.");
-      }
-    } catch {
-      setStatus("err");
-      setMsg("Network error. Try again.");
-    }
-  }
+  // NOTE: the newsletter/waitlist capture used to live here, ABOVE the trial
+  // CTA. It was intercepting the warmest traffic on the page — visitors ready
+  // to start handed over an email and left instead of entering the product.
+  // /api/waitlist is untouched and still serves the other capture points; it
+  // just no longer competes with the primary action on the landing page.
 
   return (
     <div
@@ -79,10 +58,14 @@ export default function LandingClient() {
           .landing-card .landing-feature { padding: 9px !important; }
           .landing-card .landing-feature-t { font-size: 12.5px !important; margin-bottom: 2px !important; }
           .landing-card .landing-feature-d { font-size: 11px !important; line-height: 1.35 !important; }
-          .landing-card .landing-form { margin-top: 14px !important; }
-          .landing-card .landing-divider { margin: 14px 0 10px !important; }
+          .landing-card .receipts { margin-top: 14px !important; padding: 12px 10px 9px !important; }
+          .landing-card .receipts-grid { grid-template-columns: 1fr 1fr !important; gap: 7px !important; }
+          .landing-card .receipts-cell { padding: 8px 9px !important; }
+          .landing-card .hero-frame { margin-bottom: 14px !important; }
         }
         @media (max-width: 640px) and (max-height: 750px) {
+          /* Short viewports: the feature grid is the first thing to go. The
+             hero and the receipts stay — they are what actually convert. */
           .landing-card .landing-features { display: none !important; }
           .landing-card .landing-logo { max-height: 80px !important; }
         }
@@ -140,6 +123,16 @@ export default function LandingClient() {
             traders. See dealer positioning, flow, and key levels the moment they move.
           </p>
 
+          {/* Show the product before asking for anything. Drop /hero-loop.mp4
+              into public/ and this becomes a live capture; until then it holds
+              the frame with the existing still. */}
+          <HeroVideo />
+
+          {/* Receipts sit directly under the product shot and above the CTA:
+              see it → believe it → start. With a 2-day trial there isn't room
+              to be convinced later, so the proof has to land before the click. */}
+          <ReceiptsStrip />
+
           <div style={featureGrid} className="landing-features">
             {FEATURES.map((f) => (
               <Link
@@ -157,37 +150,15 @@ export default function LandingClient() {
             ))}
           </div>
 
-          {/* Waitlist form */}
-          <form onSubmit={submit} className="landing-form" style={{ marginTop: 26 }}>
-            <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>
-              Sign up for the newsletter and get notified.
-            </label>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@email.com"
-                disabled={status === "loading"}
-                style={emailInput}
-              />
-              <button type="submit" disabled={status === "loading"} style={notifyBtn}>
-                {status === "loading" ? "…" : "Notify me"}
-              </button>
-            </div>
-            {msg && (
-              <div
-                style={{
-                  marginTop: 10,
-                  fontSize: 13,
-                  color: status === "ok" ? T.green : T.red,
-                }}
-              >
-                {msg}
-              </div>
-            )}
-          </form>
+          {/* ONE primary action. Everything above exists to earn this click. */}
+          <div style={{ marginTop: 24 }}>
+            <Link href="/pricing?from=landing&trial=1" style={{ ...ctaBtn, textDecoration: "none" }}>
+              <span>Start your 2-day free trial</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
+                No charge up front · Cancel anytime
+              </span>
+            </Link>
+          </div>
 
           <a
             href="https://x.com/bzilatrades"
@@ -213,33 +184,16 @@ export default function LandingClient() {
             </svg>
           </a>
 
-          <div style={divider} className="landing-divider">
-            <span style={{ background: T.panel, padding: "0 12px", color: T.muted, fontSize: 12 }}>
-              already a member?
-            </span>
-          </div>
+          {/* MONTH / YEAR promo codes + the $45/$500 price used to sit here.
+              Both are gone on purpose: discounting before the visitor knows
+              what the product is anchors the value low and reads as desperate.
+              Price belongs on /pricing, AFTER the pitch has landed. */}
 
-          {/* Trial + promo callout */}
-          <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 10, background: "rgba(33,158,188,0.08)", border: "1px solid rgba(33,158,188,0.25)", textAlign: "center" }}>
-            <span style={{ fontSize: 13, color: T.muted }}>Try it free for </span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>2 days</span>
-            <span style={{ fontSize: 13, color: T.muted }}> — then use code </span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
-            <span style={{ fontSize: 13, color: T.muted }}> or </span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
-            <span style={{ fontSize: 13, color: T.muted }}> for </span>
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.green }}>$45/mo or $500/yr</span>
-          </div>
-
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <Link href="/sign-in" style={{ ...primaryBtn, textDecoration: "none" }}>
-              Sign in to dashboard
-            </Link>
-            <Link href="/pricing?from=landing&trial=1" style={{ ...primaryBtn, textDecoration: "none" }}>
-              <span>Start 2-day free trial</span>
-              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.8, letterSpacing: "0.04em" }}>Cancel anytime</span>
-            </Link>
-          </div>
+          {/* Sign-in demoted to a quiet text link — it's for people who already
+              have an account, not a second choice competing with the trial. */}
+          <Link href="/sign-in" style={signInLink}>
+            Already a member? Sign in
+          </Link>
         </div>
       </div>
 
@@ -368,57 +322,41 @@ const featureCell: React.CSSProperties = {
   padding: 14,
 };
 
-const emailInput: React.CSSProperties = {
-  flex: 1,
-  minWidth: 200,
-  fontSize: 15,
-  padding: "12px 14px",
-  border: `1px solid ${T.border}`,
-  borderRadius: 10,
-  background: "rgba(0,0,0,0.4)",
+// emailInput / notifyBtn / divider / primaryBtn removed with the waitlist form
+// and the twin CTA row — see the comments in the component body.
+
+// The one primary action on the page. Full-width and visually unambiguous:
+// nothing else on the landing is styled to compete with it.
+const ctaBtn: React.CSSProperties = {
+  width: "100%",
+  padding: "15px 18px",
+  borderRadius: 12,
+  border: "1px solid rgba(33,158,188,0.65)",
+  background: "linear-gradient(180deg, rgba(33,158,188,0.42), rgba(33,158,188,0.20))",
   color: T.text,
-  outline: "none",
-};
-
-const notifyBtn: React.CSSProperties = {
-  padding: "12px 22px",
-  borderRadius: 10,
-  border: "1px solid rgba(33,158,188,0.4)",
-  background: "linear-gradient(180deg,rgba(33,158,188,0.25),rgba(33,158,188,0.08))",
-  color: T.cyan,
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-
-const divider: React.CSSProperties = {
-  textAlign: "center",
-  margin: "26px 0 16px",
-  borderTop: `1px solid ${T.border}`,
-  position: "relative",
-  top: -10,
-  lineHeight: 0,
-};
-
-const primaryBtn: React.CSSProperties = {
-  flex: 1,
-  minWidth: 180,
-  padding: "12px 18px",
-  borderRadius: 10,
-  border: `1px solid rgba(33,158,188,0.5)`,
-  background: "rgba(33,158,188,0.25)",
-  color: T.text,
-  fontSize: 14,
+  fontSize: 16,
   fontWeight: 800,
   cursor: "pointer",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  gap: 2,
+  gap: 3,
   textAlign: "center",
   lineHeight: 1.3,
+  boxShadow: "0 0 22px rgba(33,158,188,0.28)",
+};
+
+// Deliberately quiet — a wayfinding link for existing members, not an option
+// being weighed against the trial.
+const signInLink: React.CSSProperties = {
+  display: "block",
+  marginTop: 14,
+  textAlign: "center",
+  fontSize: 13,
+  fontWeight: 600,
+  color: T.muted,
+  textDecoration: "none",
 };
 
 const xFollow: React.CSSProperties = {
