@@ -134,13 +134,20 @@ export default function Gex3DPage() {
   const [tilt, setTilt] = useState(34);
   const [heading, setHeading] = useState(-36); // degrees, wrapped to [-180, 180]
   const [absMode, setAbsMode] = useState(false);
+  // Newest column at the NEAR edge of the Z axis. End-of-day carries the day's
+  // biggest walls, and with time running away from the camera those walls sat at
+  // the back, facing away — the tall stuff hid behind the morning's terrain and
+  // you read it side-on. Defaults ON: the freshest surface faces you.
+  const [newestFront, setNewestFront] = useState(true);
   const [spin, setSpin] = useState(false);
 
   const reliefRef = useRef(relief);
   const absRef = useRef(absMode);
+  const newestFrontRef = useRef(newestFront);
   const spinRef = useRef(spin);
   reliefRef.current = relief;
   absRef.current = absMode;
+  newestFrontRef.current = newestFront;
   spinRef.current = spin;
 
   const flipIdx = useRef<number | null>(null);
@@ -361,9 +368,11 @@ export default function Gex3DPage() {
     ctx.stroke();
     ctx.restore();
 
-    // live spot marker at the head of the track
+    // live spot marker at the head of the track — the NEWEST column, which is
+    // z=0 when the axis is reversed, not NZ-1.
+    const headZ = newestFrontRef.current ? 0 : NZ - 1;
     {
-      const p = proj(gxAt(NZ - 1), RIBBON_Y + 5, NZ - 1);
+      const p = proj(gxAt(headZ), RIBBON_Y + 5, headZ);
       ctx.save();
       ctx.shadowColor = canvasRgba(SPOT, 0.9);
       ctx.shadowBlur = 16;
@@ -375,7 +384,7 @@ export default function Gex3DPage() {
       ctx.font = "10px var(--font-inter), Inter, sans-serif";
       ctx.textAlign = "left";
       ctx.fillStyle = canvasRgba(SPOT, 0.95);
-      ctx.fillText(spotPath[NZ - 1].toFixed(0), p.x + 8, p.y - 6);
+      ctx.fillText(spotPath[headZ].toFixed(0), p.x + 8, p.y - 6);
     }
 
     // ── wall impacts: rejection vs break-through ───────────────────────────
@@ -392,6 +401,11 @@ export default function Gex3DPage() {
     // Detected on the spot ribbon vs the strike nearest it at each column.
     const impacts: { z: number; x: number; v: number; kind: "reject" | "break"; force: number }[] = [];
     const stepPts = strikes.length > 1 ? Math.abs(strikes[1] - strikes[0]) : 5;
+    // Array order follows the Z axis, which reverses with `newestFront` — so
+    // "the column before this one IN TIME" is z+1 when reversed. Reading z-1
+    // blindly would run the physics backwards and swap rejections for breaks.
+    const back = newestFrontRef.current ? 1 : -1;   // one step earlier in time
+    const fwd = -back;                              // one step later in time
     for (let z = 1; z < NZ - 1; z++) {
       const xi = Math.round(gxAt(z));
       if (xi < 0 || xi >= NX) continue;
@@ -399,9 +413,9 @@ export default function Gex3DPage() {
       if (Math.abs(v) < CROSS_THRESHOLD) continue; // only STRONG walls count
 
       const k = strikes[xi];
-      const d0 = spotPath[z - 1] - k;  // signed distance to the wall, before
-      const d1 = spotPath[z] - k;      //                              at
-      const d2 = spotPath[z + 1] - k;  //                              after
+      const d0 = spotPath[z + back] - k;  // signed distance to the wall, before
+      const d1 = spotPath[z] - k;         //                              at
+      const d2 = spotPath[z + fwd] - k;   //                              after
       if (Math.abs(d1) > stepPts) continue; // never actually reached the wall
 
       const closed = Math.abs(d1) < Math.abs(d0); // was approaching
@@ -424,7 +438,7 @@ export default function Gex3DPage() {
       ctx.save();
       if (im.kind === "reject") {
         // shockwave: 3 arcs radiating back the way price came from
-        const away = Math.sign(spotPath[im.z - 1] - strikes[im.x]) || 1;
+        const away = Math.sign(spotPath[im.z + back] - strikes[im.x]) || 1;
         const baseR = (4 + im.force * 7) * hit.s;
         ctx.lineWidth = 1.4;
         ctx.shadowColor = canvasRgba(wallCol, 0.9);
@@ -542,25 +556,32 @@ export default function Gex3DPage() {
       return lastSpot as number;
     });
 
-    surfRef.current = {
-      strikes: live.strikes,
-      rows: live.norm,
-      raw: live.rows,
-      spotPath,
-      times: live.times,
-      peak: live.peak,
-    };
-    dimsRef.current = { nx: live.strikes.length, nz: live.norm.length };
-
-    // Zero-gamma flip from the NEWEST column, interpolated between strikes.
+    // Zero-gamma flip from the NEWEST column — taken BEFORE any reversal, since
+    // "newest" is the last element of the server's ascending-time arrays.
     const last = live.norm[live.norm.length - 1] || [];
     let fi: number | null = null;
     for (let i = 1; i < last.length; i++) {
       if (last[i - 1] < 0 && last[i] >= 0) { fi = i - 1 + (0 - last[i - 1]) / (last[i] - last[i - 1]); break; }
     }
     flipIdx.current = fi;
+
+    // Time direction is flipped by reversing the arrays ONCE here rather than
+    // inverting z at every proj() call site — the towers, ribbon, crossings and
+    // axis labels all walk these arrays in lockstep, so one reversal keeps them
+    // consistent and there's no z-mapping to forget in a later edit.
+    const flip = <T,>(a: T[]) => (newestFront ? [...a].reverse() : a);
+
+    surfRef.current = {
+      strikes: live.strikes,
+      rows: flip(live.norm),
+      raw: flip(live.rows),
+      spotPath: flip(spotPath),
+      times: flip(live.times),
+      peak: live.peak,
+    };
+    dimsRef.current = { nx: live.strikes.length, nz: live.norm.length };
     draw();
-  }, [live, draw]);
+  }, [live, newestFront, draw]);
 
   useEffect(() => { draw(); }, [relief, absMode, draw]);
   useEffect(() => { camRef.current.pitch = (tilt * Math.PI) / 180; draw(); }, [tilt, draw]);
@@ -857,6 +878,10 @@ export default function Gex3DPage() {
           <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Raise put walls above the floor too — sign still drives color">
             <input type="checkbox" checked={absMode} onChange={(e) => setAbsMode(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
             Flip −GEX up
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }} title="Put the newest (end-of-day) columns at the front, facing you">
+            <input type="checkbox" checked={newestFront} onChange={(e) => setNewestFront(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
+            Newest in front
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={spin} onChange={(e) => setSpin(e.target.checked)} style={{ accentColor: HOME_THEME.cyan }} />
