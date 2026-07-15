@@ -9,7 +9,7 @@
 // 0–7 DTE. Newest print first.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeInputStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 
@@ -149,15 +149,36 @@ export default function WhaleOrdersPanel() {
     return merged;
   }, [history, orders]);
 
+  // ── Optional single-ticker filter. The tape already carries every ticker, so
+  // this is a pure client-side narrow — no extra fetch, no server round-trip.
+  // Empty = all tickers (the default). Matches on the NORMALIZED root, so
+  // typing "SPX" also catches prints that stream as "SPXW". ──
+  const [tickerFilter, setTickerFilter] = useState("");
+  const activeFilter = tickerFilter.trim().toUpperCase();
+  const filtered = useMemo(
+    () => (activeFilter ? rows.filter((o) => normTicker(o.underlying) === activeFilter) : rows),
+    [rows, activeFilter]
+  );
+
+  // Suggestions come from the tickers actually printing today, so the dropdown
+  // only ever offers something that will return rows.
+  const tickersInTape = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of rows) { const t = normTicker(o.underlying); if (t) set.add(t); }
+    return [...set].sort();
+  }, [rows]);
+
   // ── Live spot per ticker for the % OTM column. Sourced from Theta /proxy/quotes
   //    (Yahoo /api/quotes-batch fallback), polled every 15s, so % OTM reflects the
   //    LIVE underlying — not FlowOrder.spot, which is frozen at print time. ──
   const [spotByTicker, setSpotByTicker] = useState<Record<string, number>>({});
+  // Driven by the FILTERED rows: with a ticker filter on we only need that one
+  // quote, not a batch for every whale ticker on the tape.
   const tickerKey = useMemo(() => {
     const set = new Set<string>();
-    for (const o of rows) { const t = normTicker(o.underlying); if (t) set.add(t); }
+    for (const o of filtered) { const t = normTicker(o.underlying); if (t) set.add(t); }
     return [...set].sort().join(",");
-  }, [rows]);
+  }, [filtered]);
   useEffect(() => {
     if (!shouldConnect || !tickerKey) return;
     let cancelled = false;
@@ -193,17 +214,18 @@ export default function WhaleOrdersPanel() {
     return () => { cancelled = true; clearTimeout(kick); clearInterval(id); };
   }, [tickerKey, shouldConnect]);
 
+  // Totals follow the filter — "Calls $X / Puts $Y" describes what's on screen.
   const totals = useMemo(() => {
     let prem = 0, callPrem = 0, putPrem = 0;
-    for (const o of rows) {
+    for (const o of filtered) {
       const p = o.premium || 0;
       prem += p;
       if (o.type === "C") callPrem += p; else putPrem += p;
     }
-    return { count: rows.length, prem, callPrem, putPrem };
-  }, [rows]);
+    return { count: filtered.length, prem, callPrem, putPrem };
+  }, [filtered]);
 
-  const visible = rows.slice(0, MAX_ROWS);
+  const visible = filtered.slice(0, MAX_ROWS);
 
   const headerCell: React.CSSProperties = {
     fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted,
@@ -216,6 +238,40 @@ export default function WhaleOrdersPanel() {
         <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap", minWidth: 0 }}>
           <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.text }}>Whale Flow</span>
           <span style={{ fontSize: 10, color: C.muted }}>0–7 DTE · ≥$500K · OTM</span>
+
+          {/* Ticker narrow — client-side, empty = all tickers. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <input
+              list="whale-ticker-suggestions"
+              value={tickerFilter}
+              onChange={(e) => setTickerFilter(e.target.value.toUpperCase())}
+              placeholder="All tickers"
+              autoComplete="off"
+              spellCheck={false}
+              style={{
+                ...homeInputStyle, width: 92, fontSize: 11, padding: "3px 8px",
+                textTransform: "uppercase",
+                borderColor: activeFilter ? DOCK_THEME.activeBorder : C.border,
+                color: activeFilter ? C.cyan : C.text,
+              }}
+            />
+            <datalist id="whale-ticker-suggestions">
+              {tickersInTape.map((t) => <option key={t} value={t} />)}
+            </datalist>
+            {activeFilter && (
+              <button
+                onClick={() => setTickerFilter("")}
+                title="Clear ticker filter"
+                style={{
+                  padding: "3px 7px", fontSize: 11, fontWeight: 800, lineHeight: 1, cursor: "pointer",
+                  borderRadius: 4, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.muted,
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+
           <span style={{ fontSize: 11, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
           <span style={{ fontSize: 11, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
           <span style={{ fontSize: 11, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
@@ -245,7 +301,11 @@ export default function WhaleOrdersPanel() {
           {/* ── Rows ── */}
           {visible.length === 0 ? (
             <p style={{ fontSize: 12, padding: 20, color: C.muted }}>
-              {status === "LIVE" ? "No whale prints yet today (0–7 DTE, ≥$500K, OTM)." : "Connecting to feed…"}
+              {status !== "LIVE"
+                ? "Connecting to feed…"
+                : activeFilter
+                  ? `No ${activeFilter} whale prints yet today (0–7 DTE, ≥$500K, OTM).`
+                  : "No whale prints yet today (0–7 DTE, ≥$500K, OTM)."}
             </p>
           ) : (
             visible.map((o, i) => {
@@ -282,9 +342,9 @@ export default function WhaleOrdersPanel() {
               );
             })
           )}
-          {rows.length > MAX_ROWS && (
+          {filtered.length > MAX_ROWS && (
             <p style={{ fontSize: 11, padding: "8px 10px", color: C.muted, textAlign: "center" }}>
-              Showing newest {MAX_ROWS} of {rows.length.toLocaleString()} whale prints.
+              Showing newest {MAX_ROWS} of {filtered.length.toLocaleString()} whale prints.
             </p>
           )}
         </div>
