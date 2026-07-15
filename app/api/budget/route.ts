@@ -282,6 +282,7 @@ export async function POST(req: NextRequest) {
       const row = await insertPropRow({
         profile_id: profile.id,
         entry_date: String(body?.date ?? "").trim(),
+        source: body?.source ? String(body.source) : "prop",
         firm: body?.firm ? String(body.firm) : "TPT",
         accounts: Number(body?.accounts ?? 0),
         cost: Number(body?.cost ?? 0),
@@ -294,6 +295,7 @@ export async function POST(req: NextRequest) {
     if (action === "propUpdate") {
       await updatePropRow(profile.id, Number(body?.id ?? 0), {
         entry_date: body?.date != null ? String(body.date) : undefined,
+        source: body?.source != null ? String(body.source) : undefined,
         firm: body?.firm != null ? String(body.firm) : undefined,
         accounts: body?.accounts != null ? Number(body.accounts) : undefined,
         cost: body?.cost != null ? Number(body.cost) : undefined,

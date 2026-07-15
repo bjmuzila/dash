@@ -26,7 +26,12 @@ type RegisterRow = {
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type DailyBalance = { day: string; coastal: number; truist: number; secu: number };
 type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
-type PropRow = { id: number; entry_date: string; firm: string; accounts: number; cost: number; payout: number; note?: string | null };
+type PropSource = "prop" | "cbedge";
+type PropRow = { id: number; entry_date: string; source: PropSource; firm: string; accounts: number; cost: number; payout: number; note?: string | null };
+// A Bzila ledger line, normalized across all three streams (prop + cbedge come
+// from budget_prop; contracts are read out of the Payments register).
+type BzilaEntry = { key: string; id: number | null; date: string; stream: "prop" | "cbedge" | "contracts"; label: string; accounts: number; inAmt: number; outAmt: number };
+const STREAM_LABEL: Record<BzilaEntry["stream"], string> = { prop: "Prop", cbedge: "CB Edge", contracts: "Contracts" };
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 type Intel = {
@@ -133,7 +138,7 @@ export default function BudgetPage() {
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
   const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "prop" | "yearly">("overview");
+  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "bzila" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
@@ -158,8 +163,9 @@ export default function BudgetPage() {
   const [azPay, setAzPay] = useState("");
   const [azGas, setAzGas] = useState("");
 
-  // Prop composer
+  // Bzila composer
   const [ppDate, setPpDate] = useState(todayIso());
+  const [ppSource, setPpSource] = useState<PropSource>("prop");
   const [ppFirm, setPpFirm] = useState("TPT");
   const [ppAccounts, setPpAccounts] = useState("1");
   const [ppCost, setPpCost] = useState("");
@@ -192,10 +198,22 @@ export default function BudgetPage() {
     setSelectedDate(null);
   }, [month]);
 
+  // Bzila reads propRows (loaded for the selected month's year) alongside
+  // yearRows (loaded for `year`). Keep them on the same year or the Contracts
+  // stream would be off by a year.
+  useEffect(() => {
+    if (tab !== "bzila") return;
+    const y = Number(month.slice(0, 4));
+    if (y && y !== year) setYear(y);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, month]);
+
   // Load a whole year of register rows for the Yearly tab and for the Overview's
   // monthly cash-flow bucket.
   useEffect(() => {
-    if (tab !== "yearly" && tab !== "overview") return;
+    // Bzila needs the year's register rows too — its Contracts stream is read
+    // from the Payments register rather than entered on the tab.
+    if (tab !== "yearly" && tab !== "overview" && tab !== "bzila") return;
     let cancelled = false;
     (async () => {
       setYearLoading(true);
@@ -330,26 +348,74 @@ export default function BudgetPage() {
     return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
   }, [amazonRows]);
 
-  // Prop ledger — group the year's rows by month (newest first), with per-month
-  // and year totals. propRows already covers the selected month's whole year.
-  const propComputed = useMemo(() => {
-    const byMonth = new Map<string, PropRow[]>();
+  // Bzila — the business ledger. Three streams merged into one set of entries:
+  //   prop + cbedge → budget_prop rows (entered on this tab)
+  //   contracts     → Payments register rows in a Contracts category (read only,
+  //                   so a contract is never entered twice)
+  // Grouped by month (newest first) with per-stream and year totals.
+  const bzilaComputed = useMemo(() => {
+    const contractCatIds = new Set(categories.filter((c) => /contract/i.test(c.name)).map((c) => c.id));
+    const entries: BzilaEntry[] = [];
+
     for (const r of propRows) {
-      const ym = r.entry_date.slice(0, 7);
-      (byMonth.get(ym) || byMonth.set(ym, []).get(ym)!).push(r);
+      entries.push({
+        key: `p${r.id}`,
+        id: r.id,
+        date: r.entry_date,
+        stream: r.source === "cbedge" ? "cbedge" : "prop",
+        label: r.firm,
+        accounts: r.accounts || 0,
+        inAmt: r.payout || 0,
+        outAmt: r.cost || 0,
+      });
+    }
+    for (const r of yearRows) {
+      if (r.is_beginning) continue;
+      const isContract = (r.category_id != null && contractCatIds.has(r.category_id)) || /contract/i.test(r.label);
+      if (!isContract) continue;
+      entries.push({
+        key: `r${r.id}`,
+        id: null, // read-only here — edit it on the Payments tab
+        date: r.entry_date,
+        stream: "contracts",
+        label: r.label,
+        accounts: 0,
+        inAmt: r.amount > 0 ? r.amount : 0,
+        outAmt: r.amount < 0 ? Math.abs(r.amount) : 0,
+      });
+    }
+
+    const byMonth = new Map<string, BzilaEntry[]>();
+    for (const e of entries) {
+      const ym = e.date.slice(0, 7);
+      if (!byMonth.has(ym)) byMonth.set(ym, []);
+      byMonth.get(ym)!.push(e);
     }
     const months = Array.from(byMonth.entries())
       .map(([ym, rows]) => {
-        const cost = rows.reduce((s, r) => s + (r.cost || 0), 0);
-        const payout = rows.reduce((s, r) => s + (r.payout || 0), 0);
-        const accounts = rows.reduce((s, r) => s + (r.accounts || 0), 0);
-        return { ym, rows, cost, payout, accounts, net: payout - cost };
+        rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+        const inAmt = rows.reduce((s, r) => s + r.inAmt, 0);
+        const outAmt = rows.reduce((s, r) => s + r.outAmt, 0);
+        return { ym, rows, inAmt, outAmt, net: inAmt - outAmt };
       })
       .sort((a, b) => (a.ym < b.ym ? 1 : -1));
-    const totalCost = months.reduce((s, m) => s + m.cost, 0);
-    const totalPayout = months.reduce((s, m) => s + m.payout, 0);
-    return { months, totalCost, totalPayout, net: totalPayout - totalCost };
-  }, [propRows]);
+
+    const streamTotal = (s: BzilaEntry["stream"]) => {
+      const rows = entries.filter((e) => e.stream === s);
+      const inAmt = rows.reduce((x, r) => x + r.inAmt, 0);
+      const outAmt = rows.reduce((x, r) => x + r.outAmt, 0);
+      return { inAmt, outAmt, net: inAmt - outAmt };
+    };
+    const totalIn = entries.reduce((s, r) => s + r.inAmt, 0);
+    const totalOut = entries.reduce((s, r) => s + r.outAmt, 0);
+    return {
+      months,
+      totalIn,
+      totalOut,
+      net: totalIn - totalOut,
+      streams: { cbedge: streamTotal("cbedge"), contracts: streamTotal("contracts"), prop: streamTotal("prop") },
+    };
+  }, [propRows, yearRows, categories]);
 
   // Spend per category (this month's expense rows) + the "unsorted" bucket +
   // the actual rows grouped by category (for the per-category detail popup).
@@ -527,17 +593,13 @@ export default function BudgetPage() {
   }, [register, recurring, month, allBanks, categories, categoryStats, computed]);
   const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
 
-  // "Prop spending" for the selected month — net cost from the prop ledger
-  // (purchases minus payouts), so the tile matches the Prop tab.
-  const propSpend = useMemo(() => {
-    let cost = 0, payout = 0;
-    for (const r of propRows) {
-      if (r.entry_date.slice(0, 7) !== month) continue;
-      cost += r.cost || 0;
-      payout += r.payout || 0;
-    }
-    return cost - payout;
-  }, [propRows, month]);
+  // Bzila net for the selected month (all three streams). Shown as its own tile
+  // — deliberately NOT rolled into the Income / Net Profit tiles, which stay
+  // personal-only.
+  const bzilaMonth = useMemo(
+    () => bzilaComputed.months.find((m) => m.ym === month) ?? { inAmt: 0, outAmt: 0, net: 0 },
+    [bzilaComputed, month]
+  );
 
   // Cash-flow buckets (in vs out) at day / week / month resolution.
   const cashflow = useMemo(() => {
@@ -660,7 +722,7 @@ export default function BudgetPage() {
     setAzGas("");
   };
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
-  // Prop ledger.
+  // Bzila ledger (prop + cbedge; contracts are entered on Payments instead).
   const addProp = async () => {
     if (ppDate.trim() === "") return;
     const amt = Math.abs(Number(ppCost || 0));
@@ -668,8 +730,9 @@ export default function BudgetPage() {
     await post({
       action: "propAdd",
       date: ppDate,
-      firm: ppFirm.trim().toUpperCase() || "TPT",
-      accounts: ppKind === "cost" ? Number(ppAccounts || 0) : 0,
+      source: ppSource,
+      firm: ppFirm.trim().toUpperCase() || (ppSource === "cbedge" ? "CB EDGE" : "TPT"),
+      accounts: ppSource === "prop" && ppKind === "cost" ? Number(ppAccounts || 0) : 0,
       cost: ppKind === "cost" ? amt : 0,
       payout: ppKind === "payout" ? amt : 0,
     });
@@ -694,7 +757,7 @@ export default function BudgetPage() {
 
         {/* Tabs (top-level nav) */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["prop", "Prop"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
+          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["bzila", "Bzila"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
@@ -732,7 +795,7 @@ export default function BudgetPage() {
           <StatTile label="Expenses" value={fmtMoney(Math.abs(computed.payments), currency)} sub={`${monthLabel.split(" ")[0]} outflows`} valueColor={SOFT_RED} />
           <StatTile label="Net Profit" value={fmtMoney(computed.netCashFlow + amazonComputed.totalNet, currency)} sub="Income − expenses" valueColor={computed.netCashFlow + amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.green} />
           <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
-          <StatTile label="Prop Spending" value={fmtMoney(propSpend, currency)} sub="Evals, resets, data" valueColor={propSpend > 0 ? SOFT_RED : HOME_THEME.text} />
+          <StatTile label="Bzila" value={fmtMoney(bzilaMonth.net, currency)} sub={`${fmtMoney(bzilaMonth.inAmt, currency)} in · ${fmtMoney(bzilaMonth.outAmt, currency)} out`} valueColor={bzilaMonth.net < 0 ? SOFT_RED : HOME_THEME.green} />
         </div>
 
         {/* Daily/weekly budgeting intelligence */}
@@ -838,8 +901,8 @@ export default function BudgetPage() {
             <AmazonTable rows={amazonComputed.rows} currency={currency} onDelete={deleteAz} />
           </div>
         )}
-        {tab === "prop" && (
-          <PropPanel data={propComputed} year={Number(month.slice(0, 4))} currency={currency} onDelete={deleteProp} />
+        {tab === "bzila" && (
+          <BzilaPanel data={bzilaComputed} year={Number(month.slice(0, 4))} currency={currency} onDelete={deleteProp} onOpenPayments={() => setTab("register")} />
         )}
         {tab === "yearly" && (
           <YearlyPanel data={yearMonths} categories={categories} year={year} onYear={setYear} currency={currency} loading={yearLoading} />
@@ -864,13 +927,25 @@ export default function BudgetPage() {
             <button onClick={saveAmazon} style={primary()}>Add Day</button>
           </div>
         )}
-        {tab === "prop" && (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 120px 110px 1fr 120px 110px", gap: 10, alignItems: "center" }}>
+        {tab === "bzila" && (
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 120px 120px 1fr 100px 120px 100px", gap: 10, alignItems: "center" }}>
             <input type="date" value={ppDate} onChange={(e) => setPpDate(e.target.value)} style={field()} />
-            <input value={ppFirm} onChange={(e) => setPpFirm(e.target.value)} placeholder="Firm" style={field()} />
-            <ThemedSelect value={ppKind} onChange={(v) => setPpKind(v as "cost" | "payout")} options={[{ value: "cost", label: "− Purchase" }, { value: "payout", label: "+ Payout" }]} />
-            <input value={ppAccounts} onChange={(e) => setPpAccounts(e.target.value)} placeholder="Accounts" type="number" disabled={ppKind === "payout"} style={{ ...field(), opacity: ppKind === "payout" ? 0.4 : 1 }} />
-            <input value={ppCost} onChange={(e) => setPpCost(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addProp()} placeholder={ppKind === "payout" ? "Payout $" : "Cost $"} type="number" style={field()} />
+            <ThemedSelect
+              value={ppSource}
+              onChange={(v) => { setPpSource(v as PropSource); setPpFirm(v === "cbedge" ? "CB EDGE" : "TPT"); }}
+              options={[{ value: "prop", label: "Prop" }, { value: "cbedge", label: "CB Edge" }]}
+            />
+            <ThemedSelect
+              value={ppKind}
+              onChange={(v) => setPpKind(v as "cost" | "payout")}
+              options={[
+                { value: "cost", label: ppSource === "cbedge" ? "− Spend" : "− Purchase" },
+                { value: "payout", label: ppSource === "cbedge" ? "+ Earnings" : "+ Payout" },
+              ]}
+            />
+            <input value={ppFirm} onChange={(e) => setPpFirm(e.target.value)} placeholder={ppSource === "cbedge" ? "Source / vendor" : "Firm"} style={field()} />
+            <input value={ppAccounts} onChange={(e) => setPpAccounts(e.target.value)} placeholder="Accts" type="number" disabled={ppSource !== "prop" || ppKind === "payout"} style={{ ...field(), opacity: ppSource !== "prop" || ppKind === "payout" ? 0.4 : 1 }} />
+            <input value={ppCost} onChange={(e) => setPpCost(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addProp()} placeholder={ppKind === "payout" ? "Amount in $" : "Amount out $"} type="number" style={field()} />
             <button onClick={addProp} style={primary()}>Add</button>
           </div>
         )}
@@ -2742,46 +2817,89 @@ function YearlyPanel({
   );
 }
 
-// Prop-firm ledger: a year summary + monthly rows that expand to their purchases.
-function PropPanel({
+// Bzila — the business ledger. Year summary + per-stream breakdown (CB Edge /
+// Contracts / Prop) + monthly rows that expand to their entries. Contracts rows
+// are read out of the Payments register, so they're shown but not editable here.
+type BzilaStreamTotal = { inAmt: number; outAmt: number; net: number };
+function BzilaPanel({
   data,
   year,
   currency,
   onDelete,
+  onOpenPayments,
 }: {
-  data: { months: { ym: string; rows: PropRow[]; cost: number; payout: number; accounts: number; net: number }[]; totalCost: number; totalPayout: number; net: number };
+  data: {
+    months: { ym: string; rows: BzilaEntry[]; inAmt: number; outAmt: number; net: number }[];
+    totalIn: number;
+    totalOut: number;
+    net: number;
+    streams: { cbedge: BzilaStreamTotal; contracts: BzilaStreamTotal; prop: BzilaStreamTotal };
+  };
   year: number;
   currency: string;
   onDelete: (id: number) => void;
+  onOpenPayments: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(data.months[0]?.ym ?? null);
   const monthName = (ym: string) => {
     const [y, m] = ym.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
   };
+  const STREAM_COLOR: Record<BzilaEntry["stream"], string> = {
+    cbedge: HOME_THEME.cyan,
+    contracts: LIGHT_BLUE,
+    prop: HOME_THEME.orange,
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Year summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-        <StatTile label={`${year} Cost`} value={fmtMoney(data.totalCost, currency)} sub="Evals · resets · data" valueColor={SOFT_RED} />
-        <StatTile label="Payouts" value={fmtMoney(data.totalPayout, currency)} sub="Withdrawn" valueColor={HOME_THEME.green} />
-        <StatTile label="Net" value={fmtMoney(data.net, currency)} sub="Payouts − cost" valueColor={data.net < 0 ? SOFT_RED : HOME_THEME.green} />
+        <StatTile label={`${year} Income`} value={fmtMoney(data.totalIn, currency)} sub="CB Edge · contracts · payouts" valueColor={HOME_THEME.green} />
+        <StatTile label="Expenses" value={fmtMoney(data.totalOut, currency)} sub="All three streams" valueColor={SOFT_RED} />
+        <StatTile label="Net" value={fmtMoney(data.net, currency)} sub="Income − expenses" valueColor={data.net < 0 ? SOFT_RED : HOME_THEME.green} />
+      </div>
+
+      {/* Per-stream breakdown */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+        {(["cbedge", "contracts", "prop"] as const).map((s) => {
+          const t = data.streams[s];
+          return (
+            <div key={s} style={{ ...card(), padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: STREAM_COLOR[s] }} />
+                <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" }}>{STREAM_LABEL[s]}</span>
+                {s === "contracts" && (
+                  <button onClick={onOpenPayments} style={{ ...ghost(), marginLeft: "auto", padding: "3px 8px", fontSize: 10, borderRadius: 7 }}>From Payments</button>
+                )}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted }}>
+                <span>In</span><span style={{ fontWeight: 800, color: HOME_THEME.green }}>{fmtMoney(t.inAmt, currency)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 3 }}>
+                <span>Out</span><span style={{ fontWeight: 800, color: SOFT_RED }}>{fmtMoney(t.outAmt, currency)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                <span style={{ color: HOME_THEME.muted, fontWeight: 700 }}>Net</span>
+                <span style={{ fontWeight: 900, color: t.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(t.net, currency)}</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Monthly ledger */}
       <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
           <span>Month</span>
-          <span style={{ textAlign: "center" }}>Accts</span>
-          <span style={{ textAlign: "right" }}>Cost</span>
-          <span style={{ textAlign: "right" }}>Payouts</span>
+          <span style={{ textAlign: "right" }}>In</span>
+          <span style={{ textAlign: "right" }}>Out</span>
           <span style={{ textAlign: "right" }}>Net</span>
           <span />
         </div>
 
         {data.months.length === 0 && (
-          <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>No prop spending logged for {year} yet.</div>
+          <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>Nothing logged for {year} yet.</div>
         )}
 
         {data.months.map((m) => {
@@ -2790,30 +2908,37 @@ function PropPanel({
             <div key={m.ym} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
               <button
                 onClick={() => setOpen(isOpen ? null : m.ym)}
-                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 15 }}
+                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 15 }}
               >
                 <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
-                <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{m.accounts}</span>
-                <span style={{ textAlign: "right" }}>{fmtMoney(m.cost, currency)}</span>
-                <span style={{ textAlign: "right", color: m.payout > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.payout, currency)}</span>
+                <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
+                <span style={{ textAlign: "right", color: m.outAmt > 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(m.outAmt, currency)}</span>
                 <span style={{ textAlign: "right", fontWeight: 900, color: m.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(m.net, currency)}</span>
                 <span style={{ textAlign: "right", color: HOME_THEME.muted, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s ease" }}>›</span>
               </button>
 
               {isOpen && (
                 <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.8fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
-                    <span>Date</span><span>Firm</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
+                  <div style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+                    <span>Date</span><span>Stream</span><span>Item</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
                   </div>
                   {m.rows.map((r) => {
-                    const isPayout = (r.payout || 0) > 0;
+                    const isIn = r.inAmt > 0;
+                    const c = STREAM_COLOR[r.stream];
                     return (
-                      <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.8fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
-                        <span style={{ fontWeight: 700 }}>{shortDate(r.entry_date)} <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>{weekday(r.entry_date)}</span></span>
-                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em" }}>{r.firm}</span>
-                        <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{isPayout ? "—" : r.accounts}</span>
-                        <span style={{ textAlign: "right", fontWeight: 800, color: isPayout ? HOME_THEME.green : SOFT_RED }}>{isPayout ? "+" : "−"}{fmtMoney(isPayout ? r.payout : r.cost, currency)}</span>
-                        <span style={{ textAlign: "right" }}><DeleteButton onClick={() => onDelete(r.id)} /></span>
+                      <div key={r.key} style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
+                        <span style={{ fontWeight: 700 }}>{shortDate(r.date)} <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>{weekday(r.date)}</span></span>
+                        <span>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 999, color: c, background: bRgba(c, 0.10), border: `1px solid ${bRgba(c, 0.3)}` }}>
+                            {STREAM_LABEL[r.stream]}
+                          </span>
+                        </span>
+                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                        <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{r.accounts || "—"}</span>
+                        <span style={{ textAlign: "right", fontWeight: 800, color: isIn ? HOME_THEME.green : SOFT_RED }}>{isIn ? "+" : "−"}{fmtMoney(isIn ? r.inAmt : r.outAmt, currency)}</span>
+                        <span style={{ textAlign: "right" }}>
+                          {r.id != null ? <DeleteButton onClick={() => onDelete(r.id!)} /> : <span title="Edit on the Payments tab" style={{ color: HOME_THEME.muted, opacity: 0.4, fontSize: 12 }}>↗</span>}
+                        </span>
                       </div>
                     );
                   })}
@@ -2824,11 +2949,10 @@ function PropPanel({
         })}
 
         {data.months.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 15, fontWeight: 900 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 15, fontWeight: 900 }}>
             <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
-            <span />
-            <span style={{ textAlign: "right" }}>{fmtMoney(data.totalCost, currency)}</span>
-            <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalPayout, currency)}</span>
+            <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalIn, currency)}</span>
+            <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(data.totalOut, currency)}</span>
             <span style={{ textAlign: "right", color: data.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(data.net, currency)}</span>
             <span />
           </div>
