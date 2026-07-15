@@ -238,7 +238,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
               No traded bars for this contract {tf === "today" ? "this session" : "since the alert"}.
             </p>
           ) : (
-            <ContractChart bars={bars} fillPrice={fillPrice} fillTs={order.ts} track={track} />
+            <ContractChart bars={bars} fillPrice={fillPrice} fillTs={order.ts} side={order.side} track={track} />
           )}
         </div>
 
@@ -305,11 +305,12 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
 // Note the guides come from bar HIGHS/LOWS while the line is CLOSES, so the peak
 // guide sitting above the line is correct, not a bug — it's the intraday extreme.
 function ContractChart({
-  bars, fillPrice, fillTs, track,
+  bars, fillPrice, fillTs, side, track,
 }: {
   bars: Bar[];
   fillPrice: number;
   fillTs: number;
+  side: "buy" | "sell";
   track: { peak: number; trough: number } | null;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -424,6 +425,32 @@ function ContractChart({
         )}
         {/* price */}
         <path d={path} fill="none" stroke={C.green} strokeWidth={2} strokeLinejoin="round" />
+        {/* ── The purchase itself. Drawn LAST so it sits above the price line, and
+            placed at the intersection of the fill time and the fill PRICE — i.e.
+            the actual point the order got done, not that bar's close. ── */}
+        {fillIdx >= 0 && fillPrice > 0 && (() => {
+          const fx = X(fillIdx);
+          const fy = Y(fillPrice);
+          const label = `${side === "buy" ? "BOUGHT" : "SOLD"} ${fmtUsd(fillPrice)} · ${new Date(fillTs).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })}`;
+          const wLab = label.length * 5.9 + 14;
+          // Flip the label to whichever side has room, so it never clips out of
+          // the SVG on an early-morning or late-day print.
+          const flip = fx + wLab + 12 > PADL + iw;
+          const lx = flip ? fx - wLab - 10 : fx + 10;
+          const ly = Math.min(Math.max(fy - 26, PADT + 2), PADT + ih - 20);
+          return (
+            <g>
+              <rect x={lx} y={ly} width={wLab} height={17} rx={3} fill="rgba(6,8,13,0.92)" stroke={C.orange} strokeWidth={1} />
+              <text x={lx + 7} y={ly + 12} fill={C.orange} fontSize={10} fontWeight={700} fontFamily="var(--font-mono)">
+                {label}
+              </text>
+              <line x1={fx} y1={fy} x2={flip ? lx + wLab : lx} y2={ly + 8.5} stroke={C.orange} strokeWidth={1} opacity={0.6} />
+              {/* halo keeps the dot legible where it lands on top of the line */}
+              <circle cx={fx} cy={fy} r={6} fill={C.orange} opacity={0.25} />
+              <circle cx={fx} cy={fy} r={3.5} fill={C.orange} stroke="#05060A" strokeWidth={1.5} />
+            </g>
+          );
+        })()}
         {/* right price axis */}
         {[0, 0.25, 0.5, 0.75, 1].map((f) => {
           const v = min + (max - min) * f;

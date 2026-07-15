@@ -411,15 +411,101 @@ async function ensureFlowPrintsSchema(pool) {
   }
 }
 
+/**
+ * mode=series — the whole session as a strike × time grid, for the /gex-3d
+ * terrain map. The default (mode=point) answers "what was strike K N minutes
+ * ago"; this answers "what did the entire surface do all day", which is a
+ * different query shape (one pass, grouped by snapshot timestamp) and must not
+ * be faked by looping `point` over 30 ages — that's 30 round-trips.
+ *
+ * option_strike_gex_history is written once/60s with a SHARED timestamp across
+ * every strike in the snapshot (see gex-history-writer), so grouping on the raw
+ * timestamp gives clean columns with no bucketing needed.
+ *
+ * Returns { mode:"series", basis, expiry, date, strikes[], times[], rows[][],
+ *           spotPath[], updatedAt } where rows[t][s] is net GEX in raw units
+ * (client scales) and null means "no row recorded for that strike/time".
+ */
+async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const date = searchParams.get('date') || todayYmdET();
+  const windowSize = Math.max(4, Math.min(60, Number(searchParams.get('window')) || 13));
+  const maxCols = Math.max(4, Math.min(120, Number(searchParams.get('buckets')) || 30));
+
+  const pool = getHistPool();
+  const empty = { mode: 'series', basis, expiry, date, strikes: [], times: [], rows: [], spotPath: [] };
+  if (!pool || !expiry) return sendJson(res, 200, empty);
+
+  const { rows: raw } = await pool.query(
+    `SELECT timestamp, strike, spot, ${col} AS val
+       FROM option_strike_gex_history
+      WHERE date = $1 AND expiry = $2 AND ${col} IS NOT NULL
+      ORDER BY timestamp ASC, strike ASC`,
+    [date, expiry]
+  );
+  if (!raw.length) return sendJson(res, 200, empty);
+
+  // Group into snapshot columns keyed by the shared write timestamp.
+  const byTs = new Map();
+  for (const r of raw) {
+    const ts = Number(r.timestamp);
+    let e = byTs.get(ts);
+    if (!e) { e = { ts, spot: Number(r.spot), vals: new Map() }; byTs.set(ts, e); }
+    e.vals.set(Number(r.strike), Number(r.val));
+  }
+  let cols = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+
+  // Evenly downsample to at most maxCols columns, always keeping the newest.
+  if (cols.length > maxCols) {
+    const picked = [];
+    for (let i = 0; i < maxCols; i++) picked.push(cols[Math.round((i * (cols.length - 1)) / (maxCols - 1))]);
+    cols = picked;
+  }
+
+  // Strike window centered on the LATEST spot, snapped to the strike grid that
+  // actually has data (SPX records 5s and 10s — don't assume a step).
+  const latest = cols[cols.length - 1];
+  const allStrikes = [...new Set(raw.map((r) => Number(r.strike)))].sort((a, b) => a - b);
+  const center = Number(latest.spot) || allStrikes[Math.floor(allStrikes.length / 2)];
+  let ci = 0;
+  for (let i = 1; i < allStrikes.length; i++) {
+    if (Math.abs(allStrikes[i] - center) < Math.abs(allStrikes[ci] - center)) ci = i;
+  }
+  const strikes = allStrikes.slice(Math.max(0, ci - windowSize), ci + windowSize + 1);
+
+  const rows = cols.map((c) => strikes.map((k) => {
+    const v = c.vals.get(k);
+    return Number.isFinite(v) ? v : null;
+  }));
+
+  sendJson(res, 200, {
+    mode: 'series',
+    basis,
+    expiry,
+    date,
+    strikes,
+    times: cols.map((c) => c.ts),
+    rows,
+    spotPath: cols.map((c) => (Number.isFinite(Number(c.spot)) ? Number(c.spot) : null)),
+    updatedAt: latest.ts,
+  });
+}
+
 async function handleGexHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
-  const expiry = searchParams.get('expiry') || '';
+  const expiry = searchParams.get('expiry') || marketState.getState().expiry || '';
   const ages = (searchParams.get('ages') || '5,15,30')
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
   // basis=vol → per-strike VOL-ONLY baselines (net_vol_gex) for the heatmap's
   // Vol GEX Speed column. Default stays net_gex so existing callers are unchanged.
   const basis = searchParams.get('basis') === 'vol' ? 'vol' : 'net';
   const col = basis === 'vol' ? 'net_vol_gex' : 'net_gex';
+
+  // mode=series → full-session strike × time grid (/gex-3d). Default is the
+  // original point-in-time baseline shape; existing callers are untouched.
+  if (searchParams.get('mode') === 'series') {
+    return handleGexHistorySeries(req, res, { expiry, basis, col });
+  }
 
   if (!expiry || !ages.length) {
     return sendJson(res, 200, { mode: 'point', basis, ages, baselines: {} });
