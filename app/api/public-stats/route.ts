@@ -26,6 +26,25 @@ export const revalidate = 86400;
 /** Below this many graded samples a stat is withheld rather than published. */
 const MIN_N = 30;
 
+/**
+ * Independent-observation floor, in DAYS/WEEKS — not raw rows.
+ *
+ * Raw count lies. ICT grades ~171 setups per session, so 21 trading days
+ * inflates to n=3592 and sails past MIN_N while representing three weeks of
+ * market. Those rows are one detector firing repeatedly inside the same
+ * sessions; they are not independent trials, and a percentage over them is
+ * pseudo-replication dressed up as a sample.
+ *
+ * So a stat must clear BOTH floors: enough rows AND enough distinct time
+ * periods. This is what stops the landing from publishing "53.1% over n=3592"
+ * when the honest read is "coin flip over 21 days".
+ */
+const MIN_PERIODS = 30;
+
+/** EM breadth floors — see emZones() for why these differ from MIN_PERIODS. */
+const MIN_EM_WEEKS = 4;
+const MIN_EM_TICKERS = 30;
+
 export interface PublicStat {
   key: string;
   label: string;      // what the number means, in prospect language
@@ -42,16 +61,36 @@ async function emZones(): Promise<PublicStat | null> {
     SELECT
       COUNT(*) FILTER (WHERE result = 'hit')::int            AS hits,
       COUNT(*) FILTER (WHERE result IN ('hit','miss'))::int  AS evaluated,
+      COUNT(DISTINCT week_start) FILTER (WHERE result IN ('hit','miss'))::int AS weeks,
+      COUNT(DISTINCT ticker) FILTER (WHERE result IN ('hit','miss'))::int     AS tickers,
       MIN(week_start) FILTER (WHERE result IN ('hit','miss')) AS since
     FROM em_tracker
   `);
   const r = rows[0];
   const n = Number(r?.evaluated ?? 0);
-  if (n < MIN_N) return null;
+  // EM's breadth is CROSS-SECTIONAL, not longitudinal: ~389 different
+  // underlyings per week rather than one instrument sampled repeatedly. Two
+  // tickers in the same week do correlate (market-wide moves), so this is not
+  // 1,514 fully independent trials — but it is far closer than ICT's 171
+  // detections inside a single session. Hence a breadth floor here instead of
+  // the session floor: enough distinct names AND at least a month of weeks.
+  // The sublabel discloses both numbers so the reader can discount it himself.
+  if (
+    n < MIN_N ||
+    Number(r?.weeks ?? 0) < MIN_EM_WEEKS ||
+    Number(r?.tickers ?? 0) < MIN_EM_TICKERS
+  ) return null;
   return {
     key: "em",
-    label: "Estimated-move zones held",
-    sublabel: "Weekly EM bands, graded on the finalized weekly candle",
+    // Framed as CALIBRATION, not edge — deliberately.
+    // A 1-SD weekly band is *supposed* to contain price ~68% of the time. We
+    // measure ~67%, which demonstrates the band is honest, NOT that it beats
+    // the market. Selling ~1-SD-behaving-like-1-SD as a "win rate" to index
+    // traders gets it called out instantly and costs more trust than it buys.
+    // The real claim — "our published bands do exactly what they say, and here
+    // is every graded week including the misses" — is one nobody else makes.
+    label: "Weekly EM bands contained price",
+    sublabel: `${Number(r.tickers)} tickers over ${Number(r.weeks)} weeks — a 1-SD band should land near 68%`,
     pct: Math.round((Number(r.hits) / n) * 1000) / 10,
     n,
     since: r?.since ?? null,
@@ -71,7 +110,13 @@ async function ictSetups(): Promise<PublicStat | null> {
   `);
   const r = rows[0];
   const n = Number(r?.graded ?? 0);
-  if (n < MIN_N) return null;
+  // Sessions — not setups — are the independent unit here. At ~171 graded
+  // setups/session, `graded` is not a sample count. Currently 21 sessions, so
+  // this returns null and ICT does NOT publish. That is correct: 53.1% is a
+  // coin flip, and win rate without an R-multiple says nothing about whether
+  // the system makes money. Publish this only once (a) sessions clear the
+  // floor and (b) expectancy justifies it — see scripts/verify-public-stats.mjs.
+  if (n < MIN_N || Number(r?.sessions ?? 0) < MIN_PERIODS) return null;
   return {
     key: "ict",
     label: "ICT setups resolved in-direction",
