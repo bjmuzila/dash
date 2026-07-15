@@ -342,8 +342,12 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Drop the old one-row-per-day uniqueness so multiple deliveries can share a date.
     ALTER TABLE budget_amazon DROP CONSTRAINT IF EXISTS budget_amazon_profile_id_work_date_key;
 
-    -- Prop-firm spending log: one row per dated event. A purchase carries
-    -- accounts + cost (payout = 0); a payout carries payout (cost/accounts = 0).
+    -- Bzila business ledger: one row per dated event. `source` splits the two
+    -- streams entered here — 'prop' (firm evals/resets + payouts) and 'cbedge'
+    -- (CB Edge earnings + spending). The third Bzila stream, contracts, is NOT
+    -- stored here: it lives in the register (Payments) under a Contracts
+    -- category and is read from there, so it's never entered twice.
+    -- cost = money out, payout = money in, for both sources.
     CREATE TABLE IF NOT EXISTS budget_prop (
       id SERIAL PRIMARY KEY,
       profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
@@ -357,6 +361,8 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_budget_prop_profile ON budget_prop(profile_id);
+    -- Added after the table shipped: existing rows are all prop purchases.
+    ALTER TABLE budget_prop ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prop';
 
     CREATE TABLE IF NOT EXISTS waitlist (
       id SERIAL PRIMARY KEY,

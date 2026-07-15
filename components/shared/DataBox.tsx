@@ -163,9 +163,17 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
       // Strip each "other plain canvas" (see otherLiveCanvases above) from the
       // clone by matching DOM order — querySelectorAll order is identical
       // between the live tree and its deep clone, so index-matching is exact.
+      // Snapshot BOTH lists once, up front. Index-matching only holds while the
+      // clone's canvas list is untouched — the placeholder swap below removes
+      // canvases from the clone, so re-querying afterward (as the lt block used
+      // to) shifts every later index and hides the wrong elements. On
+      // /es-candles the heatmap overlay canvas is stripped here and sits BEFORE
+      // the chart's canvases in DOM order, so the shift left one live copy of
+      // the chart visible under the composited __ltScreenshot bitmap → two
+      // candle series at slightly different scales in the PNG.
+      const liveAll = Array.from(el.querySelectorAll("canvas"));
+      const cloneCanvases = Array.from(clone.querySelectorAll("canvas")) as HTMLElement[];
       if (otherLiveCanvases.length) {
-        const cloneCanvases = Array.from(clone.querySelectorAll("canvas"));
-        const liveAll = Array.from(el.querySelectorAll("canvas"));
         otherLiveCanvases.forEach((liveCanvas) => {
           const idx = liveAll.indexOf(liveCanvas);
           const cloned = idx >= 0 ? cloneCanvases[idx] : undefined;
@@ -184,13 +192,18 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
       // different offsets/scales → two candle series and two price axes in the
       // PNG. The composite is the trustworthy one (it's the library's own
       // renderer), so blank the clone's copies and let it be the only chart.
+      // Uses the pre-swap lists captured above — never re-query the clone here.
       if (lt) {
-        const cloneCanvases = Array.from(clone.querySelectorAll("canvas"));
-        const liveAll = Array.from(el.querySelectorAll("canvas"));
         liveAll.forEach((liveCanvas, i) => {
           if (!lt.target.contains(liveCanvas)) return;
-          const cloned = cloneCanvases[i] as HTMLElement | undefined;
-          if (cloned) cloned.style.visibility = "hidden";
+          const cloned = cloneCanvases[i];
+          if (cloned) {
+            cloned.style.visibility = "hidden";
+            // visibility alone leaves html2canvas free to paint a parent's
+            // background over the composite region on some paths; belt-and-
+            // braces so the clone copy can never contribute pixels.
+            cloned.style.opacity = "0";
+          }
         });
       }
       // Inject overlay text as real DOM so html2canvas renders it natively
