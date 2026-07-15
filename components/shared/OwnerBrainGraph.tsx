@@ -27,7 +27,7 @@ type Cluster = { id: string; name: string; color: string; pages: string[] };
 // Clustered map of the live app/**/page.tsx tree. Regenerate if routes change.
 export const CBEDGE_CLUSTERS: Cluster[] = [
   { id: "core", name: "GEX / Options", color: "#00E0C6", pages: ["/gex", "/gex2", "/flow", "/flow-gex-history", "/greeks", "/mult-greek", "/options-chain", "/es-candles", "/footprint", "/confidence-score"] },
-  { id: "home", name: "Dashboards", color: "#5AA9FF", pages: ["/home", "/home-fast", "/new-home", "/dashboard", "/overview", "/mobile", "/traders-dashboard", "/premarket"] },
+  { id: "home", name: "Dashboards", color: "#5AA9FF", pages: ["/home", "/home-fast", "/dashboard", "/overview", "/mobile", "/traders-dashboard", "/premarket"] },
   { id: "signals", name: "Signals / Analysis", color: "#C084FC", pages: ["/ict", "/scanner", "/fails", "/stats", "/top10", "/legging", "/estimated-move", "/em", "/trading"] },
   { id: "data", name: "Data / Calendars", color: "#FB8501", pages: ["/database", "/database/etf", "/economic-calendar", "/expiry-calendar", "/insider", "/quotes", "/analytics", "/logs", "/recipes"] },
   { id: "social", name: "Social", color: "#FF6FAE", pages: ["/social-media", "/chat", "/explore"] },
@@ -42,15 +42,27 @@ type NodeT = {
   type: "core" | "hub" | "leaf";
   cluster: string | null;
   color: string;
-  rgb: RGB;            // parsed once — re-parsing hex every frame is wasteful
+  rgb: RGB;            // parsed + tinted once — re-parsing hex every frame is wasteful
   r: number;
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
   fx: number | null; fy: number | null; fz: number | null;
   // per-frame projection cache
   sx: number; sy: number; ss: number; depth: number;
+  // rustic per-node character (seeded, stable)
+  phase: number;       // breathing offset — nothing pulses in unison
+  spd: number;         // breathing rate
+  lean: number;        // specular highlight angle — light hits each ball differently
+  squash: number;      // slight non-circularity
 };
-type LinkT = { s: NodeT; t: NodeT; strong: boolean };
+type LinkT = {
+  s: NodeT; t: NodeT; strong: boolean;
+  rest: number;        // jittered spring length — uneven branch spacing
+  sag: number;         // how much the edge bows
+  wob: number;         // bow drift phase
+  alpha: number;       // per-edge opacity
+  width: number;       // per-edge thickness
+};
 
 const FOV = 900;        // perspective strength
 const WORLD_R = 430;    // soft bound so the brain never drifts off-screen
@@ -70,6 +82,37 @@ function mix(a: RGB, b: RGB, t: number): RGB {
 }
 const rgbStr = (c: RGB) => `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
 const rgbaStr = (c: RGB, a: number) => `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a})`;
+
+/* ── rustic variance ────────────────────────────────────────────────────────
+ * Every irregularity below is SEEDED off the node/link id, never Math.random().
+ * Same route always gets the same size, tint, wobble and lean — the graph looks
+ * hand-grown but is stable across frames, re-renders and reloads.
+ */
+function hash(s: string) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+/** mulberry32 — tiny deterministic PRNG. */
+function rngFor(s: string) {
+  let a = hash(s);
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/** Nudge a color so no two nodes in a cluster are the exact same flat swatch. */
+function tint(c: RGB, r: () => number): RGB {
+  const k = (r() - 0.5) * 34;      // brightness drift
+  const w = (r() - 0.5) * 18;      // slight hue skew via uneven channel shift
+  return [
+    Math.max(0, Math.min(255, c[0] + k + w)),
+    Math.max(0, Math.min(255, c[1] + k)),
+    Math.max(0, Math.min(255, c[2] + k - w)),
+  ];
+}
 
 export default function OwnerBrainGraph() {
   const router = useRouter();
@@ -94,41 +137,63 @@ export default function OwnerBrainGraph() {
     // ── graph ────────────────────────────────────────────────────────────────
     const nodes: NodeT[] = [];
     const links: LinkT[] = [];
-    const mk = (id: string, type: NodeT["type"], cluster: string | null, color: string, r: number): NodeT => ({
-      id, type, cluster, color, rgb: hex2rgb(color), r,
-      x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, fx: null, fy: null, fz: null,
-      sx: 0, sy: 0, ss: 1, depth: 0,
-    });
+    const mk = (id: string, type: NodeT["type"], cluster: string | null, color: string, baseR: number): NodeT => {
+      const r = rngFor(id);
+      // size varies a lot: some routes are boulders, some are pebbles
+      const scale = type === "leaf" ? 0.55 + r() * 1.15 : 0.85 + r() * 0.4;
+      return {
+        id, type, cluster, color,
+        rgb: type === "core" ? hex2rgb(color) : tint(hex2rgb(color), r),
+        r: baseR * scale,
+        x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, fx: null, fy: null, fz: null,
+        sx: 0, sy: 0, ss: 1, depth: 0,
+        phase: r() * Math.PI * 2,
+        spd: 0.02 + r() * 0.05,
+        lean: r() * Math.PI * 2,
+        squash: 0.9 + r() * 0.2,
+      };
+    };
 
     const core = mk("CB EDGE", "core", null, "#FFFFFF", 20);
     nodes.push(core);
     const hubs: Record<string, NodeT> = {};
 
-    // hubs seeded on a fibonacci sphere so clusters spread evenly in 3D
+    // hubs start on a fibonacci sphere, then get knocked off-lattice so the
+    // clusters never sit in a tidy ring
     const N = CBEDGE_CLUSTERS.length;
     CBEDGE_CLUSTERS.forEach((c, i) => {
+      const hr = rngFor(c.id + "|hub");
       const hub = mk(c.name, "hub", c.id, c.color, 11);
-      const phi = Math.acos(1 - (2 * (i + 0.5)) / N);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5);
-      const R = 190;
+      const phi = Math.acos(1 - (2 * (i + 0.5)) / N) + (hr() - 0.5) * 0.5;
+      const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5) + (hr() - 0.5) * 0.7;
+      const R = 150 + hr() * 110;   // clusters sit at uneven distances from the core
       hub.x = R * Math.sin(phi) * Math.cos(theta);
       hub.y = R * Math.sin(phi) * Math.sin(theta);
       hub.z = R * Math.cos(phi);
       hubs[c.id] = hub;
       nodes.push(hub);
-      links.push({ s: core, t: hub, strong: true });
+      links.push({
+        s: core, t: hub, strong: true,
+        rest: 175 + hr() * 90, sag: (hr() - 0.5) * 26, wob: hr() * 6.28,
+        alpha: 0.24 + hr() * 0.2, width: 0.7 + hr() * 0.5,
+      });
 
-      c.pages.forEach((p, j) => {
+      c.pages.forEach((p) => {
+        const lr = rngFor(p);
         const n = mk(p, "leaf", c.id, c.color, 5);
-        // scatter leaves in a small shell around their hub
-        const a = (j / c.pages.length) * Math.PI * 2;
-        const b = ((j * 2.4) % Math.PI) - Math.PI / 2;
-        const rr = 75 + ((j * 17) % 35);
+        // clumpy shell — leaves bunch and straggle instead of sitting on a ring
+        const a = lr() * Math.PI * 2;
+        const b = Math.asin(lr() * 2 - 1);
+        const rr = 42 + Math.pow(lr(), 0.6) * 78;
         n.x = hub.x + Math.cos(a) * Math.cos(b) * rr;
         n.y = hub.y + Math.sin(b) * rr;
         n.z = hub.z + Math.sin(a) * Math.cos(b) * rr;
         nodes.push(n);
-        links.push({ s: hub, t: n, strong: false });
+        links.push({
+          s: hub, t: n, strong: false,
+          rest: 38 + lr() * 62, sag: (lr() - 0.5) * 20, wob: lr() * 6.28,
+          alpha: 0.1 + lr() * 0.22, width: 0.3 + lr() * 0.5,
+        });
       });
     });
 
@@ -295,9 +360,8 @@ export default function OwnerBrainGraph() {
         const a = l.s, b = l.t;
         let dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-        // short leaf springs pull each cluster into a tight sunburst around its hub
-        const rest = l.strong ? 210 : 58;
-        const f = (d - rest) * (l.strong ? 0.02 : 0.035);
+        // per-link rest length (seeded) — branches sit at uneven lengths
+        const f = (d - l.rest) * (l.strong ? 0.02 : 0.032);
         dx /= d; dy /= d; dz /= d;
         a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
         b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
@@ -350,16 +414,25 @@ export default function OwnerBrainGraph() {
       // 0 = nearest, 1 = deepest — drives fog on both links and nodes
       const fogOf = (d: number) => Math.max(0, Math.min(1, (d + WORLD_R) / (WORLD_R * 2)));
 
-      // links — hair-thin, one uniform teal, sunk into the fog with depth
+      // links — hair-thin teal, each with its own weight and a slow organic bow
       for (const l of links) {
         const dim = foc && l.t.cluster !== foc && l.s.cluster !== foc;
         const fog = fogOf((l.s.depth + l.t.depth) / 2);
-        ctx.globalAlpha = dim ? 0.03 : (l.strong ? 0.34 : 0.2) * (1 - fog * 0.85);
+        const ss = (l.s.ss + l.t.ss) / 2;
+        ctx.globalAlpha = dim ? 0.03 : l.alpha * (1 - fog * 0.85);
         ctx.strokeStyle = `rgb(${LINK})`;
-        ctx.lineWidth = (l.strong ? 0.9 : 0.5) * ((l.s.ss + l.t.ss) / 2);
+        ctx.lineWidth = l.width * ss;
+
+        // bow the edge perpendicular to its run, drifting slowly over time
+        const dx = l.t.sx - l.s.sx, dy = l.t.sy - l.s.sy;
+        const len = Math.hypot(dx, dy) || 1;
+        const bow = l.sag * ss * (0.75 + 0.25 * Math.sin(t * 0.01 + l.wob));
+        const cx = (l.s.sx + l.t.sx) / 2 + (dy / len) * bow;
+        const cy = (l.s.sy + l.t.sy) / 2 - (dx / len) * bow;
+
         ctx.beginPath();
         ctx.moveTo(l.s.sx, l.s.sy);
-        ctx.lineTo(l.t.sx, l.t.sy);
+        ctx.quadraticCurveTo(cx, cy, l.t.sx, l.t.sy);
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
@@ -370,8 +443,11 @@ export default function OwnerBrainGraph() {
         const dim = foc && n.cluster !== foc && n.type !== "core";
         const fog = fogOf(n.depth);
         const body = mix(n.rgb, FOG_RGB, fog * 0.8);
-        const pulse = n.type !== "leaf" ? 1 + Math.sin(t * 0.05 + n.x) * 0.08 : 1;
-        const rad = Math.max(0.5, n.r * n.ss * (hover === n ? 1.4 : 1));
+        // each node breathes on its own phase/rate — nothing throbs in unison
+        const pulse = 1 + Math.sin(t * n.spd + n.phase) * (n.type === "leaf" ? 0.03 : 0.07);
+        const rad = Math.max(0.5, n.r * n.ss * pulse * (hover === n ? 1.4 : 1));
+        // light comes from each ball's own angle, so highlights scatter
+        const lx = Math.cos(n.lean) * 0.34, ly = Math.sin(n.lean) * 0.34;
         ctx.globalAlpha = dim ? 0.1 : 1;
 
         // tight bloom — only the near, larger nodes glow at all
@@ -379,25 +455,28 @@ export default function OwnerBrainGraph() {
           const g = ctx.createRadialGradient(n.sx, n.sy, rad * 0.6, n.sx, n.sy, rad * 2.4);
           g.addColorStop(0, rgbaStr(n.rgb, 0.27)); g.addColorStop(1, rgbaStr(n.rgb, 0));
           ctx.fillStyle = g;
-          ctx.beginPath(); ctx.arc(n.sx, n.sy, rad * 2.4 * pulse, 0, 7); ctx.fill();
+          ctx.beginPath(); ctx.arc(n.sx, n.sy, rad * 2.4, 0, 7); ctx.fill();
         }
 
-        // sphere: lit from upper-left, shaded to the fogged body color
+        // sphere: lit from its own angle, shaded to the fogged body color,
+        // very slightly squashed so no two balls are the same perfect circle
         const sg = ctx.createRadialGradient(
-          n.sx - rad * 0.35, n.sy - rad * 0.4, rad * 0.1,
+          n.sx - rad * lx, n.sy - rad * ly, rad * 0.1,
           n.sx, n.sy, rad,
         );
         sg.addColorStop(0, rgbStr(mix(WHITE_RGB, body, 0.45)));
         sg.addColorStop(0.55, rgbStr(body));
         sg.addColorStop(1, rgbStr(mix(body, FOG_RGB, 0.45)));
         ctx.fillStyle = sg;
-        ctx.beginPath(); ctx.arc(n.sx, n.sy, rad, 0, 7); ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(n.sx, n.sy, rad, rad * n.squash, n.lean, 0, 7);
+        ctx.fill();
 
         // hard specular — this is what reads as "glossy 3D ball"
         if (rad > 2.2) {
           ctx.globalAlpha = (dim ? 0.1 : 1) * (1 - fog * 0.7) * 0.75;
           ctx.fillStyle = "#ffffff";
-          ctx.beginPath(); ctx.arc(n.sx - rad * 0.32, n.sy - rad * 0.34, rad * 0.26, 0, 7); ctx.fill();
+          ctx.beginPath(); ctx.arc(n.sx - rad * lx * 0.95, n.sy - rad * ly * 0.95, rad * 0.24, 0, 7); ctx.fill();
         }
         ctx.globalAlpha = 1;
 

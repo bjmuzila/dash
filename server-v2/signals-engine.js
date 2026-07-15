@@ -30,6 +30,10 @@
  *                      the "stats in play" marker the Scanner IB tab backtests.
  *          ib_break  : price crosses IBH (+IB_BREAK buf) → LONG, or IBL (−buf) →
  *                      SHORT. Extension out of the IB is the tradable event.
+ *                      RTH ONLY (09:30–16:00 ET) — the IB is an RTH range, so
+ *                      globex extension out of it is meaningless. Latched per
+ *                      side until price re-enters the range, so one extension
+ *                      fires once instead of dithering on the threshold.
  *        Both are annotated with confluence like any other level signal.
  *
  *   3) CONFLUENCE ANNOTATION  (booster only — no standalone signal)
@@ -468,12 +472,33 @@ function evaluateFrame(cur, mem, cfg = {}) {
   // ib_break: extension out of a COMPLETE IB. A break is a threshold CROSS this
   // frame (prev inside, now beyond by ≥ IB_BREAK) — price simply sitting outside
   // the range must not re-fire every cooldown window.
-  if (ctx.ibComplete && ctx.ibh != null && ctx.ibl != null && prev) {
+  //
+  // RTH ONLY. The IB is the 09:30–10:30 RTH range, so an "extension" out of it is
+  // only meaningful while that session is still trading. ibComplete is just
+  // `nowMin >= 630` with no upper bound, and the engine runs the whole FUTURES
+  // session (globex reopens 18:00 ET) — so without this gate, evening globex was
+  // firing IB breaks against a range formed nine hours earlier that morning.
+  //
+  // HYSTERESIS. Price parked exactly on the threshold (IBH + IB_BREAK) dithers
+  // across it tick by tick, and each crossing is a fresh "break" — the cooldown
+  // only spaced the duplicates out, it didn't stop them. Once a side breaks, that
+  // side is latched until price returns INSIDE the range, so one extension = one
+  // signal. mem.ibBroke resets daily with the IB itself.
+  const ibRth = ibMins >= 570 && ibMins < 960;   // 09:30–16:00 ET
+  if (ctx.ibComplete && ibRth && ctx.ibh != null && ctx.ibl != null && prev) {
     const brk = C.IB_BREAK;
-    if (prev.priceEs < ctx.ibh + brk && priceEs >= ctx.ibh + brk) {
+    // Reset the latch on a new session, so yesterday's break can't mute today's.
+    if (mem.ibBrokeDay !== ibDay) { mem.ibBrokeDay = ibDay; mem.ibBroke = { up: false, down: false }; }
+    if (!mem.ibBroke) mem.ibBroke = { up: false, down: false };
+    // Back inside the range → re-arm both sides.
+    if (priceEs < ctx.ibh + brk && priceEs > ctx.ibl - brk) mem.ibBroke = { up: false, down: false };
+
+    if (!mem.ibBroke.up && prev.priceEs < ctx.ibh + brk && priceEs >= ctx.ibh + brk) {
+      mem.ibBroke.up = true;
       fire({ kind: 'ib_break', direction: 'long', setup: 'IB break ↑', levelName: 'IBH', levelEs: ctx.ibh, base: 3,
         reason: `Extended above the Initial Balance high (${ctx.ibh.toFixed(2)}) → upside extension` });
-    } else if (prev.priceEs > ctx.ibl - brk && priceEs <= ctx.ibl - brk) {
+    } else if (!mem.ibBroke.down && prev.priceEs > ctx.ibl - brk && priceEs <= ctx.ibl - brk) {
+      mem.ibBroke.down = true;
       fire({ kind: 'ib_break', direction: 'short', setup: 'IB break ↓', levelName: 'IBL', levelEs: ctx.ibl, base: 3,
         reason: `Extended below the Initial Balance low (${ctx.ibl.toFixed(2)}) → downside extension` });
     }
@@ -1019,7 +1044,10 @@ async function sendDiscord(sig) {
 const mem = {
   prev: null, levels: {}, cooldowns: new Map(), bzPrev: null, bzLevels: {}, fdPrev: null,
   ibFormedDay: null,        // ET date the ib_formed signal already fired for
+  ibBroke: { up: false, down: false }, // IB break latch — cleared when price re-enters the range
+  ibBrokeDay: null,         // ET date the latch above belongs to
   whaleSeen: new Set(),     // print identities already alerted (capped)
+  whaleContractAt: new Map(), // contract key -> last whale alert ms (dupe collapse)
 };
 
 function readFrame() {
