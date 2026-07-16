@@ -56,7 +56,18 @@ type GexMetric = "voloi" | "vol";
 // ET calendar date (YYYY-MM-DD) for a ms timestamp. Module-level so the overlay
 // draw can group GEX columns into sessions for the per-session basis.
 const ET_DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
-const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
+// Cached for the same reason as etMinutes below: this is called per-row inside
+// memos that re-run on every candle frame, and Intl formatting is not cheap.
+// Slot timestamps repeat, so steady-state this is a Map hit.
+const ET_DAY_CACHE = new Map<number, string>();
+const etDayKey = (ts: number): string => {
+  const hit = ET_DAY_CACHE.get(ts);
+  if (hit !== undefined) return hit;
+  const v = ET_DAY_FMT.format(new Date(ts));
+  if (ET_DAY_CACHE.size > 20_000) ET_DAY_CACHE.clear();
+  ET_DAY_CACHE.set(ts, v);
+  return v;
+};
 
 // ES trades at a POSITIVE carry to SPX (cost of carry − dividends). It is never
 // negative and never a few hundred points. Anything outside this band is a data
@@ -107,14 +118,33 @@ type VolumeProfile = {
   lvn: number | null;      // most significant low-volume node inside the range
 };
 
-/** Minutes-since-ET-midnight for a slot timestamp. */
+/**
+ * Minutes-since-ET-midnight for a slot timestamp.
+ *
+ * PERF, and it is not a micro-optimization: this used to CONSTRUCT a fresh
+ * Intl.DateTimeFormat on every call. Constructing one costs ~10-50us (it loads
+ * ICU tz data); calling it per row over ~2000 candles inside sessionLevels put
+ * 40-100ms on the main thread, and that memo re-ran on every WS candle frame.
+ * Hoisting the formatter to a module const fixes the construction; the cache
+ * fixes the rest, because slot timestamps are the SAME values on every
+ * recompute, so steady-state this is a Map hit and nothing else.
+ *
+ * Bounded: a long-lived tab must not grow this without limit.
+ */
+const ET_MIN_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+});
+const ET_MIN_CACHE = new Map<number, number>();
 function etMinutes(ts: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(new Date(ts));
+  const hit = ET_MIN_CACHE.get(ts);
+  if (hit !== undefined) return hit;
+  const parts = ET_MIN_FMT.formatToParts(new Date(ts));
   const m: Record<string, string> = {};
   parts.forEach((p) => { m[p.type] = p.value; });
-  return Number(m.hour) * 60 + Number(m.minute);
+  const v = Number(m.hour) * 60 + Number(m.minute);
+  if (ET_MIN_CACHE.size > 20_000) ET_MIN_CACHE.clear();
+  ET_MIN_CACHE.set(ts, v);
+  return v;
 }
 
 /**
@@ -343,6 +373,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
   }, [historical, liveRows]);
+  // Mirrored for the imperative overlay draw. `rows` gets a NEW identity on every
+  // coalesced candle frame; when it (and profile/tpoProfiles/mvcHistory) sat in
+  // the overlay effect's dep array, that whole effect tore down and rebuilt its
+  // ResizeObserver + both timescale subscriptions several times a second. draw()
+  // reads these refs instead, so the effect can subscribe ONCE and data changes
+  // just call drawOverlayRef.current() (which the data effects already do).
+  const rowsRef = useRef(rows);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
 
 
@@ -376,16 +414,16 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // DRAW time using the live ESU basis (same as the other levels), so the line
   // tracks the current /ESU price — not the stale per-row esPrice.
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; spxPx: number; basis: number | null }>>([]);
+  const mvcHistoryRef = useRef(mvcHistory);
+  // Repaint on sync — see the bubble refs below for why this is not optional.
+  useEffect(() => { mvcHistoryRef.current = mvcHistory; drawOverlayRef.current(); }, [mvcHistory]);
   const showMvcLine = true; // CB level always on
-  const [showHeatmap, setShowHeatmap] = useState(!embedded);
-  // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
-  // profile OFF (user can still toggle it on). Done as an effect, not a lazy
-  // initializer, so it applies client-side after SSR hydration.
-  useEffect(() => {
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("embed") === "1") {
-      setShowHeatmap(false);
-    }
-  }, []);
+  // Default OFF everywhere (was: on unless embedded). The default read on this
+  // chart is candles + GEX bubbles + the rail; the heatmap is the heaviest thing
+  // here (a ~1.6MB backfill and a full-canvas per-column paint) and is now
+  // strictly opt-in. This also makes the old embed-only override below redundant
+  // — the dock gets the same clean chart from the default.
+  const [showHeatmap, setShowHeatmap] = useState(false);
   // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
   // history columns than 1-day and visibly slows the chart, so default to
   // the fast 1-day window and let the user opt into 5-day when they want it.
@@ -413,6 +451,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
   const drawOverlayRef = useRef<() => void>(() => {});
+  // Memo for the SPX→ES basis resolver built inside draw(). Keyed by identity on
+  // its only inputs (rows, mvcHistory, live basis) so it survives pan/zoom/hover
+  // frames and is rebuilt only when the underlying data actually changes.
+  const basisCacheRef = useRef<{
+    rows: unknown; mvc: unknown; basis: number; fn: (tsMs: number) => number;
+  }>({ rows: null, mvc: null, basis: NaN, fn: () => 0 });
   // Cached right price-axis gutter width (px). Updated only on >=1px change so
   // the heatmap's right edge doesn't shimmer with sub-pixel label wobble.
   const hmScaleWRef = useRef(0);
@@ -587,9 +631,25 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   }, []);
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing. Must stay BELOW the useState above (see bubbleScaleRef).
-  useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
-  useEffect(() => { bubbleVarRef.current = bubbleVar; }, [bubbleVar]);
-  useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
+  // Each sync MUST repaint. These used to sit in the overlay effect's dep array,
+  // so changing one re-ran the effect and that re-ran draw() as a side effect.
+  // Now that the effect subscribes once, updating the ref alone would leave the
+  // slider visually dead until the 5s backstop interval — so repaint explicitly.
+  useEffect(() => { bubbleScaleRef.current = bubbleScale; drawOverlayRef.current(); }, [bubbleScale]);
+  useEffect(() => { bubbleVarRef.current = bubbleVar; drawOverlayRef.current(); }, [bubbleVar]);
+  useEffect(() => { bubbleMinsRef.current = bubbleMins; drawOverlayRef.current(); }, [bubbleMins]);
+
+  // ── Replay (today's session only) ──────────────────────────────────────────
+  // Cuts candles / CB line / bubbles at a cursor and steps forward. Everything
+  // else on this chart (Call/Put/Flip levels, heatmap, TPO, profile) is LIVE-only
+  // — there is no historical source for a wall or a flip, so they are NOT rewound
+  // and the dock says so. A replayed frame is not a point-in-time snapshot.
+  const [replayOn, setReplayOn] = useState(false);
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 5 | 10>(2);
+  // Read inside draw(): a ref, so scrubbing doesn't re-run the overlay effect.
+  const replayCutoffRef = useRef<number>(Infinity);
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
   // chart down to nothing and only the GEX bars remain visible.
@@ -670,9 +730,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     return () => ro.disconnect();
   }, []);
   const sessionLevels = useMemo(() => {
-    if (!rows.length) return null;
+    // Gated on showSessions (its only consumer, and OFF by default). This walks
+    // every row calling etMinutes/dayKey per bar; leaving it ungated meant paying
+    // for PDH/ON lines nobody had asked to see, on every candle frame.
+    if (!showSessions || !rows.length) return null;
     void clockTick; // re-evaluate on the clock so the window rolls forward
-    const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+    // etDayKey (module-level, cached) — NOT a local formatter. This used to
+    // construct an Intl.DateTimeFormat per call, once per row, per recompute.
+    const dayKey = etDayKey;
 
     // Build the ms boundaries for "today" in ET from the current time.
     const now = Date.now();
@@ -709,14 +774,19 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       onh: Number.isFinite(onh) ? onh : null,
       onl: Number.isFinite(onl) ? onl : null,
     };
-  }, [rows, clockTick]);
+  }, [rows, clockTick, showSessions]);
 
   // Session volume profile from today's candles (ES price). 1-pt bins.
+  // Gated on showProfile: this walks every bar of the session and is pure waste
+  // when the profile isn't drawn — and it's OFF by default now.
   const profile = useMemo(() => {
+    if (!showProfile) return buildVolumeProfile([], 1);
     const today = rows.length ? rows[rows.length - 1].date : "";
     const todays = today ? rows.filter((r) => r.date === today) : rows;
     return buildVolumeProfile(todays, 1);
-  }, [rows]);
+  }, [rows, showProfile]);
+  const profileRef = useRef(profile);
+  useEffect(() => { profileRef.current = profile; drawOverlayRef.current(); }, [profile]);
 
   // TPO box profiles: a running ETH → RTH → ETH → RTH strip covering the past
   // day + the current day (4 profiles), each anchored to its own fixed session
@@ -725,7 +795,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // still forming — same idea as the volume profile above, just one per
   // session instead of one sidebar.
   const tpoProfiles = useMemo(() => {
-    if (!rows.length) return [] as TpoProfile[];
+    // Gated on showTpo — four filter+buildTpoProfile passes over the window is
+    // the single most expensive memo here, and it's OFF by default.
+    if (!showTpo || !rows.length) return [] as TpoProfile[];
     void clockTick; // roll the window forward with the clock, like sessionLevels above
 
     const now = Date.now();
@@ -744,9 +816,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // Saturday), which silently dropped the whole ETH+RTH pair and made TPO
     // look like it only had the current session. Same `days.filter(d < today)
     // .pop()` pattern already used for PDH/PDL above.
-    const dayOf = (r: EsCandleRecord) =>
-      r.date || new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(r.timestamp));
-    const sessionDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(sessionDayMid + 12 * 60 * 60_000));
+    const dayOf = (r: EsCandleRecord) => r.date || etDayKey(r.timestamp);
+    const sessionDay = etDayKey(sessionDayMid + 12 * 60 * 60_000);
     const days = [...new Set(rows.map(dayOf))].sort();
     const prevDay = days.filter((d) => d < sessionDay).pop() ?? null;
     const prevDayRow = prevDay ? rows.find((r) => dayOf(r) === prevDay) : undefined;
@@ -773,7 +844,47 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       if (rthProfile) { rthProfile.startTs = rthStart; rthProfile.endTs = rthEnd; sessions.push(rthProfile); }
     }
     return sessions;
-  }, [rows, clockTick]);
+  }, [rows, clockTick, showTpo]);
+  const tpoProfilesRef = useRef(tpoProfiles);
+  useEffect(() => { tpoProfilesRef.current = tpoProfiles; drawOverlayRef.current(); }, [tpoProfiles]);
+
+  // ── Replay wiring ──────────────────────────────────────────────────────────
+  // Today's session = the last ET day present in `rows` (rows carry `.date`).
+  const sessionRows = useMemo(() => {
+    if (!replayOn || !rows.length) return [];
+    const d = rows[rows.length - 1].date;
+    return rows.filter((r) => r.date === d);
+  }, [rows, replayOn]);
+
+  // The cursor, in ms. Infinity = live (no cut).
+  const replayCutoff = useMemo(() => {
+    if (!replayOn || !sessionRows.length) return Infinity;
+    return sessionRows[Math.min(replayIdx, sessionRows.length - 1)].timestamp;
+  }, [replayOn, replayIdx, sessionRows]);
+
+  useEffect(() => {
+    replayCutoffRef.current = replayCutoff;
+    drawOverlayRef.current();
+    railDrawRef.current();
+  }, [replayCutoff]);
+
+  // Entering replay starts at the session open; leaving snaps back to live.
+  useEffect(() => {
+    if (replayOn) setReplayIdx(0);
+    else { setReplayPlaying(false); replayCutoffRef.current = Infinity; }
+  }, [replayOn]);
+
+  // Playback: one bar per tick. Bars are 5-min (~78/RTH session), so 1x ≈ 78s.
+  useEffect(() => {
+    if (!replayOn || !replayPlaying) return;
+    const id = setInterval(() => {
+      setReplayIdx((i) => {
+        if (i >= sessionRows.length - 1) { setReplayPlaying(false); return i; }
+        return i + 1;
+      });
+    }, Math.max(50, 1000 / replaySpeed));
+    return () => clearInterval(id);
+  }, [replayOn, replayPlaying, replaySpeed, sessionRows.length]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
   // chart plots ES, so we offset by the live basis (esFut - spx) before drawing.
@@ -995,7 +1106,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch(`/api/snapshots/mvc?limit=1000`, { cache: "no-store" });
+        // days=5 matches the chart's 5-day `rows` window — anything older can't
+        // be drawn anyway. NOTE: if that window ever grows, this must grow with
+        // it, or the basis resolver loses its CB rows for the older columns.
+        const res = await fetch(`/api/snapshots/mvc?days=5&limit=1000`, { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
         const rows = Array.isArray(json.rows) ? json.rows : [];
@@ -1249,7 +1363,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const chart = chartApiRef.current;
     if (!candleSeries || !chart) return;
 
-    const candleData: CandlestickData[] = rows.map((row) => {
+    // In replay, everything after the cursor simply doesn't exist yet.
+    const srcRows = replayOn ? rows.filter((r) => r.timestamp <= replayCutoff) : rows;
+    const candleData: CandlestickData[] = srcRows.map((row) => {
       const base: CandlestickData = {
         time: toChartTime(row.timestamp),
         open: row.open,
@@ -1282,7 +1398,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // by distance from it.
     if (candleData.length) {
       let lo = Infinity, hi = -Infinity;
-      for (const r of rows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
+      for (const r of srcRows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
       candleBandRef.current = Number.isFinite(lo) ? { lo, hi } : null;
     } else {
       candleBandRef.current = null;
@@ -1291,8 +1407,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // the day we last fit for — so the chart follows the session into the new
     // day instead of staying parked on the prior one. Within the same day we
     // never re-center, preserving the user's pan/zoom on live updates.
-    const lastDay = candleData.length ? rows[rows.length - 1].date : "";
-    if (candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
+    const lastDay = candleData.length ? srcRows[srcRows.length - 1].date : "";
+    // Never re-fit while scrubbing — the axis would jump on every bar.
+    if (!replayOn && candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
       chart.timeScale().fitContent();
       didFitRef.current = true;
       lastFitDayRef.current = lastDay;
@@ -1304,7 +1421,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     drawOverlayRef.current();
     drawLanesRef.current();
     railDrawRef.current();
-  }, [rows, showVsa, vsaMap]);
+  }, [rows, showVsa, vsaMap, replayOn, replayCutoff]);
 
   // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
   // right gutter. Recomputed on data, basis, and pan/zoom (range subscribe).
@@ -1576,6 +1693,19 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     if (!canvas || !chart || !series) return;
 
     const draw = () => {
+      // ── Data reads, from refs ────────────────────────────────────────────────
+      // These deliberately SHADOW the component-scope values of the same name, so
+      // everything below reads the ref without touching 600 lines of draw code.
+      // They are NOT in this effect's dep array: each gets a new identity on every
+      // coalesced candle frame, and having them there tore down and rebuilt the
+      // ResizeObserver + both timescale subscriptions several times a second.
+      // The toggles (showHeatmap/showTpo/...) DO stay in deps — they only change
+      // when the user clicks, so re-subscribing on those is free.
+      const rows = rowsRef.current;
+      const mvcHistory = mvcHistoryRef.current;
+      const profile = profileRef.current;
+      const tpoProfiles = tpoProfilesRef.current;
+
       const ctx = canvas.getContext("2d");
       const parent = canvas.parentElement;
       if (!ctx || !parent) return;
@@ -1739,7 +1869,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           return Math.abs(b) >= 1 ? b : (basis || prevBasisRef.current || b);
         };
       };
-      const basisAt = buildBasisAt();
+      // basisAt depends ONLY on rows + mvcHistory + the live basis. Rebuilding it
+      // per frame walked all ~1000 CB rows (each with a binary search into rows)
+      // plus a per-day median sort — on every pan, zoom, hover and tick. Identity
+      // compare is enough: both are memoized arrays that only change on new data.
+      const bc = basisCacheRef.current;
+      if (bc.rows !== rows || bc.mvc !== mvcHistory || bc.basis !== basis) {
+        basisCacheRef.current = { rows, mvc: mvcHistory, basis, fn: buildBasisAt() };
+      }
+      const basisAt = basisCacheRef.current.fn;
 
       // ?debugBasis=1 → dump exactly what basis each source yields per ET day, so
       // a wrong level can be traced to a number instead of eyeballed off a chart.
@@ -1941,7 +2079,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           // not a mean — averaging smears the very spikes we're trying to show.
           const bucketMs = bubbleMinsRef.current * 60_000;
           const byBucket = new Map<number, GexColumn>();
-          for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
+          // Replay: drop future minutes BEFORE sessMax is computed below, or the
+          // radius scale would be set by gamma that hasn't printed yet at the
+          // cursor — every earlier bubble would render at its final-session size.
+          const cut = replayCutoffRef.current;
+          const srcMins = [...minuteColsRef.current.values()]
+            .filter((m) => m.slotTs <= cut)
+            .sort((a, b) => a.slotTs - b.slotTs);
+          for (const m of srcMins) {
             byBucket.set(Math.floor(m.slotTs / bucketMs) * bucketMs, m);
           }
           const mins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
@@ -2175,6 +2320,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         };
         for (let i = 0; i < mvcHistory.length; i++) {
           const p = mvcHistory[i];
+          // Replay: mvcHistory is sorted ascending, so the first future point ends
+          // the line. flush() closes the run that was open at the cursor.
+          if (p.ts > replayCutoffRef.current) { flush(prevX); break; }
           const x = xOf(p.ts);
           // Convert the SPX CB level → ES with the basis THAT SNAPSHOT was taken
           // at: the row's own (esPrice − spxPrice), a simultaneous pair recorded
@@ -2235,19 +2383,35 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // zoom/drag instead of tracking it in real time.
     const container = chartRef.current;
     container?.addEventListener("wheel", schedule, { passive: true });
-    container?.addEventListener("pointermove", schedule);
-    container?.addEventListener("pointerup", schedule);
+    // Only repaint while the pointer is actually DOWN (dragging the axis) — this
+    // was an unconditional pointermove listener, so merely hovering the chart
+    // fired a full overlay redraw per mouse event. That alone made the page feel
+    // broken under the cursor, which is exactly where the cursor always is.
+    let dragging = false;
+    const onDown = () => { dragging = true; };
+    const onMove = () => { if (dragging) schedule(); };
+    // On window, not the container: a drag that ends outside the chart still
+    // needs to clear the flag, or the next hover repaints forever.
+    const onUp = () => { dragging = false; schedule(); };
+    container?.addEventListener("pointerdown", onDown);
+    container?.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
 
     return () => {
       cancelAnimationFrame(raf);
       ts.unsubscribeVisibleLogicalRangeChange(schedule);
       ro.disconnect();
       container?.removeEventListener("wheel", schedule);
-      container?.removeEventListener("pointermove", schedule);
-      container?.removeEventListener("pointerup", schedule);
+      container?.removeEventListener("pointerdown", onDown);
+      container?.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexBubbles, bubbleScale, bubbleVar, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
+    // Data (rows/profile/tpoProfiles/mvcHistory) is read from refs inside draw()
+    // and is deliberately absent here — see the comment at the top of draw().
+    // bubbleScale/bubbleVar/bubbleMins likewise already have refs. What remains
+    // is user-driven toggles only, which change on a click, not on a tick.
+  }, [showHeatmap, showGexBubbles, intensity, gexMetric, showProfile, showTpo, showLevels]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -2376,6 +2540,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 { label: "GEX Rail", on: showRail, toggle: () => setShowRail((v) => !v) },
                 { label: "Bubbles", on: showGexBubbles, toggle: () => setShowGexBubbles((v) => !v) },
                 { label: "VSA", on: showVsa, toggle: () => setShowVsa((v) => !v) },
+                { label: "Replay", on: replayOn, toggle: () => setReplayOn((v) => !v) },
               ] as const).map((o) => (
                 <button
                   key={o.label}
@@ -2424,6 +2589,52 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                     options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
                     active={String(bubbleMins)}
                     onChange={(v) => setBubbleMins(Number(v) === 1 ? 1 : 5)}
+                  />
+                </div>
+              )}
+              {replayOn && (
+                <div className="mt-1 px-3 pb-2 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>
+                    Replay — today&apos;s session
+                  </div>
+                  <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.65, lineHeight: 1.4, marginBottom: 6 }}>
+                    Candles, CB line and bubbles rewind. Levels, heatmap and TPO stay{" "}
+                    <b style={{ color: HOME_THEME.red }}>live</b> — not point-in-time.
+                  </div>
+                  <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+                    <button
+                      onClick={() => setReplayPlaying((v) => !v)}
+                      title={replayPlaying ? "Pause" : "Play"}
+                      style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.text, background: "transparent" }}
+                    >
+                      {replayPlaying ? "❚❚" : "▶"}
+                    </button>
+                    <button
+                      onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+                      title="Step back one bar"
+                      style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, background: "transparent" }}
+                    >◀</button>
+                    <button
+                      onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(sessionRows.length - 1, i + 1)); }}
+                      title="Step forward one bar"
+                      style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, background: "transparent" }}
+                    >▶|</button>
+                    <span style={{ fontSize: 11, fontVariantNumeric: "tabular-nums", color: HOME_THEME.text, marginLeft: 2 }}>
+                      {/* ET_MIN_FMT, not ET_HM_FMT — the latter carries weekday:"short" and
+                          would render "Thu, 14:30" here. */}
+                      {sessionRows.length && Number.isFinite(replayCutoff) ? ET_MIN_FMT.format(new Date(replayCutoff)) : "--:--"}
+                    </span>
+                  </div>
+                  <input
+                    type="range" min={0} max={Math.max(0, sessionRows.length - 1)} step={1} value={replayIdx}
+                    onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+                    style={{ width: "100%", accentColor: HOME_THEME.cyan }}
+                  />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Speed</div>
+                  <SegGroup
+                    options={[{ label: "1x", value: "1" }, { label: "2x", value: "2" }, { label: "5x", value: "5" }, { label: "10x", value: "10" }]}
+                    active={String(replaySpeed)}
+                    onChange={(v) => setReplaySpeed(Number(v) as 1 | 2 | 5 | 10)}
                   />
                 </div>
               )}

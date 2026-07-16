@@ -100,6 +100,21 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  // ── Re-render coalescing ───────────────────────────────────────────────────
+  // The /ws/gex feed pushes candle frames continuously, and EVERY frame used to
+  // fire both setState calls below. A 5-minute bar whose close ticks 40×/sec
+  // does not need 40 re-renders: each one re-derives `candles` (two 20-day
+  // buildSlotAverages passes) and `sessionCandles` (Map + sort), and on the
+  // ES-candles page that cascades into rows → sessionLevels/profile/tpoProfiles/
+  // vsaMap → full setData → overlay redraw. That fan-out, several times a
+  // second, was the page's lag.
+  //
+  // Trailing-edge 250ms = a 4Hz ceiling on renders. The maps are refs and are
+  // still written on every frame, so NO data is dropped — only the render is
+  // deferred, and whatever lands in the window is published together.
+  const COALESCE_MS = 250;
+  const tickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rowsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // SQLite load (today + history). Reused by mount and manual reload.
   const loadFromDb = useCallback(async () => {
@@ -150,8 +165,23 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
         liveMapRef.current.set(raw.slotKey, raw);
         changed = true;
       }
-      if (changed) setTodayRows([...liveMapRef.current.values()]);
-      if (sessionChanged) setSessionTick((n) => n + 1);
+      // Coalesced publish (see COALESCE_MS above). The `if (!timer)` guard makes
+      // this trailing-edge: the first frame in a quiet period arms the timer and
+      // every frame for the next 250ms rides it, then one render carries them all.
+      if (changed && !rowsTimerRef.current) {
+        rowsTimerRef.current = setTimeout(() => {
+          rowsTimerRef.current = null;
+          if (unmountedRef.current) return;
+          setTodayRows([...liveMapRef.current.values()]);
+        }, COALESCE_MS);
+      }
+      if (sessionChanged && !tickTimerRef.current) {
+        tickTimerRef.current = setTimeout(() => {
+          tickTimerRef.current = null;
+          if (unmountedRef.current) return;
+          setSessionTick((n) => n + 1);
+        }, COALESCE_MS);
+      }
     };
 
     const handle = (rawMsg: string) => {
@@ -194,6 +224,9 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
     return () => {
       unmountedRef.current = true;
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      // Pending coalesced publishes must not fire into an unmounted tree.
+      if (tickTimerRef.current) { clearTimeout(tickTimerRef.current); tickTimerRef.current = null; }
+      if (rowsTimerRef.current) { clearTimeout(rowsTimerRef.current); rowsTimerRef.current = null; }
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws) {

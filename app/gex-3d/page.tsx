@@ -17,9 +17,11 @@
 //
 // DATA: useGexSurface → /proxy/gex-history?mode=series (the prior session is
 // held until today has its first RTH column, ~09:30 ET; 30-min poll + manual
-// refresh). Defaults to 5-MIN columns. The time axis is a
+// refresh). Defaults to 30 COLUMNS (~13-min) — the density at which a tower's
+// footprint comes out square against a ~27-strike ladder. The time axis is a
 // FIXED world depth (Z_EXTENT) regardless of column count, so the map never
-// stretches into a runway.
+// stretches into a runway; the strike axis then follows it (xCell) to keep
+// cells square, so finer column settings narrow the map rather than growing it.
 //
 // Canvas colors are derived from HOME_THEME tokens via canvasRgba()/shade() —
 // no raw literals. 2D canvas can't consume CSS vars, so tokens become locals.
@@ -76,10 +78,27 @@ const BEACON_THRESHOLD = 0.55;
 
 // The time axis occupies a FIXED world depth no matter how many columns exist —
 // this is what keeps the 1-min surface from stretching into a runway. Per-cell
-// spacing still caps at 17 so a sparse 10-column morning doesn't over-stretch.
+// spacing still caps at 18 so a sparse 10-column morning doesn't over-stretch.
 const Z_EXTENT = 520;
-function xCell(nx: number) { return Math.max(10, Math.min(26, 700 / Math.max(1, nx))); }
-function zCell(nz: number) { return Math.min(17, Z_EXTENT / Math.max(1, nz)); }
+/** Widest the strike axis may get. Only reached when columns are scarce. */
+const X_EXTENT = 700;
+function zCell(nz: number) { return Math.min(18, Z_EXTENT / Math.max(1, nz)); }
+/**
+ * Width per strike. The strike axis does NOT own an independent extent: cells
+ * track zCell so a tower's footprint is SQUARE, which is the whole point of
+ * drawing boxes. Previously X was pinned near its own 26-unit cap while Z fell
+ * out of the fixed depth (6.5 at 5-min), so every tower rendered as a 4:1 fin —
+ * a fin reads as a slice through a surface, which is exactly the melted-sheet
+ * look the box treatment exists to avoid.
+ *
+ * Squareness is bounded, not absolute: X can't exceed what the ladder can fill
+ * (X_EXTENT/nx) and won't go below 9, so dense column counts still narrow the
+ * cell rather than stretching the map. This only ever makes the map NARROWER
+ * than the old 700 — the display never grows.
+ */
+function xCell(nx: number, nz: number) {
+  return Math.max(9, Math.min(X_EXTENT / Math.max(1, nx), zCell(nz)));
+}
 
 /** Signed GEX → ramp color at that magnitude. mag is 0…1. */
 function rampFor(v: number, mag: number): [number, number, number] {
@@ -174,6 +193,41 @@ function lineY(
   return (w === 0 ? hi : hi * (1 - w) + Math.max(hi, cap(u >= 0 ? i + 1 : i - 1)) * w) + 5;
 }
 
+/** Columns each side averaged into the price line's ride height. */
+const RIDE_SMOOTH = 2;
+
+/**
+ * Smooth the price line's RIDE HEIGHT — never its strike position.
+ *
+ * The drape is a step function: it snaps to whatever tower cap spot happens to
+ * be over, so one column to the next can differ by the entire height of a wall
+ * and the line reads as a saw with no relationship to how price actually moved.
+ * A centered mean over ±RIDE_SMOOTH columns turns those cliffs into ramps.
+ *
+ * Two things this deliberately does NOT do:
+ *  - It never touches `gx`. That is the real spot path; smoothing it would be
+ *    inventing prices, and the wall-impact physics reads the same array.
+ *  - It never lets the result fall BELOW the local cap. A mean alone would sink
+ *    the line into the wall at the moment it matters most, where the depth sort
+ *    would then bury it. Clamping back up means the smoothing only ever raises
+ *    the approach columns — the line ramps INTO a wall and still sits exactly on
+ *    its cap, which is the read we want.
+ */
+function smoothRide(yPath: Float32Array, capAt: (z: number) => number): Float32Array {
+  const n = yPath.length;
+  const out = new Float32Array(n);
+  for (let z = 0; z < n; z++) {
+    let sum = 0, cnt = 0;
+    for (let k = -RIDE_SMOOTH; k <= RIDE_SMOOTH; k++) {
+      const j = z + k;
+      if (j < 0 || j >= n) continue;
+      sum += yPath[j]; cnt++;
+    }
+    out[z] = Math.max(sum / cnt, capAt(z));
+  }
+  return out;
+}
+
 // ── FX records (world-space; projected fresh every animation frame) ─────────
 type ImpactFx = {
   kind: "reject" | "break";
@@ -200,10 +254,14 @@ const SUNX = -0.55 / SUN_LEN, SUNZ = -0.83 / SUN_LEN;
 
 export default function Gex3DPage() {
   const [basis, setBasis] = useState<"net" | "vol">("net");
-  // Column resolution. DEFAULT IS 5-MIN (80): discrete towers need breathing
-  // room along the fixed-depth time axis — 390 one-minute boxes in the same
-  // depth fuse into a solid wall. 1-min remains a click away.
-  const [buckets, setBuckets] = useState(80);
+  // Column resolution. DEFAULT IS 30 COLUMNS (~13-min), down from 5-min (80).
+  // Square towers are what forces this: cell depth is Z_EXTENT/nz, and with a
+  // ~27-strike ladder the footprint only comes out square around 30 columns
+  // (~17 units a side). At 80 the square cell collapses to ~6.5 and the towers
+  // become needles; the fixed depth means the alternative — widening Z to match
+  // X — is a runway. Finer resolutions stay one click away and still render,
+  // just with narrower cells.
+  const [buckets, setBuckets] = useState(30);
   const live = useGexSurface(basis, buckets);
 
   const cvRef = useRef<HTMLCanvasElement | null>(null);
@@ -252,8 +310,8 @@ export default function Gex3DPage() {
     const { yaw, pitch, zoom, panX, panY } = camRef.current;
     const { w: W, h: H } = sizeRef.current;
     const { nx, nz } = dimsRef.current;
-    const SXc = xCell(nx);
-    const SZc = zCell(nz); // fixed total depth — see Z_EXTENT
+    const SXc = xCell(nx, nz); // square-footprint cells — see xCell
+    const SZc = zCell(nz);     // fixed total depth — see Z_EXTENT
     const x = (gx - (nx - 1) / 2) * SXc;
     const z = (gz - (nz - 1) / 2) * SZc;
     const cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -293,9 +351,13 @@ export default function Gex3DPage() {
     for (let z = 0; z < NZ; z++) gx[z] = Math.max(-0.5, Math.min(NX - 0.5, (spotPath[z] - strikes[0]) / (step || 5)));
     const headZ = newestFrontRef.current ? 0 : NZ - 1;
 
-    // The price line LAYS ON the tower caps (2D drape, not an extruded rail).
-    const yPath = new Float32Array(NZ);
-    for (let z = 0; z < NZ; z++) yPath[z] = lineY(rows, gx[z], z, NX, curve, absMode, rel);
+    // The price line LAYS ON the tower caps (2D drape, not an extruded rail),
+    // then has its ride height smoothed so wall-to-wall steps become ramps —
+    // see smoothRide. The clamp floor is the raw drape itself, so the smoothed
+    // line can only ever sit at or above the cap it's riding.
+    const rawRide = new Float32Array(NZ);
+    for (let z = 0; z < NZ; z++) rawRide[z] = lineY(rows, gx[z], z, NX, curve, absMode, rel);
+    const yPath = smoothRide(rawRide, (z) => rawRide[z]);
 
     // ── wall impacts: rejection vs break-through ─────────────────────────
     // REJECTION = price closed on a strong strike, touched, turned back the
@@ -431,14 +493,25 @@ export default function Gex3DPage() {
       segs.sort((p, q) => q.d - p.d);
     }
     const drawSeg = (s: Seg) => {
+      // Round caps + an overdrawn dark halo are what make a per-segment stroke
+      // read as one continuous track: segments are drawn in depth order, not
+      // path order, so there are no joins to rely on — each segment has to
+      // finish its own ends.
       ctx.lineCap = "round";
       // dark halo first so the line separates from same-hue terrain beneath it
-      ctx.strokeStyle = canvasRgba(HOME_THEME.bg, 0.7);
-      ctx.lineWidth = 4.5;
+      ctx.strokeStyle = canvasRgba(HOME_THEME.bg, 0.85);
+      ctx.lineWidth = 6;
       ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1); ctx.stroke();
-      ctx.strokeStyle = canvasRgba(SPOT, 0.95);
-      ctx.lineWidth = 2.2;
+      // The glow does the legibility work the old flat 2.2px stroke couldn't:
+      // over a bright orange put wall the line was the same hue as its
+      // background and simply vanished into it.
+      ctx.save();
+      ctx.shadowColor = canvasRgba(SPOT, 0.8);
+      ctx.shadowBlur = 7;
+      ctx.strokeStyle = canvasRgba(SPOT, 0.98);
+      ctx.lineWidth = 2.8;
       ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1); ctx.stroke();
+      ctx.restore();
     };
 
     // ── box towers + price line, one depth-sorted pass ──────────────────────
@@ -563,7 +636,7 @@ export default function Gex3DPage() {
       ctx.fillText(String(strikes[x]), p.x, p.y);
     }
     if (times.length) {
-      const padX = Math.max(1.2, 30 / xCell(NX));
+      const padX = Math.max(1.2, 30 / xCell(NX, NZ));
       const timeEdgeRight = proj(NX - 1, 0, 0).depth < proj(0, 0, 0).depth;
       const timeEdgeX = timeEdgeRight ? NX - 1 + padX : -padX;
       ctx.textAlign = timeEdgeRight ? "left" : "right";

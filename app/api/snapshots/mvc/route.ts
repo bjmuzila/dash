@@ -48,7 +48,11 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const date  = searchParams.get("date")  ?? undefined;
     const limit = Math.min(Number(searchParams.get("limit") ?? 200), 1000);
-    const rows  = await getMvcSnapshots(date, limit);
+    // ?days=N → only rows from the last N days, with a narrowed column set.
+    // Absent = unchanged full-table behaviour for existing callers.
+    const days  = Number(searchParams.get("days") ?? 0);
+    const since = days > 0 ? Date.now() - days * 86_400_000 : undefined;
+    const rows  = await getMvcSnapshots(date, limit, since);
     return NextResponse.json({ rows });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

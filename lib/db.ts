@@ -2732,11 +2732,20 @@ export async function insertMvcSnapshot(r: Omit<MvcRecord, "id">): Promise<numbe
   return Number(result.rows[0]?.id ?? 0);
 }
 
-export async function getMvcSnapshots(date?: string, limit = 200): Promise<MvcRecord[]> {
+export async function getMvcSnapshots(date?: string, limit = 200, sinceMs?: number): Promise<MvcRecord[]> {
   if (date) {
     return queryAll<MvcRecord>(
       "SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT ?",
       [date, limit]
+    );
+  }
+  // Windowed read (sinceMs) — used by the ES-candles chart, which only draws the
+  // last few days of CB history and only needs 4 of this table's ~20 columns.
+  // SELECT * over 1000 rows was ~87kB on the wire for ~10kB of usable data.
+  if (sinceMs) {
+    return queryAll<MvcRecord>(
+      "SELECT timestamp, strikeOIVol, spxPrice, esPrice FROM mvc_snapshots WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+      [sinceMs, limit]
     );
   }
   return queryAll<MvcRecord>(
