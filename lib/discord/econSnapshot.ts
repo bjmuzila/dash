@@ -226,6 +226,36 @@ function dash(v?: string): string {
   return s ? s : "–";
 }
 
+/**
+ * Optical-centering correction for text inside a pill. THE rule to understand
+ * before touching any pill CSS in this file:
+ *
+ * html2canvas puts the text baseline at (content-box top + font ascent) and
+ * ignores line-height's half-leading, which a real browser uses to centre the
+ * glyphs in the line box. Consequences, both of which we hit for real:
+ *   - height:56px + line-height:54px  -> the 54px of leading is discarded, text
+ *     rides HIGH against the top of the box.
+ *   - line-height:1                   -> ascent (~0.97em) nearly fills the box,
+ *     text sits LOW.
+ * Neither centres. So we centre it ourselves: keep line-height:1 (predictable
+ * box height) and shift padding from the top to the bottom.
+ *
+ * Offset works out to about (2*ascent - capHeight - fontSize)/2. For Inter
+ * (ascent 0.969em, cap 0.727em) that is ~0.108em; for the Arial/Helvetica
+ * fallback (0.905 / 0.716) it is ~0.046em. The snapshot renders in an iframe
+ * written via document.write, which does NOT inherit the parent's @font-face,
+ * so the real font is likely the fallback — 0.08em splits the difference and
+ * lands within a pixel either way at these sizes.
+ *
+ * If text looks HIGH, lower this. If it looks LOW, raise it. One number, every
+ * pill.
+ */
+const PILL_NUDGE_EM = 0.08;
+
+function nudgePx(fontSize: number): number {
+  return Math.round(PILL_NUDGE_EM * fontSize);
+}
+
 // Fewer rows in a lane -> bigger type (fills the panel); more rows -> smaller
 // type (keeps everything on-canvas). 6 rows is the "neutral" baseline: a light
 // day (4-5 events) should read BIG rather than leave the panel half empty.
@@ -309,6 +339,9 @@ export function buildSnapshotHTML(
   const pillHeight = px(22, econScale);
   const pillPadH = px(10, econScale);
   const pillPadV = Math.max(0, Math.round((pillHeight - pillFontSize) / 2));
+  const pillNudge = nudgePx(pillFontSize);
+  const pillPadTop = Math.max(0, pillPadV - pillNudge);
+  const pillPadBot = pillPadV + pillNudge;
   const econTimeCol = px(74, econScale);
   const econImpactCol = px(74, econScale);
   const econNumCol = px(58, econScale);
@@ -373,18 +406,17 @@ export function buildSnapshotHTML(
 body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:'Inter','Helvetica Neue',Arial,sans-serif;background:var(--bg)}
 .snapshot{width:1280px;height:672px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 50%,${hexA(HT.cyan, 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,rgba(18,103,131,0.07) 0%,transparent 50%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
-/* html2canvas does NOT vertically center flex text, and it does NOT honour
-   large line-heights the way the browser does — it applies the half-leading at
-   the top only, so a height:56px + line-height:54px pill renders top-heavy.
-   Every pill below is instead an inline-block with line-height:1 and SYMMETRIC
-   vertical padding, which html2canvas measures correctly. Do not "simplify"
-   these back to inline-flex + align-items:center, and do not reintroduce
-   height + tall line-height. */
-.badge{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:16px 26px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
+/* Every pill: line-height:1 + ASYMMETRIC vertical padding (bottom > top). See
+   PILL_NUDGE_EM above for why — html2canvas ignores half-leading, so neither a
+   tall line-height nor symmetric padding centres the text. Do not "simplify"
+   these to inline-flex + align-items:center (html2canvas ignores that too), do
+   not reintroduce height + tall line-height, and do not even out the padding.
+   Box heights are unchanged: top + bottom still sum to the old 2x value. */
+.badge{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:${16 - nudgePx(24)}px 26px ${16 + nudgePx(24)}px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
 .badge-inner{display:inline-block;letter-spacing:0.07em;margin-right:-0.07em}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{display:inline-block;line-height:1;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:12px 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
-.today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:12px 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.date-pill{display:inline-block;line-height:1;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
 .pill-inner-06{display:inline-block;letter-spacing:0.06em;margin-right:-0.06em}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
 /* Econ lane is widened (3.3fr -> 3.6fr) because the Event column was the
@@ -397,10 +429,9 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .panel{border-radius:18px;border:1px solid var(--border);background:radial-gradient(circle at 50% 0%,rgba(126,211,252,0.10) 0%,transparent 60%),var(--panelBg);box-shadow:0 18px 40px rgba(0,0,0,0.22);overflow:hidden;height:100%;display:flex;flex-direction:column}
 .panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
 .panel-title{font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
-/* Count bubble — same line-height:1 + symmetric padding rule as the pills in
-   the topbar. It kept the old height+line-height form by oversight and sat
-   top-heavy for it. 13px text + 6px padding top/bottom = the same 25px box. */
-.panel-pct{display:inline-block;line-height:1;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:6px 9px}
+/* Count bubble — same nudged-padding rule as the topbar pills. It kept the old
+   height+line-height form by oversight and sat top-heavy for it. */
+.panel-pct{display:inline-block;line-height:1;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:${6 - nudgePx(13)}px 9px ${6 + nudgePx(13)}px}
 .ern-body{display:flex;flex-direction:column;flex:1}
 .ern-group{padding:14px 16px;border-bottom:1px solid var(--border);flex:1}
 .ern-group:last-child{border-bottom:none}
@@ -409,9 +440,8 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .ern-chip{width:48px;text-align:center;flex-shrink:0}
 .chip-logo{display:block;width:36px;height:36px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
 .chip-logo img{width:36px;height:36px;object-fit:contain;display:block}
-/* Ticker fallback chip — line-height:1 + padding, same rule as every other
-   pill. 10px text + 13px padding top/bottom = the 36px box the logos use. */
-.chip-fb{display:block;width:36px;height:36px;line-height:1;padding:13px 0;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
+/* Ticker fallback chip — same nudged-padding rule; 36px box matches the logos. */
+.chip-fb{display:block;width:36px;height:36px;line-height:1;padding:${13 - nudgePx(10)}px 0 ${13 + nudgePx(10)}px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
 .chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 .pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
@@ -438,7 +468,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .ec-event{font-size:${econEventSize}px;line-height:${econEventSize + 8}px;font-weight:600;white-space:nowrap;min-width:0}
 .ec-num{font-size:${econNumSize}px;line-height:${econNumSize + 8}px;font-weight:700;text-align:right;color:var(--text);white-space:nowrap}
 .ec-impact{text-align:left;min-width:0}
-.impact-pill{display:inline-block;line-height:1;text-align:center;border:1px solid;border-radius:8px;padding:${pillPadV}px ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;white-space:nowrap}
+.impact-pill{display:inline-block;line-height:1;text-align:center;border:1px solid;border-radius:8px;padding:${pillPadTop}px ${pillPadH}px ${pillPadBot}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;white-space:nowrap}
 .pill-inner-04{display:inline-block;letter-spacing:0.04em;margin-right:-0.04em}
 .logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:80px;height:80px;object-fit:contain}

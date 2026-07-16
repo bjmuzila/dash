@@ -959,6 +959,22 @@ export function HomeClient({
     return best;
   }, [heatmapRows]);
 
+  // Peak |net GEX| strike for the SPY / QQQ columns — each gets the same white
+  // box + glow the SPX NET GEX peak (mvcStrikeHeatmap) gets. Own column, own peak.
+  const peakStrikeByCol = useMemo(() => {
+    const out: Record<string, number | null> = {};
+    for (const c of ["spyGexVal", "qqqGexVal"] as const) {
+      let best: number | null = null;
+      let bestAbs = 0;
+      for (const r of heatmapRows) {
+        const a = Math.abs(Number(r[c] ?? 0));
+        if (a > bestAbs) { bestAbs = a; best = r.strikeNum; }
+      }
+      out[c] = best;
+    }
+    return out;
+  }, [heatmapRows]);
+
   // Screenshot title date, e.g. "Mon 6/29" — mirrors the GEX chart title format.
   const heatmapTitleDate = useMemo(() => {
     if (!selectedExpiry) return "";
@@ -1644,8 +1660,10 @@ export function HomeClient({
                         const atmEdges: React.CSSProperties = isAtm
                           ? { borderTop: atmBorder, borderBottom: atmBorder, ...(colIdx === 5 ? { borderRight: atmBorder } : {}) }
                           : {};
+                        // Column peak (SPY/QQQ) — same white box + glow as the SPX NET GEX peak.
+                        const isPeak = !isTable && peakStrikeByCol[colKey] != null && row.strikeNum === peakStrikeByCol[colKey];
                         return (
-                          <td key={colIdx} title={title} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
+                          <td key={colIdx} title={title} className={isPeak ? "mvc-peak-cell" : undefined} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(isPeak ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                             {isTable
                               ? barEl(value, colKey)
                               : <span style={{ position: "relative", zIndex: 1 }}>{text}</span>}

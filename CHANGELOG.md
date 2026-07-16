@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-16 — ES Candles: rail on by default in the home card + bubble size persisted (`app/es-candles/page.tsx`)
+
+`showRail` was `useState(!embedded)`, so the home GEX card's ES Candles view opened with the GEX rail off — now `true` everywhere. Bubbles (`showGexBubbles`) and the 5-minute bubble bucket (`bubbleMins`) were already the defaults on both surfaces, so no change there; the home card and `/es-candles` now both open at rail + bubbles + 5m. The card still opens with the heatmap off (it sits next to the GEX chart and the heatmap panel — a third copy of that read is noise), and `railFits` still auto-collapses the 230px rail below `RAIL_MIN_WIDTH` (560px of chart area) so a narrow card doesn't starve the candles. One change covers both surfaces: the home card renders `<EsCandlesPage embedded>`, not the legacy trimmed `EsCandlesFullPanel`. Bubble size now persists per browser under `es-candles-bubble-scale-v1`: restored in a mount effect (not a lazy `useState` initializer — a localStorage read during render hydrates a different tree than SSR sent), validated against the slider's own 0.1–0.5 range so a stale key can't push the knob somewhere the slider can't undo, and written by a wrapped setter rather than an effect on the value, so nothing is stored until the user actually drags it and a future default change still reaches everyone who never touched it. Not build-verified (sandbox down); needs VPS rebuild.
+
 ## 2026-07-15 — TPO structure labels + hover callouts + 5/10/30-session strip (`lib/tpo.ts`, `app/scanner/page.tsx`)
 
 `lib/tpo.ts` gains `KIND_TITLE` ("Excess high — selling tail", "Poor low — unfinished", "Hole — thin zone") and `KIND_NOTE` (the one-line "so what"). `KIND_LABEL` stays for the terse badge/tooltip copy. The 3px colored spine next to each profile on `/scanner` → TPO was technically the same information and unreadable: an excess high and a poor high are **opposite trades** and looked identical.

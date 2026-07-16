@@ -297,6 +297,11 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 // there, not on the chart page. See app/test/page.tsx OptionsPositioningTab.)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Bubble-size knob, persisted per browser (see changeBubbleScale). Sizing is
+// pure taste, so it's the one overlay setting that shouldn't reset every visit.
+// Versioned suffix so a future range change can invalidate old values.
+const BUBBLE_SCALE_KEY = "es-candles-bubble-scale-v1";
+
 /**
  * `leading` renders as the first item in the dock, before the "ES 5m Candles"
  * title. Routed as /es-candles it receives nothing (Next passes params /
@@ -309,9 +314,10 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
  *    wide it happens to be, so the switcher in `leading` lands in a different
  *    place than the GexToolbar's copy of it — the button jumps sideways out from
  *    under the cursor on every click.
- *  - overlays start at bubbles-only. The full route opens with heatmap + rail +
- *    bubbles, which is three layers of GEX on top of a card that is already
- *    sitting next to the GEX chart and the heatmap panel.
+ *  - overlays start at rail + bubbles, same as the full route, minus the
+ *    heatmap. The heatmap is the layer worth dropping here: the card already
+ *    sits next to the GEX chart and the heatmap panel, so a third copy of that
+ *    read is noise — the rail and bubbles are what the card is FOR.
  * Both are first-render defaults only — every overlay stays toggleable.
  */
 export default function EsCandlesPage({ leading, embedded = false }: { leading?: ReactNode; embedded?: boolean } = {}) {
@@ -533,7 +539,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   }, [showVsa, rows, historical, vsaTuning]);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
-  const [showRail, setShowRail] = useState(!embedded); // right-side vertical GEX-by-strike rail
+  // Right-side vertical GEX-by-strike rail. On by default EVERYWHERE, including
+  // the home card (`embedded`) — the rail + bubbles are the default read. If the
+  // chart area is too narrow for it, `railFits` still auto-collapses it below.
+  const [showRail, setShowRail] = useState(true);
   // Per-strike 1-minute GEX bubbles. Radius ∝ |net GEX|
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
@@ -552,6 +561,26 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
   // 5m spaces them one per candle, which is why it's the default.
   const [bubbleMins, setBubbleMins] = useState<1 | 5>(5);
+  // Restore the last bubble-size the user landed on. Read in an effect rather
+  // than a lazy useState initializer so SSR and the first client render agree
+  // (a localStorage read during render hydrates a different tree than the server
+  // sent). Validated against the slider's own 0.1–0.5 range — a stale or
+  // hand-edited key must never push the knob somewhere the slider can't undo.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(BUBBLE_SCALE_KEY);
+      const n = raw === null ? NaN : Number(raw);
+      if (Number.isFinite(n) && n >= 0.1 && n <= 0.5) setBubbleScale(n);
+    } catch { /* private mode / storage disabled — keep the default */ }
+  }, []);
+  // Persist on change. Wrapping the setter (rather than an effect on the value)
+  // keeps the initial default out of storage: nothing is written until the user
+  // actually drags the slider, so changing BUBBLE_DEFAULT later still reaches
+  // everyone who never touched it.
+  const changeBubbleScale = useCallback((v: number) => {
+    setBubbleScale(v);
+    try { window.localStorage.setItem(BUBBLE_SCALE_KEY, String(v)); } catch { /* ignore */ }
+  }, []);
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing. Must stay BELOW the useState above (see bubbleScaleRef).
   useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
@@ -2386,7 +2415,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               {showGexBubbles && (
                 <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble size</div>
-                  <DockSlider label="bubble" value={bubbleScale} min={0.1} max={0.5} step={0.02} onChange={setBubbleScale} title="Bubble size" />
+                  <DockSlider label="bubble" value={bubbleScale} min={0.1} max={0.5} step={0.02} onChange={changeBubbleScale} title="Bubble size (saved in this browser)" />
                   <DockSlider
                     label="variance" value={bubbleVar} min={0.5} max={2.5} step={0.1}
                     format={(v) => v.toFixed(1)} onChange={setBubbleVar}

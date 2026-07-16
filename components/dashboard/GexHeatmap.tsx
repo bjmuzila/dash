@@ -28,14 +28,13 @@ const SPEED_COL = { key: "volSpeed", label: "VOL GEX SPEED" } as const;
 
 type ColKey = (typeof BASE_COLS)[number]["key"] | "volSpeed";
 
+// All cells render in millions, whole numbers only — keeps column widths stable
+// and stops digit-churn on every tick.
 function fmtG(v: number | null): string {
   if (v == null || !Number.isFinite(v)) return "—";
-  const a = Math.abs(v);
-  const s = v >= 0 ? "" : "-";
-  if (a >= 1e9) return s + "$" + (a / 1e9).toFixed(2) + "B";
-  if (a >= 1e6) return s + "$" + (a / 1e6).toFixed(2) + "M";
-  if (a >= 1e3) return s + "$" + (a / 1e3).toFixed(2) + "K";
-  return s + "$" + a.toFixed(2);
+  const m = Math.round(v / 1e6);
+  const s = m < 0 ? "-" : "";
+  return s + "$" + Math.abs(m).toLocaleString() + "M";
 }
 
 function robustMax(vals: number[], pct = 0.95): number {
@@ -84,15 +83,23 @@ export default function GexHeatmap({
     ? allStrikes.reduce((best, s) => Math.abs(s - spotPrice) < Math.abs(best - spotPrice) ? s : best, allStrikes[0] ?? spotPrice)
     : (allStrikes[0] ?? 0);
 
-  // Hysteresis anchor: only re-center the window once spot moves 5 strikes from the
-  // current anchor. Prevents add-one/drop-one window flashing on every tick. (See [[heatmap]] note.)
+  // Quantized anchor: the visible window only re-centers in whole 5-strike jumps.
+  // Snapping to a fixed 5-strike lattice (rather than re-anchoring to nearestStrike)
+  // means the row set is a pure function of the bucket, so a tick that crosses the
+  // threshold and ticks back lands on the same rows instead of flashing.
   const strikeStep = allStrikes.length > 1 ? Math.abs(allStrikes[0] - allStrikes[1]) : 1;
+  const bucket = strikeStep * 5;
+  const snapped = allStrikes.length
+    ? allStrikes.reduce((best, s) =>
+        Math.abs(s - Math.round(nearestStrike / bucket) * bucket) <
+        Math.abs(best - Math.round(nearestStrike / bucket) * bucket) ? s : best, allStrikes[0])
+    : nearestStrike;
   if (
     anchorStrikeRef.current == null ||
     !allStrikes.includes(anchorStrikeRef.current) ||
-    Math.abs(nearestStrike - anchorStrikeRef.current) > strikeStep * 4.5
+    Math.abs(nearestStrike - anchorStrikeRef.current) >= bucket
   ) {
-    anchorStrikeRef.current = nearestStrike;
+    anchorStrikeRef.current = snapped;
   }
   const atmStrike = anchorStrikeRef.current;
   const atmIdx = allStrikes.indexOf(atmStrike);
