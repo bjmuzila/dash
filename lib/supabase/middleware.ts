@@ -20,7 +20,16 @@ export async function getUserFromMiddleware(req: NextRequest): Promise<{
   isOwner: boolean;
   isPaid: boolean;
 }> {
-  const res = NextResponse.next({ request: req });
+  // Plain pass-through — do NOT pass `{ request: req }` here. That form tells
+  // Next to re-emit the request (headers AND body) to the downstream handler,
+  // which consumes the body stream inside middleware. GETs are unaffected (no
+  // body), so the site looks fine — but any POST carrying a body then dies in
+  // the route with "TypeError: Response body object should not be disturbed or
+  // locked" at fromNodeNextRequest, before a single line of handler code runs.
+  // That broke every Discord snapshot upload. We modify nothing about the
+  // request (no header rewrite, no cookie rotation), so the bare form is both
+  // correct and sufficient.
+  const res = NextResponse.next();
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const session = await validateSessionToken(token);
   return {
