@@ -19,6 +19,8 @@
  *
  * Optional env overrides:
  *   BACKFILL_INTERVAL=1|5    aggregation to pull → dxLink {=Nm} + intervalMinutes (default 1)
+ *   BACKFILL_RTH_ONLY=0      include overnight/ETH bars (default: RTH only, 09:30-16:00 ET).
+ *                            The live recorder stores ETH, so use 0 to match it.
  *   BACKFILL_FROM=YYYY-MM-DD only write bars on/after this ET date (default: no floor)
  *   BACKFILL_TO=YYYY-MM-DD   only write bars on/before this ET date (default: no ceiling)
  *   BACKFILL_DAYS_BACK=730   how far back to request (dxFeed may cap it; default 730 = ~2yr)
@@ -68,6 +70,12 @@ const INTERVAL         = Number(process.env.BACKFILL_INTERVAL || 1);
 // history that was never broken.
 const FROM_DATE        = (process.env.BACKFILL_FROM || '').trim() || null;
 const TO_DATE          = (process.env.BACKFILL_TO   || '').trim() || null;
+// RTH-only filter. Defaults ON (the script's original behaviour), but the LIVE
+// recorder in proxy-tastytrade.js does NOT filter — it stores overnight bars too.
+// So an RTH-only backfill leaves a history with no ETH sitting next to live data
+// that has it, and the chart shows a gap every night before the deploy.
+// BACKFILL_RTH_ONLY=0 pulls the full 23h Globex session to match the recorder.
+const RTH_ONLY         = process.env.BACKFILL_RTH_ONLY !== '0';
 
 if (INTERVAL !== 1 && INTERVAL !== 5) {
   console.error(`[backfill] BACKFILL_INTERVAL must be 1 or 5 (got ${INTERVAL})`);
@@ -258,7 +266,7 @@ async function main() {
   const candleSymbol = `${ES_CANDLE_SYMBOL || esStreamer}{=${INTERVAL}m}`;
   const fromTime = Date.now() - DAYS_BACK * 86_400_000;
   console.log(`[backfill] ES symbol: ${esStreamer}  candle: ${candleSymbol}`);
-  console.log(`[backfill] interval: ${INTERVAL}m  →  intervalMinutes=${INTERVAL}`);
+  console.log(`[backfill] interval: ${INTERVAL}m  →  intervalMinutes=${INTERVAL}  session=${RTH_ONLY ? 'RTH only' : 'RTH + ETH'}`);
   console.log(`[backfill] fromTime: ${new Date(fromTime).toISOString()}  (${DAYS_BACK} days back)`);
   if (FROM_DATE || TO_DATE) {
     console.log(`[backfill] ET date window: ${FROM_DATE || '-inf'} .. ${TO_DATE || '+inf'} (inclusive)`);
@@ -379,7 +387,7 @@ async function main() {
               const volume  = Number(ev.volume) || 0;
 
               if (!(barTime > 0) || !(open > 0)) continue;
-              if (!isRth(barTime)) continue;
+              if (RTH_ONLY && !isRth(barTime)) continue;
 
               totalReceived++;
               lastEventAt = Date.now();

@@ -127,9 +127,9 @@ export function useEsCandles(
   // fire both setState calls below. A 5-minute bar whose close ticks 40×/sec
   // does not need 40 re-renders: each one re-derives `candles` (two 20-day
   // buildSlotAverages passes) and `sessionCandles` (Map + sort), and on the
-  // ES-candles page that cascades into rows → sessionLevels/profile/tpoProfiles/
-  // vsaMap → full setData → overlay redraw. That fan-out, several times a
-  // second, was the page's lag.
+  // ES-candles page that cascades into rows → sessionLevels/profile/tpoProfiles
+  // → full setData → overlay redraw. That fan-out, several times a second, was
+  // the page's lag.
   //
   // Trailing-edge 250ms = a 4Hz ceiling on renders. The maps are refs and are
   // still written on every frame, so NO data is dropped — only the render is
@@ -138,8 +138,18 @@ export function useEsCandles(
   const tickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Monotonic load token. Guards against a STALE fetch landing after a switch:
+  // loadFromDb is async, so toggling 1m→5m leaves the 1m request in flight, and
+  // its .then() merges into the map the clear-effect just wiped. The two
+  // intervals do NOT collide on slotKey (1m has :31/:32/:33, 5m only :30/:35), so
+  // nothing overwrites — the stale bars INTERLEAVE, producing a series that is
+  // 5m bars with 1m bars wedged between them. It renders happily and is garbage.
+  const loadSeqRef = useRef(0);
+
   // SQLite load (today + history). Reused by mount and manual reload.
   const loadFromDb = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
+    const want = intervalMinutes;
     const [today, hist] = await Promise.all([
       queryEsCandlesToday(intervalMinutes),
       // 1m history is deliberately short: dxFeed only serves ~7 days of it, and
@@ -148,6 +158,10 @@ export function useEsCandles(
       queryEsCandlesHistorical(intervalMinutes === 1 ? 2 : historyDays, intervalMinutes),
     ]);
     if (unmountedRef.current) return;
+    // Superseded by a newer load, or the interval moved under us → drop it.
+    // Checked against the ref (not the closure) so an in-flight load can't
+    // resurrect the aggregation the user just switched away from.
+    if (seq !== loadSeqRef.current || want !== intervalRef.current) return;
     if (hist.length) setHistorical(hist);
     if (today.length) {
       // Merge — never wipe live bars already in the map.
