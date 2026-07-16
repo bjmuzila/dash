@@ -171,9 +171,10 @@ function buildMesh(
     a[z * nx + x] = v == null || !Number.isFinite(v) ? 0 : applyCurve(v, curve) * (v < 0 ? -1 : 1);
   }
 
-  // Separable 1-2-1 smoothing. Two X passes kill the strike-to-strike steps;
-  // Z passes scale with density (1-min data carries minute jitter worth two).
-  const xPasses = 2, zPasses = nz > 150 ? 2 : 1;
+  // Separable 1-2-1 smoothing. ONE X pass only: two merged neighboring strike
+  // walls into a single plateau — adjacent levels must stay readable as
+  // separate ridges. Z passes scale with density (1-min carries minute jitter).
+  const xPasses = 1, zPasses = nz > 150 ? 2 : 1;
   for (let p = 0; p < xPasses; p++) {
     const o = new Float32Array(nz * nx);
     for (let z = 0; z < nz; z++) {
@@ -252,6 +253,18 @@ function buildMesh(
   return { nxM, nzM, xUp, zUp, hs, qR, qG, qB, qMag, qNx, qNy, qNz, hoverH };
 }
 
+/** Bilinear surface height at fractional ORIGINAL-grid coords — line draping. */
+function sampleH(mesh: BuiltMesh, gx: number, gz: number): number {
+  const xm = Math.max(0, Math.min(mesh.nxM - 1.001, gx * mesh.xUp));
+  const zm = Math.max(0, Math.min(mesh.nzM - 1.001, gz * mesh.zUp));
+  const x0 = Math.floor(xm), z0 = Math.floor(zm);
+  const tx = xm - x0, tz = zm - z0;
+  const i = z0 * mesh.nxM + x0;
+  const h00 = mesh.hs[i], h10 = mesh.hs[i + 1];
+  const h01 = mesh.hs[i + mesh.nxM], h11 = mesh.hs[i + mesh.nxM + 1];
+  return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+}
+
 // ── FX records (world-space; projected fresh every animation frame) ─────────
 type ImpactFx = {
   kind: "reject" | "break";
@@ -263,7 +276,12 @@ type ImpactFx = {
   z2: number; gx2: number; // one step later in time — arrow / shard direction
 };
 type BeaconFx = { x: number; y: number; v: number };
-type FxState = { gx: Float32Array; headZ: number; impacts: ImpactFx[]; beacons: BeaconFx[] };
+type FxState = {
+  gx: Float32Array;
+  /** World y of the DRAPED price line per column (surface height + lift). */
+  yPath: Float32Array;
+  headZ: number; impacts: ImpactFx[]; beacons: BeaconFx[];
+};
 
 // Fixed world-space sun (unit vector). Faces are lambert-shaded against it
 // after rotating their normals by yaw, so orbiting 360° reads as walking
@@ -371,6 +389,13 @@ export default function Gex3DPage() {
     for (let z = 0; z < NZ; z++) gx[z] = Math.max(-0.5, Math.min(NX - 0.5, (spotPath[z] - strikes[0]) / (step || 5)));
     const headZ = newestFrontRef.current ? 0 : NZ - 1;
 
+    // The price line LAYS ON the terrain (2D drape, not an extruded rail):
+    // sample the smoothed surface at spot's strike per column, lifted a hair
+    // so it rides the skin instead of z-fighting with it.
+    const mesh = meshRef.current;
+    const yPath = new Float32Array(NZ);
+    for (let z = 0; z < NZ; z++) yPath[z] = (mesh ? sampleH(mesh, gx[z], z) : 0) + 5;
+
     // ── wall impacts: rejection vs break-through ─────────────────────────
     // REJECTION = price closed on a strong strike, touched, turned back the
     // side it came from. BREAK = went straight through. Array order follows
@@ -400,13 +425,12 @@ export default function Gex3DPage() {
 
       const shaped = applyCurve(v, curve) * (v < 0 ? -1 : 1);
       const topWorld = (absMode ? Math.abs(shaped) : shaped) * rel;
-      const contactY = Math.max(0, Math.min(Math.abs(topWorld), 34));
       impacts.push({
         kind: crossed ? "break" : "reject",
         z, x: xi, v, force: Math.min(1, Math.abs(v)),
         seed: ((z * 0.37 + xi * 0.61) % 1),
         gx: gx[z],
-        yHit: v >= 0 || absMode ? contactY : -contactY,
+        yHit: yPath[z], // the draped line's own height — impact sits ON the line
         topWorld,
         away: Math.sign(spotPath[z + back] - k) || 1,
         z2: z + fwd, gx2: gx[z + fwd],
@@ -427,7 +451,7 @@ export default function Gex3DPage() {
     beacons.sort((p, q) => Math.abs(q.v) - Math.abs(p.v));
     beacons.length = Math.min(beacons.length, 8);
 
-    fxRef.current = { gx, headZ, impacts, beacons };
+    fxRef.current = { gx, yPath, headZ, impacts, beacons };
     needsRef.current = true;
   }, []);
 
@@ -489,38 +513,34 @@ export default function Gex3DPage() {
     const mesh = meshRef.current;
     const fx = fxRef.current;
 
-    // ── price ribbon segments (world pieces + depth), sorted far → near ────
-    // Depth-merged with the mesh below: canvas 2D has no depth buffer, so the
-    // merge IS the depth test — a wall nearer the camera than a stretch of
-    // track paints over it and occludes it, like a wall should.
-    const RIBBON_Y = 34, RIBBON_W = 0.34;
-    type P = { x: number; y: number };
-    type Seg = { d: number; a: P; b: P; af: P; bf: P; tL0: P; tR0: P; tL1: P; tR1: P; bR0: P; bR1: P };
+    // ── price line: a flat 2D stroke DRAPED on the terrain ─────────────────
+    // Not an extruded 3D rail — the line follows the surface height at spot's
+    // strike (fx.yPath), so it visibly climbs the walls it's trading against.
+    // Still depth-merged per segment with the mesh: canvas 2D has no depth
+    // buffer, so the merge IS the depth test — a wall nearer the camera than a
+    // stretch of track occludes it, like a wall should.
+    type Seg = { d: number; x0: number; y0: number; x1: number; y1: number };
     const segs: Seg[] = [];
     if (fx) {
       for (let z = 0; z < NZ - 1; z++) {
-        const g0 = fx.gx[z], g1 = fx.gx[z + 1];
+        const a = proj(fx.gx[z], fx.yPath[z], z);
+        const b = proj(fx.gx[z + 1], fx.yPath[z + 1], z + 1);
         segs.push({
-          d: proj((g0 + g1) / 2, RIBBON_Y, z + 0.5).depth,
-          a: proj(g0, RIBBON_Y, z), b: proj(g1, RIBBON_Y, z + 1),
-          af: proj(g0, 0, z), bf: proj(g1, 0, z + 1),
-          tL0: proj(g0 - RIBBON_W, RIBBON_Y + 5, z), tR0: proj(g0 + RIBBON_W, RIBBON_Y + 5, z),
-          tL1: proj(g1 - RIBBON_W, RIBBON_Y + 5, z + 1), tR1: proj(g1 + RIBBON_W, RIBBON_Y + 5, z + 1),
-          bR0: proj(g0 + RIBBON_W, RIBBON_Y - 5, z), bR1: proj(g1 + RIBBON_W, RIBBON_Y - 5, z + 1),
+          d: proj((fx.gx[z] + fx.gx[z + 1]) / 2, (fx.yPath[z] + fx.yPath[z + 1]) / 2, z + 0.5).depth,
+          x0: a.x, y0: a.y, x1: b.x, y1: b.y,
         });
       }
       segs.sort((p, q) => q.d - p.d);
     }
     const drawSeg = (s: Seg) => {
-      ctx.strokeStyle = canvasRgba(HOME_THEME.bg, 0.85);
-      ctx.lineWidth = 4;
-      ctx.beginPath(); ctx.moveTo(s.af.x, s.af.y); ctx.lineTo(s.bf.x, s.bf.y); ctx.stroke();
-      poly([s.a, s.b, s.bf, s.af], canvasRgba(SPOT, 0.12));            // fin to floor
-      poly([s.tR0, s.tR1, s.bR1, s.bR0], shade(SPOT, 0.6));            // dark rail side
-      poly([s.tL0, s.tR0, s.tR1, s.tL1], shade(SPOT, 1.12));           // lit rail top
-      ctx.strokeStyle = canvasRgba(SPOT, 0.9);
-      ctx.lineWidth = 1.3;
-      ctx.beginPath(); ctx.moveTo(s.tL0.x, s.tL0.y); ctx.lineTo(s.tL1.x, s.tL1.y); ctx.stroke();
+      ctx.lineCap = "round";
+      // dark halo first so the line separates from same-hue terrain beneath it
+      ctx.strokeStyle = canvasRgba(HOME_THEME.bg, 0.7);
+      ctx.lineWidth = 4.5;
+      ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1); ctx.stroke();
+      ctx.strokeStyle = canvasRgba(SPOT, 0.95);
+      ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1); ctx.stroke();
     };
 
     // ── terrain mesh, depth-sorted and merged with the ribbon ─────────────
@@ -609,7 +629,7 @@ export default function Gex3DPage() {
       for (const im of fx.impacts) {
         if (im.kind === "reject") {
           const z0 = Math.max(0, im.z - zPad), z1 = Math.min(NZ - 1, im.z + zPad);
-          const yTop = Math.max(Math.abs(im.topWorld), RIBBON_Y + 14);
+          const yTop = Math.max(Math.abs(im.topWorld), 30);
           const sgn = im.v >= 0 || absRef.current ? 1 : -1;
           const col = im.v >= 0 ? ICE_HI : MAGMA_HI;
           poly(
@@ -672,10 +692,9 @@ export default function Gex3DPage() {
     const fx = fxRef.current;
     if (!NX || !NZ || !fx) return;
     const { spotPath } = surfRef.current;
-    const RIBBON_Y = 34;
 
-    // energy flow along the price ribbon — a faint dash stream moving with
-    // time. Low alpha on purpose: it's bloom, and bloom is allowed to leak.
+    // energy flow along the draped price line — a faint dash stream moving
+    // with time. Low alpha on purpose: it's bloom, and bloom is allowed to leak.
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.strokeStyle = canvasRgba(SPOT, 0.2);
@@ -684,7 +703,7 @@ export default function Gex3DPage() {
     ctx.lineDashOffset = -((now * 0.05) % 24);
     ctx.beginPath();
     for (let z = 0; z < NZ; z++) {
-      const p = proj(fx.gx[z], RIBBON_Y + 5, z);
+      const p = proj(fx.gx[z], fx.yPath[z] + 1, z);
       if (z === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
     }
     ctx.stroke();
@@ -757,7 +776,7 @@ export default function Gex3DPage() {
         // flowing dash so the bounce direction is alive. Drawn from the real
         // spot track — it can't claim a bounce that didn't happen.
         if (im.z2 >= 0 && im.z2 < NZ) {
-          const q = proj(im.gx2, RIBBON_Y + 5, im.z2);
+          const q = proj(im.gx2, fx.yPath[im.z2] + 1, im.z2);
           ctx.save();
           ctx.strokeStyle = canvasRgba(SPOT, 0.85);
           ctx.lineWidth = 2;
@@ -788,7 +807,7 @@ export default function Gex3DPage() {
           ctx.stroke();
         }
         if (im.z2 >= 0 && im.z2 < NZ) {
-          const q = proj(im.gx2, RIBBON_Y + 5, im.z2);
+          const q = proj(im.gx2, fx.yPath[im.z2] + 1, im.z2);
           const dx = q.x - hit.x, dy = q.y - hit.y;
           const len = Math.hypot(dx, dy) || 1;
           for (let i = 0; i < 5; i++) {
@@ -806,7 +825,7 @@ export default function Gex3DPage() {
 
     // live spot marker at the head of the track, breathing
     {
-      const p = proj(fx.gx[fx.headZ], RIBBON_Y + 5, fx.headZ);
+      const p = proj(fx.gx[fx.headZ], fx.yPath[fx.headZ] + 1, fx.headZ);
       const pulse = 1 + 0.18 * Math.sin(now / 260);
       ctx.save();
       ctx.shadowColor = canvasRgba(SPOT, 0.9);

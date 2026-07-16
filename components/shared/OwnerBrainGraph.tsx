@@ -26,7 +26,7 @@ type Cluster = { id: string; name: string; color: string; pages: string[] };
 
 // Clustered map of the live app/**/page.tsx tree. Regenerate if routes change.
 export const CBEDGE_CLUSTERS: Cluster[] = [
-  { id: "core", name: "GEX / Options", color: "#00E0C6", pages: ["/gex", "/gex2", "/flow", "/flow-gex-history", "/greeks", "/mult-greek", "/options-chain", "/es-candles", "/footprint", "/confidence-score"] },
+  { id: "core", name: "GEX / Options", color: "#00E0C6", pages: ["/gex", "/gex2", "/flow", "/greeks", "/mult-greek", "/options-chain", "/es-candles", "/footprint", "/confidence-score"] },
   { id: "home", name: "Dashboards", color: "#5AA9FF", pages: ["/home", "/home-fast", "/dashboard", "/overview", "/mobile", "/traders-dashboard", "/premarket"] },
   { id: "signals", name: "Signals / Analysis", color: "#C084FC", pages: ["/ict", "/scanner", "/fails", "/stats", "/top10", "/legging", "/estimated-move", "/em", "/trading"] },
   { id: "data", name: "Data / Calendars", color: "#FB8501", pages: ["/database", "/database/etf", "/economic-calendar", "/expiry-calendar", "/insider", "/quotes", "/analytics", "/logs", "/recipes"] },

@@ -46,8 +46,6 @@ const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsur
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
-const { startRegimeAlertRecorder, getRecentAlerts: getRegimeAlertRows, getLatestFit: getRegimeLatestFit, runOnce: runRegimeAlertsOnce } = require('./regime-alert-recorder');
-const { startRegimeTrainer, getLatestStoredFit: getRegimeStoredFit, forceRetrainAll: forceRegimeRetrain } = require('./regime-trainer');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -1759,92 +1757,6 @@ async function main() {
         return;
       }
 
-      // GET /proxy/regime-alerts?ticker=ESU&limit=50
-      // Trend/Panic regime-flip alerts from regime-alert-recorder.js (newest
-      // first) — start price/confidence, and once closed, the realized reaction
-      // in points (return/max up/max down pts, plus the original % fields,
-      // bars elapsed). Read by the "Alert Log" card on the /test Regime Engine tab.
-      if (pathname === '/proxy/regime-alerts' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const limit = Math.min(200, Math.max(1, Number(u.searchParams.get('limit') || 50)));
-            const ticker = u.searchParams.get('ticker') || '';
-            const rows = await getRegimeAlertRows({ ticker, limit });
-            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // GET /proxy/regime-state?ticker=ESU — the canonical server-side HMM fit
-      // (same object regime-alert-recorder.js uses to log alerts), refit every
-      // 60s independent of any browser tab. The /test Regime Engine tab reads
-      // THIS instead of running fitGaussianHmm client-side, so every open tab
-      // renders the identical decoded path/labels instead of each cold-refitting
-      // on whatever data window happened to be loaded at page-load time.
-      if (pathname === '/proxy/regime-state' && req.method === 'GET') {
-        const u = new URL(req.url, `http://localhost:${PORT}`);
-        const ticker = u.searchParams.get('ticker') || 'ESU';
-        const fit = getRegimeLatestFit(ticker);
-        if (!fit) { sendJson(res, 200, { ok: true, ticker, fittedAt: null, bars: [], hmm: null }); return; }
-        sendJson(res, 200, { ok: true, ticker, fittedAt: fit.fittedAt, bars: fit.bars, hmm: fit.hmm });
-        return;
-      }
-      // POST /proxy/regime-alerts-run — force one detection pass now (manual test).
-      if (pathname === '/proxy/regime-alerts-run' && req.method === 'POST') {
-        runRegimeAlertsOnce(`http://localhost:${PORT}`)
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-      // GET /proxy/regime-fit?ticker=ESU — the PERSISTENT-LEARNING fit
-      // (server-v2/regime-trainer.js): daily 05:00 ET 30D refit + validation
-      // log, stored in Postgres. Distinct from /proxy/regime-state above
-      // (that one is the continuous 60s live fit used for the Alert Log).
-      // The Regime Engine tab's "Persistent Learning" card reads THIS one.
-      if (pathname === '/proxy/regime-fit' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const ticker = u.searchParams.get('ticker') || 'ESU';
-            const data = await getRegimeStoredFit(ticker);
-            sendJson(res, 200, { ok: true, ticker, ...(data || { fit: null, validation: [] }) });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // POST /proxy/regime-retrain — admin manual trigger: force the daily
-      // 30D trainer to run now for both tickers, ignoring the 05:00 ET window
-      // and the once-per-day guard.
-      if (pathname === '/proxy/regime-retrain' && req.method === 'POST') {
-        forceRegimeRetrain(`http://localhost:${PORT}`)
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-      // GET /proxy/pairs-regime-fit?pair=ESU-NQU — latest stored PAIRS regime fit
-      // (server-v2/pairs-regime-trainer.js): daily 04:30 ET spread-HMM refit
-      // (MeanRevert/Drift/Stuck) + validation log. Phase 1 of the pairs engine.
-      if (pathname === '/proxy/pairs-regime-fit' && req.method === 'GET') {
-        (async () => {
-          try {
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const pair = u.searchParams.get('pair') || 'ESU-NQU';
-            const data = await require('./pairs-regime-trainer').getLatestStoredFit(pair);
-            sendJson(res, 200, { ok: true, pair, ...(data || { fit: null, validation: [] }) });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // POST /proxy/pairs-regime-retrain — admin manual trigger, ignores the
-      // 04:30 ET window and the once-per-day guard.
-      if (pathname === '/proxy/pairs-regime-retrain' && req.method === 'POST') {
-        require('./pairs-regime-trainer').forceRetrainAll(`http://localhost:${PORT}`)
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-
       // Fire a single MVC snapshot now (ignores the auto on/off switch, still
       // requires RTH + a live chain). POST /proxy/mvc-snapshot
       if (pathname === '/proxy/mvc-snapshot' && req.method === 'POST') {
@@ -2376,13 +2288,6 @@ async function main() {
     // ES signals → trade_signals table (+ optional Discord). Alerts only, no
     // orders. Read via /proxy/signals; force a pass via POST /proxy/signals-run.
     startSignalsEngine(PORT);
-    // Regime Engine alert recorder: every 60s refits the same Trend/Chop/Panic
-    // HMM as the /test Regime Engine tab (ESU + NQU, server-side, no browser tab
-    // needed), logs an alert whenever the decoded state flips into Trend or
-    // Panic, and closes it out with the realized price reaction once the regime
-    // flips away. Read via /proxy/regime-alerts; force a pass via POST
-    // /proxy/regime-alerts-run.
-    startRegimeAlertRecorder(PORT);
     // Econ-calendar countdown alerts: polls /api/calendar every 20s and appends
     // "5 minutes to <event>" / "1 minute to <event>" lines to public/signals.txt
     // for High/Medium impact events, read by the home SignalsFeed as [Econ] chips.
@@ -2392,29 +2297,6 @@ async function main() {
     // same channel via signals-engine.js's own SIGNALS_DISCORD_WEBHOOK — point
     // both env vars at the same webhook and Discord matches the home feed.
     require('./discord-relay').startDiscordRelay();
-    // Regime Engine persistent-learning trainer: daily 05:00-05:10 ET, refits
-    // the same HMM on a 30D window, decodes+validates each day's regime call
-    // against the actual next-day return, and stores fit + accuracy metrics
-    // in Postgres (regime_fits / regime_validation_log). Additive to the
-    // recorder above — read via /proxy/regime-fit; force via POST /proxy/regime-retrain.
-    // On every successful refit (daily OR forced): (a) push a tiny
-    // "regime-fit-updated" frame over /ws/gex so open tabs refetch the stored
-    // fit immediately, and (b) invalidate the alert recorder's stored-fit
-    // cache so its next 60s cycle decodes against the NEW params right away.
-    require('./regime-trainer').setOnRefit((tickerKey, summary) => {
-      try { broadcastEvent('regime-fit-updated', { ticker: tickerKey, ...summary }); } catch {}
-      try { require('./regime-alert-recorder').markStoredFitStale(tickerKey); } catch {}
-    });
-    startRegimeTrainer(PORT);
-    // Pairs Regime Engine trainer (co-equal HMM, REGIME_LEARNING_DESIGN.md
-    // Phase 1): daily 04:30-04:40 ET, fits a 3-state MeanRevert/Drift/Stuck
-    // HMM on the ESU-NQU spread zscore, validates reversion/drift calls 5 bars
-    // forward, stores in pairs_regime_fits / pairs_validation_log. Read via
-    // /proxy/pairs-regime-fit; force via POST /proxy/pairs-regime-retrain.
-    require('./pairs-regime-trainer').setOnRefit((pairId, summary) => {
-      try { broadcastEvent('pairs-regime-updated', { pair: pairId, ...summary }); } catch {}
-    });
-    require('./pairs-regime-trainer').startPairsRegimeTrainer(PORT);
     // Reference-levels cache: writes PDH/PDL after RTH close (16:05 ET) and
     // PWH/PWL on Sunday into ref_levels, so the Analytics Levels card reads them
     // via /api/ref-levels instead of recomputing from 20 days of ES candles.
