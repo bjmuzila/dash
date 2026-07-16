@@ -1023,7 +1023,7 @@ async function main() {
             const limit = Math.min(10000, Number(u.searchParams.get('limit') || 3650));
             const { rows } = await p.query(
               `SELECT to_char(date, 'YYYY-MM-DD') AS date, symbol, spot, resistance, support,
-                      neutral, dollar_gamma, cpg_ratio, r2, s2, open_int,
+                      neutral, dollar_gamma, cpg_ratio, r2, s2, open_int, curve,
                       EXTRACT(EPOCH FROM updated_at) * 1000 AS t
                FROM gex_levels_history
                WHERE symbol = $1 ORDER BY date DESC LIMIT $2`,

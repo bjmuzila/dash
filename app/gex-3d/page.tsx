@@ -1,25 +1,31 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /gex-3d — GEX heatmap rendered as a 3D perspective terrain of towers.
-// Positive (call-wall) GEX extrudes UP as blue "ice walls"; negative (put) GEX
-// extrudes DOWN as red "magma cliffs" — or up too, via "Flip −GEX up", which
-// raises both signs from a common baseline and lets color carry the sign.
-// Strikes on X, session time on Z. Strength reads as BOTH height and luminance
-// (two-stop color ramps), so a dominant wall is obvious even end-on or flat.
+// /gex-3d — today's SPX GEX as a smooth-shaded 3D terrain (not box towers).
 //
-// DATA: useGexSurface → /proxy/gex-history?mode=series, out of
-// option_strike_gex_history. The session ROLLS AT 08:00 ET, not midnight: the
-// finished session's terrain stays up all night and hands over to the new
-// contract in the morning, rather than blanking at midnight. Polls every 30
-// MINUTES on purpose — this is a session-shape view, not a live tape — with a
-// manual Refresh for when you want it now.
-// Basis follows the dashboard convention: OI+Vol default + a Vol-only toggle.
-// The grid is normalized by the DAY's peak |GEX| in the hook, so terrain height
-// is comparable across the session but NOT across days.
+// The recorded per-minute grid (strikes × session minutes) is smoothed with a
+// separable 1-2-1 kernel and upsampled with Catmull-Rom splines into a
+// continuous mesh, lit by a fixed world-space sun (lambert + specular) with
+// depth fog. Smoothing shapes the TERRAIN ONLY — every column is still one
+// minute's real snapshot, and hover reads the exact raw value from the
+// unsmoothed grid. +GEX rises as ice, −GEX drops as magma (or rises too via
+// "Flip −GEX up"); strength reads as height AND luminance.
 //
-// Canvas colors are derived from HOME_THEME tokens via canvasRgba() — no raw
-// literals. 2D canvas can't consume CSS vars, so tokens are read into locals.
+// RENDER ARCHITECTURE: the scene (mesh + ribbon + axes) is drawn once per
+// camera/data change into an OFFSCREEN layer; a persistent rAF loop composites
+// it and animates the FX on top every frame — pulsing wall beacons, flowing
+// energy along the price ribbon, and the wall-impact effects (shockwave rings,
+// sparks, deflection arrows, break shards). Effects animate at 60fps without
+// re-painting ~20k mesh quads.
+//
+// DATA: useGexSurface → /proxy/gex-history?mode=series (session rolls 08:00 ET,
+// 30-min poll + manual refresh). Defaults to 1-MIN columns. The time axis is a
+// FIXED world depth (Z_EXTENT) regardless of column count, so a 390-column
+// 1-min session is exactly as deep as a 30-column one — dense data makes the
+// surface finer, not longer.
+//
+// Canvas colors are derived from HOME_THEME tokens via canvasRgba()/shade() —
+// no raw literals. 2D canvas can't consume CSS vars, so tokens become locals.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -49,26 +55,29 @@ function mixRgb(a: string, b: string, t: number): [number, number, number] {
   const k = Math.max(0, Math.min(1, t));
   return [r1 + (r2 - r1) * k, g1 + (g2 - g1) * k, b1 + (b2 - b1) * k];
 }
-/** Apply a light factor to an [r,g,b] and return a css rgb string. */
-function litRgb([r, g, b]: [number, number, number], f: number, a = 1): string {
-  const c = (v: number) => Math.round(Math.max(0, Math.min(255, v * f)));
-  return `rgba(${c(r)},${c(g)},${c(b)},${a})`;
-}
 
 // Two-stop ramps: weak strikes sit at the DEEP end, dominant walls climb to the
-// BRIGHT end. Strength therefore reads as luminance, not just height — which is
-// what makes the big walls pop when the map is tilted flat or viewed end-on.
+// BRIGHT end. Strength therefore reads as luminance, not just height.
 const ICE_DEEP = HOME_THEME.purple;   // weak +GEX
 const ICE = HOME_THEME.cyan;          // mid +GEX
 const ICE_HI = LIGHT_BLUE;            // dominant call wall
 const MAGMA_DEEP = "#7f1d1d";         // weak −GEX (deep ember; no theme token this dark)
 const MAGMA = HOME_THEME.red;         // mid −GEX
-const MAGMA_HI = HOME_THEME.orange;   // dominant put wall (white-hot magma)
+const MAGMA_HI = HOME_THEME.orange;   // dominant put wall
 const SPOT = HOME_THEME.orange;
 const AXIS = HOME_THEME.text;
 
 /** |normalized GEX| at/above which a strike counts as a "strong" wall. */
 const CROSS_THRESHOLD = 0.45;
+/** |normalized GEX| at/above which the newest column gets a pulsing beacon. */
+const BEACON_THRESHOLD = 0.55;
+
+// The time axis occupies a FIXED world depth no matter how many columns exist —
+// this is what keeps the 1-min surface from stretching into a runway. Per-cell
+// spacing still caps at 17 so a sparse 10-column morning doesn't over-stretch.
+const Z_EXTENT = 520;
+function xCell(nx: number) { return Math.max(10, Math.min(26, 700 / Math.max(1, nx))); }
+function zCell(nz: number) { return Math.min(17, Z_EXTENT / Math.max(1, nz)); }
 
 /** Signed GEX → ramp color at that magnitude. mag is 0…1. */
 function rampFor(v: number, mag: number): [number, number, number] {
@@ -79,7 +88,7 @@ function rampFor(v: number, mag: number): [number, number, number] {
 }
 
 // ── data ────────────────────────────────────────────────────────────────────
-/** Renderer-local shape: the live surface flattened to what draw() needs. */
+/** Renderer-local shape: the live surface flattened to what the mesh needs. */
 type Surface = {
   strikes: number[];
   /** Normalized (~±1) grid: rows[t][s]. null = no row recorded (≠ zero GEX). */
@@ -109,16 +118,15 @@ function fmtGex(v: number): string {
   return `${s}${a.toFixed(0)}`;
 }
 
-type Cell = { x: number; z: number; v: number; h: number; depth: number; missing: boolean };
+/** Hover target at ORIGINAL grid resolution (mesh vertices are too dense). */
+type Cell = { x: number; z: number; v: number; h: number; missing: boolean };
 
 /**
  * Contrast curve applied to the normalized magnitude before it becomes height
- * and color. Everything is scaled by the DAY'S PEAK |GEX|, and the peak is
- * usually a single huge ATM wall — so under "linear" a strike 10 away holding a
- * perfectly real 4% of that peak renders as 4% of the height: visually nothing.
- * That's what reads as "data missing farther from the strike". √ and log lift
- * the small end so the far ladder is legible; they change the SHAPE of the
- * height mapping, not the data.
+ * and color. Everything is scaled by the DAY'S PEAK |GEX| (usually one huge ATM
+ * wall), so under "linear" a real 4%-of-peak strike renders as 4% height —
+ * visually nothing. √ and log lift the small end so the far ladder is legible;
+ * they change the SHAPE of the height mapping, not the data.
  */
 type Curve = "linear" | "sqrt" | "log";
 function applyCurve(mag: number, curve: Curve): number {
@@ -128,18 +136,159 @@ function applyCurve(mag: number, curve: Curve): number {
   return m;
 }
 
+// ── mesh ────────────────────────────────────────────────────────────────────
+function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t3);
+}
+
+type BuiltMesh = {
+  nxM: number; nzM: number; xUp: number; zUp: number;
+  /** World height per mesh vertex (curve + absMode + relief applied). */
+  hs: Float32Array;
+  /** Per-quad base color (pre-lighting) + |v| + face normal. */
+  qR: Float32Array; qG: Float32Array; qB: Float32Array; qMag: Float32Array;
+  qNx: Float32Array; qNy: Float32Array; qNz: Float32Array;
+  /** Smoothed world height sampled back at ORIGINAL grid verts — hover/FX. */
+  hoverH: Float32Array;
+};
+
+/**
+ * Grid → smooth mesh. Steps: curve-shape the signed values, blur (1-2-1,
+ * separable), Catmull-Rom upsample. Upsample factors adapt to density so the
+ * quad budget stays ~10–21k: a 1-min session is already dense in Z and only
+ * needs X refinement; a 30-column view needs both.
+ */
+function buildMesh(
+  norm: (number | null)[][], nx: number, nz: number,
+  curve: Curve, absMode: boolean, relief: number,
+): BuiltMesh | null {
+  if (nx < 2 || nz < 2) return null;
+
+  let a = new Float32Array(nz * nx);
+  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
+    const v = norm[z]?.[x];
+    a[z * nx + x] = v == null || !Number.isFinite(v) ? 0 : applyCurve(v, curve) * (v < 0 ? -1 : 1);
+  }
+
+  // Separable 1-2-1 smoothing. Two X passes kill the strike-to-strike steps;
+  // Z passes scale with density (1-min data carries minute jitter worth two).
+  const xPasses = 2, zPasses = nz > 150 ? 2 : 1;
+  for (let p = 0; p < xPasses; p++) {
+    const o = new Float32Array(nz * nx);
+    for (let z = 0; z < nz; z++) {
+      const r = z * nx;
+      for (let x = 0; x < nx; x++) {
+        o[r + x] = 0.25 * a[r + Math.max(0, x - 1)] + 0.5 * a[r + x] + 0.25 * a[r + Math.min(nx - 1, x + 1)];
+      }
+    }
+    a = o;
+  }
+  for (let p = 0; p < zPasses; p++) {
+    const o = new Float32Array(nz * nx);
+    for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
+      o[z * nx + x] =
+        0.25 * a[Math.max(0, z - 1) * nx + x] + 0.5 * a[z * nx + x] + 0.25 * a[Math.min(nz - 1, z + 1) * nx + x];
+    }
+    a = o;
+  }
+
+  const xUp = nz > 200 ? 2 : 3;
+  const zUp = nz <= 40 ? 4 : nz <= 100 ? 2 : 1;
+  const nxM = (nx - 1) * xUp + 1;
+  const nzM = (nz - 1) * zUp + 1;
+
+  // Catmull-Rom along strikes…
+  const up = new Float32Array(nz * nxM);
+  for (let z = 0; z < nz; z++) {
+    const r = z * nx, ro = z * nxM;
+    for (let xm = 0; xm < nxM; xm++) {
+      const xf = xm / xUp;
+      const i = Math.min(nx - 2, Math.floor(xf));
+      const t = xf - i;
+      up[ro + xm] = t === 0
+        ? a[r + i]
+        : catmull(a[r + Math.max(0, i - 1)], a[r + i], a[r + i + 1], a[r + Math.min(nx - 1, i + 2)], t);
+    }
+  }
+  // …then along time (skipped when the data is already minute-dense).
+  let S = up;
+  if (zUp > 1) {
+    S = new Float32Array(nzM * nxM);
+    for (let xm = 0; xm < nxM; xm++) for (let zm = 0; zm < nzM; zm++) {
+      const zf = zm / zUp;
+      const i = Math.min(nz - 2, Math.floor(zf));
+      const t = zf - i;
+      S[zm * nxM + xm] = t === 0
+        ? up[i * nxM + xm]
+        : catmull(up[Math.max(0, i - 1) * nxM + xm], up[i * nxM + xm], up[(i + 1) * nxM + xm], up[Math.min(nz - 1, i + 2) * nxM + xm], t);
+    }
+  }
+
+  const hs = new Float32Array(nzM * nxM);
+  for (let i = 0; i < S.length; i++) hs[i] = (absMode ? Math.abs(S[i]) : S[i]) * relief;
+
+  const hoverH = new Float32Array(nz * nx);
+  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) hoverH[z * nx + x] = hs[z * zUp * nxM + x * xUp];
+
+  const nQ = (nxM - 1) * (nzM - 1);
+  const qR = new Float32Array(nQ), qG = new Float32Array(nQ), qB = new Float32Array(nQ);
+  const qMag = new Float32Array(nQ);
+  const qNx = new Float32Array(nQ), qNy = new Float32Array(nQ), qNz = new Float32Array(nQ);
+  const SXm = xCell(nx) / xUp, SZm = zCell(nz) / zUp;
+  let qi = 0;
+  for (let zm = 0; zm < nzM - 1; zm++) for (let xm = 0; xm < nxM - 1; xm++, qi++) {
+    const ia = zm * nxM + xm, ib = ia + 1, id = ia + nxM, ic = id + 1;
+    const v = (S[ia] + S[ib] + S[ic] + S[id]) / 4;
+    const mag = Math.min(1, Math.abs(v));
+    const [r, g, b] = rampFor(v, mag);
+    qR[qi] = r; qG[qi] = g; qB[qi] = b; qMag[qi] = mag;
+    // Face normal from height slopes in WORLD units → real lambert shading.
+    const dhdx = ((hs[ib] - hs[ia]) + (hs[ic] - hs[id])) / 2 / SXm;
+    const dhdz = ((hs[id] - hs[ia]) + (hs[ic] - hs[ib])) / 2 / SZm;
+    const inv = 1 / Math.hypot(dhdx, 1, dhdz);
+    qNx[qi] = -dhdx * inv; qNy[qi] = inv; qNz[qi] = -dhdz * inv;
+  }
+  return { nxM, nzM, xUp, zUp, hs, qR, qG, qB, qMag, qNx, qNy, qNz, hoverH };
+}
+
+// ── FX records (world-space; projected fresh every animation frame) ─────────
+type ImpactFx = {
+  kind: "reject" | "break";
+  z: number; x: number; v: number; force: number; seed: number;
+  gx: number;       // spot grid-x at the touch column
+  yHit: number;     // world y of the contact point
+  topWorld: number; // signed wall top (world units) — barrier pane height
+  away: number;     // side price came from (sign)
+  z2: number; gx2: number; // one step later in time — arrow / shard direction
+};
+type BeaconFx = { x: number; y: number; v: number };
+type FxState = { gx: Float32Array; headZ: number; impacts: ImpactFx[]; beacons: BeaconFx[] };
+
+// Fixed world-space sun (unit vector). Faces are lambert-shaded against it
+// after rotating their normals by yaw, so orbiting 360° reads as walking
+// around solid geometry, not paint that follows the camera.
+const SUN_LEN = Math.hypot(-0.45, 0.62, -0.64);
+const SUNX = -0.45 / SUN_LEN, SUNY = 0.62 / SUN_LEN, SUNZ = -0.64 / SUN_LEN;
+
 export default function Gex3DPage() {
   const [basis, setBasis] = useState<"net" | "vol">("net");
-  // Column resolution. 30 = every ~13th minute (fast, readable); 400 = every
-  // recorded minute (~390 towers × 27 strikes — heavier, but nothing dropped).
-  const [buckets, setBuckets] = useState(30);
+  // Column resolution. DEFAULT IS 1-MIN (400): the smooth mesh keeps ~390
+  // columns readable, and the fixed Z_EXTENT keeps them from stretching the map.
+  const [buckets, setBuckets] = useState(400);
   const live = useGexSurface(basis, buckets);
 
   const cvRef = useRef<HTMLCanvasElement | null>(null);
+  const sceneRef = useRef<HTMLCanvasElement | null>(null); // offscreen scene layer
   const tipRef = useRef<HTMLDivElement | null>(null);
   const surfRef = useRef<Surface>(EMPTY_SURFACE);
   const dimsRef = useRef({ nx: 0, nz: 0 });
+  const meshRef = useRef<BuiltMesh | null>(null);
+  const fxRef = useRef<FxState | null>(null);
   const cellsRef = useRef<Cell[]>([]);
+  const needsRef = useRef(true); // scene layer dirty flag
+  const dprRef = useRef(1);
+  const bufRef = useRef<{ px: Float32Array; py: Float32Array; pd: Float32Array; depths: Float32Array; order: Int32Array } | null>(null);
   const camRef = useRef({ yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1, panX: 0, panY: 0 });
   /** mode "orbit" = left-drag; "pan" = right/middle-drag or shift+left-drag. */
   const dragRef = useRef<
@@ -147,17 +296,14 @@ export default function Gex3DPage() {
   >(null);
   const sizeRef = useRef({ w: 0, h: 0 });
 
-  const [relief, setRelief] = useState(110);
+  const [relief, setRelief] = useState(120);
   const [tilt, setTilt] = useState(34);
   const [heading, setHeading] = useState(-36); // degrees, wrapped to [-180, 180]
   const [absMode, setAbsMode] = useState(false);
-  // Default √: with linear scaling everything but the ATM wall is a smear on the
-  // floor, which reads as missing data. See applyCurve.
+  // Default √: with linear scaling everything but the ATM wall is a smear on
+  // the floor, which reads as missing data. See applyCurve.
   const [curve, setCurve] = useState<Curve>("sqrt");
-  // Newest column at the NEAR edge of the Z axis. End-of-day carries the day's
-  // biggest walls, and with time running away from the camera those walls sat at
-  // the back, facing away — the tall stuff hid behind the morning's terrain and
-  // you read it side-on. Defaults ON: the freshest surface faces you.
+  // Newest column at the NEAR edge of the Z axis: the freshest walls face you.
   const [newestFront, setNewestFront] = useState(true);
   const [spin, setSpin] = useState(false);
 
@@ -174,13 +320,14 @@ export default function Gex3DPage() {
 
   const flipIdx = useRef<number | null>(null);
 
+  const invalidate = useCallback(() => { needsRef.current = true; }, []);
+
   const proj = useCallback((gx: number, gy: number, gz: number) => {
     const { yaw, pitch, zoom, panX, panY } = camRef.current;
     const { w: W, h: H } = sizeRef.current;
     const { nx, nz } = dimsRef.current;
-    // Grid spacing shrinks as the ladder widens so a 40-strike day still fits.
-    const SXc = Math.max(10, Math.min(26, 700 / Math.max(1, nx)));
-    const SZc = Math.max(8, Math.min(17, 520 / Math.max(1, nz)));
+    const SXc = xCell(nx);
+    const SZc = zCell(nz); // fixed total depth — see Z_EXTENT
     const x = (gx - (nx - 1) / 2) * SXc;
     const z = (gz - (nz - 1) / 2) * SZc;
     const cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -196,27 +343,134 @@ export default function Gex3DPage() {
     return { x: W / 2 + panX + rx * s, y: H / 2 + 40 + panY - ry * s, s, depth: rz2 };
   }, []);
 
-  const draw = useCallback(() => {
-    const cv = cvRef.current;
-    const ctx = cv?.getContext("2d");
-    if (!cv || !ctx) return;
-    const { w: W, h: H } = sizeRef.current;
-    const { strikes, rows, spotPath, times } = surfRef.current;
+  // ── rebuild: data/settings → mesh + hover cells + FX records ──────────────
+  // Camera-independent, so it runs on data or control changes only — never
+  // per frame. Everything here is what the render + FX layers consume.
+  const rebuild = useCallback(() => {
+    const { rows, spotPath, strikes } = surfRef.current;
     const { nx: NX, nz: NZ } = dimsRef.current;
-    const rel = reliefRef.current;
+    const curve = curveRef.current, absMode = absRef.current, rel = reliefRef.current;
+    if (!NX || !NZ) { meshRef.current = null; fxRef.current = null; cellsRef.current = []; needsRef.current = true; return; }
 
-    ctx.fillStyle = HOME_THEME.bg;
+    meshRef.current = buildMesh(rows, NX, NZ, curve, absMode, rel);
+
+    // hover cells at original resolution, heights from the SMOOTHED surface so
+    // the tooltip anchors to what's actually on screen.
+    const hoverH = meshRef.current?.hoverH;
+    const cells: Cell[] = [];
+    for (let z = 0; z < NZ; z++) for (let x = 0; x < NX; x++) {
+      const v = rows[z]?.[x];
+      const missing = v == null || !Number.isFinite(v);
+      cells.push({ x, z, v: missing ? 0 : (v as number), h: hoverH ? hoverH[z * NX + x] : 0, missing });
+    }
+    cellsRef.current = cells;
+
+    // spot → fractional grid index per column (step read from the ladder).
+    const step = strikes.length > 1 ? strikes[1] - strikes[0] : 5;
+    const gx = new Float32Array(NZ);
+    for (let z = 0; z < NZ; z++) gx[z] = Math.max(-0.5, Math.min(NX - 0.5, (spotPath[z] - strikes[0]) / (step || 5)));
+    const headZ = newestFrontRef.current ? 0 : NZ - 1;
+
+    // ── wall impacts: rejection vs break-through ─────────────────────────
+    // REJECTION = price closed on a strong strike, touched, turned back the
+    // side it came from. BREAK = went straight through. Array order follows
+    // the Z axis, which reverses with `newestFront` — so "one step earlier in
+    // time" is z+1 when reversed; reading z-1 blindly would run the physics
+    // backwards and swap rejections for breaks.
+    const impacts: ImpactFx[] = [];
+    const stepPts = Math.abs(step) || 5;
+    const back = newestFrontRef.current ? 1 : -1;
+    const fwd = -back;
+    for (let z = 1; z < NZ - 1; z++) {
+      const xi = Math.round(gx[z]);
+      if (xi < 0 || xi >= NX) continue;
+      const v = rows[z]?.[xi] ?? 0;
+      if (Math.abs(v) < CROSS_THRESHOLD) continue; // only STRONG walls
+
+      const k = strikes[xi];
+      const d0 = spotPath[z + back] - k;
+      const d1 = spotPath[z] - k;
+      const d2 = spotPath[z + fwd] - k;
+      if (Math.abs(d1) > stepPts) continue;            // never actually reached it
+      if (!(Math.abs(d1) < Math.abs(d0))) continue;    // wasn't approaching
+
+      const crossed = Math.sign(d0) !== 0 && Math.sign(d2) !== 0 && Math.sign(d0) !== Math.sign(d2);
+      const turned = Math.abs(d2) > Math.abs(d1);
+      if (!crossed && !turned) continue;
+
+      const shaped = applyCurve(v, curve) * (v < 0 ? -1 : 1);
+      const topWorld = (absMode ? Math.abs(shaped) : shaped) * rel;
+      const contactY = Math.max(0, Math.min(Math.abs(topWorld), 34));
+      impacts.push({
+        kind: crossed ? "break" : "reject",
+        z, x: xi, v, force: Math.min(1, Math.abs(v)),
+        seed: ((z * 0.37 + xi * 0.61) % 1),
+        gx: gx[z],
+        yHit: v >= 0 || absMode ? contactY : -contactY,
+        topWorld,
+        away: Math.sign(spotPath[z + back] - k) || 1,
+        z2: z + fwd, gx2: gx[z + fwd],
+      });
+    }
+    // strongest first; cap so a churny day doesn't become a fireworks show.
+    impacts.sort((p, q) => q.force - p.force);
+    impacts.length = Math.min(impacts.length, 14);
+
+    // ── beacons: the newest column's dominant walls get a pulsing marker ──
+    const beacons: BeaconFx[] = [];
+    for (let x = 0; x < NX; x++) {
+      const v = rows[headZ]?.[x];
+      if (v == null || Math.abs(v) < BEACON_THRESHOLD) continue;
+      const shaped = applyCurve(v, curve) * (v < 0 ? -1 : 1);
+      beacons.push({ x, y: (absMode ? Math.abs(shaped) : shaped) * rel, v });
+    }
+    beacons.sort((p, q) => Math.abs(q.v) - Math.abs(p.v));
+    beacons.length = Math.min(beacons.length, 8);
+
+    fxRef.current = { gx, headZ, impacts, beacons };
+    needsRef.current = true;
+  }, []);
+
+  // ── scene render: mesh + ribbon + panes + axes → offscreen layer ──────────
+  const renderScene = useCallback(() => {
+    const scene = sceneRef.current;
+    const ctx = scene?.getContext("2d");
+    if (!scene || !ctx) return;
+    const { w: W, h: H } = sizeRef.current;
+    const dpr = dprRef.current;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // deep-space background: subtle vertical falloff instead of a flat fill.
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0, shade(HOME_THEME.bg, 1.4));
+    bgGrad.addColorStop(0.55, HOME_THEME.bg);
+    bgGrad.addColorStop(1, shade(HOME_THEME.bg, 0.7));
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
-    if (!NX || !NZ) return; // nothing recorded yet today — overlay handles the message
 
-    // floor grid
-    ctx.strokeStyle = canvasRgba(ICE, 0.12);
+    const { strikes, times } = surfRef.current;
+    const { nx: NX, nz: NZ } = dimsRef.current;
+    if (!NX || !NZ) return; // overlay handles the empty message
+
+    const poly = (pts: { x: number; y: number }[], fill: string, stroke?: string) => {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 0.5; ctx.stroke(); }
+    };
+
+    // floor grid — strides scale with density so 1-min doesn't paint 390 lines.
+    ctx.strokeStyle = canvasRgba(ICE, 0.1);
     ctx.lineWidth = 1;
     for (let x = 0; x < NX; x += 2) {
       const a = proj(x, 0, 0), b = proj(x, 0, NZ - 1);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
-    for (let z = 0; z < NZ; z += 3) {
+    const zStride = Math.max(1, Math.round(NZ / 24));
+    for (let z = 0; z < NZ; z += zStride) {
       const a = proj(0, 0, z), b = proj(NX - 1, 0, z);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
@@ -232,380 +486,168 @@ export default function Gex3DPage() {
       ctx.restore();
     }
 
-    // build + depth-sort columns
-    // "abs" mode raises BOTH signs above the floor at their magnitude — put
-    // walls stop hanging below the plane where they're hard to compare against
-    // call walls. Sign still drives color, so nothing is lost; it's the same
-    // data, just measured from a common baseline.
-    const absMode = absRef.current;
-    const curve = curveRef.current;
-    const cells: Cell[] = [];
-    for (let z = 0; z < NZ; z++)
-      for (let x = 0; x < NX; x++) {
-        const raw = rows[z]?.[x];
-        const missing = raw == null || !Number.isFinite(raw);
-        const v = missing ? 0 : (raw as number);
-        // Height uses the CURVED magnitude but keeps the original sign.
-        const shaped = applyCurve(v, curve) * (v < 0 ? -1 : 1);
-        cells.push({
-          x, z, v,
-          h: (absMode ? Math.abs(shaped) : shaped) * rel,
-          depth: proj(x, 0, z).depth,
-          missing,
+    const mesh = meshRef.current;
+    const fx = fxRef.current;
+
+    // ── price ribbon segments (world pieces + depth), sorted far → near ────
+    // Depth-merged with the mesh below: canvas 2D has no depth buffer, so the
+    // merge IS the depth test — a wall nearer the camera than a stretch of
+    // track paints over it and occludes it, like a wall should.
+    const RIBBON_Y = 34, RIBBON_W = 0.34;
+    type P = { x: number; y: number };
+    type Seg = { d: number; a: P; b: P; af: P; bf: P; tL0: P; tR0: P; tL1: P; tR1: P; bR0: P; bR1: P };
+    const segs: Seg[] = [];
+    if (fx) {
+      for (let z = 0; z < NZ - 1; z++) {
+        const g0 = fx.gx[z], g1 = fx.gx[z + 1];
+        segs.push({
+          d: proj((g0 + g1) / 2, RIBBON_Y, z + 0.5).depth,
+          a: proj(g0, RIBBON_Y, z), b: proj(g1, RIBBON_Y, z + 1),
+          af: proj(g0, 0, z), bf: proj(g1, 0, z + 1),
+          tL0: proj(g0 - RIBBON_W, RIBBON_Y + 5, z), tR0: proj(g0 + RIBBON_W, RIBBON_Y + 5, z),
+          tL1: proj(g1 - RIBBON_W, RIBBON_Y + 5, z + 1), tR1: proj(g1 + RIBBON_W, RIBBON_Y + 5, z + 1),
+          bR0: proj(g0 + RIBBON_W, RIBBON_Y - 5, z), bR1: proj(g1 + RIBBON_W, RIBBON_Y - 5, z + 1),
         });
       }
-    cells.sort((a, b) => b.depth - a.depth);
-    cellsRef.current = cells;
-
-    const poly = (pts: { x: number; y: number }[], fill: string, stroke?: string) => {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.closePath();
-      ctx.fillStyle = fill;
-      ctx.fill();
-      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 0.5; ctx.stroke(); }
+      segs.sort((p, q) => q.d - p.d);
+    }
+    const drawSeg = (s: Seg) => {
+      ctx.strokeStyle = canvasRgba(HOME_THEME.bg, 0.85);
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(s.af.x, s.af.y); ctx.lineTo(s.bf.x, s.bf.y); ctx.stroke();
+      poly([s.a, s.b, s.bf, s.af], canvasRgba(SPOT, 0.12));            // fin to floor
+      poly([s.tR0, s.tR1, s.bR1, s.bR0], shade(SPOT, 0.6));            // dark rail side
+      poly([s.tL0, s.tR0, s.tR1, s.tL1], shade(SPOT, 1.12));           // lit rail top
+      ctx.strokeStyle = canvasRgba(SPOT, 0.9);
+      ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.moveTo(s.tL0.x, s.tL0.y); ctx.lineTo(s.tL1.x, s.tL1.y); ctx.stroke();
     };
 
-    // Fixed WORLD-SPACE sun. Faces used to carry constant shade factors keyed on
-    // face index, which meant the light rode along with the camera — orbit past
-    // 90° and the lit face was still the one facing you, so the terrain looked
-    // painted-on instead of solid. Now each side's normal is rotated by yaw and
-    // lambert-shaded against a sun that stays put, so going 360° reads as
-    // walking around real geometry.
-    const { yaw } = camRef.current;
-    const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
-    const SUN = { x: -0.55, z: -0.83 }; // horizontal sun direction, unit-ish
-    const lambert = (nx: number, nz: number) => {
-      const wx = nx * cyaw - nz * syaw;   // rotate the face normal into world space
-      const wz = nx * syaw + nz * cyaw;
-      const d = wx * SUN.x + wz * SUN.z;  // −1 (facing away) … 1 (facing the sun)
-      return 0.42 + 0.46 * Math.max(0, d);
-    };
-
-    // ── one depth-sorted scene ─────────────────────────────────────────────
-    // Towers and the price ribbon are drawn from a SINGLE list sorted back to
-    // front. Previously every tower was painted first and the ribbon after, so
-    // the ribbon floated on top of walls it was actually behind — price appeared
-    // to hang in front of a wall it had just been rejected by. Canvas 2D has no
-    // depth buffer, so the sort IS the depth test: a wall nearer the camera than
-    // a segment of the track now paints over it and occludes it, like a wall.
-    type Prim = { d: number; render: () => void };
-    const prims: Prim[] = [];
-
-    const w = 0.46;
-    for (const c of cells) {
-      // NO DATA: draw an explicit hollow floor tile. Skipping these entirely
-      // (what the map used to do) makes a gap in the recording look identical
-      // to a strike that genuinely carried no gamma.
-      if (c.missing) {
-        const q = [proj(c.x - w, 0, c.z - w), proj(c.x + w, 0, c.z - w), proj(c.x + w, 0, c.z + w), proj(c.x - w, 0, c.z + w)];
-        poly(q, canvasRgba(AXIS, 0.03), canvasRgba(AXIS, 0.1));
-        continue;
+    // ── terrain mesh, depth-sorted and merged with the ribbon ─────────────
+    if (mesh) {
+      const { nxM, nzM, xUp, zUp, hs } = mesh;
+      const nV = nxM * nzM, nQ = (nxM - 1) * (nzM - 1);
+      let buf = bufRef.current;
+      if (!buf || buf.px.length !== nV || buf.depths.length !== nQ) {
+        buf = {
+          px: new Float32Array(nV), py: new Float32Array(nV), pd: new Float32Array(nV),
+          depths: new Float32Array(nQ), order: new Int32Array(nQ),
+        };
+        bufRef.current = buf;
       }
-      if (Math.abs(c.v) < 0.004) continue; // true ~zero — leave bare floor
-      const mag = applyCurve(c.v, curve);
-      const rgb = rampFor(c.v, mag);
-      const x0 = c.x - w, x1 = c.x + w, z0 = c.z - w, z1 = c.z + w;
-      const tA = proj(x0, c.h, z0), tB = proj(x1, c.h, z0), tC = proj(x1, c.h, z1), tD = proj(x0, c.h, z1);
-      const bA = proj(x0, 0, z0), bB = proj(x1, 0, z0), bC = proj(x1, 0, z1), bD = proj(x0, 0, z1);
-      const faces = [
-        { p: [tA, tB, bB, bA], t: tA, b: bA, d: (tA.depth + tB.depth) / 2, f: lambert(0, -1) },
-        { p: [tB, tC, bC, bB], t: tB, b: bB, d: (tB.depth + tC.depth) / 2, f: lambert(1, 0) },
-        { p: [tC, tD, bD, bC], t: tC, b: bC, d: (tC.depth + tD.depth) / 2, f: lambert(0, 1) },
-        { p: [tD, tA, bA, bD], t: tD, b: bD, d: (tD.depth + tA.depth) / 2, f: lambert(-1, 0) },
-      ].sort((a, b) => b.d - a.d);
+      const { px, py, pd, depths, order } = buf;
 
-      // Depth for the whole box = its mid-height centroid, so a tall wall sorts
-      // by where its MASS is, not by its floor tile.
-      const boxDepth = proj(c.x, c.h / 2, c.z).depth;
-      prims.push({
-        d: boxDepth,
-        render: () => {
-          // Each side face carries a base→crest gradient: the tower darkens into
-          // the floor and brightens at the cap, so height and strength reinforce
-          // each other instead of every tower being one flat slab of color.
-          for (const f of faces) {
-            let fill: string | CanvasGradient;
-            if (Math.abs(f.t.y - f.b.y) > 1) {
-              const g = ctx.createLinearGradient(f.b.x, f.b.y, f.t.x, f.t.y);
-              g.addColorStop(0, litRgb(rgb, f.f * 0.5));
-              g.addColorStop(1, litRgb(rgb, f.f * 1.25));
-              fill = g;
-            } else {
-              fill = litRgb(rgb, f.f);
-            }
-            poly(f.p, fill, canvasRgba(HOME_THEME.bg, 0.35));
-          }
-          // Cap: brightest surface, scaled by strength.
-          poly([tA, tB, tC, tD], litRgb(rgb, 1.15 + mag * 0.2), canvasRgba(AXIS, 0.16));
-
-          // Dominant walls get a bloom so they're unmistakable at any angle.
-          if (mag > 0.55) {
-            ctx.save();
-            ctx.globalAlpha = 0.1 + (mag - 0.55) * 0.5;
-            ctx.shadowColor = canvasRgba(c.v >= 0 ? ICE_HI : MAGMA_HI, 0.9);
-            ctx.shadowBlur = 10 + mag * 14;
-            poly([tA, tB, tC, tD], c.v >= 0 ? ICE_HI : MAGMA_HI);
-            ctx.restore();
-          }
-        },
-      });
-    }
-
-    // ── spot track: a real 3D ribbon, not a flat polyline ───────────────────
-    // Built as three parts so it reads as a solid object in the terrain:
-    //   1. floor shadow (where price actually sits on the strike axis)
-    //   2. a vertical fin dropping from the ribbon to the floor
-    //   3. an extruded top rail with a lit face + highlight edge
-    const RIBBON_Y = 34;   // ride height above the floor plane
-    const RIBBON_W = 0.34; // half-width in grid units (across strikes)
-    // Spot → fractional grid index on the live strike ladder (step is read from
-    // the ladder itself: SPX records 5s and 10s, never assume one).
-    const step = strikes.length > 1 ? strikes[1] - strikes[0] : 5;
-    const gxAt = (z: number) =>
-      Math.max(-0.5, Math.min(NX - 0.5, (spotPath[z] - strikes[0]) / (step || 5)));
-
-    // 1. floor shadow
-    ctx.save();
-    ctx.strokeStyle = canvasRgba(HOME_THEME.bg, 0.85);
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    for (let z = 0; z < NZ; z++) {
-      const p = proj(gxAt(z), 0, z);
-      if (z) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
-    }
-    ctx.stroke();
-    ctx.restore();
-
-    // 2. vertical fin — quads from ribbon down to the floor, depth-sorted
-    const fins: { p: { x: number; y: number }[]; d: number }[] = [];
-    for (let z = 0; z < NZ - 1; z++) {
-      const a = proj(gxAt(z), RIBBON_Y, z);
-      const b = proj(gxAt(z + 1), RIBBON_Y, z + 1);
-      const af = proj(gxAt(z), 0, z);
-      const bf = proj(gxAt(z + 1), 0, z + 1);
-      fins.push({ p: [a, b, bf, af], d: (a.depth + b.depth) / 2 });
-    }
-    fins.sort((a, b) => b.d - a.d);
-    for (const f of fins) poly(f.p, canvasRgba(SPOT, 0.14));
-
-    // 3. extruded top rail — side face + cap, drawn back-to-front
-    const rails: { side: { x: number; y: number }[]; cap: { x: number; y: number }[]; d: number }[] = [];
-    for (let z = 0; z < NZ - 1; z++) {
-      const g0 = gxAt(z), g1 = gxAt(z + 1);
-      const tL0 = proj(g0 - RIBBON_W, RIBBON_Y + 5, z);
-      const tR0 = proj(g0 + RIBBON_W, RIBBON_Y + 5, z);
-      const tL1 = proj(g1 - RIBBON_W, RIBBON_Y + 5, z + 1);
-      const tR1 = proj(g1 + RIBBON_W, RIBBON_Y + 5, z + 1);
-      const bR0 = proj(g0 + RIBBON_W, RIBBON_Y - 5, z);
-      const bR1 = proj(g1 + RIBBON_W, RIBBON_Y - 5, z + 1);
-      rails.push({
-        cap: [tL0, tR0, tR1, tL1],
-        side: [tR0, tR1, bR1, bR0],
-        d: (tL0.depth + tL1.depth) / 2,
-      });
-    }
-    rails.sort((a, b) => b.d - a.d);
-    for (const r of rails) {
-      poly(r.side, shade(SPOT, 0.6));
-      poly(r.cap, shade(SPOT, 1.12));
-    }
-
-    // glowing crest line along the top of the ribbon
-    ctx.save();
-    ctx.strokeStyle = canvasRgba(SPOT, 0.95);
-    ctx.lineWidth = 1.6;
-    ctx.shadowColor = canvasRgba(SPOT, 0.7);
-    ctx.shadowBlur = 12;
-    ctx.beginPath();
-    for (let z = 0; z < NZ; z++) {
-      const p = proj(gxAt(z) - RIBBON_W, RIBBON_Y + 5, z);
-      if (z) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
-    }
-    ctx.stroke();
-    ctx.restore();
-
-    // live spot marker at the head of the track — the NEWEST column, which is
-    // z=0 when the axis is reversed, not NZ-1.
-    const headZ = newestFrontRef.current ? 0 : NZ - 1;
-    {
-      const p = proj(gxAt(headZ), RIBBON_Y + 5, headZ);
-      ctx.save();
-      ctx.shadowColor = canvasRgba(SPOT, 0.9);
-      ctx.shadowBlur = 16;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, Math.max(3, 5 * p.s), 0, Math.PI * 2);
-      ctx.fillStyle = shade(SPOT, 1.2);
-      ctx.fill();
-      ctx.restore();
-      ctx.font = "10px var(--font-inter), Inter, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = canvasRgba(SPOT, 0.95);
-      ctx.fillText(spotPath[headZ].toFixed(0), p.x + 8, p.y - 6);
-    }
-
-    // ── wall impacts: rejection vs break-through ───────────────────────────
-    // Two very different events, so they get two very different marks:
-    //
-    //   REJECTION — price closed on a strong strike, touched it, and turned
-    //     back the SAME side it came from. Drawn as an impact splash on the
-    //     wall face: concentric shockwave arcs + spall lines, sized by |GEX|.
-    //     This is price hitting something solid and bouncing off it.
-    //
-    //   BREAK — price went straight through to the other side. Drawn as a
-    //     pierced ring + a breach line through the tower. The wall failed.
-    //
-    // Detected on the spot ribbon vs the strike nearest it at each column.
-    const impacts: { z: number; x: number; v: number; kind: "reject" | "break"; force: number }[] = [];
-    const stepPts = strikes.length > 1 ? Math.abs(strikes[1] - strikes[0]) : 5;
-    // Array order follows the Z axis, which reverses with `newestFront` — so
-    // "the column before this one IN TIME" is z+1 when reversed. Reading z-1
-    // blindly would run the physics backwards and swap rejections for breaks.
-    const back = newestFrontRef.current ? 1 : -1;   // one step earlier in time
-    const fwd = -back;                              // one step later in time
-    for (let z = 1; z < NZ - 1; z++) {
-      const xi = Math.round(gxAt(z));
-      if (xi < 0 || xi >= NX) continue;
-      const v = rows[z]?.[xi] ?? 0;
-      if (Math.abs(v) < CROSS_THRESHOLD) continue; // only STRONG walls count
-
-      const k = strikes[xi];
-      const d0 = spotPath[z + back] - k;  // signed distance to the wall, before
-      const d1 = spotPath[z] - k;         //                              at
-      const d2 = spotPath[z + fwd] - k;   //                              after
-      if (Math.abs(d1) > stepPts) continue; // never actually reached the wall
-
-      const closed = Math.abs(d1) < Math.abs(d0); // was approaching
-      if (!closed) continue;
-
-      const crossed = Math.sign(d0) !== 0 && Math.sign(d2) !== 0 && Math.sign(d0) !== Math.sign(d2);
-      const turned = Math.abs(d2) > Math.abs(d1); // moving back away
-      if (crossed) impacts.push({ z, x: xi, v, kind: "break", force: Math.min(1, Math.abs(v)) });
-      else if (turned) impacts.push({ z, x: xi, v, kind: "reject", force: Math.min(1, Math.abs(v)) });
-    }
-
-    for (const im of impacts) {
-      const shaped = applyCurve(im.v, curve) * (im.v < 0 ? -1 : 1);
-      const top = (absMode ? Math.abs(shaped) : shaped) * rel;
-
-      // THE WALL ITSELF. A splash alone still let the eye read the ribbon as
-      // passing "near" a tower. This raises a translucent barrier pane across
-      // the rejecting strike, spanning the columns around the touch and the
-      // full tower height, so the price track visibly runs into a surface and
-      // turns. It is drawn from the same strike + height as the tower — it's a
-      // rendering of the wall that's already there, not an invented one.
-      if (im.kind === "reject") {
-        const z0 = Math.max(0, im.z - 1.6), z1 = Math.min(NZ - 1, im.z + 1.6);
-        const yTop = Math.abs(top) < RIBBON_Y + 14 ? RIBBON_Y + 14 : Math.abs(top);
-        const sgn = im.v >= 0 || absMode ? 1 : -1;
-        const pane = [
-          proj(im.x, 0, z0), proj(im.x, sgn * yTop, z0),
-          proj(im.x, sgn * yTop, z1), proj(im.x, 0, z1),
-        ];
-        const wallCol0 = im.v >= 0 ? ICE_HI : MAGMA_HI;
-        ctx.save();
-        poly(pane, canvasRgba(wallCol0, 0.16), canvasRgba(wallCol0, 0.5));
-        ctx.restore();
+      let minD = Infinity, maxD = -Infinity;
+      for (let zm = 0; zm < nzM; zm++) {
+        const r = zm * nxM, gz = zm / zUp;
+        for (let xm = 0; xm < nxM; xm++) {
+          const i = r + xm;
+          const p = proj(xm / xUp, hs[i], gz);
+          px[i] = p.x; py[i] = p.y; pd[i] = p.depth;
+          if (p.depth < minD) minD = p.depth;
+          if (p.depth > maxD) maxD = p.depth;
+        }
       }
-      // Contact point: where the ribbon meets the tower, not the tower's crest —
-      // the impact reads as price hitting the wall's FACE.
-      const contactY = Math.max(0, Math.min(Math.abs(top), RIBBON_Y));
-      const hit = proj(gxAt(im.z), im.v >= 0 ? contactY : -contactY, im.z);
-      const wallCol = im.v >= 0 ? ICE_HI : MAGMA_HI;
+      let qi = 0;
+      for (let zm = 0; zm < nzM - 1; zm++) {
+        const r0 = zm * nxM, r1 = r0 + nxM;
+        for (let xm = 0; xm < nxM - 1; xm++, qi++) {
+          depths[qi] = (pd[r0 + xm] + pd[r0 + xm + 1] + pd[r1 + xm] + pd[r1 + xm + 1]) * 0.25;
+          order[qi] = qi;
+        }
+      }
+      order.sort((A, B) => depths[B] - depths[A]);
 
-      ctx.save();
-      if (im.kind === "reject") {
-        // shockwave: 3 arcs radiating back the way price came from
-        const away = Math.sign(spotPath[im.z + back] - strikes[im.x]) || 1;
-        const baseR = (4 + im.force * 7) * hit.s;
-        ctx.lineWidth = 1.4;
-        ctx.shadowColor = canvasRgba(wallCol, 0.9);
-        ctx.shadowBlur = 12;
-        for (let i = 0; i < 3; i++) {
-          const r = baseR * (1 + i * 0.55);
-          ctx.strokeStyle = canvasRgba(wallCol, 0.75 - i * 0.2);
-          ctx.beginPath();
-          // half-arc opening back toward the side price came from
-          const a0 = away > 0 ? -Math.PI / 2 : Math.PI / 2;
-          ctx.arc(hit.x, hit.y, r, a0, a0 + Math.PI);
-          ctx.stroke();
-        }
-        // spall: short spikes kicking off the face
-        ctx.strokeStyle = canvasRgba(SPOT, 0.85);
-        ctx.lineWidth = 1;
-        for (let i = -2; i <= 2; i++) {
-          const ang = (i * 0.32) + (away > 0 ? 0 : Math.PI);
-          const L = baseR * (1.1 + Math.abs(i) * 0.12);
-          ctx.beginPath();
-          ctx.moveTo(hit.x, hit.y);
-          ctx.lineTo(hit.x + Math.cos(ang) * L, hit.y + Math.sin(ang) * L * 0.6);
-          ctx.stroke();
-        }
-        // hot core at the point of contact
+      const { yaw } = camRef.current;
+      const cy = Math.cos(yaw), sy = Math.sin(yaw);
+      const bgRgb = hexToRgb(HOME_THEME.bg);
+      const fogSpan = Math.max(1, maxD - minD);
+      const qW = nxM - 1;
+      let si = 0;
+      for (let k = 0; k < nQ; k++) {
+        const q = order[k];
+        const qd = depths[q];
+        while (si < segs.length && segs[si].d >= qd) drawSeg(segs[si++]);
+        const zm = (q / qW) | 0, xm = q - zm * qW;
+        const ia = zm * nxM + xm, ib = ia + 1, id = ia + nxM, ic = id + 1;
+        // lambert + a specular kiss on strong walls, faded into bg with depth.
+        const wx = mesh.qNx[q] * cy - mesh.qNz[q] * sy;
+        const wz = mesh.qNx[q] * sy + mesh.qNz[q] * cy;
+        const dot = Math.max(0, wx * SUNX + mesh.qNy[q] * SUNY + wz * SUNZ);
+        const f = 0.4 + 0.72 * dot + Math.pow(dot, 12) * 0.5 * mesh.qMag[q];
+        const fog = Math.max(0, Math.min(1, (qd - minD) / fogSpan)) * 0.42;
+        const r = Math.min(255, mesh.qR[q] * f) * (1 - fog) + bgRgb[0] * fog;
+        const g = Math.min(255, mesh.qG[q] * f) * (1 - fog) + bgRgb[1] * fog;
+        const b = Math.min(255, mesh.qB[q] * f) * (1 - fog) + bgRgb[2] * fog;
+        const fill = `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
         ctx.beginPath();
-        ctx.arc(hit.x, hit.y, Math.max(1.6, 2.6 * hit.s), 0, Math.PI * 2);
-        ctx.fillStyle = canvasRgba(SPOT, 0.95);
+        ctx.moveTo(px[ia], py[ia]);
+        ctx.lineTo(px[ib], py[ib]);
+        ctx.lineTo(px[ic], py[ic]);
+        ctx.lineTo(px[id], py[id]);
+        ctx.closePath();
+        ctx.fillStyle = fill;
         ctx.fill();
-
-        // Deflection arrow: contact point → where price actually went next.
-        // Drawn from the real spot track, so it can't claim a bounce that
-        // didn't happen — it's just making the turn legible in 3D.
-        const nz = im.z + fwd;
-        if (nz >= 0 && nz < NZ) {
-          const q = proj(gxAt(nz), RIBBON_Y + 5, nz);
-          ctx.strokeStyle = canvasRgba(SPOT, 0.9);
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(hit.x, hit.y);
-          ctx.lineTo(q.x, q.y);
-          ctx.stroke();
-          const ang = Math.atan2(q.y - hit.y, q.x - hit.x);
-          const hl = 6 * Math.max(0.6, q.s);
-          ctx.beginPath();
-          ctx.moveTo(q.x, q.y);
-          ctx.lineTo(q.x - hl * Math.cos(ang - 0.4), q.y - hl * Math.sin(ang - 0.4));
-          ctx.moveTo(q.x, q.y);
-          ctx.lineTo(q.x - hl * Math.cos(ang + 0.4), q.y - hl * Math.sin(ang + 0.4));
-          ctx.stroke();
-        }
-      } else {
-        // BREAK: pierced ring + breach line straight through the tower
-        const a = proj(im.x, 0, im.z);
-        const b = proj(im.x, top, im.z);
-        ctx.strokeStyle = canvasRgba(SPOT, 0.45);
-        ctx.lineWidth = 1.2;
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.strokeStyle = canvasRgba(SPOT, 0.9);
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(hit.x, hit.y, Math.max(2.5, (3 + im.force * 4) * hit.s), 0, Math.PI * 2);
+        // hairline stroke in the same color seals AA seams between quads —
+        // without it the mesh shows a faint grid of background-colored cracks.
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = 0.6;
         ctx.stroke();
       }
-      ctx.restore();
+      while (si < segs.length) drawSeg(segs[si++]);
+    } else {
+      for (const s of segs) drawSeg(s);
     }
 
-    // axes
+    // ── barrier panes on rejections (static part; the FX layer animates) ───
+    // A translucent pane across the rejecting strike, spanning the columns
+    // around the touch and the wall's height — price visibly runs into a
+    // surface and turns. Rendered from the same strike + height as the
+    // terrain: it's the wall that's already there, not an invented one.
+    if (fx) {
+      const zPad = Math.max(1.6, 10 / zCell(NZ));
+      for (const im of fx.impacts) {
+        if (im.kind === "reject") {
+          const z0 = Math.max(0, im.z - zPad), z1 = Math.min(NZ - 1, im.z + zPad);
+          const yTop = Math.max(Math.abs(im.topWorld), RIBBON_Y + 14);
+          const sgn = im.v >= 0 || absRef.current ? 1 : -1;
+          const col = im.v >= 0 ? ICE_HI : MAGMA_HI;
+          poly(
+            [proj(im.x, 0, z0), proj(im.x, sgn * yTop, z0), proj(im.x, sgn * yTop, z1), proj(im.x, 0, z1)],
+            canvasRgba(col, 0.14), canvasRgba(col, 0.45),
+          );
+        } else {
+          // break: dashed breach line straight up the pierced tower
+          const a = proj(im.x, 0, im.z), b = proj(im.x, im.topWorld, im.z);
+          ctx.save();
+          ctx.strokeStyle = canvasRgba(SPOT, 0.45);
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([2, 4]);
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
+
+    // ── axes ────────────────────────────────────────────────────────────────
     ctx.font = "10px var(--font-inter), Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = canvasRgba(AXIS, 0.6);
-    // Axis labels ride the edge CURRENTLY nearest the camera. Pinned to a fixed
-    // edge they'd end up buried behind the terrain the moment you orbit past 90°.
-    // Lower depth = closer to the viewer (see proj).
+    // Labels ride the edge CURRENTLY nearest the camera; pinned to a fixed edge
+    // they'd bury behind the terrain past 90° of orbit. Pads are converted to
+    // grid units so they hold a constant SCREEN gap at any column density.
+    const padZ = Math.max(1.6, 22 / zCell(NZ));
     const strikeEdgeFar = proj(0, 0, NZ - 1).depth < proj(0, 0, 0).depth;
-    const strikeEdgeZ = strikeEdgeFar ? NZ + 0.6 : -1.6;
-
-    const labelStride = Math.max(1, Math.round(NX / 7)); // ~7 strike labels, any ladder width
+    const strikeEdgeZ = strikeEdgeFar ? NZ - 1 + padZ : -padZ;
+    const labelStride = Math.max(1, Math.round(NX / 7));
     for (let x = 0; x < NX; x += labelStride) {
       const p = proj(x, 0, strikeEdgeZ);
       ctx.fillText(String(strikes[x]), p.x, p.y);
     }
-    // time axis — real recorded clock times, on whichever X edge faces us
     if (times.length) {
+      const padX = Math.max(1.2, 30 / xCell(NX));
       const timeEdgeRight = proj(NX - 1, 0, 0).depth < proj(0, 0, 0).depth;
-      const timeEdgeX = timeEdgeRight ? NX + 1.2 : -2.2;
+      const timeEdgeX = timeEdgeRight ? NX - 1 + padX : -padX;
       ctx.textAlign = timeEdgeRight ? "left" : "right";
       ctx.fillStyle = canvasRgba(AXIS, 0.5);
       const a = proj(timeEdgeX, 0, 0);
@@ -615,39 +657,213 @@ export default function Gex3DPage() {
     }
   }, [proj]);
 
-  // resize + render loop
+  // ── FX compositor: scene blit + animated effects, every frame ─────────────
+  const paint = useCallback((now: number) => {
+    const cv = cvRef.current;
+    const ctx = cv?.getContext("2d");
+    if (!cv || !ctx) return;
+    const scene = sceneRef.current;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (scene && scene.width) ctx.drawImage(scene, 0, 0);
+    const dpr = dprRef.current;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const { nx: NX, nz: NZ } = dimsRef.current;
+    const fx = fxRef.current;
+    if (!NX || !NZ || !fx) return;
+    const { spotPath } = surfRef.current;
+    const RIBBON_Y = 34;
+
+    // energy flow along the price ribbon — a faint dash stream moving with
+    // time. Low alpha on purpose: it's bloom, and bloom is allowed to leak.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = canvasRgba(SPOT, 0.2);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([9, 15]);
+    ctx.lineDashOffset = -((now * 0.05) % 24);
+    ctx.beginPath();
+    for (let z = 0; z < NZ; z++) {
+      const p = proj(fx.gx[z], RIBBON_Y + 5, z);
+      if (z === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // pulsing beacons on the newest column's dominant walls — the "huge GEX
+    // levels" announce themselves without hunting.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const bc of fx.beacons) {
+      const c = proj(bc.x, bc.y, fx.headZ);
+      const col = bc.v >= 0 ? ICE_HI : MAGMA_HI;
+      const a = 0.14 + 0.12 * (0.5 + 0.5 * Math.sin(now / 420 + bc.x));
+      const up = bc.y >= 0 ? -1 : 1; // pillar rises off the crest, away from the floor
+      const g = ctx.createLinearGradient(c.x, c.y, c.x, c.y + up * 52 * c.s);
+      g.addColorStop(0, canvasRgba(col, a * 2.2));
+      g.addColorStop(1, canvasRgba(col, 0));
+      ctx.strokeStyle = g;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(c.x, c.y + up * 52 * c.s); ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, (4 + 1.6 * Math.sin(now / 380 + bc.x)) * Math.max(0.5, c.s), 0, Math.PI * 2);
+      ctx.fillStyle = canvasRgba(col, a);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // ── wall impacts ────────────────────────────────────────────────────────
+    for (const im of fx.impacts) {
+      const hit = proj(im.gx, im.yHit, im.z);
+      const col = im.v >= 0 ? ICE_HI : MAGMA_HI;
+      const s = Math.max(0.5, hit.s);
+
+      if (im.kind === "reject") {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        // shockwave: staggered half-rings radiating back the way price came
+        const a0 = im.away > 0 ? -Math.PI / 2 : Math.PI / 2;
+        ctx.lineWidth = 1.6;
+        for (let i = 0; i < 3; i++) {
+          const ph = ((now / 1500) + im.seed + i / 3) % 1;
+          const r = (5 + 24 * ph * (0.5 + im.force)) * s;
+          ctx.strokeStyle = canvasRgba(col, (1 - ph) * 0.55);
+          ctx.beginPath();
+          ctx.arc(hit.x, hit.y, r, a0, a0 + Math.PI);
+          ctx.stroke();
+        }
+        // sparks kicking off the face, with a little gravity
+        const base = im.away > 0 ? 0 : Math.PI;
+        for (let i = 0; i < 7; i++) {
+          const ph = ((now / 1100) + i * 0.143 + im.seed * 3.7) % 1;
+          const ang = base + (i - 3) * 0.3 + Math.sin(im.seed * 99 + i) * 0.12;
+          const L = (10 + 18 * im.force) * s * ph;
+          ctx.beginPath();
+          ctx.arc(hit.x + Math.cos(ang) * L, hit.y + Math.sin(ang) * L * 0.6 + ph * ph * 6 * s, 1.7, 0, Math.PI * 2);
+          ctx.fillStyle = canvasRgba(SPOT, (1 - ph) * 0.8);
+          ctx.fill();
+        }
+        // hot core at the point of contact
+        ctx.shadowColor = canvasRgba(col, 0.9);
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.arc(hit.x, hit.y, (2.6 + 0.9 * Math.sin(now / 180 + im.seed * 10)) * s, 0, Math.PI * 2);
+        ctx.fillStyle = canvasRgba(SPOT, 0.95);
+        ctx.fill();
+        ctx.restore();
+
+        // deflection arrow: contact → where price actually went next, with a
+        // flowing dash so the bounce direction is alive. Drawn from the real
+        // spot track — it can't claim a bounce that didn't happen.
+        if (im.z2 >= 0 && im.z2 < NZ) {
+          const q = proj(im.gx2, RIBBON_Y + 5, im.z2);
+          ctx.save();
+          ctx.strokeStyle = canvasRgba(SPOT, 0.85);
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 8]);
+          ctx.lineDashOffset = -((now * 0.04) % 14);
+          ctx.beginPath(); ctx.moveTo(hit.x, hit.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+          ctx.setLineDash([]);
+          const ang = Math.atan2(q.y - hit.y, q.x - hit.x);
+          const hl = 6 * Math.max(0.6, q.s);
+          ctx.beginPath();
+          ctx.moveTo(q.x, q.y);
+          ctx.lineTo(q.x - hl * Math.cos(ang - 0.4), q.y - hl * Math.sin(ang - 0.4));
+          ctx.moveTo(q.x, q.y);
+          ctx.lineTo(q.x - hl * Math.cos(ang + 0.4), q.y - hl * Math.sin(ang + 0.4));
+          ctx.stroke();
+          ctx.restore();
+        }
+      } else {
+        // BREAK: expanding pierced rings + shards carrying on through
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.lineWidth = 1.6;
+        for (let i = 0; i < 2; i++) {
+          const ph = ((now / 1300) + im.seed + i * 0.5) % 1;
+          ctx.strokeStyle = canvasRgba(col, (1 - ph) * 0.5);
+          ctx.beginPath();
+          ctx.arc(hit.x, hit.y, (4 + 30 * ph * (0.5 + im.force)) * s, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (im.z2 >= 0 && im.z2 < NZ) {
+          const q = proj(im.gx2, RIBBON_Y + 5, im.z2);
+          const dx = q.x - hit.x, dy = q.y - hit.y;
+          const len = Math.hypot(dx, dy) || 1;
+          for (let i = 0; i < 5; i++) {
+            const ph = ((now / 1000) + i * 0.2 + im.seed) % 1;
+            const spread = ((i - 2) * 3 * s * ph);
+            ctx.beginPath();
+            ctx.arc(hit.x + dx * ph - (dy / len) * spread, hit.y + dy * ph + (dx / len) * spread, 1.6, 0, Math.PI * 2);
+            ctx.fillStyle = canvasRgba(SPOT, (1 - ph) * 0.7);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+    }
+
+    // live spot marker at the head of the track, breathing
+    {
+      const p = proj(fx.gx[fx.headZ], RIBBON_Y + 5, fx.headZ);
+      const pulse = 1 + 0.18 * Math.sin(now / 260);
+      ctx.save();
+      ctx.shadowColor = canvasRgba(SPOT, 0.9);
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(3, 5 * p.s) * pulse, 0, Math.PI * 2);
+      ctx.fillStyle = shade(SPOT, 1.25);
+      ctx.fill();
+      ctx.restore();
+      ctx.font = "10px var(--font-inter), Inter, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillStyle = canvasRgba(SPOT, 0.95);
+      if (Number.isFinite(spotPath[fx.headZ])) ctx.fillText(spotPath[fx.headZ].toFixed(0), p.x + 8, p.y - 6);
+    }
+  }, [proj]);
+
+  // resize + the ONE persistent frame loop (scene re-render only when dirty)
   useEffect(() => {
     const cv = cvRef.current;
     if (!cv) return;
+    if (!sceneRef.current) sceneRef.current = document.createElement("canvas");
+    const scene = sceneRef.current;
     const ro = new ResizeObserver(() => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dprRef.current = dpr;
       sizeRef.current = { w: cv.clientWidth, h: cv.clientHeight };
       cv.width = cv.clientWidth * dpr;
       cv.height = cv.clientHeight * dpr;
-      cv.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw();
+      scene.width = cv.width;
+      scene.height = cv.height;
+      needsRef.current = true;
     });
     ro.observe(cv);
     let raf = 0;
-    const loop = () => {
+    const loop = (now: number) => {
       if (spinRef.current && !dragRef.current) {
         camRef.current.yaw += 0.004;
-        draw();
+        needsRef.current = true;
       }
+      if (needsRef.current) {
+        needsRef.current = false;
+        renderScene();
+      }
+      paint(now);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => { ro.disconnect(); cancelAnimationFrame(raf); };
-  }, [draw]);
+  }, [renderScene, paint]);
 
-  // Live surface → renderer. Kept in a ref (not state) so the draw loop never
-  // re-subscribes; the effect pushes and redraws once per poll.
+  // Live surface → renderer. Kept in refs so the frame loop never re-subscribes.
   useEffect(() => {
     if (live.loading || !live.strikes.length || !live.rows.length) {
       surfRef.current = EMPTY_SURFACE;
       dimsRef.current = { nx: 0, nz: 0 };
       flipIdx.current = null;
-      draw();
+      rebuild();
       return;
     }
     // Carry spot forward across any null column so the ribbon stays continuous.
@@ -662,14 +878,16 @@ export default function Gex3DPage() {
     const last = live.norm[live.norm.length - 1] || [];
     let fi: number | null = null;
     for (let i = 1; i < last.length; i++) {
-      if (last[i - 1] < 0 && last[i] >= 0) { fi = i - 1 + (0 - last[i - 1]) / (last[i] - last[i - 1]); break; }
+      if (last[i - 1] != null && last[i] != null && (last[i - 1] as number) < 0 && (last[i] as number) >= 0) {
+        fi = i - 1 + (0 - (last[i - 1] as number)) / ((last[i] as number) - (last[i - 1] as number));
+        break;
+      }
     }
     flipIdx.current = fi;
 
     // Time direction is flipped by reversing the arrays ONCE here rather than
-    // inverting z at every proj() call site — the towers, ribbon, crossings and
-    // axis labels all walk these arrays in lockstep, so one reversal keeps them
-    // consistent and there's no z-mapping to forget in a later edit.
+    // inverting z at every proj() call site — mesh, ribbon, impacts and axis
+    // labels all walk these arrays in lockstep.
     const flip = <T,>(a: T[]) => (newestFront ? [...a].reverse() : a);
 
     surfRef.current = {
@@ -681,16 +899,16 @@ export default function Gex3DPage() {
       peak: live.peak,
     };
     dimsRef.current = { nx: live.strikes.length, nz: live.norm.length };
-    draw();
-  }, [live, newestFront, draw]);
+    rebuild();
+  }, [live, newestFront, rebuild]);
 
-  useEffect(() => { draw(); }, [relief, absMode, curve, draw]);
-  useEffect(() => { camRef.current.pitch = (tilt * Math.PI) / 180; draw(); }, [tilt, draw]);
+  // Control changes that reshape the mesh (camera-only changes just invalidate).
+  useEffect(() => { rebuild(); }, [relief, absMode, curve, rebuild]);
+  useEffect(() => { camRef.current.pitch = (tilt * Math.PI) / 180; invalidate(); }, [tilt, invalidate]);
 
   // Orbit drag is wired with NATIVE window listeners (see useEffect below), not
   // React synthetic handlers: the pointer routinely leaves the canvas mid-drag,
-  // and no React state is written per-move (that re-rendered the whole page on
-  // every mousemove and fought the draw loop). Tilt state syncs on pointerup.
+  // and no React state is written per-move. Tilt state syncs on pointerup.
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault(); // stop text-selection / native image-drag swallowing it
     // Left = orbit. Right / middle / shift+left = pan.
@@ -737,7 +955,6 @@ export default function Gex3DPage() {
   useEffect(() => {
     const cv = cvRef.current;
     if (!cv) return;
-    let raf = 0;
     const move = (e: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
@@ -747,15 +964,13 @@ export default function Gex3DPage() {
         camRef.current.panX = d.panX + (e.clientX - d.x);
         camRef.current.panY = d.panY + (e.clientY - d.y);
       } else {
-        // Yaw is deliberately UNBOUNDED — you can lap the map as many times as
-        // you like; it's normalized to [-π, π] on release. Pitch spans −88°…88°:
-        // NEGATIVE pitch puts the camera under the floor plane looking up, which
-        // is the only way to read +GEX towers from below. The old 2° floor was
-        // what made the map feel like it wouldn't actually rotate all the way.
+        // Yaw is deliberately UNBOUNDED — lap the map freely; it's normalized
+        // to [-π, π] on release. Pitch spans −88°…88°: NEGATIVE pitch puts the
+        // camera under the floor plane looking up.
         camRef.current.yaw = d.yaw + (e.clientX - d.x) * 0.006;
         camRef.current.pitch = Math.max(-1.535, Math.min(1.535, d.pitch - (e.clientY - d.y) * 0.005));
       }
-      if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
+      needsRef.current = true; // frame loop re-renders the scene layer
     };
     const up = () => {
       if (!dragRef.current) return;
@@ -777,9 +992,8 @@ export default function Gex3DPage() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
-      if (raf) cancelAnimationFrame(raf);
     };
-  }, [draw]);
+  }, []);
 
   // Wheel must be a native non-passive listener to cancel page scroll.
   useEffect(() => {
@@ -789,15 +1003,11 @@ export default function Gex3DPage() {
       e.preventDefault();
       const cam = camRef.current;
       const prev = cam.zoom;
-      // Wide range: 0.2× (whole session in frame) to 8× (single strike filling
-      // the view). The old 0.5–2.4 clamp made "full zoom" impossible.
       const next = Math.max(0.2, Math.min(8, prev * (e.deltaY > 0 ? 0.9 : 1.111)));
       if (next === prev) return;
 
-      // Zoom toward the CURSOR, not the canvas center: scale the pan offset
-      // about the pointer so whatever is under the mouse stays under the mouse.
-      // Without this, zooming in on an off-center wall walks it off screen and
-      // you have to re-pan after every scroll.
+      // Zoom toward the CURSOR: scale the pan offset about the pointer so
+      // whatever is under the mouse stays under the mouse.
       const r = cv.getBoundingClientRect();
       const mx = e.clientX - r.left - (sizeRef.current.w / 2 + cam.panX);
       const my = e.clientY - r.top - (sizeRef.current.h / 2 + 40 + cam.panY);
@@ -805,11 +1015,11 @@ export default function Gex3DPage() {
       cam.panX -= mx * (k - 1);
       cam.panY -= my * (k - 1);
       cam.zoom = next;
-      draw();
+      needsRef.current = true;
     };
     cv.addEventListener("wheel", onNativeWheel, { passive: false });
     return () => cv.removeEventListener("wheel", onNativeWheel);
-  }, [draw]);
+  }, []);
 
   const legendDot = (color: string, round = false) => ({
     width: 11, height: 11, background: color, borderRadius: round ? "50%" : 2, display: "inline-block",
@@ -820,14 +1030,14 @@ export default function Gex3DPage() {
     <PageShell>
       <Card
         variant="dissolve"
-        title="GEX 3D Perspective Map"
+        title="GEX 3D Terrain"
         subtitle={
           live.loading
             ? "Loading today's recorded surface…"
             : live.error
             ? `History unavailable — ${live.error}`
             : (live.stale ? "Last session · " : "") +
-              `${live.expiry || "—"} · ${live.times.length} towers` +
+              `${live.expiry || "—"} · ${live.times.length} columns` +
               (live.strideMin > 1 ? ` (every ${live.strideMin}th min of ${live.minutesAvailable})` : " (every min)") +
               ` · ${live.date} · peak ${fmtGex(live.peak)}` +
               (live.fetchedAt ? ` · pulled ${fmtClock(live.fetchedAt)}` : "")
@@ -844,10 +1054,6 @@ export default function Gex3DPage() {
             −GEX (weak → strong)
           </span>
           <span style={legendItem}><span style={legendDot(HOME_THEME.orange, true)} />Spot track / wall impact</span>
-          <span style={legendItem}>
-            <span style={{ ...legendDot(HOME_THEME.text), background: "transparent", border: `1px solid ${HOME_THEME.border}` }} />
-            No data recorded
-          </span>
 
           {/* Basis toggle — every GEX surface is OI+Vol default + Vol-only. */}
           <span style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
@@ -880,8 +1086,8 @@ export default function Gex3DPage() {
             ))}
           </span>
 
-          {/* Column resolution — every tower is one minute either way; this only
-              controls how many of those minutes survive. */}
+          {/* Column resolution — every column is one minute either way; this only
+              controls how many of those minutes survive. 1-min is the default. */}
           <span style={{ display: "inline-flex", gap: 6 }}>
             {([
               { label: "30 cols", n: 30 },
@@ -925,12 +1131,26 @@ export default function Gex3DPage() {
             onPointerMove={onPointerMove}
             onPointerLeave={() => { if (tipRef.current) tipRef.current.style.opacity = "0"; }}
             onContextMenu={(e) => e.preventDefault()} // right-drag is pan, not a menu
-            style={{ display: "block", width: "100%", height: 560, cursor: "grab", touchAction: "none", userSelect: "none" }}
+            style={{
+              display: "block", width: "100%", height: "min(72vh, 900px)",
+              cursor: "grab", touchAction: "none", userSelect: "none",
+            }}
+          />
+          {/* CB watermark — top-left of the chart, above the canvas, out of the
+              pointer path so it never eats a drag. */}
+          <img
+            src="/cb-edge-logo.png"
+            alt="CB Edge"
+            style={{
+              position: "absolute", top: 10, left: 12, height: 42, width: "auto",
+              opacity: 0.55, pointerEvents: "none", userSelect: "none", zIndex: 2,
+              filter: `drop-shadow(0 0 6px ${canvasRgba(HOME_THEME.bg, 0.7)})`,
+            }}
           />
           {live.stale && !!live.times.length && (
             <div
               style={{
-                position: "absolute", top: 10, left: 10, fontSize: 10, fontWeight: 700,
+                position: "absolute", top: 10, right: 10, fontSize: 10, fontWeight: 700,
                 letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 8px",
                 borderRadius: 4, color: HOME_THEME.orange,
                 border: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panelBgStrong,
@@ -976,7 +1196,7 @@ export default function Gex3DPage() {
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             Tilt
-            {/* negative = camera below the floor plane, looking up at the towers */}
+            {/* negative = camera below the floor plane, looking up at the walls */}
             <input type="range" min={-88} max={88} value={tilt} onChange={(e) => setTilt(+e.target.value)} style={{ width: 120, accentColor: HOME_THEME.cyan }} />
             <span style={{ width: 34, opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>{tilt}°</span>
           </label>
@@ -992,7 +1212,7 @@ export default function Gex3DPage() {
                 const deg = +e.target.value;
                 setHeading(deg);
                 camRef.current.yaw = (deg * Math.PI) / 180;
-                draw();
+                invalidate();
               }}
               style={{ width: 140, accentColor: HOME_THEME.cyan }}
             />
@@ -1029,7 +1249,7 @@ export default function Gex3DPage() {
                 camRef.current.panY = 0;
                 setHeading(v.yaw);
                 setTilt(v.pitch);
-                draw();
+                invalidate();
               }}
             >
               {v.label}
@@ -1040,10 +1260,10 @@ export default function Gex3DPage() {
             style={{ ...homeButtonStyle, padding: "6px 12px" }}
             onClick={() => {
               camRef.current = { yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1, panX: 0, panY: 0 };
-              setRelief(110);
+              setRelief(120);
               setTilt(34);
               setHeading(-36);
-              draw();
+              invalidate();
             }}
           >
             Reset view
@@ -1053,15 +1273,14 @@ export default function Gex3DPage() {
         <p style={{ fontSize: 12, color: HOME_THEME.green, marginTop: 14, marginBottom: 0, lineHeight: 1.6 }}>
           Live from <code>/proxy/gex-history?mode=series</code> — today&apos;s recorded per-strike net GEX
           ({basis === "net" ? "OI+Vol composite" : "volume-only"}), RTH only (9:30–16:00 ET), ±13 strikes
-          around spot. <b>Every tower is one minute&apos;s snapshot</b> — the resolution buttons only
-          change how many of those minutes survive (30 cols ≈ every 13th minute; 1-min drops
-          nothing). Nothing is averaged. Height and color ramp are normalized to the day&apos;s peak
-          |GEX| — so a far strike holding a real 4% of a giant ATM wall is 4% of the height under
-          <b> Linear</b>, which looks like missing data; <b>√/Log</b> lift it back into view. Hollow
-          floor tiles mark strikes with <b>no recorded row</b> — distinct from a real zero. Where spot
-          reached a strike holding |GEX| ≥ {CROSS_THRESHOLD}× peak: a <b>barrier pane + shockwave +
-          arrow</b> means price hit it and turned (rejection); a <b>pierced ring</b> means it broke
-          through.
+          around spot, <b>1-minute columns by default</b>. The surface is a Catmull-Rom–smoothed mesh
+          over that grid — smoothing shapes the terrain only; <b>hover reads the exact raw value</b>,
+          nothing is averaged into the data. Height/color are normalized to the day&apos;s peak |GEX|;
+          <b> √/Log</b> lift the far ladder next to a giant ATM wall. Pulsing beacons mark the newest
+          column&apos;s walls at |GEX| ≥ {BEACON_THRESHOLD}× peak. Where spot reached a strike holding
+          |GEX| ≥ {CROSS_THRESHOLD}× peak: a <b>barrier pane + animated shockwave, sparks and a
+          deflection arrow</b> means price hit it and turned (rejection); <b>expanding rings + shards
+          punching through</b> mean it broke.
         </p>
       </Card>
     </PageShell>

@@ -83,10 +83,14 @@ async function ensureSchema() {
       r2           DOUBLE PRECISION,
       s2           DOUBLE PRECISION,
       open_int     DOUBLE PRECISION NOT NULL DEFAULT 0,
+      curve        JSONB,
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (date, symbol)
     )
   `);
+  // Additive for tables created before the curve snapshot existed — pre-curve
+  // rows stay NULL and the client renders a dash for them.
+  await p.query(`ALTER TABLE gex_levels_history ADD COLUMN IF NOT EXISTS curve JSONB`);
   _schemaReady = true;
   return true;
 }
@@ -112,6 +116,21 @@ function inWindow() {
 // ── Derivation — mirrors deriveGexLevels() in app/test/page.tsx ──────────────
 
 const oiVolNet = (r) => (Number(r.netGEX) || 0) + (Number(r.netVolGEX) || 0);
+
+// Downsampled cumulative net-GEX-by-strike curve (running sum from the lowest
+// strike up — same math as glCumulativeByStrike / findGexFlip). Snapshotted per
+// day so the tab's history table can sparkline the whole gamma profile, not
+// just the walls. Kept to GL_CURVE_POINTS so the JSONB stays a few KB/day.
+// `rows` must already be sorted ascending by strike.
+const GL_CURVE_POINTS = 48;
+function cumulativeCurve(rows) {
+  let cum = 0;
+  const pts = rows.map((r) => { cum += oiVolNet(r); return { k: Number(r.strike), c: cum }; });
+  const at = (p) => ({ k: Number(p.k.toFixed(2)), c: Math.round(p.c) });
+  if (pts.length <= GL_CURVE_POINTS) return pts.map(at);
+  const step = (pts.length - 1) / (GL_CURVE_POINTS - 1);
+  return Array.from({ length: GL_CURVE_POINTS }, (_, i) => at(pts[Math.round(i * step)]));
+}
 
 function deriveFromSnapshot(v2) {
   const rows = (Array.isArray(v2.gexRows) ? v2.gexRows : [])
@@ -146,7 +165,11 @@ function deriveFromSnapshot(v2) {
   const r2 = above[0]?.strike ?? null;
   const s2 = below[0]?.strike ?? null;
 
-  return { spot, resistance, support, neutral, dollarGamma, cpgRatio, r2, s2, openInt: totalCallOI + totalPutOI };
+  return {
+    spot, resistance, support, neutral, dollarGamma, cpgRatio, r2, s2,
+    openInt: totalCallOI + totalPutOI,
+    curve: cumulativeCurve(rows),
+  };
 }
 
 // ── Collect + upsert ─────────────────────────────────────────────────────────
@@ -173,13 +196,15 @@ async function collectGexLevelsHistory(base, opts = {}) {
   if (!p) return null;
   await p.query(
     `INSERT INTO gex_levels_history
-       (date, symbol, spot, resistance, support, neutral, dollar_gamma, cpg_ratio, r2, s2, open_int, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+       (date, symbol, spot, resistance, support, neutral, dollar_gamma, cpg_ratio, r2, s2, open_int, curve, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb, now())
      ON CONFLICT (date, symbol) DO UPDATE SET
        spot = EXCLUDED.spot, resistance = EXCLUDED.resistance, support = EXCLUDED.support,
        neutral = EXCLUDED.neutral, dollar_gamma = EXCLUDED.dollar_gamma, cpg_ratio = EXCLUDED.cpg_ratio,
-       r2 = EXCLUDED.r2, s2 = EXCLUDED.s2, open_int = EXCLUDED.open_int, updated_at = now()`,
-    [date, symbol, d.spot, d.resistance, d.support, d.neutral, d.dollarGamma, d.cpgRatio, d.r2, d.s2, d.openInt]
+       r2 = EXCLUDED.r2, s2 = EXCLUDED.s2, open_int = EXCLUDED.open_int,
+       curve = EXCLUDED.curve, updated_at = now()`,
+    [date, symbol, d.spot, d.resistance, d.support, d.neutral, d.dollarGamma, d.cpgRatio, d.r2, d.s2, d.openInt,
+     d.curve?.length ? JSON.stringify(d.curve) : null]
   );
   return { date, symbol, ...d };
 }

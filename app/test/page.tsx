@@ -446,6 +446,8 @@ function AmTbrStat({ label, value, accent }: { label: string; value: string; acc
 //     gex-levels-history-recorder.js upserts one row per trading day into the
 //     gex_levels_history Postgres table (kept forever), read back via
 //     GET /proxy/gex-levels-history and merged with the localStorage cache.
+//     Each row also snapshots a downsampled cumulative-gamma curve (the
+//     `curve` JSONB col) so the table sparklines that day's gamma profile.
 //   - "Open Interest by expiration" — would need OI totals per *other* expiries,
 //     which requires switching the shared feed. Rebuilt as "Open interest by
 //     strike" for the current 0DTE chain instead, using real callOI/putOI.
@@ -762,10 +764,59 @@ function glCumulativeByStrike(rows: GexLevelsRow[]): { strike: number; cum: numb
   });
 }
 
+// Split a cumulative curve into contiguous same-sign runs, inserting an
+// interpolated point at each zero-crossing so the color flips EXACTLY at the
+// crossing (= the gamma flip) instead of at the next listed strike. Positive
+// cumulative gamma renders green (dealers long gamma / suppressive), negative
+// renders red (dealers short gamma / accelerative).
+type GlCurvePt = { strike: number; cum: number };
+function glSignSegments(pts: GlCurvePt[]): { sign: 1 | -1; pts: GlCurvePt[] }[] {
+  if (pts.length < 2) return [];
+  const signOf = (v: number): 1 | -1 => (v >= 0 ? 1 : -1);
+  const segs: { sign: 1 | -1; pts: GlCurvePt[] }[] = [];
+  let cur = { sign: signOf(pts[0].cum), pts: [pts[0]] };
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i - 1], p = pts[i];
+    const s = signOf(p.cum);
+    if (s !== cur.sign) {
+      const dv = p.cum - prev.cum;
+      const frac = dv === 0 ? 0 : (0 - prev.cum) / dv;
+      const cross: GlCurvePt = { strike: prev.strike + (p.strike - prev.strike) * frac, cum: 0 };
+      cur.pts.push(cross);
+      segs.push(cur);
+      cur = { sign: s, pts: [cross, p] };
+    } else {
+      cur.pts.push(p);
+    }
+  }
+  segs.push(cur);
+  return segs.filter((s) => s.pts.length > 1);
+}
+
+// NOTE: deliberately NOT HOME_THEME.green — that token is #8ECAE6, a light
+// blue, which would both fail to read as "green" and collide with the
+// LIGHT_BLUE spot line on this very chart. #22C55E matches POS_GREEN in
+// app/analytics/page.tsx, the app's existing green-vs-HOME_THEME.red pair.
+const GEX_POS_GREEN = "#22C55E";
+const GL_SIGN_COLOR = (sign: 1 | -1) => (sign > 0 ? GEX_POS_GREEN : HOME_THEME.red);
+
+// Downsampled copy of the cumulative curve stored on each daily history row so
+// the "History of key level changes" table can draw a per-day sparkline of the
+// same shape this chart shows. Kept small (48 pts) — it rides in localStorage
+// and in the gex_levels_history.curve JSONB column.
+const GL_CURVE_POINTS = 48;
+function glDownsampleCurve(pts: GlCurvePt[]): { k: number; c: number }[] {
+  if (!pts.length) return [];
+  const at = (p: GlCurvePt) => ({ k: Number(p.strike.toFixed(2)), c: Math.round(p.cum) });
+  if (pts.length <= GL_CURVE_POINTS) return pts.map(at);
+  const step = (pts.length - 1) / (GL_CURVE_POINTS - 1);
+  return Array.from({ length: GL_CURVE_POINTS }, (_, i) => at(pts[Math.round(i * step)]));
+}
+
 // Net Gamma by strike — cumulative area/mountain chart (matches the
-// SqueezeMetrics-style reference: a red-filled curve whose zero-crossing IS
-// the gamma flip). The previous version drew a discrete per-strike bar chart,
-// whose own "sign change" is a different thing entirely from the cumulative
+// SqueezeMetrics-style reference: a green-above-zero / red-below-zero curve
+// whose zero-crossing IS the gamma flip). The previous version drew a discrete
+// per-strike bar chart, whose own "sign change" is a different thing from the cumulative
 // flip — that mismatch was why the flip/Neutral stat looked wrong against the
 // chart. This curve crosses zero exactly at `neutral` (d.neutral / gexFlip).
 function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; spot: number; neutral?: number | null }) {
@@ -792,8 +843,10 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
   const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
   const y0 = y(0);
 
-  const linePath = shown.map((p, i) => `${i === 0 ? "M" : "L"} ${x(p.strike).toFixed(2)} ${y(p.cum).toFixed(2)}`).join(" ");
-  const areaPath = `${linePath} L ${x(xhi).toFixed(2)} ${y0.toFixed(2)} L ${x(xlo).toFixed(2)} ${y0.toFixed(2)} Z`;
+  // One filled+stroked path per same-sign run: green where cumulative gamma is
+  // positive, red where it's negative. Segments meet at the interpolated
+  // zero-crossing so there's no color seam away from the flip.
+  const segs = glSignSegments(shown);
 
   return (
     <div
@@ -807,8 +860,18 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
     >
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
-        <path d={areaPath} fill={`${HOME_THEME.red}33`} stroke="none" />
-        <path d={linePath} fill="none" stroke={HOME_THEME.red} strokeWidth={2} />
+        {segs.map((seg, i) => {
+          const c = GL_SIGN_COLOR(seg.sign);
+          const lp = seg.pts.map((p, j) => `${j === 0 ? "M" : "L"} ${x(p.strike).toFixed(2)} ${y(p.cum).toFixed(2)}`).join(" ");
+          const first = seg.pts[0], last = seg.pts[seg.pts.length - 1];
+          const ap = `${lp} L ${x(last.strike).toFixed(2)} ${y0.toFixed(2)} L ${x(first.strike).toFixed(2)} ${y0.toFixed(2)} Z`;
+          return (
+            <g key={i}>
+              <path d={ap} fill={`${c}33`} stroke="none" />
+              <path d={lp} fill="none" stroke={c} strokeWidth={2} />
+            </g>
+          );
+        })}
         {Number.isFinite(neutral as number) && (
           <line x1={x(neutral as number)} x2={x(neutral as number)} y1={padT} y2={H - padB} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 3" opacity={0.55} />
         )}
@@ -819,7 +882,7 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
             cx={x(p.strike)}
             cy={y(p.cum)}
             r={hover?.idx === i ? 4 : 7}
-            fill={hover?.idx === i ? HOME_THEME.red : "transparent"}
+            fill={hover?.idx === i ? GL_SIGN_COLOR(p.cum >= 0 ? 1 : -1) : "transparent"}
             style={{ cursor: "inherit" }}
             onMouseMove={(e) => { if (!pan.draggingRef.current) show(i, e); }}
           />
@@ -834,7 +897,9 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
       {hover && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
-          <div>Cumulative Gamma$: {glFmtBn(shown[hover.idx].cum)}</div>
+          <div style={{ color: GL_SIGN_COLOR(shown[hover.idx].cum >= 0 ? 1 : -1), fontWeight: 700 }}>
+            Cumulative Gamma$: {glFmtBn(shown[hover.idx].cum)}
+          </div>
         </ChartTooltip>
       )}
     </div>
@@ -1374,6 +1439,11 @@ type GlHistoryEntry = {
   r2: number | null;
   s2: number | null;
   openInt: number;
+  // Downsampled cumulative-gamma curve as of this row's last update — the same
+  // shape the Net gamma exposure by strike card draws, snapshotted per day so
+  // the table shows how the whole gamma profile (not just the walls) moved.
+  // null on rows recorded before the curve column existed.
+  curve?: { k: number; c: number }[] | null;
 };
 
 function todayEtDate(): string {
@@ -1416,6 +1486,16 @@ async function fetchServerGlHistory(): Promise<GlHistoryEntry[]> {
     const j = (await r.json()) as { ok?: boolean; rows?: Record<string, unknown>[] };
     if (!j?.ok || !Array.isArray(j.rows)) return [];
     const num = (v: unknown): number | null => (v == null || v === "" ? null : Number(v));
+    // curve arrives as JSONB (already parsed by pg) but tolerate a JSON string.
+    const parseCurve = (v: unknown): { k: number; c: number }[] | null => {
+      let arr: unknown = v;
+      if (typeof v === "string") { try { arr = JSON.parse(v); } catch { return null; } }
+      if (!Array.isArray(arr)) return null;
+      const pts = arr
+        .map((p) => ({ k: Number((p as { k?: unknown })?.k), c: Number((p as { c?: unknown })?.c) }))
+        .filter((p) => Number.isFinite(p.k) && Number.isFinite(p.c));
+      return pts.length > 1 ? pts : null;
+    };
     return j.rows
       .map((row): GlHistoryEntry => ({
         date: String(row.date ?? ""),
@@ -1429,6 +1509,7 @@ async function fetchServerGlHistory(): Promise<GlHistoryEntry[]> {
         r2: num(row.r2),
         s2: num(row.s2),
         openInt: Number(row.open_int ?? 0),
+        curve: parseCurve(row.curve),
       }))
       .filter((e) => e.date && e.spot > 0);
   } catch {
@@ -1443,9 +1524,48 @@ function mergeGlHistory(server: GlHistoryEntry[], local: GlHistoryEntry[]): GlHi
   for (const e of server) byDate.set(e.date, e);
   for (const e of local) {
     const cur = byDate.get(e.date);
-    if (!cur || (e.t ?? 0) > (cur.t ?? 0)) byDate.set(e.date, e);
+    // A pre-curve localStorage row can still win on `t`; don't let it drop a
+    // curve the server already has for that date.
+    if (!cur || (e.t ?? 0) > (cur.t ?? 0)) byDate.set(e.date, { ...e, curve: e.curve ?? cur?.curve ?? null });
   }
   return [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+// Per-day snapshot of the cumulative-gamma curve, drawn with the same
+// green-positive / red-negative treatment as NetGammaByStrikeChart so a glance
+// down the column shows the gamma profile flipping across days. Axis-free by
+// design — the numeric columns beside it carry the actual levels.
+function GlCurveSpark({ curve, neutral }: { curve?: { k: number; c: number }[] | null; neutral?: number | null }) {
+  const W = 104, H = 28, padY = 3;
+  if (!curve || curve.length < 2) return <span style={{ opacity: 0.35 }}>—</span>;
+  const pts: GlCurvePt[] = curve.map((p) => ({ strike: p.k, cum: p.c }));
+  const xlo = pts[0].strike, xhi = pts[pts.length - 1].strike;
+  const x = (k: number) => ((k - xlo) / (xhi - xlo || 1)) * W;
+  const vals = pts.map((p) => p.cum);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const y = (v: number) => padY + (1 - (v - lo) / (hi - lo)) * (H - padY * 2);
+  const y0 = y(0);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} style={{ display: "block" }} aria-hidden>
+      <line x1={0} x2={W} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+      {glSignSegments(pts).map((seg, i) => {
+        const c = GL_SIGN_COLOR(seg.sign);
+        const lp = seg.pts.map((p, j) => `${j === 0 ? "M" : "L"} ${x(p.strike).toFixed(2)} ${y(p.cum).toFixed(2)}`).join(" ");
+        const first = seg.pts[0], last = seg.pts[seg.pts.length - 1];
+        return (
+          <g key={i}>
+            <path d={`${lp} L ${x(last.strike).toFixed(2)} ${y0.toFixed(2)} L ${x(first.strike).toFixed(2)} ${y0.toFixed(2)} Z`} fill={`${c}33`} stroke="none" />
+            <path d={lp} fill="none" stroke={c} strokeWidth={1.25} />
+          </g>
+        );
+      })}
+      {neutral != null && neutral >= xlo && neutral <= xhi && (
+        <line x1={x(neutral)} x2={x(neutral)} y1={0} y2={H} stroke={HOME_THEME.text} strokeWidth={1} strokeDasharray="2 2" opacity={0.45} />
+      )}
+    </svg>
+  );
 }
 
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
@@ -1458,6 +1578,7 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
         <thead>
           <tr>
             <th style={{ ...th, textAlign: "left" }}>Date</th>
+            <th style={{ ...th, textAlign: "center" }}>Curve</th>
             <th style={th}>Price</th>
             <th style={th}>Resistance</th>
             <th style={th}>Support</th>
@@ -1473,6 +1594,11 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
           {rows.map((r) => (
             <tr key={r.date}>
               <td style={{ ...td, textAlign: "left" }}>{glFmtDate(r.date)}</td>
+              <td style={{ ...td, padding: "4px 8px", textAlign: "center" }}>
+                <div style={{ display: "flex", justifyContent: "center" }} title="Cumulative gamma$ across all strikes as of this row's last update — dashed line = Neutral (gamma flip)">
+                  <GlCurveSpark curve={r.curve} neutral={r.neutral} />
+                </div>
+              </td>
               <td style={td}>{glFmt2(r.spot)}</td>
               <td style={td}>{r.resistance != null ? glFmt0(r.resistance) : "—"}</td>
               <td style={td}>{r.support != null ? glFmt0(r.support) : "—"}</td>
@@ -1613,6 +1739,9 @@ function GexLevelsTab() {
         date: today, t: Date.now(), spot: d.spot, resistance: d.resistance, support: d.support, neutral: d.neutral,
         dollarGamma: d.dollarGamma, cpgRatio: d.cpgRatio, r2: d.r2, s2: d.s2,
         openInt: d.totalCallOI + d.totalPutOI,
+        // Same cumulative curve the Net gamma card renders, downsampled — this
+        // is the per-day snapshot the table's Curve column draws.
+        curve: glDownsampleCurve(glCumulativeByStrike(d.rows)),
       };
       let next: GlHistoryEntry[];
       if (idx === -1) {
@@ -1776,10 +1905,10 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={rightOrder.handleDragStart("netGamma")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Cumulative across ALL listed strikes — crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
+                    subtitle="Cumulative across ALL listed strikes — green above zero (dealers long gamma), red below (short gamma); crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
                   >
                     <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
-                    <ChartLegend items={[{ label: "Cumulative Gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
+                    <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
                   </Card>
                 ),
                 callPutGamma: (
