@@ -219,7 +219,18 @@ export const config = {
     // PUBLIC_PATTERN, and gets 307'd to "/" — the element then receives HTML
     // instead of video and silently falls back to its poster. The asset looks
     // "missing" while actually being deployed and gated.
-    "/((?!_next|proxy|ws|.*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm|mov|m4v|ogg|mp3)).*)",
-    "/(api)(.*)",
+    // NOTE: /api/discord-share is excluded from BOTH entries below (it would
+    // otherwise match each one). Reason: this middleware runs on the Node.js
+    // runtime, and Next builds the middleware's Request from the same incoming
+    // Node stream the route handler later needs. For a POST carrying a body the
+    // stream is consumed here, and the route then dies with "TypeError: Response
+    // body object should not be disturbed or locked" at fromNodeNextRequest —
+    // before one line of handler code runs. GETs have no body, so nothing else
+    // on the site shows it. Skipping middleware is safe for THIS route only
+    // because app/api/discord-share/route.ts does its own getServerUserId() +
+    // OWNER_USER_ID gate. Do NOT copy this exclusion to a route that relies on
+    // middleware for auth.
+    "/((?!_next|proxy|ws|api/discord-share|.*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm|mov|m4v|ogg|mp3)).*)",
+    "/api/((?!discord-share(?:/|$)).*)",
   ],
 };
