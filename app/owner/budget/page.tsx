@@ -26,7 +26,20 @@ type RegisterRow = {
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type DailyBalance = { day: string; coastal: number; truist: number; secu: number };
 type AmazonRow = { id: number; work_date: string; pay: number; gas: number };
-type PropSource = "prop" | "cbedge";
+type PropSource = "prop" | "cbedge" | "contracts";
+// Per-stream wording for the Bzila entry form. Keeps the source-specific
+// labels/defaults in one place instead of ternaries at each field.
+const PROP_SOURCE_UI: Record<PropSource, {
+  label: string;
+  defaultFirm: string;
+  firmPlaceholder: string;
+  costLabel: string;
+  payoutLabel: string;
+}> = {
+  prop:      { label: "Prop",      defaultFirm: "TPT",      firmPlaceholder: "Firm",            costLabel: "− Purchase", payoutLabel: "+ Payout" },
+  cbedge:    { label: "CB Edge",   defaultFirm: "CB EDGE",  firmPlaceholder: "Source / vendor", costLabel: "− Spend",    payoutLabel: "+ Earnings" },
+  contracts: { label: "Contracts", defaultFirm: "CONTRACT", firmPlaceholder: "Client",          costLabel: "− Expense",  payoutLabel: "+ Invoice" },
+};
 type PropRow = { id: number; entry_date: string; source: PropSource; firm: string; accounts: number; cost: number; payout: number; note?: string | null };
 // A Bzila ledger line, normalized across all three streams (prop + cbedge come
 // from budget_prop; contracts are read out of the Payments register).
@@ -349,9 +362,10 @@ export default function BudgetPage() {
   }, [amazonRows]);
 
   // Bzila — the business ledger. Three streams merged into one set of entries:
-  //   prop + cbedge → budget_prop rows (entered on this tab)
-  //   contracts     → Payments register rows in a Contracts category (read only,
-  //                   so a contract is never entered twice)
+  //   prop + cbedge + contracts → budget_prop rows (entered on this tab)
+  //   contracts                 → ALSO picked up from Payments register rows in a
+  //                               Contracts category (read only). Enter a contract
+  //                               here or there, not both.
   // Grouped by month (newest first) with per-stream and year totals.
   const bzilaComputed = useMemo(() => {
     const contractCatIds = new Set(categories.filter((c) => /contract/i.test(c.name)).map((c) => c.id));
@@ -362,7 +376,7 @@ export default function BudgetPage() {
         key: `p${r.id}`,
         id: r.id,
         date: r.entry_date,
-        stream: r.source === "cbedge" ? "cbedge" : "prop",
+        stream: r.source === "cbedge" ? "cbedge" : r.source === "contracts" ? "contracts" : "prop",
         label: r.firm,
         accounts: r.accounts || 0,
         inAmt: r.payout || 0,
@@ -722,7 +736,8 @@ export default function BudgetPage() {
     setAzGas("");
   };
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
-  // Bzila ledger (prop + cbedge; contracts are entered on Payments instead).
+  // Bzila ledger (prop + cbedge + contracts). Contracts can also arrive from the
+  // Payments register — see bzilaComputed.
   const addProp = async () => {
     if (ppDate.trim() === "") return;
     const amt = Math.abs(Number(ppCost || 0));
@@ -731,7 +746,7 @@ export default function BudgetPage() {
       action: "propAdd",
       date: ppDate,
       source: ppSource,
-      firm: ppFirm.trim().toUpperCase() || (ppSource === "cbedge" ? "CB EDGE" : "TPT"),
+      firm: ppFirm.trim().toUpperCase() || PROP_SOURCE_UI[ppSource].defaultFirm,
       accounts: ppSource === "prop" && ppKind === "cost" ? Number(ppAccounts || 0) : 0,
       cost: ppKind === "cost" ? amt : 0,
       payout: ppKind === "payout" ? amt : 0,
@@ -932,18 +947,18 @@ export default function BudgetPage() {
             <input type="date" value={ppDate} onChange={(e) => setPpDate(e.target.value)} style={field()} />
             <ThemedSelect
               value={ppSource}
-              onChange={(v) => { setPpSource(v as PropSource); setPpFirm(v === "cbedge" ? "CB EDGE" : "TPT"); }}
-              options={[{ value: "prop", label: "Prop" }, { value: "cbedge", label: "CB Edge" }]}
+              onChange={(v) => { setPpSource(v as PropSource); setPpFirm(PROP_SOURCE_UI[v as PropSource].defaultFirm); }}
+              options={(Object.keys(PROP_SOURCE_UI) as PropSource[]).map((s) => ({ value: s, label: PROP_SOURCE_UI[s].label }))}
             />
             <ThemedSelect
               value={ppKind}
               onChange={(v) => setPpKind(v as "cost" | "payout")}
               options={[
-                { value: "cost", label: ppSource === "cbedge" ? "− Spend" : "− Purchase" },
-                { value: "payout", label: ppSource === "cbedge" ? "+ Earnings" : "+ Payout" },
+                { value: "cost", label: PROP_SOURCE_UI[ppSource].costLabel },
+                { value: "payout", label: PROP_SOURCE_UI[ppSource].payoutLabel },
               ]}
             />
-            <input value={ppFirm} onChange={(e) => setPpFirm(e.target.value)} placeholder={ppSource === "cbedge" ? "Source / vendor" : "Firm"} style={field()} />
+            <input value={ppFirm} onChange={(e) => setPpFirm(e.target.value)} placeholder={PROP_SOURCE_UI[ppSource].firmPlaceholder} style={field()} />
             <input value={ppAccounts} onChange={(e) => setPpAccounts(e.target.value)} placeholder="Accts" type="number" disabled={ppSource !== "prop" || ppKind === "payout"} style={{ ...field(), opacity: ppSource !== "prop" || ppKind === "payout" ? 0.4 : 1 }} />
             <input value={ppCost} onChange={(e) => setPpCost(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addProp()} placeholder={ppKind === "payout" ? "Amount in $" : "Amount out $"} type="number" style={field()} />
             <button onClick={addProp} style={primary()}>Add</button>

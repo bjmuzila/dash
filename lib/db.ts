@@ -119,13 +119,23 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_playbook_date ON playbook_feed(date);
     CREATE INDEX IF NOT EXISTS idx_playbook_ts ON playbook_feed(timestamp);
 
+    -- NOTE: UNIQUE is ("slotKey","intervalMinutes"), NOT slotKey alone. slotKey is
+    -- 'YYYY-MM-DDTHH:MM' and carries no interval, so a 1m bar at 09:30 and a 5m
+    -- bar at 09:30 are the SAME key. Under the old slotKey-only UNIQUE the 1m bar
+    -- silently overwrote the 5m bar's close+volume (and left intervalMinutes
+    -- reading 5, so the damage didn't even show up in a GROUP BY). Existing DBs
+    -- are migrated by scripts/migrate-es-candles-composite-key.sql — this CREATE
+    -- is IF NOT EXISTS and will NOT retrofit them.
     CREATE TABLE IF NOT EXISTS es_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
-      "slotKey" TEXT NOT NULL UNIQUE, time TEXT, symbol TEXT, "intervalMinutes" INTEGER,
-      source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL
+      "slotKey" TEXT NOT NULL, time TEXT, symbol TEXT,
+      "intervalMinutes" INTEGER NOT NULL DEFAULT 5,
+      source TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, "avgVolume" REAL,
+      CONSTRAINT es_candles_slot_interval_key UNIQUE ("slotKey", "intervalMinutes")
     );
     CREATE INDEX IF NOT EXISTS idx_ec_date ON es_candles(date);
     CREATE INDEX IF NOT EXISTS idx_ec_slot ON es_candles("slotKey");
+    CREATE INDEX IF NOT EXISTS idx_ec_interval_date ON es_candles("intervalMinutes", date);
 
     CREATE TABLE IF NOT EXISTS nq_candles (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
@@ -362,12 +372,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Drop the old one-row-per-day uniqueness so multiple deliveries can share a date.
     ALTER TABLE budget_amazon DROP CONSTRAINT IF EXISTS budget_amazon_profile_id_work_date_key;
 
-    -- Bzila business ledger: one row per dated event. The source column splits the two
-    -- streams entered here — 'prop' (firm evals/resets + payouts) and 'cbedge'
-    -- (CB Edge earnings + spending). The third Bzila stream, contracts, is NOT
-    -- stored here: it lives in the register (Payments) under a Contracts
-    -- category and is read from there, so it's never entered twice.
-    -- cost = money out, payout = money in, for both sources.
+    -- Bzila business ledger: one row per dated event. The source column splits the
+    -- streams entered here — 'prop' (firm evals/resets + payouts), 'cbedge'
+    -- (CB Edge earnings + spending), and 'contracts' (contract work entered
+    -- directly on the Bzila tab).
+    -- Contracts have TWO sources by design: rows entered here, plus register
+    -- (Payments) rows in a Contracts category, which are read in as read-only
+    -- ledger lines. Enter a given contract in one place or the other, never both.
+    -- cost = money out, payout = money in, for all sources.
     CREATE TABLE IF NOT EXISTS budget_prop (
       id SERIAL PRIMARY KEY,
       profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
@@ -3193,9 +3205,13 @@ export async function ensureEsCandlesTable(): Promise<void> { /* handled in ensu
 export async function upsertEsCandle(r: Omit<EsCandleDbRecord, "id">): Promise<void> {
   const pool = await getDb();
   await pool.query(
+    // Conflict target MUST include "intervalMinutes" — on slotKey alone a 1-minute
+    // bar and a 5-minute bar at the same clock time are the same row, and this
+    // upsert would overwrite the 5m close+volume with 1m values. See
+    // scripts/migrate-es-candles-composite-key.sql.
     `INSERT INTO es_candles (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT("slotKey") DO UPDATE SET
+     ON CONFLICT("slotKey","intervalMinutes") DO UPDATE SET
        timestamp=EXCLUDED.timestamp, high=GREATEST(es_candles.high,EXCLUDED.high), low=LEAST(es_candles.low,EXCLUDED.low),
        close=EXCLUDED.close, volume=EXCLUDED.volume, "avgVolume"=EXCLUDED."avgVolume"`,
     [r.timestamp, r.date, r.slotKey, r.time ?? "", r.symbol ?? "/ES", r.intervalMinutes ?? 5,
@@ -3203,28 +3219,47 @@ export async function upsertEsCandle(r: Omit<EsCandleDbRecord, "id">): Promise<v
   );
 }
 
-export async function getEsCandles(date?: string, daysBack?: number, limit = 2000): Promise<EsCandleDbRecord[]> {
+/**
+ * Read ES candles at ONE aggregation.
+ *
+ * `intervalMinutes` is REQUIRED in every query and defaults to 5. This table now
+ * holds mixed intervals, and an unfiltered `SELECT *` returns 1m and 5m bars
+ * interleaved in a single ascending-by-timestamp array — which looks like
+ * plausible data and is not. Every existing caller (chart, IB stats, signals
+ * engine, backtests) wants 5m, hence the default: their behaviour is unchanged.
+ */
+export async function getEsCandles(
+  date?: string, daysBack?: number, limit = 2000, intervalMinutes = 5
+): Promise<EsCandleDbRecord[]> {
   if (date) {
     return queryAll<EsCandleDbRecord>(
-      `SELECT * FROM es_candles WHERE date = ? ORDER BY timestamp ASC LIMIT ?`,
-      [date, limit]
+      `SELECT * FROM es_candles WHERE date = ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
+      [date, intervalMinutes, limit]
     );
   }
   if (daysBack) {
     const cutoff = new Date(Date.now() - daysBack * 86400_000).toISOString().slice(0, 10);
     return queryAll<EsCandleDbRecord>(
-      `SELECT * FROM es_candles WHERE date >= ? ORDER BY timestamp ASC LIMIT ?`,
-      [cutoff, limit]
+      `SELECT * FROM es_candles WHERE date >= ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, intervalMinutes, limit]
     );
   }
   return queryAll<EsCandleDbRecord>(
-    `SELECT * FROM es_candles ORDER BY timestamp DESC LIMIT ?`,
-    [limit]
+    `SELECT * FROM es_candles WHERE "intervalMinutes" = ? ORDER BY timestamp DESC LIMIT ?`,
+    [intervalMinutes, limit]
   );
 }
 
 // ── NQ candles (5m NASDAQ futures — parallel to es_candles, own table so ES
 //    stays untouched and the unique-slotKey conflict target doesn't collide) ────
+//
+// ⚠ LATENT: this table still keys on slotKey ALONE, which is the exact defect
+//   that corrupted es_candles (slotKey has no interval in it, so a 1m and a 5m
+//   bar at the same clock time are one row and the upsert below silently
+//   overwrites close+volume). It is not a live bug ONLY because nothing writes
+//   1m NQ bars today. Before adding any NQ interval other than 5m, migrate this
+//   to UNIQUE("slotKey","intervalMinutes") — see
+//   scripts/migrate-es-candles-composite-key.sql for the pattern.
 
 export async function upsertNqCandle(r: Omit<EsCandleDbRecord, "id">): Promise<void> {
   const pool = await getDb();
@@ -4375,7 +4410,7 @@ export async function listAmazonRows(profileId: number, fromDate: string, toDate
 }
 
 // ── Prop-firm spending log ────────────────────────────────────────────────────
-export type BudgetPropSource = "prop" | "cbedge";
+export type BudgetPropSource = "prop" | "cbedge" | "contracts";
 
 export interface BudgetPropRecord {
   id: number;
@@ -4392,7 +4427,7 @@ export interface BudgetPropRecord {
 }
 
 function normSource(v: unknown): BudgetPropSource {
-  return v === "cbedge" ? "cbedge" : "prop";
+  return v === "cbedge" ? "cbedge" : v === "contracts" ? "contracts" : "prop";
 }
 
 export async function insertPropRow(input: {

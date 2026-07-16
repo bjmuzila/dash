@@ -53,7 +53,7 @@ export function ThemedSelect({
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<{ left: number; top: number; width: number; maxH: number } | null>(null);
+  const [rect, setRect] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
 
   // Anchor the portal'd menu under the trigger; flip above when it would
   // overflow the viewport bottom. Reposition on scroll/resize.
@@ -69,7 +69,9 @@ export function ThemedSelect({
       const maxH = Math.max(120, Math.min(maxMenuHeight, flip ? above : below));
       setRect({
         left: Math.max(PAD, Math.min(r.left, window.innerWidth - r.width - PAD)),
-        top: flip ? r.top - GAP - maxH : r.bottom + GAP,
+        // When flipped, pin the menu's BOTTOM to the trigger so it hugs it
+        // regardless of content height.
+        ...(flip ? { bottom: window.innerHeight - r.top + GAP } : { top: r.bottom + GAP }),
         width: r.width,
         maxH,
       });
@@ -146,7 +148,7 @@ export function ThemedSelect({
           role="listbox"
           style={{
             position: "fixed",
-            top: rect.top,
+            ...(rect.bottom !== undefined ? { bottom: rect.bottom } : { top: rect.top }),
             left: rect.left,
             width: rect.width,
             maxHeight: rect.maxH,

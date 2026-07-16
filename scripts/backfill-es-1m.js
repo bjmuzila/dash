@@ -2,14 +2,25 @@
 /**
  * scripts/backfill-es-1m.js
  *
- * One-shot backfill: pulls 1-minute RTH ES candles from dxLink (as far back
- * as dxFeed will serve) and upserts them into es_candles (intervalMinutes=1).
+ * One-shot backfill: pulls RTH ES candles from dxLink (as far back as dxFeed
+ * will serve) and upserts them into es_candles at the requested aggregation.
+ *
+ * ⚠ REQUIRES the composite key. Run scripts/migrate-es-candles-composite-key.sql
+ *   before this script. Against the old UNIQUE("slotKey") schema, a 1m pull
+ *   silently overwrote the close+volume of every 5m bar on a :00/:05/:10 minute
+ *   (slotKey has no interval in it, so the two collide). On the migrated schema
+ *   the conflict target below names both columns and they coexist.
  *
  * Usage (from repo root on VPS or locally with a valid .env.local):
  *
- *   node scripts/backfill-es-1m.js
+ *   node scripts/backfill-es-1m.js                       # 1m, full history
+ *   BACKFILL_INTERVAL=5 BACKFILL_FROM=2026-06-23 \
+ *   BACKFILL_TO=2026-06-30 node scripts/backfill-es-1m.js   # repair a 5m window
  *
  * Optional env overrides:
+ *   BACKFILL_INTERVAL=1|5    aggregation to pull → dxLink {=Nm} + intervalMinutes (default 1)
+ *   BACKFILL_FROM=YYYY-MM-DD only write bars on/after this ET date (default: no floor)
+ *   BACKFILL_TO=YYYY-MM-DD   only write bars on/before this ET date (default: no ceiling)
  *   BACKFILL_DAYS_BACK=730   how far back to request (dxFeed may cap it; default 730 = ~2yr)
  *   BACKFILL_DRY_RUN=1       parse + print stats but skip DB writes
  *   GEX_DEBUG=1              verbose per-candle logging
@@ -19,11 +30,16 @@
  *   2. GET /api-quote-tokens  -> dxLink WS URL + quote token.
  *   3. Resolve front /ES streamer symbol (e.g. /ESU26:XCME).
  *   4. Open dxLink WS, run SETUP -> AUTH -> CHANNEL_REQUEST -> FEED_SETUP.
- *   5. Subscribe Candle "/ESU26:XCME{=1m}" with fromTime = now - BACKFILL_DAYS_BACK * 86400000.
- *   6. Collect all Candle events.  Filter to RTH (09:30–16:00 ET, Mon–Fri).
+ *   5. Subscribe Candle "/ESU26:XCME{=Nm}" with fromTime = now - BACKFILL_DAYS_BACK * 86400000.
+ *   6. Collect all Candle events.  Filter to RTH (09:30–16:00 ET, Mon–Fri) and
+ *      to the optional BACKFILL_FROM/TO date window.
  *   7. Once the stream goes "live" (bar timestamp ≥ now - 5min), flush remaining
  *      rows to DB and exit. Also exits if no new candles arrive for 30s.
- *   8. Upsert into es_candles via ON CONFLICT("slotKey") DO UPDATE.
+ *   8. Upsert into es_candles via ON CONFLICT("slotKey","intervalMinutes").
+ *
+ * Repairing a damaged 5m range is safe and idempotent: `open` is never updated,
+ * high/low use GREATEST/LEAST (a fresh 5m bar's range equals the stored one), and
+ * close/volume are overwritten outright — which is exactly what was broken.
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env.local') });
@@ -43,6 +59,20 @@ const DXLINK_WS_URL    = process.env.DXFEED_WS_URL || 'wss://tasty-openapi-ws.dx
 const DAYS_BACK        = Number(process.env.BACKFILL_DAYS_BACK || 730);
 const DRY_RUN          = process.env.BACKFILL_DRY_RUN === '1';
 const DEBUG            = process.env.GEX_DEBUG === '1';
+// Which aggregation to pull: 1 or 5. Drives BOTH the dxLink subscription
+// ("{=1m}"/"{=5m}") and the intervalMinutes column, so a 5m pull repairs the 5m
+// rows in place and a 1m pull lands beside them.
+const INTERVAL         = Number(process.env.BACKFILL_INTERVAL || 1);
+// Optional ET date window (inclusive), 'YYYY-MM-DD'. Bars outside are dropped
+// before any write. Used to repair a specific damaged range without rewriting
+// history that was never broken.
+const FROM_DATE        = (process.env.BACKFILL_FROM || '').trim() || null;
+const TO_DATE          = (process.env.BACKFILL_TO   || '').trim() || null;
+
+if (INTERVAL !== 1 && INTERVAL !== 5) {
+  console.error(`[backfill] BACKFILL_INTERVAL must be 1 or 5 (got ${INTERVAL})`);
+  process.exit(1);
+}
 // Continuous contract symbol override — dxFeed serves the rolling front-month
 // under /ES:XCME (no contract month code). Set ES_CANDLE_SYMBOL to override.
 const ES_CANDLE_SYMBOL = process.env.ES_CANDLE_SYMBOL || null;
@@ -135,9 +165,16 @@ function isRth(epochMs) {
 }
 
 // ---------------------------------------------------------------------------
-// Slot key (1-minute granularity)
+// Slot key, floored to INTERVAL minutes.
+//
+// NOTE the shape of the key: 'YYYY-MM-DDTHH:MM' with NO interval in it. That is
+// deliberate (it matches the 5m writer in proxy-tastytrade.js) and it is why
+// es_candles must be keyed UNIQUE("slotKey","intervalMinutes") — on slotKey
+// alone, the 1m bar at 09:30 and the 5m bar at 09:30 are the same row, and this
+// script's upsert overwrote the 5m close+volume with 1m values for every
+// :00/:05/:10 minute. See scripts/migrate-es-candles-composite-key.sql.
 // ---------------------------------------------------------------------------
-function etOneMinSlot(epochMs) {
+function etSlot(epochMs, intervalMin) {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -147,10 +184,13 @@ function etOneMinSlot(epochMs) {
   const parts = Object.fromEntries(fmt.formatToParts(new Date(epochMs)).map((p) => [p.type, p.value]));
   const date    = `${parts.year}-${parts.month}-${parts.day}`;
   const hour    = parts.hour === '24' ? '00' : parts.hour;
-  const time    = `${hour}:${parts.minute}`;
+  // Floor the ET minute to the interval so a 5m pull yields :00/:05/:10… exactly
+  // as the live 5m writer does — otherwise a re-pull would create NEW rows next
+  // to the real ones instead of repairing them.
+  const slotMin = String(Math.floor(Number(parts.minute || '0') / intervalMin) * intervalMin).padStart(2, '0');
+  const time    = `${hour}:${slotMin}`;
   const slotKey = `${date}T${time}`;
-  // Floor to 1-min boundary
-  const slotMs = Math.floor(epochMs / 60_000) * 60_000;
+  const slotMs  = Math.floor(epochMs / (intervalMin * 60_000)) * (intervalMin * 60_000);
   return { slotKey, date, time, slotMs };
 }
 
@@ -163,10 +203,18 @@ async function flushToDB(candles) {
   for (const r of candles) {
     try {
       await pool.query(
+        // ON CONFLICT MUST name ("slotKey","intervalMinutes"). With slotKey alone
+        // this statement is what corrupted 468 five-minute rows on 2026-06-23→30:
+        // every 1m bar on a :00/:05/:10 minute matched the 5m row of the same
+        // clock time and replaced its close+volume — while leaving
+        // intervalMinutes reading 5, so nothing looked wrong.
+        //
+        // `high`/`low` use GREATEST/LEAST and `open` is untouched, which is why a
+        // clean re-pull fully repairs those rows rather than half-fixing them.
         `INSERT INTO es_candles
            (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT("slotKey") DO UPDATE SET
+         ON CONFLICT("slotKey","intervalMinutes") DO UPDATE SET
            timestamp=EXCLUDED.timestamp,
            high=GREATEST(es_candles.high,EXCLUDED.high),
            low=LEAST(es_candles.low,EXCLUDED.low),
@@ -175,7 +223,7 @@ async function flushToDB(candles) {
            "avgVolume"=EXCLUDED."avgVolume"`,
         [
           r.slotMs, r.date, r.slotKey, r.time,
-          '/ES', 1, 'dxlink-backfill',
+          '/ES', INTERVAL, `dxlink-backfill-${INTERVAL}m`,
           r.open, r.high, r.low, r.close, r.volume, 0,
         ]
       );
@@ -205,10 +253,16 @@ async function main() {
   console.log(`[backfill] Quote token ok, WS=${wsUrl}`);
 
   const esStreamer = ES_CANDLE_SYMBOL || await resolveFrontEs(accessToken);
-  const candleSymbol = ES_CANDLE_SYMBOL ? `${ES_CANDLE_SYMBOL}{=1m}` : `${esStreamer}{=1m}`;
+  // dxLink aggregates server-side by the {=Nm} suffix, so this is what decides
+  // whether we get 1m or 5m bars — it must track INTERVAL, not be hardcoded.
+  const candleSymbol = `${ES_CANDLE_SYMBOL || esStreamer}{=${INTERVAL}m}`;
   const fromTime = Date.now() - DAYS_BACK * 86_400_000;
   console.log(`[backfill] ES symbol: ${esStreamer}  candle: ${candleSymbol}`);
+  console.log(`[backfill] interval: ${INTERVAL}m  →  intervalMinutes=${INTERVAL}`);
   console.log(`[backfill] fromTime: ${new Date(fromTime).toISOString()}  (${DAYS_BACK} days back)`);
+  if (FROM_DATE || TO_DATE) {
+    console.log(`[backfill] ET date window: ${FROM_DATE || '-inf'} .. ${TO_DATE || '+inf'} (inclusive)`);
+  }
 
   // Collected RTH candles keyed by slotKey (merge in case dxFeed sends partials)
   const candleMap = new Map(); // slotKey -> row
@@ -316,7 +370,11 @@ async function main() {
               totalReceived++;
               lastEventAt = Date.now();
 
-              const { slotKey, date, time, slotMs } = etOneMinSlot(barTime);
+              const { slotKey, date, time, slotMs } = etSlot(barTime, INTERVAL);
+              // Optional repair window — drop anything outside it before it can
+              // touch rows that were never broken.
+              if (FROM_DATE && date < FROM_DATE) continue;
+              if (TO_DATE   && date > TO_DATE)   continue;
               const prev = candleMap.get(slotKey);
               candleMap.set(slotKey, prev
                 ? {
@@ -354,7 +412,7 @@ async function main() {
   const earliest = rows[0]?.slotKey ?? 'n/a';
   const latest   = rows[rows.length - 1]?.slotKey ?? 'n/a';
 
-  console.log(`\n[backfill] ✓ Collected ${rows.length} RTH 1m bars`);
+  console.log(`\n[backfill] ✓ Collected ${rows.length} RTH ${INTERVAL}m bars`);
   console.log(`[backfill]   Range: ${earliest}  →  ${latest}`);
 
   if (DRY_RUN) {
@@ -364,7 +422,7 @@ async function main() {
   } else {
     console.log('[backfill] Writing to es_candles...');
     const written = await flushToDB(rows);
-    console.log(`[backfill] ✓ Upserted ${written} rows into es_candles (intervalMinutes=1)`);
+    console.log(`[backfill] ✓ Upserted ${written} rows into es_candles (intervalMinutes=${INTERVAL})`);
   }
 
   await pool?.end().catch(() => {});
