@@ -148,8 +148,10 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_ib_date ON ib_levels(date);
 
     -- EOD Initial Balance results — one row per (date, symbol), written 16:30 ET
-    -- by server-v2/ib-results-recorder.js via POST /api/ib-results. `rules` is
-    -- the 14-rule scoreboard: [{id,name,state,side,hit,note}].
+    -- by server-v2/ib-results-recorder.js via POST /api/ib-results. The rules
+    -- column is the 14-rule scoreboard: [{id,name,state,side,hit,note}].
+    -- NOTE: this whole block is a JS template literal — never use backticks in
+    -- these SQL comments, they terminate the string and break the build.
     CREATE TABLE IF NOT EXISTS ib_daily_results (
       id SERIAL PRIMARY KEY, date TEXT NOT NULL, symbol TEXT NOT NULL,
       ib_high REAL, ib_low REAL, ib_mid REAL, ib_width REAL, width_bucket TEXT,
