@@ -377,15 +377,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // tracks the current /ESU price — not the stale per-row esPrice.
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; spxPx: number; basis: number | null }>>([]);
   const showMvcLine = true; // CB level always on
-  const [showHeatmap, setShowHeatmap] = useState(!embedded);
-  // In the dock (embed) auto-load a clean candle chart: default the GEX heatmap
-  // profile OFF (user can still toggle it on). Done as an effect, not a lazy
-  // initializer, so it applies client-side after SSR hydration.
-  useEffect(() => {
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("embed") === "1") {
-      setShowHeatmap(false);
-    }
-  }, []);
+  // Default OFF everywhere (was: on unless embedded). The default read on this
+  // chart is candles + GEX bubbles + the rail; the heatmap is the heaviest thing
+  // here (a ~1.6MB backfill and a full-canvas per-column paint) and is now
+  // strictly opt-in. This also makes the old embed-only override redundant — the
+  // dock gets the same clean chart from the default.
+  const [showHeatmap, setShowHeatmap] = useState(false);
   // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
   // history columns than 1-day and visibly slows the chart, so default to
   // the fast 1-day window and let the user opt into 5-day when they want it.
@@ -1506,6 +1503,36 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     return () => clearInterval(id);
   }, [effectiveBasis, hasLevels]);
 
+  // ── Steady basis for the CANVAS overlay ───────────────────────────────────
+  // Same defect the price lines above already fixed, in the other half of the
+  // chart. draw() called effectiveBasis() RAW on every frame, and that is
+  // (lastEsClose − spot) where both sides tick continuously. So a GEX strike
+  // that has not moved in an hour got re-projected onto a wobbling basis 60x a
+  // second, and the bubbles / heatmap / CB line visibly jittered up and down
+  // while the price lines beside them sat perfectly still.
+  //
+  // The pipeline should be: get GEX data → convert to ES ONCE → render. Not
+  // re-convert per frame through a noisy live number. So: same treatment as
+  // lineLevels — snap to the ES tick, republish on a 1-min cadence, and only
+  // repaint when the quantized value actually CHANGED.
+  //
+  // Deps mirror lineLevels: hasLevels flips false→true when the first level
+  // lands, which re-runs this so the overlay converts immediately instead of
+  // waiting out the first 60s with a zero basis.
+  const steadyBasisRef = useRef(0);
+  useEffect(() => {
+    const publish = () => {
+      const b = toTick(effectiveBasis());
+      if (b === steadyBasisRef.current) return; // nothing moved → no repaint
+      steadyBasisRef.current = b;
+      drawOverlayRef.current();
+      railDrawRef.current();
+    };
+    publish();
+    const id = setInterval(publish, 60_000);
+    return () => clearInterval(id);
+  }, [effectiveBasis, hasLevels]);
+
   // Draw GEX level lines (Call Wall / Put Wall / Flip) on the candle series.
   // Update in place; only create/remove when a level appears or disappears.
   useEffect(() => {
@@ -1596,7 +1623,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       // NOT basisRef.current directly: out of hours that's esFut − frozen spot,
       // which is not a basis at all. effectiveBasis() falls back to the prior-day
       // CLOSE basis whenever SPX cash is shut. See its comment.
-      const basis = effectiveBasis();
+      //
+      // steadyBasisRef, NOT effectiveBasis() directly: the raw value is
+      // (lastEsClose − spot) and both tick, so calling it per frame re-projected
+      // every static GEX strike onto a moving basis and the whole overlay
+      // jittered 1-2pt continuously. See the steadyBasisRef comment. Falls back
+      // to the raw value only for the first frame, before the 1-min publisher
+      // has run (it publishes immediately on mount, so this is a hydration-order
+      // guard, not a code path that survives).
+      const basis = steadyBasisRef.current || effectiveBasis();
 
       // ── Per-SESSION ES basis ───────────────────────────────────────────────
       // Strikes live in SPX space; the chart plots ES. The basis (ES − SPX) is
@@ -2582,7 +2617,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               putWall={levels.putWall}
               gexFlip={levels.gexFlip}
               spot={levels.spx}
-              basis={effectiveBasis()}
+              // Steady basis, not effectiveBasis(): this prop is evaluated on
+              // EVERY render, and `levels` gets a new identity on every /ws/gex
+              // frame, so the raw (lastEsClose − spot) value re-projected the
+              // rail's strikes onto a moving basis continuously. `spot` stays
+              // live — that marker SHOULD tick; the strikes should not.
+              basis={steadyBasisRef.current || effectiveBasis()}
               priceToY={priceToY}
               drawRef={railDrawRef}
             />
