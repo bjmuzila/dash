@@ -269,12 +269,12 @@ function buildTpoProfile(
   };
 }
 
-// Floor a ms timestamp to its 5-minute candle slot, returned as a UTC ms boundary
-// aligned to the candle grid (candles use raw ms flooring of /ES bars).
-// The chart's candle grid. timeToCoordinate ONLY resolves at these timestamps,
-// which is why sub-candle buckets used to vanish. Anything finer than this must
-// go through xAt() (see the draw), which interpolates within a bar.
-const CANDLE_MS = 300_000;
+// NOTE: there is deliberately no CANDLE_MS constant any more. It was 300_000 —
+// correct only while this chart was permanently 5m. With the 1m/5m switcher the
+// bar grid is runtime state, so xAt()/slotX() derive `candleMs` from
+// barMinsRef.current instead (see the draw). A constant here would silently
+// mis-place every bubble and heatmap column at 1m, which is exactly what it did.
+//
 // Heatmap column bucket. 1-min: snapshots arrive every ~30s, so each column is
 // the latest snapshot in that minute. Columns are ~barSpacing/5 px wide and are
 // carried forward to the next column's left edge, so the band stays continuous.
@@ -350,6 +350,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Bar aggregation. 1m is a SEPARATE server stream (dxLink aggregates by {=Nm},
   // so 1m detail doesn't exist inside the 5m feed) gated by ES_1M_CANDLES=1.
   const [barMins, setBarMins] = useState<1 | 5>(5);
+  // Read inside the overlay draw (xAt/slotX) to size the bar grid. A ref, so a
+  // switch repaints without re-running the overlay effect.
+  const barMinsRef = useRef<1 | 5>(barMins);
   const { sessionCandles: liveRows, historical, connected, refresh } = useEsCandles(true, 20, barMins);
 
   // Chart candles: 5-day rolling window at 5m so the heatmap's historical columns
@@ -616,6 +619,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // so changing one re-ran the effect and that re-ran draw() as a side effect.
   // Now that the effect subscribes once, updating the ref alone would leave the
   // slider visually dead until the 5s backstop interval — so repaint explicitly.
+  // Sync + repaint: xAt/slotX read barMinsRef to size the bar grid, so a switch
+  // must repaint or every bubble stays positioned for the old bar size.
+  useEffect(() => { barMinsRef.current = barMins; drawOverlayRef.current(); railDrawRef.current(); }, [barMins]);
   useEffect(() => { bubbleScaleRef.current = bubbleScale; drawOverlayRef.current(); }, [bubbleScale]);
   useEffect(() => { bubbleVarRef.current = bubbleVar; drawOverlayRef.current(); }, [bubbleVar]);
   useEffect(() => { bubbleMinsRef.current = bubbleMins; drawOverlayRef.current(); }, [bubbleMins]);
@@ -1906,17 +1912,29 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       }
 
       // ms → screen px, INTERPOLATED INSIDE a candle. timeToCoordinate resolves
-      // only at candle timestamps (CANDLE_MS grid) and returns null everywhere
+      // only at candle timestamps (the bar grid) and returns null everywhere
       // else — that's why 1-min data only rendered every 5 minutes. Anchor on the
       // containing candle, then offset by the sub-bar fraction × barSpacing.
+      //
+      // candleMs MUST track the chart's actual bar size — it is NOT the module
+      // CANDLE_MS constant, which is hardcoded to 5 minutes. That constant was
+      // true while this chart was always 5m; with the 1m/5m switcher it is a lie,
+      // and using it at 1m floors every bubble to the nearest :00/:05 boundary and
+      // then offsets it by a fraction of a ONE-minute bar. Result: every bubble in
+      // a 5-minute window collapses onto the boundary bar, and the trail renders
+      // as vertical stripes every 5 bars instead of a continuous line.
+      //
+      // SLOT_MS stays 60_000: that's the GEX snapshot cadence (how often a column
+      // is recorded), which is a property of the data and independent of bar size.
+      const candleMs = barMinsRef.current * 60_000;
       const barSpacing = (() => {
         try { return ts.options().barSpacing ?? 6; } catch { return 6; }
       })();
       const xAt = (tMs: number): number | null => {
-        const grid = Math.floor(tMs / CANDLE_MS) * CANDLE_MS;
+        const grid = Math.floor(tMs / candleMs) * candleMs;
         const c0 = ts.timeToCoordinate((grid / 1000) as UTCTimestamp);
         if (c0 == null) return null; // no candle there (gap / off-screen)
-        const frac = (tMs - grid) / CANDLE_MS;
+        const frac = (tMs - grid) / candleMs;
         return c0 + frac * barSpacing;
       };
 
@@ -1925,7 +1943,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         const x0 = xAt(slotTs);
         if (x0 == null) return null;
         const xEndRaw = xAt(slotTs + SLOT_MS);
-        const x1 = xEndRaw != null ? xEndRaw : x0 + barSpacing / (CANDLE_MS / SLOT_MS);
+        // Fallback width = one SLOT_MS worth of bars. At 1m bars a 1-min slot is
+        // exactly one bar (ratio 1); at 5m it's a fifth of one.
+        const x1 = xEndRaw != null ? xEndRaw : x0 + barSpacing / (candleMs / SLOT_MS);
         return { left: Math.min(x0, x1), w: Math.max(1, Math.abs(x1 - x0)) };
       };
 

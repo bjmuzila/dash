@@ -28,7 +28,7 @@ import {
   ColorType, CrosshairMode, HistogramSeries, LineSeries, createChart, createSeriesMarkers,
 } from "lightweight-charts";
 import type {
-  IChartApi, ISeriesApi, ISeriesMarkersPluginApi, Time, UTCTimestamp, LineData, HistogramData,
+  IChartApi, ISeriesApi, ISeriesMarkersPluginApi, SeriesMarker, Time, UTCTimestamp, LineData, HistogramData,
 } from "lightweight-charts";
 import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
@@ -455,27 +455,47 @@ function ContractChart({
 
     // Fill / peak / trough as real price lines so they stay pinned while panning.
     const lines = [
-      fillPrice > 0 && { price: fillPrice, color: C.orange, title: side === "buy" ? "BOUGHT" : "SOLD" },
-      track && Number.isFinite(track.peak) && { price: track.peak, color: BULL, title: "PEAK" },
-      track && Number.isFinite(track.trough) && { price: track.trough, color: BEAR, title: "TROUGH" },
-    ].filter(Boolean) as { price: number; color: string; title: string }[];
+      fillPrice > 0 && { price: fillPrice, color: C.orange },
+      track && Number.isFinite(track.peak) && { price: track.peak, color: BULL },
+      track && Number.isFinite(track.trough) && { price: track.trough, color: BEAR },
+    ].filter(Boolean) as { price: number; color: string }[];
     const handles = lines.map((l) =>
       price.createPriceLine({
         price: l.price, color: l.color, lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: l.title,
+        axisLabelVisible: false,
       }),
     );
 
     // The purchase itself — an arrow pinned to the fill bar, so it survives pan
     // and zoom instead of being drawn at a fixed pixel.
     const fillBar = bars.find((b) => b.time >= fillTs - 60_000) ?? bars[0];
-    markersRef.current?.setMarkers([{
+    const markers: SeriesMarker<UTCTimestamp>[] = [{
       time: sec(fillBar.time),
       position: side === "buy" ? "belowBar" : "aboveBar",
       color: C.orange,
       shape: side === "buy" ? "arrowUp" : "arrowDown",
       text: `${side === "buy" ? "BOUGHT" : "SOLD"} ${fmtUsd(fillPrice)}`,
-    }]);
+    }];
+
+    // Peak / trough as arrow markers pinned to their bar — same treatment as the fill.
+    const scan = bars.filter((b) => b.time >= fillTs - 60_000);
+    const src = scan.length ? scan : bars;
+    if (track && Number.isFinite(track.peak)) {
+      const peakBar = src.reduce((a, b) => (b.close > a.close ? b : a), src[0]);
+      markers.push({
+        time: sec(peakBar.time), position: "aboveBar", color: BULL,
+        shape: "arrowDown", text: `PEAK ${fmtUsd(track.peak)}`,
+      });
+    }
+    if (track && Number.isFinite(track.trough)) {
+      const troughBar = src.reduce((a, b) => (b.close < a.close ? b : a), src[0]);
+      markers.push({
+        time: sec(troughBar.time), position: "belowBar", color: BEAR,
+        shape: "arrowUp", text: `TROUGH ${fmtUsd(track.trough)}`,
+      });
+    }
+    markers.sort((a, b) => (a.time as number) - (b.time as number));
+    markersRef.current?.setMarkers(markers);
 
     chart.timeScale().fitContent();
 
