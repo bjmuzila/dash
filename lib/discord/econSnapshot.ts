@@ -327,9 +327,11 @@ export function buildSnapshotHTML(
   const presRowPadV = px(14, presScale);
   const presTimeCol = px(92, presScale);
 
-  // 10, not 11: "FORECAST"/"PREVIOUS" are the longest labels on the canvas and
-  // have to fit econNumCol (58 * scale). At 11 they overflow their cell and
-  // collide with the neighbouring header. Keep this in step with econNumCol.
+  // Header labels must fit econNumCol (58 * scale ~= 62px). Bold uppercase runs
+  // about 0.72em per glyph, so "FORECAST"/"PREVIOUS" need ~67px and collided
+  // with their neighbour — hence "Fcst"/"Prev" in the markup below. The data in
+  // those columns ("216K", "12.7") was never the problem, so the columns stay
+  // narrow and the Event column keeps the width instead.
   const econHeadSize = px(10, econScale);
   const econTimeSize = px(14, econScale);
   const econEventSize = px(16, econScale);
@@ -442,7 +444,10 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .chip-logo img{width:36px;height:36px;object-fit:contain;display:block}
 /* Ticker fallback chip — same nudged-padding rule; 36px box matches the logos. */
 .chip-fb{display:block;width:36px;height:36px;line-height:1;padding:${13 - nudgePx(10)}px 0 ${13 + nudgePx(10)}px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
-.chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* Same trap as .ec-event: overflow:hidden + a tight line-height made
+   html2canvas shear the bottom off every ticker (NFLX rendered as "NFLY").
+   No clipping, and leading to spare. Tickers are <=5 chars — they fit. */
+.chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:15px;white-space:nowrap}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 .pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
 .pres-row:last-child{border-bottom:none}
@@ -498,7 +503,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
       ${economicEvents.length > 0 ? `
       <div class="econ-table">
         <div class="econ-row head">
-          <div>Time</div><div>Event</div><div>Impact</div><div style="text-align:right">Actual</div><div style="text-align:right">Forecast</div><div style="text-align:right">Previous</div>
+          <div>Time</div><div>Event</div><div>Impact</div><div style="text-align:right">Actual</div><div style="text-align:right">Fcst</div><div style="text-align:right">Prev</div>
         </div>
         ${econRowsHTML}
       </div>` : `<div class="empty-panel">No high-impact events today</div>`}

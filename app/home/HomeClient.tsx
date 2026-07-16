@@ -125,6 +125,14 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
+// Heatmap cells only: always millions, whole numbers. Fixed unit + no decimals
+// keeps cell width stable so the grid doesn't twitch as values tick.
+function fmtCellM(v: number) {
+  if (!isFinite(v)) return "--";
+  const m = Math.round(v / 1e6);
+  return (m < 0 ? "-" : "+") + "$" + Math.abs(m).toLocaleString("en-US") + "M";
+}
+
 // Heatmap rank badge ("#1", "#2"...), rasterized as an inline SVG data URI
 // rather than live DOM text. html2canvas is unreliable rasterizing text this
 // small (9px) inside a flex layout — captures were showing a blank/garbled
@@ -276,9 +284,13 @@ function toHeatmapRows(
   spot: number,
   rollingByStrike?: Map<number, number>,
   spyGex?: OffsetGexMap,
-  qqqGex?: OffsetGexMap
+  qqqGex?: OffsetGexMap,
+  // Which strikes are VISIBLE is centered on centerSpot (a coarse, 5-strike-quantized
+  // spot) so the row set doesn't add/drop a strike on every tick. Which row is ATM
+  // still uses the live spot, so the highlight tracks price continuously.
+  centerSpot?: number
 ): HeatmapRow[] {
-  const windowRows = pickCenterRows(rows, spot, 20);
+  const windowRows = pickCenterRows(rows, centerSpot ?? spot, 20);
   // Rank by OI+Vol net (netGEX OI-only + netVolGEX vol-only), matching the column.
   const oiVol = (r: ChainRow) => (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
   const byAbsPos = [...windowRows].filter((row) => oiVol(row) > 0).sort((a, b) => Math.abs(oiVol(b)) - Math.abs(oiVol(a))).slice(0, 5);
@@ -320,16 +332,16 @@ function toHeatmapRows(
     return {
       strikeNum: row.strike,
       strike: formatStrikeValue(row.strike),
-      netGexVal: net,        netGex: fmtMoney(net),
-      volOnlyVal: volOnly,   volOnly: fmtMoney(volOnly),
-      dexVal: dex,           dex: fmtMoney(dex),
+      netGexVal: net,        netGex: fmtCellM(net),
+      volOnlyVal: volOnly,   volOnly: fmtCellM(volOnly),
+      dexVal: dex,           dex: fmtCellM(dex),
       rollingVal: rolling ?? null,
-      rolling: rolling == null ? "—" : fmtMoney(rolling),
+      rolling: rolling == null ? "—" : fmtCellM(rolling),
       spyGexVal: spyCell ? spyCell.netGEX : null,
-      spyGex: spyCell ? fmtMoney(spyCell.netGEX) : "—",
+      spyGex: spyCell ? fmtCellM(spyCell.netGEX) : "—",
       spyStrike: spyCell ? spyCell.strike : null,
       qqqGexVal: qqqCell ? qqqCell.netGEX : null,
-      qqqGex: qqqCell ? fmtMoney(qqqCell.netGEX) : "—",
+      qqqGex: qqqCell ? fmtCellM(qqqCell.netGEX) : "—",
       qqqStrike: qqqCell ? qqqCell.strike : null,
       type,
       rank: rankMap.get(row.strike)?.rank,
@@ -916,15 +928,31 @@ export function HomeClient({
     [expiryOptions, selectedExpiry]
   );
 
+  // Coarse spot that only moves in whole 5-strike steps. The visible strike window
+  // is centered on THIS, so a 1-point tick can no longer add a strike at one end and
+  // drop one at the other — the row set only shifts once price has covered 5 strikes.
+  const centerSpotRef = useRef<number | null>(null);
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
     if (!(useSpot > 0) || !chainRows.length) return [] as HeatmapRow[];
+
+    const uniq = [...new Set(chainRows.map((r) => r.strike))].sort((a, b) => a - b);
+    const step = uniq.length > 1 ? Math.min(...uniq.slice(1).map((s, i) => s - uniq[i])) : 5;
+    const bucket = step * 5;
+    if (
+      centerSpotRef.current == null ||
+      Math.abs(useSpot - centerSpotRef.current) >= bucket
+    ) {
+      centerSpotRef.current = Math.round(useSpot / bucket) * bucket;
+    }
+
     return toHeatmapRows(
       chainRows,
       useSpot,
       rollingByStrike,
       sideGex.SPY?.map,
-      sideGex.QQQ?.map
+      sideGex.QQQ?.map,
+      centerSpotRef.current
     );
   }, [chainRows, chartSpot, spot, rollingByStrike, sideGex]);
 
