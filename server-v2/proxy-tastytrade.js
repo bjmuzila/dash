@@ -941,6 +941,10 @@ async function fetchUnderlyingQuotes(symbols) {
   // miss); else the TT by-type batch. Indices + futures unchanged below.
   const eqBack = new Map(equities.map((e) => [e, e]));
   if (useTheta()) {
+    // Collect misses and fall back in ONE batched TT call. Doing it per symbol
+    // meant a wide watchlist (the ~100-name movers universe) could fan out to
+    // 100 individual TT requests whenever Theta was gated.
+    const misses = [];
     await Promise.all([...eqBack.keys()].map(async (e) => {
       try {
         const q = await thetaAdapterQuotes.fetchStockQuoteTheta(e);
@@ -948,9 +952,12 @@ async function fetchUnderlyingQuotes(symbols) {
       } catch (err) {
         console.warn('[WATCH-QUOTES][theta]', e, String(err.message).slice(0, 120));
       }
-      // Theta miss/gated → TT fallback for this one symbol.
-      await batchParam('equity', [e], (v) => v);
+      misses.push(e);
     }));
+    if (misses.length) {
+      console.warn(`[WATCH-QUOTES][theta] ${misses.length}/${eqBack.size} miss → TT fallback`);
+      await batchParam('equity', misses, (v) => v);
+    }
   } else {
     await batchParam('equity', [...eqBack.keys()], (v) => v);
   }

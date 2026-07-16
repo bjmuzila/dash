@@ -310,9 +310,26 @@ function buildSnapshotHTML(
   const pillFontSize = px(11, econScale);
   const pillHeight = px(22, econScale);
   const pillPadH = px(10, econScale);
-  const econTimeCol = px(80, econScale);
-  const econImpactCol = px(80, econScale);
-  const econNumCol = px(66, econScale);
+  const pillPadV = Math.max(0, Math.round((pillHeight - pillFontSize) / 2));
+  const econTimeCol = px(74, econScale);
+  const econImpactCol = px(74, econScale);
+  const econNumCol = px(58, econScale);
+  const econColGap = 6;
+  const econRowPadH = 14;
+
+  // html2canvas does NOT implement text-overflow:ellipsis and treats
+  // overflow:hidden on text nodes unreliably — long titles bleed out from under
+  // the Event cell and run beneath the impact pill. So truncate in JS against
+  // the measured column width instead of trusting CSS to clip.
+  // 1280 canvas - 60 snapshot padding - 36 grid gaps = 1184 across 6.3fr;
+  // the econ panel is 3.6fr of that.
+  const ECON_PANEL_W = Math.round((1280 - 60 - 36) * (3.6 / 6.3));
+  const econEventColW = Math.max(
+    120,
+    ECON_PANEL_W - econRowPadH * 2 - econTimeCol - econImpactCol - econNumCol * 3 - econColGap * 5
+  );
+  const econMaxChars = Math.max(12, Math.floor(econEventColW / (econEventSize * 0.56)));
+  const clipText = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
   const formattedQuote = (() => {
     const raw = (quote || "").trim();
@@ -330,7 +347,7 @@ function buildSnapshotHTML(
     return `
     <div class="econ-row">
       <div class="ec-time">${fmtTime(ev)}</div>
-      <div class="ec-event">${ev.title}</div>
+      <div class="ec-event">${clipText(ev.title, econMaxChars)}</div>
       <div class="ec-impact"><span class="impact-pill" style="background:${badge.bg};border-color:${badge.border};color:${badge.text}"><span class="pill-inner-04">${ev.impact}</span></span></div>
       <div class="ec-num">${dash(ev.actual)}</div>
       <div class="ec-num">${dash(ev.forecast)}</div>
@@ -358,18 +375,24 @@ function buildSnapshotHTML(
 body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;color:var(--text);font-family:'Inter','Helvetica Neue',Arial,sans-serif;background:var(--bg)}
 .snapshot{width:1280px;height:672px;display:flex;flex-direction:column;position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 15% 50%,${hexA(HT.cyan, 0.06)} 0%,transparent 50%),radial-gradient(circle at 85% 30%,rgba(18,103,131,0.07) 0%,transparent 50%),var(--bg);border:1px solid var(--border);padding:26px 30px 30px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
-/* html2canvas does NOT vertically center flex text — it renders on the normal
-   baseline, which is why pills looked top-heavy. Every pill below is an
-   inline-block whose line-height == its inner height. Do not "simplify" these
-   back to inline-flex + align-items:center. */
-.badge{display:inline-block;height:56px;line-height:54px;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:0 26px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
+/* html2canvas does NOT vertically center flex text, and it does NOT honour
+   large line-heights the way the browser does — it applies the half-leading at
+   the top only, so a `height:56px;line-height:54px` pill renders top-heavy.
+   Every pill below is instead an inline-block with line-height:1 and SYMMETRIC
+   vertical padding, which html2canvas measures correctly. Do not "simplify"
+   these back to inline-flex + align-items:center, and do not reintroduce
+   height + tall line-height. */
+.badge{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:16px 26px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
 .badge-inner{display:inline-block;letter-spacing:0.07em;margin-right:-0.07em}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{display:inline-block;height:40px;line-height:38px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:0 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
-.today-pill{display:inline-block;height:40px;line-height:38px;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:0 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.date-pill{display:inline-block;line-height:1;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:12px 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:12px 18px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
 .pill-inner-06{display:inline-block;letter-spacing:0.06em;margin-right:-0.06em}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
-.grid{display:grid;grid-template-columns:1.4fr 3.3fr 1.5fr;gap:18px;margin-top:20px;flex:1;min-height:0}
+/* Econ lane is widened (3.3fr -> 3.6fr) because the Event column was the
+   tightest thing on the canvas — titles like "Philly Fed Manufacturing Index"
+   had ~200px to live in. Keep the fr total at 6.3 or update ECON_PANEL_W. */
+.grid{display:grid;grid-template-columns:1.3fr 3.6fr 1.4fr;gap:18px;margin-top:20px;flex:1;min-height:0}
 /* THE card surface (classicCardAccentStyle): frosted fill, hairline edge, faint
    light-blue radial glow, 18px radius. NO per-card accent strip, NO colored
    panel titles — see PageCard.tsx. */
@@ -394,14 +417,19 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .pr-title{font-size:${presTitleSize}px;font-weight:600;line-height:1.3;min-width:0}
 .empty-panel{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:rgba(255,255,255,0.35);font-size:14px}
 .econ-table{display:flex;flex-direction:column;flex:1}
-.econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:8px;padding:${econRowPadV}px 14px;align-items:center;border-bottom:1px solid var(--border);flex:1;min-width:0}
+.econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:${econColGap}px;padding:${econRowPadV}px ${econRowPadH}px;align-items:center;border-bottom:1px solid var(--border);flex:1;min-width:0}
 .econ-row:last-child{border-bottom:none}
 .econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto}
-.ec-time{font-size:${econTimeSize}px;font-weight:700;color:var(--muted);white-space:nowrap}
-.ec-event{font-size:${econEventSize}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.ec-num{font-size:${econNumSize}px;font-weight:700;text-align:right;color:var(--text)}
-.ec-impact{text-align:left}
-.impact-pill{display:inline-block;height:${pillHeight}px;line-height:${pillHeight - 2}px;text-align:center;border:1px solid;border-radius:8px;padding:0 ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase}
+/* Every cell carries an explicit line-height with leading to spare. Without it
+   html2canvas draws the glyphs low inside a line box it measured as `normal`
+   and the descenders get sheared off by the row's overflow. */
+.ec-time{font-size:${econTimeSize}px;line-height:${econTimeSize + 8}px;font-weight:700;color:var(--muted);white-space:nowrap}
+/* Titles are truncated in JS (see clipText) — html2canvas ignores
+   text-overflow:ellipsis, so CSS clipping here is belt-and-braces only. */
+.ec-event{font-size:${econEventSize}px;line-height:${econEventSize + 8}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ec-num{font-size:${econNumSize}px;line-height:${econNumSize + 8}px;font-weight:700;text-align:right;color:var(--text);white-space:nowrap}
+.ec-impact{text-align:left;min-width:0}
+.impact-pill{display:inline-block;line-height:1;text-align:center;border:1px solid;border-radius:8px;padding:${pillPadV}px ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;white-space:nowrap}
 .pill-inner-04{display:inline-block;letter-spacing:0.04em;margin-right:-0.04em}
 .logo-wrap{position:absolute;bottom:18px;right:22px;display:flex;align-items:center;justify-content:flex-end;opacity:0.96}
 .logo-wrap img{width:80px;height:80px;object-fit:contain}

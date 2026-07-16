@@ -464,9 +464,56 @@ async function fetchIndexPriceTheta(symbol) {
   return price > 0 ? price : null;
 }
 
+// Prior regular-session close per symbol, cached for the ET trading day.
+// /v3/stock/snapshot/quote is an NBBO snapshot — it carries bid/ask/last but NOT
+// prev_close, so every caller of fetchUnderlyingQuotes was getting prevClose: 0
+// and any change-vs-prior-close math silently collapsed (the Traders Dashboard
+// "Trending Now" card filtered its whole watchlist out and showed the 7 AM
+// placeholder). The baseline only moves once a day, so fetch it from the EOD
+// history endpoint and hold it until the ET date rolls.
+const _prevCloseCache = new Map(); // SYMBOL -> { etDate, prevClose }
+
+function _etDateStr(d = new Date()) {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d).reduce((a, x) => (x.type === 'literal' ? a : { ...a, [x.type]: x.value }), {});
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/**
+ * Prior trading day's close for an equity, via Theta EOD history.
+ * Walks back 10 calendar days to clear weekends/holidays and takes the newest
+ * bar strictly BEFORE today's ET session (today's own EOD bar, once it prints,
+ * is the current close — not the baseline). Cached per symbol per ET day.
+ * Returns 0 when unavailable so callers keep their existing fallbacks.
+ */
+async function fetchStockPrevCloseTheta(symbol) {
+  const sym = String(symbol).toUpperCase();
+  const today = _etDateStr();
+  const hit = _prevCloseCache.get(sym);
+  if (hit && hit.etDate === today) return hit.prevClose;
+
+  let prevClose = 0;
+  try {
+    const end = new Date();
+    const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
+    const bars = await fetchStockDailyHistoryTheta(sym, start, end);
+    const todayMs = Date.parse(`${today}T00:00:00.000-05:00`);
+    const prior = bars.filter((b) => b.time < todayMs);
+    prevClose = Number(prior[prior.length - 1]?.close) || 0;
+  } catch (err) {
+    console.warn('[THETA-PREVCLOSE]', sym, String(err.message).slice(0, 120));
+  }
+
+  // Cache successes only — a transient miss shouldn't pin 0 for the whole day.
+  if (prevClose > 0) _prevCloseCache.set(sym, { etDate: today, prevClose });
+  return prevClose;
+}
+
 /**
  * Real-time stock quote snapshot (equities only — never indices/futures).
- * v3 stock snapshot returns bid/ask + prev-close; mark = midpoint. Returns
+ * Snapshot supplies bid/ask/last (mark = midpoint); prev-close is backfilled
+ * from EOD history because the snapshot payload doesn't include it. Returns
  * { last, mark, close, prevClose } shaped like fetchUnderlyingQuotes' assign(),
  * or null if unavailable/gated so the caller can fall back to TT.
  */
@@ -481,13 +528,21 @@ async function fetchStockQuoteTheta(symbol) {
   const bid = Number(r.bid), ask = Number(r.ask);
   const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : Number(r.last ?? r.price);
   const last = Number(r.last ?? r.price ?? mark);
-  const prevClose = Number(r.prev_close ?? r.prevClose);
   if (!(last > 0) && !(mark > 0)) return null;
+
+  // Honor prev_close if a payload variant ever carries it; otherwise backfill.
+  let prevClose = Number(r.prev_close ?? r.prevClose);
+  if (!(prevClose > 0)) prevClose = await fetchStockPrevCloseTheta(symbol);
+
+  // No baseline → report the miss so fetchUnderlyingQuotes falls back to TT
+  // rather than handing callers a quote that can't produce a change %.
+  if (!(prevClose > 0)) return null;
+
   return {
     last: last > 0 ? last : mark,
     mark: mark > 0 ? mark : last,
     close: Number(r.close) > 0 ? Number(r.close) : 0,
-    prevClose: prevClose > 0 ? prevClose : 0,
+    prevClose,
   };
 }
 
@@ -1138,6 +1193,7 @@ module.exports = {
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,
+  fetchStockPrevCloseTheta,
   fetchStockDayVolumeTheta,
   fetchStockDailyVolumeSeriesTheta,
 };
