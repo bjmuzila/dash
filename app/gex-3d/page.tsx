@@ -82,8 +82,8 @@ function rampFor(v: number, mag: number): [number, number, number] {
 /** Renderer-local shape: the live surface flattened to what draw() needs. */
 type Surface = {
   strikes: number[];
-  /** Normalized (~±1) grid: rows[t][s]. */
-  rows: number[][];
+  /** Normalized (~±1) grid: rows[t][s]. null = no row recorded (≠ zero GEX). */
+  rows: (number | null)[][];
   /** Raw net GEX per cell — tooltip only. */
   raw: (number | null)[][];
   /** Spot per column; nulls carried forward so the ribbon never breaks. */
@@ -109,7 +109,24 @@ function fmtGex(v: number): string {
   return `${s}${a.toFixed(0)}`;
 }
 
-type Cell = { x: number; z: number; v: number; h: number; depth: number };
+type Cell = { x: number; z: number; v: number; h: number; depth: number; missing: boolean };
+
+/**
+ * Contrast curve applied to the normalized magnitude before it becomes height
+ * and color. Everything is scaled by the DAY'S PEAK |GEX|, and the peak is
+ * usually a single huge ATM wall — so under "linear" a strike 10 away holding a
+ * perfectly real 4% of that peak renders as 4% of the height: visually nothing.
+ * That's what reads as "data missing farther from the strike". √ and log lift
+ * the small end so the far ladder is legible; they change the SHAPE of the
+ * height mapping, not the data.
+ */
+type Curve = "linear" | "sqrt" | "log";
+function applyCurve(mag: number, curve: Curve): number {
+  const m = Math.min(1, Math.abs(mag));
+  if (curve === "sqrt") return Math.sqrt(m);
+  if (curve === "log") return Math.log10(1 + 9 * m); // 0→0, 1→1
+  return m;
+}
 
 export default function Gex3DPage() {
   const [basis, setBasis] = useState<"net" | "vol">("net");
@@ -134,6 +151,9 @@ export default function Gex3DPage() {
   const [tilt, setTilt] = useState(34);
   const [heading, setHeading] = useState(-36); // degrees, wrapped to [-180, 180]
   const [absMode, setAbsMode] = useState(false);
+  // Default √: with linear scaling everything but the ATM wall is a smear on the
+  // floor, which reads as missing data. See applyCurve.
+  const [curve, setCurve] = useState<Curve>("sqrt");
   // Newest column at the NEAR edge of the Z axis. End-of-day carries the day's
   // biggest walls, and with time running away from the camera those walls sat at
   // the back, facing away — the tall stuff hid behind the morning's terrain and
@@ -143,10 +163,12 @@ export default function Gex3DPage() {
 
   const reliefRef = useRef(relief);
   const absRef = useRef(absMode);
+  const curveRef = useRef(curve);
   const newestFrontRef = useRef(newestFront);
   const spinRef = useRef(spin);
   reliefRef.current = relief;
   absRef.current = absMode;
+  curveRef.current = curve;
   newestFrontRef.current = newestFront;
   spinRef.current = spin;
 
@@ -216,11 +238,21 @@ export default function Gex3DPage() {
     // call walls. Sign still drives color, so nothing is lost; it's the same
     // data, just measured from a common baseline.
     const absMode = absRef.current;
+    const curve = curveRef.current;
     const cells: Cell[] = [];
     for (let z = 0; z < NZ; z++)
       for (let x = 0; x < NX; x++) {
-        const v = rows[z]?.[x] ?? 0;
-        cells.push({ x, z, v, h: (absMode ? Math.abs(v) : v) * rel, depth: proj(x, 0, z).depth });
+        const raw = rows[z]?.[x];
+        const missing = raw == null || !Number.isFinite(raw);
+        const v = missing ? 0 : (raw as number);
+        // Height uses the CURVED magnitude but keeps the original sign.
+        const shaped = applyCurve(v, curve) * (v < 0 ? -1 : 1);
+        cells.push({
+          x, z, v,
+          h: (absMode ? Math.abs(shaped) : shaped) * rel,
+          depth: proj(x, 0, z).depth,
+          missing,
+        });
       }
     cells.sort((a, b) => b.depth - a.depth);
     cellsRef.current = cells;
@@ -253,8 +285,16 @@ export default function Gex3DPage() {
 
     const w = 0.46;
     for (const c of cells) {
-      if (Math.abs(c.v) < 0.035) continue;
-      const mag = Math.min(1, Math.abs(c.v));
+      // NO DATA: draw an explicit hollow floor tile. Skipping these entirely
+      // (what the map used to do) makes a gap in the recording look identical
+      // to a strike that genuinely carried no gamma.
+      if (c.missing) {
+        const q = [proj(c.x - w, 0, c.z - w), proj(c.x + w, 0, c.z - w), proj(c.x + w, 0, c.z + w), proj(c.x - w, 0, c.z + w)];
+        poly(q, canvasRgba(AXIS, 0.03), canvasRgba(AXIS, 0.1));
+        continue;
+      }
+      if (Math.abs(c.v) < 0.004) continue; // true ~zero — leave bare floor
+      const mag = applyCurve(c.v, curve);
       const rgb = rampFor(c.v, mag);
       const x0 = c.x - w, x1 = c.x + w, z0 = c.z - w, z1 = c.z + w;
       const tA = proj(x0, c.h, z0), tB = proj(x1, c.h, z0), tC = proj(x1, c.h, z1), tD = proj(x0, c.h, z1);
@@ -428,7 +468,28 @@ export default function Gex3DPage() {
     }
 
     for (const im of impacts) {
-      const top = (absMode ? Math.abs(im.v) : im.v) * rel;
+      const shaped = applyCurve(im.v, curve) * (im.v < 0 ? -1 : 1);
+      const top = (absMode ? Math.abs(shaped) : shaped) * rel;
+
+      // THE WALL ITSELF. A splash alone still let the eye read the ribbon as
+      // passing "near" a tower. This raises a translucent barrier pane across
+      // the rejecting strike, spanning the columns around the touch and the
+      // full tower height, so the price track visibly runs into a surface and
+      // turns. It is drawn from the same strike + height as the tower — it's a
+      // rendering of the wall that's already there, not an invented one.
+      if (im.kind === "reject") {
+        const z0 = Math.max(0, im.z - 1.6), z1 = Math.min(NZ - 1, im.z + 1.6);
+        const yTop = Math.abs(top) < RIBBON_Y + 14 ? RIBBON_Y + 14 : Math.abs(top);
+        const sgn = im.v >= 0 || absMode ? 1 : -1;
+        const pane = [
+          proj(im.x, 0, z0), proj(im.x, sgn * yTop, z0),
+          proj(im.x, sgn * yTop, z1), proj(im.x, 0, z1),
+        ];
+        const wallCol0 = im.v >= 0 ? ICE_HI : MAGMA_HI;
+        ctx.save();
+        poly(pane, canvasRgba(wallCol0, 0.16), canvasRgba(wallCol0, 0.5));
+        ctx.restore();
+      }
       // Contact point: where the ribbon meets the tower, not the tower's crest —
       // the impact reads as price hitting the wall's FACE.
       const contactY = Math.max(0, Math.min(Math.abs(top), RIBBON_Y));
@@ -468,6 +529,28 @@ export default function Gex3DPage() {
         ctx.arc(hit.x, hit.y, Math.max(1.6, 2.6 * hit.s), 0, Math.PI * 2);
         ctx.fillStyle = canvasRgba(SPOT, 0.95);
         ctx.fill();
+
+        // Deflection arrow: contact point → where price actually went next.
+        // Drawn from the real spot track, so it can't claim a bounce that
+        // didn't happen — it's just making the turn legible in 3D.
+        const nz = im.z + fwd;
+        if (nz >= 0 && nz < NZ) {
+          const q = proj(gxAt(nz), RIBBON_Y + 5, nz);
+          ctx.strokeStyle = canvasRgba(SPOT, 0.9);
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(hit.x, hit.y);
+          ctx.lineTo(q.x, q.y);
+          ctx.stroke();
+          const ang = Math.atan2(q.y - hit.y, q.x - hit.x);
+          const hl = 6 * Math.max(0.6, q.s);
+          ctx.beginPath();
+          ctx.moveTo(q.x, q.y);
+          ctx.lineTo(q.x - hl * Math.cos(ang - 0.4), q.y - hl * Math.sin(ang - 0.4));
+          ctx.moveTo(q.x, q.y);
+          ctx.lineTo(q.x - hl * Math.cos(ang + 0.4), q.y - hl * Math.sin(ang + 0.4));
+          ctx.stroke();
+        }
       } else {
         // BREAK: pierced ring + breach line straight through the tower
         const a = proj(im.x, 0, im.z);
@@ -583,7 +666,7 @@ export default function Gex3DPage() {
     draw();
   }, [live, newestFront, draw]);
 
-  useEffect(() => { draw(); }, [relief, absMode, draw]);
+  useEffect(() => { draw(); }, [relief, absMode, curve, draw]);
   useEffect(() => { camRef.current.pitch = (tilt * Math.PI) / 180; draw(); }, [tilt, draw]);
 
   // Orbit drag is wired with NATIVE window listeners (see useEffect below), not
@@ -742,7 +825,11 @@ export default function Gex3DPage() {
             <span style={{ ...legendDot(HOME_THEME.red), width: 26, background: `linear-gradient(90deg, ${MAGMA_DEEP}, ${HOME_THEME.red}, ${HOME_THEME.orange})` }} />
             −GEX (weak → strong)
           </span>
-          <span style={legendItem}><span style={legendDot(HOME_THEME.orange, true)} />Spot track / wall crossing</span>
+          <span style={legendItem}><span style={legendDot(HOME_THEME.orange, true)} />Spot track / wall impact</span>
+          <span style={legendItem}>
+            <span style={{ ...legendDot(HOME_THEME.text), background: "transparent", border: `1px solid ${HOME_THEME.border}` }} />
+            No data recorded
+          </span>
 
           {/* Basis toggle — every GEX surface is OI+Vol default + Vol-only. */}
           <span style={{ display: "inline-flex", gap: 6, marginLeft: 8 }}>
@@ -753,6 +840,24 @@ export default function Gex3DPage() {
                 style={basis === b ? { ...homeButtonStyle, padding: "5px 12px" } : { ...homeSecondaryButtonStyle, padding: "5px 12px" }}
               >
                 {b === "net" ? "OI+Vol" : "Vol only"}
+              </button>
+            ))}
+          </span>
+
+          {/* Height curve — lifts the far ladder out of the ATM wall's shadow. */}
+          <span style={{ display: "inline-flex", gap: 6 }}>
+            {([
+              { label: "Linear", c: "linear" },
+              { label: "√", c: "sqrt" },
+              { label: "Log", c: "log" },
+            ] as const).map((r) => (
+              <button
+                key={r.c}
+                title="How magnitude maps to height. Linear = true proportions; √/Log lift small strikes so they're visible next to the ATM wall."
+                onClick={() => setCurve(r.c)}
+                style={curve === r.c ? { ...homeButtonStyle, padding: "5px 12px" } : { ...homeSecondaryButtonStyle, padding: "5px 12px" }}
+              >
+                {r.label}
               </button>
             ))}
           </span>
@@ -933,9 +1038,12 @@ export default function Gex3DPage() {
           around spot. <b>Every tower is one minute&apos;s snapshot</b> — the resolution buttons only
           change how many of those minutes survive (30 cols ≈ every 13th minute; 1-min drops
           nothing). Nothing is averaged. Height and color ramp are normalized to the day&apos;s peak
-          |GEX| — comparable within the session, not across days. Where spot reached a strike holding
-          |GEX| ≥ {CROSS_THRESHOLD}× peak: a <b>shockwave splash</b> means price turned back
-          (rejection), a <b>pierced ring</b> means it broke through.
+          |GEX| — so a far strike holding a real 4% of a giant ATM wall is 4% of the height under
+          <b> Linear</b>, which looks like missing data; <b>√/Log</b> lift it back into view. Hollow
+          floor tiles mark strikes with <b>no recorded row</b> — distinct from a real zero. Where spot
+          reached a strike holding |GEX| ≥ {CROSS_THRESHOLD}× peak: a <b>barrier pane + shockwave +
+          arrow</b> means price hit it and turned (rejection); a <b>pierced ring</b> means it broke
+          through.
         </p>
       </Card>
     </PageShell>

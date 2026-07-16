@@ -20,8 +20,13 @@ export interface GexSurface {
   times: number[];
   /** rows[t][s] raw net GEX; null where no row was recorded. */
   rows: (number | null)[][];
-  /** rows scaled to ~[-1, 1] by peak |GEX|; nulls become 0. */
-  norm: number[][];
+  /**
+   * rows scaled to ~[-1, 1] by peak |GEX|. NULL IS PRESERVED — a strike with no
+   * recorded row is not the same claim as a strike with zero GEX, and the map
+   * draws them differently. Collapsing null→0 here would launder "we don't
+   * know" into "it's flat".
+   */
+  norm: (number | null)[][];
   /** Spot at each column. */
   spotPath: (number | null)[];
   /** Epoch ms per 1-minute sample (undownsampled) — bubbles. */
@@ -29,7 +34,7 @@ export interface GexSurface {
   /** minuteRaw[m][s] raw net GEX at full 1-min resolution. */
   minuteRaw: (number | null)[][];
   /** minuteRows scaled by the SAME peak as `norm` so both layers agree. */
-  minuteNorm: number[][];
+  minuteNorm: (number | null)[][];
   /** Peak |GEX| used for the scaling, in raw units. */
   peak: number;
   expiry: string;
@@ -107,8 +112,8 @@ export function useGexSurface(
         for (const row of (minuteRaw.length ? minuteRaw : rows)) for (const v of row) {
           if (v != null && Number.isFinite(v)) peak = Math.max(peak, Math.abs(v));
         }
-        const scale = (g: (number | null)[][]) =>
-          g.map((row) => row.map((v) => (peak > 0 && v != null && Number.isFinite(v) ? v / peak : 0)));
+        const scale = (g: (number | null)[][]): (number | null)[][] =>
+          g.map((row) => row.map((v) => (v != null && Number.isFinite(v) && peak > 0 ? v / peak : null)));
 
         setSurface({
           strikes: Array.isArray(j?.strikes) ? j.strikes : [],
