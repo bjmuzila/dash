@@ -35,6 +35,24 @@ const RULE_NAMES: Record<string, string> = {
   "13": "Time Filter", "14": "Contained Day",
 };
 
+/** one-line plain-English "what does this rule claim" for the legend under the table */
+const RULE_CLAIM: Record<string, string> = {
+  "1": "Close vs IB midpoint calls which IB extreme gets touched first.",
+  "2": "Which extreme formed first + midpoint bias agreeing = stronger first-touch call.",
+  "3": "A close-confirmed break of one side holds — the other side never trades.",
+  "4": "Wide IB (vs 14-day norm) → rotation/both sides; narrow/normal → single-side trend day.",
+  "5": "Break with a volume surge follows through ≥ 1× IB width.",
+  "6": "A break that fails back inside within 30m fades to the opposite extreme.",
+  "7": "An unfilled 15m FVG inside the IB points to the extreme touched first.",
+  "8": "Price retests the broken level and continues in the break direction.",
+  "9": "A close-confirmed break extends ≥ 1× IB width (0.5/1/1.5/2× shown on hover).",
+  "10": "Close in the top/bottom 25% of the IB, agreeing with formation order, calls first touch.",
+  "11": "Open type (vs prior RTH) + width bucket predicts a single-side day.",
+  "12": "The inner 30m ORB breaking in the same direction as midpoint bias confirms the bias.",
+  "13": "Breaks before 11:00 ET extend ≥ 1× more often than midday/late breaks.",
+  "14": "Still inside the IB at 14:00 ET → stays contained into the close.",
+};
+
 const f1 = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : n.toFixed(1));
 const clock = (m: number | null) =>
   m == null ? "—" : `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -178,6 +196,24 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
               <div style={{ marginTop: 10, fontSize: 14, fontStyle: "italic", color: HOME_THEME.text }}>
                 Break column: H/L = close-confirmed break side, BOTH = rotation, NONE = contained, † = break failed back inside within 30m.
                 1× = the break ran ≥ 1× IB width. Hit rates are conditional on the rule being in play, so columns have different sample sizes.
+              </div>
+
+              {/* rules legend — what each R# column is actually claiming */}
+              <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.10)" }}>
+                <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.05em", color: LIGHT_BLUE, marginBottom: 8 }}>
+                  THE RULES
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "4px 24px" }}>
+                  {RULE_IDS.map((id) => (
+                    <div key={id} style={{ display: "flex", gap: 8, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.45 }}>
+                      <span style={{ fontWeight: 800, color: HOME_THEME.cyan, minWidth: 30 }}>R{id}</span>
+                      <span>
+                        <span style={{ fontWeight: 700 }}>{RULE_NAMES[id]}</span>
+                        <span style={{ opacity: 0.85 }}> — {RULE_CLAIM[id]}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}

@@ -1,28 +1,24 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /gex-3d — today's SPX GEX as a smooth-shaded 3D terrain (not box towers).
+// /gex-3d — today's SPX GEX as DISCRETE 3D BOX TOWERS (one box per strike per
+// column, raw per-minute values, no smoothing). Two smoothed-surface rewrites
+// ("terrain mesh", "flush slabs") were both rejected — the levels blended
+// together. The towers ARE the view. +GEX rises as ice, −GEX drops as magma
+// (or rises too via "Flip −GEX up"); strength reads as height AND luminance.
 //
-// The recorded per-minute grid (strikes × session minutes) is smoothed with a
-// separable 1-2-1 kernel and upsampled with Catmull-Rom splines into a
-// continuous mesh, lit by a fixed world-space sun (lambert + specular) with
-// depth fog. Smoothing shapes the TERRAIN ONLY — every column is still one
-// minute's real snapshot, and hover reads the exact raw value from the
-// unsmoothed grid. +GEX rises as ice, −GEX drops as magma (or rises too via
-// "Flip −GEX up"); strength reads as height AND luminance.
-//
-// RENDER ARCHITECTURE: the scene (mesh + ribbon + axes) is drawn once per
-// camera/data change into an OFFSCREEN layer; a persistent rAF loop composites
-// it and animates the FX on top every frame — pulsing wall beacons, flowing
-// energy along the price ribbon, and the wall-impact effects (shockwave rings,
-// sparks, deflection arrows, break shards). Effects animate at 60fps without
-// re-painting ~20k mesh quads.
+// RENDER ARCHITECTURE (kept from the rewrites): the scene (towers + price
+// line + panes + axes) is drawn once per camera/data change into an OFFSCREEN
+// layer; a persistent rAF loop composites it and animates the FX on top every
+// frame — pulsing wall beacons, wall-impact shockwaves/sparks, solid
+// deflection arrows, break rings/shards, breathing spot marker. No animated
+// dashes on the price line itself (rejected as glitchy-looking). The price
+// track is a flat 2D line draped on the tower caps, not an extruded ribbon.
 //
 // DATA: useGexSurface → /proxy/gex-history?mode=series (session rolls 08:00 ET,
-// 30-min poll + manual refresh). Defaults to 1-MIN columns. The time axis is a
-// FIXED world depth (Z_EXTENT) regardless of column count, so a 390-column
-// 1-min session is exactly as deep as a 30-column one — dense data makes the
-// surface finer, not longer.
+// 30-min poll + manual refresh). Defaults to 5-MIN columns. The time axis is a
+// FIXED world depth (Z_EXTENT) regardless of column count, so the map never
+// stretches into a runway.
 //
 // Canvas colors are derived from HOME_THEME tokens via canvasRgba()/shade() —
 // no raw literals. 2D canvas can't consume CSS vars, so tokens become locals.
@@ -54,6 +50,11 @@ function mixRgb(a: string, b: string, t: number): [number, number, number] {
   const [r2, g2, b2] = hexToRgb(b);
   const k = Math.max(0, Math.min(1, t));
   return [r1 + (r2 - r1) * k, g1 + (g2 - g1) * k, b1 + (b2 - b1) * k];
+}
+/** Apply a light factor to an [r,g,b] and return a css rgb string. */
+function litRgb([r, g, b]: [number, number, number], f: number, a = 1): string {
+  const c = (v: number) => Math.round(Math.max(0, Math.min(255, v * f)));
+  return `rgba(${c(r)},${c(g)},${c(b)},${a})`;
 }
 
 // Two-stop ramps: weak strikes sit at the DEEP end, dominant walls climb to the
@@ -136,153 +137,40 @@ function applyCurve(mag: number, curve: Curve): number {
   return m;
 }
 
-// ── mesh ────────────────────────────────────────────────────────────────────
-function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
-  const t2 = t * t, t3 = t2 * t;
-  return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t3);
-}
+// ── towers ──────────────────────────────────────────────────────────────────
+// The map is DISCRETE BOX TOWERS — one box per (strike, column), raw values,
+// NO smoothing anywhere. Two smoothed-surface generations ("terrain mesh",
+// "flush slabs") both read as melted sheets and were rejected. What survives
+// from those experiments: the cached scene layer + animated FX compositor, the
+// world-space sun, the fixed Z extent, the watermark, and the flat price line.
 
-type BuiltMesh = {
-  nxM: number; nzM: number; zUp: number;
-  /** Original strike count — Gh is nzM × nxG. */
-  nxG: number;
-  /** World grid-x of each mesh column (strike-index units; NON-uniform). */
-  gxPos: Float32Array;
-  /** Z-processed WORLD height per strike center (nzM × nxG) — line draping. */
-  Gh: Float32Array;
-  /** World height per mesh vertex (profile + absMode + relief applied). */
-  hs: Float32Array;
-  /** Per-quad base color (pre-lighting) + |v| + face normal. */
-  qR: Float32Array; qG: Float32Array; qB: Float32Array; qMag: Float32Array;
-  qNx: Float32Array; qNy: Float32Array; qNz: Float32Array;
-  /** Smoothed world height sampled back at ORIGINAL grid verts — hover/FX. */
-  hoverH: Float32Array;
-};
-
-/**
- * Grid → flush-tower mesh. TIME gets the smoothing (1-2-1 blur + Catmull-Rom
- * upsample); STRIKES get NONE — cross-strike interpolation melted adjacent
- * walls into plateaus twice. Each strike is a flat-topped slab over its full
- * cell, flush against its neighbors, with a shared vertical wall face where
- * heights differ — the box-tower look, kept smooth along the session and lit
- * and fogged like terrain.
- */
-function buildMesh(
-  norm: (number | null)[][], nx: number, nz: number,
+/** Signed world height of the tower at (x, z); 0 for missing cells. */
+function towerH(
+  rows: (number | null)[][], x: number, z: number,
   curve: Curve, absMode: boolean, relief: number,
-): BuiltMesh | null {
-  if (nx < 2 || nz < 2) return null;
-
-  let a = new Float32Array(nz * nx);
-  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
-    const v = norm[z]?.[x];
-    a[z * nx + x] = v == null || !Number.isFinite(v) ? 0 : applyCurve(v, curve) * (v < 0 ? -1 : 1);
-  }
-
-  // Z-ONLY 1-2-1 smoothing — time is where the minute jitter lives. X is
-  // never blurred: that's what merged the levels.
-  const zPasses = nz > 150 ? 2 : 1;
-  for (let p = 0; p < zPasses; p++) {
-    const o = new Float32Array(nz * nx);
-    for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
-      o[z * nx + x] =
-        0.25 * a[Math.max(0, z - 1) * nx + x] + 0.5 * a[z * nx + x] + 0.25 * a[Math.min(nz - 1, z + 1) * nx + x];
-    }
-    a = o;
-  }
-
-  // Catmull-Rom upsample along TIME (still per strike — nothing crosses X).
-  const zUp = nz <= 40 ? 4 : nz <= 100 ? 2 : 1;
-  const nzM = (nz - 1) * zUp + 1;
-  let G = a;
-  if (zUp > 1) {
-    G = new Float32Array(nzM * nx);
-    for (let x = 0; x < nx; x++) for (let zm = 0; zm < nzM; zm++) {
-      const zf = zm / zUp;
-      const i = Math.min(nz - 2, Math.floor(zf));
-      const t = zf - i;
-      G[zm * nx + x] = t === 0
-        ? a[i * nx + x]
-        : catmull(a[Math.max(0, i - 1) * nx + x], a[i * nx + x], a[(i + 1) * nx + x], a[Math.min(nz - 1, i + 2) * nx + x], t);
-    }
-  }
-  // World height at strike CENTERS (nzM × nx) — what the price line drapes on.
-  const Gh = new Float32Array(nzM * nx);
-  for (let i = 0; i < G.length; i++) Gh[i] = (absMode ? Math.abs(G[i]) : G[i]) * relief;
-
-  // ── X: flush TOWERS. Each strike is a flat-topped slab spanning its full
-  // cell [i−0.5, i+0.5], flush against its neighbors — NO grooves, NO gaps.
-  // The boundary between two strikes is a pair of mesh columns at the SAME x,
-  // each carrying its own side's height: the quad between them is the vertical
-  // wall face, exactly like the old box towers — but tops stay smooth in time.
-  const nxM = 2 * nx;
-  const gxPos = new Float32Array(nxM);
-  const col = new Int32Array(nxM);
-  for (let i = 0; i < nx; i++) {
-    gxPos[2 * i] = i - 0.5; col[2 * i] = i;
-    gxPos[2 * i + 1] = i + 0.5; col[2 * i + 1] = i;
-  }
-
-  const hs = new Float32Array(nzM * nxM);
-  const vs = new Float32Array(nzM * nxM);
-  for (let zm = 0; zm < nzM; zm++) {
-    const gr = zm * nx, mr = zm * nxM;
-    for (let xm = 0; xm < nxM; xm++) {
-      const v = G[gr + col[xm]];
-      vs[mr + xm] = v;
-      hs[mr + xm] = (absMode ? Math.abs(v) : v) * relief;
-    }
-  }
-
-  const hoverH = new Float32Array(nz * nx);
-  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) hoverH[z * nx + x] = Gh[z * zUp * nx + x];
-
-  const nQ = (nxM - 1) * (nzM - 1);
-  const qR = new Float32Array(nQ), qG = new Float32Array(nQ), qB = new Float32Array(nQ);
-  const qMag = new Float32Array(nQ);
-  const qNx = new Float32Array(nQ), qNy = new Float32Array(nQ), qNz = new Float32Array(nQ);
-  const SXc = xCell(nx), SZm = zCell(nz) / zUp;
-  let qi = 0;
-  for (let zm = 0; zm < nzM - 1; zm++) for (let xm = 0; xm < nxM - 1; xm++, qi++) {
-    const ia = zm * nxM + xm, ib = ia + 1, id = ia + nxM, ic = id + 1;
-    // Wall quads sit between two strikes at the same x — color them by the
-    // DOMINANT side so a tall wall's face isn't washed out by a weak neighbor.
-    const vA = (vs[ia] + vs[id]) / 2, vB = (vs[ib] + vs[ic]) / 2;
-    const v = Math.abs(vA) >= Math.abs(vB) ? vA : vB;
-    const mag = Math.min(1, Math.abs(v));
-    const [r, g, b] = rampFor(v, mag);
-    qR[qi] = r; qG[qi] = g; qB[qi] = b; qMag[qi] = mag;
-    // Face normal from height slopes in WORLD units → real lambert shading.
-    // X spacing is non-uniform (groove/shoulder/center), so use the real dx.
-    const dxw = Math.max(0.05, gxPos[xm + 1] - gxPos[xm]) * SXc;
-    const dhdx = ((hs[ib] - hs[ia]) + (hs[ic] - hs[id])) / 2 / dxw;
-    const dhdz = ((hs[id] - hs[ia]) + (hs[ic] - hs[ib])) / 2 / SZm;
-    const inv = 1 / Math.hypot(dhdx, 1, dhdz);
-    qNx[qi] = -dhdx * inv; qNy[qi] = inv; qNz[qi] = -dhdz * inv;
-  }
-  return { nxM, nzM, zUp, nxG: nx, gxPos, Gh, hs, qR, qG, qB, qMag, qNx, qNy, qNz, hoverH };
+): number {
+  const v = rows[z]?.[x];
+  if (v == null || !Number.isFinite(v)) return 0;
+  const shaped = applyCurve(v, curve) * (v < 0 ? -1 : 1);
+  return (absMode ? Math.abs(shaped) : shaped) * relief;
 }
 
 /**
- * Surface height for the draped price line. The towers are flat slabs, so the
- * line LAYS FLAT on whichever tower spot is over (no cross-cell averaging —
- * that clipped the line into the taller slab at every boundary). Near a wall
- * (outer 20% of the cell) it blends up to the taller neighbor, so crossings
- * climb/descend the wall face instead of teleporting.
+ * Price-line ride height at a column: flat on the cap of the tower spot is
+ * over (floor over put pits), climbing to the taller neighbor in the outer
+ * 20% of the cell so wall crossings climb the face instead of teleporting.
  */
-function sampleH(mesh: BuiltMesh, gx: number, gz: number): number {
-  const nx = mesh.nxG;
-  const zm = Math.max(0, Math.min(mesh.nzM - 1.001, gz * mesh.zUp));
-  const z0 = Math.floor(zm), tz = zm - z0;
-  const hAt = (x: number) => {
-    const i = Math.max(0, Math.min(nx - 1, x));
-    return mesh.Gh[z0 * nx + i] * (1 - tz) + mesh.Gh[(z0 + 1) * nx + i] * tz;
-  };
+function lineY(
+  rows: (number | null)[][], gx: number, z: number, nx: number,
+  curve: Curve, absMode: boolean, relief: number,
+): number {
+  const cap = (x: number) =>
+    Math.max(0, towerH(rows, Math.max(0, Math.min(nx - 1, x)), z, curve, absMode, relief));
   const i = Math.max(0, Math.min(nx - 1, Math.round(gx)));
-  const u = gx - i; // −0.5…0.5 within the tower's cell
-  const hi = hAt(i);
-  const w = Math.max(0, (Math.abs(u) - 0.3) / 0.2); // 0 on the cap → 1 at the wall
-  return w === 0 ? hi : hi * (1 - w) + Math.max(hi, hAt(u >= 0 ? i + 1 : i - 1)) * w;
+  const u = gx - i;
+  const hi = cap(i);
+  const w = Math.max(0, (Math.abs(u) - 0.3) / 0.2);
+  return (w === 0 ? hi : hi * (1 - w) + Math.max(hi, cap(u >= 0 ? i + 1 : i - 1)) * w) + 5;
 }
 
 // ── FX records (world-space; projected fresh every animation frame) ─────────
@@ -303,17 +191,18 @@ type FxState = {
   headZ: number; impacts: ImpactFx[]; beacons: BeaconFx[];
 };
 
-// Fixed world-space sun (unit vector). Faces are lambert-shaded against it
-// after rotating their normals by yaw, so orbiting 360° reads as walking
-// around solid geometry, not paint that follows the camera.
-const SUN_LEN = Math.hypot(-0.45, 0.62, -0.64);
-const SUNX = -0.45 / SUN_LEN, SUNY = 0.62 / SUN_LEN, SUNZ = -0.64 / SUN_LEN;
+// Fixed world-space sun (horizontal direction). Tower faces are lambert-shaded
+// against it after rotating their normals by yaw, so orbiting 360° reads as
+// walking around solid geometry, not paint that follows the camera.
+const SUN_LEN = Math.hypot(-0.55, -0.83);
+const SUNX = -0.55 / SUN_LEN, SUNZ = -0.83 / SUN_LEN;
 
 export default function Gex3DPage() {
   const [basis, setBasis] = useState<"net" | "vol">("net");
-  // Column resolution. DEFAULT IS 1-MIN (400): the smooth mesh keeps ~390
-  // columns readable, and the fixed Z_EXTENT keeps them from stretching the map.
-  const [buckets, setBuckets] = useState(400);
+  // Column resolution. DEFAULT IS 5-MIN (80): discrete towers need breathing
+  // room along the fixed-depth time axis — 390 one-minute boxes in the same
+  // depth fuse into a solid wall. 1-min remains a click away.
+  const [buckets, setBuckets] = useState(80);
   const live = useGexSurface(basis, buckets);
 
   const cvRef = useRef<HTMLCanvasElement | null>(null);
@@ -321,12 +210,10 @@ export default function Gex3DPage() {
   const tipRef = useRef<HTMLDivElement | null>(null);
   const surfRef = useRef<Surface>(EMPTY_SURFACE);
   const dimsRef = useRef({ nx: 0, nz: 0 });
-  const meshRef = useRef<BuiltMesh | null>(null);
   const fxRef = useRef<FxState | null>(null);
   const cellsRef = useRef<Cell[]>([]);
   const needsRef = useRef(true); // scene layer dirty flag
   const dprRef = useRef(1);
-  const bufRef = useRef<{ px: Float32Array; py: Float32Array; pd: Float32Array; depths: Float32Array; order: Int32Array } | null>(null);
   const camRef = useRef({ yaw: -0.62, pitch: (34 * Math.PI) / 180, zoom: 1, panX: 0, panY: 0 });
   /** mode "orbit" = left-drag; "pan" = right/middle-drag or shift+left-drag. */
   const dragRef = useRef<
@@ -388,18 +275,14 @@ export default function Gex3DPage() {
     const { rows, spotPath, strikes } = surfRef.current;
     const { nx: NX, nz: NZ } = dimsRef.current;
     const curve = curveRef.current, absMode = absRef.current, rel = reliefRef.current;
-    if (!NX || !NZ) { meshRef.current = null; fxRef.current = null; cellsRef.current = []; needsRef.current = true; return; }
+    if (!NX || !NZ) { fxRef.current = null; cellsRef.current = []; needsRef.current = true; return; }
 
-    meshRef.current = buildMesh(rows, NX, NZ, curve, absMode, rel);
-
-    // hover cells at original resolution, heights from the SMOOTHED surface so
-    // the tooltip anchors to what's actually on screen.
-    const hoverH = meshRef.current?.hoverH;
+    // tower cells — one box per (strike, column), raw values, exact heights.
     const cells: Cell[] = [];
     for (let z = 0; z < NZ; z++) for (let x = 0; x < NX; x++) {
       const v = rows[z]?.[x];
       const missing = v == null || !Number.isFinite(v);
-      cells.push({ x, z, v: missing ? 0 : (v as number), h: hoverH ? hoverH[z * NX + x] : 0, missing });
+      cells.push({ x, z, v: missing ? 0 : (v as number), h: towerH(rows, x, z, curve, absMode, rel), missing });
     }
     cellsRef.current = cells;
 
@@ -409,12 +292,9 @@ export default function Gex3DPage() {
     for (let z = 0; z < NZ; z++) gx[z] = Math.max(-0.5, Math.min(NX - 0.5, (spotPath[z] - strikes[0]) / (step || 5)));
     const headZ = newestFrontRef.current ? 0 : NZ - 1;
 
-    // The price line LAYS ON the terrain (2D drape, not an extruded rail):
-    // sample the smoothed surface at spot's strike per column, lifted a hair
-    // so it rides the skin instead of z-fighting with it.
-    const mesh = meshRef.current;
+    // The price line LAYS ON the tower caps (2D drape, not an extruded rail).
     const yPath = new Float32Array(NZ);
-    for (let z = 0; z < NZ; z++) yPath[z] = (mesh ? sampleH(mesh, gx[z], z) : 0) + 5;
+    for (let z = 0; z < NZ; z++) yPath[z] = lineY(rows, gx[z], z, NX, curve, absMode, rel);
 
     // ── wall impacts: rejection vs break-through ─────────────────────────
     // REJECTION = price closed on a strong strike, touched, turned back the
@@ -496,7 +376,7 @@ export default function Gex3DPage() {
     const { nx: NX, nz: NZ } = dimsRef.current;
     if (!NX || !NZ) return; // overlay handles the empty message
 
-    const poly = (pts: { x: number; y: number }[], fill: string, stroke?: string) => {
+    const poly = (pts: { x: number; y: number }[], fill: string | CanvasGradient, stroke?: string) => {
       ctx.beginPath();
       ctx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
@@ -530,15 +410,12 @@ export default function Gex3DPage() {
       ctx.restore();
     }
 
-    const mesh = meshRef.current;
     const fx = fxRef.current;
 
-    // ── price line: a flat 2D stroke DRAPED on the terrain ─────────────────
-    // Not an extruded 3D rail — the line follows the surface height at spot's
-    // strike (fx.yPath), so it visibly climbs the walls it's trading against.
-    // Still depth-merged per segment with the mesh: canvas 2D has no depth
-    // buffer, so the merge IS the depth test — a wall nearer the camera than a
-    // stretch of track occludes it, like a wall should.
+    // ── price line: a flat 2D stroke DRAPED on the tower caps ──────────────
+    // Not an extruded 3D rail — the line rides the cap of the tower spot is
+    // over (fx.yPath), so it visibly climbs the walls it's trading against.
+    // Depth-merged per segment with the towers below.
     type Seg = { d: number; x0: number; y0: number; x1: number; y1: number };
     const segs: Seg[] = [];
     if (fx) {
@@ -563,81 +440,81 @@ export default function Gex3DPage() {
       ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1); ctx.stroke();
     };
 
-    // ── terrain mesh, depth-sorted and merged with the ribbon ─────────────
-    if (mesh) {
-      const { nxM, nzM, zUp, gxPos, hs } = mesh;
-      const nV = nxM * nzM, nQ = (nxM - 1) * (nzM - 1);
-      let buf = bufRef.current;
-      if (!buf || buf.px.length !== nV || buf.depths.length !== nQ) {
-        buf = {
-          px: new Float32Array(nV), py: new Float32Array(nV), pd: new Float32Array(nV),
-          depths: new Float32Array(nQ), order: new Int32Array(nQ),
-        };
-        bufRef.current = buf;
-      }
-      const { px, py, pd, depths, order } = buf;
+    // ── box towers + price line, one depth-sorted pass ──────────────────────
+    // Towers and line segments go into a SINGLE back-to-front list — canvas 2D
+    // has no depth buffer, so the sort IS the depth test: a wall nearer the
+    // camera than a stretch of track paints over it and occludes it.
+    type Prim = { d: number; render: () => void };
+    const prims: Prim[] = [];
+    const { yaw } = camRef.current;
+    const cyaw = Math.cos(yaw), syaw = Math.sin(yaw);
+    const lambert = (nxn: number, nzn: number) => {
+      const wx = nxn * cyaw - nzn * syaw; // rotate face normal into world space
+      const wz = nxn * syaw + nzn * cyaw;
+      const d = wx * SUNX + wz * SUNZ;    // −1 (facing away) … 1 (facing the sun)
+      return 0.42 + 0.46 * Math.max(0, d);
+    };
 
-      let minD = Infinity, maxD = -Infinity;
-      for (let zm = 0; zm < nzM; zm++) {
-        const r = zm * nxM, gz = zm / zUp;
-        for (let xm = 0; xm < nxM; xm++) {
-          const i = r + xm;
-          const p = proj(gxPos[xm], hs[i], gz);
-          px[i] = p.x; py[i] = p.y; pd[i] = p.depth;
-          if (p.depth < minD) minD = p.depth;
-          if (p.depth > maxD) maxD = p.depth;
-        }
+    const w = 0.46;
+    const curve = curveRef.current;
+    for (const c of cellsRef.current) {
+      // NO DATA: explicit hollow floor tile — a gap in the recording must not
+      // look identical to a strike that genuinely carried no gamma.
+      if (c.missing) {
+        const q = [proj(c.x - w, 0, c.z - w), proj(c.x + w, 0, c.z - w), proj(c.x + w, 0, c.z + w), proj(c.x - w, 0, c.z + w)];
+        poly(q, canvasRgba(AXIS, 0.03), canvasRgba(AXIS, 0.1));
+        continue;
       }
-      let qi = 0;
-      for (let zm = 0; zm < nzM - 1; zm++) {
-        const r0 = zm * nxM, r1 = r0 + nxM;
-        for (let xm = 0; xm < nxM - 1; xm++, qi++) {
-          depths[qi] = (pd[r0 + xm] + pd[r0 + xm + 1] + pd[r1 + xm] + pd[r1 + xm + 1]) * 0.25;
-          order[qi] = qi;
-        }
-      }
-      order.sort((A, B) => depths[B] - depths[A]);
+      if (Math.abs(c.v) < 0.004) continue; // true ~zero — leave bare floor
+      const mag = applyCurve(c.v, curve);
+      const rgb = rampFor(c.v, mag);
+      const h = c.h;
+      const x0 = c.x - w, x1 = c.x + w, z0 = c.z - w, z1 = c.z + w;
+      const tA = proj(x0, h, z0), tB = proj(x1, h, z0), tC = proj(x1, h, z1), tD = proj(x0, h, z1);
+      const bA = proj(x0, 0, z0), bB = proj(x1, 0, z0), bC = proj(x1, 0, z1), bD = proj(x0, 0, z1);
+      const faces = [
+        { p: [tA, tB, bB, bA], t: tA, b: bA, d: (tA.depth + tB.depth) / 2, f: lambert(0, -1) },
+        { p: [tB, tC, bC, bB], t: tB, b: bB, d: (tB.depth + tC.depth) / 2, f: lambert(1, 0) },
+        { p: [tC, tD, bD, bC], t: tC, b: bC, d: (tC.depth + tD.depth) / 2, f: lambert(0, 1) },
+        { p: [tD, tA, bA, bD], t: tD, b: bD, d: (tD.depth + tA.depth) / 2, f: lambert(-1, 0) },
+      ].sort((fa, fb) => fb.d - fa.d);
 
-      const { yaw } = camRef.current;
-      const cy = Math.cos(yaw), sy = Math.sin(yaw);
-      const bgRgb = hexToRgb(HOME_THEME.bg);
-      const fogSpan = Math.max(1, maxD - minD);
-      const qW = nxM - 1;
-      let si = 0;
-      for (let k = 0; k < nQ; k++) {
-        const q = order[k];
-        const qd = depths[q];
-        while (si < segs.length && segs[si].d >= qd) drawSeg(segs[si++]);
-        const zm = (q / qW) | 0, xm = q - zm * qW;
-        const ia = zm * nxM + xm, ib = ia + 1, id = ia + nxM, ic = id + 1;
-        // lambert + a specular kiss on strong walls, faded into bg with depth.
-        const wx = mesh.qNx[q] * cy - mesh.qNz[q] * sy;
-        const wz = mesh.qNx[q] * sy + mesh.qNz[q] * cy;
-        const dot = Math.max(0, wx * SUNX + mesh.qNy[q] * SUNY + wz * SUNZ);
-        const f = 0.4 + 0.72 * dot + Math.pow(dot, 12) * 0.5 * mesh.qMag[q];
-        const fog = Math.max(0, Math.min(1, (qd - minD) / fogSpan)) * 0.42;
-        const r = Math.min(255, mesh.qR[q] * f) * (1 - fog) + bgRgb[0] * fog;
-        const g = Math.min(255, mesh.qG[q] * f) * (1 - fog) + bgRgb[1] * fog;
-        const b = Math.min(255, mesh.qB[q] * f) * (1 - fog) + bgRgb[2] * fog;
-        const fill = `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
-        ctx.beginPath();
-        ctx.moveTo(px[ia], py[ia]);
-        ctx.lineTo(px[ib], py[ib]);
-        ctx.lineTo(px[ic], py[ic]);
-        ctx.lineTo(px[id], py[id]);
-        ctx.closePath();
-        ctx.fillStyle = fill;
-        ctx.fill();
-        // hairline stroke in the same color seals AA seams between quads —
-        // without it the mesh shows a faint grid of background-colored cracks.
-        ctx.strokeStyle = fill;
-        ctx.lineWidth = 0.6;
-        ctx.stroke();
-      }
-      while (si < segs.length) drawSeg(segs[si++]);
-    } else {
-      for (const s of segs) drawSeg(s);
+      // Depth for the whole box = its mid-height centroid, so a tall wall
+      // sorts by where its MASS is, not by its floor tile.
+      prims.push({
+        d: proj(c.x, h / 2, c.z).depth,
+        render: () => {
+          // Base→crest gradient per side: towers darken into the floor and
+          // brighten at the cap, so height and strength reinforce each other.
+          for (const f of faces) {
+            let fill: string | CanvasGradient;
+            if (Math.abs(f.t.y - f.b.y) > 1) {
+              const g = ctx.createLinearGradient(f.b.x, f.b.y, f.t.x, f.t.y);
+              g.addColorStop(0, litRgb(rgb, f.f * 0.5));
+              g.addColorStop(1, litRgb(rgb, f.f * 1.25));
+              fill = g;
+            } else {
+              fill = litRgb(rgb, f.f);
+            }
+            poly(f.p, fill, canvasRgba(HOME_THEME.bg, 0.35));
+          }
+          // Cap: brightest surface, scaled by strength.
+          poly([tA, tB, tC, tD], litRgb(rgb, 1.15 + mag * 0.2), canvasRgba(AXIS, 0.16));
+          // Dominant walls get a bloom so they're unmistakable at any angle.
+          if (mag > 0.55) {
+            ctx.save();
+            ctx.globalAlpha = 0.1 + (mag - 0.55) * 0.5;
+            ctx.shadowColor = canvasRgba(c.v >= 0 ? ICE_HI : MAGMA_HI, 0.9);
+            ctx.shadowBlur = 10 + mag * 14;
+            poly([tA, tB, tC, tD], c.v >= 0 ? ICE_HI : MAGMA_HI);
+            ctx.restore();
+          }
+        },
+      });
     }
+    for (const s of segs) prims.push({ d: s.d, render: () => drawSeg(s) });
+    prims.sort((p, q) => q.d - p.d);
+    for (const p of prims) p.render();
 
     // ── barrier panes on rejections (static part; the FX layer animates) ───
     // A translucent pane across the rejecting strike, spanning the columns
@@ -1059,7 +936,7 @@ export default function Gex3DPage() {
             : live.error
             ? `History unavailable — ${live.error}`
             : (live.stale ? "Last session · " : "") +
-              `${live.expiry || "—"} · ${live.times.length} columns` +
+              `${live.expiry || "—"} · ${live.times.length} towers` +
               (live.strideMin > 1 ? ` (every ${live.strideMin}th min of ${live.minutesAvailable})` : " (every min)") +
               ` · ${live.date} · peak ${fmtGex(live.peak)}` +
               (live.fetchedAt ? ` · pulled ${fmtClock(live.fetchedAt)}` : "")
@@ -1295,9 +1172,10 @@ export default function Gex3DPage() {
         <p style={{ fontSize: 12, color: HOME_THEME.green, marginTop: 14, marginBottom: 0, lineHeight: 1.6 }}>
           Live from <code>/proxy/gex-history?mode=series</code> — today&apos;s recorded per-strike net GEX
           ({basis === "net" ? "OI+Vol composite" : "volume-only"}), RTH only (9:30–16:00 ET), ±13 strikes
-          around spot, <b>1-minute columns by default</b>. The surface is a Catmull-Rom–smoothed mesh
-          over that grid — smoothing shapes the terrain only; <b>hover reads the exact raw value</b>,
-          nothing is averaged into the data. Height/color are normalized to the day&apos;s peak |GEX|;
+          around spot. <b>Every tower is one minute&apos;s snapshot</b> — the resolution buttons only
+          change how many of those minutes survive; nothing is smoothed or averaged, and hover reads
+          the exact raw value. Hollow floor tiles mark strikes with <b>no recorded row</b> — distinct
+          from a real zero. Height/color are normalized to the day&apos;s peak |GEX|;
           <b> √/Log</b> lift the far ladder next to a giant ATM wall. Pulsing beacons mark the newest
           column&apos;s walls at |GEX| ≥ {BEACON_THRESHOLD}× peak. Where spot reached a strike holding
           |GEX| ≥ {CROSS_THRESHOLD}× peak: a <b>barrier pane + animated shockwave, sparks and a

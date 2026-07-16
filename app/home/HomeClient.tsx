@@ -892,9 +892,13 @@ export function HomeClient({
   // fetched in heatmap view — the chain embed doesn't render these columns, so
   // there's no reason to poll two extra chains behind it.
   const SIDE_TICKERS = useMemo(() => ["SPY", "QQQ"] as const, []);
+  // Pinned to selectedExpiry — these columns flip contract exactly when the SPX
+  // heatmap does, instead of resolving their own 0DTE and drifting onto a
+  // different date than the rows beside them.
   const { data: sideGex, loading: sideLoading, refresh: refreshSideGex } = useDualTickerGex(
     SIDE_TICKERS,
     sideBasis,
+    selectedExpiry,
     60_000,
     heatmapView !== "chain"
   );
@@ -903,6 +907,14 @@ export function HomeClient({
   useEffect(() => {
     refreshSideGexRef.current = refreshSideGex;
   }, [refreshSideGex]);
+
+  // DTE tag for the SPY/QQQ column headers, taken from the SPX expiry the
+  // heatmap is on ("0DTE", "1DTE", …). Flips with the contract so the header can
+  // never claim 0DTE while the data is on a later expiry.
+  const sideDteTag = useMemo(
+    () => expiryOptions.find((o) => o.value === selectedExpiry)?.label.split(" ")[0] ?? "0DTE",
+    [expiryOptions, selectedExpiry]
+  );
 
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
@@ -1553,12 +1565,12 @@ export function HomeClient({
                         { label: "Vol Only GEX", tip: undefined },
                         { label: "DEX", tip: undefined },
                         {
-                          label: "SPY 0DTE Net GEX",
-                          tip: `SPY's 0DTE net GEX at the SAME distance from ATM as this SPX row (SPY doesn't share SPX's strike ladder, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the SPY strike.`,
+                          label: `SPY ${sideDteTag} Net GEX`,
+                          tip: `SPY's net GEX on ${sideGex.SPY?.expiration ?? selectedExpiry} — the same contract the SPX heatmap is on — at the SAME distance from ATM as this SPX row (SPY doesn't share SPX's strike ladder, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the SPY strike.`,
                         },
                         {
-                          label: "QQQ 0DTE Net GEX",
-                          tip: `QQQ's 0DTE net GEX at the SAME distance from ATM as this SPX row (QQQ tracks NDX, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the QQQ strike.`,
+                          label: `QQQ ${sideDteTag} Net GEX`,
+                          tip: `QQQ's net GEX on ${sideGex.QQQ?.expiration ?? selectedExpiry} — the same contract the SPX heatmap is on — at the SAME distance from ATM as this SPX row (QQQ tracks NDX, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the QQQ strike.`,
                         },
                       ].map((header, index) => (
                         <th

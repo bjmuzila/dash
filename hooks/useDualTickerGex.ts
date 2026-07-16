@@ -3,8 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Per-strike 0DTE net GEX for arbitrary tickers (SPY / QQQ), keyed by MONEYNESS
+ * Per-strike net GEX for arbitrary tickers (SPY / QQQ), keyed by MONEYNESS
  * OFFSET rather than by strike.
+ *
+ * EXPIRY: caller-driven, NOT self-resolved. The home heatmap passes its own
+ * selectedExpiry so these columns flip contract in lockstep with SPX. An earlier
+ * cut resolved "0DTE" independently here and could silently sit on a different
+ * date than the rows beside it (weekends, holidays, or any manual expiry pick).
  *
  * WHY OFFSET AND NOT STRIKE (see [[home-heatmap-spy-qqq-columns]]):
  * The home heatmap's rows are SPX strikes. SPY trades a ~1/10 ladder and QQQ
@@ -54,6 +59,9 @@ export interface TickerGex {
 
 export type DualTickerGex = Record<string, TickerGex>;
 
+/** Stable identity — a fresh {} each render would retrigger every downstream memo. */
+const EMPTY: DualTickerGex = {};
+
 interface RawSide {
   gamma?: unknown;
   volume?: unknown;
@@ -66,22 +74,22 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Today's date in America/New_York as YYYY-MM-DD. 0DTE is an ET concept. */
-function etToday(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
-
 /**
- * The 0DTE listing for a ticker: today's expiration when it exists, else the
- * nearest future listing. On a weekend / holiday there is no true 0DTE, so
- * falling back to the front listing keeps the column populated instead of blank.
+ * Pin the ticker to the SAME expiration the SPX heatmap is showing, so the
+ * columns flip contract exactly when SPX does — never resolving their own idea
+ * of "0DTE" and silently drifting onto a different date than the rows beside
+ * them.
+ *
+ * SPX lists expiries SPY/QQQ don't always carry (and vice versa), so when the
+ * exact date isn't listed we fall back to that ticker's nearest listing on or
+ * after it. The resolved date is returned so the caller can tell whether it got
+ * what it asked for.
  */
-async function resolveZeroDte(ticker: string, signal: AbortSignal): Promise<string | null> {
+async function resolveExpiration(
+  ticker: string,
+  wanted: string,
+  signal: AbortSignal
+): Promise<string | null> {
   const json = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`, { signal })
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
@@ -91,8 +99,7 @@ async function resolveZeroDte(ticker: string, signal: AbortSignal): Promise<stri
   const dates = [
     ...new Set(items.map((it) => String(it["expiration-date"] ?? "").slice(0, 10)).filter(Boolean)),
   ].sort();
-  const today = etToday();
-  return dates.find((d) => d === today) ?? dates.find((d) => d >= today) ?? dates[dates.length - 1] ?? null;
+  return dates.find((d) => d === wanted) ?? dates.find((d) => d >= wanted) ?? null;
 }
 
 /**
@@ -103,9 +110,10 @@ async function resolveZeroDte(ticker: string, signal: AbortSignal): Promise<stri
 async function loadTicker(
   ticker: string,
   basis: GexBasis,
+  wantedExpiry: string,
   signal: AbortSignal
 ): Promise<TickerGex | null> {
-  const expiration = await resolveZeroDte(ticker, signal);
+  const expiration = await resolveExpiration(ticker, wantedExpiry, signal);
   if (!expiration) return null;
 
   const json = await fetch(
@@ -189,10 +197,17 @@ async function loadTicker(
 export function useDualTickerGex(
   tickers: readonly string[],
   basis: GexBasis,
+  /** The SPX expiry the heatmap is showing — these columns follow it exactly. */
+  expiration: string,
   refreshMs = 60_000,
   enabled = true
 ): { data: DualTickerGex; loading: boolean; refresh: () => void } {
-  const [data, setData] = useState<DualTickerGex>({});
+  // Values are stamped with the (expiry|basis) that produced them. A cycle change
+  // must INVALIDATE, not merge — otherwise flipping SPX's expiry would leave the
+  // previous contract's numbers sitting under the new label until the fetch
+  // lands, which is worse than showing "—" for a beat.
+  const cycle = `${expiration}|${basis}`;
+  const [state, setState] = useState<{ cycle: string; data: DualTickerGex }>({ cycle: "", data: {} });
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -201,7 +216,7 @@ export function useDualTickerGex(
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !expiration) return;
     const list = key.split(",").filter(Boolean);
     if (!list.length) return;
 
@@ -214,19 +229,20 @@ export function useDualTickerGex(
       setLoading(true);
       try {
         const results = await Promise.allSettled(
-          list.map((t) => loadTicker(t.toUpperCase(), basis, ctrl.signal))
+          list.map((t) => loadTicker(t.toUpperCase(), basis, expiration, ctrl.signal))
         );
         if (cancelled || ctrl.signal.aborted) return;
 
-        // Merge rather than replace: a ticker that failed this cycle keeps its
-        // last good values instead of flickering to "—".
-        setData((prev) => {
-          const next: DualTickerGex = { ...prev };
+        setState((prev) => {
+          // Within the same cycle, merge — a ticker that failed this poll keeps
+          // its last good value rather than flickering to "—". Across cycles,
+          // start clean so no stale contract can survive the flip.
+          const next: DualTickerGex = prev.cycle === cycle ? { ...prev.data } : {};
           results.forEach((res, i) => {
             const t = list[i].toUpperCase();
             if (res.status === "fulfilled" && res.value) next[t] = res.value;
           });
-          return next;
+          return { cycle, data: next };
         });
       } finally {
         // Guarded: an aborted cycle must not clear the spinner for the cycle
@@ -239,7 +255,11 @@ export function useDualTickerGex(
       cancelled = true;
       ctrl.abort();
     };
-  }, [key, basis, tick, enabled]);
+  }, [key, basis, expiration, cycle, tick, enabled]);
+
+  // Reads empty until the fetch for the CURRENT cycle lands — never the previous
+  // expiry's or basis's numbers.
+  const data = state.cycle === cycle ? state.data : EMPTY;
 
   useEffect(() => {
     if (!enabled || refreshMs <= 0) return;
