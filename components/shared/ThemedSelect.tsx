@@ -53,14 +53,26 @@ export function ThemedSelect({
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number; maxH: number } | null>(null);
 
-  // Anchor the portal'd menu under the trigger; reposition on scroll/resize.
+  // Anchor the portal'd menu under the trigger; flip above when it would
+  // overflow the viewport bottom. Reposition on scroll/resize.
   useEffect(() => {
     if (!open) return;
     const update = () => {
       const r = btnRef.current?.getBoundingClientRect();
-      if (r) setRect({ left: r.left, top: r.bottom + 6, width: r.width });
+      if (!r) return;
+      const GAP = 6, PAD = 8;
+      const below = window.innerHeight - r.bottom - GAP - PAD;
+      const above = r.top - GAP - PAD;
+      const flip = below < Math.min(maxMenuHeight, 160) && above > below;
+      const maxH = Math.max(120, Math.min(maxMenuHeight, flip ? above : below));
+      setRect({
+        left: Math.max(PAD, Math.min(r.left, window.innerWidth - r.width - PAD)),
+        top: flip ? r.top - GAP - maxH : r.bottom + GAP,
+        width: r.width,
+        maxH,
+      });
     };
     update();
     window.addEventListener("scroll", update, true);
@@ -69,7 +81,7 @@ export function ThemedSelect({
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
     };
-  }, [open]);
+  }, [open, maxMenuHeight]);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -137,7 +149,7 @@ export function ThemedSelect({
             top: rect.top,
             left: rect.left,
             width: rect.width,
-            maxHeight: maxMenuHeight,
+            maxHeight: rect.maxH,
             overflowY: "auto",
             zIndex: 9999,
             padding: 6,

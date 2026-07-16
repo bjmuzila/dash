@@ -15,8 +15,9 @@
 // dashes on the price line itself (rejected as glitchy-looking). The price
 // track is a flat 2D line draped on the tower caps, not an extruded ribbon.
 //
-// DATA: useGexSurface → /proxy/gex-history?mode=series (session rolls 08:00 ET,
-// 30-min poll + manual refresh). Defaults to 5-MIN columns. The time axis is a
+// DATA: useGexSurface → /proxy/gex-history?mode=series (the prior session is
+// held until today has its first RTH column, ~09:30 ET; 30-min poll + manual
+// refresh). Defaults to 5-MIN columns. The time axis is a
 // FIXED world depth (Z_EXTENT) regardless of column count, so the map never
 // stretches into a runway.
 //
@@ -1056,7 +1057,7 @@ export default function Gex3DPage() {
                 pointerEvents: "none",
               }}
             >
-              Last session · rolls at 8:00 AM ET
+              Last session · rolls at 9:30 AM ET
             </div>
           )}
           {!live.loading && !live.error && !live.times.length && (

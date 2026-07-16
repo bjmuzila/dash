@@ -44,10 +44,14 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 
   .ly{position:absolute;cursor:move}
   .ly.sel{outline:2px solid var(--grn);outline-offset:2px}
+  .ly[data-lock="1"]{cursor:default}
+  .ly[data-lock="1"].sel{outline-color:#ffb020}
   .ly .hnd{display:none;position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--grn);border-radius:3px;cursor:nwse-resize;z-index:9}
   .ly.sel .hnd{display:block}
+  .ly[data-lock="1"].sel .hnd{display:none}
   .ly[data-t=text]{padding:0}
   .ly[data-t=text] .ed{outline:none;white-space:pre-wrap;word-break:break-word}
+  .ly .ed[contenteditable="true"]{cursor:text;box-shadow:0 0 0 1px var(--grn) inset}
   .ly[data-t=image]{border-radius:12px;overflow:hidden;background:#101a2c;border:1px solid #2a3c5e}
   .ly[data-t=image] img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
   .ly[data-t=image] .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#43597d;font-size:14px;font-weight:600;text-align:center;padding:10px}
@@ -102,7 +106,7 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   </div>
 
   <h3>Selected layer</h3>
-  <div id="insp"><p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p></div>
+  <div id="insp"><p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · double-click text = edit it · ctrl+click = add to selection (then Group) · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p></div>
 
   <h3>Presets</h3>
   <div class="row">
@@ -127,7 +131,11 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 </div>
 
 <script>
-var stage=document.getElementById('stage'), W=1600, H=900, Z=0.55, sel=null;
+// sel = the layer whose inspector is showing (last clicked).
+// selSet = every selected layer. Dragging any of them moves the whole set, so
+// grouping is just "select together and remember it" — layers in the same group
+// share a data-g id and clicking one always selects all of them.
+var stage=document.getElementById('stage'), W=1600, H=900, Z=0.55, sel=null, selSet=[];
 
 // Every logo layer starts as the real CB Edge mark. Safe for html2canvas: the
 // srcdoc iframe inherits the site origin, so this is a same-origin image and
@@ -157,8 +165,10 @@ function mkLayer(o){
   d.style.left=px(o.x); d.style.top=px(o.y);
   d.style.width=px(o.w); if(o.h) d.style.height=px(o.h);
 
+  // contenteditable is OFF until you double-click. Live contenteditable swallows
+  // mousedown, which is why text layers used to be undraggable.
   if(o.t==='text'){
-    d.innerHTML='<div class="ed" contenteditable="true">'+(o.html||'Your text here')+'</div>';
+    d.innerHTML='<div class="ed" contenteditable="false">'+(o.html||'Your text here')+'</div>';
     var e=d.firstChild;
     e.style.fontSize=px(o.fs||48);
     e.style.fontWeight=o.fw||800;
@@ -170,7 +180,7 @@ function mkLayer(o){
   if(o.t==='list'){
     var items=o.items||['Point one','Point two','Point three'];
     d.innerHTML='<ul>'+items.map(function(i){
-      return '<li><span class="dot"></span><span class="ed" contenteditable="true">'+i+'</span></li>';
+      return '<li><span class="dot"></span><span class="ed" contenteditable="false">'+i+'</span></li>';
     }).join('')+'</ul>';
     d.dataset.fs=o.fs||28; d.dataset.col=o.col||'#e8eefb';
     styleList(d);
@@ -220,6 +230,7 @@ function addHandle(d){
   var h=document.createElement('div'); h.className='hnd'; d.appendChild(h);
   h.addEventListener('mousedown',function(e){
     e.preventDefault(); e.stopPropagation();
+    if(d.dataset.lock==='1') return;
     var x0=e.clientX,y0=e.clientY,w0=d.offsetWidth,h0=d.offsetHeight;
     var ar=h0/w0;
     function mv(ev){
@@ -234,10 +245,23 @@ function addHandle(d){
 }
 function wire(d){
   addHandle(d);
+  // Text/bullets: double-click turns editing on, blur turns it back off, so the
+  // layer is draggable the rest of the time.
+  if(d.dataset.t==='text'||d.dataset.t==='list'){
+    d.addEventListener('dblclick',function(ev){
+      if(d.dataset.lock==='1') return;
+      var t=ev.target.classList.contains('ed')?ev.target:d.querySelector('.ed');
+      if(!t)return;
+      t.contentEditable='true'; t.focus();
+      t.addEventListener('blur',function(){t.contentEditable='false'},{once:true});
+    });
+  }
   d.addEventListener('mousedown',function(e){
     if(e.target.classList.contains('hnd'))return;
-    select(d);
-    if(e.target.isContentEditable && !e.shiftKey) return;
+    if(e.target.isContentEditable) return;
+    select(d, e.ctrlKey||e.metaKey);
+    // ctrl+click can toggle d back OFF — don't then drag it.
+    if(d.dataset.lock==='1' || selSet.indexOf(d)<0) return;
     e.preventDefault();
     var img=d.querySelector('img');
     var x0=e.clientX,y0=e.clientY;
@@ -251,8 +275,14 @@ function wire(d){
       document.addEventListener('mousemove',pmv);document.addEventListener('mouseup',pup);
       return;
     }
-    var l0=d.offsetLeft,t0=d.offsetTop;
-    function mv(ev){ d.style.left=px(l0+(ev.clientX-x0)/Z); d.style.top=px(t0+(ev.clientY-y0)/Z); }
+    // Drag every unlocked layer in the selection by the same delta.
+    var movers=selSet.filter(function(x){return x.dataset.lock!=='1'});
+    if(movers.indexOf(d)<0) movers=[d];
+    var st=movers.map(function(x){return [x.offsetLeft,x.offsetTop]});
+    function mv(ev){
+      var dx=(ev.clientX-x0)/Z, dy=(ev.clientY-y0)/Z;
+      movers.forEach(function(x,i){ x.style.left=px(st[i][0]+dx); x.style.top=px(st[i][1]+dy); });
+    }
     function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
     document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
   });
@@ -263,17 +293,34 @@ function wire(d){
     img.dataset.z=z; img.style.width=(z*100)+'%'; img.style.height=(z*100)+'%';
   },{passive:false});
 }
-function select(d){
-  document.querySelectorAll('.ly').forEach(function(x){x.classList.remove('sel')});
-  if(d) d.classList.add('sel');
-  sel=d; inspector();
+function groupOf(d){
+  return d.dataset.g ? [].slice.call(stage.querySelectorAll('.ly[data-g="'+d.dataset.g+'"]')) : [d];
+}
+function select(d,add){
+  if(!d){ selSet=[]; }
+  else {
+    var grp=groupOf(d);
+    if(add){
+      if(selSet.indexOf(d)>=0) selSet=selSet.filter(function(x){return grp.indexOf(x)<0});
+      else grp.forEach(function(x){ if(selSet.indexOf(x)<0) selSet.push(x); });
+    } else selSet=grp;
+  }
+  document.querySelectorAll('.ly').forEach(function(x){x.classList.toggle('sel',selSet.indexOf(x)>=0)});
+  sel = (d && selSet.indexOf(d)>=0) ? d : (selSet[selSet.length-1]||null);
+  inspector();
 }
 stage.addEventListener('mousedown',function(e){ if(e.target===stage||e.target.classList.contains('grid')) select(null); });
 
 function inspector(){
   var p=document.getElementById('insp');
-  if(!sel){ p.innerHTML='<p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p>'; return; }
-  var t=sel.dataset.t, h='';
+  if(!sel){ p.innerHTML='<p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · double-click text = edit it · ctrl+click = add to selection (then Group) · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p>'; return; }
+  // With more than one layer selected only the group/lock controls make sense —
+  // per-layer styling would be ambiguous.
+  var multi=selSet.length>1;
+  var t=multi?'':sel.dataset.t, h='';
+  if(multi){
+    h+='<p class="empty" style="margin:0 0 8px">'+selSet.length+' layers selected'+(sel.dataset.g?' · grouped':'')+'</p>';
+  }
   if(t==='text'){
     var e=sel.querySelector('.ed');
     h+='<label>Font size</label><input type="range" id="i_fs" min="12" max="130" value="'+parseInt(e.style.fontSize)+'">';
@@ -308,7 +355,14 @@ function inspector(){
     h+='<div class="f2"><div><label>Fill</label><input type="color" id="b_bg" value="'+sel.dataset.bgc+'"></div><div><label>Border</label><input type="color" id="b_bd" value="'+sel.dataset.bd+'"></div></div>';
     h+='<div class="row" style="margin-top:8px"><button id="b_op">Toggle 50% opacity</button></div>';
   }
-  h+='<div class="row" style="margin-top:14px"><button id="i_front">Bring front</button><button id="i_dup">Duplicate</button><button id="i_del">Delete</button></div>';
+  var anyG=selSet.some(function(x){return !!x.dataset.g});
+  var allLock=selSet.length>0 && selSet.every(function(x){return x.dataset.lock==='1'});
+  h+='<label style="margin-top:14px">Group &amp; lock</label><div class="row">';
+  h+='<button id="i_grp"'+(selSet.length<2?' disabled style="opacity:.45"':'')+'>Group</button>';
+  h+='<button id="i_ungrp"'+(anyG?'':' disabled style="opacity:.45"')+'>Ungroup</button>';
+  h+='<button id="i_lock" class="'+(allLock?'on':'')+'">'+(allLock?'Unlock':'Lock')+'</button>';
+  h+='</div>';
+  h+='<div class="row" style="margin-top:8px"><button id="i_front">Bring front</button><button id="i_dup">Duplicate</button><button id="i_del">Delete</button></div>';
   p.innerHTML=h;
 
   var g=function(i){return document.getElementById(i)};
@@ -325,7 +379,7 @@ function inspector(){
     g('l_fs').oninput=function(){sel.dataset.fs=this.value; styleList(sel)};
     g('l_add').onclick=function(){
       var li=document.createElement('li');
-      li.innerHTML='<span class="dot"></span><span class="ed" contenteditable="true">New point</span>';
+      li.innerHTML='<span class="dot"></span><span class="ed" contenteditable="false">New point</span>';
       sel.querySelector('ul').appendChild(li); styleList(sel);
     };
     g('l_rm').onclick=function(){
@@ -381,14 +435,38 @@ function inspector(){
     g('b_bd').oninput=function(){sel.dataset.bd=this.value; sel.style.border='1px solid '+this.value};
     g('b_op').onclick=function(){sel.style.opacity = (sel.style.opacity==='0.5'?'1':'0.5')};
   }
-  g('i_front').onclick=function(){stage.appendChild(sel)};
-  g('i_dup').onclick=function(){
-    var c=sel.cloneNode(true);
-    c.style.left=px(sel.offsetLeft+30); c.style.top=px(sel.offsetTop+30);
-    c.classList.remove('sel'); var oh=c.querySelector('.hnd'); if(oh)oh.remove();
-    wire(c); stage.appendChild(c); select(c);
+  g('i_grp').onclick=function(){
+    if(selSet.length<2) return;
+    var id='g'+Date.now().toString(36);
+    selSet.forEach(function(x){x.dataset.g=id});
+    select(sel);
   };
-  g('i_del').onclick=function(){sel.remove(); select(null)};
+  g('i_ungrp').onclick=function(){
+    selSet.forEach(function(x){delete x.dataset.g});
+    select(sel);
+  };
+  g('i_lock').onclick=function(){
+    var lock=!allLock;
+    selSet.forEach(function(x){ if(lock) x.dataset.lock='1'; else delete x.dataset.lock; });
+    inspector();
+  };
+  g('i_front').onclick=function(){ selSet.forEach(function(x){stage.appendChild(x)}); };
+  g('i_dup').onclick=function(){
+    // Duplicating a group keeps them grouped, under a fresh id.
+    var id=selSet.length>1?'g'+Date.now().toString(36):null;
+    var copies=selSet.map(function(x){
+      var c=x.cloneNode(true);
+      c.style.left=px(x.offsetLeft+30); c.style.top=px(x.offsetTop+30);
+      c.classList.remove('sel'); var oh=c.querySelector('.hnd'); if(oh)oh.remove();
+      c.querySelectorAll('.ed').forEach(function(n){n.contentEditable='false'});
+      if(id) c.dataset.g=id; else delete c.dataset.g;
+      wire(c); stage.appendChild(c); return c;
+    });
+    selSet=copies; sel=copies[copies.length-1];
+    document.querySelectorAll('.ly').forEach(function(x){x.classList.toggle('sel',copies.indexOf(x)>=0)});
+    inspector();
+  };
+  g('i_del').onclick=function(){ selSet.forEach(function(x){x.remove()}); select(null)};
 }
 function rgb2hex(c){
   if(!c) return '#ffffff';
@@ -399,11 +477,14 @@ function rgb2hex(c){
 
 document.addEventListener('keydown',function(e){
   if(!sel || document.activeElement.isContentEditable) return;
-  if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();sel.remove();select(null);return}
+  if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();selSet.forEach(function(x){x.remove()});select(null);return}
   var k={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
   if(!k)return; e.preventDefault();
   var s=e.shiftKey?10:1;
-  sel.style.left=px(sel.offsetLeft+k[0]*s); sel.style.top=px(sel.offsetTop+k[1]*s);
+  selSet.forEach(function(x){
+    if(x.dataset.lock==='1') return;
+    x.style.left=px(x.offsetLeft+k[0]*s); x.style.top=px(x.offsetTop+k[1]*s);
+  });
 });
 
 document.querySelectorAll('[data-add]').forEach(function(b){
@@ -602,6 +683,9 @@ function restore(s){
   stage.querySelectorAll('.ly').forEach(function(d){
     var h=d.querySelector('.hnd'); if(h)h.remove();
     d.classList.remove('sel');
+    // Presets saved before the dblclick-to-edit change stored contenteditable=true,
+    // which would make those layers undraggable again.
+    d.querySelectorAll('.ed').forEach(function(n){n.contentEditable='false'});
     wire(d);
     if(d.dataset.t==='image'||d.dataset.t==='logo') d.addEventListener('dblclick',function(){pick(d)});
   });

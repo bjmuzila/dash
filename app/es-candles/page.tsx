@@ -7,9 +7,13 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData }
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
-// findGEXFlip is intentionally NOT imported: the flip is no longer recomputed
-// per-WS-frame off gexRows (that's what made it twitch). It comes from the CB
-// snapshot table alongside the CB strike — see the /api/snapshots/mvc poll.
+// The flip is computed HERE with findGEXFlip, same as the home page, so the two
+// pages agree by construction. Do NOT source it from mvc_snapshots.gexFlip: both
+// recorders (scripts/auto-snapshot-mvc.js, server-v2/mvc-auto-snapshot.js) fall
+// back to `mvcOIRow.strike` when /api/gex omits gexFlip, so that column silently
+// holds the CB strike instead of a flip. Steadiness is handled at publish time
+// (tick-quantized, 1-min cadence) — not by picking a different source.
+import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
@@ -809,6 +813,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       if (Array.isArray(d.expirations) && d.expirations.length) {
         setExpirations(d.expirations.map(String));
       }
+      // gexFlip isn't sent by the feed — compute it from gexRows exactly like the
+      // home page (zero-crossing of the net-GEX profile nearest spot) so both
+      // pages report the same number from the same inputs.
+      let computedFlip: number | null = null;
+      if (Array.isArray(d.gexRows) && d.gexRows.length) {
+        computedFlip = findGEXFlip(d.gexRows as ChainRow[], spx > 0 ? spx : undefined);
+      }
       setLevels((prev) => {
         const nextSpx = spx > 0 ? spx : prev.spx;
         const nextEs = esFut > 0 ? esFut : prev.esFut;
@@ -823,9 +834,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         return {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
-          // Flip + CB are structural levels owned by the CB snapshot poll, not
-          // the live feed. Carry them through untouched here.
-          gexFlip:  prev.gexFlip,
+          gexFlip:  computedFlip != null ? computedFlip : prev.gexFlip,
+          // CB is owned by the snapshot poll, not the live feed.
           mvc:      prev.mvc,
           basis:    nextBasis,
           spx:      nextSpx,
@@ -1020,26 +1030,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         }
         if (cancelled) return;
         setMvcHistory(pts);
-        // Latest CB + flip (SPX points) → the legend chips and the price lines.
-        // Both come from the newest snapshot row. The recorder writes these every
-        // 30m RTH, so this 60s poll is already finer than the underlying data —
-        // and crucially they change ONLY when the snapshot changes, so the lines
-        // and axis labels sit still between writes.
+        // Latest CB (SPX points) → the legend chip. strikeOIVol is a real strike,
+        // so this is trustworthy — unlike the row's gexFlip column, which the
+        // recorders backfill with the CB strike when /api/gex omits a flip. The
+        // flip is computed live from gexRows instead (see the /ws/gex handler).
         const latest = pts.length ? pts[pts.length - 1].spx : 0;
-        const newestRow = rows.length
-          ? [...rows].sort(
-              (a: Record<string, unknown>, b: Record<string, unknown>) =>
-                Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0)
-            )[0]
-          : null;
-        const flipRaw = newestRow ? Number(newestRow.gexFlip ?? 0) : 0;
-        const nextFlip = flipRaw > 0 ? flipRaw : null;
-        setLevels((prev) => {
-          const nextMvc = latest > 0 ? latest : prev.mvc;
-          // Identity-stable when nothing moved → the publish effect stays quiet.
-          if (prev.mvc === nextMvc && prev.gexFlip === nextFlip) return prev;
-          return { ...prev, mvc: nextMvc, gexFlip: nextFlip };
-        });
+        if (latest > 0) {
+          setLevels((prev) => (prev.mvc === latest ? prev : { ...prev, mvc: latest }));
+        }
       } catch { /* keep last */ }
     };
     void load();

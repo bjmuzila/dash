@@ -467,6 +467,19 @@ function isRthEt(ms) {
 }
 
 /**
+ * SQL mirror of isRthEt() for the row-selecting queries below, so "does this
+ * date have a session worth drawing" is answered in Postgres instead of by
+ * pulling the day and counting survivors in JS. `timestamp` is BIGINT ms, so
+ * /1000.0 → to_timestamp() → shift into ET → compare the clock time. Uses the
+ * named zone (not a fixed offset) for the same DST reason as isRthEt. Alias the
+ * column (h.timestamp) — bare `timestamp` in an expression collides with the
+ * type-literal syntax.
+ */
+const RTH_ET_SQL = `
+  (timezone('America/New_York', to_timestamp(h.timestamp / 1000.0)))::time
+    BETWEEN TIME '09:30' AND TIME '16:00'`;
+
+/**
  * The trading session the 3D map should be showing, rolling at 08:00 ET rather
  * than midnight. Between the close and 08:00 the next morning there is nothing
  * new worth showing — the new contract has no recorded surface yet — so a
@@ -475,8 +488,13 @@ function isRthEt(ms) {
  * last real terrain up, then hands over to the new contract.
  *
  * Returns YYYY-MM-DD in ET. Weekends/holidays are NOT special-cased here; the
- * caller falls back to the most recent date that actually has rows, which
+ * caller falls back to the most recent date that actually has RTH rows, which
  * covers them (and any day the feed was down) without a holiday calendar.
+ *
+ * NOTE this is only the ANCHOR — the newest session the caller may show, not
+ * the one it will. Because the fallback requires an RTH row, the real handover
+ * to the new contract happens at the first 09:30 write, not at 08:00; this just
+ * stops the walk-back from reaching past today.
  */
 function sessionYmdET(now = Date.now()) {
   const p = new Intl.DateTimeFormat('en-US', {
@@ -519,14 +537,23 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
   if (!pool) return sendJson(res, 200, empty);
 
   // Resolve the session to show. Explicit ?date wins; otherwise take the 08:00-ET
-  // session anchor and walk back to the most recent date that actually HAS rows
-  // (covers weekends, holidays, and feed outages without a holiday calendar).
+  // session anchor and walk back to the most recent date that actually has RTH
+  // rows (covers weekends, holidays, and feed outages without a holiday calendar).
+  //
+  // The RTH predicate is load-bearing, not a tidy-up: the writer is not RTH-gated
+  // (it persists whenever the feed is up), so from 08:00 ET the anchor rolls to
+  // today and today already HAS rows — premarket ones. Matching on mere existence
+  // therefore locked onto today, and the RTH filter further down then dropped
+  // every column, so the map went blank from 08:00 until the first 09:30 write
+  // instead of holding yesterday's terrain. Requiring an RTH row here means a
+  // date is only chosen if it can actually produce columns.
   let date = dateParam;
   if (!date) {
     const anchor = sessionYmdET();
     const { rows: dr } = await pool.query(
-      `SELECT date FROM option_strike_gex_history
-        WHERE date <= $1 ORDER BY date DESC LIMIT 1`,
+      `SELECT h.date FROM option_strike_gex_history h
+        WHERE h.date <= $1 AND ${RTH_ET_SQL}
+        ORDER BY h.date DESC LIMIT 1`,
       [anchor]
     );
     date = dr[0]?.date || anchor;
@@ -537,9 +564,13 @@ async function handleGexHistorySeries(req, res, { expiry, basis, col }) {
   // rolled to the new 0DTE by the time we're still displaying yesterday's map.
   let useExpiry = expiry;
   if (!searchParams.get('expiry')) {
+    // Counted over RTH rows only, to match the date resolution above — an expiry
+    // that leads on premarket volume but has no session rows would win the count
+    // and then yield an empty grid.
     const { rows: er } = await pool.query(
-      `SELECT expiry, COUNT(*) AS n FROM option_strike_gex_history
-        WHERE date = $1 GROUP BY expiry ORDER BY n DESC LIMIT 1`,
+      `SELECT h.expiry, COUNT(*) AS n FROM option_strike_gex_history h
+        WHERE h.date = $1 AND ${RTH_ET_SQL}
+        GROUP BY h.expiry ORDER BY n DESC LIMIT 1`,
       [date]
     );
     if (er[0]?.expiry) useExpiry = er[0].expiry;
