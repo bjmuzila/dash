@@ -2184,10 +2184,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   return (
     <div ref={captureRef} className="es-candles-root flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
-      {/* data-capture-hide: live-only control chrome. DataBox's captureElement
-          drops it from the Snap/Discord PNG and shifts the chart up to close
-          the gap — the exported image is chart + title band only. */}
-      <div className="px-4 pt-3 pb-1" data-capture-hide style={{ position: "relative", zIndex: 30 }}>
+      {/* The dock STAYS in the Snap/Discord PNG (no data-capture-hide). It used
+          to be dropped, but dropping a direct child above the chart makes
+          captureElement's hiddenShift exceed the 44px title band, so the chart
+          composited UP and the candles rendered underneath the watermark. Kept
+          in flow, the exported image reads: watermark band → toolbar → chart.
+          data-capture-hide is still applied per-control below to the pieces
+          that are meaningless in a static image (Snap/Discord buttons). */}
+      <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
         <FitScale align={embedded ? "left" : "center"} min={0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
           {leading}
@@ -2368,8 +2372,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />
 
           <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
-          <BoxSnapBtn targetRef={captureRef} label="ES Candles" />
-          <BoxDiscordBtn targetRef={captureRef} label="ES Candles" />
+          {/* The dock itself now stays in the capture, so the capture-triggering
+              controls hide themselves — they'd be dead pixels in the PNG. Not
+              direct children of captureRef, so they don't affect hiddenShift. */}
+          <span data-capture-hide><BoxSnapBtn targetRef={captureRef} label="ES Candles" /></span>
+          <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} label="ES Candles" /></span>
         </Dock>
         </FitScale>
       </div>

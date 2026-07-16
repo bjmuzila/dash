@@ -18,6 +18,7 @@ export async function POST(request: Request) {
 
     const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
     if (!webhookUrl) {
+      console.error("[discord-share] DISCORD_WEBHOOK_URL is not configured");
       return NextResponse.json(
         { ok: false, error: "DISCORD_WEBHOOK_URL is not configured" },
         { status: 500 },
@@ -54,6 +55,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: String(err) }, { status: 502 });
+    // Log server-side: the response body below is NOT reliably readable by the
+    // client. Cloudflare intercepts a 502 from the origin and replaces the body
+    // with its own branded "Bad gateway" page, so any error string returned here
+    // is silently discarded before the browser sees it. The log is the only
+    // channel that survives — never rely on the response body alone to debug.
+    console.error("[discord-share] failed:", err);
+    // 500, not 502: Cloudflare passes a 500 body through untouched but swallows
+    // 502/504. Callers still see !res.ok either way.
+    return NextResponse.json({ ok: false, error: String(err) }, { status: 500 });
   }
 }
