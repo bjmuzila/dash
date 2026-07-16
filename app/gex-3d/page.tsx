@@ -160,12 +160,12 @@ type BuiltMesh = {
 };
 
 /**
- * Grid → tower-profile mesh. TIME gets the smoothing (1-2-1 blur + Catmull-Rom
+ * Grid → flush-tower mesh. TIME gets the smoothing (1-2-1 blur + Catmull-Rom
  * upsample); STRIKES get NONE — cross-strike interpolation melted adjacent
- * walls into plateaus twice. Instead each strike extrudes its own ridge: full
- * height at the strike center, a near-floor groove at the midpoint to each
- * neighbor. That's the separation the box towers gave, kept smooth along the
- * session and still lit/fogged like terrain.
+ * walls into plateaus twice. Each strike is a flat-topped slab over its full
+ * cell, flush against its neighbors, with a shared vertical wall face where
+ * heights differ — the box-tower look, kept smooth along the session and lit
+ * and fogged like terrain.
  */
 function buildMesh(
   norm: (number | null)[][], nx: number, nz: number,
@@ -210,31 +210,17 @@ function buildMesh(
   const Gh = new Float32Array(nzM * nx);
   for (let i = 0; i < G.length; i++) Gh[i] = (absMode ? Math.abs(G[i]) : G[i]) * relief;
 
-  // ── X: per-strike TOWER PROFILE, not interpolation ────────────────────────
-  // Mesh columns are non-uniform: a groove vertex at every midpoint between
-  // strikes (4% of the neighbors' height — essentially the floor), the strike
-  // center at full height, and on coarser views a pair of shoulders that give
-  // the towers flat caps. 1-min skips the shoulders to hold the quad budget.
-  const dense = nz > 200;
-  const perStrike = dense ? 2 : 4;
-  const nxM = perStrike * nx + 1;
+  // ── X: flush TOWERS. Each strike is a flat-topped slab spanning its full
+  // cell [i−0.5, i+0.5], flush against its neighbors — NO grooves, NO gaps.
+  // The boundary between two strikes is a pair of mesh columns at the SAME x,
+  // each carrying its own side's height: the quad between them is the vertical
+  // wall face, exactly like the old box towers — but tops stay smooth in time.
+  const nxM = 2 * nx;
   const gxPos = new Float32Array(nxM);
-  const colA = new Int32Array(nxM), colB = new Int32Array(nxM);
-  const colF = new Float32Array(nxM);
-  {
-    let j = 0;
-    const groove = (i0: number, i1: number) => {
-      gxPos[j] = (i0 + i1) / 2;
-      colA[j] = Math.max(0, i0); colB[j] = Math.min(nx - 1, i1);
-      colF[j] = 0.04; j++;
-    };
-    groove(-1, 0);
-    for (let i = 0; i < nx; i++) {
-      if (!dense) { gxPos[j] = i - 0.26; colA[j] = colB[j] = i; colF[j] = 0.94; j++; }
-      gxPos[j] = i; colA[j] = colB[j] = i; colF[j] = 1; j++;
-      if (!dense) { gxPos[j] = i + 0.26; colA[j] = colB[j] = i; colF[j] = 0.94; j++; }
-      groove(i, i + 1);
-    }
+  const col = new Int32Array(nxM);
+  for (let i = 0; i < nx; i++) {
+    gxPos[2 * i] = i - 0.5; col[2 * i] = i;
+    gxPos[2 * i + 1] = i + 0.5; col[2 * i + 1] = i;
   }
 
   const hs = new Float32Array(nzM * nxM);
@@ -242,7 +228,7 @@ function buildMesh(
   for (let zm = 0; zm < nzM; zm++) {
     const gr = zm * nx, mr = zm * nxM;
     for (let xm = 0; xm < nxM; xm++) {
-      const v = colF[xm] * (G[gr + colA[xm]] + G[gr + colB[xm]]) / 2;
+      const v = G[gr + col[xm]];
       vs[mr + xm] = v;
       hs[mr + xm] = (absMode ? Math.abs(v) : v) * relief;
     }
@@ -259,7 +245,10 @@ function buildMesh(
   let qi = 0;
   for (let zm = 0; zm < nzM - 1; zm++) for (let xm = 0; xm < nxM - 1; xm++, qi++) {
     const ia = zm * nxM + xm, ib = ia + 1, id = ia + nxM, ic = id + 1;
-    const v = (vs[ia] + vs[ib] + vs[ic] + vs[id]) / 4;
+    // Wall quads sit between two strikes at the same x — color them by the
+    // DOMINANT side so a tall wall's face isn't washed out by a weak neighbor.
+    const vA = (vs[ia] + vs[id]) / 2, vB = (vs[ib] + vs[ic]) / 2;
+    const v = Math.abs(vA) >= Math.abs(vB) ? vA : vB;
     const mag = Math.min(1, Math.abs(v));
     const [r, g, b] = rampFor(v, mag);
     qR[qi] = r; qG[qi] = g; qB[qi] = b; qMag[qi] = mag;
@@ -275,20 +264,25 @@ function buildMesh(
 }
 
 /**
- * Surface height for the draped price line: bilinear over the strike-CENTER
- * height grid (Gh), not the profiled mesh — between two towers the line
- * bridges crest-to-crest instead of diving into every groove it crosses.
+ * Surface height for the draped price line. The towers are flat slabs, so the
+ * line LAYS FLAT on whichever tower spot is over (no cross-cell averaging —
+ * that clipped the line into the taller slab at every boundary). Near a wall
+ * (outer 20% of the cell) it blends up to the taller neighbor, so crossings
+ * climb/descend the wall face instead of teleporting.
  */
 function sampleH(mesh: BuiltMesh, gx: number, gz: number): number {
   const nx = mesh.nxG;
   const zm = Math.max(0, Math.min(mesh.nzM - 1.001, gz * mesh.zUp));
-  const x0 = Math.max(0, Math.min(nx - 2, Math.floor(gx)));
-  const tx = Math.max(0, Math.min(1, gx - x0));
   const z0 = Math.floor(zm), tz = zm - z0;
-  const i = z0 * nx + x0;
-  const h00 = mesh.Gh[i], h10 = mesh.Gh[i + 1];
-  const h01 = mesh.Gh[i + nx], h11 = mesh.Gh[i + nx + 1];
-  return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+  const hAt = (x: number) => {
+    const i = Math.max(0, Math.min(nx - 1, x));
+    return mesh.Gh[z0 * nx + i] * (1 - tz) + mesh.Gh[(z0 + 1) * nx + i] * tz;
+  };
+  const i = Math.max(0, Math.min(nx - 1, Math.round(gx)));
+  const u = gx - i; // −0.5…0.5 within the tower's cell
+  const hi = hAt(i);
+  const w = Math.max(0, (Math.abs(u) - 0.3) / 0.2); // 0 on the cap → 1 at the wall
+  return w === 0 ? hi : hi * (1 - w) + Math.max(hi, hAt(u >= 0 ? i + 1 : i - 1)) * w;
 }
 
 // ── FX records (world-space; projected fresh every animation frame) ─────────
@@ -719,22 +713,8 @@ export default function Gex3DPage() {
     if (!NX || !NZ || !fx) return;
     const { spotPath } = surfRef.current;
 
-    // energy flow along the draped price line — a faint dash stream moving
-    // with time. Low alpha on purpose: it's bloom, and bloom is allowed to leak.
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.strokeStyle = canvasRgba(SPOT, 0.2);
-    ctx.lineWidth = 2;
-    ctx.setLineDash([9, 15]);
-    ctx.lineDashOffset = -((now * 0.05) % 24);
-    ctx.beginPath();
-    for (let z = 0; z < NZ; z++) {
-      const p = proj(fx.gx[z], fx.yPath[z] + 1, z);
-      if (z === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
+    // NO animated dash/flow on the price line — the solid draped stroke in the
+    // scene layer is the whole line. (The moving dashes read as broken/glitchy.)
 
     // pulsing beacons on the newest column's dominant walls — the "huge GEX
     // levels" announce themselves without hunting.
@@ -798,18 +778,15 @@ export default function Gex3DPage() {
         ctx.fill();
         ctx.restore();
 
-        // deflection arrow: contact → where price actually went next, with a
-        // flowing dash so the bounce direction is alive. Drawn from the real
-        // spot track — it can't claim a bounce that didn't happen.
+        // deflection arrow: contact → where price actually went next. SOLID —
+        // dashed/animated strokes on the track read as broken. Drawn from the
+        // real spot track — it can't claim a bounce that didn't happen.
         if (im.z2 >= 0 && im.z2 < NZ) {
           const q = proj(im.gx2, fx.yPath[im.z2] + 1, im.z2);
           ctx.save();
           ctx.strokeStyle = canvasRgba(SPOT, 0.85);
           ctx.lineWidth = 2;
-          ctx.setLineDash([6, 8]);
-          ctx.lineDashOffset = -((now * 0.04) % 14);
           ctx.beginPath(); ctx.moveTo(hit.x, hit.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-          ctx.setLineDash([]);
           const ang = Math.atan2(q.y - hit.y, q.x - hit.x);
           const hl = 6 * Math.max(0.6, q.s);
           ctx.beginPath();

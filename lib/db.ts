@@ -147,6 +147,24 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_ib_date ON ib_levels(date);
 
+    -- EOD Initial Balance results — one row per (date, symbol), written 16:30 ET
+    -- by server-v2/ib-results-recorder.js via POST /api/ib-results. `rules` is
+    -- the 14-rule scoreboard: [{id,name,state,side,hit,note}].
+    CREATE TABLE IF NOT EXISTS ib_daily_results (
+      id SERIAL PRIMARY KEY, date TEXT NOT NULL, symbol TEXT NOT NULL,
+      ib_high REAL, ib_low REAL, ib_mid REAL, ib_width REAL, width_bucket TEXT,
+      bias TEXT, first_formed TEXT, close_zone TEXT, open_type TEXT, orb_dir TEXT, fvg TEXT,
+      break_side TEXT, break_min INTEGER, failed INTEGER, retest INTEGER, retest_cont INTEGER,
+      vol_surge INTEGER, single_break INTEGER, both_broke INTEGER, neither_broke INTEGER,
+      contained_at2 INTEGER, contained_broke_late INTEGER,
+      ext_05 INTEGER, ext_10 INTEGER, ext_15 INTEGER, ext_20 INTEGER,
+      first_touch_side TEXT, first_touch_min INTEGER,
+      day_high REAL, day_low REAL, day_close REAL,
+      rules JSONB, computed_at BIGINT NOT NULL,
+      UNIQUE(date, symbol)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ibdr_date ON ib_daily_results(date);
+
     CREATE TABLE IF NOT EXISTS bzila_snapshots (
       id SERIAL PRIMARY KEY, timestamp BIGINT NOT NULL, date TEXT NOT NULL,
       time TEXT, ticker TEXT, session TEXT DEFAULT 'rth', orders TEXT, stats TEXT
@@ -3228,6 +3246,103 @@ export async function getNqCandles(date?: string, daysBack?: number, limit = 200
     `SELECT * FROM nq_candles ORDER BY timestamp DESC LIMIT ?`,
     [limit]
   );
+}
+
+// ── IB Daily Results (EOD 16:30 ET scoreboard — ib_daily_results) ─────────────
+
+export interface IbDailyResultRow {
+  id?: number;
+  date: string;
+  symbol: string;                 // 'ES' | 'NQ'
+  ib_high: number | null; ib_low: number | null; ib_mid: number | null; ib_width: number | null;
+  width_bucket: string | null;    // 'narrow' | 'normal' | 'wide'
+  bias: string | null;            // 'H' | 'L'
+  first_formed: string | null;    // 'H' | 'L'
+  close_zone: string | null;      // 'top25' | 'mid50' | 'bot25'
+  open_type: string | null;       // 'OAR-H' | 'OAR-L' | 'HIR' | 'LIR'
+  orb_dir: string | null; fvg: string | null;
+  break_side: string | null; break_min: number | null;
+  failed: number | null; retest: number | null; retest_cont: number | null; vol_surge: number | null;
+  single_break: number | null; both_broke: number | null; neither_broke: number | null;
+  contained_at2: number | null; contained_broke_late: number | null;
+  ext_05: number | null; ext_10: number | null; ext_15: number | null; ext_20: number | null;
+  first_touch_side: string | null; first_touch_min: number | null;
+  day_high: number | null; day_low: number | null; day_close: number | null;
+  rules: unknown;                 // JSONB — IbRuleResult[]
+  computed_at: number;
+}
+
+export async function upsertIbDailyResult(r: Omit<IbDailyResultRow, "id">): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `INSERT INTO ib_daily_results (
+       date, symbol, ib_high, ib_low, ib_mid, ib_width, width_bucket,
+       bias, first_formed, close_zone, open_type, orb_dir, fvg,
+       break_side, break_min, failed, retest, retest_cont, vol_surge,
+       single_break, both_broke, neither_broke, contained_at2, contained_broke_late,
+       ext_05, ext_10, ext_15, ext_20, first_touch_side, first_touch_min,
+       day_high, day_low, day_close, rules, computed_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+               $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
+     ON CONFLICT (date, symbol) DO UPDATE SET
+       ib_high=EXCLUDED.ib_high, ib_low=EXCLUDED.ib_low, ib_mid=EXCLUDED.ib_mid, ib_width=EXCLUDED.ib_width,
+       width_bucket=EXCLUDED.width_bucket, bias=EXCLUDED.bias, first_formed=EXCLUDED.first_formed,
+       close_zone=EXCLUDED.close_zone, open_type=EXCLUDED.open_type, orb_dir=EXCLUDED.orb_dir, fvg=EXCLUDED.fvg,
+       break_side=EXCLUDED.break_side, break_min=EXCLUDED.break_min, failed=EXCLUDED.failed,
+       retest=EXCLUDED.retest, retest_cont=EXCLUDED.retest_cont, vol_surge=EXCLUDED.vol_surge,
+       single_break=EXCLUDED.single_break, both_broke=EXCLUDED.both_broke, neither_broke=EXCLUDED.neither_broke,
+       contained_at2=EXCLUDED.contained_at2, contained_broke_late=EXCLUDED.contained_broke_late,
+       ext_05=EXCLUDED.ext_05, ext_10=EXCLUDED.ext_10, ext_15=EXCLUDED.ext_15, ext_20=EXCLUDED.ext_20,
+       first_touch_side=EXCLUDED.first_touch_side, first_touch_min=EXCLUDED.first_touch_min,
+       day_high=EXCLUDED.day_high, day_low=EXCLUDED.day_low, day_close=EXCLUDED.day_close,
+       rules=EXCLUDED.rules, computed_at=EXCLUDED.computed_at`,
+    [r.date, r.symbol, r.ib_high, r.ib_low, r.ib_mid, r.ib_width, r.width_bucket,
+     r.bias, r.first_formed, r.close_zone, r.open_type, r.orb_dir, r.fvg,
+     r.break_side, r.break_min, r.failed, r.retest, r.retest_cont, r.vol_surge,
+     r.single_break, r.both_broke, r.neither_broke, r.contained_at2, r.contained_broke_late,
+     r.ext_05, r.ext_10, r.ext_15, r.ext_20, r.first_touch_side, r.first_touch_min,
+     r.day_high, r.day_low, r.day_close, JSON.stringify(r.rules ?? []), r.computed_at]
+  );
+}
+
+export async function getIbDailyResults(symbol: string, limit = 90): Promise<IbDailyResultRow[]> {
+  return queryAll<IbDailyResultRow>(
+    `SELECT * FROM ib_daily_results WHERE symbol = ? ORDER BY date DESC LIMIT ?`,
+    [symbol, limit]
+  );
+}
+
+/** Per-session RTH day range + IB width for the sessions BEFORE `beforeDate` —
+ *  feeds the trailing ATR14 / avgIB20 width-bucket classification. String
+ *  time compare is safe: `time` is zero-padded ET 'HH:MM'. */
+export async function getIbTrailingStats(
+  table: "es_candles" | "nq_candles",
+  beforeDate: string,
+  daysBack = 70
+): Promise<{ date: string; dayRange: number; ibWidth: number }[]> {
+  const tbl = table === "nq_candles" ? "nq_candles" : "es_candles";
+  const cutoff = new Date(Date.parse(`${beforeDate}T12:00:00Z`) - daysBack * 86400_000)
+    .toISOString().slice(0, 10);
+  const rows = await queryAll<{ date: string; rth_high: number; rth_low: number; ib_high: number; ib_low: number }>(
+    `SELECT date,
+            MAX(high) FILTER (WHERE time >= '09:30' AND time < '16:00') AS rth_high,
+            MIN(low)  FILTER (WHERE time >= '09:30' AND time < '16:00') AS rth_low,
+            MAX(high) FILTER (WHERE time >= '09:30' AND time < '10:30') AS ib_high,
+            MIN(low)  FILTER (WHERE time >= '09:30' AND time < '10:30') AS ib_low
+       FROM ${tbl}
+      WHERE date >= ? AND date < ?
+      GROUP BY date
+     HAVING COUNT(*) FILTER (WHERE time >= '09:30' AND time < '10:30') > 0
+      ORDER BY date ASC`,
+    [cutoff, beforeDate]
+  );
+  return rows
+    .map((r) => ({
+      date: r.date,
+      dayRange: Number(r.rth_high) - Number(r.rth_low),
+      ibWidth: Number(r.ib_high) - Number(r.ib_low),
+    }))
+    .filter((r) => Number.isFinite(r.dayRange) && Number.isFinite(r.ibWidth) && r.ibWidth > 0);
 }
 
 // ── IB Levels (locked Initial Balance per day) ──────────────────────────────────

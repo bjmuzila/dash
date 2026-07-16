@@ -24,6 +24,7 @@ import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { avg, med, clock, type IbDataset, type SlimDay } from "@/lib/ibStats";
 import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
+import IbDailyResults from "@/components/scanner/IbDailyResults";
 
 const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
@@ -1751,6 +1752,10 @@ export default function IbStatsTab() {
           </Tbl>
         </Card>
         </>)}
+
+        {/* Daily Results — EOD 16:30 ET scoreboard, one row per session, every
+            rule graded. Collapsed by default; owner-gated like the history above. */}
+        {isOwner && <IbDailyResults sym={sym} />}
       </div>
     </div>
   );

@@ -23,7 +23,7 @@ import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
-import { useVolGexSpeed, type SpeedWindow, type VolGexSpeedMap } from "@/hooks/useVolGexSpeed";
+import { useDualTickerGex, type GexBasis, type OffsetGexMap } from "@/hooks/useDualTickerGex";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -76,12 +76,13 @@ type HeatmapRow = {
   netGexVal: number;   netGex: string;
   volOnlyVal: number;  volOnly: string;
   dexVal: number;      dex: string;
-  gexVexVal: number;   gexVex: string;   // Net VEX (vanna)
   rollingVal: number | null; rolling: string;  // 30-min rolling net GEX (DB)
-  // Vol-only GEX speed: Δ|netVolGEX| over the selected window.
-  // + = wall BUILDING at that strike, − = wall BLEEDING. See hooks/useVolGexSpeed.
-  volSpeedVal: number | null; volSpeed: string;
-  volSpeedPct: number | null;
+  // SPY / QQQ 0DTE net GEX at the SAME moneyness offset as this SPX row (ATM+N).
+  // SPY and QQQ don't share SPX's strike ladder, so the join is by offset, not
+  // strike — see hooks/useDualTickerGex. `*Strike` is the contract the value
+  // actually came from, surfaced in the cell tooltip.
+  spyGexVal: number | null; spyGex: string; spyStrike: number | null;
+  qqqGexVal: number | null; qqqGex: string; qqqStrike: number | null;
   type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
   rank?: number;
   rankColor?: string;
@@ -274,7 +275,8 @@ function toHeatmapRows(
   rows: ChainRow[],
   spot: number,
   rollingByStrike?: Map<number, number>,
-  speedByStrike?: VolGexSpeedMap
+  spyGex?: OffsetGexMap,
+  qqqGex?: OffsetGexMap
 ): HeatmapRow[] {
   const windowRows = pickCenterRows(rows, spot, 20);
   // Rank by OI+Vol net (netGEX OI-only + netVolGEX vol-only), matching the column.
@@ -290,17 +292,22 @@ function toHeatmapRows(
   const atmStrike = windowRows.reduce((best, row) => (
     Math.abs(row.strike - spot) < Math.abs(best - spot) ? row.strike : best
   ), windowRows[0]?.strike ?? 0);
+  // windowRows is DESCENDING (highest strike first), so a row ABOVE the ATM sits
+  // at a LOWER index — hence atmIdx − idx to make "above ATM" a POSITIVE offset,
+  // matching the ascending ladder useDualTickerGex keys SPY/QQQ by.
+  const atmIdx = windowRows.findIndex((row) => row.strike === atmStrike);
 
-  return windowRows.map((row) => {
+  return windowRows.map((row, idx) => {
+    const offset = atmIdx < 0 ? null : atmIdx - idx;
+    const spyCell = offset == null ? undefined : spyGex?.[offset];
+    const qqqCell = offset == null ? undefined : qqqGex?.[offset];
     // NET GEX column = OI+Vol basis. Server rows carry netGEX (OI-only) and
     // netVolGEX (vol-only); their sum is the true OI+Vol net (gamma·(OI+vol)·S²,
     // calls +, puts −). The chart bars use the same basis, so they now agree.
     const net = (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
     const volOnly = row.netVolGEX ?? 0;
     const dex = (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
-    const flowGex = row.flowGEX ?? 0;  // Flow GEX from dealer inventory
     const rolling = rollingByStrike?.get(row.strike); // 30-min rolling net GEX
-    const sp = speedByStrike?.[row.strike];           // vol-only GEX speed
     const isAtm = row.strike === atmStrike;
     let type: HeatmapRow["type"] = "neutral";
     if (isAtm) type = "atm";
@@ -316,12 +323,14 @@ function toHeatmapRows(
       netGexVal: net,        netGex: fmtMoney(net),
       volOnlyVal: volOnly,   volOnly: fmtMoney(volOnly),
       dexVal: dex,           dex: fmtMoney(dex),
-      gexVexVal: flowGex,    gexVex: fmtMoney(flowGex),
       rollingVal: rolling ?? null,
       rolling: rolling == null ? "—" : fmtMoney(rolling),
-      volSpeedVal: sp ? sp.magDelta : null,
-      volSpeed: sp ? fmtMoney(sp.magDelta) : "—",
-      volSpeedPct: sp ? sp.pct : null,
+      spyGexVal: spyCell ? spyCell.netGEX : null,
+      spyGex: spyCell ? fmtMoney(spyCell.netGEX) : "—",
+      spyStrike: spyCell ? spyCell.strike : null,
+      qqqGexVal: qqqCell ? qqqCell.netGEX : null,
+      qqqGex: qqqCell ? fmtMoney(qqqCell.netGEX) : "—",
+      qqqStrike: qqqCell ? qqqCell.strike : null,
       type,
       rank: rankMap.get(row.strike)?.rank,
       rankColor: rankMap.get(row.strike)?.rankColor,
@@ -507,8 +516,9 @@ export function HomeClient({
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
   // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
   const [intensity, setIntensity] = useState(1.75);
-  // Rolling window for the VOL GEX SPEED column + movers rail.
-  const [speedWin, setSpeedWin] = useState<SpeedWindow>(60);
+  // Basis for the SPY 0DTE / QQQ 0DTE net GEX columns. Independent of the SPX
+  // columns beside them, which always render OI+Vol and Vol-only side by side.
+  const [sideBasis, setSideBasis] = useState<GexBasis>("oi-vol");
   // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
   // option chain. ("table" divergent-bars view retired from the switcher; kept in
   // the union so its now-unreachable render branch stays valid without a refactor.)
@@ -830,8 +840,14 @@ export function HomeClient({
     loadChain(selectedExpiry).catch(() => {});
   }, [loadChain, selectedExpiry]);
 
+  // Held in a ref because useDualTickerGex is declared below (it needs chainRows'
+  // siblings), but the refresh button is wired up here. Keeps the ↻ button
+  // refreshing the SPY/QQQ columns alongside the SPX chain.
+  const refreshSideGexRef = useRef<() => void>(() => {});
+
   const handleRefresh = useCallback(async () => {
     if (selectedExpiry) await loadChain(selectedExpiry);
+    refreshSideGexRef.current();
   }, [loadChain, selectedExpiry]);
 
   // Heatmap icon-button refresh with press feedback (idle ↻ / refreshing / ✓ / ✗).
@@ -872,24 +888,40 @@ export function HomeClient({
     });
   }, [gexChainRows, wsChainRows]);
 
-  // Vol-only GEX speed (Δ|netVolGEX| per strike over a rolling window). Hybrid
-  // source: live ring buffer + Postgres seed on reload. See hooks/useVolGexSpeed.
-  const speedSource = useMemo(
-    () => chainRows.map((r) => ({ strike: r.strike, netVolGEX: r.netVolGEX ?? 0 })),
-    [chainRows]
+  // SPY / QQQ 0DTE per-strike net GEX for the two right-hand columns. Only
+  // fetched in heatmap view — the chain embed doesn't render these columns, so
+  // there's no reason to poll two extra chains behind it.
+  const SIDE_TICKERS = useMemo(() => ["SPY", "QQQ"] as const, []);
+  const { data: sideGex, loading: sideLoading, refresh: refreshSideGex } = useDualTickerGex(
+    SIDE_TICKERS,
+    sideBasis,
+    60_000,
+    heatmapView !== "chain"
   );
-  const { speed: volSpeed } = useVolGexSpeed(speedSource, selectedExpiry, speedWin);
+  // Effect, not a render-phase assignment — the ref is only ever read from the
+  // refresh click handler, never during render.
+  useEffect(() => {
+    refreshSideGexRef.current = refreshSideGex;
+  }, [refreshSideGex]);
 
   const heatmapRows = useMemo(() => {
     const useSpot = chartSpot > 0 ? chartSpot : spot;
     if (!(useSpot > 0) || !chainRows.length) return [] as HeatmapRow[];
-    return toHeatmapRows(chainRows, useSpot, rollingByStrike, volSpeed);
-  }, [chainRows, chartSpot, spot, rollingByStrike, volSpeed]);
+    return toHeatmapRows(
+      chainRows,
+      useSpot,
+      rollingByStrike,
+      sideGex.SPY?.map,
+      sideGex.QQQ?.map
+    );
+  }, [chainRows, chartSpot, spot, rollingByStrike, sideGex]);
 
   // Column maxes + top-3 magnitudes for intensity coloring (per visible column).
-  // volSpeedVal gets its own scale — Δ$ is orders of magnitude below the level.
+  // spyGexVal / qqqGexVal each get their OWN scale — SPY and QQQ notional gamma
+  // is orders of magnitude below SPX's, so sharing netGexVal's max would leave
+  // both columns colorless.
   const heatmapColorMeta = useMemo(() => {
-    const cols = ["netGexVal", "volOnlyVal", "dexVal", "gexVexVal", "volSpeedVal"] as const;
+    const cols = ["netGexVal", "volOnlyVal", "dexVal", "spyGexVal", "qqqGexVal"] as const;
     const max: Record<string, number> = {};
     const top3: Record<string, number[]> = {};
     for (const c of cols) {
@@ -1423,14 +1455,24 @@ export function HomeClient({
                         style={{ width: 80, height: 3, accentColor: "#219EBC" }}
                       />
                       <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
-                      {/* Rolling window for the VOL GEX SPEED column. */}
-                      <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginLeft: 6 }}>Speed</span>
+                      {/* Basis for the SPY 0DTE / QQQ 0DTE columns only. The SPX
+                          NET GEX / VOL ONLY GEX columns are unaffected — they
+                          already show both bases side by side. */}
+                      <span
+                        title="Basis for the SPY 0DTE / QQQ 0DTE columns. OI+Vol = open interest + volume (full positioning). Vol Only = today's volume (intraday flow)."
+                        style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginLeft: 6, cursor: "help" }}
+                      >
+                        SPY/QQQ{sideLoading ? " …" : ""}
+                      </span>
                       <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                        {([30, 60, 300] as SpeedWindow[]).map((w) => (
+                        {([
+                          { key: "oi-vol" as GexBasis, label: "OI+Vol", tip: "Open interest + volume — full dealer positioning." },
+                          { key: "vol-only" as GexBasis, label: "Vol Only", tip: "Today's volume only — intraday flow, resets daily." },
+                        ]).map((b) => (
                           <button
-                            key={w}
-                            onClick={() => setSpeedWin(w)}
-                            title={`Δ|vol-only GEX| over the last ${w < 60 ? `${w}s` : `${w / 60}m`}`}
+                            key={b.key}
+                            onClick={() => setSideBasis(b.key)}
+                            title={b.tip}
                             style={{
                               padding: "2px 7px",
                               fontSize: 9,
@@ -1438,11 +1480,11 @@ export function HomeClient({
                               cursor: "pointer",
                               border: "none",
                               fontFamily: "inherit",
-                              background: speedWin === w ? "rgba(33,158,188,0.14)" : "transparent",
-                              color: speedWin === w ? "#219EBC" : "#5a7a98",
+                              background: sideBasis === b.key ? "rgba(33,158,188,0.14)" : "transparent",
+                              color: sideBasis === b.key ? "#219EBC" : "#5a7a98",
                             }}
                           >
-                            {w < 60 ? `${w}s` : `${w / 60}m`}
+                            {b.label}
                           </button>
                         ))}
                       </div>
@@ -1505,13 +1547,26 @@ export function HomeClient({
                   </colgroup>
                   <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
-                      {["Strike", "Net GEX", "Vol Only GEX", "DEX", "Flow Gex", `Vol GEX Speed`].map((header, index) => (
+                      {[
+                        { label: "Strike", tip: undefined as string | undefined },
+                        { label: "Net GEX", tip: undefined },
+                        { label: "Vol Only GEX", tip: undefined },
+                        { label: "DEX", tip: undefined },
+                        {
+                          label: "SPY 0DTE Net GEX",
+                          tip: `SPY's 0DTE net GEX at the SAME distance from ATM as this SPX row (SPY doesn't share SPX's strike ladder, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the SPY strike.`,
+                        },
+                        {
+                          label: "QQQ 0DTE Net GEX",
+                          tip: `QQQ's 0DTE net GEX at the SAME distance from ATM as this SPX row (QQQ tracks NDX, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the QQQ strike.`,
+                        },
+                      ].map((header, index) => (
                         <th
-                          key={header}
-                          title={index === 5 ? `Δ|vol-only GEX| over the last ${speedWin < 60 ? `${speedWin}s` : `${speedWin / 60}m`} — green = wall building, red = bleeding` : undefined}
-                          style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 || heatmapView === "table" ? "left" : "right", color: "#fff", cursor: index === 5 ? "help" : undefined }}
+                          key={header.label}
+                          title={header.tip}
+                          style={{ padding: "6px 16px", fontWeight: 500, borderBottom: "1px solid rgba(255,255,255,0.06)", textAlign: index === 0 || heatmapView === "table" ? "left" : "right", color: "#fff", cursor: header.tip ? "help" : undefined }}
                         >
-                          {header}
+                          {header.label}
                         </th>
                       ))}
                     </tr>
@@ -1568,7 +1623,7 @@ export function HomeClient({
                       };
 
                       // Numeric cell: heatmap view paints a background; table view draws a bar.
-                      const dataCell = (text: string, value: number | null, colKey: string, colIdx: number) => {
+                      const dataCell = (text: string, value: number | null, colKey: string, colIdx: number, title?: string) => {
                         const isTable = heatmapView === "table";
                         const base: React.CSSProperties = { position: "relative", padding: "0 16px", textAlign: isTable ? "left" : "right", lineHeight: 1.1, overflow: "hidden" };
                         const bg = isTable || value == null
@@ -1578,7 +1633,7 @@ export function HomeClient({
                           ? { borderTop: atmBorder, borderBottom: atmBorder, ...(colIdx === 5 ? { borderRight: atmBorder } : {}) }
                           : {};
                         return (
-                          <td key={colIdx} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
+                          <td key={colIdx} title={title} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)" }}>
                             {isTable
                               ? barEl(value, colKey)
                               : <span style={{ position: "relative", zIndex: 1 }}>{text}</span>}
@@ -1626,11 +1681,25 @@ export function HomeClient({
                             </td>
                             {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
                             {dataCell(row.dex, row.dexVal, "dexVal", 3)}
-                            {dataCell(row.gexVex, row.gexVexVal, "gexVexVal", 4)}
-                            {/* VOL GEX SPEED — rendered by the shared dataCell so it uses the
-                                exact same heatmap palette, font size and color as every other
-                                column. Sign still means build (+) vs bleed (−). */}
-                            {dataCell(row.volSpeed, row.volSpeedVal, "volSpeedVal", 5)}
+                            {/* SPY / QQQ 0DTE net GEX — same moneyness offset as this SPX row,
+                                NOT the same strike. Rendered through the shared dataCell so they
+                                use the identical heatmap palette as every other column; each has
+                                its own color scale (see heatmapColorMeta). The tooltip names the
+                                actual contract so the offset join is never ambiguous. */}
+                            {dataCell(
+                              row.spyGex,
+                              row.spyGexVal,
+                              "spyGexVal",
+                              4,
+                              row.spyStrike == null ? "No SPY strike at this offset" : `SPY ${row.spyStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`
+                            )}
+                            {dataCell(
+                              row.qqqGex,
+                              row.qqqGexVal,
+                              "qqqGexVal",
+                              5,
+                              row.qqqStrike == null ? "No QQQ strike at this offset" : `QQQ ${row.qqqStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`
+                            )}
                           </tr>
                         </React.Fragment>
                       );

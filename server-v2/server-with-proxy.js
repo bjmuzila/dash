@@ -2470,6 +2470,10 @@ async function main() {
     // setup (same analyzeICT the /ict page renders), records new ones, and grades
     // pending ones by follow-through → /api/ict-setups.
     require('./ict-setup-tracker').startIctSetupTracker(PORT);
+    // EOD IB results: daily at 16:30 ET, computes the finished session's Initial
+    // Balance + 14-rule scoreboard (ES+NQ) from the persisted 5m candles →
+    // ib_daily_results, read by the IB Stats tab's Daily Results table.
+    require('./ib-results-recorder').startIbResultsRecorder(PORT);
     // Momentum Bias grader: grades pending TP/reversal signals (recorded inline
     // by the feed in _flushEsCandles) via follow-through every 5m → the
     // momentum_bias_signals table. Read via /api/momentum-bias.

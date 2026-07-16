@@ -379,11 +379,14 @@ export default function FlowPage() {
   useEffect(() => {
     if (view !== "combined") return;
     let cancelled = false;
-    // Push the premium floor to the server so the 20k cap keeps the biggest
-    // prints across the WHOLE session, not just the most recent slice.
+    // Push the premium floor to the server so the cap keeps the biggest prints
+    // across the WHOLE session, not just the most recent slice. 2k rows is
+    // plenty for DISPLAY (the tape renders max 800) — the totals / premium
+    // split no longer come from this pull, they're SQL-aggregated over the
+    // full session by /proxy/flow-premsplit below.
     const premParam = minPremium > 0 ? `&minPremium=${minPremium}` : "";
     const load = () =>
-      fetch(`/proxy/flow-history?limit=20000&date=${date}${premParam}`)
+      fetch(`/proxy/flow-history?limit=2000&date=${date}${premParam}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => { if (!cancelled && j && Array.isArray(j.tape)) setCombinedHistory(j.tape as FlowOrder[]); })
         .catch(() => {});
@@ -394,15 +397,59 @@ export default function FlowPage() {
     return () => { cancelled = true; clearTimeout(kick); if (id) clearInterval(id); };
   }, [view, minPremium, date, isToday]);
 
-  // ── WS: /ws/gex, keep only the flow tape. ──
+  // ── Combined premium split, aggregated in SQL over the FULL filtered session
+  // (the 2k-row tape pull above is display-only and would undercount). Follows
+  // every filter the tape follows, plus the scope. ──
+  type PremSplit = { count: number; prem: number; buyCall: number; buyPut: number; sellCall: number; sellPut: number };
+  const [combinedSplit, setCombinedSplit] = useState<PremSplit | null>(null);
+  useEffect(() => {
+    if (view !== "combined") { setCombinedSplit(null); return; }
+    let cancelled = false;
+    const qp = new URLSearchParams({ date });
+    if (scope === "exIdx") qp.set("exIdx", "1");
+    if (side !== "all") qp.set("side", side);
+    if (optType !== "all") qp.set("type", optType);
+    if (minPremium > 0) qp.set("minPremium", String(minPremium));
+    if (minSize > 0) qp.set("minSize", String(minSize));
+    if (expiry !== "all") qp.set("expiry", expiry);
+    if (dteMin > 0) qp.set("dteMin", String(dteMin));
+    if (dteMax != null) qp.set("dteMax", String(dteMax));
+    if (otmOnly) qp.set("otmOnly", "1");
+    const load = () =>
+      fetch(`/proxy/flow-premsplit?${qp.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (!cancelled && j && j.split) setCombinedSplit(j.split as PremSplit); })
+        .catch(() => {});
+    const kick = setTimeout(load, 400);
+    const id = isToday ? setInterval(load, 15000) : null;
+    return () => { cancelled = true; clearTimeout(kick); if (id) clearInterval(id); };
+  }, [view, scope, date, isToday, side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly]);
+
+  // ── WS: /ws/gex?topics=flow — the server only sends flow frames (plus a
+  // flow-trimmed snapshot), so this page stops parsing the ~100KB gex frames
+  // and candle deltas it never used. ──
   const unmountedRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldConnectRef = useRef(shouldConnect);
   shouldConnectRef.current = shouldConnect;
+  // Latest tape frame, applied at most every TAPE_FLUSH_MS. The server re-sends
+  // the full capped tape up to 2×/s during RTH; rendering every frame re-sorts
+  // the 20k-row merge each time. The newest frame supersedes older ones, so
+  // coalescing loses nothing.
+  const pendingTapeRef = useRef<FlowOrder[] | null>(null);
+  const TAPE_FLUSH_MS = 2000;
 
   useEffect(() => {
     unmountedRef.current = false;
+
+    const flushTape = () => {
+      const t = pendingTapeRef.current;
+      if (t) { pendingTapeRef.current = null; setOrders(t); }
+    };
+    // First frame after (re)connect flushes immediately so the tape paints
+    // without waiting out a throttle window.
+    let firstFrame = true;
 
     const handleMessage = (raw: string) => {
       let msg: Record<string, unknown>;
@@ -410,8 +457,12 @@ export default function FlowPage() {
       if (String(msg.type ?? "") !== "flow") return;
       const data = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
       const tape = data.tape as FlowOrder[] | undefined;
-      if (Array.isArray(tape)) setOrders(tape);
+      if (Array.isArray(tape)) {
+        pendingTapeRef.current = tape;
+        if (firstFrame) { firstFrame = false; flushTape(); }
+      }
     };
+    const flushId = setInterval(flushTape, TAPE_FLUSH_MS);
 
     const scheduleReconnect = () => {
       if (unmountedRef.current || !shouldConnectRef.current) return;
@@ -422,11 +473,11 @@ export default function FlowPage() {
     const connect = () => {
       if (unmountedRef.current) return;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${window.location.host}/ws/gex`;
+      const url = `${proto}//${window.location.host}/ws/gex?topics=flow`;
       let ws: WebSocket;
       try { ws = new WebSocket(url); } catch { scheduleReconnect(); return; }
       wsRef.current = ws;
-      ws.onopen = () => setStatus("LIVE");
+      ws.onopen = () => { firstFrame = true; setStatus("LIVE"); };
       ws.onmessage = (evt) => handleMessage(String(evt.data));
       ws.onerror = () => { try { ws.close(); } catch {} };
       ws.onclose = () => { setStatus("RECONNECTING"); scheduleReconnect(); };
@@ -436,6 +487,7 @@ export default function FlowPage() {
 
     return () => {
       unmountedRef.current = true;
+      clearInterval(flushId);
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
       const ws = wsRef.current;
       wsRef.current = null;
@@ -747,8 +799,18 @@ export default function FlowPage() {
     } catch {}
   }, [netSeries, filtered]);
 
-  // ── Summary of the filtered tape. ──
+  // ── Summary of the filtered tape. Combined view prefers the SQL split (full
+  // session, exact) and only falls back to summing its capped tape rows while
+  // the split request is in flight. ──
   const totals = useMemo(() => {
+    if (view === "combined" && combinedSplit) {
+      const s = combinedSplit;
+      return {
+        count: s.count, prem: s.prem,
+        callPrem: s.buyCall + s.sellCall, putPrem: s.buyPut + s.sellPut,
+        buyCall: s.buyCall, buyPut: s.buyPut, sellCall: s.sellCall, sellPut: s.sellPut,
+      };
+    }
     let prem = 0, callPrem = 0, putPrem = 0;
     let buyCall = 0, buyPut = 0, sellCall = 0, sellPut = 0;
     for (const o of tapeRows) {
@@ -758,7 +820,7 @@ export default function FlowPage() {
       else { putPrem += p; if (o.side === "buy") buyPut += p; else sellPut += p; }
     }
     return { count: tapeRows.length, prem, callPrem, putPrem, buyCall, buyPut, sellCall, sellPut };
-  }, [tapeRows]);
+  }, [tapeRows, view, combinedSplit]);
 
   function resetFilters() {
     setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0);
@@ -825,7 +887,7 @@ export default function FlowPage() {
     const max = Math.max(1, ...cards.map((c) => c.value));
     return (
       <div style={{ padding: "6px 20px 20px" }}>
-        <label style={labelStyle}>Premium Split (Filtered Tape)</label>
+        <label style={labelStyle}>Premium Split {view === "combined" ? "(Full Session — SQL)" : "(Filtered Tape)"}</label>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
           {cards.map((c) => {
             const color = c.bull ? BULLISH : BEARISH;
