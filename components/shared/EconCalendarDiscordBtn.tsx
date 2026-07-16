@@ -377,7 +377,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-shrink:0}
 /* html2canvas does NOT vertically center flex text, and it does NOT honour
    large line-heights the way the browser does — it applies the half-leading at
-   the top only, so a `height:56px;line-height:54px` pill renders top-heavy.
+   the top only, so a height:56px + line-height:54px pill renders top-heavy.
    Every pill below is instead an inline-block with line-height:1 and SYMMETRIC
    vertical padding, which html2canvas measures correctly. Do not "simplify"
    these back to inline-flex + align-items:center, and do not reintroduce
@@ -421,7 +421,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .econ-row:last-child{border-bottom:none}
 .econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto}
 /* Every cell carries an explicit line-height with leading to spare. Without it
-   html2canvas draws the glyphs low inside a line box it measured as `normal`
+   html2canvas draws the glyphs low inside a line box it measured as "normal"
    and the descenders get sheared off by the row's overflow. */
 .ec-time{font-size:${econTimeSize}px;line-height:${econTimeSize + 8}px;font-weight:700;color:var(--muted);white-space:nowrap}
 /* Titles are truncated in JS (see clipText) — html2canvas ignores
