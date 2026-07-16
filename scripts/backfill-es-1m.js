@@ -243,7 +243,7 @@ async function main() {
     throw new Error('Missing TT_CLIENT_ID / TT_CLIENT_SECRET / TT_REFRESH_TOKEN in .env.local');
   }
 
-  console.log(`[backfill] Starting ES 1m RTH candle backfill`);
+  console.log(`[backfill] Starting ES ${INTERVAL}m RTH candle backfill`);
   console.log(`[backfill] DAYS_BACK=${DAYS_BACK}  DRY_RUN=${DRY_RUN}  DB=${pool ? 'yes' : 'no'}`);
 
   const accessToken  = await getAccessToken();
@@ -268,6 +268,7 @@ async function main() {
   const candleMap = new Map(); // slotKey -> row
   let totalReceived = 0;
   let lastEventAt = Date.now();
+  let doneReason = null; // set by the ingest loop to request a clean shutdown
 
   await new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
@@ -280,16 +281,29 @@ async function main() {
 
     const COMPACT_CANDLE_FIELDS = ['eventType', 'eventSymbol', 'time', 'open', 'high', 'low', 'close', 'volume'];
 
-    // Idle-timeout: if no candle arrives for 30s, we've drained the history.
-    const idleTimer = setInterval(async () => {
-      if (Date.now() - lastEventAt > 30_000) {
-        console.log('[backfill] 30s idle — stream drained. Wrapping up...');
-        clearInterval(idleTimer);
-        clearInterval(keepalive);
-        ws.terminate();
-        resolve();
-      }
-    }, 5_000);
+    // Shutdown watcher. TWO independent exits, because the idle timer ALONE
+    // deadlocks during RTH: a live {=Nm} subscription pushes an update to the
+    // forming bar every few seconds, so `lastEventAt` never goes stale, the
+    // stream never looks "drained", and the script runs forever — while
+    // flushToDB (which only runs after this promise resolves) never fires. A
+    // Ctrl-C at that point writes NOTHING. That is not a hypothetical: it is
+    // exactly what happened trying to repair 2026-06-23→30 at 1:20pm ET.
+    //
+    //   1. doneReason — set by the ingest loop once bars arrive PAST the target
+    //      window (history drained) or once we reach live bars. Deterministic,
+    //      and works fine mid-session.
+    //   2. idle 30s — the original fallback, still correct out of hours.
+    const finish = (reason) => {
+      console.log(`[backfill] ${reason} — wrapping up...`);
+      clearInterval(idleTimer);
+      clearInterval(keepalive);
+      ws.terminate();
+      resolve();
+    };
+    const idleTimer = setInterval(() => {
+      if (doneReason) return finish(doneReason);
+      if (Date.now() - lastEventAt > 30_000) return finish('30s idle — stream drained');
+    }, 2_000);
 
     ws.on('open', () => {
       send({ type: 'SETUP', channel: 0, version: '0.1-js', keepaliveTimeout: 60, acceptKeepaliveTimeout: 60 });
@@ -374,7 +388,13 @@ async function main() {
               // Optional repair window — drop anything outside it before it can
               // touch rows that were never broken.
               if (FROM_DATE && date < FROM_DATE) continue;
-              if (TO_DATE   && date > TO_DATE)   continue;
+              if (TO_DATE && date > TO_DATE) {
+                // dxFeed streams history in ascending time, so the first bar past
+                // TO_DATE proves the window is fully drained. Stop HERE rather
+                // than waiting for an idle gap that never comes during RTH.
+                if (!doneReason && candleMap.size) doneReason = `passed BACKFILL_TO (${TO_DATE})`;
+                continue;
+              }
               const prev = candleMap.get(slotKey);
               candleMap.set(slotKey, prev
                 ? {
@@ -391,10 +411,12 @@ async function main() {
                 console.log(`[backfill] ${totalReceived} RTH bars collected, latest: ${slotKey}`);
               }
 
-              // Once the stream reaches "now" bars, we're live — drain for another
-              // 30s then the idle timer will fire and close the connection.
+              // Reaching a live bar means history is drained. This USED to just
+              // log and lean on the 30s idle timer to exit — which works after
+              // the close but deadlocks during RTH, because the forming bar keeps
+              // ticking and the stream never goes idle. Request shutdown here.
               if (barTime >= Date.now() - 2 * 60_000) {
-                if (DEBUG) console.log(`[backfill] Reached live bar at ${slotKey}`);
+                if (!doneReason) doneReason = `reached live bar at ${slotKey}`;
               }
             }
           }
