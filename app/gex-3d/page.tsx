@@ -143,8 +143,14 @@ function catmull(p0: number, p1: number, p2: number, p3: number, t: number): num
 }
 
 type BuiltMesh = {
-  nxM: number; nzM: number; xUp: number; zUp: number;
-  /** World height per mesh vertex (curve + absMode + relief applied). */
+  nxM: number; nzM: number; zUp: number;
+  /** Original strike count — Gh is nzM × nxG. */
+  nxG: number;
+  /** World grid-x of each mesh column (strike-index units; NON-uniform). */
+  gxPos: Float32Array;
+  /** Z-processed WORLD height per strike center (nzM × nxG) — line draping. */
+  Gh: Float32Array;
+  /** World height per mesh vertex (profile + absMode + relief applied). */
   hs: Float32Array;
   /** Per-quad base color (pre-lighting) + |v| + face normal. */
   qR: Float32Array; qG: Float32Array; qB: Float32Array; qMag: Float32Array;
@@ -154,10 +160,12 @@ type BuiltMesh = {
 };
 
 /**
- * Grid → smooth mesh. Steps: curve-shape the signed values, blur (1-2-1,
- * separable), Catmull-Rom upsample. Upsample factors adapt to density so the
- * quad budget stays ~10–21k: a 1-min session is already dense in Z and only
- * needs X refinement; a 30-column view needs both.
+ * Grid → tower-profile mesh. TIME gets the smoothing (1-2-1 blur + Catmull-Rom
+ * upsample); STRIKES get NONE — cross-strike interpolation melted adjacent
+ * walls into plateaus twice. Instead each strike extrudes its own ridge: full
+ * height at the strike center, a near-floor groove at the midpoint to each
+ * neighbor. That's the separation the box towers gave, kept smooth along the
+ * session and still lit/fogged like terrain.
  */
 function buildMesh(
   norm: (number | null)[][], nx: number, nz: number,
@@ -171,20 +179,9 @@ function buildMesh(
     a[z * nx + x] = v == null || !Number.isFinite(v) ? 0 : applyCurve(v, curve) * (v < 0 ? -1 : 1);
   }
 
-  // Separable 1-2-1 smoothing. ONE X pass only: two merged neighboring strike
-  // walls into a single plateau — adjacent levels must stay readable as
-  // separate ridges. Z passes scale with density (1-min carries minute jitter).
-  const xPasses = 1, zPasses = nz > 150 ? 2 : 1;
-  for (let p = 0; p < xPasses; p++) {
-    const o = new Float32Array(nz * nx);
-    for (let z = 0; z < nz; z++) {
-      const r = z * nx;
-      for (let x = 0; x < nx; x++) {
-        o[r + x] = 0.25 * a[r + Math.max(0, x - 1)] + 0.5 * a[r + x] + 0.25 * a[r + Math.min(nx - 1, x + 1)];
-      }
-    }
-    a = o;
-  }
+  // Z-ONLY 1-2-1 smoothing — time is where the minute jitter lives. X is
+  // never blurred: that's what merged the levels.
+  const zPasses = nz > 150 ? 2 : 1;
   for (let p = 0; p < zPasses; p++) {
     const o = new Float32Array(nz * nx);
     for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
@@ -194,74 +191,103 @@ function buildMesh(
     a = o;
   }
 
-  const xUp = nz > 200 ? 2 : 3;
+  // Catmull-Rom upsample along TIME (still per strike — nothing crosses X).
   const zUp = nz <= 40 ? 4 : nz <= 100 ? 2 : 1;
-  const nxM = (nx - 1) * xUp + 1;
   const nzM = (nz - 1) * zUp + 1;
-
-  // Catmull-Rom along strikes…
-  const up = new Float32Array(nz * nxM);
-  for (let z = 0; z < nz; z++) {
-    const r = z * nx, ro = z * nxM;
-    for (let xm = 0; xm < nxM; xm++) {
-      const xf = xm / xUp;
-      const i = Math.min(nx - 2, Math.floor(xf));
-      const t = xf - i;
-      up[ro + xm] = t === 0
-        ? a[r + i]
-        : catmull(a[r + Math.max(0, i - 1)], a[r + i], a[r + i + 1], a[r + Math.min(nx - 1, i + 2)], t);
-    }
-  }
-  // …then along time (skipped when the data is already minute-dense).
-  let S = up;
+  let G = a;
   if (zUp > 1) {
-    S = new Float32Array(nzM * nxM);
-    for (let xm = 0; xm < nxM; xm++) for (let zm = 0; zm < nzM; zm++) {
+    G = new Float32Array(nzM * nx);
+    for (let x = 0; x < nx; x++) for (let zm = 0; zm < nzM; zm++) {
       const zf = zm / zUp;
       const i = Math.min(nz - 2, Math.floor(zf));
       const t = zf - i;
-      S[zm * nxM + xm] = t === 0
-        ? up[i * nxM + xm]
-        : catmull(up[Math.max(0, i - 1) * nxM + xm], up[i * nxM + xm], up[(i + 1) * nxM + xm], up[Math.min(nz - 1, i + 2) * nxM + xm], t);
+      G[zm * nx + x] = t === 0
+        ? a[i * nx + x]
+        : catmull(a[Math.max(0, i - 1) * nx + x], a[i * nx + x], a[(i + 1) * nx + x], a[Math.min(nz - 1, i + 2) * nx + x], t);
+    }
+  }
+  // World height at strike CENTERS (nzM × nx) — what the price line drapes on.
+  const Gh = new Float32Array(nzM * nx);
+  for (let i = 0; i < G.length; i++) Gh[i] = (absMode ? Math.abs(G[i]) : G[i]) * relief;
+
+  // ── X: per-strike TOWER PROFILE, not interpolation ────────────────────────
+  // Mesh columns are non-uniform: a groove vertex at every midpoint between
+  // strikes (4% of the neighbors' height — essentially the floor), the strike
+  // center at full height, and on coarser views a pair of shoulders that give
+  // the towers flat caps. 1-min skips the shoulders to hold the quad budget.
+  const dense = nz > 200;
+  const perStrike = dense ? 2 : 4;
+  const nxM = perStrike * nx + 1;
+  const gxPos = new Float32Array(nxM);
+  const colA = new Int32Array(nxM), colB = new Int32Array(nxM);
+  const colF = new Float32Array(nxM);
+  {
+    let j = 0;
+    const groove = (i0: number, i1: number) => {
+      gxPos[j] = (i0 + i1) / 2;
+      colA[j] = Math.max(0, i0); colB[j] = Math.min(nx - 1, i1);
+      colF[j] = 0.04; j++;
+    };
+    groove(-1, 0);
+    for (let i = 0; i < nx; i++) {
+      if (!dense) { gxPos[j] = i - 0.26; colA[j] = colB[j] = i; colF[j] = 0.94; j++; }
+      gxPos[j] = i; colA[j] = colB[j] = i; colF[j] = 1; j++;
+      if (!dense) { gxPos[j] = i + 0.26; colA[j] = colB[j] = i; colF[j] = 0.94; j++; }
+      groove(i, i + 1);
     }
   }
 
   const hs = new Float32Array(nzM * nxM);
-  for (let i = 0; i < S.length; i++) hs[i] = (absMode ? Math.abs(S[i]) : S[i]) * relief;
+  const vs = new Float32Array(nzM * nxM);
+  for (let zm = 0; zm < nzM; zm++) {
+    const gr = zm * nx, mr = zm * nxM;
+    for (let xm = 0; xm < nxM; xm++) {
+      const v = colF[xm] * (G[gr + colA[xm]] + G[gr + colB[xm]]) / 2;
+      vs[mr + xm] = v;
+      hs[mr + xm] = (absMode ? Math.abs(v) : v) * relief;
+    }
+  }
 
   const hoverH = new Float32Array(nz * nx);
-  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) hoverH[z * nx + x] = hs[z * zUp * nxM + x * xUp];
+  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) hoverH[z * nx + x] = Gh[z * zUp * nx + x];
 
   const nQ = (nxM - 1) * (nzM - 1);
   const qR = new Float32Array(nQ), qG = new Float32Array(nQ), qB = new Float32Array(nQ);
   const qMag = new Float32Array(nQ);
   const qNx = new Float32Array(nQ), qNy = new Float32Array(nQ), qNz = new Float32Array(nQ);
-  const SXm = xCell(nx) / xUp, SZm = zCell(nz) / zUp;
+  const SXc = xCell(nx), SZm = zCell(nz) / zUp;
   let qi = 0;
   for (let zm = 0; zm < nzM - 1; zm++) for (let xm = 0; xm < nxM - 1; xm++, qi++) {
     const ia = zm * nxM + xm, ib = ia + 1, id = ia + nxM, ic = id + 1;
-    const v = (S[ia] + S[ib] + S[ic] + S[id]) / 4;
+    const v = (vs[ia] + vs[ib] + vs[ic] + vs[id]) / 4;
     const mag = Math.min(1, Math.abs(v));
     const [r, g, b] = rampFor(v, mag);
     qR[qi] = r; qG[qi] = g; qB[qi] = b; qMag[qi] = mag;
     // Face normal from height slopes in WORLD units → real lambert shading.
-    const dhdx = ((hs[ib] - hs[ia]) + (hs[ic] - hs[id])) / 2 / SXm;
+    // X spacing is non-uniform (groove/shoulder/center), so use the real dx.
+    const dxw = Math.max(0.05, gxPos[xm + 1] - gxPos[xm]) * SXc;
+    const dhdx = ((hs[ib] - hs[ia]) + (hs[ic] - hs[id])) / 2 / dxw;
     const dhdz = ((hs[id] - hs[ia]) + (hs[ic] - hs[ib])) / 2 / SZm;
     const inv = 1 / Math.hypot(dhdx, 1, dhdz);
     qNx[qi] = -dhdx * inv; qNy[qi] = inv; qNz[qi] = -dhdz * inv;
   }
-  return { nxM, nzM, xUp, zUp, hs, qR, qG, qB, qMag, qNx, qNy, qNz, hoverH };
+  return { nxM, nzM, zUp, nxG: nx, gxPos, Gh, hs, qR, qG, qB, qMag, qNx, qNy, qNz, hoverH };
 }
 
-/** Bilinear surface height at fractional ORIGINAL-grid coords — line draping. */
+/**
+ * Surface height for the draped price line: bilinear over the strike-CENTER
+ * height grid (Gh), not the profiled mesh — between two towers the line
+ * bridges crest-to-crest instead of diving into every groove it crosses.
+ */
 function sampleH(mesh: BuiltMesh, gx: number, gz: number): number {
-  const xm = Math.max(0, Math.min(mesh.nxM - 1.001, gx * mesh.xUp));
+  const nx = mesh.nxG;
   const zm = Math.max(0, Math.min(mesh.nzM - 1.001, gz * mesh.zUp));
-  const x0 = Math.floor(xm), z0 = Math.floor(zm);
-  const tx = xm - x0, tz = zm - z0;
-  const i = z0 * mesh.nxM + x0;
-  const h00 = mesh.hs[i], h10 = mesh.hs[i + 1];
-  const h01 = mesh.hs[i + mesh.nxM], h11 = mesh.hs[i + mesh.nxM + 1];
+  const x0 = Math.max(0, Math.min(nx - 2, Math.floor(gx)));
+  const tx = Math.max(0, Math.min(1, gx - x0));
+  const z0 = Math.floor(zm), tz = zm - z0;
+  const i = z0 * nx + x0;
+  const h00 = mesh.Gh[i], h10 = mesh.Gh[i + 1];
+  const h01 = mesh.Gh[i + nx], h11 = mesh.Gh[i + nx + 1];
   return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
 }
 
@@ -545,7 +571,7 @@ export default function Gex3DPage() {
 
     // ── terrain mesh, depth-sorted and merged with the ribbon ─────────────
     if (mesh) {
-      const { nxM, nzM, xUp, zUp, hs } = mesh;
+      const { nxM, nzM, zUp, gxPos, hs } = mesh;
       const nV = nxM * nzM, nQ = (nxM - 1) * (nzM - 1);
       let buf = bufRef.current;
       if (!buf || buf.px.length !== nV || buf.depths.length !== nQ) {
@@ -562,7 +588,7 @@ export default function Gex3DPage() {
         const r = zm * nxM, gz = zm / zUp;
         for (let xm = 0; xm < nxM; xm++) {
           const i = r + xm;
-          const p = proj(xm / xUp, hs[i], gz);
+          const p = proj(gxPos[xm], hs[i], gz);
           px[i] = p.x; py[i] = p.y; pd[i] = p.depth;
           if (p.depth < minD) minD = p.depth;
           if (p.depth > maxD) maxD = p.depth;

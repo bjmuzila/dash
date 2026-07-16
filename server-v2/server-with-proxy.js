@@ -21,6 +21,7 @@
 const { createServer } = require('http');
 // WHATWG URL is used instead of the deprecated url.parse().
 const path = require('path');
+const zlib = require('zlib');
 const dotenv = require('dotenv');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -115,20 +116,50 @@ const CORS_ALLOWLIST = new Set(
     .split(',').map((s) => s.trim()).filter(Boolean)
 );
 
-function sendJson(res, code, obj, req) {
-  const body = JSON.stringify(obj);
+// Bodies at/above this size get gzipped when the client accepts it. Big /proxy
+// payloads (flow-history tape = multi-MB of repeated JSON keys) compress
+// 80–90%; tiny ones aren't worth the CPU.
+const SEND_JSON_GZIP_MIN = 1024;
+
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.cacheControl] override the default no-store — used for
+ *   immutable historical-session responses so the browser can cache them.
+ */
+function sendJson(res, code, obj, req, opts) {
+  let body = JSON.stringify(obj);
   const headers = {
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-store',
+    'Cache-Control': (opts && opts.cacheControl) || 'no-store',
   };
+  const vary = [];
   const origin = req?.headers?.origin;
   if (origin && CORS_ALLOWLIST.has(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
-    headers['Vary'] = 'Origin';
+    vary.push('Origin');
     headers['Access-Control-Allow-Credentials'] = 'true';
   }
+  // Gzip large bodies when the caller passed `req` (needed for the
+  // Accept-Encoding check). Callers that omit req just send identity.
+  const acceptEnc = String(req?.headers?.['accept-encoding'] || '');
+  if (body.length >= SEND_JSON_GZIP_MIN && /\bgzip\b/i.test(acceptEnc)) {
+    try {
+      body = zlib.gzipSync(Buffer.from(body), { level: 6 });
+      headers['Content-Encoding'] = 'gzip';
+      vary.push('Accept-Encoding');
+    } catch { /* fall back to identity */ }
+  }
+  if (vary.length) headers['Vary'] = vary.join(', ');
   res.writeHead(code, headers);
   res.end(body);
+}
+
+// Cache-Control for a session-scoped payload: past ET sessions are immutable,
+// so let the browser keep them for a day; today's stays no-store.
+function sessionCacheOpts(date) {
+  return date && date < todayYmdET()
+    ? { cacheControl: 'public, max-age=86400' }
+    : undefined;
 }
 
 /**
@@ -314,6 +345,15 @@ async function handleProxyRest(req, res) {
   if (pathname === '/proxy/flow-netprem') {
     handleFlowNetPrem(req, res).catch((e) => {
       sendJson(res, 500, { error: 'flow-netprem failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
+  // /proxy/flow-premsplit?date=&minPremium=&exIdx=1&… — buy/sell × call/put
+  // premium totals over the full filtered session, computed in SQL.
+  if (pathname === '/proxy/flow-premsplit') {
+    handleFlowPremSplit(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'flow-premsplit failed', detail: String(e?.message || e) });
     });
     return true;
   }
@@ -684,10 +724,10 @@ async function handleFlowHistory(req, res) {
 
   const cacheKey = `${date}|${underlying.toUpperCase()}|${limit}|${minPremium}`;
   const hit = _flowHistoryCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < FLOW_HISTORY_TTL_MS) return sendJson(res, 200, hit.payload);
+  if (hit && Date.now() - hit.at < FLOW_HISTORY_TTL_MS) return sendJson(res, 200, hit.payload, req, sessionCacheOpts(date));
 
   const pool = getHistPool();
-  if (!pool) return sendJson(res, 200, { date, tape: [] });
+  if (!pool) return sendJson(res, 200, { date, tape: [] }, req);
   await ensureFlowPrintsSchema(pool);
 
   // Optional per-ticker filter. With the full roster recording, an unfiltered
@@ -741,7 +781,7 @@ async function handleFlowHistory(req, res) {
 
   const payload = { date, tape };
   _flowHistoryCache.set(cacheKey, { at: Date.now(), payload });
-  sendJson(res, 200, payload);
+  sendJson(res, 200, payload, req, sessionCacheOpts(date));
 }
 
 // ── /proxy/flow-netprem ────────────────────────────────────────────────────
@@ -754,83 +794,109 @@ async function handleFlowHistory(req, res) {
 // chart itself.
 // Accepts the same filters as the tape (side/type/premium/size/expiry/dte/otm)
 // so the chart moves with the filter panel exactly like the tape does.
-// Tiny in-memory cache so N concurrent /flow pages polling the same
-// ticker+filters every 5s collapse to one GROUP BY per key per TTL.
-const _netPremCache = new Map(); // key -> { at: ms, payload }
-// Must be >= the client poll interval (5s, see FlowNetPremPanel.tsx / app/flow
-// /page.tsx) or the cache expires between polls and never actually saves a
-// query for a single viewer, not just concurrent ones.
-const NETPREM_TTL_MS = 6000;
+// Per-key bin cache. Unlike the old 6s-TTL payload cache, entries for TODAY are
+// long-lived and refreshed INCREMENTALLY: once a key has done its one full-
+// session GROUP BY, every later poll only scans rows newer than the last bin
+// (minus a small overlap for late-flushed prints) and merges. Historical dates
+// are immutable, so those entries are simply reused until evicted.
+const _netPremCache = new Map(); // key -> { at: ms, date, binMs, bins: [] }
+// Freshness window for TODAY entries — must be >= the client poll interval (5s)
+// or the cache expires between polls and never saves a query for a single viewer.
+const NETPREM_TTL_MS = 4000;
+// Re-scan this many trailing bins on an incremental refresh: the flow writer
+// flushes in batches, so a print can land in the DB a minute+ after its ts.
+const NETPREM_OVERLAP_BINS = 3;
 
-async function handleFlowNetPrem(req, res) {
-  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+/**
+ * Shared tape-filter WHERE builder for flow_prints — used by /proxy/flow-netprem
+ * and /proxy/flow-premsplit so the chart, the split and the tape all agree on
+ * what a filter means. Returns { where, params }.
+ * @param {object} f parsed filters (see parseFlowFilters)
+ * @param {number|null} sinceMs only rows with ts >= sinceMs (incremental refresh)
+ */
+function buildFlowPrintsWhere(f, sinceMs = null) {
+  const params = [f.date];
+  let where = 'date = $1';
+  if (f.underlying) {
+    params.push(flowRootsFor(f.underlying));
+    where += ` AND underlying_norm = ANY($${params.length})`;
+  }
+  if (f.exIdx) {
+    // "All − Indices" scope: exclude the index roots (both plain + streamer forms).
+    params.push(['SPX', 'SPXW', 'NDX', 'NDXP', 'RUT', 'RUTW', 'XSP', 'XSPW', 'VIX', 'DJX']);
+    where += ` AND (underlying_norm IS NULL OR underlying_norm <> ALL($${params.length}))`;
+  }
+  if (f.side === 'buy' || f.side === 'sell') {
+    params.push(f.side);
+    where += ` AND side = $${params.length}`;
+  }
+  if (f.type === 'C' || f.type === 'P') {
+    params.push(f.type);
+    where += ` AND type = $${params.length}`;
+  }
+  if (f.minPremium > 0) {
+    params.push(f.minPremium);
+    where += ` AND premium >= $${params.length}`;
+  }
+  if (f.minSize > 0) {
+    params.push(f.minSize);
+    where += ` AND size >= $${params.length}`;
+  }
+  if (f.expiry !== 'all') {
+    params.push(f.expiry);
+    where += ` AND expiration = $${params.length}`;
+  }
+  if (f.dteMin > 0) {
+    params.push(f.dteMin);
+    where += ` AND (expiration::date - CURRENT_DATE) >= $${params.length}`;
+  }
+  if (f.dteMax != null) {
+    params.push(f.dteMax);
+    where += ` AND (expiration::date - CURRENT_DATE) <= $${params.length}`;
+  }
+  if (f.otmOnly) {
+    where += ' AND is_otm = true';
+  }
+  if (sinceMs != null) {
+    params.push(sinceMs);
+    where += ` AND ts >= $${params.length}`;
+  }
+  return { where, params };
+}
+
+function parseFlowFilters(searchParams) {
   const date = searchParams.get('date') || todayYmdET();
-  const underlying = searchParams.get('underlying') || searchParams.get('symbol') || '';
-  let binSec = Number(searchParams.get('bin') || 60);
-  if (!Number.isFinite(binSec) || binSec <= 0) binSec = 60;
-  const binMs = Math.round(binSec) * 1000;
-
-  const side = (searchParams.get('side') || 'all').toLowerCase();
-  const type = (searchParams.get('type') || 'all').toUpperCase();
+  const underlying = (searchParams.get('underlying') || searchParams.get('symbol') || '').toUpperCase();
   let minPremium = Number(searchParams.get('minPremium') || 0);
   if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
   let minSize = Number(searchParams.get('minSize') || 0);
   if (!Number.isFinite(minSize) || minSize < 0) minSize = 0;
-  const expiry = searchParams.get('expiry') || 'all';
   let dteMin = Number(searchParams.get('dteMin') || 0);
   if (!Number.isFinite(dteMin) || dteMin < 0) dteMin = 0;
   const dteMaxRaw = searchParams.get('dteMax');
-  const dteMax = dteMaxRaw != null && dteMaxRaw !== '' ? Number(dteMaxRaw) : null;
-  const otmOnly = searchParams.get('otmOnly') === '1';
+  return {
+    date,
+    underlying,
+    exIdx: searchParams.get('exIdx') === '1',
+    side: (searchParams.get('side') || 'all').toLowerCase(),
+    type: (searchParams.get('type') || 'all').toUpperCase(),
+    minPremium,
+    minSize,
+    expiry: searchParams.get('expiry') || 'all',
+    dteMin,
+    dteMax: dteMaxRaw != null && dteMaxRaw !== '' ? Number(dteMaxRaw) : null,
+    otmOnly: searchParams.get('otmOnly') === '1',
+  };
+}
 
-  const cacheKey = [date, underlying.toUpperCase(), binMs, side, type, minPremium, minSize, expiry, dteMin, dteMax, otmOnly ? 1 : 0].join('|');
-  const hit = _netPremCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < NETPREM_TTL_MS) return sendJson(res, 200, hit.payload);
+function flowFilterCacheKey(f, binMs) {
+  return [f.date, f.underlying, f.exIdx ? 1 : 0, binMs, f.side, f.type, f.minPremium, f.minSize, f.expiry, f.dteMin, f.dteMax, f.otmOnly ? 1 : 0].join('|');
+}
 
-  const pool = getHistPool();
-  if (!pool) return sendJson(res, 200, { date, binSec, bins: [] });
-  await ensureFlowPrintsSchema(pool);
-
-  const params = [date];
-  let where = 'date = $1';
-  if (underlying) {
-    params.push(flowRootsFor(underlying));
-    where += ` AND underlying_norm = ANY($${params.length})`;
-  }
-  if (side === 'buy' || side === 'sell') {
-    params.push(side);
-    where += ` AND side = $${params.length}`;
-  }
-  if (type === 'C' || type === 'P') {
-    params.push(type);
-    where += ` AND type = $${params.length}`;
-  }
-  if (minPremium > 0) {
-    params.push(minPremium);
-    where += ` AND premium >= $${params.length}`;
-  }
-  if (minSize > 0) {
-    params.push(minSize);
-    where += ` AND size >= $${params.length}`;
-  }
-  if (expiry !== 'all') {
-    params.push(expiry);
-    where += ` AND expiration = $${params.length}`;
-  }
-  if (dteMin > 0) {
-    params.push(dteMin);
-    where += ` AND (expiration::date - CURRENT_DATE) >= $${params.length}`;
-  }
-  if (dteMax != null) {
-    params.push(dteMax);
-    where += ` AND (expiration::date - CURRENT_DATE) <= $${params.length}`;
-  }
-  if (otmOnly) {
-    where += ' AND is_otm = true';
-  }
+async function queryNetPremBins(pool, f, binMs, sinceMs) {
+  const { where, params } = buildFlowPrintsWhere(f, sinceMs);
   params.push(binMs);
   const binIdx = params.length;
-
   const { rows } = await pool.query(
     `SELECT (ts / $${binIdx}::bigint) * $${binIdx}::bigint AS binms,
             sum(CASE WHEN type = 'C' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS call_net,
@@ -843,23 +909,149 @@ async function handleFlowNetPrem(req, res) {
       ORDER BY 1`,
     params
   );
-
-  const bins = rows.map((r) => ({
+  return rows.map((r) => ({
     sec: Math.floor(Number(r.binms) / 1000),
     callNet: Number(r.call_net) || 0,
     putNet: Number(r.put_net) || 0,
     callVol: Number(r.call_vol) || 0,
     putVol: Number(r.put_vol) || 0,
   }));
+}
 
-  const payload = { date, binSec, bins };
-  _netPremCache.set(cacheKey, { at: Date.now(), payload });
-  // Bound the map: drop anything older than a minute so old ticker keys don't pile up.
+/**
+ * Full bin set for a filter key, via the incremental cache.
+ *  - miss            → full-session GROUP BY, cache it
+ *  - today, stale    → GROUP BY only ts >= lastBin − overlap, merge into cache
+ *  - today, fresh    → cache as-is
+ *  - past date       → cache as-is (immutable session)
+ */
+async function getNetPremBins(f, binMs) {
+  const key = flowFilterCacheKey(f, binMs);
+  const now = Date.now();
+  const hit = _netPremCache.get(key);
+  const isToday = f.date === todayYmdET();
+  if (hit && (!isToday || now - hit.at < NETPREM_TTL_MS)) return hit.bins;
+
+  const pool = getHistPool();
+  if (!pool) return hit ? hit.bins : [];
+  await ensureFlowPrintsSchema(pool);
+
+  if (hit && isToday && hit.bins.length) {
+    // Incremental refresh: re-scan only the trailing overlap window.
+    const lastSec = hit.bins[hit.bins.length - 1].sec;
+    const sinceMs = (lastSec - (NETPREM_OVERLAP_BINS - 1) * Math.floor(binMs / 1000)) * 1000;
+    const fresh = await queryNetPremBins(pool, f, binMs, sinceMs);
+    const sinceSec = Math.floor(sinceMs / 1000);
+    const bins = hit.bins.filter((b) => b.sec < sinceSec).concat(fresh);
+    _netPremCache.set(key, { at: Date.now(), date: f.date, binMs, bins });
+    return bins;
+  }
+
+  const bins = await queryNetPremBins(pool, f, binMs, null);
+  _netPremCache.set(key, { at: Date.now(), date: f.date, binMs, bins });
+  // Bound the map: today keys idle >10min and any non-today-date keys beyond the
+  // cap get dropped (historical entries are cheap to rebuild on demand).
   if (_netPremCache.size > 400) {
-    const cutoff = Date.now() - 60_000;
+    const cutoff = Date.now() - 10 * 60_000;
     for (const [k, v] of _netPremCache) if (v.at < cutoff) _netPremCache.delete(k);
   }
-  sendJson(res, 200, payload);
+  return bins;
+}
+
+async function handleFlowNetPrem(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const f = parseFlowFilters(searchParams);
+  let binSec = Number(searchParams.get('bin') || 60);
+  if (!Number.isFinite(binSec) || binSec <= 0) binSec = 60;
+  const binMs = Math.round(binSec) * 1000;
+  // Incremental client poll: ?since=<sec> returns only bins at/after that time
+  // (client keeps its earlier bins). Cuts the steady-state 5s poll from the
+  // whole session to the live edge.
+  const sinceRaw = searchParams.get('since');
+  const since = sinceRaw != null && sinceRaw !== '' ? Number(sinceRaw) : null;
+
+  const bins = await getNetPremBins(f, binMs);
+  const out = since != null && Number.isFinite(since) ? bins.filter((b) => b.sec >= since) : bins;
+  sendJson(res, 200, { date: f.date, binSec, partial: since != null, bins: out }, req, sessionCacheOpts(f.date));
+}
+
+// ── /proxy/flow-premsplit ──────────────────────────────────────────────────
+// Buy/sell × call/put premium totals over the FULL filtered session, in SQL.
+// Lets the Combined view show exact totals without shipping 20k raw prints to
+// the browser just to sum four numbers. Same filter language as flow-netprem,
+// plus exIdx=1 for the "All − Indices" scope.
+const _premSplitCache = new Map(); // key -> { at, payload }
+const PREMSPLIT_TTL_MS = 6000;
+
+async function handleFlowPremSplit(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+  const f = parseFlowFilters(searchParams);
+  const key = flowFilterCacheKey(f, 'split');
+  const hit = _premSplitCache.get(key);
+  if (hit && Date.now() - hit.at < PREMSPLIT_TTL_MS) return sendJson(res, 200, hit.payload, req, sessionCacheOpts(f.date));
+
+  const pool = getHistPool();
+  if (!pool) return sendJson(res, 200, { date: f.date, split: null }, req);
+  await ensureFlowPrintsSchema(pool);
+
+  const { where, params } = buildFlowPrintsWhere(f);
+  const { rows } = await pool.query(
+    `SELECT count(*)::bigint AS n,
+            coalesce(sum(premium), 0) AS prem,
+            coalesce(sum(CASE WHEN type = 'C' AND side = 'buy'  THEN premium ELSE 0 END), 0) AS buy_call,
+            coalesce(sum(CASE WHEN type = 'P' AND side = 'buy'  THEN premium ELSE 0 END), 0) AS buy_put,
+            coalesce(sum(CASE WHEN type = 'C' AND side = 'sell' THEN premium ELSE 0 END), 0) AS sell_call,
+            coalesce(sum(CASE WHEN type = 'P' AND side = 'sell' THEN premium ELSE 0 END), 0) AS sell_put
+       FROM flow_prints
+      WHERE ${where}`,
+    params
+  );
+  const r = rows[0] || {};
+  const payload = {
+    date: f.date,
+    split: {
+      count: Number(r.n) || 0,
+      prem: Number(r.prem) || 0,
+      buyCall: Number(r.buy_call) || 0,
+      buyPut: Number(r.buy_put) || 0,
+      sellCall: Number(r.sell_call) || 0,
+      sellPut: Number(r.sell_put) || 0,
+    },
+  };
+  _premSplitCache.set(key, { at: Date.now(), payload });
+  if (_premSplitCache.size > 200) {
+    const cutoff = Date.now() - 60_000;
+    for (const [k, v] of _premSplitCache) if (v.at < cutoff) _premSplitCache.delete(k);
+  }
+  sendJson(res, 200, payload, req, sessionCacheOpts(f.date));
+}
+
+// ── Netprem prewarm ─────────────────────────────────────────────────────────
+// Keep the /flow chart's DEFAULT filter keys hot for the common tickers so the
+// FIRST viewer of the day hits the incremental cache instead of paying the
+// full-session GROUP BY. Runs during RTH only; each tick is an incremental
+// refresh after the first. Disable with NETPREM_PREWARM=0.
+const NETPREM_PREWARM_TICKERS = (process.env.NETPREM_PREWARM_TICKERS || 'SPX,SPY,QQQ')
+  .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+if (process.env.NETPREM_PREWARM !== '0' && NETPREM_PREWARM_TICKERS.length) {
+  const prewarmTick = async () => {
+    // RTH gate (rough): Mon–Fri 9:25–16:05 ET so the open is already warm.
+    const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const day = et.getDay();
+    const mins = et.getHours() * 60 + et.getMinutes();
+    if (day === 0 || day === 6 || mins < 9 * 60 + 25 || mins > 16 * 60 + 5) return;
+    for (const t of NETPREM_PREWARM_TICKERS) {
+      try {
+        // Mirrors the /flow page's default filter state: minPremium=50k, OTM only.
+        await getNetPremBins({
+          date: todayYmdET(), underlying: t, exIdx: false, side: 'all', type: 'all',
+          minPremium: 50_000, minSize: 0, expiry: 'all', dteMin: 0, dteMax: null, otmOnly: true,
+        }, 60_000);
+      } catch { /* pool down / query failed — try again next tick */ }
+    }
+  };
+  const prewarmId = setInterval(prewarmTick, 5000);
+  prewarmId.unref?.();
 }
 
 // ---------------------------------------------------------------------------

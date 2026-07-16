@@ -173,6 +173,26 @@ function pushRecentTicker(list: string[], ticker: string): string[] {
   return next;
 }
 
+// ── Chart warm-start cache ──────────────────────────────────────────────────
+// Last netBins payload (single entry) in sessionStorage: a revisit paints the
+// chart instantly from the stale bins while the fetch refreshes behind it.
+// Keyed by the exact filter querystring, so a different ticker/filter/date
+// never shows the wrong session.
+const NETBINS_CACHE_KEY = "flow-netbins-v1";
+function readNetBinsCache(key: string): NetBin[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(NETBINS_CACHE_KEY);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    return j && j.key === key && Array.isArray(j.bins) ? (j.bins as NetBin[]) : null;
+  } catch { return null; }
+}
+function writeNetBinsCache(key: string, bins: NetBin[]) {
+  if (typeof window === "undefined") return;
+  try { window.sessionStorage.setItem(NETBINS_CACHE_KEY, JSON.stringify({ key, bins })); } catch { /* quota — skip */ }
+}
+
 // URL params (used by the Day Posts capture embed):
 //   ?chartonly=1  → render ONLY the Net Drift chart card (no filters/tape/dark pool)
 //   ?ticker=SPX   → preset the active ticker
@@ -231,6 +251,9 @@ export default function FlowPage() {
   // `filtered` by the active-ticker check until the new tape lands, same net
   // effect as a reset without the blank-flash in between.
   const [historySwitching, setHistorySwitching] = useState(false);
+  // First run fires immediately — the 400ms debounce exists for slider drags,
+  // and paying it on initial mount just delays first paint for nothing.
+  const historyFirstRunRef = useRef(true);
   useEffect(() => {
     // Combined view doesn't read `history` — skip the pull entirely. With the
     // full roster recording (millions of prints/day) this per-ticker query is
@@ -245,18 +268,36 @@ export default function FlowPage() {
     // fills by mid-morning and the newest-20k window silently drops the whole
     // early session (looks like "history starts at 11am" with no error).
     const premParam = minPremium > 0 ? `&minPremium=${minPremium}` : "";
-    // Debounced like the combined pull: dragging the premium slider otherwise
-    // fires one full-session query per slider step.
-    const kick = setTimeout(() => {
-      fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=20000&date=${date}${premParam}`)
-        .then((r) => (r.ok ? r.json() : null))
+    const pull = (limit: number) =>
+      fetch(`/proxy/flow-history?underlying=${encodeURIComponent(active)}&limit=${limit}&date=${date}${premParam}`)
+        .then((r) => (r.ok ? r.json() : null));
+    // Two-stage load: a small newest-first slice paints the tape immediately,
+    // then the full session lands behind it and replaces the slice. `full`
+    // guards ordering — if the big pull wins the race, the small one is stale
+    // and must not clobber it.
+    let full = false;
+    const run = () => {
+      pull(1000)
+        .then((j) => {
+          if (cancelled || full) return;
+          if (j && Array.isArray(j.tape)) setHistory(j.tape as FlowOrder[]);
+          setHistorySwitching(false);
+        })
+        .catch(() => { if (!cancelled && !full) setHistorySwitching(false); });
+      pull(20000)
         .then((j) => {
           if (cancelled) return;
+          full = true;
           if (j && Array.isArray(j.tape)) setHistory(j.tape as FlowOrder[]);
           setHistorySwitching(false);
         })
         .catch(() => { if (!cancelled) setHistorySwitching(false); });
-    }, 400);
+    };
+    // Debounce only AFTER the first run: dragging the premium slider otherwise
+    // fires one full-session query per slider step.
+    const wasFirst = historyFirstRunRef.current;
+    historyFirstRunRef.current = false;
+    const kick = setTimeout(run, wasFirst ? 0 : 400);
     return () => { cancelled = true; clearTimeout(kick); };
   }, [active, date, minPremium, view]);
 
@@ -267,11 +308,14 @@ export default function FlowPage() {
   // panel too. Polled every 5s to advance the "now" edge on today's session. ──
   const [netBins, setNetBins] = useState<NetBin[]>([]);
   const [netSwitching, setNetSwitching] = useState(false);
+  // Which filter key the bins in state belong to, + the bins themselves —
+  // drives the incremental ?since poll and the sessionStorage warm start.
+  const netKeyRef = useRef<string>("");
+  const netBinsRef = useRef<NetBin[]>([]);
   useEffect(() => {
     // Chart is hidden in Combined view — don't poll its bins every 5s there.
     if (view === "combined") { setNetSwitching(false); return; }
     let cancelled = false;
-    setNetSwitching(true);
     const qp = new URLSearchParams({ underlying: active, bin: String(BIN_SEC), date });
     if (side !== "all") qp.set("side", side);
     if (optType !== "all") qp.set("type", optType);
@@ -281,15 +325,47 @@ export default function FlowPage() {
     if (dteMin > 0) qp.set("dteMin", String(dteMin));
     if (dteMax != null) qp.set("dteMax", String(dteMax));
     if (otmOnly) qp.set("otmOnly", "1");
-    const load = () =>
-      fetch(`/proxy/flow-netprem?${qp.toString()}`)
+    const key = qp.toString();
+
+    // Warm start: paint instantly from the session-cached bins for this exact
+    // key, then let the fetch below refresh them. Stale-by-hours is fine — the
+    // first poll pulls everything from the cached edge forward.
+    if (netKeyRef.current !== key) {
+      const cached = readNetBinsCache(key);
+      if (cached) {
+        netKeyRef.current = key;
+        netBinsRef.current = cached;
+        setNetBins(cached);
+        setNetSwitching(false);
+      } else {
+        setNetSwitching(true);
+      }
+    }
+
+    const load = () => {
+      // Incremental poll: once this key has bins, only pull from a 3-bin
+      // overlap before the last known bin (late-flushed prints can land in a
+      // bin after it was first served). First load pulls the whole session.
+      const prev = netKeyRef.current === key ? netBinsRef.current : [];
+      const since = isToday && prev.length > 0 ? prev[prev.length - 1].sec - 2 * BIN_SEC : null;
+      fetch(`/proxy/flow-netprem?${key}${since != null ? `&since=${since}` : ""}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => {
           if (cancelled) return;
-          if (j && Array.isArray(j.bins)) setNetBins(j.bins as NetBin[]);
+          if (j && Array.isArray(j.bins)) {
+            const incoming = j.bins as NetBin[];
+            const bins = since != null
+              ? [...prev.filter((b) => b.sec < since), ...incoming]
+              : incoming;
+            netKeyRef.current = key;
+            netBinsRef.current = bins;
+            setNetBins(bins);
+            writeNetBinsCache(key, bins);
+          }
           setNetSwitching(false);
         })
         .catch(() => { if (!cancelled) setNetSwitching(false); });
+    };
     load();
     // Past sessions are static — only poll the live edge for today.
     const id = isToday ? setInterval(load, 5000) : null;

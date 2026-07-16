@@ -91,6 +91,37 @@ function msg(type, data, symbol) {
   return JSON.stringify({ type, symbol, data, ts: Date.now() });
 }
 
+// ── Topic subscriptions ──────────────────────────────────────────────────────
+// A client may connect with ?topics=flow,spot to receive ONLY those frame types
+// (plus its connect snapshot, trimmed of unrequested heavy fields). Pages like
+// /flow use a single frame type but were parsing the full firehose — gex frames
+// alone are ~100KB every 15s. No ?topics → unchanged full stream.
+function parseTopics(request) {
+  try {
+    const q = new URL(request?.url || '/', 'http://localhost').searchParams.get('topics');
+    if (!q) return null;
+    const set = new Set(q.split(',').map((s) => s.trim()).filter(Boolean));
+    return set.size ? set : null;
+  } catch {
+    return null;
+  }
+}
+
+// Strip unrequested heavy arrays from a snapshot for a topics-scoped client.
+// Scalars (spot/vix/status/…) always ride along — they're a few hundred bytes.
+function scopeSnapshot(snap, topics) {
+  if (!topics) return snap;
+  const out = { ...snap };
+  if (!topics.has('gex')) {
+    out.gexRows = undefined;
+    out.totals = undefined;
+  }
+  if (!topics.has('flow')) out.flow = undefined;
+  if (!topics.has('esCandles')) out.esCandles = undefined;
+  if (!topics.has('nqCandles')) out.nqCandles = undefined;
+  return out;
+}
+
 /**
  * Create the GEX broadcaster and attach it to an http server.
  * @param {import('http').Server} server
@@ -249,13 +280,15 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       });
   });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, request) => {
     ws.isAlive = true;
+    // Optional ?topics=flow,spot scoping — null means "everything" (default).
+    ws.topics = parseTopics(request);
     ws.on('pong', () => {
       ws.isAlive = true;
     });
-    // Initial full snapshot.
-    const snapStr = msg('snapshot', buildSnapshot(marketState.getState()), 'SPX');
+    // Initial snapshot (trimmed to the client's topics when scoped).
+    const snapStr = msg('snapshot', scopeSnapshot(buildSnapshot(marketState.getState()), ws.topics), 'SPX');
     accountBytes('snapshot', Buffer.byteLength(snapStr));
     safeSend(ws, snapStr);
 
@@ -361,22 +394,26 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
 
     if (!out.length) return;
 
-    // Count open clients once so we can attribute bytes = size × recipients.
-    let openClients = 0;
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) openClients++;
-    }
-    // Per-message size + type, tallied once (not per client).
-    for (const m of out) {
-      const bytes = Buffer.byteLength(m) * openClients;
-      // Messages are JSON beginning {"type":"<t>",... — pull the type cheaply.
+    // Pre-extract each message's type once (JSON begins {"type":"<t>",...) so
+    // per-client topic filtering below is a Set lookup, not a regex per send.
+    const outTyped = out.map((m) => {
       const mt = /^\{"type":"([^"]+)"/.exec(m);
-      accountBytes(mt ? mt[1] : 'other', bytes);
-    }
+      return { m, t: mt ? mt[1] : 'other', bytes: Buffer.byteLength(m), recipients: 0 };
+    });
 
     for (const client of wss.clients) {
       if (client.readyState !== WebSocket.OPEN) continue;
-      for (const m of out) safeSend(client, m);
+      for (const e of outTyped) {
+        // Topic-scoped clients only get frame types they asked for.
+        if (client.topics && !client.topics.has(e.t)) continue;
+        e.recipients++;
+        safeSend(client, e.m);
+      }
+    }
+    // Bandwidth accounting: bytes × actual recipients (topic filtering means
+    // not every open client received every frame).
+    for (const e of outTyped) {
+      if (e.recipients) accountBytes(e.t, e.bytes * e.recipients);
     }
   });
 
