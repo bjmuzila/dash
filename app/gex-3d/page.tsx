@@ -283,6 +283,16 @@ export default function Gex3DPage() {
       return 0.42 + 0.46 * Math.max(0, d);
     };
 
+    // ── one depth-sorted scene ─────────────────────────────────────────────
+    // Towers and the price ribbon are drawn from a SINGLE list sorted back to
+    // front. Previously every tower was painted first and the ribbon after, so
+    // the ribbon floated on top of walls it was actually behind — price appeared
+    // to hang in front of a wall it had just been rejected by. Canvas 2D has no
+    // depth buffer, so the sort IS the depth test: a wall nearer the camera than
+    // a segment of the track now paints over it and occludes it, like a wall.
+    type Prim = { d: number; render: () => void };
+    const prims: Prim[] = [];
+
     const w = 0.46;
     for (const c of cells) {
       // NO DATA: draw an explicit hollow floor tile. Skipping these entirely
@@ -306,33 +316,41 @@ export default function Gex3DPage() {
         { p: [tD, tA, bA, bD], t: tD, b: bD, d: (tD.depth + tA.depth) / 2, f: lambert(-1, 0) },
       ].sort((a, b) => b.d - a.d);
 
-      // Each side face carries a base→crest gradient: the tower darkens into the
-      // floor and brightens at the cap, so height and strength reinforce each
-      // other instead of every tower being one flat slab of color.
-      for (const f of faces) {
-        let fill: string | CanvasGradient;
-        if (Math.abs(f.t.y - f.b.y) > 1) {
-          const g = ctx.createLinearGradient(f.b.x, f.b.y, f.t.x, f.t.y);
-          g.addColorStop(0, litRgb(rgb, f.f * 0.5));
-          g.addColorStop(1, litRgb(rgb, f.f * 1.25));
-          fill = g;
-        } else {
-          fill = litRgb(rgb, f.f);
-        }
-        poly(f.p, fill, canvasRgba(HOME_THEME.bg, 0.35));
-      }
-      // Cap: brightest surface, scaled by strength.
-      poly([tA, tB, tC, tD], litRgb(rgb, 1.15 + mag * 0.2), canvasRgba(AXIS, 0.16));
+      // Depth for the whole box = its mid-height centroid, so a tall wall sorts
+      // by where its MASS is, not by its floor tile.
+      const boxDepth = proj(c.x, c.h / 2, c.z).depth;
+      prims.push({
+        d: boxDepth,
+        render: () => {
+          // Each side face carries a base→crest gradient: the tower darkens into
+          // the floor and brightens at the cap, so height and strength reinforce
+          // each other instead of every tower being one flat slab of color.
+          for (const f of faces) {
+            let fill: string | CanvasGradient;
+            if (Math.abs(f.t.y - f.b.y) > 1) {
+              const g = ctx.createLinearGradient(f.b.x, f.b.y, f.t.x, f.t.y);
+              g.addColorStop(0, litRgb(rgb, f.f * 0.5));
+              g.addColorStop(1, litRgb(rgb, f.f * 1.25));
+              fill = g;
+            } else {
+              fill = litRgb(rgb, f.f);
+            }
+            poly(f.p, fill, canvasRgba(HOME_THEME.bg, 0.35));
+          }
+          // Cap: brightest surface, scaled by strength.
+          poly([tA, tB, tC, tD], litRgb(rgb, 1.15 + mag * 0.2), canvasRgba(AXIS, 0.16));
 
-      // Dominant walls get a bloom so they're unmistakable at any angle.
-      if (mag > 0.55) {
-        ctx.save();
-        ctx.globalAlpha = 0.1 + (mag - 0.55) * 0.5;
-        ctx.shadowColor = canvasRgba(c.v >= 0 ? ICE_HI : MAGMA_HI, 0.9);
-        ctx.shadowBlur = 10 + mag * 14;
-        poly([tA, tB, tC, tD], c.v >= 0 ? ICE_HI : MAGMA_HI);
-        ctx.restore();
-      }
+          // Dominant walls get a bloom so they're unmistakable at any angle.
+          if (mag > 0.55) {
+            ctx.save();
+            ctx.globalAlpha = 0.1 + (mag - 0.55) * 0.5;
+            ctx.shadowColor = canvasRgba(c.v >= 0 ? ICE_HI : MAGMA_HI, 0.9);
+            ctx.shadowBlur = 10 + mag * 14;
+            poly([tA, tB, tC, tD], c.v >= 0 ? ICE_HI : MAGMA_HI);
+            ctx.restore();
+          }
+        },
+      });
     }
 
     // ── spot track: a real 3D ribbon, not a flat polyline ───────────────────

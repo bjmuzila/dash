@@ -8,8 +8,9 @@
 // can compare the print you're inspecting against the ones around it.
 //
 // Contents:
-//   • contract price line (/proxy/option-history), fill / peak / trough guides,
-//     traded volume in its own pane at the bottom
+//   • pan/zoomable contract chart (lightweight-charts, same as the GEX and ES
+//     charts): close line, volume docked to the bottom, fill/peak/trough price
+//     lines and a BOUGHT/SOLD marker on the fill bar
 //   • since-fill tracking — the print's price vs current / peak / trough
 //   • Vol/OI and IV·%OTM tiles, fed live from useContractStats
 //
@@ -23,6 +24,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ColorType, CrosshairMode, HistogramSeries, LineSeries, createChart, createSeriesMarkers,
+} from "lightweight-charts";
+import type {
+  IChartApi, ISeriesApi, ISeriesMarkersPluginApi, Time, UTCTimestamp, LineData, HistogramData,
+} from "lightweight-charts";
 import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import type { ContractStat } from "@/hooks/useContractStats";
@@ -226,9 +233,28 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
         </div>
       </div>
 
-      {/* ── Chart + KPI rail ── */}
-      <div className="contract-drawer-grid" style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 12 }}>
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.35)", padding: 8, minHeight: 276 }}>
+      {/* ── Chart + KPI rail ──
+          The chart cell is a flex column so the chart fills the card's FULL
+          height — the KPI rail is the tallest thing in the row and the chart
+          stretches to match it, instead of leaving dead space underneath. */}
+      <div className="contract-drawer-grid" style={{ display: "grid", gridTemplateColumns: "1fr 230px", gap: 12, alignItems: "stretch" }}>
+        <div style={{
+          position: "relative",
+          border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.35)",
+          padding: 8, minHeight: 300, display: "flex", flexDirection: "column",
+        }}>
+          {/* CB Edge watermark. Sits above the canvas but ignores the mouse, so
+              it can't eat pan/zoom drags. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/cb-edge-logo.png"
+            alt=""
+            aria-hidden="true"
+            style={{
+              position: "absolute", top: 12, left: 12, height: 26, width: "auto",
+              opacity: 0.18, pointerEvents: "none", zIndex: 2, userSelect: "none",
+            }}
+          />
           {loading ? (
             <p style={{ fontSize: 12, color: C.muted, opacity: 0.6, padding: 20 }}>Loading contract history…</p>
           ) : err ? (
@@ -298,12 +324,17 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
   );
 }
 
-// ── Inline SVG chart: contract close line + fill/peak/trough guides, over a
-// volume pane pinned to the bottom. ──
-// Deliberately hand-rolled rather than lightweight-charts: the drawer mounts and
-// unmounts on every row click, and a full chart instance per expand is heavy.
-// Note the guides come from bar HIGHS/LOWS while the line is CLOSES, so the peak
-// guide sitting above the line is correct, not a bug — it's the intraday extreme.
+// ── Contract chart: close line + volume histogram docked to the bottom. ──
+//
+// lightweight-charts, NOT the hand-rolled SVG this started as — that couldn't
+// pan or zoom, and a fixed-height <svg> left dead space under a card sized by the
+// KPI rail. `autoSize` makes the chart track the container in BOTH axes, so it
+// fills the card and the volume histogram genuinely sits at the card's bottom.
+// Setup mirrors the /flow Net Premium chart (same v5 API, ET tick formatters,
+// volume on its own overlay price scale) so the two behave identically.
+//
+// Guides come from bar HIGHS/LOWS while the line is CLOSES, so the peak guide
+// sitting above the line is correct, not a bug — it's the intraday extreme.
 function ContractChart({
   bars, fillPrice, fillTs, side, track,
 }: {
@@ -313,163 +344,145 @@ function ContractChart({
   side: "buy" | "sell";
   track: { peak: number; trough: number } | null;
 }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(640);
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setW(el.clientWidth || 640));
-    ro.observe(el);
-    setW(el.clientWidth || 640);
-    return () => ro.disconnect();
-  }, []);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const priceRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
-  // Volume lives in its OWN pane pinned to the bottom, not overlaid on price:
-  // overlaid, it fought the price line for the same pixels and its height meant
-  // nothing against a dollar axis.
-  const H = 260, PADL = 6, PADR = 62, PADT = 10, PADB = 24;
-  const VOL_H = 46;   // volume pane, pinned to the bottom of the card
-  const GAP = 10;     // separation between panes
-  const iw = Math.max(80, w - PADL - PADR);
-  const ih = H - PADT - PADB - VOL_H - GAP; // price pane
-  const volTop = PADT + ih + GAP;
-
-  const closes = bars.map((b) => b.close);
-  // Domain spans only what's drawn — the close line and the three guide levels.
-  // Using bar high/low here would reserve headroom for wicks that aren't
-  // rendered, which is part of why the line sat squashed in the middle.
-  const rawMax = Math.max(...closes, fillPrice, ...(track && Number.isFinite(track.peak) ? [track.peak] : []));
-  const rawMin = Math.min(...closes, fillPrice, ...(track && Number.isFinite(track.trough) ? [track.trough] : []));
-  // Small breathing room only — and NOT clamped to 0. Clamping to zero on a
-  // contract trading at $30 handed ~90% of the box to empty space below the
-  // line; the axis starts near the data instead.
-  const span = rawMax - rawMin;
-  const pad = span > 0 ? span * 0.06 : Math.max(rawMax * 0.05, 0.05);
-  const max = rawMax + pad;
-  const min = rawMin - pad;
-
-  const X = (i: number) => PADL + (bars.length === 1 ? iw / 2 : (i / (bars.length - 1)) * iw);
-  const Y = (p: number) => PADT + ih - ((p - min) / (max - min || 1)) * ih;
-
-  const path = closes.map((c, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(c).toFixed(1)}`).join("");
-  const fillIdx = bars.findIndex((b) => b.time >= fillTs - 60_000);
-
-  // Volume scale: the 95th percentile, NOT the max. A whale print is by
-  // definition a volume outlier, so scaling to the max makes that one bar full
-  // height and squashes every other bar to ~1px — which reads as "no volume on
-  // the chart". Bars above p95 simply clip to full height; they're already
-  // obviously the biggest, and the fill bar is colour-coded anyway.
-  const vols = bars.map((b) => b.volume ?? 0);
-  const nonZero = vols.filter((v) => v > 0).sort((a, b) => a - b);
-  const p95 = nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * 0.95))] : 0;
-  const vmax = Math.max(1, p95);
-  const barW = Math.max(1.5, (iw / Math.max(1, bars.length)) * 0.6);
-  // Any real trade gets at least 1.5px so it's visible at all.
-  const volH = (v: number) => (v > 0 ? Math.max(1.5, Math.min(1, v / vmax) * VOL_H) : 0);
-
-  // Bars are always intraday now, but "All" can span several sessions — a bare
-  // clock time would then repeat 09:30 once per day and read as nonsense.
+  // "All" can span several sessions; a bare clock time would repeat 09:30 once
+  // per day and read as nonsense.
   const multiDay = bars.length > 1 && bars[bars.length - 1].time - bars[0].time > 86_400_000;
-  const tickFmt = (t: number) =>
-    new Date(t).toLocaleString("en-US", {
-      timeZone: "America/New_York",
-      ...(multiDay
-        ? { month: "short", day: "numeric", hour: "numeric" }
-        : { hour: "numeric", minute: "2-digit" }),
+
+  // ── Create once per mount. ──
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const chart = createChart(host, {
+      autoSize: true, // tracks the container in both axes — fills the card
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: C.text,
+        fontFamily: "Inter, system-ui, sans-serif",
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,.05)" },
+        horzLines: { color: "rgba(255,255,255,.05)" },
+      },
+      rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
+      leftPriceScale: { visible: false },
+      crosshair: { mode: CrosshairMode.Normal },
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 4,
+        tickMarkFormatter: (time: unknown) =>
+          typeof time === "number"
+            ? new Date(time * 1000).toLocaleString("en-US", {
+                timeZone: "America/New_York",
+                ...(multiDay
+                  ? { month: "short", day: "numeric", hour: "numeric" }
+                  : { hour: "2-digit", minute: "2-digit" }),
+              })
+            : "",
+      },
+      localization: {
+        priceFormatter: (p: number) => `$${p.toFixed(2)}`,
+        timeFormatter: (time: unknown) =>
+          typeof time === "number"
+            ? new Date(time * 1000).toLocaleString("en-US", {
+                timeZone: "America/New_York", month: "short", day: "numeric",
+                hour: "2-digit", minute: "2-digit",
+              })
+            : "",
+      },
     });
 
-  return (
-    <div ref={wrapRef} style={{ width: "100%" }}>
-      <svg width={w} height={H} style={{ display: "block" }}>
-        {/* ── volume pane, pinned to the bottom of the card ── */}
-        <line x1={PADL} x2={PADL + iw} y1={volTop + VOL_H} y2={volTop + VOL_H} stroke={C.border} strokeWidth={1} />
-        {bars.map((b, i) => {
-          const v = b.volume ?? 0;
-          const bh = volH(v);
-          if (!bh) return null;
-          return (
-            <rect
-              key={i}
-              x={X(i) - barW / 2}
-              y={volTop + VOL_H - bh}
-              width={barW}
-              height={bh}
-              rx={1}
-              fill={i === fillIdx ? C.orange : "rgba(142,202,230,0.45)"}
-            >
-              <title>{`${tickFmt(b.time)} — ${v.toLocaleString()} contracts`}</title>
-            </rect>
-          );
-        })}
-        <text x={PADL + iw + 8} y={volTop + 9} fill="rgba(255,255,255,0.4)" fontSize={9} fontFamily="var(--font-mono)">
-          {vmax >= 1000 ? `${(vmax / 1000).toFixed(1)}K` : vmax.toFixed(0)}
-        </text>
-        <text x={PADL + iw + 8} y={volTop + VOL_H} fill="rgba(255,255,255,0.3)" fontSize={9} fontFamily="var(--font-mono)">
-          vol
-        </text>
-        {/* peak / trough guides */}
-        {track && Number.isFinite(track.peak) && (
-          <line x1={PADL} x2={PADL + iw} y1={Y(track.peak)} y2={Y(track.peak)} stroke={BULL} strokeWidth={1} strokeDasharray="5 4" opacity={0.5} />
-        )}
-        {track && Number.isFinite(track.trough) && (
-          <line x1={PADL} x2={PADL + iw} y1={Y(track.trough)} y2={Y(track.trough)} stroke={BEAR} strokeWidth={1} strokeDasharray="5 4" opacity={0.5} />
-        )}
-        {/* fill level + fill moment */}
-        {fillPrice > 0 && (
-          <line x1={PADL} x2={PADL + iw} y1={Y(fillPrice)} y2={Y(fillPrice)} stroke={C.orange} strokeWidth={1} strokeDasharray="5 4" opacity={0.7} />
-        )}
-        {/* The alert's moment — spans both panes so the print's volume bar lines
-            up with the price it printed at. */}
-        {fillIdx >= 0 && (
-          <line x1={X(fillIdx)} x2={X(fillIdx)} y1={PADT} y2={volTop + VOL_H} stroke={C.orange} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.85} />
-        )}
-        {/* price */}
-        <path d={path} fill="none" stroke={C.green} strokeWidth={2} strokeLinejoin="round" />
-        {/* ── The purchase itself. Drawn LAST so it sits above the price line, and
-            placed at the intersection of the fill time and the fill PRICE — i.e.
-            the actual point the order got done, not that bar's close. ── */}
-        {fillIdx >= 0 && fillPrice > 0 && (() => {
-          const fx = X(fillIdx);
-          const fy = Y(fillPrice);
-          const label = `${side === "buy" ? "BOUGHT" : "SOLD"} ${fmtUsd(fillPrice)} · ${new Date(fillTs).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })}`;
-          const wLab = label.length * 5.9 + 14;
-          // Flip the label to whichever side has room, so it never clips out of
-          // the SVG on an early-morning or late-day print.
-          const flip = fx + wLab + 12 > PADL + iw;
-          const lx = flip ? fx - wLab - 10 : fx + 10;
-          const ly = Math.min(Math.max(fy - 26, PADT + 2), PADT + ih - 20);
-          return (
-            <g>
-              <rect x={lx} y={ly} width={wLab} height={17} rx={3} fill="rgba(6,8,13,0.92)" stroke={C.orange} strokeWidth={1} />
-              <text x={lx + 7} y={ly + 12} fill={C.orange} fontSize={10} fontWeight={700} fontFamily="var(--font-mono)">
-                {label}
-              </text>
-              <line x1={fx} y1={fy} x2={flip ? lx + wLab : lx} y2={ly + 8.5} stroke={C.orange} strokeWidth={1} opacity={0.6} />
-              {/* halo keeps the dot legible where it lands on top of the line */}
-              <circle cx={fx} cy={fy} r={6} fill={C.orange} opacity={0.25} />
-              <circle cx={fx} cy={fy} r={3.5} fill={C.orange} stroke="#05060A" strokeWidth={1.5} />
-            </g>
-          );
-        })()}
-        {/* right price axis */}
-        {[0, 0.25, 0.5, 0.75, 1].map((f) => {
-          const v = min + (max - min) * f;
-          return (
-            <text key={f} x={PADL + iw + 8} y={Y(v) + 3.5} fill={C.green} fontSize={10} fontFamily="var(--font-mono)">
-              ${v.toFixed(2)}
-            </text>
-          );
-        })}
-        {/* time axis */}
-        {bars.length > 1 && [0, 0.33, 0.66, 1].map((f) => {
-          const i = Math.round(f * (bars.length - 1));
-          return (
-            <text key={f} x={X(i)} y={volTop + VOL_H + 15} fill="rgba(255,255,255,0.35)" fontSize={9.5} textAnchor="middle" fontFamily="var(--font-mono)">
-              {tickFmt(bars[i].time)}
-            </text>
-          );
-        })}
-      </svg>
-    </div>
-  );
+    const price = chart.addSeries(LineSeries, {
+      color: C.green, lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+    });
+    // Volume on its own overlay scale, docked to the bottom ~20% of the card.
+    const vol = chart.addSeries(HistogramSeries, {
+      priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false,
+      priceFormat: { type: "volume" },
+    });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+    chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.08, bottom: 0.26 } });
+
+    chartRef.current = chart;
+    priceRef.current = price;
+    volRef.current = vol;
+    markersRef.current = createSeriesMarkers(price, []);
+
+    return () => {
+      markersRef.current = null;
+      priceRef.current = null;
+      volRef.current = null;
+      chartRef.current = null;
+      chart.remove();
+    };
+    // multiDay only flips when the timeframe changes, which remounts the data
+    // effect below; the formatter reads it at call time via closure on mount, so
+    // rebuild the chart if it changes to keep axis labels honest.
+  }, [multiDay]);
+
+  // ── Data + overlays. ──
+  useEffect(() => {
+    const chart = chartRef.current, price = priceRef.current, vol = volRef.current;
+    if (!chart || !price || !vol || !bars.length) return;
+
+    const sec = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
+    // Theta can emit two bars inside one interval across a session boundary;
+    // lightweight-charts throws on duplicate/unordered times, so dedupe.
+    const seen = new Set<number>();
+    const linePts: LineData[] = [];
+    const volPts: HistogramData[] = [];
+    for (const b of bars) {
+      const t = sec(b.time);
+      if (seen.has(t)) continue;
+      seen.add(t);
+      linePts.push({ time: t, value: b.close });
+      volPts.push({
+        time: t,
+        value: b.volume ?? 0,
+        color: Math.abs(b.time - fillTs) < 5 * 60_000 ? C.orange : "rgba(142,202,230,0.45)",
+      });
+    }
+    price.setData(linePts);
+    vol.setData(volPts);
+
+    // Fill / peak / trough as real price lines so they stay pinned while panning.
+    const lines = [
+      fillPrice > 0 && { price: fillPrice, color: C.orange, title: side === "buy" ? "BOUGHT" : "SOLD" },
+      track && Number.isFinite(track.peak) && { price: track.peak, color: BULL, title: "PEAK" },
+      track && Number.isFinite(track.trough) && { price: track.trough, color: BEAR, title: "TROUGH" },
+    ].filter(Boolean) as { price: number; color: string; title: string }[];
+    const handles = lines.map((l) =>
+      price.createPriceLine({
+        price: l.price, color: l.color, lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: l.title,
+      }),
+    );
+
+    // The purchase itself — an arrow pinned to the fill bar, so it survives pan
+    // and zoom instead of being drawn at a fixed pixel.
+    const fillBar = bars.find((b) => b.time >= fillTs - 60_000) ?? bars[0];
+    markersRef.current?.setMarkers([{
+      time: sec(fillBar.time),
+      position: side === "buy" ? "belowBar" : "aboveBar",
+      color: C.orange,
+      shape: side === "buy" ? "arrowUp" : "arrowDown",
+      text: `${side === "buy" ? "BOUGHT" : "SOLD"} ${fmtUsd(fillPrice)}`,
+    }]);
+
+    chart.timeScale().fitContent();
+
+    return () => { handles.forEach((h) => price.removePriceLine(h)); };
+  }, [bars, fillPrice, fillTs, side, track]);
+
+  // flex:1 + min-height:0 lets the chart consume whatever height the row gives
+  // it — without min-height:0 a flex child refuses to shrink and overflows.
+  return <div ref={hostRef} style={{ flex: 1, minHeight: 0, width: "100%" }} />;
 }
