@@ -392,18 +392,23 @@ function _dedupeCandles(url: string): Promise<EsCandleRecord[]> {
   return p;
 }
 
-export async function queryEsCandlesToday(): Promise<EsCandleRecord[]> {
+/**
+ * Today's ES bars at one aggregation.
+ * `interval` defaults to 5 — es_candles holds 1m AND 5m rows keyed on the same
+ * slotKey space, so an unfiltered read returns them interleaved.
+ */
+export async function queryEsCandlesToday(interval: 1 | 5 = 5): Promise<EsCandleRecord[]> {
   const today = etDateStr();
-  return _dedupeCandles(`/api/snapshots/candles?date=${today}&limit=2000`);
+  return _dedupeCandles(`/api/snapshots/candles?date=${today}&interval=${interval}&limit=2000`);
 }
 
 /** daysBack <= 0 means "no cutoff" — every candle we have (route drops the
  *  `daysBack` filter entirely and falls back to ORDER BY timestamp DESC, so a
  *  bigger limit still keeps the most-recent bars intact rather than truncating
  *  them off the tail). */
-export async function queryEsCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
+export async function queryEsCandlesHistorical(daysBack = 20, interval: 1 | 5 = 5): Promise<EsCandleRecord[]> {
   const qs = daysBack > 0 ? `daysBack=${daysBack}&limit=10000` : `limit=50000`;
-  return _dedupeCandles(`/api/snapshots/candles?${qs}`);
+  return _dedupeCandles(`/api/snapshots/candles?${qs}&interval=${interval}`);
 }
 
 // NQ variants — same endpoint, symbol=/NQ selects the nq_candles table.

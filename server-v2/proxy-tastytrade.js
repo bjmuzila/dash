@@ -149,6 +149,19 @@ const FLOW_BULK_STREAM = process.env.FLOW_BULK_STREAM === '1';
 // repaints. 10s keeps it visibly live without one delta every ~5s.
 const CANDLE_FLUSH_MS = Number(process.env.CANDLE_FLUSH_MS || 10000);
 
+// ES 1-minute candle stream. OFF by default — it is a second dxLink subscription
+// on top of {=5m} at 5x the bar rate, so it is opt-in per environment rather than
+// something a deploy silently turns on. Set ES_1M_CANDLES=1 in .env.local.
+const ES_1M_ENABLED = process.env.ES_1M_CANDLES === '1';
+// Broadcast cadence for the 1m stream. Faster than the 5m flush because a 1m bar
+// closes 5x as often and a 10s flush would land two closes in one delta.
+const CANDLE_1M_FLUSH_MS = Number(process.env.CANDLE_1M_FLUSH_MS || 5000);
+// Hard cap on the 1m bar array. 1 RTH session = 390 bars; 480 gives today plus a
+// little overnight without ever approaching the 5m array's 600-bar/15-session
+// reach. The es-candles page renders every bar it is handed — this cap IS the
+// today-only window.
+const ES_1M_MAX_BARS = Number(process.env.ES_1M_MAX_BARS || 480);
+
 // ThetaData greeks poll cadence (DATA_SOURCE=theta only). Greeks/all is one bulk
 // REST call per poll; 5s keeps gamma fresh against spot drift without burning the
 // concurrency budget. No effect in TT mode.
@@ -358,6 +371,33 @@ function etFiveMinSlot(ts) {
   const slotKey = `${date}T${time}`;
   // Floor the original timestamp to the 5-min boundary for a stable slotMs.
   const slotMs = Math.floor(ts / 300000) * 300000;
+  return { slotKey, date, time, slotMs };
+}
+
+/**
+ * Same, at 1-minute granularity.
+ *
+ * NOTE the slotKey shape is IDENTICAL to etFiveMinSlot's ('YYYY-MM-DDTHH:MM') —
+ * it carries no interval. That is why es_candles is keyed
+ * UNIQUE("slotKey","intervalMinutes"): the 1m bar at 09:30 and the 5m bar at
+ * 09:30 produce the same slotKey, and under the old slotKey-only UNIQUE the 1m
+ * write silently overwrote the 5m bar's close+volume. Any writer added here MUST
+ * carry its intervalMinutes through to the upsert.
+ * See scripts/migrate-es-candles-composite-key.sql.
+ */
+function etOneMinSlot(ts) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(ts));
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const hour = map.hour === '24' ? '00' : map.hour;
+  const date = `${map.year}-${map.month}-${map.day}`;
+  const time = `${hour}:${map.minute}`;
+  const slotKey = `${date}T${time}`;
+  const slotMs = Math.floor(ts / 60000) * 60000;
   return { slotKey, date, time, slotMs };
 }
 
@@ -1638,6 +1678,22 @@ class TastytradeProxy {
     this.nqCandlesDirty = false;
     this.nqCandlesDirtySlots = new Set();
     this.nqCandleFlushTimer = null;
+    // ── ES 1-minute candles ────────────────────────────────────────────────────
+    // A SECOND, independent dxLink candle subscription. dxLink aggregates
+    // server-side by the {=Nm} suffix, so 1m detail does not exist anywhere in
+    // the {=5m} stream — it cannot be derived client-side and needs its own
+    // subscription, own map, own state key.
+    //
+    // Deliberately TODAY-ONLY and capped small: 1m is 5x the bar rate of 5m, and
+    // the es-candles page renders every bar it's handed. dxFeed also only serves
+    // ~7 days of 1m history regardless of what fromTime asks for (measured
+    // 2026-07-16: a 30-day request returned 6 trading days), so a wide window
+    // buys nothing anyway.
+    this.es1mCandleSymbol = null; // e.g. "/ESU26:XCME{=1m}"
+    this.es1mCandles = new Map();
+    this.es1mCandlesDirty = false;
+    this.es1mCandlesDirtySlots = new Set();
+    this.es1mCandleFlushTimer = null;
     // Live front-ES/NQ quotes, used by _publishEsFut/_publishNqFut to clamp the
     // last trade into the current spread. Set by Quote handler; *LastTrade by Trade.
     this.esQuote = null;          // { bid, ask, mid } for the front ES future
@@ -1718,7 +1774,10 @@ class TastytradeProxy {
       this.esSymbol = esRes.streamerSymbol;     // dxLink streamer symbol (/ESU26:XCME)
       this.esTtSymbol = esRes.ttSymbol;         // TT instrument symbol for REST (/ESU6)
       this.esCandleSymbol = `${this.esSymbol}{=5m}`;
-      console.log(`[FEED] ES front streamer=${this.esSymbol} ttSymbol=${this.esTtSymbol} candle=${this.esCandleSymbol}`);
+      // Second aggregation off the SAME contract. Gated by ES_1M_CANDLES so the
+      // extra stream can be killed without a redeploy if bandwidth/CPU bites.
+      this.es1mCandleSymbol = ES_1M_ENABLED ? `${this.esSymbol}{=1m}` : null;
+      console.log(`[FEED] ES front streamer=${this.esSymbol} ttSymbol=${this.esTtSymbol} candle=${this.esCandleSymbol}${this.es1mCandleSymbol ? ` +1m=${this.es1mCandleSymbol}` : ' (1m disabled)'}`);
       // Prior close for ES future day-change.
       // The authoritative baseline is dxLink Summary.prevDayClosePrice (official
       // exchange settle for the current session, set in _onEvent). The REST
@@ -1834,6 +1893,17 @@ class TastytradeProxy {
       this.client.subscribeCandle(this.nqCandleSymbol, fromTime);
       console.log(`[FEED] subscribed NQ candles ${this.nqCandleSymbol} from ${new Date(fromTime).toISOString()}`);
       this.nqCandleFlushTimer = setInterval(() => this._flushNqCandles(), CANDLE_FLUSH_MS);
+    }
+
+    // ES 1-minute stream (ES_1M_CANDLES=1). fromTime is 2 DAYS, not the 15 the 5m
+    // streams ask for: at 1m that is already ~780 RTH bars, the array is capped at
+    // ES_1M_MAX_BARS anyway, and dxFeed only serves ~7 days of 1m regardless.
+    // Asking for 15 days would buy nothing and cost a large connect-time burst.
+    if (this.es1mCandleSymbol) {
+      const fromTime = Date.now() - 2 * 86400_000;
+      this.client.subscribeCandle(this.es1mCandleSymbol, fromTime);
+      console.log(`[FEED] subscribed ES 1m candles ${this.es1mCandleSymbol} from ${new Date(fromTime).toISOString()}`);
+      this.es1mCandleFlushTimer = setInterval(() => this._flushEs1mCandles(), CANDLE_1M_FLUSH_MS);
     }
 
     // Backfill OI + volume from REST now. OI is once-daily (OPRA ~06:30 ET) and
@@ -2684,6 +2754,41 @@ class TastytradeProxy {
     writeNqCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
   }
 
+  /**
+   * ES 1-minute flush. Same shape as the NQ twin — no baseline/esFut logic (the
+   * 5m flush owns that; two writers publishing esFut at different aggregations
+   * would fight), just state + delta + persist.
+   *
+   * The rows carry intervalMinutes:1 from the Candle handler, and writeEsCandles
+   * passes that through to upsertEsCandle's ON CONFLICT("slotKey",
+   * "intervalMinutes") — which is the ONLY reason these can share a table with
+   * the 5m bars instead of overwriting them.
+   */
+  _flushEs1mCandles() {
+    if (!this.es1mCandlesDirty) return;
+    this.es1mCandlesDirty = false;
+    const dirtySlots = this.es1mCandlesDirtySlots;
+    this.es1mCandlesDirtySlots = new Set();
+
+    const rows = [...this.es1mCandles.values()]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-ES_1M_MAX_BARS);
+
+    // Trim the backing map too. The 5m map is left to grow (600 bars ≈ 15
+    // sessions, harmless), but at 1m an untrimmed map grows 5x as fast and this
+    // process is long-lived — the slice above would hide it while the Map leaked.
+    if (this.es1mCandles.size > ES_1M_MAX_BARS * 2) {
+      this.es1mCandles = new Map(rows.map((r) => [r.slotKey, r]));
+    }
+
+    marketState.setStateSilent({ es1mCandles: rows });
+
+    const delta = rows.filter((r) => dirtySlots.has(r.slotKey));
+    if (delta.length) marketState.setState({ es1mCandlesDelta: delta });
+
+    writeEsCandles(rows.filter((r) => Number(r.volume) > 0)).catch(() => {});
+  }
+
   _onEvent(ev) {
     marketState.setStatus({ lastFeedAt: Date.now() });
     const sym = ev.eventSymbol;
@@ -2833,10 +2938,16 @@ class TastytradeProxy {
       let volume = Number(ev.volume);
       if (!Number.isFinite(volume)) volume = 0;
       if (!(barTime > 0) || !(open > 0) || !(high > 0) || !(low > 0) || !(close > 0)) return;
-      const { slotKey, date, time, slotMs } = etFiveMinSlot(barTime);
-      // Route to the ES or NQ map by which {=5m} stream this bar came from.
+      // Route by which stream this bar came from. THREE now: ES {=5m}, NQ {=5m},
+      // ES {=1m}. The 1m stream must be checked explicitly — it shares the ES
+      // contract, so anything falling through to an `isNq ? nq : es` test would
+      // dump 1m bars straight into the 5m map and interleave two aggregations
+      // into one series.
       const isNq = this.nqCandleSymbol && sym === this.nqCandleSymbol;
-      const map = isNq ? this.nqCandles : this.esCandles;
+      const isEs1m = this.es1mCandleSymbol && sym === this.es1mCandleSymbol;
+      const intervalMinutes = isEs1m ? 1 : 5;
+      const { slotKey, date, time, slotMs } = isEs1m ? etOneMinSlot(barTime) : etFiveMinSlot(barTime);
+      const map = isEs1m ? this.es1mCandles : isNq ? this.nqCandles : this.esCandles;
       const prev = map.get(slotKey);
       const merged = prev
         ? {
@@ -2846,11 +2957,12 @@ class TastytradeProxy {
             close, // last close wins
             volume: Math.max(prev.volume, volume), // dxFeed candle volume is cumulative-per-bar
           }
-        : { timestamp: slotMs, date, slotKey, time, symbol: isNq ? '/NQ' : '/ES', intervalMinutes: 5, source: 'dxlink', open, high, low, close, volume };
+        : { timestamp: slotMs, date, slotKey, time, symbol: isNq ? '/NQ' : '/ES', intervalMinutes, source: 'dxlink', open, high, low, close, volume };
       map.set(slotKey, merged);
       // Track WHICH slots changed so the flush can broadcast just those bars
       // instead of the whole 600-bar array every cycle.
-      if (isNq) { this.nqCandlesDirty = true; this.nqCandlesDirtySlots.add(slotKey); }
+      if (isEs1m) { this.es1mCandlesDirty = true; this.es1mCandlesDirtySlots.add(slotKey); }
+      else if (isNq) { this.nqCandlesDirty = true; this.nqCandlesDirtySlots.add(slotKey); }
       else { this.esCandlesDirty = true; this.esCandlesDirtySlots.add(slotKey); }
       return;
     }

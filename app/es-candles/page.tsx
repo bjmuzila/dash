@@ -359,20 +359,31 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
 
-  const { sessionCandles: liveRows, historical, connected, refresh } = useEsCandles();
+  // Bar aggregation. 1m is a SEPARATE server stream (dxLink aggregates by {=Nm},
+  // so 1m detail doesn't exist inside the 5m feed) gated by ES_1M_CANDLES=1.
+  const [barMins, setBarMins] = useState<1 | 5>(5);
+  const { sessionCandles: liveRows, historical, connected, refresh } = useEsCandles(true, 20, barMins);
 
-  // Chart candles: full 5-day rolling window so the heatmap's historical columns
+  // Chart candles: 5-day rolling window at 5m so the heatmap's historical columns
   // resolve via timeToCoordinate (which only works for timestamps on the chart's
   // time scale). historical already holds 20 days from SQLite; merge with the
   // live session so the most-recent bars always win on slotKey collision.
   const rows = useMemo(() => {
-    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - FIVE_DAYS_MS;
+    // 1m is TODAY-ONLY. 5 days of 1m is ~3,900 bars vs ~780 — 5x the row count
+    // through every downstream memo and a full setData per frame, which is the
+    // fastest way to hand back the lag this page was just tuned out of. dxFeed
+    // only serves ~7 days of 1m anyway (measured: a 30-day ask returned 6).
+    const WINDOW_MS = barMins === 1 ? 24 * 60 * 60 * 1000 : 5 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - WINDOW_MS;
     const map = new Map<string, typeof liveRows[0]>();
     for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
-    for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
+    // liveRows is the hook's 30h rolling session, so it must respect the cutoff
+    // too — at 5m it's inside the 5-day window and nothing is dropped, but at 1m
+    // an unfiltered pass would leak ~6h of overnight bars past the today-only
+    // window this memo exists to enforce.
+    for (const c of liveRows) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c); // live wins
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
-  }, [historical, liveRows]);
+  }, [historical, liveRows, barMins]);
   // Mirrored for the imperative overlay draw. `rows` gets a NEW identity on every
   // coalesced candle frame; when it (and profile/tpoProfiles/mvcHistory) sat in
   // the overlay effect's dep array, that whole effect tore down and rebuilt its
@@ -2455,7 +2466,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           {leading}
           {leading && <DockGap />}
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
-            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
+            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES {barMins}m Candles</span>
             {(() => {
               // effectiveBasis() ONLY — never levels.basis. The server basis is
               // esFut-derived and freezes on the expired contract across a roll.
@@ -2474,6 +2485,29 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           <span style={{ fontSize: 11, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
             {`${rows.length} candles`}
           </span>
+
+          {/* Bar aggregation. 1m is a separate dxLink stream (ES_1M_CANDLES=1 on
+              the server) and is TODAY-ONLY — 5 days of 1m is ~3,900 bars through
+              a render path tuned for ~780. Switching wipes the hook's maps and
+              re-loads; it does NOT reconnect the socket. */}
+          <div style={{ flexShrink: 0 }} title="Bar size — 1m is today-only (5m keeps the 5-day window)">
+            <SegGroup
+              options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
+              active={String(barMins)}
+              onChange={(v) => {
+                const next = Number(v) === 1 ? 1 : 5;
+                if (next === barMins) return;
+                // Replay indexes into today's bars; its cursor is meaningless
+                // once the bar size under it changes.
+                setReplayPlaying(false);
+                setReplayIdx(0);
+                // Re-fit: 780 one-minute bars into a viewport framed for 5-day 5m
+                // renders as an unreadable smear at the right edge.
+                didFitRef.current = false;
+                setBarMins(next);
+              }}
+            />
+          </div>
 
           {/* DTE dropdown */}
           <div ref={dteBoxRef} style={{ flexShrink: 0 }}>

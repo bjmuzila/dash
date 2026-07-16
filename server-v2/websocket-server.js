@@ -75,6 +75,9 @@ function buildSnapshot(state) {
     flow: trimSnapshotFlow(state.flow),
     esCandles: trimSnapshotCandles(state.esCandles),
     nqCandles: trimSnapshotCandles(state.nqCandles),
+    // Undefined (not an empty array) when the feed has 1m disabled, so the key is
+    // dropped from the JSON entirely rather than shipped on every reconnect.
+    es1mCandles: trimSnapshotCandles(state.es1mCandles),
     status: {
       ...state.status,
       // Server uptime in seconds (process lifetime).
@@ -119,6 +122,9 @@ function scopeSnapshot(snap, topics) {
   if (!topics.has('flow')) out.flow = undefined;
   if (!topics.has('esCandles')) out.esCandles = undefined;
   if (!topics.has('nqCandles')) out.nqCandles = undefined;
+  // Its own topic, NOT implied by 'esCandles' — a client asking for 5m candles
+  // must not silently receive a second, 5x-denser bar array it never requested.
+  if (!topics.has('es1mCandles')) out.es1mCandles = undefined;
   return out;
 }
 
@@ -369,6 +375,14 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     // NQ candles: same pattern, own message type so the NQU tab merges them separately.
     if (changed.has('nqCandles')) out.push(msg('nqCandles', state.nqCandles, state.symbol));
     if (changed.has('nqCandlesDelta')) out.push(msg('nqCandles', state.nqCandlesDelta, state.symbol));
+    // ES 1m candles (ES_1M_CANDLES=1 on the feed). MUST be its own message type,
+    // never merged into 'esCandles': the slotKey space overlaps exactly (09:30 is
+    // 09:30 at either aggregation), so a client merging both by slotKey would
+    // interleave 1m and 5m bars into one series. Clients opt in via the
+    // ?topics= filter; when the feed has 1m disabled these keys never change and
+    // nothing is sent.
+    if (changed.has('es1mCandles')) out.push(msg('es1mCandles', state.es1mCandles, state.symbol));
+    if (changed.has('es1mCandlesDelta')) out.push(msg('es1mCandles', state.es1mCandlesDelta, state.symbol));
     if (changed.has('spot') || changed.has('prevClose') || changed.has('basis')) {
       // basis rides on the 'spot' message too (not just 'aux') so a client
       // that only just connected/re-subscribed gets the authoritative value

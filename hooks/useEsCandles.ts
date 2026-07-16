@@ -81,13 +81,35 @@ function buildSlotAverages(historical: EsCandleRecord[], today: string, nDays: n
  *   the fail-rate stats need the full ~20; the live /fails panels only need
  *   last week + yesterday, so they pass a smaller window (e.g. 8) to cut the
  *   initial payload. Defaults to 20 so existing callers are unchanged.
+ * @param intervalMinutes  Bar aggregation: 5 (default) or 1.
+ *
+ *   These are two SEPARATE server streams, not two views of one — dxLink
+ *   aggregates by the {=Nm} suffix, so 1m detail does not exist inside the 5m
+ *   feed and cannot be derived from it. At 1 the hook reads `es1mCandles` WS
+ *   frames and es_candles rows WHERE intervalMinutes=1; at 5, `esCandles` and
+ *   intervalMinutes=5. The two share a slotKey space (09:30 is 09:30 either
+ *   way), so mixing them would interleave two aggregations into one series —
+ *   hence the hard split rather than a merge.
+ *
+ *   1m is server-gated by ES_1M_CANDLES=1. With it off, the WS frames never
+ *   arrive and only DB history renders.
  */
-export function useEsCandles(enabled: boolean = true, historyDays: number = 20) {
+export function useEsCandles(
+  enabled: boolean = true,
+  historyDays: number = 20,
+  intervalMinutes: 1 | 5 = 5,
+) {
   // Final gate = global bandwidth lifecycle AND the caller's enable flag.
   const lifecycle = useWsLifecycle();
   const shouldConnect = lifecycle && enabled;
   const shouldConnectRef = useRef(shouldConnect);
   shouldConnectRef.current = shouldConnect;
+  // Read inside the WS handler. A ref, not a dep: the socket effect keys on
+  // `shouldConnect` alone, so switching aggregation must not drop and re-open the
+  // connection — the server sends both streams regardless, we just change which
+  // one we listen to.
+  const intervalRef = useRef<1 | 5>(intervalMinutes);
+  intervalRef.current = intervalMinutes;
   const [todayRows, setTodayRows] = useState<EsCandleRecord[]>([]);
   const [historical, setHistorical] = useState<EsCandleRecord[]>([]);
   const [connected, setConnected] = useState(false);
@@ -118,7 +140,13 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
 
   // SQLite load (today + history). Reused by mount and manual reload.
   const loadFromDb = useCallback(async () => {
-    const [today, hist] = await Promise.all([queryEsCandlesToday(), queryEsCandlesHistorical(historyDays)]);
+    const [today, hist] = await Promise.all([
+      queryEsCandlesToday(intervalMinutes),
+      // 1m history is deliberately short: dxFeed only serves ~7 days of it, and
+      // this array feeds buildSlotAverages — a 20-day request at 1m would be 5x
+      // the rows for baselines that mostly don't exist.
+      queryEsCandlesHistorical(intervalMinutes === 1 ? 2 : historyDays, intervalMinutes),
+    ]);
     if (unmountedRef.current) return;
     if (hist.length) setHistorical(hist);
     if (today.length) {
@@ -130,9 +158,26 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
       setTodayRows([...liveMapRef.current.values()]);
       setSessionTick((n) => n + 1);
     }
-  }, [historyDays]);
+  }, [historyDays, intervalMinutes]);
+
+  // Switching aggregation MUST wipe the maps first. Both loadFromDb and ingest
+  // merge by slotKey and never replace, and 1m/5m share the slotKey space — so
+  // without this, flipping 5m→1m leaves every 5m bar sitting in the map and
+  // stacks 1m bars beside them, producing one series built from two different
+  // aggregations. It renders, and it is nonsense.
+  const prevIntervalRef = useRef(intervalMinutes);
+  useEffect(() => {
+    if (prevIntervalRef.current === intervalMinutes) return;
+    prevIntervalRef.current = intervalMinutes;
+    liveMapRef.current.clear();
+    sessionMapRef.current.clear();
+    setTodayRows([]);
+    setHistorical([]);
+    setSessionTick((n) => n + 1);
+  }, [intervalMinutes]);
 
   // Initial SQLite load — only when enabled (stays idle until turned on).
+  // loadFromDb is keyed on intervalMinutes, so a switch re-runs this too.
   useEffect(() => { if (enabled) loadFromDb().catch(() => {}); }, [enabled, loadFromDb]);
 
   /**
@@ -189,8 +234,14 @@ export function useEsCandles(enabled: boolean = true, historyDays: number = 20) 
       try { msg = JSON.parse(rawMsg); } catch { return; }
       const type = String(msg.type ?? "");
       const data = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
-      if (type === "snapshot") ingest(data.esCandles);
-      else if (type === "esCandles") ingest(Array.isArray(data) ? data : data.esCandles);
+      // Take ONLY the stream matching this hook's aggregation. The server sends
+      // both 'esCandles' (5m) and 'es1mCandles' (1m) on the same socket, and they
+      // share a slotKey space — ingesting both would merge two aggregations into
+      // one series. `wantType` is read from a ref so a switch takes effect without
+      // tearing down and reconnecting the socket.
+      const want = intervalRef.current === 1 ? "es1mCandles" : "esCandles";
+      if (type === "snapshot") ingest(intervalRef.current === 1 ? data.es1mCandles : data.esCandles);
+      else if (type === want) ingest(Array.isArray(data) ? data : data[want]);
       // Rare server-push notices (daily/forced regime refits) — re-dispatched
       // as window events so any mounted card (e.g. the Regime Engine tab's
       // Persistent Learning card) can refetch without owning its own socket.

@@ -2,10 +2,15 @@
 /**
  * server-v2/state/es-candle-writer.js
  *
- * Postgres writer for 5-minute ES futures candles. Mirrors the lazy-pool +
+ * Postgres writer for ES/NQ futures candles. Mirrors the lazy-pool +
  * no-op-without-DB pattern of gex-history-writer.js. Writes into the existing
- * `es_candles` table (created by lib/db.ts ensureAllTables), upserting on the
- * unique slotKey so a forming bar can be updated repeatedly within its slot.
+ * `es_candles` / `nq_candles` tables (created by lib/db.ts ensureAllTables),
+ * upserting so a forming bar can be updated repeatedly within its slot.
+ *
+ * es_candles holds BOTH 1m and 5m bars, distinguished ONLY by intervalMinutes —
+ * slotKey is identical for the same clock time at either aggregation. Every row
+ * written here must therefore carry a correct intervalMinutes, and the conflict
+ * target must include it. See the conflictTarget note below.
  *
  * No-ops cleanly when DATABASE_URL is unset.
  */
@@ -59,6 +64,18 @@ async function writeCandles(rows, table = 'es_candles') {
   // Whitelist the table name (it's interpolated into SQL, never user-supplied).
   const tbl = table === 'nq_candles' ? 'nq_candles' : 'es_candles';
   const defSymbol = tbl === 'nq_candles' ? '/NQ' : '/ES';
+  // The two tables have DIFFERENT unique keys, so the conflict target is not
+  // shared:
+  //   es_candles → UNIQUE("slotKey","intervalMinutes"). It holds 1m AND 5m bars,
+  //     and slotKey carries no interval, so 09:30@1m and 09:30@5m are the same
+  //     slotKey. Targeting slotKey alone here is not merely wrong — after
+  //     scripts/migrate-es-candles-composite-key.sql that constraint does not
+  //     exist and EVERY write throws "no unique or exclusion constraint matching
+  //     the ON CONFLICT specification" into the catch below, silently halting the
+  //     live recorder.
+  //   nq_candles → still UNIQUE("slotKey") (5m only, no 1m writer). Same latent
+  //     flaw; migrate it before adding any second NQ aggregation.
+  const conflictTarget = tbl === 'nq_candles' ? '"slotKey"' : '"slotKey","intervalMinutes"';
 
   for (const r of list) {
     const ts = Number(r.timestamp);
@@ -69,7 +86,7 @@ async function writeCandles(rows, table = 'es_candles') {
         `INSERT INTO ${tbl}
            (timestamp,date,"slotKey",time,symbol,"intervalMinutes",source,open,high,low,close,volume,"avgVolume")
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT("slotKey") DO UPDATE SET
+         ON CONFLICT(${conflictTarget}) DO UPDATE SET
            timestamp=EXCLUDED.timestamp,
            high=GREATEST(${tbl}.high,EXCLUDED.high),
            low=LEAST(${tbl}.low,EXCLUDED.low),

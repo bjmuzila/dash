@@ -68,6 +68,13 @@ const state = {
   // 5-minute NQ futures candles — parallel to esCandles, drives the ICT NQU tab.
   nqCandles: [],
   nqCandlesDelta: [],
+  // 1-minute ES candles — a SECOND dxLink stream (ES_1M_CANDLES=1), not a view of
+  // esCandles: dxLink aggregates server-side by the {=Nm} suffix, so 1m detail
+  // does not exist inside the 5m feed. Kept in its own keys because the two share
+  // a slotKey space (09:30 is 09:30 at either aggregation) and merging them would
+  // interleave two aggregations into one series. Empty when 1m is disabled.
+  es1mCandles: [],
+  es1mCandlesDelta: [],
   // Feed health
   status: {
     ttAuthenticated: false,

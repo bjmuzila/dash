@@ -44,9 +44,15 @@ export async function GET(req: NextRequest) {
     // have" fetch (see lib/snapdb.ts queryEsCandlesHistorical/queryNqCandlesHistorical
     // with daysBack<=0) doesn't silently get truncated back down to ~20 days.
     const limit    = Math.min(Number(searchParams.get("limit") ?? 2000), 50000);
+    // ?interval=1|5 — es_candles holds BOTH aggregations and they share a slotKey
+    // space, so an unfiltered read interleaves them into one series. Defaults to
+    // 5: every caller that predates the 1m stream keeps its exact behaviour.
+    // Ignored for NQ (nq_candles is 5m-only).
+    const intervalRaw = Number(searchParams.get("interval") ?? 5);
+    const interval    = intervalRaw === 1 ? 1 : 5;
     const rows     = isNq(searchParams.get("symbol"))
       ? await getNqCandles(date, daysBack, limit)
-      : await getEsCandles(date, daysBack, limit);
+      : await getEsCandles(date, daysBack, limit, interval);
     return NextResponse.json({ rows });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
