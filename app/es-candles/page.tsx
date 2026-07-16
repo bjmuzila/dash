@@ -7,7 +7,9 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData }
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
-import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
+// findGEXFlip is intentionally NOT imported: the flip is no longer recomputed
+// per-WS-frame off gexRows (that's what made it twitch). It comes from the CB
+// snapshot table alongside the CB strike — see the /api/snapshots/mvc poll.
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
@@ -339,7 +341,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const captureRef = useRef<HTMLDivElement>(null);
   const chartApiRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const priceLinesRef = useRef<IPriceLine[]>([]);
+  // Keyed by title so lines are updated IN PLACE. Recreating them every frame
+  // re-renders the axis labels, which resizes the price scale → the plot width
+  // shifts → the whole chart visibly nudges.
+  const priceLinesRef = useRef<Map<string, IPriceLine>>(new Map());
   const didFitRef = useRef(false);
   // ET date of the latest bar the last fitContent() ran for. When the session
   // rolls to a new ET day, new bars append far to the right; without re-fitting
@@ -775,12 +780,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       if (Array.isArray(d.expirations) && d.expirations.length) {
         setExpirations(d.expirations.map(String));
       }
-      // gexFlip isn't sent by the feed — compute it from gexRows like the home
-      // page does (zero-crossing of the net-GEX profile nearest spot).
-      let computedFlip: number | null = null;
-      if (Array.isArray(d.gexRows) && d.gexRows.length) {
-        computedFlip = findGEXFlip(d.gexRows as ChainRow[], spx > 0 ? spx : undefined);
-      }
       setLevels((prev) => {
         const nextSpx = spx > 0 ? spx : prev.spx;
         const nextEs = esFut > 0 ? esFut : prev.esFut;
@@ -795,7 +794,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         return {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
-          gexFlip:  computedFlip != null ? computedFlip : (d.gexFlip != null ? Number(d.gexFlip) || null : prev.gexFlip),
+          // Flip + CB are structural levels owned by the CB snapshot poll, not
+          // the live feed. Carry them through untouched here.
+          gexFlip:  prev.gexFlip,
           mvc:      prev.mvc,
           basis:    nextBasis,
           spx:      nextSpx,
@@ -990,9 +991,26 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         }
         if (cancelled) return;
         setMvcHistory(pts);
-        // Latest MVC (SPX points) → the legend chip value.
+        // Latest CB + flip (SPX points) → the legend chips and the price lines.
+        // Both come from the newest snapshot row. The recorder writes these every
+        // 30m RTH, so this 60s poll is already finer than the underlying data —
+        // and crucially they change ONLY when the snapshot changes, so the lines
+        // and axis labels sit still between writes.
         const latest = pts.length ? pts[pts.length - 1].spx : 0;
-        if (latest > 0) setLevels((prev) => ({ ...prev, mvc: latest }));
+        const newestRow = rows.length
+          ? [...rows].sort(
+              (a: Record<string, unknown>, b: Record<string, unknown>) =>
+                Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0)
+            )[0]
+          : null;
+        const flipRaw = newestRow ? Number(newestRow.gexFlip ?? 0) : 0;
+        const nextFlip = flipRaw > 0 ? flipRaw : null;
+        setLevels((prev) => {
+          const nextMvc = latest > 0 ? latest : prev.mvc;
+          // Identity-stable when nothing moved → the publish effect stays quiet.
+          if (prev.mvc === nextMvc && prev.gexFlip === nextFlip) return prev;
+          return { ...prev, mvc: nextMvc, gexFlip: nextFlip };
+        });
       } catch { /* keep last */ }
     };
     void load();
@@ -1114,6 +1132,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
+      // The old series is gone with the old chart — any handles still in the map
+      // are dead. Drop them so the draw effect recreates against the new series
+      // instead of applyOptions-ing a destroyed line.
+      priceLinesRef.current.clear();
 
       // lightweight-charts v5 renders candles into internal canvases that
       // html2canvas copies blank. Expose the library's own takeScreenshot()
@@ -1414,32 +1436,63 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     return () => { cancelled = true; clearInterval(id); };
   }, [historical]);
 
-  // Draw GEX level lines (Call Wall / Put Wall / Flip / MVC) on the candle series,
-  // converting SPX-point levels to ES via the live basis (esFut - spx).
+  // ── Price-line values: ES-tick quantized, republished at most once a minute ──
+  // Two separate sources of per-frame churn fed these lines:
+  //   1. `levels` gets a NEW object identity on every /ws/gex frame because
+  //      spx/esFut tick continuously — even when the walls haven't moved.
+  //   2. effectiveBasis() derives the live basis from lastEsCloseRef −
+  //      spotRef, BOTH of which tick. So even a frozen wall re-projected onto
+  //      the ES axis every frame wobbled 1–2 points.
+  // Neither of these levels moves fast enough to justify sub-minute updates,
+  // so: snap to 0.25 (the ES tick — a level between ticks isn't tradeable
+  // anyway), recompute on a 1-min cadence, and only publish when a quantized
+  // value actually CHANGED.
+  const ES_TICK = 0.25;
+  const toTick = (v: number) => Math.round(v / ES_TICK) * ES_TICK;
+
+  const [lineLevels, setLineLevels] = useState<{ callWall: number | null; putWall: number | null; gexFlip: number | null }>(
+    { callWall: null, putWall: null, gexFlip: null }
+  );
+  const levelsRef = useRef(levels);
+  useEffect(() => { levelsRef.current = levels; }, [levels]);
+
+  // Flips false→true exactly once, when the first real level lands — that
+  // re-runs the effect below so the lines paint immediately instead of waiting
+  // out the first 60s interval.
+  const hasLevels = levels.callWall != null || levels.putWall != null || levels.gexFlip != null;
+
+  useEffect(() => {
+    const publish = () => {
+      const l = levelsRef.current;
+      const b = effectiveBasis();
+      const es = (spxLevel: number | null) => (spxLevel != null ? toTick(spxLevel + b) : null);
+      const next = { callWall: es(l.callWall), putWall: es(l.putWall), gexFlip: es(l.gexFlip) };
+      // Identity-stable when nothing moved → the draw effect doesn't re-fire.
+      setLineLevels((prev) =>
+        prev.callWall === next.callWall && prev.putWall === next.putWall && prev.gexFlip === next.gexFlip
+          ? prev
+          : next
+      );
+    };
+    publish();
+    const id = setInterval(publish, 60_000);
+    return () => clearInterval(id);
+  }, [effectiveBasis, hasLevels]);
+
+  // Draw GEX level lines (Call Wall / Put Wall / Flip) on the candle series.
+  // Update in place; only create/remove when a level appears or disappears.
   useEffect(() => {
     const series = candleSeriesRef.current;
     if (!series) return;
-
-    // Clear previous lines.
-    for (const pl of priceLinesRef.current) { try { series.removePriceLine(pl); } catch {} }
-    priceLinesRef.current = [];
-
-    // Was: raw levels.esFut - levels.spx, recomputed on every `levels` change
-    // (even ones unrelated to basis) from two independently-timed fields —
-    // this is what made the Put Wall line jump around. effectiveBasis()
-    // reads the server's freshness-gated basisRef (falling back to the
-    // frozen prior-day basis) instead.
-    const basis = effectiveBasis();
-    const toEs = (spxLevel: number | null) => (spxLevel != null ? spxLevel + basis : null);
 
     const defs: Array<{ price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [];
 
     // Call/Put/Flip — toggled by the Levels button.
     if (showLevels) {
       defs.push(
-        { price: toEs(levels.callWall), color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
-        { price: toEs(levels.putWall),  color: "#ff5b5b", title: "Put Wall",  style: LineStyle.Dashed, width: 1 },
-        { price: toEs(levels.gexFlip),  color: "#f5c518", title: "Flip",      style: LineStyle.Dashed, width: 1 },
+        { price: lineLevels.callWall, color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
+        { price: lineLevels.putWall,  color: "#ff5b5b", title: "Put Wall",  style: LineStyle.Dashed, width: 1 },
+        { price: lineLevels.gexFlip,  color: "#f5c518", title: "Flip",      style: LineStyle.Dashed, width: 1 },
       );
     }
 
@@ -1457,19 +1510,33 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       );
     }
 
+    const lines = priceLinesRef.current;
+    const wanted = new Set(defs.filter((d) => d.price != null && d.price > 0).map((d) => d.title));
+
+    // Drop lines whose toggle went off / value disappeared.
+    for (const [title, pl] of [...lines.entries()]) {
+      if (wanted.has(title)) continue;
+      try { series.removePriceLine(pl); } catch {}
+      lines.delete(title);
+    }
+
     for (const d of defs) {
       if (d.price == null || !(d.price > 0)) continue;
-      const pl = series.createPriceLine({
+      const existing = lines.get(d.title);
+      if (existing) {
+        try { existing.applyOptions({ price: d.price }); } catch {}
+        continue;
+      }
+      lines.set(d.title, series.createPriceLine({
         price: d.price,
         color: d.color,
         lineWidth: d.width,
         lineStyle: d.style,
         axisLabelVisible: true,
         title: d.title,
-      });
-      priceLinesRef.current.push(pl);
+      }));
     }
-  }, [levels, showLevels, showSessions, sessionLevels, effectiveBasis]);
+  }, [lineLevels, showLevels, showSessions, sessionLevels]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket

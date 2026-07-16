@@ -297,7 +297,10 @@ export function buildSnapshotHTML(
   const presRowPadV = px(14, presScale);
   const presTimeCol = px(92, presScale);
 
-  const econHeadSize = px(11, econScale);
+  // 10, not 11: "FORECAST"/"PREVIOUS" are the longest labels on the canvas and
+  // have to fit econNumCol (58 * scale). At 11 they overflow their cell and
+  // collide with the neighbouring header. Keep this in step with econNumCol.
+  const econHeadSize = px(10, econScale);
   const econTimeSize = px(14, econScale);
   const econEventSize = px(16, econScale);
   const econNumSize = px(15, econScale);
@@ -394,7 +397,10 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .panel{border-radius:18px;border:1px solid var(--border);background:radial-gradient(circle at 50% 0%,rgba(126,211,252,0.10) 0%,transparent 60%),var(--panelBg);box-shadow:0 18px 40px rgba(0,0,0,0.22);overflow:hidden;height:100%;display:flex;flex-direction:column}
 .panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
 .panel-title{font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
-.panel-pct{display:inline-block;height:24px;line-height:24px;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:0 9px}
+/* Count bubble — same line-height:1 + symmetric padding rule as the pills in
+   the topbar. It kept the old height+line-height form by oversight and sat
+   top-heavy for it. 13px text + 6px padding top/bottom = the same 25px box. */
+.panel-pct{display:inline-block;line-height:1;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:6px 9px}
 .ern-body{display:flex;flex-direction:column;flex:1}
 .ern-group{padding:14px 16px;border-bottom:1px solid var(--border);flex:1}
 .ern-group:last-child{border-bottom:none}
@@ -403,7 +409,9 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .ern-chip{width:48px;text-align:center;flex-shrink:0}
 .chip-logo{display:block;width:36px;height:36px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
 .chip-logo img{width:36px;height:36px;object-fit:contain;display:block}
-.chip-fb{display:block;width:36px;height:36px;line-height:34px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
+/* Ticker fallback chip — line-height:1 + padding, same rule as every other
+   pill. 10px text + 13px padding top/bottom = the 36px box the logos use. */
+.chip-fb{display:block;width:36px;height:36px;line-height:1;padding:13px 0;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
 .chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 .pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
@@ -414,14 +422,20 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .econ-table{display:flex;flex-direction:column;flex:1}
 .econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:${econColGap}px;padding:${econRowPadV}px ${econRowPadH}px;align-items:center;border-bottom:1px solid var(--border);flex:1;min-width:0}
 .econ-row:last-child{border-bottom:none}
-.econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto}
+/* Tracking trimmed 0.06 -> 0.04em for the same reason econHeadSize dropped to
+   10: every 0.01em costs ~1px across "FORECAST" and pushes it into the next
+   column. nowrap so a tight fit never silently becomes two lines. */
+.econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto;white-space:nowrap}
 /* Every cell carries an explicit line-height with leading to spare. Without it
    html2canvas draws the glyphs low inside a line box it measured as "normal"
    and the descenders get sheared off by the row's overflow. */
 .ec-time{font-size:${econTimeSize}px;line-height:${econTimeSize + 8}px;font-weight:700;color:var(--muted);white-space:nowrap}
-/* Titles are truncated in JS (see clipText) — html2canvas ignores
-   text-overflow:ellipsis, so CSS clipping here is belt-and-braces only. */
-.ec-event{font-size:${econEventSize}px;line-height:${econEventSize + 8}px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+/* NO overflow:hidden here. Titles are already truncated in JS (see clipText),
+   so clipping earns nothing — and html2canvas measures this box slightly short
+   and shears the bottom off every glyph, which is exactly the "words cut off"
+   bug. The Presidential lane has never had overflow:hidden and has never
+   clipped; that is the control group. Do not add it back. */
+.ec-event{font-size:${econEventSize}px;line-height:${econEventSize + 8}px;font-weight:600;white-space:nowrap;min-width:0}
 .ec-num{font-size:${econNumSize}px;line-height:${econNumSize + 8}px;font-weight:700;text-align:right;color:var(--text);white-space:nowrap}
 .ec-impact{text-align:left;min-width:0}
 .impact-pill{display:inline-block;line-height:1;text-align:center;border:1px solid;border-radius:8px;padding:${pillPadV}px ${pillPadH}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;white-space:nowrap}
