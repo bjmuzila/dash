@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { OWNER_THEME as HOME_THEME, homeShellStyle } from "@/components/shared/ownerTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { shareToDiscord } from "@/lib/discord/share";
 
 // Local calm shell (replaces PageShell's glow background for owner pages).
 function PageShell({ children }: { children: ReactNode }) {
@@ -186,12 +187,12 @@ function ShareActions({ targetRef, caption }: { targetRef: React.RefObject<HTMLD
     setSending(true); setSent(null);
     try {
       const png = await captureNetCard(targetRef.current);
-      const form = new FormData();
-      form.append("payload_json", JSON.stringify({ content: caption }));
-      form.append("files[0]", new Blob([dataUrlToBytes(png)], { type: "image/png" }), "net-greeks.png");
-      const r = await fetch("/api/discord-share", { method: "POST", body: form });
-      setSent(r.ok ? "ok" : "err");
-    } catch { setSent("err"); }
+      await shareToDiscord({ content: caption, image: png, filename: "net-greeks.png" });
+      setSent("ok");
+    } catch (e) {
+      console.error("[owner/dev discord]", e);
+      setSent("err");
+    }
     finally { setSending(false); setTimeout(() => setSent(null), 2500); }
   }
   const btn: React.CSSProperties = { fontSize: 15, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };

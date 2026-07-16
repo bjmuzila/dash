@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { saveMVCSnapshot } from "@/lib/snapdb";
+import { shareToDiscord } from "@/lib/discord/share";
 
 declare global {
   interface Window {
@@ -48,25 +49,15 @@ function captureGexCanvas(): string | null {
   }
 }
 
-async function sendToDiscord(payload: {
+function sendToDiscord(payload: {
   content: string;
   imageBase64?: string | null;
 }): Promise<void> {
-  const form = new FormData();
-  form.append("payload_json", JSON.stringify({ content: payload.content }));
-
-  if (payload.imageBase64) {
-    const base64 = payload.imageBase64.replace(/^data:image\/\w+;base64,/, "");
-    const bytes  = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-    const blob   = new Blob([bytes], { type: "image/png" });
-    form.append("files[0]", blob, "gex-snap.png");
-  }
-
-  const res = await fetch("/api/discord-share", { method: "POST", body: form });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`Discord send failed ${res.status}: ${txt}`);
-  }
+  return shareToDiscord({
+    content: payload.content,
+    image: payload.imageBase64,
+    filename: "gex-snap.png",
+  });
 }
 
 function fmtNum(v: number) {

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { shareToDiscord } from "@/lib/discord/share";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
@@ -370,14 +371,8 @@ async function captureElement(el: HTMLElement, title?: string, fitContent = fals
   return base.toDataURL("image/png");
 }
 
-async function postToDiscord(imageBase64: string, content: string): Promise<void> {
-  const form = new FormData();
-  form.append("payload_json", JSON.stringify({ content }));
-  const base64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-  form.append("files[0]", new Blob([bytes], { type: "image/png" }), "snap.png");
-  const res = await fetch("/api/discord-share", { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Discord ${res.status}`);
+function postToDiscord(imageBase64: string, content: string): Promise<void> {
+  return shareToDiscord({ content, image: imageBase64, filename: "snap.png" });
 }
 
 // ── Shared button style ───────────────────────────────────────────────────────

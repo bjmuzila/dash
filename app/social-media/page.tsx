@@ -3,6 +3,7 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeRefLevels } from "@/lib/failLevels";
+import { shareToDiscord } from "@/lib/discord/share";
 import dynamic from "next/dynamic";
 import { SegGroup } from "@/components/shared/DockToolbar";
 const GexChart = dynamic(() => import("@/components/dashboard/GexChart"), { ssr: false });
@@ -3527,11 +3528,7 @@ export default function SocialMediaPage() {
     try {
       const blob = await renderCardBlob();
       if (!blob) throw new Error("render failed");
-      const fd = new FormData();
-      fd.append("payload_json", JSON.stringify({}));
-      fd.append("files[0]", blob, `cb-edge-spx-${todayETStr()}.png`);
-      const res = await fetch("/api/discord-share", { method: "POST", body: fd });
-      if (!res.ok) throw new Error(`discord ${res.status}`);
+      await shareToDiscord({ image: blob, filename: `cb-edge-spx-${todayETStr()}.png` });
       setDiscordState("ok");
     } catch (e) {
       console.error("[social-media discord]", e);
