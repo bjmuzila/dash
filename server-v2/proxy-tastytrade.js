@@ -660,11 +660,21 @@ async function probeRest({ ticker, expiry, type, strike }) {
           .catch(() => null)
       : Promise.resolve(null),
     (async () => {
+      // Pre/post-market, Theta's raw cash-index snapshot is frozen at the last
+      // RTH print (SPX cash doesn't trade off-hours) while option NBBO keeps
+      // moving with the futures-implied level — that mismatch was making ITM
+      // legs look "priced below intrinsic" and killing the IV solve. Prefer
+      // the live class's spotDisplay (RTH broker spot, or ES future + cash
+      // basis off-hours — see _publishSpotDisplay), same value the rest of
+      // the dashboard shows, and only fall back to the raw Theta snapshot if
+      // spotDisplay hasn't been published yet (e.g. right after a restart).
+      const live = Number(marketState.getState().spotDisplay) || 0;
+      if (INDEX_ROOTS.has(root) && live > 0) return live;
       try {
         if (INDEX_ROOTS.has(root)) return await thetaAdapter.fetchIndexPriceTheta(root);
         const q = await thetaAdapter.fetchStockQuoteTheta(root);
-        return q?.last || q?.mark || null;
-      } catch { return null; }
+        return q?.last || q?.mark || live || null;
+      } catch { return live || null; }
     })(),
   ]);
 
