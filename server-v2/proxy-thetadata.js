@@ -280,6 +280,35 @@ async function fetchGreeksTheta(underlying = SYMBOL, expiration) {
 }
 
 // ---------------------------------------------------------------------------
+// Whole-chain NBBO quote snapshot (bid/ask/sizes) for one expiration.
+//   returns Map keyed by `exp|strike|type` -> { bid, ask, bidSize, askSize }
+// Theta DOES publish per-option NBBO (docs.thetadata.us/operations/
+// option_snapshot_quote.html) — this replaces the old TT-REST-for-quote
+// fallback so the probe's Quote panel (and IV solve) stay Theta-only.
+// ---------------------------------------------------------------------------
+async function fetchQuoteTheta(underlying = SYMBOL, expiration) {
+  const root = thetaRoot(underlying);
+  const out = new Map();
+  const json = await thetaGet(
+    `/v3/option/snapshot/quote?symbol=${encodeURIComponent(root)}&expiration=${expiration}`,
+  );
+  for (const row of flatSnapshotRows(json)) {
+    const type = rightToType(row.right);
+    const strike = Number(row.strike);
+    if (!(strike > 0)) continue;
+    const bid = Number(row.bid);
+    const ask = Number(row.ask);
+    out.set(keyOf(row.expiration || expiration, strike, type), {
+      bid: Number.isFinite(bid) ? bid : 0,
+      ask: Number.isFinite(ask) ? ask : 0,
+      bidSize: Number(row.bid_size ?? row.bidSize) || 0,
+      askSize: Number(row.ask_size ?? row.askSize) || 0,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Convenience: build a fully-populated row set for one expiration the way the
 // computation layer wants it — chain x {oi, greeks}. Empty OI is preserved as
 // undefined (caller keeps the prior value), never coerced to 0.
@@ -1177,6 +1206,7 @@ module.exports = {
   fetchOpenInterestTheta,
   fetchVolumeTheta,
   fetchGreeksTheta,
+  fetchQuoteTheta,
   buildExpiryRows,
   toThetaStreamStrike,
   toThetaStreamExp,

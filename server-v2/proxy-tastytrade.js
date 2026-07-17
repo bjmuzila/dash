@@ -647,11 +647,13 @@ async function probeRest({ ticker, expiry, type, strike }) {
 
   const probeKey = _probeKeyOf(expiry, best.strike, type);
 
-  // Fetch all Theta snapshots + TT market-data (for quote + OI compare) in parallel.
-  const [oiMap, greekMap, volMap, ttIt, spot] = await Promise.all([
+  // Fetch all Theta snapshots + TT market-data (kept ONLY for the OI cross-
+  // check panel — quote/greeks/mark are Theta-only, see fetchQuoteTheta).
+  const [oiMap, greekMap, volMap, quoteMap, ttIt, spot] = await Promise.all([
     thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
     thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
     thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
+    thetaAdapter.fetchQuoteTheta(root, expiry).catch(() => new Map()),
     occSymbol
       ? ttGet(`/market-data/by-type?equity-option[]=${encodeURIComponent(occSymbol)}`)
           .then((j) => j?.data?.items?.[0] || null)
@@ -669,14 +671,16 @@ async function probeRest({ ticker, expiry, type, strike }) {
   const thetaOI = oiMap.get(probeKey)?.oi ?? null;
   const thetaVol = volMap.get(probeKey) ?? null;
   const g = greekMap.get(probeKey) || {};
+  const tq = quoteMap.get(probeKey) || {};
 
   const n = firstFiniteNumber;
 
-  // Quote: from TT (Theta has no per-option bid/ask snapshot). Label shows source.
-  const bid = n(ttIt?.bid);
-  const ask = n(ttIt?.ask);
+  // Quote: Theta's own NBBO (docs.thetadata.us/operations/option_snapshot_quote.html)
+  // — no more TT fallback here; TT is only used below for the OI cross-check.
+  const bid = n(tq.bid);
+  const ask = n(tq.ask);
   const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
-  const mark = n(ttIt?.mark) || mid;
+  const mark = mid;
 
   // Black-Scholes fallback greeks — calculated for THIS contract's side
   // (call/put), so a Theta gap never blanks delta/theta/etc: sign always
@@ -686,11 +690,16 @@ async function probeRest({ ticker, expiry, type, strike }) {
   // Theta sometimes returns a degenerate row for thin/0DTE ITM legs
   // (delta:1, gamma/theta/vega:0, iv missing) — don't treat that as real data.
   const thetaGreeksValid = g.iv > 0 && !(g.gamma === 0 && g.theta === 0 && g.vega === 0);
-  // Floor the mark at intrinsic before solving IV — a stale/crossed quote
-  // priced below intrinsic makes impliedVol() fail and blanks the BS fallback.
+  // Theta-only mark for the IV solve — TT is quote-source for the Quote panel
+  // only (Theta has no NBBO), never for computing greeks. g.mark comes from
+  // Theta's own greeks/all snapshot (its bid/ask mid, else its last/close) —
+  // use it if it clears intrinsic; otherwise there's no valid Theta price to
+  // solve from, so leave it null rather than borrowing a TT price.
   const intrinsic = type === 'C' ? Math.max(spot - best.strike, 0) : Math.max(best.strike - spot, 0);
-  const markForBs = mark > 0 ? Math.max(mark, intrinsic + 0.01) : mark;
-  const ivForBs = thetaGreeksValid ? g.iv : impliedVol({ price: markForBs, S: spot, K: best.strike, T, r: RISK_FREE, type });
+  // Two Theta-only candidates: the greeks snapshot's own embedded mark, and
+  // the dedicated NBBO quote's mid — take whichever clears intrinsic first.
+  const markForBs = [g.mark, mid].find((v) => v > intrinsic) ?? null;
+  const ivForBs = thetaGreeksValid ? g.iv : (markForBs ? impliedVol({ price: markForBs, S: spot, K: best.strike, T, r: RISK_FREE, type }) : NaN);
   const bsRaw = (spot > 0 && T > 0 && ivForBs > 0)
     ? bsGreeks({ S: spot, K: best.strike, T, sigma: ivForBs, r: RISK_FREE, type })
     : null;
@@ -702,15 +711,18 @@ async function probeRest({ ticker, expiry, type, strike }) {
 
   const feeds = {
     Quote: {
-      bid,            // TT REST
-      ask,            // TT REST
-      mid,            // TT REST
-      mark: n(ttIt?.mark) || mid,
-      bidSize: n(ttIt?.['bid-size']),
-      askSize: n(ttIt?.['ask-size']),
-      _src: 'TT REST',
+      bid,            // Theta NBBO
+      ask,            // Theta NBBO
+      mid,            // Theta NBBO
+      mark,           // Theta NBBO
+      bidSize: n(tq.bidSize),
+      askSize: n(tq.askSize),
+      _src: 'Theta NBBO',
     },
     Trade: {
+      // No Theta adapter for last-trade price yet (only OHLC volume) — this
+      // one field still reads TT REST until fetchVolumeTheta is extended to
+      // carry close/last from the OHLC snapshot.
       last: n(ttIt?.last),
       volume: thetaVol,           // Theta OHLC snapshot
       _volumeSrc: 'Theta',
