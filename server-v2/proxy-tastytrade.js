@@ -2391,7 +2391,12 @@ class TastytradeProxy {
     if (!(price > 0)) return;
     if (root === 'SPX' || root === SYMBOL) {
       this.spot = price;
-      marketState.setSpot(price);
+      // marketState.spot is the field /greeks (and any other direct spot
+      // consumer) reads — push the corrected value, not the raw tick, so
+      // those pages don't independently re-freeze off-hours the same way
+      // the GEX chart did before _effectiveSpot() (see greeks-frozen-spot-
+      // crosses.md: raw setSpot() calls were the actual upstream freeze).
+      marketState.setSpot(this._effectiveSpot());
       this._publishSpotDisplay(); // refresh display SPX + RTH cash-basis capture
     } else if (root === 'VIX') {
       marketState.setAux({ vix: price });
@@ -2912,7 +2917,7 @@ class TastytradeProxy {
         // dxLink SPX quote so the two sources don't fight over this.spot.
         if (mid > 0 && !useThetaIndex()) {
           this.spot = mid;
-          marketState.setSpot(mid);
+          marketState.setSpot(this._effectiveSpot()); // corrected, not raw — see note above
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
         }
         return;
@@ -2967,7 +2972,7 @@ class TastytradeProxy {
         const px = Number(ev.price);
         if (px > 0 && !useThetaIndex()) {
           this.spot = px;
-          marketState.setSpot(px);
+          marketState.setSpot(this._effectiveSpot()); // corrected, not raw — see note above
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
         }
         return;
