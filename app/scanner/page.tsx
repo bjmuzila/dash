@@ -19,6 +19,7 @@ import { amtRead, type AmtRead, type AmtSignal, type SignalLevel } from "@/lib/a
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
+import SemisTab from "@/components/scanner/SemisTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -126,6 +127,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "ES + NQ · paired IB sessions",
     what: "A library of canned questions over the ES and NQ Initial Balance book — cross-index divergence (ES breaks high while NQ breaks low), confirm-vs-diverge break quality, follow-the-first-breaker, width/open-type/ORB/FVG context, break timing, and trend-day filters. Click one and it runs on the real history.",
     tells: "The base rate for whatever shape today just printed, in one click — with n, a 95% confidence interval, a THIN badge under n=30, and a bias flag on anything above 85%.",
+  },
+  {
+    tab: "semis",
+    title: "Semi Strength",
+    accent: HOME_THEME.cyan,
+    scope: "SMH top 10 · live",
+    what: "An SMH-weight-weighted composite of the top 10 semiconductor holdings' intraday move vs prior close, squashed to a 0–100 Semiconductor Strength Index, alongside equal-weight breadth, relative strength vs SPX and NQ, and a SOXL 3× confirmation check.",
+    tells: "How strong semis are right now, and whether the move is real — broad participation and sector leadership, or just NVDA carrying a thin tape. All ThetaData-sourced.",
   },
 ];
 
@@ -3124,6 +3133,7 @@ export default function ScannerPage() {
         <option value="tpo">TPO Structures</option>
         <option value="ibstats">IB Stats</option>
         <option value="statprompter">Stat Prompter</option>
+        <option value="semis">Semi Strength</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3156,6 +3166,7 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "statprompter" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
           background: tab === "statprompter" ? `${LIGHT_BLUE}22` : "transparent",
         }}>Stat Prompter</button>
+        <button onClick={() => setTab("semis")} style={tabStyle(tab === "semis")}>Semi Strength</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -3166,6 +3177,7 @@ export default function ScannerPage() {
       {tab === "tpo" && <TpoStructuresScanner />}
       {tab === "ibstats" && <IbStatsTab />}
       {tab === "statprompter" && <StatPrompterTab />}
+      {tab === "semis" && <SemisTab />}
     </PageShell>
   );
 }
