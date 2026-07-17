@@ -3352,11 +3352,13 @@ class TastytradeProxy {
       //   • liveVol  — dayVolume from the Trade stream (dxLink legacy path)
       //   • restVol  — Theta OHLC snapshot day-volume (the authoritative source
       //                under DATA_SOURCE=theta; see fetchVolumeTheta)
-      // Prefer Trade stream (this.volumes). Use REST volume only if it's from the
-      // current session (same optSessionKey). This avoids stale prior-session volume.
+      // Max of the live Trade-stream dayVolume and the current-session REST volume.
+      // Both are cumulative-for-session; max() means a stale/rollover 0 can't shadow
+      // a good REST volume. The old restOISessionKey===optSessionKey gate was forcing
+      // restVol to 0 here (while the /dev builder, which has no gate, rendered volume
+      // fine) — dropped it so the home chart matches /dev.
       const liveVol = this.volumes.get(c.streamerSymbol);
-      const restVol = this.restOISessionKey === this.optSessionKey ? Number(rest?.volume ?? 0) : 0;
-      const vol = liveVol != null ? Number(liveVol) : restVol;
+      const vol = Math.max(Number(liveVol) || 0, Number(rest?.volume) || 0);
       const mid = q?.mid > 0 ? q.mid : rest?.mark || 0;
 
       // Skip only if there's truly nothing to contribute.
