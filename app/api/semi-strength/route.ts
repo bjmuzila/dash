@@ -8,22 +8,22 @@ export const revalidate = 0;
  * /api/semi-strength — Semiconductor Strength Index (SSI).
  *
  * A single 0–100 read on how strong semis are RIGHT NOW, sourced entirely from
- * ThetaData stock snapshots (via the in-process proxy's /proxy/quotes — the same
- * theta-first equity feed the watchlist uses; NOT Robinhood/Yahoo).
+ * ThetaData stock snapshots (via the in-process proxy — the same theta-first
+ * equity feed the watchlist uses; NOT Robinhood/Yahoo).
  *
- * Components:
- *   • SSI (headline)  — SMH-weight-weighted composite of each top holding's
- *                       intraday % move vs prior close, squashed to 0–100.
- *   • Breadth         — how many of the top holdings are green vs prior close
- *                       (equal-weight; catches NVDA masking the tape).
- *   • RS vs SPX / NQ  — SMH % move minus SPY / QQQ % move (leadership).
- *   • SOXL confirm    — is the 3× ETF pulling its ~3× weight, or lagging.
- *   • Per-name rows   — weight, %move, and contribution (weight × %move).
+ * TWO baselines, because they answer different questions:
+ *   • vs Prior Close — the full move including the overnight session.
+ *   • vs RTH Open    — the cash-session move only (09:30 ET open → now). On a
+ *                      day that gaps down overnight but rips at the open, this is
+ *                      the read that shows semis are actually hot intraday.
+ *
+ * Each basis carries: SSI (headline), weighted composite %, equal-weight breadth
+ * (guards a lone mega-cap faking a broad move), RS vs SPX/NQ, a SOXL 3× check,
+ * and per-name contributions.
  */
 
-// Top SMH holdings + their SMH weights (%). From the fund's published holdings;
-// update if the roster drifts. Weights are renormalised over whatever names
-// return a valid quote, so a missing name never distorts the composite.
+// Top SMH holdings + their SMH weights (%). Update if the roster drifts; weights
+// are renormalised over whatever names price, so a missing name never distorts.
 const SEMIS: { sym: string; weight: number }[] = [
   { sym: "NVDA", weight: 20.70 },
   { sym: "TSM",  weight: 9.09 },
@@ -41,130 +41,139 @@ const SEMIS: { sym: string; weight: number }[] = [
 const BENCH = ["SMH", "SOXL", "SPY", "QQQ"] as const;
 
 type QuoteItem = { symbol: string; last?: number; mark?: number; close?: number; prevClose?: number };
+type OhlcItem = { symbol: string; open?: number; high?: number; low?: number; close?: number };
 
 // tanh squash → 0–100. SCALE = the % composite move that maps to ~88/12.
-// ±1.5% intraday in the semis basket is a decisive day, so anchor there.
 const SCALE = 1.5;
-function toSSI(compositePct: number): number {
-  const t = Math.tanh(compositePct / SCALE); // -1..1
-  return Math.round((50 + 50 * t) * 10) / 10;
-}
+const toSSI = (compositePct: number) => Math.round((50 + 50 * Math.tanh(compositePct / SCALE)) * 10) / 10;
+const ssiLabel = (ssi: number) =>
+  ssi >= 70 ? "STRONG" : ssi >= 57 ? "FIRM" : ssi > 43 ? "NEUTRAL" : ssi > 30 ? "SOFT" : "WEAK";
 
-function ssiLabel(ssi: number): string {
-  if (ssi >= 70) return "STRONG";
-  if (ssi >= 57) return "FIRM";
-  if (ssi > 43) return "NEUTRAL";
-  if (ssi > 30) return "SOFT";
-  return "WEAK";
-}
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
-// Intraday % vs prior close. Prefer live last, fall back to after-hours mark.
-function pctOf(q: QuoteItem | undefined): number | null {
-  if (!q) return null;
-  const price = (q.last && q.last > 0 ? q.last : 0) || (q.mark && q.mark > 0 ? q.mark : 0);
-  const prev = q.prevClose && q.prevClose > 0 ? q.prevClose : 0;
-  if (!(price > 0) || !(prev > 0)) return null;
-  return ((price - prev) / prev) * 100;
+type Merged = { sym: string; weight: number; price: number | null; prevClose: number | null; open: number | null };
+
+async function getJson(path: string, token?: string): Promise<any> {
+  try {
+    const res = await fetch(`${proxyBase()}${path}`, {
+      cache: "no-store",
+      headers: token ? { "x-internal-token": token } : {},
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function GET() {
   const symbols = [...SEMIS.map((s) => s.sym), ...BENCH].join(",");
-  const internalToken = process.env.INTERNAL_API_TOKEN;
+  const token = process.env.INTERNAL_API_TOKEN;
 
-  let items: QuoteItem[] = [];
-  try {
-    const res = await fetch(`${proxyBase()}/proxy/quotes?symbols=${encodeURIComponent(symbols)}`, {
-      cache: "no-store",
-      headers: internalToken ? { "x-internal-token": internalToken } : {},
-    });
-    if (res.ok) {
-      const j = await res.json();
-      items = j?.data?.items ?? [];
-    }
-  } catch {
-    /* fall through to empty → nulls below */
-  }
+  const [q, o] = await Promise.all([
+    getJson(`/proxy/quotes?symbols=${encodeURIComponent(symbols)}`, token),
+    getJson(`/proxy/stock-ohlc?symbols=${encodeURIComponent(symbols)}`, token),
+  ]);
 
-  const byS = new Map(items.map((q) => [String(q.symbol).toUpperCase(), q]));
-  const priceOf = (q: QuoteItem | undefined) =>
-    q ? (q.last && q.last > 0 ? q.last : q.mark && q.mark > 0 ? q.mark : null) : null;
+  const quotes: QuoteItem[] = q?.data?.items ?? [];
+  const ohlc: OhlcItem[] = o?.data?.items ?? [];
+  const qBy = new Map(quotes.map((x) => [String(x.symbol).toUpperCase(), x]));
+  const oBy = new Map(ohlc.map((x) => [String(x.symbol).toUpperCase(), x]));
 
-  // Per-name rows (only names with a valid quote count toward the composite).
-  const rows = SEMIS.map(({ sym, weight }) => {
-    const q = byS.get(sym);
-    const pct = pctOf(q);
-    return { symbol: sym, weight, price: priceOf(q), prevClose: q?.prevClose ?? null, pct, up: pct == null ? null : pct > 0 };
+  const priceOf = (sym: string): number | null => {
+    const x = qBy.get(sym);
+    if (!x) return null;
+    if (x.last && x.last > 0) return x.last;
+    if (x.mark && x.mark > 0) return x.mark;
+    return null;
+  };
+  const posOr = (v: number | undefined | null): number | null => (v && v > 0 ? v : null);
+
+  const merge = (sym: string, weight: number): Merged => ({
+    sym,
+    weight,
+    price: priceOf(sym),
+    prevClose: posOr(qBy.get(sym)?.prevClose),
+    open: posOr(oBy.get(sym)?.open),
   });
 
-  const valid = rows.filter((r) => r.pct != null);
-  const wSum = valid.reduce((a, r) => a + r.weight, 0);
+  const semiRows = SEMIS.map((s) => merge(s.sym, s.weight));
+  const benchRows = new Map(BENCH.map((b) => [b, merge(b, 0)]));
 
-  // Weighted composite % move (renormalised over the names that priced).
-  const compositePct = wSum > 0 ? valid.reduce((a, r) => a + (r.weight / wSum) * (r.pct as number), 0) : 0;
+  type Basis = "prevClose" | "open";
+  const baseVal = (m: Merged, basis: Basis) => (basis === "prevClose" ? m.prevClose : m.open);
+  const pct = (m: Merged, basis: Basis): number | null => {
+    const b = baseVal(m, basis);
+    return m.price != null && b != null ? ((m.price - b) / b) * 100 : null;
+  };
 
-  // Contribution to the composite (renormalised weight × %move), for ranking.
-  const named = rows
-    .map((r) => ({
-      ...r,
-      pct: r.pct == null ? null : Math.round(r.pct * 100) / 100,
-      contribution: r.pct == null || wSum <= 0 ? null : Math.round((r.weight / wSum) * r.pct * 100) / 100,
-    }))
-    .sort((a, b) => (b.contribution ?? -Infinity) - (a.contribution ?? -Infinity));
+  function buildView(basis: Basis) {
+    const rows = semiRows.map((m) => {
+      const p = pct(m, basis);
+      return { symbol: m.sym, weight: m.weight, price: m.price, baseline: baseVal(m, basis), pct: p, up: p == null ? null : p > 0 };
+    });
+    const valid = rows.filter((r) => r.pct != null);
+    const wSum = valid.reduce((a, r) => a + r.weight, 0);
+    const compositePct = wSum > 0 ? valid.reduce((a, r) => a + (r.weight / wSum) * (r.pct as number), 0) : 0;
 
-  const ssi = toSSI(compositePct);
+    const names = rows
+      .map((r) => ({
+        ...r,
+        pct: r.pct == null ? null : r2(r.pct),
+        contribution: r.pct == null || wSum <= 0 ? null : r2((r.weight / wSum) * r.pct),
+      }))
+      .sort((a, b) => (b.contribution ?? -Infinity) - (a.contribution ?? -Infinity));
 
-  // Breadth (equal-weight): how many top holdings are green vs prior close.
-  const breadthTotal = valid.length;
-  const breadthUp = valid.filter((r) => (r.pct as number) > 0).length;
-  const breadthPct = breadthTotal > 0 ? Math.round((breadthUp / breadthTotal) * 100) : null;
+    const ssi = toSSI(compositePct);
+    const breadthTotal = valid.length;
+    const breadthUp = valid.filter((r) => (r.pct as number) > 0).length;
+    const breadthPct = breadthTotal > 0 ? Math.round((breadthUp / breadthTotal) * 100) : null;
 
-  // Benchmark moves.
-  const smhPct = pctOf(byS.get("SMH"));
-  const soxlPct = pctOf(byS.get("SOXL"));
-  const spyPct = pctOf(byS.get("SPY"));
-  const qqqPct = pctOf(byS.get("QQQ"));
+    const smhPct = pct(benchRows.get("SMH")!, basis);
+    const soxlPct = pct(benchRows.get("SOXL")!, basis);
+    const spyPct = pct(benchRows.get("SPY")!, basis);
+    const qqqPct = pct(benchRows.get("QQQ")!, basis);
 
-  // Relative strength: semis (SMH) vs the broad tape / broad tech.
-  const rsSpx = smhPct != null && spyPct != null ? Math.round((smhPct - spyPct) * 100) / 100 : null;
-  const rsNq = smhPct != null && qqqPct != null ? Math.round((smhPct - qqqPct) * 100) / 100 : null;
+    const rsSpx = smhPct != null && spyPct != null ? r2(smhPct - spyPct) : null;
+    const rsNq = smhPct != null && qqqPct != null ? r2(smhPct - qqqPct) : null;
 
-  // SOXL is 3× SMH — is it pulling its weight, or decaying/lagging?
-  let soxlConfirm: { expected: number; actual: number; ratio: number | null; status: string } | null = null;
-  if (smhPct != null && soxlPct != null) {
-    const expected = Math.round(smhPct * 3 * 100) / 100;
-    const ratio = Math.abs(expected) > 0.05 ? Math.round((soxlPct / expected) * 100) / 100 : null;
-    const status =
-      ratio == null ? "flat" : ratio >= 0.9 ? "confirming" : ratio >= 0.6 ? "soft" : "lagging";
-    soxlConfirm = { expected, actual: Math.round(soxlPct * 100) / 100, ratio, status };
+    let soxlConfirm: { expected: number; actual: number; ratio: number | null; status: string } | null = null;
+    if (smhPct != null && soxlPct != null) {
+      const expected = r2(smhPct * 3);
+      const ratio = Math.abs(expected) > 0.05 ? r2(soxlPct / expected) : null;
+      const status = ratio == null ? "flat" : ratio >= 0.9 ? "confirming" : ratio >= 0.6 ? "soft" : "lagging";
+      soxlConfirm = { expected, actual: r2(soxlPct), ratio, status };
+    }
+
+    const divergence =
+      compositePct > 0.1 && breadthPct != null && breadthPct < 50 ? "narrow-up"
+      : compositePct < -0.1 && breadthPct != null && breadthPct > 50 ? "narrow-down"
+      : "aligned";
+
+    return {
+      available: breadthTotal > 0,
+      ssi, ssiLabel: ssiLabel(ssi),
+      compositePct: r2(compositePct),
+      breadthUp, breadthTotal, breadthPct, divergence,
+      smhPct: smhPct == null ? null : r2(smhPct),
+      soxlPct: soxlPct == null ? null : r2(soxlPct),
+      spyPct: spyPct == null ? null : r2(spyPct),
+      qqqPct: qqqPct == null ? null : r2(qqqPct),
+      rsSpx, rsNq, soxlConfirm, names,
+    };
   }
 
-  // Divergence flag: index green but breadth thin (few names carrying).
-  const divergence =
-    compositePct > 0.1 && breadthPct != null && breadthPct < 50
-      ? "narrow-up"
-      : compositePct < -0.1 && breadthPct != null && breadthPct > 50
-      ? "narrow-down"
-      : "aligned";
+  const rthOpen = buildView("open");
+  // RTH-open basis is only meaningful once today's 09:30 bar exists (SMH open > 0
+  // and at least one name priced its open).
+  const rthOpenAvailable = benchRows.get("SMH")!.open != null && rthOpen.breadthTotal > 0;
 
   return NextResponse.json(
     {
       source: "thetadata",
       updatedAt: new Date().toISOString(),
-      ssi,
-      ssiLabel: ssiLabel(ssi),
-      compositePct: Math.round(compositePct * 100) / 100,
-      breadthUp,
-      breadthTotal,
-      breadthPct,
-      divergence,
-      smhPct: smhPct == null ? null : Math.round(smhPct * 100) / 100,
-      soxlPct: soxlPct == null ? null : Math.round(soxlPct * 100) / 100,
-      spyPct: spyPct == null ? null : Math.round(spyPct * 100) / 100,
-      qqqPct: qqqPct == null ? null : Math.round(qqqPct * 100) / 100,
-      rsSpx,
-      rsNq,
-      soxlConfirm,
-      names: named,
+      rthOpenAvailable,
+      prevClose: buildView("prevClose"),
+      rthOpen,
     },
     { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" } }
   );

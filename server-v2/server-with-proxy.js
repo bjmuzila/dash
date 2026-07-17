@@ -2308,6 +2308,25 @@ async function main() {
         }
         return;
       }
+      // Today's RTH OHLC per equity (theta stock snapshot) — the `open` field is
+      // the 09:30 ET print. Backs the Semi Strength index's "vs RTH open" basis.
+      // GET /proxy/stock-ohlc?symbols=NVDA,SMH,SPY → { items:[{symbol,open,high,low,close}] }
+      if (pathname === '/proxy/stock-ohlc' && req.method === 'GET') {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const symbols = (url.searchParams.get('symbols') || '')
+          .split(',').map((s) => s.trim()).filter(Boolean);
+        try {
+          const { fetchStockDayOhlcTheta } = require('./proxy-thetadata');
+          const items = await Promise.all(symbols.map(async (sym) => {
+            try { return { symbol: sym, ...(await fetchStockDayOhlcTheta(sym)) }; }
+            catch { return { symbol: sym, open: 0, high: 0, low: 0, close: 0 }; }
+          }));
+          sendJson(res, 200, { data: { items } });
+        } catch (e) {
+          sendJson(res, 502, { error: String(e?.message || e) });
+        }
+        return;
+      }
       // ── Legacy nested chain adapters ─────────────────────────────────────
       // The options-chain / mult-greek / insights pages fetch /api/chains and
       // /api/expirations, which forward here as /proxy/api/tt/chains/:ticker and

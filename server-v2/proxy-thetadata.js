@@ -592,6 +592,23 @@ async function fetchStockDayVolumeTheta(symbol) {
 }
 
 /**
+ * Today's regular-session OHLC for an equity — the `open` field is the RTH
+ * (09:30 ET) print, which the Semi Strength index uses as an intraday baseline
+ * so an overnight gap doesn't bury a strong cash-session move (or vice versa).
+ * Returns { open, high, low, close } (0 for any field the snapshot omits, e.g.
+ * pre-open when today's bar hasn't formed yet).
+ */
+async function fetchStockDayOhlcTheta(symbol) {
+  const json = await thetaGet(
+    `/v3/stock/snapshot/ohlc?symbol=${encodeURIComponent(String(symbol).toUpperCase())}`,
+  );
+  const rows = flatSnapshotRows(json);
+  const r = (rows.length ? rows : rowsFromV3(json))[0] || {};
+  const num = (v) => { const n = Number(v); return n > 0 ? n : 0; };
+  return { open: num(r.open), high: num(r.high), low: num(r.low), close: num(r.close) };
+}
+
+/**
  * Daily total share volume over a date range — the multi-day (5D/7D) version of
  * fetchStockDayVolumeTheta, for the Dark Pool card's multi-session % stat.
  * Returns [{date:"YYYY-MM-DD", volume}] ascending; empty on failure.
@@ -1225,5 +1242,6 @@ module.exports = {
   fetchStockQuoteTheta,
   fetchStockPrevCloseTheta,
   fetchStockDayVolumeTheta,
+  fetchStockDayOhlcTheta,
   fetchStockDailyVolumeSeriesTheta,
 };

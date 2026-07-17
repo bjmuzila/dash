@@ -3,10 +3,13 @@
 /**
  * SemisTab — Semiconductor Strength Index (SSI).
  *
- * One 0–100 read on how strong semis are right now, plus the reads that keep it
- * honest: breadth (is it broad or just NVDA), relative strength vs SPX/NQ
- * (are semis leading), and SOXL confirmation (is the 3× ETF pulling its weight).
- * Data: /api/semi-strength → ThetaData stock snapshots. Auto-refreshes 30s.
+ * One 0–100 read on how strong semis are right now, on two baselines:
+ *   • vs RTH Open   — the cash-session move (09:30 ET → now). The read that
+ *                     shows semis are hot intraday even after an overnight gap.
+ *   • vs Prior Close— the full move including the overnight session.
+ * Plus the reads that keep it honest: breadth (broad or just NVDA), relative
+ * strength vs SPX/NQ, and SOXL 3× confirmation. Data: /api/semi-strength →
+ * ThetaData stock snapshots. Auto-refreshes 30s.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,15 +23,14 @@ type NameRow = {
   symbol: string;
   weight: number;
   price: number | null;
-  prevClose: number | null;
+  baseline: number | null;
   pct: number | null;
   contribution: number | null;
   up: boolean | null;
 };
 
-type Ssi = {
-  source: string;
-  updatedAt: string;
+type View = {
+  available: boolean;
   ssi: number;
   ssiLabel: string;
   compositePct: number;
@@ -45,6 +47,16 @@ type Ssi = {
   soxlConfirm: { expected: number; actual: number; ratio: number | null; status: string } | null;
   names: NameRow[];
 };
+
+type Ssi = {
+  source: string;
+  updatedAt: string;
+  rthOpenAvailable: boolean;
+  prevClose: View;
+  rthOpen: View;
+};
+
+type Basis = "rthOpen" | "prevClose";
 
 const ssiColor = (label: string) =>
   label === "STRONG" ? UP :
@@ -74,6 +86,7 @@ export default function SemisTab() {
   const [data, setData] = useState<Ssi | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [basis, setBasis] = useState<Basis>("rthOpen");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -96,12 +109,25 @@ export default function SemisTab() {
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [load]);
 
-  const maxContrib = data ? Math.max(0.01, ...data.names.map((n) => Math.abs(n.contribution ?? 0))) : 1;
+  // RTH-open basis falls back to prior-close before the cash session opens.
+  const effBasis: Basis = basis === "rthOpen" && !data?.rthOpenAvailable ? "prevClose" : basis;
+  const view = data ? data[effBasis] : null;
+  const baseLabel = effBasis === "rthOpen" ? "RTH Open" : "Prev Close";
+
+  const maxContrib = view ? Math.max(0.01, ...view.names.map((n) => Math.abs(n.contribution ?? 0))) : 1;
 
   const divNote =
-    data?.divergence === "narrow-up" ? "Narrow — index up but under half the names are green (few carrying it)." :
-    data?.divergence === "narrow-down" ? "Narrow — index down while most names are green (heavyweight drag)." :
+    view?.divergence === "narrow-up" ? `Narrow — index up vs ${baseLabel.toLowerCase()} but under half the names are green (few carrying it).` :
+    view?.divergence === "narrow-down" ? `Narrow — index down vs ${baseLabel.toLowerCase()} while most names are green (heavyweight drag).` :
     "Broad — breadth agrees with the index move.";
+
+  const segBtn = (b: Basis, label: string, disabled?: boolean): React.CSSProperties => ({
+    padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer",
+    border: `1px solid ${effBasis === b ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
+    background: effBasis === b ? "rgba(33,158,188,0.15)" : "transparent",
+    color: disabled ? "rgba(255,255,255,0.3)" : effBasis === b ? HOME_THEME.text : "rgba(255,255,255,0.65)",
+    opacity: disabled ? 0.6 : 1,
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -112,7 +138,7 @@ export default function SemisTab() {
               Semiconductor Strength Index
             </div>
             <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", marginTop: 4 }}>
-              SMH-weighted composite of the top 10 holdings vs prior close · ThetaData
+              SMH-weighted composite of the top 10 holdings vs {baseLabel.toLowerCase()} · ThetaData
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -129,37 +155,48 @@ export default function SemisTab() {
           </div>
         </div>
 
+        {/* Basis toggle */}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <button style={segBtn("rthOpen", "vs RTH Open", !data?.rthOpenAvailable)}
+            onClick={() => data?.rthOpenAvailable && setBasis("rthOpen")}
+            disabled={!data?.rthOpenAvailable}>vs RTH Open</button>
+          <button style={segBtn("prevClose", "vs Prior Close")} onClick={() => setBasis("prevClose")}>vs Prior Close</button>
+          {data && !data.rthOpenAvailable && (
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>RTH open pending — showing prior close until 9:30 ET.</span>
+          )}
+        </div>
+
         {err && <div style={{ marginTop: 14, color: DOWN, fontSize: 13 }}>Failed to load: {err}</div>}
 
-        {data && (
+        {view && (
           <>
             {/* Hero: big SSI + the composite move */}
             <div style={{ display: "flex", alignItems: "center", gap: 28, flexWrap: "wrap", marginTop: 20, marginBottom: 20 }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                <span style={{ fontSize: 64, fontWeight: 900, lineHeight: 1, color: ssiColor(data.ssiLabel), fontVariantNumeric: "tabular-nums" }}>
-                  {data.ssi.toFixed(0)}
+                <span style={{ fontSize: 64, fontWeight: 900, lineHeight: 1, color: ssiColor(view.ssiLabel), fontVariantNumeric: "tabular-nums" }}>
+                  {view.ssi.toFixed(0)}
                 </span>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.06em", color: ssiColor(data.ssiLabel) }}>{data.ssiLabel}</div>
-                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>0–100 · 50 = flat</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.06em", color: ssiColor(view.ssiLabel) }}>{view.ssiLabel}</div>
+                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>0–100 · 50 = flat · vs {baseLabel.toLowerCase()}</div>
                 </div>
               </div>
               <div style={{ fontSize: 15 }}>
                 <span style={{ color: "rgba(255,255,255,0.55)" }}>Composite move </span>
-                <span style={{ color: signColor(data.compositePct), fontWeight: 800 }}>{fmtPct(data.compositePct)}</span>
+                <span style={{ color: signColor(view.compositePct), fontWeight: 800 }}>{fmtPct(view.compositePct)}</span>
               </div>
             </div>
 
             {/* Sub-reads */}
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Tile label="Breadth" value={`${data.breadthUp}/${data.breadthTotal}`} sub={data.breadthPct == null ? "green vs prior close" : `${data.breadthPct}% green`}
-                color={data.breadthPct == null ? undefined : data.breadthPct >= 50 ? UP : DOWN} />
-              <Tile label="RS vs SPX" value={fmtPct(data.rsSpx)} sub="SMH − SPY" color={signColor(data.rsSpx)} />
-              <Tile label="RS vs NQ" value={fmtPct(data.rsNq)} sub="SMH − QQQ" color={signColor(data.rsNq)} />
+              <Tile label="Breadth" value={`${view.breadthUp}/${view.breadthTotal}`} sub={view.breadthPct == null ? `green vs ${baseLabel.toLowerCase()}` : `${view.breadthPct}% green`}
+                color={view.breadthPct == null ? undefined : view.breadthPct >= 50 ? UP : DOWN} />
+              <Tile label="RS vs SPX" value={fmtPct(view.rsSpx)} sub="SMH − SPY" color={signColor(view.rsSpx)} />
+              <Tile label="RS vs NQ" value={fmtPct(view.rsNq)} sub="SMH − QQQ" color={signColor(view.rsNq)} />
               <Tile label="SOXL confirm"
-                value={data.soxlConfirm?.ratio == null ? "—" : `${(data.soxlConfirm.ratio * 100).toFixed(0)}%`}
-                sub={data.soxlConfirm ? `${data.soxlConfirm.status} · ${fmtPct(data.soxlPct)} vs ${fmtPct(data.soxlConfirm.expected)} exp` : "3× SMH"}
-                color={data.soxlConfirm?.status === "confirming" ? UP : data.soxlConfirm?.status === "lagging" ? DOWN : HOME_THEME.orange} />
+                value={view.soxlConfirm?.ratio == null ? "—" : `${(view.soxlConfirm.ratio * 100).toFixed(0)}%`}
+                sub={view.soxlConfirm ? `${view.soxlConfirm.status} · ${fmtPct(view.soxlPct)} vs ${fmtPct(view.soxlConfirm.expected)} exp` : "3× SMH"}
+                color={view.soxlConfirm?.status === "confirming" ? UP : view.soxlConfirm?.status === "lagging" ? DOWN : HOME_THEME.orange} />
             </div>
 
             <div style={{ marginTop: 12, fontSize: 12.5, color: "rgba(255,255,255,0.55)" }}>{divNote}</div>
@@ -167,8 +204,8 @@ export default function SemisTab() {
         )}
       </Card>
 
-      {data && (
-        <Card title="Top 10 Holdings — contribution to the move" variant="classic">
+      {view && (
+        <Card title={`Top 10 Holdings — contribution to the move (vs ${baseLabel})`} variant="classic">
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
               <thead>
@@ -176,12 +213,12 @@ export default function SemisTab() {
                   <th style={{ ...th, textAlign: "left" }}>Symbol</th>
                   <th style={th}>SMH Wt</th>
                   <th style={th}>Last</th>
-                  <th style={th}>% vs Prev</th>
+                  <th style={th}>% vs {effBasis === "rthOpen" ? "Open" : "Prev"}</th>
                   <th style={{ ...th, textAlign: "left", paddingLeft: 24 }}>Contribution</th>
                 </tr>
               </thead>
               <tbody>
-                {data.names.map((n) => {
+                {view.names.map((n) => {
                   const c = n.contribution ?? 0;
                   const w = Math.min(100, (Math.abs(c) / maxContrib) * 100);
                   return (
@@ -211,8 +248,9 @@ export default function SemisTab() {
             </table>
           </div>
           <div style={{ marginTop: 14, fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
-            Contribution = renormalised SMH weight × % move vs prior close — the points each name adds to (or subtracts from) the composite.
-            SSI squashes the composite through tanh (±1.5% ≈ 88/12). Breadth is equal-weight so a lone mega-cap can't fake a broad move.
+            Contribution = renormalised SMH weight × % move vs {baseLabel.toLowerCase()} — the points each name adds to (or subtracts from) the composite.
+            SSI squashes the composite through tanh (±1.5% ≈ 88/12). Breadth is equal-weight so a lone mega-cap can&apos;t fake a broad move.
+            RTH-open basis = today&apos;s 09:30 ET open (strips the overnight gap); prior-close basis includes it.
             Source: ThetaData stock snapshots via <span style={{ color: LIGHT_BLUE }}>/api/semi-strength</span>.
           </div>
         </Card>
