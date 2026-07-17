@@ -134,7 +134,7 @@ const SCAN_META: ScanMeta[] = [
     accent: HOME_THEME.cyan,
     scope: "SMH top 10 · live",
     what: "An SMH-weight-weighted composite of the top 10 semiconductor holdings' intraday move vs prior close, squashed to a 0–100 Semiconductor Strength Index, alongside equal-weight breadth, relative strength vs SPX and NQ, and a SOXL 3× confirmation check.",
-    tells: "How strong semis are right now, and whether the move is real — broad participation and sector leadership, or just NVDA carrying a thin tape. All ThetaData-sourced.",
+    tells: "How strong semis are right now, and whether the move is real — broad participation and sector leadership, or just NVDA carrying a thin tape. All Tastytrade-sourced, with a vs-RTH-open / vs-prior-close toggle.",
   },
 ];
 

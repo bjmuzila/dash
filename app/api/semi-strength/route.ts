@@ -8,8 +8,9 @@ export const revalidate = 0;
  * /api/semi-strength — Semiconductor Strength Index (SSI).
  *
  * A single 0–100 read on how strong semis are RIGHT NOW, sourced entirely from
- * ThetaData stock snapshots (via the in-process proxy — the same theta-first
- * equity feed the watchlist uses; NOT Robinhood/Yahoo).
+ * Tastytrade market-data (via the in-process proxy's /proxy/semi-quotes). No
+ * ThetaData, no Robinhood, no Yahoo — last / prev-close / today's RTH open all
+ * come from one TT batch.
  *
  * TWO baselines, because they answer different questions:
  *   • vs Prior Close — the full move including the overnight session.
@@ -40,8 +41,7 @@ const SEMIS: { sym: string; weight: number }[] = [
 // Benchmarks: SMH (semis ETF), SOXL (3× semis), SPY (S&P), QQQ (Nasdaq-100).
 const BENCH = ["SMH", "SOXL", "SPY", "QQQ"] as const;
 
-type QuoteItem = { symbol: string; last?: number; mark?: number; close?: number; prevClose?: number };
-type OhlcItem = { symbol: string; open?: number; high?: number; low?: number; close?: number };
+type QuoteItem = { symbol: string; last?: number; mark?: number; close?: number; prevClose?: number; open?: number; high?: number; low?: number };
 
 // tanh squash → 0–100. SCALE = the % composite move that maps to ~88/12.
 const SCALE = 1.5;
@@ -69,15 +69,10 @@ export async function GET() {
   const symbols = [...SEMIS.map((s) => s.sym), ...BENCH].join(",");
   const token = process.env.INTERNAL_API_TOKEN;
 
-  const [q, o] = await Promise.all([
-    getJson(`/proxy/quotes?symbols=${encodeURIComponent(symbols)}`, token),
-    getJson(`/proxy/stock-ohlc?symbols=${encodeURIComponent(symbols)}`, token),
-  ]);
+  const q = await getJson(`/proxy/semi-quotes?symbols=${encodeURIComponent(symbols)}`, token);
 
   const quotes: QuoteItem[] = q?.data?.items ?? [];
-  const ohlc: OhlcItem[] = o?.data?.items ?? [];
   const qBy = new Map(quotes.map((x) => [String(x.symbol).toUpperCase(), x]));
-  const oBy = new Map(ohlc.map((x) => [String(x.symbol).toUpperCase(), x]));
 
   const priceOf = (sym: string): number | null => {
     const x = qBy.get(sym);
@@ -93,7 +88,7 @@ export async function GET() {
     weight,
     price: priceOf(sym),
     prevClose: posOr(qBy.get(sym)?.prevClose),
-    open: posOr(oBy.get(sym)?.open),
+    open: posOr(qBy.get(sym)?.open),
   });
 
   const semiRows = SEMIS.map((s) => merge(s.sym, s.weight));

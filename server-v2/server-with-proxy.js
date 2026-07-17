@@ -36,7 +36,7 @@ const marketState = require('./state/market-state');
 const { getFlowGexHistoryWindow } = require('./state/flow-gex-history');
 const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = require('./state/ticker-wall-recorder');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
-const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory } = require('./proxy-tastytrade');
+const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
 const { fetchOptionDailyHistoryTheta, fetchOptionIntradayTheta } = require('./proxy-thetadata');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 const { getEsSpxBasis } = require('./es-spx-basis');
@@ -2308,19 +2308,24 @@ async function main() {
         }
         return;
       }
-      // Today's RTH OHLC per equity (theta stock snapshot) — the `open` field is
-      // the 09:30 ET print. Backs the Semi Strength index's "vs RTH open" basis.
-      // GET /proxy/stock-ohlc?symbols=NVDA,SMH,SPY → { items:[{symbol,open,high,low,close}] }
-      if (pathname === '/proxy/stock-ohlc' && req.method === 'GET') {
+      // Semi Strength quotes — Tastytrade ONLY (no ThetaData). last / prev-close /
+      // today's RTH open per equity, for the SSI's dual baseline (vs prior close +
+      // vs 09:30 open). GET /proxy/semi-quotes?symbols=NVDA,SMH,SPY
+      //   → { items:[{symbol,last,mark,close,prevClose,open,high,low}] }
+      if (pathname === '/proxy/semi-quotes' && req.method === 'GET') {
         const url = new URL(req.url || '/', 'http://localhost');
         const symbols = (url.searchParams.get('symbols') || '')
           .split(',').map((s) => s.trim()).filter(Boolean);
         try {
-          const { fetchStockDayOhlcTheta } = require('./proxy-thetadata');
-          const items = await Promise.all(symbols.map(async (sym) => {
-            try { return { symbol: sym, ...(await fetchStockDayOhlcTheta(sym)) }; }
-            catch { return { symbol: sym, open: 0, high: 0, low: 0, close: 0 }; }
-          }));
+          const map = await fetchUnderlyingDayOhlc(symbols);
+          const items = symbols.map((sym) => {
+            const q = map.get(String(sym).toUpperCase()) || {};
+            return {
+              symbol: sym,
+              last: q.last || 0, mark: q.mark || 0, close: q.close || 0,
+              prevClose: q.prevClose || 0, open: q.open || 0, high: q.high || 0, low: q.low || 0,
+            };
+          });
           sendJson(res, 200, { data: { items } });
         } catch (e) {
           sendJson(res, 502, { error: String(e?.message || e) });

@@ -138,7 +138,7 @@ export default function SemisTab() {
               Semiconductor Strength Index
             </div>
             <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", marginTop: 4 }}>
-              SMH-weighted composite of the top 10 holdings vs {baseLabel.toLowerCase()} · ThetaData
+              SMH-weighted composite of the top 10 holdings vs {baseLabel.toLowerCase()} · Tastytrade
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -251,7 +251,7 @@ export default function SemisTab() {
             Contribution = renormalised SMH weight × % move vs {baseLabel.toLowerCase()} — the points each name adds to (or subtracts from) the composite.
             SSI squashes the composite through tanh (±1.5% ≈ 88/12). Breadth is equal-weight so a lone mega-cap can&apos;t fake a broad move.
             RTH-open basis = today&apos;s 09:30 ET open (strips the overnight gap); prior-close basis includes it.
-            Source: ThetaData stock snapshots via <span style={{ color: LIGHT_BLUE }}>/api/semi-strength</span>.
+            Source: Tastytrade market-data via <span style={{ color: LIGHT_BLUE }}>/api/semi-strength</span>.
           </div>
         </Card>
       )}

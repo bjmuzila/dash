@@ -608,7 +608,162 @@ const _probeKeyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
  * @param {'C'|'P'} a.type
  * @param {number} a.strike
  */
+// ---------------------------------------------------------------------------
+// probeRestTT — TastyTrade-REST-primary probe (DATA_SOURCE=tt, Theta paused).
+// Mirror of probeRest's result shape, but the strike is resolved from the TT
+// chain and OI/greeks/vol/quote come from ONE /market-data/by-type row (TT
+// delivers delta/gamma/theta/vega/IV) with spot from the live feed (index) or
+// TT underlying. Greeks fall back to Black-Scholes for THIS side when TT's row
+// is missing/degenerate, exactly like the Theta path. probeRest() delegates
+// here when !useTheta(), so the Theta path is left untouched for theta mode.
+// ---------------------------------------------------------------------------
+async function probeRestTT({ ticker, expiry, type, strike }) {
+  const n = firstFiniteNumber;
+  const reqStrike = Number(strike);
+  const root = chainTicker(ticker);
+  const wantRoot = String(ticker || '').toUpperCase().replace(/^\./, '');
+
+  const ttChain = await getChainCached(ticker).catch(() => ({ expirations: [], contracts: [] }));
+  const cands = (ttChain.contracts || []).filter((c) => c.expiration === expiry && c.type === type);
+  // On monthly Fridays TT returns both SPX (AM) and SPXW (PM) under one query —
+  // prefer the root the user actually typed, else fall back to any match.
+  const pool = cands.some((c) => c.rootSymbol === wantRoot)
+    ? cands.filter((c) => c.rootSymbol === wantRoot)
+    : cands;
+  let best = null, bestDist = Infinity;
+  for (const c of pool) {
+    const d = Math.abs(Number(c.strike) - reqStrike);
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  if (!best) {
+    const expiryExists = (ttChain.expirations || []).includes(expiry);
+    return {
+      found: false,
+      status: expiryExists ? 'no-strike' : 'no-expiry',
+      source: 'tt',
+      chainTicker: root,
+      requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
+      resolvedStrike: null,
+      availableExpirations: (ttChain.expirations || []).slice(0, 12),
+    };
+  }
+
+  const occSymbol = best.occSymbol || null;
+  const streamerSymbol = best.streamerSymbol || (root + '_' + expiry + '_' + type + best.strike);
+  const meta = {
+    resolvedSymbol: streamerSymbol,
+    occSymbol,
+    snapped: Number.isFinite(reqStrike) && best.strike !== reqStrike,
+    requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
+    resolvedStrike: best.strike,
+    source: 'tt',
+  };
+
+  const [ttItem, spot] = await Promise.all([
+    occSymbol
+      ? ttGet('/market-data/by-type?equity-option[]=' + encodeURIComponent(occSymbol))
+          .then((j) => (j && j.data && j.data.items && j.data.items[0]) || null)
+          .catch(() => null)
+      : Promise.resolve(null),
+    (async () => {
+      // Prefer the live feed's published spot for the index root (RTH broker
+      // spot, or ES+basis off-hours — same value the rest of the dashboard
+      // shows); otherwise the per-ticker TT underlying mark/last.
+      const live = Number(marketState.getState().spotDisplay) || 0;
+      if (INDEX_ROOTS.has(root) && live > 0) return live;
+      try { return (await fetchUnderlyingSpot(ticker)) || live || 0; } catch { return live || 0; }
+    })(),
+  ]);
+
+  const it = ttItem || {};
+  const bid = n(it.bid), ask = n(it.ask);
+  const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : (n(it.mark) || null);
+  const mark = n(it.mark) || mid;
+  const oi = n(it['open-interest']) || null;
+  const vol = Number.isFinite(n(it.volume)) ? n(it.volume) : null;
+
+  // TT greeks are delivered on the by-type row. Guard the degenerate all-zero
+  // row (thin/0DTE ITM legs) the same way the Theta path guards g.*.
+  const gIv = n(it['implied-volatility']) || n(it.volatility);
+  const gDelta = n(it.delta), gGamma = n(it.gamma), gTheta = n(it.theta), gVega = n(it.vega);
+  const ttGreeksValid = gIv > 0 && !(gGamma === 0 && gTheta === 0 && gVega === 0);
+
+  const T = yearsToExpiry(best.expiration);
+  const intrinsic = type === 'C' ? Math.max(spot - best.strike, 0) : Math.max(best.strike - spot, 0);
+  const markForBs = [n(it.mark), mid].find((v) => v > intrinsic) ?? null;
+  const ivForBs = ttGreeksValid
+    ? gIv
+    : (markForBs ? impliedVol({ price: markForBs, S: spot, K: best.strike, T, r: RISK_FREE, type }) : NaN);
+  const bsRaw = (spot > 0 && T > 0 && ivForBs > 0)
+    ? bsGreeks({ S: spot, K: best.strike, T, sigma: ivForBs, r: RISK_FREE, type })
+    : null;
+  // Same unit normalization as the Theta path: theta per-year -> per-day (/365),
+  // vega per 1.00 vol -> per 1% vol (/100).
+  const bs = bsRaw ? { ...bsRaw, theta: bsRaw.theta / 365, vega: bsRaw.vega / 100 } : null;
+
+  const feeds = {
+    Quote: { bid, ask, mid, mark, bidSize: 0, askSize: 0, _src: 'TT NBBO' },
+    Trade: { last: n(it.last), volume: vol, _volumeSrc: 'TT', _src: 'TT last / vol' },
+    Summary: {
+      openInterest: oi,
+      prevClose: n(it['prev-close']),
+      prevCloseDate: it['prev-close-date'] ?? null,
+      _src: 'TT OI / prevClose',
+    },
+    Greeks: {
+      iv: ttGreeksValid ? gIv : (ivForBs > 0 ? ivForBs : null),
+      delta: ttGreeksValid ? gDelta : (bs?.delta ?? null),
+      gamma: ttGreeksValid ? gGamma : (bs?.gamma ?? null),
+      theta: ttGreeksValid ? gTheta : (bs?.theta ?? null),
+      vega: ttGreeksValid ? gVega : (bs?.vega ?? null),
+      _src: ttGreeksValid ? 'TT' : 'Black-Scholes (calculated, this side)',
+      bsIv: ivForBs > 0 ? ivForBs : null,
+      bsDelta: bs?.delta ?? null,
+      bsGamma: bs?.gamma ?? null,
+      bsTheta: bs?.theta ?? null,
+      bsVega: bs?.vega ?? null,
+    },
+  };
+
+  const isCall = type === 'C';
+  const sign = isCall ? 1 : -1;
+  const eGamma = ttGreeksValid ? gGamma : (bs?.gamma ?? 0);
+  const eDelta = ttGreeksValid ? gDelta : (bs?.delta ?? 0);
+  const eVega = ttGreeksValid ? gVega : (bs?.vega ?? 0);
+  const eTheta = ttGreeksValid ? gTheta : (bs?.theta ?? 0);
+  const exposures = (spot > 0 && oi != null)
+    ? {
+        spot,
+        oi,
+        volume: vol,
+        gex: sign * Math.abs(eGamma || 0) * oi * spot * spot,
+        gexVol: sign * Math.abs(eGamma || 0) * (vol || 0) * spot * spot,
+        dex: sign * Math.abs(eDelta || 0) * oi * 100 * spot,
+        vex: sign * (eVega || 0) * oi * 100 * spot,
+        thetaExp: sign * (eTheta || 0) * oi * 100 * spot,
+        vannaExp: bs ? sign * (bs.vanna / 100) * oi * 100 * spot : null,
+        charmExp: bs ? sign * (bs.charm / 365) * oi * 100 * spot : null,
+      }
+    : { spot, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
+
+  // No Theta to cross-check against in TT mode — report TT OI, theta side null.
+  const oiCompare = { ok: true, match: false, theta: null, tt: oi, _src: 'TT only (Theta paused)' };
+
+  const result = {
+    eventType: 'THETA', // shape tag kept for client compatibility; meta.source='tt' marks origin
+    eventSymbol: streamerSymbol,
+    occSymbol,
+    feeds,
+    exposures,
+    oiCompare,
+  };
+  return { ...meta, found: true, status: 'ready', source: 'tt', result };
+}
+
 async function probeRest({ ticker, expiry, type, strike }) {
+  // DATA_SOURCE=tt: Theta paused -> resolve + price the probe entirely from
+  // TastyTrade REST. The Theta path below is unchanged and used when useTheta().
+  if (!useTheta()) return probeRestTT({ ticker, expiry, type, strike });
   const reqStrike = Number(strike);
   const root = chainTicker(ticker); // SPX, NDX, etc.
 
@@ -1095,6 +1250,54 @@ async function fetchUnderlyingQuotes(symbols) {
     }
   }
 
+  return out;
+}
+
+/**
+ * Tastytrade-only batch OHLC for equities/ETFs — last, mark, close, prev-close
+ * AND today's regular-session OPEN, all from TT /market-data/by-type. NO
+ * ThetaData. Backs the Semi Strength index's "vs RTH open" basis. Keyed by the
+ * uppercased symbol.
+ *
+ *   it.last / it.mark        → live price (updates pre/post market)
+ *   it.close                 → today's regular (4pm) close
+ *   it['prev-close']         → prior trading day's close
+ *   it.open / open-price     → today's 09:30 ET open (field name varies by gateway)
+ *
+ * @param {string[]} symbols e.g. ["NVDA","SMH","SPY"]
+ * @returns {Promise<Map<string,{last:number,mark:number,close:number,prevClose:number,open:number,high:number,low:number}>>}
+ */
+async function fetchUnderlyingDayOhlc(symbols) {
+  const n = firstFiniteNumber;
+  const out = new Map();
+  const list = [...new Set((symbols || []).map((s) => String(s || '').trim().toUpperCase()).filter(Boolean))];
+  if (!list.length) return out;
+  const CHUNK = 90; // stay under TT's by-type URL/param cap
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const batch = list.slice(i, i + CHUNK);
+    const qs = batch.map((v) => `equity[]=${encodeURIComponent(v)}`).join('&');
+    try {
+      const json = await ttGet(`/market-data/by-type?${qs}`);
+      const items = json?.data?.items || [];
+      for (const it of items) {
+        const sym = String(it.symbol || '').toUpperCase();
+        if (!sym) continue;
+        out.set(sym, {
+          last: n(it.last),
+          mark: n(it.mark),
+          close: n(it.close),
+          prevClose: n(it['prev-close']),
+          // TT/dxFeed field name for the session open varies by gateway version —
+          // accept the common aliases; 0 when the gateway omits it (caller gates on it).
+          open: n(it.open) || n(it['open-price']) || n(it['day-open-price']) || n(it['open-price-regular']),
+          high: n(it.high) || n(it['day-high-price']),
+          low: n(it.low) || n(it['day-low-price']),
+        });
+      }
+    } catch (err) {
+      console.warn('[SEMI-OHLC] batch failed:', String(err.message).slice(0, 160));
+    }
+  }
   return out;
 }
 
@@ -3712,4 +3915,4 @@ class TastytradeProxy {
   }
 }
 
-module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchDailyHistory, probeRest, contractStats, getAccessToken, getQuoteToken, DxLinkClient, resolveFrontEsSymbol, resolveFrontNqSymbol };
+module.exports = { TastytradeProxy, fetchChain, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory, probeRest, contractStats, getAccessToken, getQuoteToken, DxLinkClient, resolveFrontEsSymbol, resolveFrontNqSymbol };
