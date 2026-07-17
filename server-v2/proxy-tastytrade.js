@@ -2260,7 +2260,9 @@ class TastytradeProxy {
       // Multi-ticker flow (FLOW_TICKERS): stream extra roots' near-spot option
       // trades into the SAME this.flow tape so the /flow page's non-SPX chips
       // populate. Flow-only — does NOT touch GEX/greeks (single-SYMBOL engine).
-      if (!this.multiFlow) {
+      // SPX-only lock: do NOT start MultiFlowManager unless FLOW_TICKERS_ENABLE=1.
+      // (Even if it starts, FlowProcessor.addPrint now drops non-SPX prints.)
+      if (process.env.FLOW_TICKERS_ENABLE === '1' && !this.multiFlow) {
         this.multiFlow = new MultiFlowManager({ thetaStream: this.thetaStream });
         this.multiFlow.start().catch((e) =>
           console.warn('[MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));

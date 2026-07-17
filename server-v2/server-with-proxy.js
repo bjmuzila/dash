@@ -747,7 +747,8 @@ const FLOW_HISTORY_TTL_MS = 4000;
 async function handleFlowHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const date = searchParams.get('date') || todayYmdET();
-  const underlying = searchParams.get('underlying') || searchParams.get('symbol') || '';
+  // SPX-only lock: ignore any ?underlying/?symbol and always filter to SPX roots.
+  const underlying = 'SPX';
   let limit = Number(searchParams.get('limit') || 5000);
   if (!Number.isFinite(limit) || limit <= 0) limit = 5000;
   limit = Math.min(limit, 20000);
@@ -901,7 +902,9 @@ function buildFlowPrintsWhere(f, sinceMs = null) {
 
 function parseFlowFilters(searchParams) {
   const date = searchParams.get('date') || todayYmdET();
-  const underlying = (searchParams.get('underlying') || searchParams.get('symbol') || '').toUpperCase();
+  // SPX-only lock: force underlying=SPX and disable the "All − Indices" scope so
+  // flow-netprem / flow-premsplit can only ever return SPX.
+  const underlying = 'SPX';
   let minPremium = Number(searchParams.get('minPremium') || 0);
   if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
   let minSize = Number(searchParams.get('minSize') || 0);
@@ -912,7 +915,7 @@ function parseFlowFilters(searchParams) {
   return {
     date,
     underlying,
-    exIdx: searchParams.get('exIdx') === '1',
+    exIdx: false,
     side: (searchParams.get('side') || 'all').toLowerCase(),
     type: (searchParams.get('type') || 'all').toUpperCase(),
     minPremium,
@@ -1066,7 +1069,7 @@ async function handleFlowPremSplit(req, res) {
 // FIRST viewer of the day hits the incremental cache instead of paying the
 // full-session GROUP BY. Runs during RTH only; each tick is an incremental
 // refresh after the first. Disable with NETPREM_PREWARM=0.
-const NETPREM_PREWARM_TICKERS = (process.env.NETPREM_PREWARM_TICKERS || 'SPX,SPY,QQQ')
+const NETPREM_PREWARM_TICKERS = (process.env.NETPREM_PREWARM_TICKERS || 'SPX')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 if (process.env.NETPREM_PREWARM !== '0' && NETPREM_PREWARM_TICKERS.length) {
   const prewarmTick = async () => {

@@ -45,7 +45,7 @@ type ProbeResult = {
 
 // Combine call + put exposures into one NET row. The server already signs puts
 // negative (gex/dex/vex/thetaExp), so call + put = net. spot is shared.
-const NET_KEYS = ["gex", "gexVol", "dex", "vex", "thetaExp", "vannaExp", "charmExp", "oi", "volume"] as const;
+const NET_KEYS = ["gex", "gexVol", "gexOiVol", "dex", "vex", "thetaExp", "vannaExp", "charmExp", "oi", "volume"] as const;
 function combineExposures(call?: Record<string, unknown>, put?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!call && !put) return undefined;
   const out: Record<string, unknown> = {};
@@ -58,6 +58,14 @@ function combineExposures(call?: Record<string, unknown>, put?: Record<string, u
   }
   out.spot = (typeof call?.spot === "number" ? call.spot : null) ?? (typeof put?.spot === "number" ? put.spot : null);
   return out;
+}
+
+// OI+Vol GEX = OI-basis gex + vol-basis gexVol (server signs puts negative on both).
+function addOiVol(ex?: Record<string, unknown>) {
+  if (!ex) return;
+  const g = typeof ex.gex === "number" ? ex.gex : null;
+  const gv = typeof ex.gexVol === "number" ? ex.gexVol : null;
+  ex.gexOiVol = g == null && gv == null ? null : (g ?? 0) + (gv ?? 0);
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -90,7 +98,7 @@ function fmtExp(v: unknown): string {
 }
 
 const EXPOSURE_ROWS: { key: string; label: string }[] = [
-  { key: "gex", label: "GEX (γ·OI·S²)" },
+  { key: "gexOiVol", label: "GEX (γ·(OI+Vol)·S²)" },
   { key: "dex", label: "DEX (δ·OI·100·S)" },
   { key: "vex", label: "VEX (vega·OI·100·S)" },
   { key: "thetaExp", label: "Theta exp" },
@@ -138,7 +146,7 @@ function RowLabel({ text, color }: { text: string; color: string }) {
 
 // Row 3: net (call + put) exposures. Same rows as ExposurePanel, plus net OI/vol.
 const NET_ROWS: { key: string; label: string }[] = [
-  { key: "gex", label: "Net GEX (γ·OI·S²)" },
+  { key: "gexOiVol", label: "Net GEX (γ·(OI+Vol)·S²)" },
   { key: "dex", label: "Net DEX (δ·OI·100·S)" },
   { key: "vex", label: "Net VEX (vega·OI·100·S)" },
   { key: "thetaExp", label: "Net Theta exp" },
@@ -528,8 +536,8 @@ export default function DevPage() {
       if (sym) setSentSymbol(sym);
 
       const cOk = callRes.d?.found, pOk = putRes.d?.found;
-      if (cOk) setCallResult(callRes.d.result);
-      if (pOk) setPutResult(putRes.d.result);
+      if (cOk) { addOiVol(callRes.d.result?.exposures); setCallResult(callRes.d.result); }
+      if (pOk) { addOiVol(putRes.d.result?.exposures); setPutResult(putRes.d.result); }
 
       // Log each side.
       for (const [name, res] of [["CALL", callRes], ["PUT", putRes]] as const) {

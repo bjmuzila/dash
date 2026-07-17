@@ -83,10 +83,12 @@ class FlowProcessor {
    * @param {number} [opts.tapeCap] hard cap on the per-order tape (default 200)
    */
   constructor({
-    windowMs = 5 * 60 * 1000,
+    // SPX-only 1-minute flow: rolling aggregation window is 1 min (env-overridable)
+    // so bucket() vols/netPremium/buyPct reflect the last 60s and prints[] can't
+    // balloon into a 5-minute backlog.
+    windowMs = Number(process.env.FLOW_WINDOW_MS || 60 * 1000),
     maxPrints = 50000,
-    // Shared across all streamed underlyings (SPX + FLOW_TICKERS), so the cap is
-    // larger than the old SPX-only 500 and overridable via FLOW_TAPE_CAP.
+    // SPX-only now, so the cap no longer has to cover a multi-root roster.
     tapeCap = Number(process.env.FLOW_TAPE_CAP || 1500),
     // Server-side noise floor ($). Lowered/overridable via FLOW_TAPE_FLOOR so
     // equity-option blocks (much smaller premium than SPX index blocks) survive
@@ -127,6 +129,9 @@ class FlowProcessor {
   addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0 }) {
     const parsed = parseOptionSymbol(streamerSymbol);
     if (!parsed || !(price > 0) || !(size > 0)) return;
+    // SPX-only lock: drop any non-SPX print at the source so the tape, prints[],
+    // and the flow_prints writer can only ever hold SPX (root SPX/SPXW → 'SPX').
+    if (displayUnderlying(parsed.root) !== 'SPX') return;
     const lastTrade = this.lastTradePx.get(streamerSymbol);
     const side = inferSide(price, quote, lastTrade, time);
     this.lastTradePx.set(streamerSymbol, price);

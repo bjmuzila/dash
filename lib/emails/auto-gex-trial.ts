@@ -1,7 +1,8 @@
 // Top-of-funnel feature-pitch email: auto-plotted GEX levels (call wall, put
-// wall, flip, GEX-by-strike) on the live chart — "you don't have to think
-// about it" — with a big 2-day free trial CTA. Built from a screenshot of the
-// live SPX GEX chart (ES 5m candles + levels + GEX-by-strike rail).
+// wall, flip) on the live chart — "you don't have to think about it" — with
+// a big 2-day free trial CTA. Embeds a REAL screenshot of the live SPX GEX
+// chart (public/717.png — ES 5m candles + Call Wall/Put Wall/Flip/CB levels),
+// not a stylized recreation.
 //
 // IMPORTANT — before sending: the "2 days free" claim only holds if
 // trial_period_days is actually set on the live Stripe Price(s). Checkout
@@ -21,6 +22,7 @@ import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
 const PRICING_URL = `${SITE_URL}/pricing`;
+const CHART_SHOT_URL = `${SITE_URL}/717.png`;
 
 export interface AutoGexTrialOpts {
   /** Override the CTA URL (defaults to /pricing). */
@@ -37,16 +39,6 @@ function escapeHtml(s: string): string {
   );
 }
 
-// Decorative GEX-by-strike rail — illustrative, not live data.
-const GEX_BARS: Array<{ label: string; width: number; color: string; tag?: string }> = [
-  { label: "7,540", width: 150, color: "#38BDF8", tag: "CALL WALL" },
-  { label: "7,535", width: 60, color: "#38BDF8" },
-  { label: "7,530", width: 46, color: "#38BDF8" },
-  { label: "7,510", width: 96, color: "#EF4444" },
-  { label: "7,500", width: 128, color: "#EF4444", tag: "PUT WALL" },
-  { label: "7,485", width: 52, color: "#EF4444" },
-];
-
 /** Plain-text fallback. */
 export function autoGexTrialText(opts: AutoGexTrialOpts = {}): string {
   const cta = opts.ctaUrl || PRICING_URL;
@@ -55,7 +47,7 @@ export function autoGexTrialText(opts: AutoGexTrialOpts = {}): string {
     "",
     "Call wall, put wall, gamma flip, and GEX by strike — plotted live, automatically. No indicators to configure, no levels to draw by hand. You don't have to think about it, just trade the lines.",
     "",
-    "CALL WALL 7,537.74  ·  FLIP 7,497.74  ·  PUT WALL 7,500.00",
+    "CALL WALL 7,539.31  ·  FLIP 7,499.31  ·  PUT WALL 7,499.00",
     "",
     "• Call wall, put wall & flip plotted live on every chart, no setup",
     "• GEX by strike, recalculated every candle",
@@ -79,15 +71,6 @@ export function autoGexTrialText(opts: AutoGexTrialOpts = {}): string {
 export function autoGexTrialEmail(opts: AutoGexTrialOpts = {}): string {
   const cta = escapeHtml(opts.ctaUrl || PRICING_URL);
   const unsubHref = opts.email ? escapeHtml(unsubscribeUrl(opts.email)) : UNSUB_URL_PLACEHOLDER;
-
-  const barRow = (bar: (typeof GEX_BARS)[number]) => `
-                <tr>
-                  <td width="52" style="padding:3px 10px 3px 0;text-align:right;font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">${bar.label}</td>
-                  <td style="padding:3px 0;">
-                    <div style="width:${bar.width}px;max-width:100%;height:13px;border-radius:3px;background:${bar.color};opacity:0.85;"></div>
-                  </td>
-                  <td style="padding:3px 0 3px 10px;font:800 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.06em;color:${bar.color};white-space:nowrap;">${bar.tag || ""}</td>
-                </tr>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -125,25 +108,13 @@ export function autoGexTrialEmail(opts: AutoGexTrialOpts = {}): string {
             </td>
           </tr>
 
-          <!-- mini chart mock: levels ribbon -->
+          <!-- real product screenshot -->
           <tr>
             <td style="padding:24px 28px 0 28px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:14px;background:#05060A;overflow:hidden;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:14px;background:#000000;overflow:hidden;">
                 <tr>
-                  <td style="padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.08);">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-                      <td style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.08em;color:#38BDF8;">CALL WALL&nbsp; 7,537.74</td>
-                      <td align="center" style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.08em;color:#9fb3c8;">FLIP&nbsp; 7,497.74</td>
-                      <td align="right" style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.08em;color:#EF4444;">PUT WALL&nbsp; 7,500.00</td>
-                    </tr></table>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:14px 18px 16px 18px;">
-                    <div style="font:700 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#6b7d8f;margin-bottom:8px;">GEX by strike — live</div>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                      ${GEX_BARS.map(barRow).join("")}
-                    </table>
+                  <td style="padding:0;line-height:0;font-size:0;">
+                    <img src="${CHART_SHOT_URL}" alt="CB Edge SPX GEX chart — Call Wall, Put Wall and Flip plotted live on ES 5m candles" width="544" style="display:block;width:100%;max-width:544px;height:auto;border:0;">
                   </td>
                 </tr>
               </table>
