@@ -41,7 +41,8 @@ const COL_LABELS: Record<NetCol, string> = {
   gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", vex: "NET VEX",
 };
 
-const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
+// Leading 34px track = the all-expirations net-GEX bar sitting left of STRIKE.
+const GRID_COLS = "34px 64px 1fr 1fr 1fr 1fr";
 
 // Stable empty map for SPY/QQQ (no dealer-flow tracking) so passing it as a
 // prop doesn't create a new reference every render.
@@ -427,7 +428,7 @@ function computeRowsAll(
 
 function TickerPanel({
   ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  changeMode, changeMap, flowGexMap, aggMode = false, precomputed = null, precomputedTotals = null,
+  changeMode, changeMap, flowGexMap, allGex = null,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -437,11 +438,9 @@ function TickerPanel({
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
-  /** ALL-expirations mode: render the parent-supplied aggregate result/totals
-   *  instead of computing a single expiry from `strikes`. */
-  aggMode?: boolean;
-  precomputed?: ComputedResult | null;
-  precomputedTotals?: Record<NetCol, number> | null;
+  /** All-expirations net GEX per strike (+ scale max) for the left-side bar.
+   *  Null until the aggregate has loaded. */
+  allGex?: { map: Map<number, number>; max: number } | null;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
@@ -455,9 +454,9 @@ function TickerPanel({
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
-  const computedFull = aggMode
-    ? precomputed
-    : (strikes.length ? computeRows(strikes, liveData, spot, contractMode, flowGexMap) : null);
+  const computedFull = strikes.length
+    ? computeRows(strikes, liveData, spot, contractMode, flowGexMap)
+    : null;
 
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
   // capture shows a focused window (ATM in the middle) rather than every strike.
@@ -485,11 +484,9 @@ function TickerPanel({
       })()
     : null;
 
-  const totals = aggMode
-    ? precomputedTotals
-    : (strikes.length && spot > 0
-        ? computeTotals(strikes, liveData, spot, contractMode, flowGexMap)
-        : null);
+  const totals = strikes.length && spot > 0
+    ? computeTotals(strikes, liveData, spot, contractMode, flowGexMap)
+    : null;
 
   // When a Δ mode is active, the NET GEX column swaps to strike_growth's
   // ΔGEX values. Scale/ranking (for heat coloring + the ★ top-3 badge) is
@@ -572,6 +569,7 @@ function TickerPanel({
 
       {/* Column headers */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <div title="Net GEX summed across ALL expirations" style={{ padding: "5px 2px", textAlign: "center", color: HT.muted, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden" }}>ΣEXP</div>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
         {NET_COLS.map(c => {
           const isChangeCol = c === "gex" && isChangeActive;
@@ -586,6 +584,7 @@ function TickerPanel({
 
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <div style={{ borderRight: "1px solid rgba(255,255,255,.06)" }} />
         <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
           const isChangeCol = c === "gex" && isChangeActive;
@@ -642,9 +641,34 @@ function TickerPanel({
                 <img
                   src={emBadgeDataUri(is1x ? "EM" : "2× EM")}
                   alt={is1x ? "EM" : "2× EM"}
-                  style={{ position: "absolute", top: 2, left: 3, zIndex: 3, display: "block", pointerEvents: "none" }}
+                  style={{ position: "absolute", top: 2, left: 37, zIndex: 3, display: "block", pointerEvents: "none" }}
                 />
               )}
+              {/* All-expirations net-GEX bar — grows from the strike edge (right)
+                  leftward, cyan for positive net GEX, red for negative. */}
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "flex-end",
+                padding: "0 2px", borderRight: "1px solid rgba(255,255,255,.06)", overflow: "hidden",
+              }}>
+                {(() => {
+                  const g = allGex?.map.get(r.strike);
+                  if (g == null || !allGex || !isFinite(g) || g === 0) return null;
+                  const ratio = Math.min(Math.abs(g) / allGex.max, 1);
+                  const pos = g >= 0;
+                  const f = fmtMoney(g);
+                  return (
+                    <div
+                      title={`All-exp net GEX: ${f.sign}${f.value}`}
+                      style={{
+                        height: 11,
+                        width: `${Math.max(ratio * 100, 4).toFixed(1)}%`,
+                        background: pos ? "rgba(41,182,246,0.85)" : "rgba(255,71,87,0.85)",
+                        borderRadius: 2,
+                      }}
+                    />
+                  );
+                })()}
+              </div>
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
@@ -753,12 +777,9 @@ export function MultGreekClient({
   // Per-ticker state
   const [strikes, setStrikes]   = useState<Record<Ticker, StrikeRow[]>>({ SPX: [], SPY: [], QQQ: [] });
   const [spots, setSpots]       = useState<Record<Ticker, number>>({ SPX: 0, SPY: 0, QQQ: 0 });
-  // ALL-expirations aggregate: when on, every greek is summed across every
-  // expiration per strike (loaded via loadAllExp, one range=all pull per ticker).
-  const [allExp, setAllExp]     = useState(false);
+  // All-expirations aggregate per strike (loaded alongside the single-expiry
+  // chain in loadAll) — feeds the left-side all-exp GEX bar.
   const [allStrikes, setAllStrikes] = useState<Record<Ticker, StrikeAgg[]>>({ SPX: [], SPY: [], QQQ: [] });
-  const allExpRef = useRef(false);
-  useEffect(() => { allExpRef.current = allExp; }, [allExp]);
   // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
   const [emByTicker, setEmByTicker] = useState<Record<Ticker, { close: number; em: number } | null>>({ SPX: null, SPY: null, QQQ: null });
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
@@ -908,9 +929,12 @@ export function MultGreekClient({
     setStatus({ state: "loading", msg: "LOADING..." });
 
     const bust = bustCache ? `&noCache=1` : "";
+    // No `expiration` param: pull the full chain (every expiration) in one shot
+    // per ticker. We filter to `expDate` for the live columns AND aggregate the
+    // whole thing for the all-expirations GEX bar (buildStrikesAll below).
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
-        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(expDate)}&range=all${bust}`)
+        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&range=all${bust}`)
           .then(async r => {
             const json = await r.json();
             return { ticker, json, ok: r.ok, status: r.status };
@@ -921,6 +945,7 @@ export function MultGreekClient({
     if (token !== loadTokenRef.current) return;
 
     const newStrikes: Partial<Record<Ticker, StrikeRow[]>> = {};
+    const newAll: Partial<Record<Ticker, StrikeAgg[]>> = {};
     const newSpots: Partial<Record<Ticker, number>> = {};
     const allSymbols = new Set<string>();
     let successCount = 0;
@@ -945,6 +970,10 @@ export function MultGreekClient({
         if (row.putSym) allSymbols.add(row.putSym);
       });
       if (parsed.length) { newStrikes[ticker] = parsed; successCount++; }
+      // All-expirations aggregate (for the left-side GEX bar). Same feed, so no
+      // extra request — parse the untargeted items across every expiration.
+      const parsedAll = buildStrikesAll(items, liveDataRef.current);
+      if (parsedAll.length) newAll[ticker] = parsedAll;
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
@@ -953,6 +982,7 @@ export function MultGreekClient({
     setActiveExpiry(expDate);
     if (successCount > 0) {
       setStrikes(prev => ({ ...prev, ...newStrikes }));
+      setAllStrikes(prev => ({ ...prev, ...newAll }));
       setSpots(prev => {
         const merged = { ...prev };
         (Object.keys(newSpots) as Ticker[]).forEach(tk => {
@@ -973,92 +1003,14 @@ export function MultGreekClient({
     }
   }, [isStatic]);
 
-  // Load EVERY expiration's chain per ticker (range=all, no expiration filter)
-  // and aggregate later at render via computeRowsAll. Mirrors loadAll's fetch/
-  // merge/status flow but stores into allStrikes.
-  const loadAllExp = useCallback(async (bustCache = false) => {
-    if (isStatic) return;
-    loadTokenRef.current += 1;
-    const token = loadTokenRef.current;
-    setStatus({ state: "loading", msg: "LOADING ALL..." });
-
-    const bust = bustCache ? `&noCache=1` : "";
-    const results = await Promise.allSettled(
-      TICKERS.map(ticker =>
-        fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&range=all${bust}`)
-          .then(async r => ({ ticker, json: await r.json(), ok: r.ok, status: r.status }))
-      )
-    );
-
-    if (token !== loadTokenRef.current) return;
-
-    const newAll: Partial<Record<Ticker, StrikeAgg[]>> = {};
-    const newSpots: Partial<Record<Ticker, number>> = {};
-    let successCount = 0;
-    const errStatuses: number[] = [];
-
-    for (const result of results) {
-      if (result.status !== "fulfilled") continue;
-      const { ticker, json, ok, status } = result.value as { ticker: Ticker; json: Record<string, unknown>; ok: boolean; status: number };
-      if (!ok || json.error) {
-        errStatuses.push(status);
-        console.error(`[MultGreek] ${ticker} all-exp chains failed: HTTP ${status}`, json);
-        continue;
-      }
-      const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
-      if (!items.length) continue;
-      const parsed = buildStrikesAll(items, liveDataRef.current);
-      if (parsed.length) { newAll[ticker] = parsed; successCount++; }
-      const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
-      if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
-    }
-
-    activeExpiryRef.current = "ALL";
-    setActiveExpiry("ALL");
-    if (successCount > 0) {
-      setAllStrikes(prev => ({ ...prev, ...newAll }));
-      setSpots(prev => {
-        const merged = { ...prev };
-        (Object.keys(newSpots) as Ticker[]).forEach(tk => {
-          const v = newSpots[tk as Ticker];
-          if (v && v > 0) merged[tk as Ticker] = v;
-        });
-        return merged;
-      });
-    }
-
-    if (successCount === 0) {
-      const code = errStatuses[0] ?? "?";
-      setStatus({ state: "err", msg: `PROXY ERR ${code}` });
-    } else if (successCount < TICKERS.length) {
-      setStatus({ state: "live", msg: `ALL · PARTIAL (${successCount}/${TICKERS.length})` });
-    } else {
-      setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "ALL · LIVE" : "ALL · CLOSED" });
-    }
-  }, [isStatic]);
-
-  // Toggle the ALL-expirations aggregate on/off, loading the matching data.
-  const toggleAllExp = useCallback(() => {
-    if (isStatic) return;
-    setAllExp(prev => {
-      const next = !prev;
-      allExpRef.current = next;
-      if (next) loadAllExp();
-      else if (selectedExpiry) loadAll(selectedExpiry);
-      return next;
-    });
-  }, [isStatic, selectedExpiry, loadAll, loadAllExp]);
-
   const doGo = useCallback(() => {
-    if (isStatic) return;
-    if (allExpRef.current) { loadAllExp(); return; }
-    if (!selectedExpiry) return;
+    if (isStatic || !selectedExpiry) return;
     loadAll(selectedExpiry);
-  }, [isStatic, selectedExpiry, loadAll, loadAllExp]);
+  }, [isStatic, selectedExpiry, loadAll]);
 
   // Auto-load when expirations are ready
   useEffect(() => {
-    if (isStatic || allExpRef.current) return;
+    if (isStatic) return;
     if (selectedExpiry && strikes.SPX.length === 0 && strikes.SPY.length === 0 && strikes.QQQ.length === 0) {
       loadAll(selectedExpiry);
     }
@@ -1084,12 +1036,11 @@ export function MultGreekClient({
 
   const doRefresh = useCallback(async () => {
     if (isStatic) return;
-    if (allExpRef.current) { await loadAllExp(true); return; }
     const exp = activeExpiryRef.current;
     if (!exp) throw new Error("No expiry selected");
     await loadAll(exp, true);
     setChangeTick(t => t + 1); // also refetch the Δ map, if a change mode is active
-  }, [isStatic, loadAll, loadAllExp]);
+  }, [isStatic, loadAll]);
 
   // Auto-refresh: TT REST per-strike volume accumulates through the session and
   // resets stale at the open, so the one-shot load lands volume=0 for SPY/QQQ
@@ -1099,12 +1050,10 @@ export function MultGreekClient({
     if (isStatic) return;
     const id = setInterval(() => {
       const exp = activeExpiryRef.current;
-      if (!exp || !isMarketOpen()) return;
-      if (allExpRef.current) loadAllExp(true);
-      else loadAll(exp, true);
+      if (exp && isMarketOpen()) loadAll(exp, true);
     }, 15000);
     return () => clearInterval(id);
-  }, [isStatic, loadAll, loadAllExp]);
+  }, [isStatic, loadAll]);
 
   // ── Static (delayed) mode: seed from the frozen snapshot, then poll for the
   // recorder's next ~30m tick instead of the live /api/chains loop. ──
@@ -1181,21 +1130,18 @@ export function MultGreekClient({
   // height only during capture.
   const isCapturing = captureWindow != null;
 
-  // ALL-expirations aggregate, recomputed each render so the contract-basis /
-  // intensity toggles apply live. Null until loadAllExp populates allStrikes.
-  const aggByTicker = { SPX: null, SPY: null, QQQ: null } as Record<Ticker, ComputedResult | null>;
-  const aggTotalsByTicker = { SPX: null, SPY: null, QQQ: null } as Record<Ticker, Record<NetCol, number> | null>;
-  if (allExp) {
-    TICKERS.forEach(tk => {
-      const sa = allStrikes[tk];
-      if (!sa || !sa.length || !(spots[tk] > 0)) return;
-      const res = computeRowsAll(sa, liveDataRef.current, spots[tk], contractMode, tk === "SPX" ? flowGexMap : EMPTY_FLOW_MAP);
-      aggByTicker[tk] = res;
-      const tot = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
-      res.rows.forEach(r => NET_COLS.forEach(c => { tot[c] += r[c]; }));
-      aggTotalsByTicker[tk] = tot;
-    });
-  }
+  // All-expirations net GEX per strike, recomputed each render so the contract-
+  // basis toggle applies live. Feeds the left-side bar next to each strike.
+  const allGexByTicker = { SPX: null, SPY: null, QQQ: null } as Record<Ticker, { map: Map<number, number>; max: number } | null>;
+  TICKERS.forEach(tk => {
+    const sa = allStrikes[tk];
+    if (!sa || !sa.length || !(spots[tk] > 0)) return;
+    const res = computeRowsAll(sa, liveDataRef.current, spots[tk], contractMode, tk === "SPX" ? flowGexMap : EMPTY_FLOW_MAP);
+    const map = new Map<number, number>();
+    let max = 0;
+    res.rows.forEach(r => { map.set(r.strike, r.gex); if (Math.abs(r.gex) > max) max = Math.abs(r.gex); });
+    allGexByTicker[tk] = { map, max: max || 1 };
+  });
 
   return (
     // display:block (not flex) during capture: a flex column's auto height
@@ -1265,28 +1211,14 @@ export function MultGreekClient({
         {/* Expiry picker — static mode only ever has the one captured expiry */}
         <DockExpiryPicker
           expirations={expirations.map((e) => e.date)}
-          value={allExp ? "" : selectedExpiry}
-          onChange={isStatic ? () => {} : (v) => { setAllExp(false); allExpRef.current = false; setSelectedExpiry(v); }}
+          value={selectedExpiry}
+          onChange={isStatic ? () => {} : setSelectedExpiry}
           includeFront
           frontLabel="— Expiry —"
         />
 
-        {/* ALL-expirations aggregate toggle */}
-        <DockButton
-          onClick={toggleAllExp}
-          title="Aggregate every greek across ALL expirations"
-          style={{
-            opacity: isStatic ? 0.45 : 1,
-            color: allExp ? "#04121a" : HT.cyan,
-            background: allExp ? HT.cyan : undefined,
-            fontWeight: 800,
-          }}
-        >
-          ALL EXP
-        </DockButton>
-
         {/* GO button */}
-        <DockButton onClick={doGo} title="Load expiry" style={{ opacity: (!isStatic && (selectedExpiry || allExp)) ? 1 : 0.45, color: HT.cyan }}>GO</DockButton>
+        <DockButton onClick={doGo} title="Load expiry" style={{ opacity: (!isStatic && selectedExpiry) ? 1 : 0.45, color: HT.cyan }}>GO</DockButton>
 
         <DockGap />
 
@@ -1357,9 +1289,7 @@ export function MultGreekClient({
             changeMode={changeMode}
             changeMap={changeMaps[ticker]}
             flowGexMap={ticker === "SPX" ? flowGexMap : EMPTY_FLOW_MAP}
-            aggMode={allExp}
-            precomputed={aggByTicker[ticker]}
-            precomputedTotals={aggTotalsByTicker[ticker]}
+            allGex={allGexByTicker[ticker]}
           />
         ))}
       </div>

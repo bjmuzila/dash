@@ -2652,6 +2652,23 @@ class TastytradeProxy {
     if (display > 0) marketState.setAux({ spotDisplay: Math.round(display * 100) / 100 });
   }
 
+  /**
+   * Effective spot for GEX MATH (walls/flip/CB/max-pain/moneyness), not just
+   * display. Previously _recompute() priced everything off this.spot even
+   * off-hours, where this.spot is the last RTH broker print — frozen, same
+   * bug _publishSpotDisplay() already works around for the display number.
+   * On a day where the real level has actually moved (e.g. overnight/
+   * pre-market), that froze every wall/flip/CB at the wrong center. Reuse
+   * the identical RTH-vs-ES-basis logic here so the chart's math and its
+   * displayed spot always agree.
+   */
+  _effectiveSpot() {
+    const esFut = Number(marketState.getState().esFut) || 0;
+    if (isRthEt() && this.spot > 0) return this.spot;
+    if (esFut > 0 && this.cashBasis != null) return esFut + this.cashBasis;
+    return this.spot; // last resort: stale broker quote (no ES/basis yet)
+  }
+
   _flushEsCandles() {
     if (!this.esCandlesDirty) return;
     this.esCandlesDirty = false;
@@ -3049,7 +3066,12 @@ class TastytradeProxy {
     // Idle is a hard kill-switch: even if a reconnect/session-roll re-armed the
     // timer, do no work (and broadcast nothing) while paused.
     if (this.idle) return;
-    if (!(this.spot > 0)) return;
+    if (!(this.spot > 0)) return; // bootstrap gate: need at least one real broker print
+    // All GEX math below prices off `spot`, NOT this.spot directly — see
+    // _effectiveSpot(): during RTH they're the same value, off-hours this is
+    // the ES-future + cash-basis reconstruction (this.spot alone freezes at
+    // the last RTH print and silently mis-centers every wall/flip/CB).
+    const spot = this._effectiveSpot();
 
     // Auto-roll expiry: advance when the active expiry has passed, OR when
     // today's 0DTE has expired (after 4:15pm ET the 0DTE has no live OI/greeks
@@ -3091,7 +3113,7 @@ class TastytradeProxy {
         if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) _oiHits++;
         if (this.greeks.get(c.streamerSymbol)) _gkHits++;
       }
-      console.log(`[GEX_DEBUG] _recompute: spot=${this.spot} expiry=${this.expiry} active=${_dbgActive.length} oiHits=${_oiHits} gkHits=${_gkHits} contractsMap=${this.contracts.size}`);
+      console.log(`[GEX_DEBUG] _recompute: spot=${spot} expiry=${this.expiry} active=${_dbgActive.length} oiHits=${_oiHits} gkHits=${_gkHits} contractsMap=${this.contracts.size}`);
     }
 
     for (const c of _dbgActive) {
@@ -3118,10 +3140,10 @@ class TastytradeProxy {
       // Prefer the broker's IV (stable); only solve from price if none was sent.
       let iv = gk?.iv > 0 ? gk.iv : 0;
       if (!(iv > 0) && mid > 0) {
-        iv = impliedVol({ price: mid, S: this.spot, K: c.strike, T, r: RISK_FREE, type: c.type });
+        iv = impliedVol({ price: mid, S: spot, K: c.strike, T, r: RISK_FREE, type: c.type });
       }
       if (iv > 0) {
-        const dist = Math.abs(c.strike - this.spot);
+        const dist = Math.abs(c.strike - spot);
         if (dist < atmDist) {
           atmDist = dist;
           atmIV = iv;
@@ -3176,7 +3198,7 @@ class TastytradeProxy {
       // Fed with the RAW broker IV when available, so it's stable.
       let bs = { gamma: 0, delta: 0, theta: 0, vega: 0, vanna: 0, charm: 0 };
       if (iv > 0) {
-        bs = bsGreeks({ S: this.spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
+        bs = bsGreeks({ S: spot, K: c.strike, T, sigma: iv, r: RISK_FREE, type: c.type });
       }
 
       // Prefer raw broker greeks for delta/gamma/vega; only when a leg's OWN
@@ -3229,13 +3251,13 @@ class TastytradeProxy {
         contracts: r.oi,
         volContracts: (r.oi || 0) + (r.volume || 0),
         volOnly: r.volume || 0,
-        spot: this.spot,
+        spot,
       });
     }
 
     // Get dealer inventory for flow GEX calculation
     const flowInventory = this.flowGexAccumulator.getInventory(this.expiry);
-    const { rows: gexRows, callWall, putWall, gexFlip, totalNetGex, totalFlowGex } = computeGexSummary(rows, this.spot, flowInventory);
+    const { rows: gexRows, callWall, putWall, gexFlip, totalNetGex, totalFlowGex } = computeGexSummary(rows, spot, flowInventory);
 
     // Greeks coverage: fraction of in-window legs that carried a REAL streamed
     // broker gamma this pass. Legs without one fall back to BS/ATM-IV gamma,
@@ -3296,7 +3318,7 @@ class TastytradeProxy {
 
     marketState.setGexUpdate({
       gexRows,
-      spot: this.spot,
+      spot,
       expiry: this.expiry,
       totals,
       callWall,
@@ -3311,7 +3333,7 @@ class TastytradeProxy {
     // Persist per-strike net GEX history (rate-limited, fire-and-forget).
     // Feeds the dashboard's rolling-net-GEX view via
     // /api/snapshots/option-strike-gex-history. No-ops without DATABASE_URL.
-    writeGexSnapshot(gexRows, this.spot, this.expiry).catch(() => {});
+    writeGexSnapshot(gexRows, spot, this.expiry).catch(() => {});
   }
 
   /**
