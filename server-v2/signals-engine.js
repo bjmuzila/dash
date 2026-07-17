@@ -392,6 +392,16 @@ function evaluateFrame(cur, mem, cfg = {}) {
   const cbEs   = toEs(cur.cbSpx);
   const ctx    = cur.ctx || {};
 
+  // ── 1-minute bar close tracker (tick-fed) ──────────────────────────────────
+  // The engine has no 1m candle feed (ES_1M_CANDLES stays 0 — 1m bars leak into
+  // the 5m map), so synthesize one from the tick stream: a 1m bar "closes" the
+  // instant the ET minute advances, and the last tick seen in the prior minute
+  // IS that bar's close. Minute boundaries align in any whole-minute tz, so the
+  // UTC floor buckets to true ET minutes. IB breaks confirm on this close.
+  const min1Key = Math.floor(ts / 60_000);
+  if (mem.min1 && mem.min1.key !== min1Key) mem.last1mClose = mem.min1.last;
+  mem.min1 = { key: min1Key, last: priceEs };
+
   // Named level map (ES) for confluence stacking.
   const namedLevels = [];
   const push = (name, es) => { if (es != null && es > 0) namedLevels.push({ name, es }); };
@@ -484,23 +494,31 @@ function evaluateFrame(cur, mem, cfg = {}) {
   // only spaced the duplicates out, it didn't stop them. Once a side breaks, that
   // side is latched until price returns INSIDE the range, so one extension = one
   // signal. mem.ibBroke resets daily with the IB itself.
+  //
+  // CONFIRM ON A 1-MINUTE CLOSE, NOT A TICK. The old check fired the instant the
+  // live tick crossed IBH+IB_BREAK, so a wick that pierced the extreme and
+  // reversed still printed a break (the reject-and-fade that defines a sell day).
+  // Now the trigger is the last CLOSED 1-min bar (mem.last1mClose): a wick that
+  // closes the minute back inside the range never fires. One sustained extension
+  // = one signal; the latch re-arms only when a 1-min bar closes back inside.
   const ibRth = ibMins >= 570 && ibMins < 960;   // 09:30–16:00 ET
-  if (ctx.ibComplete && ibRth && ctx.ibh != null && ctx.ibl != null && prev) {
+  const c1 = mem.last1mClose;                     // last completed 1-min bar close
+  if (ctx.ibComplete && ibRth && ctx.ibh != null && ctx.ibl != null && c1 != null) {
     const brk = C.IB_BREAK;
     // Reset the latch on a new session, so yesterday's break can't mute today's.
     if (mem.ibBrokeDay !== ibDay) { mem.ibBrokeDay = ibDay; mem.ibBroke = { up: false, down: false }; }
     if (!mem.ibBroke) mem.ibBroke = { up: false, down: false };
-    // Back inside the range → re-arm both sides.
-    if (priceEs < ctx.ibh + brk && priceEs > ctx.ibl - brk) mem.ibBroke = { up: false, down: false };
+    // A 1-min bar CLOSED back inside the range → re-arm both sides.
+    if (c1 < ctx.ibh + brk && c1 > ctx.ibl - brk) mem.ibBroke = { up: false, down: false };
 
-    if (!mem.ibBroke.up && prev.priceEs < ctx.ibh + brk && priceEs >= ctx.ibh + brk) {
+    if (!mem.ibBroke.up && c1 >= ctx.ibh + brk) {
       mem.ibBroke.up = true;
       fire({ kind: 'ib_break', direction: 'long', setup: 'IB break ↑', levelName: 'IBH', levelEs: ctx.ibh, base: 3,
-        reason: `Extended above the Initial Balance high (${ctx.ibh.toFixed(2)}) → upside extension` });
-    } else if (!mem.ibBroke.down && prev.priceEs > ctx.ibl - brk && priceEs <= ctx.ibl - brk) {
+        reason: `1-min close above the Initial Balance high (${ctx.ibh.toFixed(2)}) → upside extension` });
+    } else if (!mem.ibBroke.down && c1 <= ctx.ibl - brk) {
       mem.ibBroke.down = true;
       fire({ kind: 'ib_break', direction: 'short', setup: 'IB break ↓', levelName: 'IBL', levelEs: ctx.ibl, base: 3,
-        reason: `Extended below the Initial Balance low (${ctx.ibl.toFixed(2)}) → downside extension` });
+        reason: `1-min close below the Initial Balance low (${ctx.ibl.toFixed(2)}) → downside extension` });
     }
   }
 
@@ -1046,6 +1064,8 @@ const mem = {
   ibFormedDay: null,        // ET date the ib_formed signal already fired for
   ibBroke: { up: false, down: false }, // IB break latch — cleared when price re-enters the range
   ibBrokeDay: null,         // ET date the latch above belongs to
+  min1: null,               // in-progress 1-min bar { key, last } (tick-fed)
+  last1mClose: null,        // close of the last COMPLETED 1-min bar — IB breaks confirm on this
   whaleSeen: new Set(),     // print identities already alerted (capped)
   whaleContractAt: new Map(), // contract key -> last whale alert ms (dupe collapse)
 };

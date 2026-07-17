@@ -202,6 +202,9 @@ function LiveToday({ sym, win, ds, days, hist }: {
   const nq = useNqCandles(sym === "NQ", 2);
   const candles = sym === "ES" ? es.candles : nq.candles;
   const connected = sym === "ES" ? es.connected : nq.connected;
+  // `candles` is today-only, so prior-session RTH (rule 11 open type) isn't in it.
+  // The hook already loads ~2 prior sessions from the local DB — read that here.
+  const historical = sym === "ES" ? es.historical : nq.historical;
 
   const live = useMemo(() => {
     if (!candles?.length) return null;
@@ -219,8 +222,23 @@ function LiveToday({ sym, win, ds, days, hist }: {
     const today = all[all.length - 1].day;
     const bars = all.filter((b) => b.day === today);
     const priorBars = all.filter((b) => b.day < today);
-    const pdh = priorBars.length ? Math.max(...priorBars.map((b) => b.h)) : null;
-    const pdl = priorBars.length ? Math.min(...priorBars.map((b) => b.l)) : null;
+
+    // Prior-session RTH range for rule 11 (open type). `candles`/`priorBars` is
+    // today-only on the live feed, so fall back to the DB `historical` array the
+    // hook already loaded: take the most recent RTH session strictly before today.
+    let pdh = priorBars.length ? Math.max(...priorBars.map((b) => b.h)) : null;
+    let pdl = priorBars.length ? Math.min(...priorBars.map((b) => b.l)) : null;
+    if (pdh == null || pdl == null) {
+      const histRth = (historical ?? [])
+        .map((c) => ({ day: etDate(c.timestamp), min: etMin(c.timestamp), h: c.high, l: c.low }))
+        .filter((b) => b.min >= 570 && b.min <= 960 && b.day < today);
+      if (histRth.length) {
+        const priorDay = histRth.reduce((m, b) => (b.day > m ? b.day : m), histRth[0].day);
+        const pr = histRth.filter((b) => b.day === priorDay);
+        pdh = Math.max(...pr.map((b) => b.h));
+        pdl = Math.min(...pr.map((b) => b.l));
+      }
+    }
 
     const ibBars = bars.filter((b) => b.min >= 570 && b.min < REND);
     const post = bars.filter((b) => b.min >= REND);
@@ -360,7 +378,7 @@ function LiveToday({ sym, win, ds, days, hist }: {
       brokeH, brokeL, touchH, touchL, openType, fvg, volSurge, failed, retest, retestCont,
       containedAt2, extHit1, pdh, pdl, dayOpen,
     };
-  }, [candles, hist, sym, win, REND]);
+  }, [candles, historical, hist, sym, win, REND]);
 
   const dowName = DOW_NAMES[new Date().getDay()];
   const dowRow = hist.dowStats.find((d) => d.name === dowName);
@@ -395,6 +413,8 @@ function LiveToday({ sym, win, ds, days, hist }: {
         <LiveGauges live={live} days={days} dowName={dowName} win={win} />
         <IbLevelCanvas />
       </div>
+
+      <RuleClusterBoard live={live} days={days} dowName={dowName} win={win} />
 
       <RuleBoard live={live} days={days} dowName={dowName} win={win} />
 
@@ -970,6 +990,131 @@ function buildRules(live: any, dowName: string, win: Win): LiveRule[] {
   }
 
   return R;
+}
+
+/* ── C-style consolidated view: 14 rules → 4 families, with last-5 outcomes ──── */
+type ScoredRule = LiveRule & { n: number; p: number | null; last5: boolean[] };
+
+function scoreWithHistory(rules: LiveRule[], days: SlimDay[]): ScoredRule[] {
+  return rules.map((r) => {
+    if (!r.cond || !r.outcome) return { ...r, n: 0, p: null, last5: [] };
+    const g = days.filter(r.cond).slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const hits = g.filter(r.outcome).length;
+    const last5 = g.slice(-5).map((d) => r.outcome!(d)); // oldest → newest
+    return { ...r, n: g.length, p: g.length ? (100 * hits) / g.length : null, last5 };
+  });
+}
+
+/** oldest→newest hit/miss dots for a rule's last 5 in-play sessions */
+function Last5Dots({ arr }: { arr: boolean[] }) {
+  if (!arr.length) return <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.4 }}>no history</span>;
+  return (
+    <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
+      {arr.map((w, i) => (
+        <span key={i} title={w ? "hit" : "miss"} style={{
+          width: 9, height: 9, borderRadius: "50%",
+          background: w ? HOME_THEME.green : HOME_THEME.red, opacity: w ? 1 : 0.55,
+        }} />
+      ))}
+    </span>
+  );
+}
+
+function RuleClusterBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; dowName: string; win: Win }) {
+  const L = winLabel(win);
+  const provisional = !live.ibComplete;
+  const scored = scoreWithHistory(buildRules(live, dowName, win), days);
+  const byId = (id: string) => scored.find((r) => r.id === id);
+
+  const FAMILIES: { key: string; title: string; sub: string; ids: string[]; correlated?: boolean; hero?: boolean }[] = [
+    { key: "struct",   title: "Morning Structure Bias",   sub: "close vs mid · formation order · FVG · close location", ids: ["1", "2", "7", "10"], correlated: true },
+    { key: "confirm",  title: "Break Confirmation",       sub: "what price actually did after the break",              ids: ["3", "5", "6", "8", "9"] },
+    { key: "timing",   title: "Timing, Width & Day Type", sub: "whether one side runs, and how far",                   ids: ["4", "11", "13", "14", "0c"] },
+    { key: "conflict", title: "Conflict Watch",           sub: "faster structure vs the morning lean",                 ids: ["12"], hero: true },
+  ];
+
+  const familyStat = (ids: string[]) => {
+    const members = ids.map(byId).filter(Boolean) as ScoredRule[];
+    const dir = members.filter((r) => r.side && r.p != null);
+    const sumH = dir.filter((r) => r.side === "H").reduce((s, r) => s + (r.p || 0), 0);
+    const sumL = dir.filter((r) => r.side === "L").reduce((s, r) => s + (r.p || 0), 0);
+    const netSide: "H" | "L" | null = dir.length ? (sumH >= sumL ? "H" : "L") : null;
+    const onSide = dir.filter((r) => r.side === netSide);
+    const avg = onSide.length ? onSide.reduce((s, r) => s + (r.p || 0), 0) / onSide.length : null;
+    return { members, netSide, avg };
+  };
+
+  const recent = days.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).slice(-5);
+
+  return (
+    <Card
+      accent="cyan"
+      title={`IB Read — 4 families, one glance`}
+      subtitle={provisional
+        ? `${L} STILL FORMING — conditional. Correlated rules grouped so one bias can't read as four votes; each pill shows its hit rate + last-5 outcomes.`
+        : `The 14 rules grouped so correlated priors stop overcounting. Each pill shows its hit rate and last-5 outcomes; the strip up top is the recent tape.`}
+    >
+      {/* overall last-5 sessions — realized tape */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18, alignItems: "center" }}>
+        <span style={{ fontSize: 13, color: LIGHT_BLUE, fontWeight: 800, letterSpacing: "0.04em" }}>LAST 5 SESSIONS</span>
+        {recent.map((d) => {
+          const up = d.firstTouchSide === "H";
+          const col = d.firstTouchSide == null ? HOME_THEME.orange : up ? HOME_THEME.green : HOME_THEME.red;
+          const brk = d.neitherBroke ? "contained" : d.bothBroke ? "both broke" : d.singleBreak ? "single break" : "—";
+          return (
+            <span key={d.date} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2, border: `1px solid ${col}`, borderRadius: 8, padding: "5px 9px", minWidth: 74 }}>
+              <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>{d.date.slice(5)}</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: col }}>{d.firstTouchSide == null ? "—" : up ? "HIGH ↑" : "LOW ↓"}</span>
+              <span style={{ fontSize: 10.5, color: HOME_THEME.text, opacity: 0.6 }}>{brk}</span>
+            </span>
+          );
+        })}
+      </div>
+
+      {/* family clusters */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+        {FAMILIES.map((fam) => {
+          const { members, netSide, avg } = familyStat(fam.ids);
+          const verdCol = netSide == null ? HOME_THEME.orange : netSide === "H" ? HOME_THEME.green : HOME_THEME.red;
+          const verd = netSide == null ? "CONTEXT" : netSide === "H" ? "HIGH ↑" : "LOW ↓";
+          return (
+            <div key={fam.key} style={{
+              border: `1px solid ${fam.hero ? HOME_THEME.orange : HOME_THEME.border}`,
+              background: fam.hero ? "rgba(251,133,1,0.08)" : HOME_THEME.panelBg,
+              borderRadius: 14, padding: 15, position: "relative",
+            }}>
+              {(fam.correlated || fam.hero) && (
+                <span style={{ position: "absolute", top: 12, right: 12, fontSize: 9.5, letterSpacing: "0.5px", textTransform: "uppercase", color: HOME_THEME.orange, border: `1px solid ${HOME_THEME.orange}`, borderRadius: 5, padding: "2px 6px" }}>
+                  {fam.hero ? "early tell" : "correlated · 1 idea"}
+                </span>
+              )}
+              <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text }}>{fam.title}</div>
+              <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.6, marginBottom: 10 }}>{fam.sub}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
+                <span style={{ fontSize: 22, fontWeight: 800, color: verdCol }}>{verd}</span>
+                {avg != null && <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>avg conviction <b style={{ color: verdCol }}>{avg.toFixed(1)}%</b></span>}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {members.map((r) => (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, border: `1px solid ${HOME_THEME.border}`, borderRadius: 9, padding: "6px 9px", background: HOME_THEME.panelBg }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.id} · {r.name}</div>
+                      <div style={{ marginTop: 4 }}><Last5Dots arr={r.last5} /></div>
+                    </div>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: rateColor(r.p), fontVariantNumeric: "tabular-nums", flex: "none" }}>{r.p == null ? "—" : `${r.p.toFixed(1)}%`}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={note}>
+        Families collapse correlated rules so one bullish idea (close above mid · low-first · bullish structure) can&rsquo;t read as four separate votes. <b>Green dots = the rule was right on that past session, red = wrong</b> (oldest → newest, its last 5 in-play sessions). The <b>Conflict Watch</b> card is the early tell: when the faster ORB structure disagrees with the morning lean, the lean is the stale one.
+      </div>
+    </Card>
+  );
 }
 
 function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; dowName: string; win: Win }) {

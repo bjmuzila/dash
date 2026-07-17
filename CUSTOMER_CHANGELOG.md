@@ -2,6 +2,12 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 7/16/2026
+
+* Fixed the Call Wall, Put Wall and Flip lines on the ES candle chart jittering a point or two every time price updated, which also made the whole chart nudge sideways. The levels now hold still and only move when they've genuinely moved.
+* Fixed the home page GEX heatmap flickering — it used to add or drop a strike every time price ticked, shuffling the rows under your cursor. The strike list now holds still and only shifts once price has actually moved 5 strikes.
+* Every value in the home page GEX heatmap now reads in plain millions with no decimals (like +$412M), so the columns line up and stop twitching as numbers update.
+
 ## Wednesday 7/15/2026
 
 * The ES candle chart is now a tab right on the main GEX chart on the home page — click **ES Candles** to swap the gamma bars for the live 5-minute chart, and click **GEX** to swap back. It's the full chart with its own toolbar, and it opens with the gamma bubbles already turned on.
