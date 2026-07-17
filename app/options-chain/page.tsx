@@ -239,6 +239,8 @@ type GreekCell = {
   dex: number;
   chex: number;
   vex: number;
+  /** Pure volume-only GEX (volume-weighted gamma), independent of dataMode. */
+  volGex: number;
 };
 
 // One expiration's column: its date + a strike→greek map.
@@ -492,6 +494,14 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
       const pc = cnt(p);
       const live = cc > 0 || pc > 0;
 
+      // Volume-only GEX — always computed from raw call/put volume regardless of
+      // dataMode, so the OI+Vol view can flag the biggest pure-volume gamma peak.
+      const cVol = c ? (parseInt(String(c.volume ?? 0), 10) || 0) : 0;
+      const pVol = p ? (parseInt(String(p.volume ?? 0), 10) || 0) : 0;
+      const volGexValue = (cVol > 0 || pVol > 0)
+        ? (num(c, "gamma") * cVol - num(p, "gamma") * pVol) * S * S * 0.01 * 100
+        : 0;
+
       let gexValue = 0;
       if (dataMode === "flow") {
         gexValue = flowGexMap.get(strike) ?? 0;
@@ -504,6 +514,7 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
         dex:  live ? (Math.abs(num(c, "delta")) * cc - Math.abs(num(p, "delta")) * pc) * S * 100 : 0,
         chex: live ? (-num(c, "theta") * cc + num(p, "theta") * pc) * S * 100 : 0,
         vex:  live ? (num(c, "vega") * cc - num(p, "vega") * pc) * S * 100 : 0,
+        volGex: volGexValue,
       });
     });
   });
@@ -1139,20 +1150,23 @@ export default function OptionsChainPage({
     });
   }, [columns, visibleStrikes, valueAt]);
 
-  // Normalized GEX (%) per column = |strike net GEX| / Σ|net GEX| × 100,
-  // summed over the WHOLE expiration's chain (not just the visible strike
-  // window) so the % reflects true share of that expiration's total gamma.
-  const colGexTotalAbs = useMemo(() => {
+  // Per-column volume-GEX peak: the visible strike with the highest |volGex|.
+  // Flagged with ❌ on the OI+Vol view so the pure-volume gamma peak shows up
+  // next to the ★ OI+Vol MVC.
+  const volMvcByCol = useMemo(() => {
     return columns.map(col => {
-      if (!col) return 0;
-      let total = 0;
-      col.cells.forEach((_cell, strike) => {
-        const v = valueAt(col, strike);
-        if (v != null) total += Math.abs(v);
+      let best: number | null = null;
+      let bestAbs = 0;
+      visibleStrikes.forEach(s => {
+        if (s == null) return;
+        const g = col.cells.get(s)?.volGex;
+        if (g == null) return;
+        const a = Math.abs(g);
+        if (a > bestAbs) { bestAbs = a; best = s; }
       });
-      return total;
+      return best;
     });
-  }, [columns, valueAt]);
+  }, [columns, visibleStrikes]);
 
   // MVC per column = the visible strike with the highest ABSOLUTE net GEX.
   // Always keyed on GEX (the MVC definition), independent of the active greek.
@@ -1589,12 +1603,8 @@ export default function OptionsChainPage({
                       ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
                       : scale;
                     const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
-                    const gexTotalAbs = colGexTotalAbs[colIdx] ?? 0;
-                    // Signed share of the column's total |greek| — negative net greek → negative %.
-                    const normalizedGexPct =
-                      !isChangeCol && value != null && gexTotalAbs > 0
-                        ? (value / gexTotalAbs) * 100
-                        : null;
+                    // ❌ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
+                    const isVolMvc = !isChangeCol && greekMode === "gex" && dataMode === "oi-vol" && col != null && volMvcByCol[colIdx] === strike;
                     const pin = pinByCol[colIdx];
                     const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
                     const isFirst = posInRow === 0;
@@ -1632,6 +1642,7 @@ export default function OptionsChainPage({
                         }}
                       >
                         {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
+                        {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
                         {isPin && (
                           <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", verticalAlign: "middle" }}>
                             <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
@@ -1640,13 +1651,7 @@ export default function OptionsChainPage({
                             </svg>
                           </span>
                         )}
-                        {normalizedGexPct != null ? (
-                          <span style={{ fontSize: 12, fontWeight: 400, color: "rgba(255,255,255,0.78)" }}>
-                            {normalizedGexPct < 0 ? "-" : ""}{Math.abs(normalizedGexPct).toFixed(1)}%
-                          </span>
-                        ) : (
-                          <span>{value == null ? "·" : fmtMoney(value)}</span>
-                        )}
+                        <span>{value == null ? "·" : fmtMoney(value)}</span>
                       </div>
                     );
                   })}

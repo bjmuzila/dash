@@ -57,6 +57,8 @@ type GexMetric = "voloi" | "vol";
 // draw can group GEX columns into sessions for the per-session basis.
 const ET_DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
 const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
+const ET_HHMM_FMT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
+const fmtEtHM = (ts: number) => ET_HHMM_FMT.format(new Date(ts));
 
 // ES trades at a POSITIVE carry to SPX (cost of carry − dividends). It is never
 // negative and never a few hundred points. Anything outside this band is a data
@@ -403,6 +405,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const bubbleScaleRef = useRef(1);
   const bubbleVarRef = useRef(1);
   const bubbleMinsRef = useRef(5);
+  // Replay cursor, mirrored for the imperative overlay draw (null = live).
+  const replayOnRef = useRef(false);
+  const replayTsRef = useRef<number | null>(null);
   // NOTE: the effect that syncs this ref lives next to the bubbleScale useState
   // below — NOT here. A `[bubbleScale]` dep array is evaluated during render, and
   // the state is declared further down, so putting it here threw a TDZ
@@ -548,7 +553,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
   const [showGexBubbles, setShowGexBubbles] = useState(true);
-  // 0.3 is the sweet spot, so the slider is centered on it (0.1–0.5).
+  // 0.3 was the old sweet spot; slider now runs 0.1–1.0 for far bigger orbs.
   const [bubbleScale, setBubbleScale] = useState(0.3); // manual radius multiplier (sizing is taste)
   // Contrast/variance exponent on the size ramp: r ∝ ratio^var.
   //   0.5 = sqrt  → area ∝ |GEX|, but it LIFTS the low end (a strike at 1% of the
@@ -562,16 +567,52 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
   // 5m spaces them one per candle, which is why it's the default.
   const [bubbleMins, setBubbleMins] = useState<1 | 5>(5);
+  // ── Replay mode ──────────────────────────────────────────────────────────
+  // Scrub / playback of the CURRENT ET session. Candles + the two time-series
+  // gamma overlays (heatmap + bubbles) reveal only up to a moving cursor, so you
+  // can watch price and gamma build from the open forward. The rail / TPO /
+  // level lines stay live — a snapshot or a full-day profile, nothing to replay.
+  const [replayOn, setReplayOn] = useState(false);
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(2); // bars per second
+  // Frames = this session's bar timestamps (latest ET day in `rows`), oldest→newest.
+  const replayFrames = useMemo(() => {
+    if (!rows.length) return [] as number[];
+    const lastDay = rows[rows.length - 1].date;
+    return rows.filter((r) => r.date === lastDay).map((r) => r.timestamp);
+  }, [rows]);
+  const replayTs = replayOn && replayFrames.length
+    ? replayFrames[Math.min(replayIdx, replayFrames.length - 1)]
+    : null;
+  useEffect(() => { replayOnRef.current = replayOn; }, [replayOn]);
+  useEffect(() => { replayTsRef.current = replayTs; }, [replayTs]);
+  // Keep the cursor in range as live bars extend the session.
+  useEffect(() => {
+    if (replayIdx > replayFrames.length - 1) setReplayIdx(Math.max(0, replayFrames.length - 1));
+  }, [replayFrames.length, replayIdx]);
+  // Play loop: advance one bar per tick, stop at the last frame.
+  useEffect(() => {
+    if (!replayOn || !replayPlaying || replayFrames.length === 0) return;
+    const ms = Math.max(60, Math.round(1000 / Math.max(1, replaySpeed)));
+    const id = setInterval(() => {
+      setReplayIdx((i) => {
+        if (i >= replayFrames.length - 1) { setReplayPlaying(false); return i; }
+        return i + 1;
+      });
+    }, ms);
+    return () => clearInterval(id);
+  }, [replayOn, replayPlaying, replaySpeed, replayFrames.length]);
   // Restore the last bubble-size the user landed on. Read in an effect rather
   // than a lazy useState initializer so SSR and the first client render agree
   // (a localStorage read during render hydrates a different tree than the server
-  // sent). Validated against the slider's own 0.1–0.5 range — a stale or
+  // sent). Validated against the slider's own 0.1–1.0 range — a stale or
   // hand-edited key must never push the knob somewhere the slider can't undo.
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(BUBBLE_SCALE_KEY);
       const n = raw === null ? NaN : Number(raw);
-      if (Number.isFinite(n) && n >= 0.1 && n <= 0.5) setBubbleScale(n);
+      if (Number.isFinite(n) && n >= 0.1 && n <= 1.0) setBubbleScale(n);
     } catch { /* private mode / storage disabled — keep the default */ }
   }, []);
   // Persist on change. Wrapping the setter (rather than an effect on the value)
@@ -1246,7 +1287,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const chart = chartApiRef.current;
     if (!candleSeries || !chart) return;
 
-    const candleData: CandlestickData[] = rows.map((row) => {
+    // Replay: reveal only bars at/before the cursor (null = live, full history).
+    const srcRows = replayTs != null ? rows.filter((r) => r.timestamp <= replayTs) : rows;
+    const candleData: CandlestickData[] = srcRows.map((row) => {
       const base: CandlestickData = {
         time: toChartTime(row.timestamp),
         open: row.open,
@@ -1279,7 +1322,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // by distance from it.
     if (candleData.length) {
       let lo = Infinity, hi = -Infinity;
-      for (const r of rows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
+      for (const r of srcRows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
       candleBandRef.current = Number.isFinite(lo) ? { lo, hi } : null;
     } else {
       candleBandRef.current = null;
@@ -1301,7 +1344,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     drawOverlayRef.current();
     drawLanesRef.current();
     railDrawRef.current();
-  }, [rows, showVsa, vsaMap]);
+  }, [rows, showVsa, vsaMap, replayTs]);
 
   // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
   // right gutter. Recomputed on data, basis, and pan/zoom (range subscribe).
@@ -1309,8 +1352,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   useEffect(() => {
     updateLiveSpxRef.current = () => {
       const series = candleSeriesRef.current;
-      if (!series || !rows.length) { setLiveSpx(null); return; }
-      const lastEs = rows[rows.length - 1].close;
+      // Follow the replay cursor when active so the badge isn't a lookahead.
+      const src = replayTsRef.current != null ? rows.filter((r) => r.timestamp <= replayTsRef.current!) : rows;
+      if (!series || !src.length) { setLiveSpx(null); return; }
+      const lastEs = src[src.length - 1].close;
       const y = series.priceToCoordinate(lastEs);
       if (y == null) { setLiveSpx(null); return; }
       setLiveSpx({ y, spx: lastEs - effectiveBasis() });
@@ -1848,7 +1893,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       // Rendered to an offscreen buffer, then composited back through a blur so
       // adjacent strike/time cells melt into smooth bands instead of hard tiles.
       if (showHeatmap) {
-        const cols = [...columnsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs);
+        const cols = [...columnsRef.current.values()]
+          .filter((c) => replayTsRef.current == null || c.slotTs <= replayTsRef.current)
+          .sort((a, b) => a.slotTs - b.slotTs);
         // Stretch the latest column all the way to the right axis so the band
         // fills the gap to the last print. The plot's right edge = canvas width
         // minus the price-axis gutter. We READ that gutter width but CACHE it in
@@ -1977,6 +2024,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           const bucketMs = bubbleMinsRef.current * 60_000;
           const byBucket = new Map<number, GexColumn>();
           for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
+            if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
             byBucket.set(Math.floor(m.slotTs / bucketMs) * bucketMs, m);
           }
           const mins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
@@ -2016,7 +2064,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 // xAt, not timeToCoordinate: these are 1-min buckets and the
                 // chart grid is 5-min, so a raw lookup returned null for 4 of
                 // every 5 minutes and the trail only drew on candle boundaries.
-                const x = xAt(m.slotTs);
+                // Anchor the column on its CANDLE, not the trailing minute of the
+                // bucket. At 5m the representative `m` is the bucket's LAST minute
+                // (~+4m in), so xAt(m.slotTs) drifted every column ~0.8 bars right
+                // of its candle — invisible mid-chart, but the NEWEST bucket drifted
+                // off the last candle into the right-axis gap and the live columns
+                // piled up there ("newest bubbles render strange"). Snap x to the
+                // bucket grid: = the candle at 5m; still sub-bar offset at 1m since
+                // the key IS the minute.
+                const x = xAt(Math.floor(m.slotTs / bucketMs) * bucketMs);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
                 // Rank THIS minute's strikes by |net GEX|. The top 3 are what the
@@ -2448,9 +2504,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               {showGexBubbles && (
                 <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble size</div>
-                  <DockSlider label="bubble" value={bubbleScale} min={0.1} max={0.5} step={0.02} onChange={changeBubbleScale} title="Bubble size (saved in this browser)" />
+                  <DockSlider label="bubble" value={bubbleScale} min={0.1} max={1.0} step={0.02} onChange={changeBubbleScale} title="Bubble size (saved in this browser)" />
                   <DockSlider
-                    label="variance" value={bubbleVar} min={0.5} max={2.5} step={0.1}
+                    label="variance" value={bubbleVar} min={0.3} max={4} step={0.1}
                     format={(v) => v.toFixed(1)} onChange={setBubbleVar}
                     title="Size contrast — low = all bubbles similar, high = only real gamma renders big"
                   />
@@ -2500,6 +2556,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           {/* intensity slider */}
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />
 
+          <DockButton
+            onClick={() => { const nv = !replayOn; setReplayOn(nv); setReplayPlaying(false); if (nv) setReplayIdx(0); }}
+            title="Replay this session — reveal candles + gamma from the open forward"
+            style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
+          >
+            <span>Replay</span>
+          </DockButton>
+
           <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
           {/* The dock itself now stays in the capture, so the capture-triggering
               controls hide themselves — they'd be dead pixels in the PNG. Not
@@ -2512,6 +2576,51 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
 
       <div className="es-candles-body flex flex-col" style={{ flex: 1, minHeight: 0 }}>
+      {replayOn && (
+        <div
+          className="es-candles-replay flex flex-wrap items-center gap-3 px-4 pt-2 pb-2"
+          style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}
+        >
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.cyan }}>Replay</span>
+          {replayFrames.length === 0 ? (
+            <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No session bars yet — replay needs today&apos;s candles.</span>
+          ) : (
+            <>
+              <div className="flex items-center gap-1">
+                <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }} title="Step back one bar"><span>⏮</span></DockButton>
+                <DockButton
+                  onClick={() => { if (replayIdx >= replayFrames.length - 1) { setReplayIdx(0); setReplayPlaying(true); } else { setReplayPlaying((p) => !p); } }}
+                  title={replayPlaying ? "Pause" : "Play"}
+                ><span style={{ minWidth: 12, display: "inline-block", textAlign: "center" }}>{replayPlaying ? "⏸" : "▶"}</span></DockButton>
+                <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }} title="Step forward one bar"><span>⏭</span></DockButton>
+              </div>
+              <DockSlider
+                label="bar"
+                value={Math.min(replayIdx, replayFrames.length - 1)}
+                min={0}
+                max={Math.max(0, replayFrames.length - 1)}
+                step={1}
+                width={240}
+                format={(v) => fmtEtHM(replayFrames[Math.min(Math.round(v), replayFrames.length - 1)])}
+                onChange={(v) => { setReplayPlaying(false); setReplayIdx(Math.round(v)); }}
+                title="Scrub through the session"
+              />
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
+                {fmtEtHM(replayFrames[Math.min(replayIdx, replayFrames.length - 1)])} · {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}
+              </span>
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: HOME_THEME.muted }}>Speed</span>
+                <SegGroup
+                  options={[{ label: "1×", value: "1" }, { label: "2×", value: "2" }, { label: "4×", value: "4" }, { label: "8×", value: "8" }]}
+                  active={String(replaySpeed)}
+                  onChange={(v) => setReplaySpeed(Number(v))}
+                />
+              </div>
+              <DockButton onClick={() => { setReplayPlaying(false); setReplayOn(false); }} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
+            </>
+          )}
+        </div>
+      )}
       <div className="es-candles-toggles flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
           const basis = effectiveBasis();

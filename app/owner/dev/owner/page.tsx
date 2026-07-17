@@ -147,7 +147,7 @@ interface EodGexRow {
   computed_at: string;
 }
 
-// Auth status (from /api/clerk-status, now backed by Supabase Auth). The route
+// Auth status (from /api/auth-status, backed by our own users/sessions tables). The route
 // reports whether Supabase auth env is configured + read-only user stats via the
 // service-role admin API. Never carries secrets. (Clerk was removed; the
 // publishable/secret/roleSets fields are gone — Supabase has no equivalent
@@ -1351,7 +1351,7 @@ function MetricsTabSection({
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.text, opacity: 1 }}>
             <span>{users != null ? `${users.toLocaleString()} total` : "—"}</span>
-            <span>{activeSessions != null ? `${activeSessions} active` : ""}</span>
+            <span>{activeSessions != null ? `${activeSessions} logged in` : ""}</span>
           </div>
         </div>
       </div>
@@ -1370,6 +1370,7 @@ function OverviewSection({ metrics }: {
     users: number | null;
     waitlist: number | null;
     activeSessions: number | null;
+    onToday: number;
     uptime: string;
     feed: Array<{ label: string; loads: number; ago: string; active: boolean }>;
     topPages: Array<{ label: string; loads: number }>;
@@ -1394,7 +1395,7 @@ function OverviewSection({ metrics }: {
     };
   };
 }) {
-  const { daily, heatmap, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, topPages, rowsToday, visits, signups, infra, ops } = metrics;
+  const { daily, heatmap, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra, ops } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1462,11 +1463,12 @@ function OverviewSection({ metrics }: {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {/* KPI strip */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(6, minmax(0,1fr))", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(7, minmax(0,1fr))", gap: 10 }}>
         {[
           { l: "Visits · 12d", v: totalVisits.toLocaleString() },
           { l: "Total users", v: users != null ? users.toLocaleString() : "—" },
-          { l: "Active now", v: activeSessions != null ? activeSessions.toLocaleString() : "—" },
+          { l: "On today", v: onToday.toLocaleString() },
+          { l: "Logged in · 30d", v: activeSessions != null ? activeSessions.toLocaleString() : "—" },
           { l: "Waitlist", v: waitlist != null ? waitlist.toLocaleString() : "—" },
           { l: "CPU", v: infra.cpu.value },
           { l: "WS out/hr", v: infra.wsPerHr },
@@ -1675,7 +1677,7 @@ export default function OwnerDashboard() {
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
 
   // Auth status (Supabase). Null until first fetch.
-  const [clerk, setClerk] = useState<AuthStatus | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
 
   // Customer feedback feed
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
@@ -1987,10 +1989,10 @@ export default function OwnerDashboard() {
         if (pv.ok) { const j = await pv.json(); setVisits((j?.visits ?? []) as PageVisit[]); }
       } catch { /* non-fatal */ }
 
-      // Clerk key status (masked — never includes the secret value).
+      // Auth status (masked — never includes any secret value).
       try {
-        const ck = await fetch("/api/clerk-status", { cache: "no-store" });
-        if (ck.ok) { setClerk((await ck.json()) as AuthStatus); }
+        const ck = await fetch("/api/auth-status", { cache: "no-store" });
+        if (ck.ok) { setAuthStatus((await ck.json()) as AuthStatus); }
       } catch { /* non-fatal */ }
 
       // Hetzner hosting metrics (live window on general refresh). Merge so a
@@ -2395,7 +2397,7 @@ export default function OwnerDashboard() {
         ago: fmtAgo(p.lastSeen),
         active: p.status === "active",
       }));
-    const signups = (clerk?.stats?.recent ?? []).map((u) => ({ createdAt: u.createdAt }));
+    const signups = (authStatus?.stats?.recent ?? []).map((u) => ({ createdAt: u.createdAt }));
 
     // Top pages by lifetime loads (real, from page_load_status totalLoads).
     const topPages = [...pageStatuses]
@@ -2437,6 +2439,21 @@ export default function OwnerDashboard() {
       maintenance: maint === true,
     };
 
+    // Unique visitors "on today" — distinct user (ip fallback for logged-out)
+    // seen since midnight ET. The real "who came today", unlike activeSessions
+    // which counts 30-day-unexpired logins regardless of recent activity.
+    const etToday = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" });
+    const onTodaySet = new Set<string>();
+    for (const v of visits) {
+      if (!v.createdAt) continue;
+      const t = new Date(v.createdAt);
+      if (isNaN(t.getTime())) continue;
+      if (t.toLocaleDateString("en-US", { timeZone: "America/New_York" }) !== etToday) continue;
+      const key = v.userId || (v.ip ? `ip:${v.ip}` : "");
+      if (key) onTodaySet.add(key);
+    }
+    const onToday = onTodaySet.size;
+
     return {
       daily: dailyVisitSeries(visits, 7),
       heatmap: hourlyHeatmap(visits),
@@ -2444,9 +2461,10 @@ export default function OwnerDashboard() {
       weekly: weeklySignupSeries(signups, 7),
       totalVisits,
       activePages,
-      users: clerk?.stats?.userCount ?? null,
+      users: authStatus?.stats?.userCount ?? null,
       waitlist: waitlistCount,
-      activeSessions: clerk?.stats?.activeSessions ?? null,
+      activeSessions: authStatus?.stats?.activeSessions ?? null,
+      onToday,
       uptime: displayUptime != null ? fmtUptime(displayUptime) : "—",
       feed,
       topPages,
