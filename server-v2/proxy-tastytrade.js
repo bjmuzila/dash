@@ -2298,6 +2298,12 @@ class TastytradeProxy {
     // Mark the session this REST data belongs to so we don't use stale volume
     // across session boundaries.
     this.restOISessionKey = this.optSessionKey;
+    // Re-arm the Theta flow/trade subscription every poll, not just on the
+    // one-time "became ready" edge above — the active window drifts with
+    // spot, and a strike that enters the window later was never subscribed,
+    // so it carries no live volume even after the OI-side fix. subscribeActive
+    // re-sends the current leg list; safe/cheap to call repeatedly.
+    this._subscribeThetaFlow();
   }
 
   /**
@@ -2399,17 +2405,21 @@ class TastytradeProxy {
    */
   _scheduleOiRefresh() {
     if (this.oiTimer) { clearTimeout(this.oiTimer); this.oiTimer = null; }
-    // OI is static for the session and live volume comes from the dxLink Trade
-    // stream (this.volumes), not REST — rest.volume is only a startup fallback.
-    // So once coverage is ready we stop polling entirely; the 60s loop was a
-    // 24/7 upstream bleed (full chain ×5 batches/min) for data that no longer
-    // changes. setExpiry() re-arms it by clearing oiReady before calling here.
-    if (this.oiReady) return;
+    // Per-contract OI is static for the session, but WHICH contracts are in
+    // scope is not: _activeContracts() windows around live spot, and spot
+    // drifts all session. Stopping the poll entirely once "ready" (prior
+    // behavior) meant strikes that drift INTO the window later never get
+    // backfilled — they show OI 0 / empty on the chart even though Theta
+    // has always had the number, because nothing ever asked for it again.
+    // Keep polling at the slower OI_REFRESH_MS cadence after ready instead
+    // of stopping — still far cheaper than the RECOMPUTE_MS warm-up pace,
+    // and actually matches what this function's own comment always claimed.
+    const delay = this.oiReady ? OI_REFRESH_MS : RECOMPUTE_MS;
     this.oiTimer = setTimeout(async () => {
       if (this.idle) { this._scheduleOiRefresh(); return; }
       try { await this._refreshOI(); } catch {}
       this._scheduleOiRefresh();
-    }, RECOMPUTE_MS);
+    }, delay);
   }
 
   /**
