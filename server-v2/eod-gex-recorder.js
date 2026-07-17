@@ -23,6 +23,9 @@
  */
 
 const { computeGexRows, totalNetGex } = require('./computation/gex-calculator');
+const { useTheta } = require('./config/data-source');
+// Option data source follows the SAME DATA_SOURCE flag as the main feed:
+// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
 const {
   fetchChainTheta,
   fetchGreeksTheta,
@@ -34,7 +37,7 @@ const {
   fetchEodHistoryTheta,
   fetchIndexEodTheta,
   fetchStockEodTheta,
-} = require('./proxy-thetadata');
+} = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 const { bsGreeks, impliedVol, yearsToExpiry } = require('./computation/utils');
 
 // `exp|strike|type` key matching proxy-thetadata's keyOf()

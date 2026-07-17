@@ -22,7 +22,8 @@
  * No-op unless SCANNER_TICKERS is set and DATABASE_URL is available.
  */
 
-const thetaAdapter = require('./proxy-thetadata');
+const { useTheta } = require('./config/data-source');
+const thetaAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 const { computeGexSummary } = require('./computation/gex-calculator');
 
 const INTERVAL_MINS = Number(process.env.SCANNER_INTERVAL_MINS || 5);

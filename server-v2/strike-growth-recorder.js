@@ -27,6 +27,9 @@
  */
 
 const { computeGexRows } = require('./computation/gex-calculator');
+const { useTheta } = require('./config/data-source');
+// Option data source follows the SAME DATA_SOURCE flag as the main feed:
+// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
 const {
   fetchChainTheta,
   fetchGreeksTheta,
@@ -34,7 +37,7 @@ const {
   fetchVolumeTheta,
   fetchStockQuoteTheta,
   fetchIndexPriceTheta,
-} = require('./proxy-thetadata');
+} = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 const { SCANNER_TICKERS, SCANNER_HOT } = require('./scanner-tickers');
 
 // Cash indices price off the index snapshot endpoint, NOT the stock-quote one

@@ -673,14 +673,16 @@ export default function BudgetPage() {
     return { items, total, next: items[0] ?? null };
   }, [recurring, register, month]);
 
-  // Rent countdown — rent is paid on the 5th. Amount is read from a recurring
-  // rule whose label contains "rent"; the daily figure is how much extra you'd
-  // need to bank each remaining day to cover the shortfall by the 5th.
+  // Rent countdown — rent is due on the 5th. Amount is read from a recurring
+  // rule whose label contains "rent". We also project cash flow to the 5th:
+  // every OTHER income (e.g. two pay runs) and expense landing before rent,
+  // so the card answers "is enough coming in to cover rent when it's due?".
   const rentInfo = useMemo(() => {
     const RENT_DAY = 5;
     const rentRule = recurring.find((r) => r.active && r.amount < 0 && /rent/i.test(r.label));
     const rentAmount = rentRule ? Math.abs(rentRule.amount) : 0;
-    const now = new Date(todayIso() + "T00:00:00");
+    const today = todayIso();
+    const now = new Date(today + "T00:00:00");
     let due = new Date(now.getFullYear(), now.getMonth(), RENT_DAY);
     if (due.getTime() < now.getTime()) due = new Date(now.getFullYear(), now.getMonth() + 1, RENT_DAY);
     const daysUntil = Math.round((due.getTime() - now.getTime()) / 86400000);
@@ -688,9 +690,48 @@ export default function BudgetPage() {
     const dueIso = `${dueYm}-${String(RENT_DAY).padStart(2, "0")}`;
     const paid = register.some((r) => !r.is_beginning && r.amount < 0 && /rent/i.test(r.label) && r.entry_date.slice(0, 7) === dueYm);
     const available = allBanks;
-    const shortfall = Math.max(0, rentAmount - available);
+
+    // Everything landing in [today .. the 5th], rent itself excluded (shown apart):
+    // real register rows + non-materialized recurring occurrences (e.g. two pay
+    // runs) — so we can answer whether we clear rent when it's due.
+    const isRent = (label: string) => /rent/i.test(label);
+    const inWindow = (d: string) => d >= today && d <= dueIso;
+    const materialized = new Set(
+      register
+        .filter((r) => !r.is_beginning && typeof r.recurring_tag === "string" && r.recurring_tag.startsWith("__recur__:"))
+        .map((r) => r.recurring_tag as string)
+    );
+    // Calendar months the window touches (this month, plus next if it wraps).
+    const months: string[] = [];
+    for (let d = new Date(now.getFullYear(), now.getMonth(), 1), g = 0; g < 4; d = new Date(d.getFullYear(), d.getMonth() + 1, 1), g++) {
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      months.push(ym);
+      if (ym === dueYm) break;
+    }
+    type Flow = { label: string; amount: number; date: string };
+    const flows: Flow[] = [];
+    for (const r of register) {
+      if (r.is_beginning || !inWindow(r.entry_date)) continue;
+      flows.push({ label: r.label, amount: r.amount, date: r.entry_date });
+    }
+    for (const rule of recurring) {
+      if (!rule.active) continue;
+      for (const ym of months) {
+        for (const date of occurrencesInMonth(rule, ym)) {
+          if (!inWindow(date) || materialized.has(`__recur__:${rule.id}:${date}`)) continue;
+          flows.push({ label: rule.label, amount: rule.amount, date });
+        }
+      }
+    }
+    flows.sort((a, b) => (a.date < b.date ? -1 : 1));
+    const incoming = flows.filter((f) => f.amount > 0);
+    const outgoing = flows.filter((f) => f.amount < 0 && !isRent(f.label));
+    const incomingTotal = incoming.reduce((s, f) => s + f.amount, 0);
+    const outgoingTotal = outgoing.reduce((s, f) => s + Math.abs(f.amount), 0);
+    const projected = available + incomingTotal - outgoingTotal; // cash on hand when rent hits
+    const shortfall = Math.max(0, rentAmount - projected);
     const perDay = daysUntil > 0 ? shortfall / daysUntil : shortfall;
-    return { rentAmount, daysUntil, dueIso, paid, available, shortfall, perDay };
+    return { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, projected, shortfall, perDay };
   }, [recurring, register, allBanks]);
 
   const monthLabel = (() => {
@@ -1821,18 +1862,38 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
   );
 }
 
-/** Rent countdown — days until the 5th + the daily extra needed to cover rent. */
+/** Rent card — countdown to the 5th plus a to-the-5th cash-flow projection:
+ *  what's still coming in (e.g. both pay runs) and going out before rent, and
+ *  whether that clears rent when it's due. */
 function RentCountdown({
   info,
   currency,
 }: {
-  info: { rentAmount: number; daysUntil: number; dueIso: string; paid: boolean; available: number; shortfall: number; perDay: number };
+  info: {
+    rentAmount: number; daysUntil: number; dueIso: string; paid: boolean; available: number;
+    incoming: { label: string; amount: number; date: string }[];
+    outgoing: { label: string; amount: number; date: string }[];
+    incomingTotal: number; outgoingTotal: number; projected: number;
+    shortfall: number; perDay: number;
+  };
   currency: string;
 }) {
-  const { rentAmount, daysUntil, dueIso, paid, available, shortfall, perDay } = info;
+  const { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, projected, shortfall, perDay } = info;
   const covered = rentAmount > 0 && shortfall <= 0;
-  const pct = rentAmount > 0 ? Math.min(100, (available / rentAmount) * 100) : 0;
+  const pct = rentAmount > 0 ? Math.min(100, Math.max(0, (projected / rentAmount) * 100)) : 0;
   const accent = paid || covered ? HOME_THEME.green : shortfall > 0 ? SOFT_RED : LIGHT_BLUE;
+  const surplus = projected - rentAmount;
+
+  const flowLine = (f: { label: string; amount: number; date: string }, key: string, positive: boolean) => (
+    <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {f.label} <span style={{ opacity: 0.5 }}>· {shortDate(f.date)}</span>
+      </span>
+      <span style={{ fontWeight: 700, color: positive ? HOME_THEME.green : SOFT_RED, flexShrink: 0 }}>
+        {positive ? "+" : ""}{fmtMoney(f.amount, currency)}
+      </span>
+    </div>
+  );
 
   return (
     <div style={{ ...card(), padding: 16 }}>
@@ -1860,21 +1921,55 @@ function RentCountdown({
             <span style={{ fontWeight: 800, color: HOME_THEME.text }}>{fmtMoney(rentAmount, currency)}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 4 }}>
-            <span>Set aside</span>
+            <span>On hand now</span>
             <span style={{ fontWeight: 800, color: available < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(available, currency)}</span>
           </div>
+
+          {!paid && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
+              {/* What else lands before rent — e.g. both pay runs. */}
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+                <span>Coming in before then</span>
+                <span style={{ color: incomingTotal > 0 ? HOME_THEME.green : HOME_THEME.muted }}>+{fmtMoney(incomingTotal, currency)}</span>
+              </div>
+              {incoming.length
+                ? incoming.map((f, i) => flowLine(f, "in" + i, true))
+                : <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
+
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted, marginTop: 10 }}>
+                <span>Going out before then</span>
+                <span style={{ color: outgoingTotal > 0 ? SOFT_RED : HOME_THEME.muted }}>{outgoingTotal > 0 ? "−" : ""}{fmtMoney(outgoingTotal, currency)}</span>
+              </div>
+              {outgoing.length
+                ? outgoing.map((f, i) => flowLine(f, "out" + i, false))
+                : <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
+
+              {/* Cash on hand the moment rent is due. */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 12 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>Projected on the 5th</span>
+                <span style={{ fontSize: 18, fontWeight: 900, color: accent }}>{fmtMoney(projected, currency)}</span>
+              </div>
+            </div>
+          )}
 
           <div style={{ height: 8, borderRadius: 99, background: "rgba(255,255,255,0.07)", margin: "12px 0 6px", overflow: "hidden" }}>
             <div style={{ height: 8, borderRadius: 99, background: accent, width: `${pct}%`, transition: "width 0.2s ease" }} />
           </div>
 
-          {paid || covered ? (
+          {paid ? (
             <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.green, marginTop: 6 }}>
-              {paid ? "Rent is paid for this month." : "Fully covered — you've got rent."}
+              Rent is paid for this month.
+            </div>
+          ) : covered ? (
+            <div style={{ marginTop: 8, borderRadius: 10, background: bRgba(HOME_THEME.green, 0.10), border: `1px solid ${bRgba(HOME_THEME.green, 0.3)}`, padding: "10px 12px" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Enough coming in — rent's covered.</div>
+              <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.8, marginTop: 2 }}>
+                {fmtMoney(surplus, currency)} to spare after rent{daysUntil > 0 ? ` on the 5th` : ""}.
+              </div>
             </div>
           ) : (
             <div style={{ marginTop: 8, borderRadius: 10, background: bRgba(SOFT_RED, 0.10), border: `1px solid ${bRgba(SOFT_RED, 0.3)}`, padding: "10px 12px" }}>
-              <div style={{ fontSize: 12, color: HOME_THEME.muted }}>Short by <span style={{ fontWeight: 800, color: SOFT_RED }}>{fmtMoney(shortfall, currency)}</span></div>
+              <div style={{ fontSize: 12, color: HOME_THEME.muted }}>Still short by <span style={{ fontWeight: 800, color: SOFT_RED }}>{fmtMoney(shortfall, currency)}</span> after what's due{daysUntil > 0 ? ` in ${daysUntil} day${daysUntil === 1 ? "" : "s"}` : " today"}</div>
               <div style={{ fontSize: 20, fontWeight: 900, color: SOFT_RED, marginTop: 2 }}>
                 {fmtMoney(perDay, currency)}<span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.muted }}> /day extra</span>
               </div>

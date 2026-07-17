@@ -32,12 +32,15 @@
  * Manual fire: POST /proxy/vol-pin-run
  */
 
+const { useTheta } = require('./config/data-source');
+// Option data source follows the SAME DATA_SOURCE flag as the main feed:
+// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
 const {
   fetchChainTheta,
   fetchOpenInterestTheta,
   fetchGreeksTheta,
   fetchStockQuoteTheta,
-} = require('./proxy-thetadata');
+} = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 
 // ── tunables ──────────────────────────────────────────────────────────────────
 

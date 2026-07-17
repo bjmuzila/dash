@@ -560,7 +560,7 @@ async function fetchWeeklyHistoryFutures(ticker, daysBack = 140) {
 // Theta weekly history. Index route for SPX/NDX, stock route for equities.
 // Futures (ESM/NQM) have no Theta feed and are handled by the dxLink path.
 async function fetchWeeklyHistoryTheta(ticker, daysBack = 140) {
-  const theta = require('./proxy-thetadata');
+  const theta = require('./config/data-source').useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
   const end = new Date();
   const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
   let daily;

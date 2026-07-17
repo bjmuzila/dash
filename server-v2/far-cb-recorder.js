@@ -23,6 +23,10 @@
  */
 
 const { computeGexRows } = require('./computation/gex-calculator');
+const { useTheta } = require('./config/data-source');
+// Option data source follows the SAME DATA_SOURCE flag as the main feed:
+// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
+const _optSrc = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 const {
   fetchChainTheta,
   fetchGreeksTheta,
@@ -30,9 +34,9 @@ const {
   fetchVolumeTheta,
   fetchStockQuoteTheta,
   fetchIndexPriceTheta,
-} = require('./proxy-thetadata');
+} = _optSrc;
 const { getActiveRoster } = require('./far-cb-tickers');
-const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta, fetchOptionDailyHistoryTheta } = require('./proxy-thetadata');
+const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta, fetchOptionDailyHistoryTheta } = _optSrc;
 
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
