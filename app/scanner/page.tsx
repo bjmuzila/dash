@@ -15,6 +15,7 @@ import { ScoreInfo } from "@/components/shared/InfoTip";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { buildTpoStructures, baseRateFor, ageBucket, KIND_LABEL, KIND_TITLE, KIND_NOTE, KIND_MEANING, type StructureKind, type TpoStructure, type TpoSession } from "@/lib/tpo";
+import { amtRead, type AmtRead, type AmtSignal, type SignalLevel } from "@/lib/amt";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
@@ -2627,6 +2628,174 @@ function StructureRow({ s, spot, base }: {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  AMT — Auction Market Theory read + live signals (over the TPO profile)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Renders lib/amt.ts's AmtRead: a headline read (day type / IB width / state /
+// bias) plus a signal rail. A signal fires "LIVE" when spot is within a small
+// pad of its trigger price — that liveness is computed HERE per tick so the
+// heavy structure scan never re-runs on a WS tick.
+
+const LEVEL_RANK: Record<SignalLevel, number> = { action: 0, watch: 1, info: 2 };
+const LEVEL_COLOR: Record<SignalLevel, string> = {
+  action: HOME_THEME.orange,
+  watch: LIGHT_BLUE,
+  info: NEUTRAL,
+};
+const dirGlyph = (d: AmtSignal["dir"]) =>
+  d === "up" ? { g: "▲", c: HOME_THEME.green } : d === "down" ? { g: "▼", c: HOME_THEME.red } : { g: "◆", c: NEUTRAL };
+
+function AmtSignalRow({ s, spot, livePad }: { s: AmtSignal; spot: number | null; livePad: number }) {
+  const live = s.trigger != null && spot != null && Math.abs(spot - s.trigger) <= livePad;
+  const dist = s.trigger != null && spot != null ? s.trigger - spot : null;
+  const lvlColor = LEVEL_COLOR[s.level];
+  const dg = dirGlyph(s.dir);
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: "70px 1fr 96px",
+      gap: 10, alignItems: "start", padding: "9px 12px",
+      borderRadius: 8,
+      border: `1px solid ${live ? HOME_THEME.green : "rgba(255,255,255,0.08)"}`,
+      background: live ? `${HOME_THEME.green}14` : "rgba(255,255,255,0.02)",
+    }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={{
+          fontSize: 12, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase",
+          color: lvlColor, border: `1px solid ${lvlColor}55`, background: `${lvlColor}18`,
+          borderRadius: 5, padding: "2px 6px", textAlign: "center",
+        }}>{s.level}</span>
+        {live && (
+          <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green, textAlign: "center", letterSpacing: "0.04em" }}>
+            ● LIVE
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ color: dg.c }}>{dg.g}</span>{s.title}
+        </span>
+        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.62)", lineHeight: 1.45 }}>{s.detail}</span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, textAlign: "right", fontSize: 14 }}>
+        <span style={{ color: HOME_THEME.text, fontWeight: 700 }}>
+          {s.trigger != null ? s.trigger.toFixed(2) : "—"}
+        </span>
+        <span style={{ color: "rgba(255,255,255,0.4)" }}>
+          {s.target != null ? `→ ${s.target.toFixed(2)}` : "trail"}
+        </span>
+        {dist != null && (
+          <span style={{ color: "rgba(255,255,255,0.35)" }}>
+            {dist >= 0 ? "+" : ""}{dist.toFixed(2)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; binSize: number }) {
+  // Live pad: 2 bins or ~0.12% of price, whichever is larger — enough to catch a
+  // level as spot approaches it without lighting up the whole rail.
+  const livePad = Math.max(binSize * 2, (spot ?? 0) * 0.0012);
+
+  const signals = useMemo(() => {
+    const withLive = amt.signals.map((s) => {
+      const live = s.trigger != null && spot != null && Math.abs(spot - s.trigger) <= livePad;
+      const dist = s.trigger != null && spot != null ? Math.abs(s.trigger - spot) : Infinity;
+      return { s, live, dist };
+    });
+    return withLive
+      .sort((a, b) =>
+        (Number(b.live) - Number(a.live)) ||
+        (LEVEL_RANK[a.s.level] - LEVEL_RANK[b.s.level]) ||
+        (a.dist - b.dist))
+      .map((x) => x.s);
+  }, [amt.signals, spot, livePad]);
+
+  const liveCount = signals.filter((s) => s.trigger != null && spot != null && Math.abs(spot - s.trigger) <= livePad).length;
+
+  const ibColor = amt.ibClass === "narrow" ? HOME_THEME.orange : amt.ibClass === "wide" ? HOME_THEME.cyan : HOME_THEME.text;
+  const stateColor =
+    amt.state === "imbalance_up" || amt.state === "shift_up" ? HOME_THEME.green
+    : amt.state === "imbalance_down" || amt.state === "shift_down" ? HOME_THEME.red
+    : LIGHT_BLUE;
+
+  if (!amt.ok) {
+    return (
+      <Card variant="budget" title={<span style={{ fontSize: 16 }}>AMT — auction read &amp; live signals</span>}>
+        <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+          {amt.reason}
+        </div>
+      </Card>
+    );
+  }
+
+  const tile = (label: string, value: React.ReactNode, note?: string, color?: string) => (
+    <div style={{
+      padding: "10px 12px", borderRadius: 10,
+      border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)",
+      display: "flex", flexDirection: "column", gap: 3, minWidth: 0,
+    }}>
+      <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)" }}>{label}</span>
+      <span style={{ fontSize: 16, fontWeight: 800, color: color ?? HOME_THEME.text }}>{value}</span>
+      {note && <span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", lineHeight: 1.4 }}>{note}</span>}
+    </div>
+  );
+
+  return (
+    <Card variant="budget"
+      title={<span style={{ fontSize: 16 }}>AMT — auction read &amp; live signals</span>}
+      subtitle={`Day-timeframe read vs prior value${liveCount ? ` · ${liveCount} live` : ""}${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
+
+      {/* headline read */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 14 }}>
+        {tile("Day type", amt.dayType.label, amt.dayType.note)}
+        {tile("IB width", amt.ibRatio != null ? `${amt.ibClass} · ${amt.ibRatio.toFixed(2)}×` : "building", "vs recent-median IB", ibColor)}
+        {tile("State", amt.stateLabel.split(" — ")[0], amt.stateLabel.split(" — ")[1], stateColor)}
+        {tile("Opening", amt.opening?.label ?? "—", amt.opening?.note)}
+      </div>
+
+      {/* bias banner */}
+      <div style={{
+        padding: "10px 14px", borderRadius: 10, marginBottom: 14,
+        border: `1px solid ${stateColor}40`, background: `${stateColor}0F`,
+        fontSize: 15, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5,
+      }}>
+        {amt.bias}
+        <div style={{ fontSize: 13, fontWeight: 400, color: "rgba(255,255,255,0.5)", marginTop: 4 }}>{amt.location}</div>
+      </div>
+
+      {/* signal rail */}
+      <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)", marginBottom: 8 }}>
+        Signals &amp; alerts <span style={{ textTransform: "none", letterSpacing: 0 }}>— a row lights green when spot reaches its trigger</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {signals.map((s) => <AmtSignalRow key={s.id} s={s} spot={spot} livePad={livePad} />)}
+        {!signals.length && (
+          <div style={{ padding: 16, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+            No actionable auction signals yet — waiting on IB and structure to form.
+          </div>
+        )}
+      </div>
+
+      {/* playbook */}
+      <details style={{ marginTop: 14 }}>
+        <summary style={{ cursor: "pointer", fontSize: 14, color: LIGHT_BLUE, fontWeight: 700 }}>Playbook / process</summary>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8, fontSize: 14, color: "rgba(255,255,255,0.7)", lineHeight: 1.5 }}>
+          {amt.playbook.map((p, i) => <span key={i}>{i + 1}. {p}</span>)}
+        </div>
+      </details>
+
+      <div style={{ marginTop: 12, fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
+        Auction read is derived from 5-min RTH profiles — opening type is approximate (no tick tape). Responsive = fade back to value; initiative = follow. Not financial advice.
+      </div>
+    </Card>
+  );
+}
+
 function TpoStructuresScanner() {
   const [instr, setInstr] = useState<"ESU" | "NQU">("ESU");
   const [kindFilter, setKindFilter] = useState<"all" | "extremes" | "holes">("all");
@@ -2671,6 +2840,11 @@ function TpoStructuresScanner() {
   const spot = candles[candles.length - 1]?.close ?? null;
   const today = res.sessions[res.sessions.length - 1] ?? null;
 
+  // AMT read is derived from the already-memoized structure scan, so it only
+  // recomputes once per bar (via `res`), never per WS tick. Signal liveness (spot
+  // vs trigger) is computed inside AmtPanel at render, so alerts still react live.
+  const amt = useMemo(() => amtRead(res), [res]);
+
   const open = useMemo(() => {
     const rows = res.open.filter((s) => {
       if (kindFilter === "holes") return s.kind === "hole";
@@ -2691,6 +2865,9 @@ function TpoStructuresScanner() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+      {/* ── AMT auction read + live signals ──────────────────────────────── */}
+      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
 
       {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
       <Card variant="budget"

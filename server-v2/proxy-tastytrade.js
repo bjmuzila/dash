@@ -683,7 +683,14 @@ async function probeRest({ ticker, expiry, type, strike }) {
   // matches the side being watched. Uses Theta IV when present, otherwise
   // backs out IV from the live quote.
   const T = yearsToExpiry(best.expiration);
-  const ivForBs = g.iv > 0 ? g.iv : impliedVol({ price: mark, S: spot, K: best.strike, T, r: RISK_FREE, type });
+  // Theta sometimes returns a degenerate row for thin/0DTE ITM legs
+  // (delta:1, gamma/theta/vega:0, iv missing) — don't treat that as real data.
+  const thetaGreeksValid = g.iv > 0 && !(g.gamma === 0 && g.theta === 0 && g.vega === 0);
+  // Floor the mark at intrinsic before solving IV — a stale/crossed quote
+  // priced below intrinsic makes impliedVol() fail and blanks the BS fallback.
+  const intrinsic = type === 'C' ? Math.max(spot - best.strike, 0) : Math.max(best.strike - spot, 0);
+  const markForBs = mark > 0 ? Math.max(mark, intrinsic + 0.01) : mark;
+  const ivForBs = thetaGreeksValid ? g.iv : impliedVol({ price: markForBs, S: spot, K: best.strike, T, r: RISK_FREE, type });
   const bsRaw = (spot > 0 && T > 0 && ivForBs > 0)
     ? bsGreeks({ S: spot, K: best.strike, T, sigma: ivForBs, r: RISK_FREE, type })
     : null;
@@ -719,12 +726,12 @@ async function probeRest({ ticker, expiry, type, strike }) {
       // Theta live greeks when available; otherwise fall back to Black-Scholes
       // computed for THIS contract's side (call/put), so delta/theta always
       // carry the correct sign for the side being watched rather than nulling out.
-      iv: g.iv || (ivForBs > 0 ? ivForBs : null),
-      delta: g.delta ?? bs?.delta ?? null,
-      gamma: g.gamma ?? bs?.gamma ?? null,
-      theta: g.theta ?? bs?.theta ?? null,
-      vega: g.vega ?? bs?.vega ?? null,
-      _src: g.delta != null ? 'Theta' : 'Black-Scholes (calculated, this side)',
+      iv: thetaGreeksValid ? g.iv : (ivForBs > 0 ? ivForBs : null),
+      delta: thetaGreeksValid ? g.delta : (bs?.delta ?? null),
+      gamma: thetaGreeksValid ? g.gamma : (bs?.gamma ?? null),
+      theta: thetaGreeksValid ? g.theta : (bs?.theta ?? null),
+      vega: thetaGreeksValid ? g.vega : (bs?.vega ?? null),
+      _src: thetaGreeksValid ? 'Theta' : 'Black-Scholes (calculated, this side)',
       // Pure Black-Scholes values (never Theta-live), for consumers that want
       // the BS-calculated greeks specifically regardless of Theta coverage
       // (e.g. the Watch tracker) — same ivForBs basis used for `bs` above.
@@ -741,16 +748,23 @@ async function probeRest({ ticker, expiry, type, strike }) {
   const sign = isCall ? 1 : -1;
   const oi = thetaOI;
   const vol = thetaVol;
+  // Use the same validated greeks as the Greeks panel (thetaGreeksValid), not
+  // raw g.* — otherwise a degenerate Theta row zeroes GEX/DEX/VEX even though
+  // the panel above is showing the BS fallback values.
+  const eGamma = thetaGreeksValid ? g.gamma : (bs?.gamma ?? 0);
+  const eDelta = thetaGreeksValid ? g.delta : (bs?.delta ?? 0);
+  const eVega = thetaGreeksValid ? g.vega : (bs?.vega ?? 0);
+  const eTheta = thetaGreeksValid ? g.theta : (bs?.theta ?? 0);
   const exposures = (spot > 0 && oi != null)
     ? {
         spot,
         oi,
         volume: vol,
-        gex: sign * Math.abs(g.gamma || 0) * oi * spot * spot,
-        gexVol: sign * Math.abs(g.gamma || 0) * (vol || 0) * spot * spot,
-        dex: sign * Math.abs(g.delta || 0) * oi * 100 * spot,
-        vex: sign * (g.vega || 0) * oi * 100 * spot,
-        thetaExp: sign * (g.theta || 0) * oi * 100 * spot,
+        gex: sign * Math.abs(eGamma || 0) * oi * spot * spot,
+        gexVol: sign * Math.abs(eGamma || 0) * (vol || 0) * spot * spot,
+        dex: sign * Math.abs(eDelta || 0) * oi * 100 * spot,
+        vex: sign * (eVega || 0) * oi * 100 * spot,
+        thetaExp: sign * (eTheta || 0) * oi * 100 * spot,
         vannaExp: bs ? sign * (bs.vanna / 100) * oi * 100 * spot : null,
         charmExp: bs ? sign * (bs.charm / 365) * oi * 100 * spot : null,
       }

@@ -89,6 +89,7 @@ export interface TpoSession {
   mid: number;
   high: number;
   low: number;
+  open: number;              // first RTH bar's open — AMT opening-type read
   ibHigh: number | null;     // first two 30-min periods (09:30–10:30)
   ibLow: number | null;
   ibRange: number | null;
@@ -284,7 +285,7 @@ export function buildTpoSession(
 
   return {
     date, bins, maxCount: bins[pocIdx].count, poc, vah, val,
-    mid: (high + low) / 2, high, low,
+    mid: (high + low) / 2, high, low, open: bars[0].open,
     ibHigh, ibLow, ibRange: ibHigh != null && ibLow != null ? ibHigh - ibLow : null,
     periods: periods.length,
     singles: singleIdx.map((i) => bins[i].price),
