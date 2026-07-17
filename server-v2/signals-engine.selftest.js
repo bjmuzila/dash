@@ -12,7 +12,14 @@
  * Frames are built in ES space with basis=0 so SPX-level inputs map 1:1 to ES.
  */
 
-const { evaluateFrame, evaluateFlowDivergence } = require('./signals-engine');
+const { evaluateFrame, evaluateFlowDivergence, __setAlertCacheForTest } = require('./signals-engine');
+
+// flip_cross is production-disabled by default via the live DB-backed
+// ALERT_CATALOG toggle (isAlertEnabled('flip_cross')), not the old
+// FLIP_CROSS_ENABLED cfg flag. There's no DB in this pure-logic test, so flip
+// the in-memory cache directly (test-only escape hatch — see signals-engine.js)
+// to keep the pure flip-cross logic (tests 1/2/8/9) covered.
+__setAlertCacheForTest('flip_cross', true);
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -26,9 +33,7 @@ function frame(ts, priceEs, extra = {}) {
 // Run a list of frames through one mem, return all signals emitted.
 function run(mem, frames) {
   const all = [];
-  // flip_cross is production-disabled by default; enable it here so the pure
-  // flip-cross logic (tests 1/2/8/9) stays covered.
-  for (const f of frames) for (const s of evaluateFrame(f, mem, { FLIP_CROSS_ENABLED: true })) all.push(s);
+  for (const f of frames) for (const s of evaluateFrame(f, mem)) all.push(s);
   return all;
 }
 function runFd(mem, frames) {

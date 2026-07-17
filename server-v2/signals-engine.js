@@ -93,11 +93,9 @@ const marketState = require('./state/market-state');
 // ── tunables (ES points unless noted) ───────────────────────────────────────
 const EVAL_MS        = Number(process.env.SIGNALS_EVAL_MS        || 3000);   // detection cadence
 const CROSS_BUFFER   = Number(process.env.SIGNALS_CROSS_BUFFER   || 1.0);    // flip penetration
-// flip_cross is OFF by default: the GEX flip level jitters frame-to-frame, so a
-// price sitting near it re-crosses every eval and the per-level cooldown key
-// keeps changing → spam. Set SIGNALS_FLIP_CROSS=1 to re-enable (only after the
-// cross is de-duped with hysteresis).
-const FLIP_CROSS_ENABLED = process.env.SIGNALS_FLIP_CROSS === '1';
+// NOTE: flip_cross used to be gated by a compile-time SIGNALS_FLIP_CROSS env
+// var. It's now a live, DB-backed per-alert toggle — see ALERT_CATALOG /
+// isAlertEnabled() below. Same for BZ_CB / MR_CALL_SHORT / BZILA below.
 const WALL_TOUCH     = Number(process.env.SIGNALS_WALL_TOUCH     || 1.5);    // "at the wall"
 const WALL_REJECT    = Number(process.env.SIGNALS_WALL_REJECT    || 1.5);    // push-back = fade
 const WALL_BREAK     = Number(process.env.SIGNALS_WALL_BREAK     || 2.0);    // close-through = break
@@ -111,20 +109,6 @@ const COOLDOWN_MS    = Number(process.env.SIGNALS_COOLDOWN_MS    || 10 * 60_000)
 const DISCORD_WEBHOOK= process.env.SIGNALS_DISCORD_WEBHOOK || ''; // NOTE: no longer falls back to DISCORD_WEBHOOK_URL — that's shared w/ calendar/GEX buttons
 const BZ_MIN_SCORE       = Number(process.env.SIGNALS_BZ_MIN_SCORE       || 4);   // need 4-of-5 confluence
 const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);  // Confidence Score gate
-// CB reactions inside the Bzila detector (hold + break). OFF by default — both
-// variants were rejected in live use. Opt in with SIGNALS_BZ_CB=1.
-const BZ_CB_ENABLED      = process.env.SIGNALS_BZ_CB === '1';
-// Mean-reversion short (Call Wall) — flooded Discord 2026-07-17 (fired every
-// ~10-20min for hours as the Call Wall level drifted a few ticks each time,
-// each drift landing outside the cooldown's rounded-level key). Muted by
-// default; the detector stays intact. Opt back in with SIGNALS_MR_CALL_SHORT=1.
-const MR_CALL_SHORT_ENABLED = process.env.SIGNALS_MR_CALL_SHORT === '1';
-// Whole Bzila GEX Confluence v2 detector (flip cross, wall mean-reversion,
-// wall break, + the already-off CB reactions) — Brandon called the whole
-// thing off 2026-07-17 ("bz alerts all need to go, that was a bad idea") after
-// the Call Wall mean-reversion leg flooded Discord for hours. Detector code
-// stays intact for backtesting; opt back in with SIGNALS_BZILA=1.
-const BZILA_ENABLED = process.env.SIGNALS_BZILA === '1';
 // Regime deadband ($): |net GEX| must exceed this for a gamma regime to be "on".
 // Matches greeks-cross-alerts.js GREEKS_CROSS_GEX_BAND (0.5B) but wider by
 // default — a regime that can't clear $1B isn't worth staking a break trade on.
@@ -252,6 +236,137 @@ async function getRecentSignals({ limit = 50, since = 0, kind = '' } = {}) {
     console.warn('[signals] read failed:', e.message);
     return [];
   }
+}
+
+// ── live alert on/off catalog (DB-backed, ~20s poll into an in-memory cache) ──
+// Replaces the old compile-time env kill switches (SIGNALS_FLIP_CROSS,
+// SIGNALS_BZ_CB, SIGNALS_MR_CALL_SHORT, SIGNALS_BZILA) with a live per-alert-key
+// toggle Brandon can flip from the /dev/owner admin page without a redeploy — a
+// background poll refreshes this cache every ~20s, and setAlertEnabled() also
+// updates it immediately on write so a flip takes effect right away.
+const ALERT_CATALOG = [
+  { key: 'flip_cross',           label: 'GEX Flip Cross',                               group: 'primary', defaultEnabled: false },
+  { key: 'ib_formed',            label: 'Initial Balance Formed (info only)',           group: 'primary', defaultEnabled: true },
+  { key: 'ib_break',             label: 'Initial Balance Break',                        group: 'primary', defaultEnabled: true },
+  { key: 'whale_print',          label: 'Whale Option Prints',                          group: 'primary', defaultEnabled: true },
+  { key: 'flow_divergence',      label: 'Flow GEX Divergence',                          group: 'primary', defaultEnabled: true },
+  { key: 'bzila_confluence',     label: 'Bzila Confluence — MASTER (all setups below)', group: 'bzila',   defaultEnabled: false },
+  { key: 'bzila_flip_cross',     label: 'Bzila: Flip cross breakout/breakdown',         group: 'bzila',   defaultEnabled: true },
+  { key: 'bzila_mr_put_long',    label: 'Bzila: Mean-reversion long (Put Wall)',        group: 'bzila',   defaultEnabled: true },
+  { key: 'bzila_mr_call_short',  label: 'Bzila: Mean-reversion short (Call Wall)',      group: 'bzila',   defaultEnabled: false },
+  { key: 'bzila_putwall_break',  label: 'Bzila: Put Wall break (trend down)',           group: 'bzila',   defaultEnabled: true },
+  { key: 'bzila_callwall_break', label: 'Bzila: Call Wall break (trend up)',            group: 'bzila',   defaultEnabled: true },
+  { key: 'bzila_cb_reaction',    label: 'Bzila: CB hold/break',                         group: 'bzila',   defaultEnabled: false },
+];
+const ALERT_CATALOG_BY_KEY = new Map(ALERT_CATALOG.map((a) => [a.key, a]));
+
+// Literal `setup` strings fired inside evaluateBzilaConfluence → their catalog
+// sub-key. Falls back to null (governed by the bzila_confluence master key
+// alone) for any setup string not recognized here.
+function bzilaSubKey(setup) {
+  switch (setup) {
+    case 'Trend breakout long (Flip cross)':
+    case 'Trend breakdown short (Flip cross)':
+      return 'bzila_flip_cross';
+    case 'Mean-reversion long (Put Wall)':
+      return 'bzila_mr_put_long';
+    case 'Mean-reversion short (Call Wall)':
+      return 'bzila_mr_call_short';
+    case 'Trend breakdown short (Put Wall break)':
+      return 'bzila_putwall_break';
+    case 'Trend breakout long (Call Wall break)':
+      return 'bzila_callwall_break';
+    case 'CB support hold':
+    case 'CB resistance hold':
+    case 'CB break ↑':
+    case 'CB break ↓':
+      return 'bzila_cb_reaction';
+    default:
+      return null;
+  }
+}
+
+let alertCache = new Map(ALERT_CATALOG.map((a) => [a.key, a.defaultEnabled]));
+
+/** Self-creating signal_alert_settings table — same lazy, no-DB-safe pattern as
+ * ensureSchema()/trade_signals, reusing the SAME pool (getPool() above). */
+async function ensureAlertSettingsSchema() {
+  const p = getPool();
+  if (!p) return false;
+  try {
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS signal_alert_settings (
+        key         TEXT PRIMARY KEY,
+        enabled     BOOLEAN NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    return true;
+  } catch (e) {
+    console.error('[signals] ensureAlertSettingsSchema error:', e.message);
+    return false;
+  }
+}
+
+/** Poll the DB and overlay any stored rows onto the catalog defaults. Safe to
+ * call on a timer; no-ops (leaves the cache as-is) without a DB. Never throws. */
+async function refreshAlertCache() {
+  const p = getPool();
+  if (!p) return;
+  if (!(await ensureAlertSettingsSchema())) return;
+  try {
+    const { rows } = await p.query('SELECT key, enabled FROM signal_alert_settings');
+    const next = new Map(ALERT_CATALOG.map((a) => [a.key, a.defaultEnabled]));
+    for (const r of rows) {
+      if (ALERT_CATALOG_BY_KEY.has(r.key)) next.set(r.key, !!r.enabled);
+    }
+    alertCache = next;
+  } catch (e) {
+    console.warn('[signals] refreshAlertCache failed:', e.message);
+  }
+}
+
+/** Sync read for detector hot paths — never touches the DB, safe to call per-eval. */
+function isAlertEnabled(key) {
+  if (alertCache.has(key)) return alertCache.get(key);
+  const cat = ALERT_CATALOG_BY_KEY.get(key);
+  return cat ? cat.defaultEnabled : true;
+}
+
+/** Upsert a toggle + update the cache immediately (don't wait for the next 20s
+ * poll). Returns false (safe no-op) if there's no DB or the key isn't in the
+ * catalog — in the no-DB case the cache is still updated so the change is at
+ * least visible for the life of this process. */
+async function setAlertEnabled(key, enabled) {
+  if (!ALERT_CATALOG_BY_KEY.has(key)) return false;
+  const p = getPool();
+  if (!p) { alertCache.set(key, !!enabled); return false; }
+  if (!(await ensureAlertSettingsSchema())) { alertCache.set(key, !!enabled); return false; }
+  try {
+    await p.query(
+      `INSERT INTO signal_alert_settings (key, enabled, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE SET enabled = $2, updated_at = NOW()`,
+      [key, !!enabled]
+    );
+    alertCache.set(key, !!enabled);
+    return true;
+  } catch (e) {
+    console.warn('[signals] setAlertEnabled failed:', e.message);
+    return false;
+  }
+}
+
+/** Full catalog with each entry's live `enabled` merged in — for the GET route. */
+async function listAlertSettings() {
+  return ALERT_CATALOG.map((a) => ({
+    key: a.key, label: a.label, group: a.group, enabled: isAlertEnabled(a.key),
+  }));
+}
+
+// Test-only escape hatch (signals-engine.selftest.js has no DB) — flips a cache
+// entry directly without touching Postgres. Never call this from real code.
+function __setAlertCacheForTest(key, enabled) {
+  alertCache.set(key, !!enabled);
 }
 
 // ── ET / session helpers ─────────────────────────────────────────────────────
@@ -389,7 +504,7 @@ function computeContextLevels(esCandles, asOf = Date.now()) {
 function evaluateFrame(cur, mem, cfg = {}) {
   const C = {
     CROSS_BUFFER, WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
-    CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS, FLIP_CROSS_ENABLED,
+    CB_MIN_SIZE, CONFLUENCE_DIST, TOUCH_WINDOW_MS, COOLDOWN_MS,
     IB_BREAK, ...cfg,
   };
   const out = [];
@@ -432,6 +547,7 @@ function evaluateFrame(cur, mem, cfg = {}) {
 
   // Cooldown-guarded emit. score = base + confluence count (capped 5).
   const fire = ({ kind, direction, setup, levelName, levelEs, reason, base = 2 }) => {
+    if (!isAlertEnabled(kind)) return; // live DB-backed toggle (ALERT_CATALOG)
     const key = `${kind}:${direction}:${levelEs != null ? Math.round(levelEs) : 'x'}`;
     const last = mem.cooldowns.get(key) || 0;
     if (ts - last < C.COOLDOWN_MS) return;
@@ -451,8 +567,8 @@ function evaluateFrame(cur, mem, cfg = {}) {
     });
   };
 
-  // ── 1) FLIP CROSS ── (disabled by default — see FLIP_CROSS_ENABLED)
-  if (C.FLIP_CROSS_ENABLED && prev && flipEs != null && prev.flipEs != null) {
+  // ── 1) FLIP CROSS ── (disabled by default — live toggle key 'flip_cross', see fire())
+  if (prev && flipEs != null && prev.flipEs != null) {
     const upCross   = prev.priceEs <= prev.flipEs && priceEs >= flipEs + C.CROSS_BUFFER;
     const downCross = prev.priceEs >= prev.flipEs && priceEs <= flipEs - C.CROSS_BUFFER;
     if (upCross) fire({ kind: 'flip_cross', direction: 'long', setup: 'GEX flip cross ↑', levelName: 'Flip', levelEs: flipEs, base: 3, reason: `ES ${priceEs.toFixed(2)} crossed above the GEX flip → positive-gamma regime` });
@@ -471,7 +587,7 @@ function evaluateFrame(cur, mem, cfg = {}) {
   const ibDay = etDateStr(new Date(ts));
   const ibMins = etMinutesOf(ts);
   const inIbFireWindow = ibMins >= 630 && ibMins < 645; // 10:30–10:45 ET
-  if (ctx.ibComplete && inIbFireWindow && ctx.ibh != null && ctx.ibl != null && mem.ibFormedDay !== ibDay) {
+  if (isAlertEnabled('ib_formed') && ctx.ibComplete && inIbFireWindow && ctx.ibh != null && ctx.ibl != null && mem.ibFormedDay !== ibDay) {
     mem.ibFormedDay = ibDay;
     const width = ctx.ibh - ctx.ibl;
     const conf = confluenceAt(ctx.ibh, 'IBH').concat(confluenceAt(ctx.ibl, 'IBL'));
@@ -558,11 +674,11 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   const C = {
     WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
     CROSS_BUFFER, TOUCH_WINDOW_MS, COOLDOWN_MS, BZ_MIN_SCORE, BZ_CONFIDENCE_MIN,
-    GEX_REGIME_BAND, BZ_CB_ENABLED, MR_CALL_SHORT_ENABLED, ...cfg,
+    GEX_REGIME_BAND, ...cfg,
   };
   const out = [];
   const { ts, priceEs, basis } = cur;
-  if (!BZILA_ENABLED) return out;
+  if (!isAlertEnabled('bzila_confluence')) return out; // live DB-backed master toggle
   if (!(priceEs > 0)) return out;
 
   const toEs = (spx) => (spx != null && Number.isFinite(spx) ? spx + (basis || 0) : null);
@@ -634,6 +750,8 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   };
 
   const fire = (direction, setup, levelName, levelEs, regimeOk, { requireGexMomentum = false } = {}) => {
+    const subKey = bzilaSubKey(setup);
+    if (subKey && !isAlertEnabled(subKey)) return; // live DB-backed per-setup toggle
     if (!confOk) return; // No-Trade Rule: Confidence < BZ_CONFIDENCE_MIN
     // No-Trade: GEX weakening sharply while the setup depends on that regime.
     if (regimeOk && gexWeakeningSharply) return;
@@ -691,7 +809,7 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   });
   reactLevel('bz_call', callEs, {
     touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
-    onReject: (from) => { if (from === 'from_below' && C.MR_CALL_SHORT_ENABLED) fire('short', 'Mean-reversion short (Call Wall)', 'Call Wall', callEs, positiveGexRegime); },
+    onReject: (from) => { if (from === 'from_below') fire('short', 'Mean-reversion short (Call Wall)', 'Call Wall', callEs, positiveGexRegime); },
     onBreak: (dir) => { if (dir === 'up') fire('long', 'Trend breakout long (Call Wall break)', 'Call Wall', callEs, negativeGexRegime, { requireGexMomentum: true }); },
   });
 
@@ -703,7 +821,7 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   // The detector is left intact (not deleted) so it can be backtested off the
   // trade_signals history before anyone decides to bring it back. Do NOT re-enable
   // without a win-rate number to point at.
-  if (C.BZ_CB_ENABLED) {
+  if (isAlertEnabled('bzila_cb_reaction')) {
     reactLevel('bz_cb', cbEs, {
       touch: C.CB_TOUCH, rej: C.CB_REJECT, brk: C.CB_BREAK,
       onReject: (from) => {
@@ -736,6 +854,7 @@ function evaluateFlowDivergence(cur, mem, cfg = {}) {
   const prev = mem.fdPrev;
   mem.fdPrev = { priceEs, ts };                 // carry forward for next frame's direction
   if (!(priceEs > 0) || !prev || !(prev.priceEs > 0)) return out;
+  if (!isAlertEnabled('flow_divergence')) return out; // live DB-backed toggle
 
   const totalFlow = Number(cur.totalFlowGex) || 0;
   const maxFlow   = Number(cur.maxFlow) || 0;
@@ -811,6 +930,10 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
   const C = { WHALE_MIN_PREMIUM, WHALE_DTE_MIN, WHALE_DTE_MAX, WHALE_CONTRACT_COOLDOWN_MS, ...cfg };
   if (!mem.whaleContractAt) mem.whaleContractAt = new Map(); // contract key -> last fire ms
   const out = [];
+  // NOTE: toggle is checked below, AFTER dedup bookkeeping (mem.whaleSeen /
+  // mem.whaleContractAt) runs — if the toggle is off, prints still get marked
+  // "seen" so flipping it back on doesn't dump the whole day's backlog at once.
+  const alertOn = isAlertEnabled('whale_print');
   if (!Array.isArray(rows) || !rows.length) return out;
   if (!mem.whaleSeen) mem.whaleSeen = new Set();
 
@@ -868,6 +991,8 @@ function evaluateWhalePrints(rows, mem, cfg = {}) {
     const prem = premium >= 1e6 ? `$${(premium / 1e6).toFixed(1)}M` : `$${Math.round(premium / 1e3)}K`;
     // Score by conviction: bigger premium = higher score (3 → 5).
     const score = premium >= 5e6 ? 5 : premium >= 2.5e6 ? 4 : 3;
+
+    if (!alertOn) continue; // toggle off — dedup state above still updated
 
     out.push({
       ts,
@@ -1165,6 +1290,14 @@ async function runOnce(base, { force = false } = {}) {
 /** Persist + alert + log a batch of signals. */
 async function emit(sigs) {
   for (const sig of sigs) {
+    // Belt-and-suspenders: re-derive this signal's live toggle key(s) and skip it
+    // if disabled, in case some call site upstream missed a gate. Bzila signals
+    // must have BOTH the master key and their own sub-key enabled.
+    if (!isAlertEnabled(sig.kind)) continue;
+    if (sig.kind === 'bzila_confluence') {
+      const subKey = bzilaSubKey(sig.setup);
+      if (subKey && !isAlertEnabled(subKey)) continue;
+    }
     sig.sessionDate = etDateStr(new Date(sig.ts));
     await insertSignal(sig);
     void sendDiscord(sig);
@@ -1173,6 +1306,8 @@ async function emit(sigs) {
 }
 
 let timer = null;
+let alertPollTimer = null;
+const ALERT_POLL_MS = Number(process.env.SIGNALS_ALERT_POLL_MS || 20_000); // live toggle refresh cadence
 function startSignalsEngine(port) {
   const base = `http://localhost:${port}`;
   if (process.env.SIGNALS_ENGINE_DISABLED === '1') {
@@ -1181,8 +1316,16 @@ function startSignalsEngine(port) {
   }
   console.log(`[signals] enabled — GEX/CB signal engine every ${EVAL_MS}ms during the futures session; alerts-only${DISCORD_WEBHOOK ? ' + Discord' : ''}, no orders`);
   ensureSchema().catch(() => {});
+  // Live per-alert toggle cache: seed immediately (fire-and-forget, don't block
+  // startup), then keep it fresh on its own timer so a flip from the owner admin
+  // page's Signal Alerts panel takes effect within ~20s, no redeploy/restart.
+  refreshAlertCache().catch(() => {});
+  alertPollTimer = setInterval(() => { void refreshAlertCache(); }, ALERT_POLL_MS);
   timer = setInterval(() => { void runOnce(base); }, EVAL_MS);
-  return () => { if (timer) clearInterval(timer); timer = null; };
+  return () => {
+    if (timer) clearInterval(timer); timer = null;
+    if (alertPollTimer) clearInterval(alertPollTimer); alertPollTimer = null;
+  };
 }
 
 module.exports = {
@@ -1198,4 +1341,13 @@ module.exports = {
   computeContextLevels,
   inSession,
   _mem: mem,
+  // Live per-alert-key toggle system (ALERT_CATALOG) — used by server-with-proxy's
+  // /proxy/signal-alerts GET+POST routes and the /dev/owner admin UI.
+  ALERT_CATALOG,
+  listAlertSettings,
+  setAlertEnabled,
+  isAlertEnabled,
+  refreshAlertCache,
+  bzilaSubKey,
+  __setAlertCacheForTest, // test-only — used by signals-engine.selftest.js
 };

@@ -1822,6 +1822,46 @@ export default function OwnerDashboard() {
     setTimeout(() => setCtlMsg((m) => (m?.key === key ? null : m)), 4000);
   }, []);
 
+  // Signal Alerts — live DB-backed per-alert-key toggles for the background
+  // trade-signal engine (server-v2/signals-engine.js). Replaces the old
+  // compile-time env-var kill switches; flipping one here takes effect within
+  // ~20s (the engine's poll cadence), no redeploy/restart needed.
+  type SignalAlertRow = { key: string; label: string; group: string; enabled: boolean };
+  const [signalAlerts, setSignalAlerts] = useState<SignalAlertRow[] | null>(null);
+  const [signalAlertsBusy, setSignalAlertsBusy] = useState<string | null>(null);
+
+  const loadSignalAlerts = useCallback(async () => {
+    try {
+      const r = await fetch("/proxy/signal-alerts");
+      const j = await r.json();
+      if (Array.isArray(j?.alerts)) setSignalAlerts(j.alerts);
+    } catch { /* non-fatal */ }
+  }, []);
+
+  useEffect(() => { void loadSignalAlerts(); }, [loadSignalAlerts]);
+
+  const toggleSignalAlert = useCallback(async (key: string, current: boolean) => {
+    const next = !current;
+    setSignalAlertsBusy(key);
+    // Optimistic flip.
+    setSignalAlerts((rows) => rows ? rows.map((r) => (r.key === key ? { ...r, enabled: next } : r)) : rows);
+    try {
+      const r = await fetch("/proxy/signal-alerts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, enabled: next }),
+      });
+      const j = await r.json();
+      if (!j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      flashMsg(`sigalert-${key}`, `${key} → ${next ? "ON" : "OFF"}`, true);
+    } catch (e) {
+      // Revert on failure.
+      setSignalAlerts((rows) => rows ? rows.map((r) => (r.key === key ? { ...r, enabled: current } : r)) : rows);
+      flashMsg(`sigalert-${key}`, `Failed: ${String((e as Error)?.message || e)}`, false);
+    } finally {
+      setSignalAlertsBusy(null);
+    }
+  }, [flashMsg]);
+
   // /ws/gex status socket (drives the "Proxy WS" badge + snapshot-derived KPIs).
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -3191,6 +3231,74 @@ export default function OwnerDashboard() {
                 {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
               </div>
             )}
+
+            {/* ── Signal Alerts — live per-kind toggles for the background trade-signal
+                engine (Discord "CB Edge Signals"). DB-backed; a flip here takes effect
+                within ~20s, no redeploy. Replaces the old compile-time env kill switches. */}
+            <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text }}>Signal Alerts</span>
+                <span style={{ fontSize: 13, color: HOME_THEME.textMuted }}>
+                  on/off per alert type for the background signals engine → Discord. No redeploy needed.
+                </span>
+              </div>
+              {!signalAlerts ? (
+                <span style={{ fontSize: 14, color: HOME_THEME.textMuted }}>Loading…</span>
+              ) : (() => {
+                const masterEnabled = signalAlerts.find((r) => r.key === "bzila_confluence")?.enabled ?? true;
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {signalAlerts.map((row) => {
+                      const isBzilaSub = row.group === "bzila" && row.key !== "bzila_confluence";
+                      const dimmed = isBzilaSub && !masterEnabled;
+                      const busy = signalAlertsBusy === row.key;
+                      return (
+                        <div
+                          key={row.key}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10,
+                            paddingLeft: isBzilaSub ? 22 : 0,
+                            opacity: dimmed ? 0.45 : 1,
+                          }}
+                        >
+                          <button
+                            onClick={() => toggleSignalAlert(row.key, row.enabled)}
+                            disabled={busy}
+                            title={
+                              row.key === "bzila_confluence"
+                                ? "Master switch — must be ON for any Bzila sub-setup below to fire."
+                                : isBzilaSub
+                                ? "Independently toggleable, but only fires while the Bzila Confluence master switch above is also ON."
+                                : undefined
+                            }
+                            style={{
+                              ...homeButtonStyle, padding: "4px 12px", borderRadius: 7, fontSize: 13,
+                              minWidth: 74, textAlign: "center",
+                              opacity: busy ? 0.6 : 1,
+                              cursor: busy ? "wait" : "pointer",
+                              background: row.enabled ? homeButtonStyle.background : "rgba(255,255,255,0.04)",
+                            }}
+                          >
+                            {busy ? "…" : row.enabled ? "● ON" : "○ OFF"}
+                          </button>
+                          <span style={{ fontSize: 14, color: HOME_THEME.text }}>{row.label}</span>
+                          <span
+                            style={{
+                              fontSize: 11, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase",
+                              padding: "2px 7px", borderRadius: 5,
+                              color: row.group === "bzila" ? HOME_THEME.cyan : HOME_THEME.textMuted,
+                              border: `1px solid ${row.group === "bzila" ? HOME_THEME.cyan : HOME_THEME.border}66`,
+                            }}
+                          >
+                            {row.group}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </AccordionCard>
         )}

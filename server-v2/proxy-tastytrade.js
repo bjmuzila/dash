@@ -2454,7 +2454,13 @@ class TastytradeProxy {
 
   /** Pick contracts for the active expiry within the strike window of spot. */
   _activeContracts() {
-    const center = this.spot > 0 ? this.spot : null;
+    // Window must center on the SAME spot _recompute() prices off (see
+    // _effectiveSpot()) — centering on raw this.spot instead left the window
+    // (and the dxLink subscription list) anchored to the frozen last-RTH
+    // print while the GEX math had already moved to the corrected spot,
+    // pushing the real ATM strikes off to one edge of the visible range.
+    const effSpot = this._effectiveSpot ? this._effectiveSpot() : this.spot;
+    const center = effSpot > 0 ? effSpot : null;
     // Fixed point window if set, else a percentage band around spot.
     const band = STRIKE_WINDOW != null ? STRIKE_WINDOW : (center ? center * STRIKE_WINDOW_PCT : Infinity);
     const out = [];

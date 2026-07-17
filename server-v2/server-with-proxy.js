@@ -46,7 +46,11 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
-const { startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce } = require('./signals-engine');
+const {
+  startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
+  ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
+  setAlertEnabled: setSignalAlertEnabled,
+} = require('./signals-engine');
 const { checkProxyAccess } = require('./proxy-auth');
 const { initObservability, captureError } = require('./observability');
 
@@ -2115,6 +2119,39 @@ async function main() {
           try { on = !!JSON.parse(body || '{}').on; } catch {}
           setMvcAutoEnabled(on);
           sendJson(res, 200, { enabled: isMvcAutoEnabled() });
+        });
+        return;
+      }
+      // Live per-alert-key toggles for the signals engine (bzila floods etc.) —
+      // DB-backed, no redeploy needed. The engine polls the DB every ~20s, and
+      // setAlertEnabled() also updates its in-memory cache immediately on write.
+      //   GET  /proxy/signal-alerts                    → { alerts: [{key,label,group,enabled}] }
+      //   POST /proxy/signal-alerts { key, enabled }    → { ok: true }
+      if (pathname === '/proxy/signal-alerts' && req.method === 'GET') {
+        listSignalAlertSettings()
+          .then((alerts) => sendJson(res, 200, { alerts }))
+          .catch((e) => sendJson(res, 502, { error: String(e?.message || e) }));
+        return;
+      }
+      if (pathname === '/proxy/signal-alerts' && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let parsed = {};
+          try { parsed = JSON.parse(body || '{}'); } catch {}
+          const key = typeof parsed.key === 'string' ? parsed.key : '';
+          const hasEnabled = typeof parsed.enabled === 'boolean';
+          if (!key || !hasEnabled) {
+            sendJson(res, 400, { error: 'key (string) and enabled (boolean) required' });
+            return;
+          }
+          if (!SIGNAL_ALERT_CATALOG.some((a) => a.key === key)) {
+            sendJson(res, 400, { error: `unknown alert key: ${key}` });
+            return;
+          }
+          setSignalAlertEnabled(key, parsed.enabled)
+            .then(() => sendJson(res, 200, { ok: true }))
+            .catch((e) => sendJson(res, 502, { error: String(e?.message || e) }));
         });
         return;
       }

@@ -448,7 +448,7 @@ function PremarketCard() {
       {loading || error || bullets.length === 0 || isStale ? (
         <CardState loading={loading} error={error ?? data?.error ?? null} empty={emptyMsg} />
       ) : (
-        <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
+        <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7, flex: 1, minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
           {bullets.map((b, i) => (
             <li key={i} style={{ fontSize: 16, lineHeight: 1.45, color: T.text }}>{b}</li>
           ))}
