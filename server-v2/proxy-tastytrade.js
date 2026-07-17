@@ -255,11 +255,20 @@ async function fetchChain(underlying = SYMBOL) {
   const expSet = new Set();
 
   for (const item of items) {
+    // TT's nested endpoint can return MULTIPLE items under one root query —
+    // e.g. querying "SPX" returns both the AM-settled monthly (root-symbol
+    // "SPX") and the PM-settled weekly (root-symbol "SPXW") as separate items,
+    // which collide on the same expiration date on a monthly-expiration
+    // Friday (today). Keep each item's own root-symbol on every contract so
+    // callers can disambiguate instead of silently taking whichever item
+    // happened to come first.
+    const itemRoot = item['root-symbol'] || item['underlying-symbol'] || null;
     for (const exp of item.expirations || []) {
       const expiration = exp['expiration-date'];
       if (!expiration) continue;
       expSet.add(expiration);
       const dte = dteFromIso(expiration);
+      const settlementType = exp['settlement-type'] || null; // "AM" | "PM"
       for (const strikeObj of exp.strikes || []) {
         const strike = Number(strikeObj['strike-price']);
         if (!(strike > 0)) continue;
@@ -271,6 +280,8 @@ async function fetchChain(underlying = SYMBOL) {
             strike,
             type: 'C',
             dte,
+            rootSymbol: itemRoot,
+            settlementType,
           });
         }
         if (strikeObj['put-streamer-symbol']) {
@@ -281,6 +292,8 @@ async function fetchChain(underlying = SYMBOL) {
             strike,
             type: 'P',
             dte,
+            rootSymbol: itemRoot,
+            settlementType,
           });
         }
       }
@@ -629,10 +642,21 @@ async function probeRest({ ticker, expiry, type, strike }) {
   }
 
   // Find matching TT contract for its OCC symbol (needed to query TT by-type).
-  const ttContract = (ttChain?.contracts || []).find(
+  // On a monthly-expiration Friday, TT's nested chain can carry BOTH the
+  // AM-settled monthly (root-symbol "SPX") and the PM-settled weekly
+  // (root-symbol "SPXW") under the same expiration date/strike/type — filter
+  // to the root the user actually typed first, and only fall back to an
+  // unfiltered match for symbols where TT never tagged a root-symbol at all
+  // (equities, or older cache entries).
+  const wantRoot = String(ticker || '').toUpperCase().replace(/^\./, '');
+  const ttCandidates = (ttChain?.contracts || []).filter(
     (c) => c.expiration === expiry && c.type === type &&
            Math.abs(Number(c.strike) - best.strike) < 0.01,
   );
+  const ttContract =
+    ttCandidates.find((c) => c.rootSymbol === wantRoot) ||
+    (ttCandidates.some((c) => c.rootSymbol) ? null : ttCandidates[0]) ||
+    null;
   const occSymbol = ttContract?.occSymbol || null;
   const streamerSymbol = ttContract?.streamerSymbol || `${root}_${expiry}_${type}${best.strike}`;
 

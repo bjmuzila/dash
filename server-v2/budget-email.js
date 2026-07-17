@@ -273,14 +273,29 @@ async function runOnce(base) {
 }
 
 // ── daily 08:00 ET scheduler (60s tick + once-per-day guard) ────────────────
+// Guard is persisted to disk (mounted ./state volume) — an in-memory guard
+// resets on every container restart, so a restart during the 8am hour
+// re-sent the email (root cause of the 3x-in-one-morning bug).
+const path = require('path');
+const fs = require('fs');
+const GUARD_FILE = path.join(__dirname, '..', 'state', '.budget-email-last-run');
+
+function readLastRunDay() {
+  try { return fs.readFileSync(GUARD_FILE, 'utf8').trim(); } catch { return null; }
+}
+function writeLastRunDay(ymd) {
+  try { fs.mkdirSync(path.dirname(GUARD_FILE), { recursive: true }); fs.writeFileSync(GUARD_FILE, ymd); } catch (e) { console.error('[budget-email] guard write failed:', e.message); }
+}
+
 function startBudgetEmail(port) {
   const base = `http://localhost:${port}`;
-  let lastRunDay = null;
+  let lastRunDay = readLastRunDay();
   console.log('[budget-email] enabled — daily 08:00 ET briefing');
   setInterval(() => {
     const { hour, ymd } = etParts();
     if (hour === 8 && lastRunDay !== ymd) {
       lastRunDay = ymd;
+      writeLastRunDay(ymd);
       console.log(`[budget-email] firing ${ymd}`);
       runOnce(base).catch((e) => console.error('[budget-email] failed:', e.message));
     }

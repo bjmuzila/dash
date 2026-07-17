@@ -114,6 +114,17 @@ const BZ_CONFIDENCE_MIN  = Number(process.env.SIGNALS_BZ_CONFIDENCE_MIN  || 65);
 // CB reactions inside the Bzila detector (hold + break). OFF by default — both
 // variants were rejected in live use. Opt in with SIGNALS_BZ_CB=1.
 const BZ_CB_ENABLED      = process.env.SIGNALS_BZ_CB === '1';
+// Mean-reversion short (Call Wall) — flooded Discord 2026-07-17 (fired every
+// ~10-20min for hours as the Call Wall level drifted a few ticks each time,
+// each drift landing outside the cooldown's rounded-level key). Muted by
+// default; the detector stays intact. Opt back in with SIGNALS_MR_CALL_SHORT=1.
+const MR_CALL_SHORT_ENABLED = process.env.SIGNALS_MR_CALL_SHORT === '1';
+// Whole Bzila GEX Confluence v2 detector (flip cross, wall mean-reversion,
+// wall break, + the already-off CB reactions) — Brandon called the whole
+// thing off 2026-07-17 ("bz alerts all need to go, that was a bad idea") after
+// the Call Wall mean-reversion leg flooded Discord for hours. Detector code
+// stays intact for backtesting; opt back in with SIGNALS_BZILA=1.
+const BZILA_ENABLED = process.env.SIGNALS_BZILA === '1';
 // Regime deadband ($): |net GEX| must exceed this for a gamma regime to be "on".
 // Matches greeks-cross-alerts.js GREEKS_CROSS_GEX_BAND (0.5B) but wider by
 // default — a regime that can't clear $1B isn't worth staking a break trade on.
@@ -547,10 +558,11 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   const C = {
     WALL_TOUCH, WALL_REJECT, WALL_BREAK, CB_TOUCH, CB_REJECT, CB_BREAK,
     CROSS_BUFFER, TOUCH_WINDOW_MS, COOLDOWN_MS, BZ_MIN_SCORE, BZ_CONFIDENCE_MIN,
-    GEX_REGIME_BAND, BZ_CB_ENABLED, ...cfg,
+    GEX_REGIME_BAND, BZ_CB_ENABLED, MR_CALL_SHORT_ENABLED, ...cfg,
   };
   const out = [];
   const { ts, priceEs, basis } = cur;
+  if (!BZILA_ENABLED) return out;
   if (!(priceEs > 0)) return out;
 
   const toEs = (spx) => (spx != null && Number.isFinite(spx) ? spx + (basis || 0) : null);
@@ -679,7 +691,7 @@ function evaluateBzilaConfluence(cur, mem, cfg = {}) {
   });
   reactLevel('bz_call', callEs, {
     touch: C.WALL_TOUCH, rej: C.WALL_REJECT, brk: C.WALL_BREAK,
-    onReject: (from) => { if (from === 'from_below') fire('short', 'Mean-reversion short (Call Wall)', 'Call Wall', callEs, positiveGexRegime); },
+    onReject: (from) => { if (from === 'from_below' && C.MR_CALL_SHORT_ENABLED) fire('short', 'Mean-reversion short (Call Wall)', 'Call Wall', callEs, positiveGexRegime); },
     onBreak: (dir) => { if (dir === 'up') fire('long', 'Trend breakout long (Call Wall break)', 'Call Wall', callEs, negativeGexRegime, { requireGexMomentum: true }); },
   });
 
