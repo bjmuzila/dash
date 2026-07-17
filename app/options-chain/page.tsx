@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ColorType, CrosshairMode, LineSeries, createChart } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, LineData, UTCTimestamp } from "lightweight-charts";
@@ -661,6 +661,227 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
   );
 }
 
+// ── Memoized chain matrix ───────────────────────────────────────────────────
+interface ChainMatrixProps {
+  columns: ExpColumn[];
+  gridCols: number;
+  visibleStrikes: (number | null)[];
+  nearestStrike: number;
+  spot: number;
+  greekMode: GreekMode;
+  dataMode: DataMode;
+  intensity: number; // parent passes the DEFERRED intensity
+  colScales: { max: number; top3: number[] }[];
+  volMvcByCol: (number | null)[];
+  mvcByCol: (number | null)[];
+  pinByCol: { above: number | null; below: number | null }[];
+  valueAt: (col: ExpColumn, strike: number) => number | null;
+  isStandalone: boolean;
+  changeMode: ChangeMode;
+  changeMeta: { expiries: Set<string>; hasData: boolean };
+  changeMap: Map<string, number>;
+  changeScaleByExp: Map<string, { max: number; top3: number[] }>;
+  emStrikes: { close: number | null; d1: number | null; u1: number | null; d2: number | null; u2: number | null } | null;
+  anyCurrentWeek: boolean;
+  emLevels: { close: number; em: number } | null;
+  activeTicker: string;
+  atmRowRef: React.RefObject<HTMLDivElement | null>;
+  onCellClick: (v: { strike: number; expiration: string }) => void;
+}
+
+// Split out + memoized so transient parent state (the load-progress bar, the
+// last-update clock, Intensity-slider commits) never re-renders the ~560-cell
+// matrix. It re-renders only when its own data props change — which, thanks to
+// the parent's useMemo/useCallback, is exactly "when the chain data changed."
+const ChainMatrix = memo(function ChainMatrix({
+  columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
+  intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
+  changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
+  emLevels, activeTicker, atmRowRef, onCellClick,
+}: ChainMatrixProps) {
+  // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
+  const renderIdx = Array.from({ length: gridCols })
+    .map((_, i) => i)
+    .filter((i) => {
+      const c = columns[i];
+      if (!c) return true; // keep empty placeholder slots
+      return isTradingDay(new Date(c.expiration + "T00:00:00"));
+    });
+  // Shared strike axis: ONE strike column on the left, then one
+  // value-only column per expiration. Row N = same strike everywhere.
+  const STRIKE_COL = 76;
+  // Sticky header/strike column must be fully opaque — rows scroll under it.
+  const HDR_BG = "#0D1119";
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
+      borderRadius: 12,
+      overflow: "clip",
+      border: `1px solid ${HT.border}`,
+      borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
+      background: HT.panelBg,
+    }}>
+      {/* ── Header row: empty strike corner + one expiry header per column ── */}
+      <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
+        Strike
+      </div>
+      {renderIdx.map((i) => {
+        const col = columns[i];
+        const isChangeCol = !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
+          changeMeta.expiries.has(col.expiration);
+        const colTotal = col
+          ? (isChangeCol
+              ? visibleStrikes.reduce((s, k) => s + (k == null ? 0 : (changeMap.get(`${col.expiration}|${k}`) ?? 0)), 0)
+              : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
+          : null;
+        return (
+          <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
+            <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
+            {!isStandalone && (
+              <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+                {colTotal == null ? "—" : fmtMoney(colTotal)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* ── One row per shared strike ── */}
+      {visibleStrikes.map((strike, rowIdx) => {
+        // Padding row (chain ran out on this side of ATM): keep the row so
+        // ATM stays centered, but render it empty.
+        if (strike == null) {
+          return (
+            <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
+              <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
+              {renderIdx.map((i) => (
+                <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
+              ))}
+            </div>
+          );
+        }
+        const isATM = strike === nearestStrike;
+        const isClose = anyCurrentWeek && emStrikes != null && strike === emStrikes.close;
+        const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
+        const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
+        // All marker lines are DOTTED now. Close = brighter, EM bands dimmer.
+        const rowEmBorder = isClose ? "2px dotted rgba(255,255,255,.95)"
+          : is1x ? "2px dotted rgba(255,255,255,.85)"
+          : is2x ? "2px dotted rgba(255,255,255,.7)"
+          : undefined;
+        // Small label + hover tooltip for the marked rows.
+        let emTag: string | null = null, emTip = "";
+        if (isATM) { emTag = "ATM"; emTip = `At-the-money — nearest strike to spot (${spot ? spot.toFixed(2) : "—"})`; }
+        else if (isClose) { emTag = "CLOSE"; emTip = `Last week's close${emLevels ? ` (${emLevels.close})` : ""} — the EM band center`; }
+        else if (is1x) {
+          const up = emStrikes != null && strike === emStrikes.u1;
+          emTag = up ? "+1σ" : "−1σ";
+          emTip = `1× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${emLevels.em})` : ""}`;
+        } else if (is2x) {
+          const up = emStrikes != null && strike === emStrikes.u2;
+          emTag = up ? "+2σ" : "−2σ";
+          emTip = `2× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${2 * emLevels.em})` : ""}`;
+        }
+        return (
+          <div key={strike} style={{ display: "contents" }}>
+            {/* Shared strike label (sticky left) */}
+            <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
+              position: "sticky", left: 0, zIndex: 2,
+              padding: "2px 8px", fontSize: 12, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
+              color: isATM ? "#0a0e14" : "#e4e4e7",
+              background: isATM ? "#ffb300" : HDR_BG,
+              borderRight: `1px solid ${HT.border}`,
+              borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
+              borderBottom: isATM ? "2px solid #ffffff" : undefined,
+              display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
+              cursor: emTag ? "help" : undefined,
+              whiteSpace: "nowrap", overflow: "hidden",
+            }}>
+              {emTag && (
+                <span style={{
+                  fontSize: 8, fontWeight: 800, letterSpacing: "0.04em",
+                  padding: "1px 4px", borderRadius: 4, marginRight: "auto",
+                  background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
+                  color: isATM ? "#0a0e14" : "#ffffff",
+                }}>{emTag}</span>
+              )}
+              {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
+            </div>
+            {/* One value cell per expiration */}
+            {renderIdx.map((colIdx, posInRow) => {
+              const col = columns[colIdx];
+              const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] };
+              const isChangeCol =
+                !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
+                changeMeta.expiries.has(col.expiration);
+              const chKey = isChangeCol ? `${col!.expiration}|${strike}` : "";
+              const value = isChangeCol
+                ? (changeMap.has(chKey) ? changeMap.get(chKey)! : null)
+                : (col ? valueAt(col, strike) : null);
+              const cellScale = isChangeCol
+                ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
+                : scale;
+              const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
+              // ❌ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
+              const isVolMvc = !isChangeCol && greekMode === "gex" && dataMode === "oi-vol" && col != null && volMvcByCol[colIdx] === strike;
+              const pin = pinByCol[colIdx];
+              const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
+              const isFirst = posInRow === 0;
+              const isLast = posInRow === renderIdx.length - 1;
+              // ATM box: use box-shadow so it overlays without shifting layout.
+              // Top+bottom on every cell; left edge on first col; right edge on last col.
+              const atmShadow = isATM
+                ? [
+                    "inset 0 2px 0 #ffffff",
+                    "inset 0 -2px 0 #ffffff",
+                    ...(isFirst ? ["inset 2px 0 0 #ffffff"] : []),
+                    ...(isLast ? ["inset -2px 0 0 #ffffff"] : []),
+                  ].join(", ")
+                : undefined;
+              // Contract flow sparkline only makes sense for SPX 0DTE (that's
+              // what /proxy/flow-gex-history tracks — the live 0DTE tape).
+              const isZeroDteCol = !isChangeCol && col != null && col.expiration === etDateKey(etToday());
+              const isClickable = isZeroDteCol && activeTicker.toUpperCase() === "SPX" && value != null;
+              return (
+                <div
+                  key={`${strike}-${colIdx}`}
+                  className={isMvc ? "mvc-peak-cell" : undefined}
+                  onClick={isClickable ? () => onCellClick({ strike, expiration: col!.expiration }) : undefined}
+                  title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
+                  style={{
+                    padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
+                    color: value == null ? "#3a4a5e" : "rgba(255,255,255,0.62)",
+                    background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
+                    borderTop: rowEmBorder,
+                    boxShadow: atmShadow,
+                    whiteSpace: "nowrap", overflow: "hidden",
+                    display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 5,
+                    cursor: isClickable ? "pointer" : undefined,
+                    ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
+                  }}
+                >
+                  {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
+                  {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
+                  {isPin && (
+                    <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", verticalAlign: "middle" }}>
+                      <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
+                        <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
+                        <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
+                      </svg>
+                    </span>
+                  )}
+                  <span>{value == null ? "·" : fmtMoney(value)}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
 export default function OptionsChainPage({
   expirySelection = "sequential",
   expiryCount,
@@ -716,6 +937,10 @@ export default function OptionsChainPage({
   const [displayPercent, setDisplayPercent] = useState<number>(10);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [intensity, setIntensity] = useState(1.75);
+  // Grid colors read this deferred copy so dragging the Intensity slider stays
+  // responsive — React commits the slider urgently and repaints the ~560-cell
+  // matrix on a lower-priority pass it can interrupt.
+  const deferredIntensity = useDeferredValue(intensity);
   const [lastUpdate, setLastUpdate] = useState("--:--:--");
   const [loadProgress, setLoadProgress] = useState(0); // 0-100
   const [greekMode, setGreekMode] = useState<GreekMode>("gex");
@@ -815,24 +1040,45 @@ export default function OptionsChainPage({
         }
       }
 
+      // Progressive paint: seed placeholder slots so the grid renders its
+      // skeleton immediately, then fill + repaint ONE column at a time as each
+      // /api/chains call resolves — instead of blocking on Promise.all of all N
+      // before the first cell appears. Perceived load = time to the FIRST expiry,
+      // not the slowest.
+      const pending: ExpColumn[] = targets.map(t => ({
+        expiration: t.value, label: t.label, underlying: 0, cells: new Map<number, GreekCell>(),
+      }));
+      if (token === loadTokenRef.current) {
+        expColumnsRef.current = pending;
+        setRefreshSeed(s => s + 0.01);
+      }
+      let spotSet = false;
+
       const results = await Promise.all(
         targets.map(async (t, i) => {
           const res = await fetch(
             `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(t.value)}&range=all${bust}`,
           );
           const json = await res.json().catch(() => null);
-          if (token === loadTokenRef.current) {
-            setLoadProgress(8 + Math.round(((i + 1) / targets.length) * 84));
-          }
           const data = (json?.data as Record<string, unknown> | undefined) ?? undefined;
           const items = (data?.items as unknown[]) ?? [];
           const underlying = parseFloat(String(data?.underlyingPrice ?? 0)) || 0;
-          return {
+          const col = {
             expiration: t.value,
             label: t.label,
             underlying,
             cells: parseExpiration(items, t.value, underlying, dataModeRef.current, flowGexMap),
           } as ExpColumn;
+          if (token === loadTokenRef.current) {
+            pending[i] = col;                        // fill this slot in place
+            expColumnsRef.current = pending.slice(); // fresh ref → memo grid repaints
+            // Center ATM + build the strike window off the FIRST spot we get,
+            // without waiting for the remaining columns.
+            if (!spotSet && underlying > 0) { spotSet = true; setUnderlyingPrice(underlying); }
+            setLoadProgress(8 + Math.round(((i + 1) / targets.length) * 84));
+            setRefreshSeed(s => s + 0.01);
+          }
+          return col;
         }),
       );
 
@@ -1478,189 +1724,32 @@ export default function OptionsChainPage({
         /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
            inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
         <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
-          {(() => {
-          // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
-          const renderIdx = Array.from({ length: gridCols })
-            .map((_, i) => i)
-            .filter((i) => {
-              const c = columns[i];
-              if (!c) return true; // keep empty placeholder slots
-              return isTradingDay(new Date(c.expiration + "T00:00:00"));
-            });
-          // Shared strike axis: ONE strike column on the left, then one
-          // value-only column per expiration. Row N = same strike everywhere.
-          const STRIKE_COL = 76;
-          // Sticky header/strike column must be fully opaque — rows scroll under it.
-          const HDR_BG = "#0D1119";
-          return (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
-            borderRadius: 12,
-            overflow: "clip",
-            border: `1px solid ${HT.border}`,
-            borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
-            background: HT.panelBg,
-          }}>
-            {/* ── Header row: empty strike corner + one expiry header per column ── */}
-            <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
-              Strike
-            </div>
-            {renderIdx.map((i) => {
-              const col = columns[i];
-              const isChangeCol = !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
-                changeMeta.expiries.has(col.expiration);
-              const colTotal = col
-                ? (isChangeCol
-                    ? visibleStrikes.reduce((s, k) => s + (k == null ? 0 : (changeMap.get(`${col.expiration}|${k}`) ?? 0)), 0)
-                    : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
-                : null;
-              return (
-                <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
-                  {!isStandalone && (
-                    <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
-                      {colTotal == null ? "—" : fmtMoney(colTotal)}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* ── One row per shared strike ── */}
-            {visibleStrikes.map((strike, rowIdx) => {
-              // Padding row (chain ran out on this side of ATM): keep the row so
-              // ATM stays centered, but render it empty.
-              if (strike == null) {
-                return (
-                  <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-                    <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
-                    {renderIdx.map((i) => (
-                      <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
-                    ))}
-                  </div>
-                );
-              }
-              const isATM = strike === nearestStrike;
-              const isClose = anyCurrentWeek && emStrikes != null && strike === emStrikes.close;
-              const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
-              const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
-              // All marker lines are DOTTED now. Close = brighter, EM bands dimmer.
-              const rowEmBorder = isClose ? "2px dotted rgba(255,255,255,.95)"
-                : is1x ? "2px dotted rgba(255,255,255,.85)"
-                : is2x ? "2px dotted rgba(255,255,255,.7)"
-                : undefined;
-              // Small label + hover tooltip for the marked rows.
-              let emTag: string | null = null, emTip = "";
-              if (isATM) { emTag = "ATM"; emTip = `At-the-money — nearest strike to spot (${spot ? spot.toFixed(2) : "—"})`; }
-              else if (isClose) { emTag = "CLOSE"; emTip = `Last week's close${emLevels ? ` (${emLevels.close})` : ""} — the EM band center`; }
-              else if (is1x) {
-                const up = emStrikes != null && strike === emStrikes.u1;
-                emTag = up ? "+1σ" : "−1σ";
-                emTip = `1× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${emLevels.em})` : ""}`;
-              } else if (is2x) {
-                const up = emStrikes != null && strike === emStrikes.u2;
-                emTag = up ? "+2σ" : "−2σ";
-                emTip = `2× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${2 * emLevels.em})` : ""}`;
-              }
-              return (
-                <div key={strike} style={{ display: "contents" }}>
-                  {/* Shared strike label (sticky left) */}
-                  <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
-                    position: "sticky", left: 0, zIndex: 2,
-                    padding: "2px 8px", fontSize: 12, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
-                    color: isATM ? "#0a0e14" : "#e4e4e7",
-                    background: isATM ? "#ffb300" : HDR_BG,
-                    borderRight: `1px solid ${HT.border}`,
-                    borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
-                    borderBottom: isATM ? "2px solid #ffffff" : undefined,
-                    display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
-                    cursor: emTag ? "help" : undefined,
-                    whiteSpace: "nowrap", overflow: "hidden",
-                  }}>
-                    {emTag && (
-                      <span style={{
-                        fontSize: 8, fontWeight: 800, letterSpacing: "0.04em",
-                        padding: "1px 4px", borderRadius: 4, marginRight: "auto",
-                        background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
-                        color: isATM ? "#0a0e14" : "#ffffff",
-                      }}>{emTag}</span>
-                    )}
-                    {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
-                  </div>
-                  {/* One value cell per expiration */}
-                  {renderIdx.map((colIdx, posInRow) => {
-                    const col = columns[colIdx];
-                    const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] };
-                    const isChangeCol =
-                      !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
-                      changeMeta.expiries.has(col.expiration);
-                    const chKey = isChangeCol ? `${col!.expiration}|${strike}` : "";
-                    const value = isChangeCol
-                      ? (changeMap.has(chKey) ? changeMap.get(chKey)! : null)
-                      : (col ? valueAt(col, strike) : null);
-                    const cellScale = isChangeCol
-                      ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
-                      : scale;
-                    const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
-                    // ❌ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
-                    const isVolMvc = !isChangeCol && greekMode === "gex" && dataMode === "oi-vol" && col != null && volMvcByCol[colIdx] === strike;
-                    const pin = pinByCol[colIdx];
-                    const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
-                    const isFirst = posInRow === 0;
-                    const isLast = posInRow === renderIdx.length - 1;
-                    // ATM box: use box-shadow so it overlays without shifting layout.
-                    // Top+bottom on every cell; left edge on first col; right edge on last col.
-                    const atmShadow = isATM
-                      ? [
-                          "inset 0 2px 0 #ffffff",
-                          "inset 0 -2px 0 #ffffff",
-                          ...(isFirst ? ["inset 2px 0 0 #ffffff"] : []),
-                          ...(isLast ? ["inset -2px 0 0 #ffffff"] : []),
-                        ].join(", ")
-                      : undefined;
-                    // Contract flow sparkline only makes sense for SPX 0DTE (that's
-                    // what /proxy/flow-gex-history tracks — the live 0DTE tape).
-                    const isZeroDteCol = !isChangeCol && col != null && col.expiration === etDateKey(etToday());
-                    const isClickable = isZeroDteCol && activeTicker.toUpperCase() === "SPX" && value != null;
-                    return (
-                      <div
-                        key={`${strike}-${colIdx}`}
-                        className={isMvc ? "mvc-peak-cell" : undefined}
-                        onClick={isClickable ? () => setContractPopup({ strike, expiration: col!.expiration }) : undefined}
-                        title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
-                        style={{
-                          padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
-                          color: value == null ? "#3a4a5e" : "rgba(255,255,255,0.62)",
-                          background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
-                          borderTop: rowEmBorder,
-                          boxShadow: atmShadow,
-                          whiteSpace: "nowrap", overflow: "hidden",
-                          display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 5,
-                          cursor: isClickable ? "pointer" : undefined,
-                          ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
-                        }}
-                      >
-                        {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
-                        {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
-                        {isPin && (
-                          <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", verticalAlign: "middle" }}>
-                            <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
-                              <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
-                              <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
-                            </svg>
-                          </span>
-                        )}
-                        <span>{value == null ? "·" : fmtMoney(value)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-          );
-          })()}
+          <ChainMatrix
+            columns={columns}
+            gridCols={gridCols}
+            visibleStrikes={visibleStrikes}
+            nearestStrike={nearestStrike}
+            spot={spot}
+            greekMode={greekMode}
+            dataMode={dataMode}
+            intensity={deferredIntensity}
+            colScales={colScales}
+            volMvcByCol={volMvcByCol}
+            mvcByCol={mvcByCol}
+            pinByCol={pinByCol}
+            valueAt={valueAt}
+            isStandalone={isStandalone}
+            changeMode={changeMode}
+            changeMeta={changeMeta}
+            changeMap={changeMap}
+            changeScaleByExp={changeScaleByExp}
+            emStrikes={emStrikes}
+            anyCurrentWeek={anyCurrentWeek}
+            emLevels={emLevels}
+            activeTicker={activeTicker}
+            atmRowRef={atmRowRef}
+            onCellClick={setContractPopup}
+          />
         </div>
       )}
 
