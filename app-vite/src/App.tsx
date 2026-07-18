@@ -1,7 +1,8 @@
+import '@/app/globals.css' // app's global stylesheet: dark html/body bg, margin:0, system font stack (--font-sans / --font-inter alias). Fixes the white frame + wrong font.
 import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/components/auth/AuthProvider'
-import Nav from './Nav'
+import LayoutShell from '@/components/shared/LayoutShell'
 // Existing Next client pages, compiled directly via the '@' alias + next/* shims.
 import TradersDashboard from '@/app/traders-dashboard/page'
 import Analytics from '@/app/analytics/page'
@@ -26,15 +27,16 @@ const EconCalendar = lazy(() => import('@/app/economic-calendar/page'))
 
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 
-// Served under /app in prod (see vite.config base:'/app/'), so the router
-// basename is /app: the browser URL /app/scanner maps to route /scanner.
+// Mirrors app/layout.tsx: AuthProvider > (body flex-column) > LayoutShell.
+// LayoutShell renders the universal GlobalToolbar (+ Gex/Notes docks) around the
+// routed page, exactly like the real Next app. The wrapper div replaces the Next
+// body's `className="flex h-screen flex-col overflow-hidden"` (no Tailwind here).
 export default function App() {
   return (
     <BrowserRouter basename="/app">
       <AuthProvider>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', minHeight: 0 }}>
-          <Nav />
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+          <LayoutShell>
             <Routes>
               <Route path="/home" element={S(<Home />)} />
               <Route path="/traders-dashboard" element={<TradersDashboard />} />
@@ -54,7 +56,7 @@ export default function App() {
               <Route path="/economic-calendar" element={S(<EconCalendar />)} />
               <Route path="*" element={<Navigate to="/home" replace />} />
             </Routes>
-          </div>
+          </LayoutShell>
         </div>
       </AuthProvider>
     </BrowserRouter>
