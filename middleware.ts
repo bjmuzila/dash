@@ -50,6 +50,11 @@ const OWNER_PATTERNS: RegExp[] = [
   /^\/owner(\/.*)?$/,
   // Owner-group backend tools that live at the root (shown under the owner rail).
   /^\/social-media(\/.*)?$/,
+  // Standalone Vite "home 3.0" dashboard (public/home3) — owner-only while it's
+  // a partial recreation, so paying customers keep the complete /home. Static
+  // assets (/home3/assets/*.js, *.css, *.png) bypass this gate via the matcher
+  // extension exclusion below; only the bare /home3 entry route is gated.
+  /^\/home3$/,
 ];
 const isOwnerRoute = (path: string) => OWNER_PATTERNS.some((re) => re.test(path));
 

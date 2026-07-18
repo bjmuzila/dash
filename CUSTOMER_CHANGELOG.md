@@ -2,6 +2,11 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 7/17/2026
+
+* The Options Chain cells now show the dollar gamma (GEX premium) again instead of a percentage.
+* In the Options Chain's OI + Vol view, an ❌ now marks the strike with the biggest volume-driven gamma for each expiration, so you can spot where the day's option volume is piling up.
+
 ## Thursday 7/16/2026
 
 * Fixed the Call Wall, Put Wall and Flip lines on the ES candle chart jittering a point or two every time price updated, which also made the whole chart nudge sideways. The levels now hold still and only move when they've genuinely moved.

@@ -66,6 +66,13 @@ const nextConfig = {
           source: '/proxy/:path*',
           destination: `${internalProxyBase}/proxy/:path*`,
         },
+        // Serve the standalone Vite "home 3.0" SPA (static files in public/home3)
+        // at the clean /home3 URL. Its assets live under /home3/ (Vite base),
+        // and its /ws/gex, /proxy/*, /api/* calls are same-origin → live feed.
+        {
+          source: '/home3',
+          destination: '/home3/index.html',
+        },
       ],
     };
   },

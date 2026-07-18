@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-17 — Options chain: cells back to GEX premium $ + ❌ volume-GEX peak marker (`app/options-chain/page.tsx`)
+
+Reverted the value cells from the normalized GEX % display back to the dollar GEX premium (`fmtMoney(value)`), removing the `normalizedGexPct` render-local and the `colGexTotalAbs` memo that fed it. Added a pure volume-only `volGex` field to `GreekCell`, computed in `parseExpiration` from raw call/put `volume` × gamma (independent of `dataMode`, so it's present even in OI+Vol mode), plus a per-column `volMvcByCol` memo that picks the visible strike with the highest `|volGex|`; that strike is now flagged with an ❌ in its expiry cell (`isVolMvc`), gated to OI+Vol data mode + GEX greek mode so it sits alongside the ★ OI+Vol MVC without touching the other views. Syntax validated via esbuild (`--jsx=preserve`); not build-verified against a full `tsc`/VPS build.
+
 ## 2026-07-16 — Home GEX heatmap: strike-window flicker + millions-only cells (`app/home/HomeClient.tsx`, `components/dashboard/GexHeatmap.tsx`)
 
 **The trap: the home heatmap is NOT `GexHeatmap.tsx`.** `app/home/HomeClient.tsx` renders its own inline heatmap grid with its own local `fmtMoney` (L118) and its own windowing (`pickCenterRows` L265 → `toHeatmapRows` L282). The first pass this session edited `components/dashboard/GexHeatmap.tsx` and had zero effect on the home page; that component is used by other surfaces. Check which file feeds the surface before editing — both exist, both look right.
