@@ -52,6 +52,8 @@ export default function GexToolbar(props: {
   expirations: string[]; expiry: string; onExpiry: (v: string) => void
   showOI: boolean; showDex: boolean; showFlip: boolean
   onToggleOI: () => void; onToggleDex: () => void; onToggleFlip: () => void
+  showGhost5: boolean; showGhost15: boolean; showGhost30: boolean
+  onToggleGhost5: () => void; onToggleGhost15: () => void; onToggleGhost30: () => void
   onRefresh: () => void
   status: string
 }) {
@@ -72,6 +74,9 @@ export default function GexToolbar(props: {
       <Toggle label="OI" on={p.showOI} onClick={p.onToggleOI} />
       <Toggle label="DEX" on={p.showDex} onClick={p.onToggleDex} />
       <Toggle label="Flip" on={p.showFlip} onClick={p.onToggleFlip} />
+      <Toggle label="Ghost 5m" on={p.showGhost5} onClick={p.onToggleGhost5} />
+      <Toggle label="15m" on={p.showGhost15} onClick={p.onToggleGhost15} />
+      <Toggle label="30m" on={p.showGhost30} onClick={p.onToggleGhost30} />
       <button onClick={p.onRefresh} style={{ padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', color: C.cyan, background: 'rgba(33,158,188,0.10)', border: '1px solid rgba(33,158,188,0.35)' }}>↻ Now</button>
       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: p.status === 'LIVE' ? C.green : C.orange }}>
         <span style={{ width: 7, height: 7, borderRadius: 999, background: p.status === 'LIVE' ? C.green : C.orange, boxShadow: `0 0 8px ${p.status === 'LIVE' ? C.green : C.orange}` }} />

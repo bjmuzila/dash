@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { C, panelStyle } from './theme'
 import { useGexFeed } from './useGexFeed'
 import {
-  netGEXTotal, callWallOf, putWallOf, findGEXFlip, netGEXOf,
-  fmtMoneyB, formatStrikeValue, type CalcMode,
+  netGEXTotal, callWallOf, putWallOf, findGEXFlip, netGEXOf, computeGEXProfile,
+  fmtMoneyB, formatStrikeValue, type CalcMode, type ChainRow,
 } from './calc'
-import TopNav from './TopNav'
+import { useStrikeGexHistory } from './useStrikeGexHistory'
+import Toolbar from './Toolbar'
 import GexToolbar, { type GexView, type GexMode, type DataMode } from './GexToolbar'
 import LevelsStrip, { type Tile } from './LevelsStrip'
 import GexChart from './GexChart'
@@ -14,6 +15,7 @@ import SignalsFeed from './SignalsFeed'
 import TabCard from './TabCard'
 import { useDualTickerGex } from './useDualTickerGex'
 import EsCandlesView from './EsCandlesView'
+import StrikeDetailPopup from './StrikeDetailPopup'
 
 // Optionally enrich the levels strip (CB / Max Pain / EM) from the published
 // /api/levels?ticker=SPX endpoint. Field names vary, so we read defensively.
@@ -36,8 +38,12 @@ export default function Dashboard() {
   const [showOI, setShowOI] = useState(false)
   const [showDex, setShowDex] = useState(false)
   const [showFlip, setShowFlip] = useState(true)
+  const [showGhost5, setShowGhost5] = useState(false)
+  const [showGhost15, setShowGhost15] = useState(false)
+  const [showGhost30, setShowGhost30] = useState(false)
   const [intensity, setIntensity] = useState(1.75)
   const [levels, setLevels] = useState<Record<string, unknown> | null>(null)
+  const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null)
 
   // Keep the local expiry in sync with the first one the feed reports.
   useEffect(() => {
@@ -65,6 +71,8 @@ export default function Dashboard() {
   const callWall = useMemo(() => callWallOf(chain, spot, cm) ?? feed.callWall, [chain, spot, cm, feed.callWall])
   const putWall = useMemo(() => putWallOf(chain, spot, cm) ?? feed.putWall, [chain, spot, cm, feed.putWall])
   const flip = useMemo(() => findGEXFlip(chain, spot), [chain, spot])
+  const gexProfile = useMemo(() => computeGEXProfile(chain, spot, dataMode), [chain, spot, dataMode])
+  const baselines = useStrikeGexHistory(expiry)
   const posGexPct = useMemo(() => {
     let pos = 0, tot = 0
     for (const r of chain) { const v = netGEXOf(r, cm, spot); if (v > 0) pos += v; tot += Math.abs(v) }
@@ -92,7 +100,15 @@ export default function Dashboard() {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bg, color: '#fff' }}>
-      <TopNav esFut={feed.esFut} esPrev={feed.esFutPrevClose} />
+      <Toolbar
+        quotes={{
+          esFut: feed.esFut, esPrev: feed.esFutPrevClose,
+          spx: spot, spxChg: feed.spxChange, spxPct: feed.spxChangePct,
+          vix: feed.vix, vixPrev: feed.vixPrevClose,
+          status: feed.status,
+        }}
+        onRefresh={() => setExpiry((e) => e)}
+      />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'row', padding: 24, gap: 28, minHeight: 0, overflow: 'hidden' }}>
         {/* Left column */}
@@ -105,6 +121,10 @@ export default function Dashboard() {
               expirations={feed.expirations} expiry={expiry} onExpiry={setExpiry}
               showOI={showOI} showDex={showDex} showFlip={showFlip}
               onToggleOI={() => setShowOI((v) => !v)} onToggleDex={() => setShowDex((v) => !v)} onToggleFlip={() => setShowFlip((v) => !v)}
+              showGhost5={showGhost5} showGhost15={showGhost15} showGhost30={showGhost30}
+              onToggleGhost5={() => { setShowGhost5((v) => !v); setShowGhost15(false); setShowGhost30(false) }}
+              onToggleGhost15={() => { setShowGhost15((v) => !v); setShowGhost5(false); setShowGhost30(false) }}
+              onToggleGhost30={() => { setShowGhost30((v) => !v); setShowGhost5(false); setShowGhost15(false) }}
               onRefresh={() => setExpiry((e) => e)}
               status={feed.status}
             />
@@ -113,7 +133,23 @@ export default function Dashboard() {
               {view === 'escandles' ? (
                 <EsCandlesView />
               ) : feed.chartReady && chain.length > 0 ? (
-                <GexChart chain={chain} spot={spot} mode={cm} flip={showFlip ? flip : null} cb={cb} />
+                <GexChart
+                  chain={chain}
+                  spotPrice={spot}
+                  flipPoint={flip}
+                  gexProfile={gexProfile}
+                  mode={mode}
+                  dataMode={dataMode}
+                  showOI={showOI}
+                  showDex={showDex}
+                  showFlipCurve={showFlip}
+                  baselines={baselines}
+                  showGhost5={showGhost5}
+                  showGhost15={showGhost15}
+                  showGhost30={showGhost30}
+                  expiry={expiry}
+                  onStrikeClick={(row, pos) => setSelectedStrike({ row, pos })}
+                />
               ) : (
                 <Loader status={feed.status} />
               )}
@@ -147,6 +183,17 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {selectedStrike && (
+        <StrikeDetailPopup
+          row={selectedStrike.row}
+          spotPrice={spot}
+          baselines={baselines}
+          popupStyle="card"
+          anchor={selectedStrike.pos}
+          onClose={() => setSelectedStrike(null)}
+        />
+      )}
     </div>
   )
 }
