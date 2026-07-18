@@ -1,11 +1,11 @@
 import { useMemo } from 'react'
 import { C } from './theme'
 import { netGEXOf, callPosOf, putPosOf, type ChainRow } from './calc'
+import type { DualTickerGex } from './useDualTickerGex'
 
 // Live GEX heatmap — ported from HomeClient's heatmap: intensity-scaled cell
-// backgrounds, rank badges (#1–#5 by |net GEX|), ATM row highlight.
-// SPY/QQQ 0DTE columns need the dual-ticker endpoint (useDualTickerGex) — shown
-// as "—" here until that feed is wired.
+// backgrounds, rank badges (#1–#5 by |net GEX|), ATM row highlight, and the
+// SPY/QQQ 0DTE net-GEX columns joined by moneyness offset (useDualTickerGex).
 
 function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]): string {
   const n = value || 0
@@ -35,13 +35,17 @@ function fmtM(v: number): string {
 
 const RANK_COLORS = ['#FB8501', '#FB8501', '#94a3b8', '#94a3b8', '#94a3b8']
 
-export default function Heatmap({ chain, spot, intensity }: { chain: ChainRow[]; spot: number; intensity: number }) {
-  const { rows } = useMemo(() => {
+export default function Heatmap({ chain, spot, intensity, sideGex }: { chain: ChainRow[]; spot: number; intensity: number; sideGex?: DualTickerGex }) {
+  const { rows, atmStrike, step } = useMemo(() => {
     const window = chain.filter((r) => r.strike >= spot - 110 && r.strike <= spot + 110)
-    const atmStrike = window.reduce(
+    const atm = window.reduce(
       (best, r) => (Math.abs(r.strike - spot) < Math.abs(best - spot) ? r.strike : best),
       window[0]?.strike ?? spot,
     )
+    // Strike spacing near the money (SPX is 5-wide) → convert Δstrike to offset.
+    const strikes = [...new Set(window.map((r) => r.strike))].sort((a, b) => a - b)
+    let st = 5
+    for (let i = 1; i < strikes.length; i++) { const d = strikes[i] - strikes[i - 1]; if (d > 0) { st = d; break } }
     const built = window
       .sort((a, b) => b.strike - a.strike)
       .map((r) => ({
@@ -49,10 +53,12 @@ export default function Heatmap({ chain, spot, intensity }: { chain: ChainRow[];
         net: netGEXOf(r, 'net', spot),
         vol: netGEXOf(r, 'vol', spot),
         dex: dexOf(r, spot),
-        atm: r.strike === atmStrike,
+        atm: r.strike === atm,
+        offset: Math.round((r.strike - atm) / (st || 5)),
       }))
-    return { rows: built, atm: atmStrike }
+    return { rows: built, atmStrike: atm, step: st }
   }, [chain, spot])
+  void atmStrike; void step
 
   // Per-column max + top-5 magnitudes for intensity + rank.
   const cols = useMemo(() => {
@@ -72,6 +78,12 @@ export default function Heatmap({ chain, spot, intensity }: { chain: ChainRow[];
     })
     return m
   }, [rows])
+
+  const sideMax = useMemo(() => {
+    const maxOf = (t?: { map: Record<number, { netGEX: number }> }) =>
+      t ? Math.max(0, ...Object.values(t.map).map((o) => Math.abs(o.netGEX))) : 0
+    return { SPY: maxOf(sideGex?.SPY), QQQ: maxOf(sideGex?.QQQ) }
+  }, [sideGex])
 
   const th: React.CSSProperties = { position: 'sticky', top: 0, background: 'rgba(10,13,20,0.98)', color: '#7f92a8', fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', zIndex: 1 }
   const td: React.CSSProperties = { padding: '5px 10px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 12, whiteSpace: 'nowrap' }
@@ -104,8 +116,8 @@ export default function Heatmap({ chain, spot, intensity }: { chain: ChainRow[];
                 <td style={{ ...td, color: '#e8eef7', background: metricBg(r.net, cols.net.max, intensity, cols.net.top) }}>{fmtM(r.net)}</td>
                 <td style={{ ...td, color: '#e8eef7', background: metricBg(r.vol, cols.vol.max, intensity, cols.vol.top) }}>{fmtM(r.vol)}</td>
                 <td style={{ ...td, color: '#e8eef7', background: metricBg(r.dex, cols.dex.max, intensity, cols.dex.top) }}>{fmtM(r.dex)}</td>
-                <td style={{ ...td, color: '#5a6b85' }}>—</td>
-                <td style={{ ...td, color: '#5a6b85' }}>—</td>
+                <SideCell v={sideGex?.SPY?.map[r.offset]?.netGEX} max={sideMax.SPY} intensity={intensity} td={td} />
+                <SideCell v={sideGex?.QQQ?.map[r.offset]?.netGEX} max={sideMax.QQQ} intensity={intensity} td={td} />
               </tr>
             )
           })}
@@ -116,4 +128,9 @@ export default function Heatmap({ chain, spot, intensity }: { chain: ChainRow[];
       </table>
     </div>
   )
+}
+
+function SideCell({ v, max, intensity, td }: { v?: number; max: number; intensity: number; td: React.CSSProperties }) {
+  if (v == null || !isFinite(v)) return <td style={{ ...td, color: '#5a6b85' }}>—</td>
+  return <td style={{ ...td, color: '#e8eef7', background: metricBg(v, max, intensity, []) }}>{fmtM(v)}</td>
 }

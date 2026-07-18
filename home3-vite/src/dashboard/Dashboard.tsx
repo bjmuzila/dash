@@ -12,6 +12,8 @@ import GexChart from './GexChart'
 import Heatmap from './Heatmap'
 import SignalsFeed from './SignalsFeed'
 import TabCard from './TabCard'
+import { useDualTickerGex } from './useDualTickerGex'
+import EsCandlesView from './EsCandlesView'
 
 // Optionally enrich the levels strip (CB / Max Pain / EM) from the published
 // /api/levels?ticker=SPX endpoint. Field names vary, so we read defensively.
@@ -54,6 +56,10 @@ export default function Dashboard() {
   const cm: CalcMode = dataMode === 'vol-only' ? 'vol' : 'net'
   const spot = feed.spot > 0 ? feed.spot : feed.spotDisplay
   const chain = feed.gexRows
+
+  // SPY / QQQ 0DTE per-strike net GEX for the two right-hand heatmap columns,
+  // pinned to the SPX expiry so they flip contract in lockstep.
+  const sideGex = useDualTickerGex(['SPY', 'QQQ'], dataMode === 'vol-only' ? 'vol-only' : 'oi-vol', expiry, 60_000, true)
 
   const netGex = useMemo(() => netGEXTotal(chain, cm, spot), [chain, cm, spot])
   const callWall = useMemo(() => callWallOf(chain, spot, cm) ?? feed.callWall, [chain, spot, cm, feed.callWall])
@@ -105,9 +111,7 @@ export default function Dashboard() {
             <LevelsStrip tiles={tiles} />
             <div style={{ flex: 1, minHeight: 0, position: 'relative', padding: '0 8px 8px' }}>
               {view === 'escandles' ? (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5a6b85', fontSize: 13, textAlign: 'center', padding: 24 }}>
-                  ES Candles view — reuses the standalone /es-candles page in the live app (lightweight-charts). Port that route to enable here.
-                </div>
+                <EsCandlesView />
               ) : feed.chartReady && chain.length > 0 ? (
                 <GexChart chain={chain} spot={spot} mode={cm} flip={showFlip ? flip : null} cb={cb} />
               ) : (
@@ -138,7 +142,7 @@ export default function Dashboard() {
               </span>
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
-              <Heatmap chain={chain} spot={spot} intensity={intensity} />
+              <Heatmap chain={chain} spot={spot} intensity={intensity} sideGex={sideGex} />
             </div>
           </div>
         </div>
