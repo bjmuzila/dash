@@ -54,7 +54,7 @@ export default function App() {
               <Route path="/fails" element={S(<Fails />)} />
               <Route path="/premarket" element={S(<Premarket />)} />
               <Route path="/economic-calendar" element={S(<EconCalendar />)} />
-              <Route path="*" element={<Navigate to="/home" replace />} />
+              <Route path="*" element={<Navigate to="/traders-dashboard" replace />} />
             </Routes>
           </LayoutShell>
         </div>
