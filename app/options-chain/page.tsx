@@ -1040,22 +1040,14 @@ export default function OptionsChainPage({
         }
       }
 
-      // Progressive paint: seed placeholder slots so the grid renders its
-      // skeleton immediately, then fill + repaint ONE column at a time as each
-      // /api/chains call resolves — instead of blocking on Promise.all of all N
-      // before the first cell appears. Perceived load = time to the FIRST expiry,
-      // not the slowest.
-      const pending: ExpColumn[] = targets.map(t => ({
-        expiration: t.value, label: t.label, underlying: 0, cells: new Map<number, GreekCell>(),
-      }));
-      if (token === loadTokenRef.current) {
-        expColumnsRef.current = pending;
-        setRefreshSeed(s => s + 0.01);
-      }
-      let spotSet = false;
-
+      // Fetch every expiry column in parallel, then paint the whole grid in a
+      // SINGLE commit once all /api/chains calls resolve — every cell appears at
+      // once, with no column-by-column "domino" fill. (Previously each column
+      // seeded a placeholder and repainted as its own fetch resolved.) The old
+      // grid stays visible until the new data is ready, so there's no flash of
+      // empty cells either.
       const results = await Promise.all(
-        targets.map(async (t, i) => {
+        targets.map(async (t) => {
           const res = await fetch(
             `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(t.value)}&range=all${bust}`,
           );
@@ -1063,22 +1055,12 @@ export default function OptionsChainPage({
           const data = (json?.data as Record<string, unknown> | undefined) ?? undefined;
           const items = (data?.items as unknown[]) ?? [];
           const underlying = parseFloat(String(data?.underlyingPrice ?? 0)) || 0;
-          const col = {
+          return {
             expiration: t.value,
             label: t.label,
             underlying,
             cells: parseExpiration(items, t.value, underlying, dataModeRef.current, flowGexMap),
           } as ExpColumn;
-          if (token === loadTokenRef.current) {
-            pending[i] = col;                        // fill this slot in place
-            expColumnsRef.current = pending.slice(); // fresh ref → memo grid repaints
-            // Center ATM + build the strike window off the FIRST spot we get,
-            // without waiting for the remaining columns.
-            if (!spotSet && underlying > 0) { spotSet = true; setUnderlyingPrice(underlying); }
-            setLoadProgress(8 + Math.round(((i + 1) / targets.length) * 84));
-            setRefreshSeed(s => s + 0.01);
-          }
-          return col;
         }),
       );
 

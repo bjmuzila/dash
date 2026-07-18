@@ -51,9 +51,12 @@ export default defineConfig(({ mode }) => {
         { find: /^@\//, replacement: REPO_ROOT + '/' },
       ],
     },
-    // Inline empty PostCSS so Vite doesn't walk up into the Next repo's
-    // postcss.config.js (Tailwind with no content) and warn.
-    css: { postcss: { plugins: [] } },
+    // Tailwind runs via app-vite/postcss.config.cjs + tailwind.config.cjs (its
+    // content globs point back at ../app + ../components). Vite auto-discovers
+    // that config from this dir, so the customer pages' Tailwind utility classes
+    // (flex, h-full, flex-1, gap-*, grid, …) generate real CSS. Previously this
+    // was stubbed to empty PostCSS, which silently dropped every Tailwind class —
+    // inline-styled pages were fine but class-laid-out pages (/es-candles) collapsed.
     server: {
       port: 5174,
       open: true,
