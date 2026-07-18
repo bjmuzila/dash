@@ -42,10 +42,15 @@ src/
 
 ## Migration status
 
-Foundation done: config, proxy, theme, nav rail, routing, Hub (list). Each
-page under `pages/` is a themed placeholder until its Next route is ported
-over — **page for page, tab for tab, card for card**. To port a page, replace
-its module body with the real cards; the shell, nav, and routing already work.
+**All routes ported** — page for page, tab for tab, card for card. Routes are
+code-split (React.lazy) so each page loads on demand. `tsc --noEmit` clean,
+`vite build` green.
+
+Known deferred pieces (small, isolated):
+- Hub "Brain" force-graph — List view is live; the graph toggle is stubbed.
+- Results "Fail Rate" tab — needs `useEsCandles` (WS) + `lib/failLevels` ported; the other two Results tabs are live.
+- Social Media live GEX-chart *previews* — replaced with labeled placeholders (the whole streaming/chart stack); the Daily Levels form, share card, PNG export, and Day Posts tab are fully ported.
+- Changelog — renders CHANGELOG.md bundled per build (`public/CHANGELOG.md`), refreshed each deploy.
 
 Route map (nav.ts) mirrors the backend exactly:
 

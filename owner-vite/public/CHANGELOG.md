@@ -1,0 +1,2292 @@
+# Changelog
+
+## 2026-07-17 — Options chain: cells back to GEX premium $ + ❌ volume-GEX peak marker (`app/options-chain/page.tsx`)
+
+Reverted the value cells from the normalized GEX % display back to the dollar GEX premium (`fmtMoney(value)`), removing the `normalizedGexPct` render-local and the `colGexTotalAbs` memo that fed it. Added a pure volume-only `volGex` field to `GreekCell`, computed in `parseExpiration` from raw call/put `volume` × gamma (independent of `dataMode`, so it's present even in OI+Vol mode), plus a per-column `volMvcByCol` memo that picks the visible strike with the highest `|volGex|`; that strike is now flagged with an ❌ in its expiry cell (`isVolMvc`), gated to OI+Vol data mode + GEX greek mode so it sits alongside the ★ OI+Vol MVC without touching the other views. Syntax validated via esbuild (`--jsx=preserve`); not build-verified against a full `tsc`/VPS build.
+
+## 2026-07-16 — Home GEX heatmap: strike-window flicker + millions-only cells (`app/home/HomeClient.tsx`, `components/dashboard/GexHeatmap.tsx`)
+
+**The trap: the home heatmap is NOT `GexHeatmap.tsx`.** `app/home/HomeClient.tsx` renders its own inline heatmap grid with its own local `fmtMoney` (L118) and its own windowing (`pickCenterRows` L265 → `toHeatmapRows` L282). The first pass this session edited `components/dashboard/GexHeatmap.tsx` and had zero effect on the home page; that component is used by other surfaces. Check which file feeds the surface before editing — both exist, both look right.
+
+**Flicker root cause:** `pickCenterRows` re-derived `atmIndex` from whichever strike was nearest *live* spot on every `/ws/gex` frame, so a 1-point tick could shift the window index by one — adding a strike at one end and dropping one at the other, which reflows every row and reads as flicker. Fix: `toHeatmapRows` gained a `centerSpot` param. Visible rows center on `centerSpotRef` — a coarse spot snapped to `Math.round(spot/bucket)*bucket` where `bucket = strikeStep * 5` — and only re-snaps once `|spot − center| >= bucket`. Hysteresis is what matters here: a bare quantize would flip back and forth when spot parks exactly on a bucket boundary, which is worse (5-strike jumps instead of 1). ATM highlight still uses live spot, so it tracks continuously while the row set holds still. `strikeStep` is derived as the MIN gap across unique strikes, not `[0]−[1]`, so a gappy chain doesn't inflate the bucket.
+
+**Cells:** new `fmtCellM` (millions, whole numbers, `toLocaleString`) applied to all six cell columns — netGex, volOnly, dex, rolling, spyGex, qqqGex. Fixed unit + no decimals also kills width churn. The header stat bar deliberately still uses `fmtMoney`/`fmtMoneyB` (B/M/K) — not asked for, don't "fix" it.
+
+`GexHeatmap.tsx` got the equivalent treatment (its `anchorStrikeRef` hysteresis was `strikeStep * 4.5` → now a 5-strike lattice + `fmtG` in millions), which is consistent but was not the reported bug and is untested on its surfaces.
+
+**Caveat:** `centerSpotRef` is mutated inside a `useMemo`, mirroring the existing `anchorStrikeRef` pattern in `GexHeatmap`. Works, but isn't StrictMode/concurrent-safe in principle — move to `useState` + effect if the window ever desyncs. Not build-verified (sandbox down all session: `HYPERVISOR_VIRT_DISABLED`); run `npx tsc --noEmit` before trusting it, and both fixes are unverified against live ticks.
+
+## 2026-07-16 — ES Candles: GEX level lines stop flickering 1–2pt per frame (`app/es-candles/page.tsx`)
+
+`EsCandlesFullPanel.tsx` had already been hardened against this; the full page had not. Three compounding sources of per-frame churn: (1) the draw effect depended on `levels`, which gets a NEW object identity on every `/ws/gex` frame because `spx`/`esFut` tick continuously — so all 4–7 price lines were torn down and recreated every frame, re-rendering the axis labels → resizing the price scale → shifting the plot width → the whole chart visibly nudged; (2) `effectiveBasis()` returns `lastEsCloseRef − spotRef` while cash is open and **both sides tick**, so even a frozen wall re-projected onto the ES axis wobbled 1–2pt every frame — this was the actual magnitude the user saw; (3) `findGEXFlip` re-derived the flip off ticking `gexRows` on every frame. Fix mirrors the panel: level values snap to 0.25 (the ES tick — a level between ticks isn't tradeable), recompute on a 1-min cadence via a `lineLevels` state, and publish only when a quantized value actually CHANGED; lines now live in a `Map` keyed by title and are updated in place with `applyOptions`, created/removed only on appear/disappear (`priceLinesRef` changed from `IPriceLine[]` → `Map<string, IPriceLine>`, cleared on chart re-init so dead handles don't get `applyOptions`-ed). Residual by design: a level can still move one tick at a minute boundary if the basis genuinely drifted.
+
+**Flip source — reverted, keep it that way.** Mid-session the flip was briefly re-sourced from `mvc_snapshots.gexFlip` to stop it twitching. That is a trap: BOTH recorders (`scripts/auto-snapshot-mvc.js` ~L98, `server-v2/mvc-auto-snapshot.js` ~L168) do `Number.isFinite(gexFlipRaw) && gexFlipRaw > 500 ? gexFlipRaw : (mvcOIRow?.strike ?? mvcVolRow?.strike ?? null)` — when `/api/gex` omits `gexFlip` that column silently holds the **CB strike**, not a flip. Now computed live with `findGEXFlip(gexRows, spx)`, identical function and inputs to `HomeClient.tsx` L1140, so the two pages agree by construction. Steadiness is handled at publish time, never by picking a different source. CB still comes from the snapshot poll — `strikeOIVol` is a real strike and is trustworthy.
+
+**Unresolved:** reported flip mismatch (home 7555.40 SPX vs es-candles 7618) is NOT a wrong flip — 7618 − 7555.40 = 62.60, a basis offset. The es-candles stat chips render ES-space by design (`const es = (v) => v + basis`, L2483); home renders SPX-space. Open question is whether 62.60 is the correct basis: an inline comment cites +47.9 as the verified true basis on 2026-07-13, and ES basis decays toward expiry rather than climbing ~15pt in three sessions. `isPlausibleBasis` only rejects outside `0 < b < 250` — far too loose to catch a wrong-but-plausible value. Next step: load `/es-candles?debugBasis=1` and compare the raw ES/SPX prints; suspect `lastEsCloseRef` (last ES *candle* close) being differenced against a live `spotRef`. Not build-verified (sandbox down all session: `HYPERVISOR_VIRT_DISABLED`); needs VPS rebuild.
+
+## 2026-07-16 — ES Candles: rail on by default in the home card + bubble size persisted (`app/es-candles/page.tsx`)
+
+`showRail` was `useState(!embedded)`, so the home GEX card's ES Candles view opened with the GEX rail off — now `true` everywhere. Bubbles (`showGexBubbles`) and the 5-minute bubble bucket (`bubbleMins`) were already the defaults on both surfaces, so no change there; the home card and `/es-candles` now both open at rail + bubbles + 5m. The card still opens with the heatmap off (it sits next to the GEX chart and the heatmap panel — a third copy of that read is noise), and `railFits` still auto-collapses the 230px rail below `RAIL_MIN_WIDTH` (560px of chart area) so a narrow card doesn't starve the candles. One change covers both surfaces: the home card renders `<EsCandlesPage embedded>`, not the legacy trimmed `EsCandlesFullPanel`. Bubble size now persists per browser under `es-candles-bubble-scale-v1`: restored in a mount effect (not a lazy `useState` initializer — a localStorage read during render hydrates a different tree than SSR sent), validated against the slider's own 0.1–0.5 range so a stale key can't push the knob somewhere the slider can't undo, and written by a wrapped setter rather than an effect on the value, so nothing is stored until the user actually drags it and a future default change still reaches everyone who never touched it. Not build-verified (sandbox down); needs VPS rebuild.
+
+## 2026-07-15 — TPO structure labels + hover callouts + 5/10/30-session strip (`lib/tpo.ts`, `app/scanner/page.tsx`)
+
+`lib/tpo.ts` gains `KIND_TITLE` ("Excess high — selling tail", "Poor low — unfinished", "Hole — thin zone") and `KIND_NOTE` (the one-line "so what"). `KIND_LABEL` stays for the terse badge/tooltip copy. The 3px colored spine next to each profile on `/scanner` → TPO was technically the same information and unreadable: an excess high and a poor high are **opposite trades** and looked identical.
+
+`TpoLetterProfile` now paints an outlined+tinted band over each of TODAY's structures (new `Labels` toggle), and the text card is a **hover tooltip**, not a permanent annotation — the first pass drew always-on cards for every structure, which needed a de-collide pass to fit, and a label shoved away from its own band stops pointing at the thing it labels. Hit regions cover ALL sessions (prior days already have the spine), live in `hitsRef` **not state** so hover never re-runs the canvas draw, and carry a 3px pad since a 1-pt poor high is ~5px tall and otherwise un-hoverable; hover clears while dragging so panning doesn't flicker. Tooltip is HTML, positioned in the wrapper.
+
+New **5D / 10D / 30D** selector. `historyDays` scales 14/22/**46** and is passed to `useEsCandles`/`useNqCandles`: 30 *sessions* needs ~46 *calendar* days once weekends+holidays are out, so asking for 30 quietly returns ~21 profiles — the two numbers are not interchangeable. Required a new anchor pass in the draw effect (`anchorRef`, re-armed on session-count/split change and on Reset): at 30 sessions the strip is several canvases wide and ~a year of price range tall, so `ox/oy = 0` opened on the OLDEST profile with spot nowhere on screen — it now jumps to the newest profile centered vertically on spot, then bails and lets the state change re-run the draw. Open Business rail rows swapped `KIND_LABEL` → `KIND_TITLE` (grid col 110px → 210px). Bins deliberately unchanged at 1.00 pt = **4 ticks** (`binSize`; NQU 5) — the only 0.25 in the engine is `TOUCH_PAD`, a one-tick hit-test pad on zero-width structures, unrelated to bin height. Side benefit: `buildTpoStructures` walks everything loaded, so at 30D the base rates get ~46 days of sample instead of ~17. **NOT build-verified** (bash sandbox down all session: `HYPERVISOR_VIRT_DISABLED`).
+
+## 2026-07-15 — VSA candle coloring + ES Candles moved onto the home GEX card (`lib/vsa.ts`, `app/es-candles/page.tsx`, `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`)
+
+New `lib/vsa.ts` colors "inefficient" candles on `/es-candles` behind an `Overlays → VSA` toggle. It is **volume-based, NOT delta** — a deliberate constraint: dxFeed `Candle` carries no aggressor side (`proxy-tastytrade.js` subscribes OHLCV only), and the last attempt at true per-print `TimeAndSale` classification saturated the streamer. So this measures effort MAGNITUDE vs result: `churn` (RVOL ≥ hi, body ≤ smallBody → absorption) and `thin` (RVOL ≤ lo, body ≥ bigBody → unopposed run). Both render HOLLOW (per-bar `color: transparent` + `borderColor`), which required flipping the series to `borderVisible: true` with `borderUpColor`/`borderDownColor` matched to the fills — normal candles render identically, but `borderVisible: false` would have swallowed the outline and left signal bars as empty gaps. Churn's wick is orange rather than closePos-tinted: a churn bar is small-body by definition, so once hollow it is almost all wick and a green/red wick buried the signal. RVOL baseline is per time-of-day slot ("HH:MM") median across PRIOR sessions only (`d < self`, ≥3 sessions or it scores `normal` — never guesses), built from `historical` (20 sessions) not `rows` (5 days); the forming bar is skipped entirely since partial volume makes the live right edge read `thin` on every tick. Five sliders (hi/lo RVOL, sm/big body, lookback) — defaults 1.8/0.6/0.30/0.70/10d are guesses, tune for scarcity. Zero server change, no new subscription, no WS bandwidth. **Build bug worth remembering:** the `vsaMap` memo was first placed beside the other `rows` memos, ~170 lines ABOVE the `showVsa`/`vsaTuning` state it closes over — typechecks and dev-renders fine, then died only in the Docker prerender as `ReferenceError: Cannot access 'aA' before initialization`. Memos must sit below the state they capture.
+
+Home: ES Candles left the bottom Economic Calendar tab strip and became a `GEX | ES Candles` view switch on the GEX chart card (`gexView` state). First attempt put it on the heatmap panel (wrong panel) and then in the levels strip, which stole width and wrapped BULL/BEAR onto a third row — hence a new `leading?: ReactNode` slot on both `GexToolbar` and the es-candles dock, so the switcher rides inside whichever toolbar is already mounted and neither view pays for an extra row. The card now embeds the **real** `app/es-candles/page.tsx` (same pattern as the Chain tab reusing `/options-chain`; the page has no router hooks) rather than the trimmed `EsCandlesFullPanel`, which has no dock and no bubbles/TPO/profile/VSA. New `embedded` prop: pins the dock `align="left"` (centered, it indented by its own width so the switcher jumped sideways out from under the cursor on click) and starts overlays at bubbles-only (route keeps heatmap+rail+bubbles). `showGexBubbles` now defaults `true` everywhere. `GexToolbar` + levels strip unmount in candles view. `EsCandlesFullPanel` is now unused by home but still exists. **NOT build-verified** (bash sandbox down all session: `HYPERVISOR_VIRT_DISABLED`).
+
+## 2026-07-14 — ES Candles snapshot: double-chart regression, toolbar hidden, SPX badge metrics (`components/shared/DataBox.tsx`, `app/es-candles/page.tsx`)
+
+The 7/13 "chart rendered twice" fix regressed. `captureElement`'s `onclone` ran two index-matched passes over the canvas list: the first (`otherLiveCanvases` — the heatmap overlay, the EsGexRail) **replaces** cloned canvases with placeholder divs, and the second (blank the lightweight-charts copies so only the composited `__ltScreenshot` bitmap survives) then **re-queried** `clone.querySelectorAll("canvas")`. Post-removal that list is shorter, so `liveAll[i]` no longer maps to `cloneCanvases[i]` — and on `/es-candles` the stripped overlay canvas sits at DOM index 0, ahead of the chart's canvases, shifting every one of them by one. The wrong nodes got hidden, one live clone copy of the chart survived, and it landed under the composite at a different scale → two candle series at different prices for the same time. Both passes now share a single pair of lists snapshotted BEFORE the placeholder swap (the original fix only held while the stripped canvases happened to sort after the chart's); the hide also sets `opacity:0` alongside `visibility:hidden`. Added a general `[data-capture-hide]` mechanism: tagged nodes are removed from the clone at the very end of `onclone` (after the index-paired children loop, so pairing stays exact — the attribute survives `cloneNode`, no index matching needed), their height is dropped from `contentH`, and any tagged direct child ABOVE the chart contributes to `hiddenShift`, which the canvas composites subtract — they position off LIVE rects where that chrome still occupies space. `/es-candles` tags its whole toolbar row, so the PNG is now chart + title band only. Also pinned explicit `fontSize`/`lineHeight`/`padding` on both SPX gutter badges: Tailwind's `text-[11px]` sets font-size only, leaving line-height inherited, and html2canvas resolved the baseline from that → text sat off-centre in the pill (browser centres the line box, so it only showed in the export). Not build-verified (sandbox down); needs VPS rebuild.
+
+## 2026-07-14 — Stat Prompter tab + bar-stat precompute + live IB level canvas (`components/scanner/StatPrompterTab.tsx`, `components/scanner/IbLevelCanvas.tsx`, `scripts/build-bar-stats.mjs`, `lib/ibStats.ts`, `app/scanner/page.tsx`)
+
+New `/scanner` → **Stat Prompter** tab: ~20 canned, runnable questions over the ES+NQ IB book (`public/data/ib-ES/NQ.json`), grouped Cross-index / Break quality / Context / Timing / Session shape / Bar stats, several collapsed behind dropdowns (symbol, timeframe, weekday, view) rather than split into separate cards. The cross-index set generalizes today's session (ES broke IB high, NQ broke low): confirm-vs-diverge cohorts with ES's own break quality compared across them, divergence resolution, "ES high / NQ no-high → does NQ then hit its low", follow-the-first-breaker. Sample sizes are deliberately NOT printed (Brandon's call) — but they still gate the read via a `THIN` badge (n<30) and a `CHECK FOR BIAS` flag (rate >85%, the ICT-lookahead smell test). New `IbLevelCanvas.tsx` mounts at the top of the tab: today's live IB (from `useEsCandles`, 09:30–10:30 ET) as an SVG price ladder — IB high/low/mid, 0.25 fib pullback edge, ±0.5/1/1.5/2× extensions each labeled with price, points-away and historical reach rate; the target rail flips to the downside on a low break. Carries an explicit warning that those reach rates are **conditional on a break occurring**, not the unconditional odds price gets there today.
+
+New `failOutcome()` in `lib/ibStats.ts` resolves a failed break into four **mutually exclusive** outcomes — `recovered` (new extreme past the pre-fail peak) / `full_rotation` / `to_mid` / `chop` — derived from the existing slim export, no re-export needed. Unit trap handled: `peakBeforeFail` is in POINTS while `rExt` is in IB WIDTHS, and comparing them raw makes everything look "recovered". This answers what `failed` alone (~76%) never could. Two bugs found while building: the baseline table's "breaks" row divided breaks by breaks (always 100%, tripping its own bias badge), and its rows **overlap** (a break can be `failed` AND `hit 1x` — it recovered) so they were being read as a partition when they aren't; the table now states its denominator per row and carries a "do not add these up / do not chart as parts of a whole" caveat. Stacked composition bars are permitted ONLY on the `failOutcome` prompt, where the segments genuinely sum to 100.
+
+New `scripts/build-bar-stats.mjs` precomputes the bar-level book from a raw 1m CSV → `public/data/bars-<SYM>.json` (~71 KB of pure aggregates; the browser never sees the 900k-bar source): time-of-day seasonality (ret/absRet/range/vol/up-prob/drift by 1m/5m/30m/hour, sliced by weekday), range+vol structure (range percentiles by TF, ATR by hour and weekday, inside/outside/narrow-range bars and what follows them), and autocorrelation (ACF lags 1–20 on returns and |returns|, variance ratio, streak continuation) at 1/5/15/30m. Returns are log-bp and **never cross a session boundary**. Two real bugs caught by the script's own output and locked out with a hard sanity gate: `resample()` anchored buckets to each session's first bar, so a missing 09:30 print shifted every bucket into a brand-new time-of-day cell (NQ produced 108 "hourly" cells instead of 7) — now anchored to a fixed clock grid; and `buildTod()` skipped each session's first bar (no prior close), silently **deleting the 09:30 bucket entirely** — it now uses that bar's own open→close. The gate refuses to write when cell counts don't match the session length exactly, in either direction. Run: `node scripts/build-bar-stats.mjs --sym ES --in "<1min.csv>"`. Both symbols built clean over 2017-04-17 → 2026-07-10 (~2,380 sessions). NOT build-verified.
+
+## 2026-07-14 — TPO Structures replaces Balance/Imbalance on /scanner (`lib/tpo.ts`, `app/scanner/page.tsx`, `md files/TPO-ENGINE-PLAN.md`)
+
+New `lib/tpo.ts` builds a real TPO profile per RTH session (one touch per 30-min period per price bin — TIME, not volume; `TpoBin.periods[]` stores the period INDICES so the UI can render letters and gets the Initial Balance for free), then extracts the auction structures and **forward-fills each one across every later session** (`testedAt` / `repairedAt` / `touches`) — that forward-fill is the product, since a tail is worthless intraday and valuable as an untested level three weeks later. The taxonomy is deliberately split because the trades are opposite: **excess** (≥2 singles at an extreme whose period CLOSED BACK INSIDE = rejection → level holds, fade it) vs **tail** (same singles but the period closed away = trend continuation → do NOT fade) vs **poor high/low** (flat stack at the extreme, no tail = unfinished auction → expect it taken out, trade toward it) vs **hole** (mid-profile singles = thin zone → price accelerates THROUGH, never target inside) vs **naked POC**. Separating excess from tail requires each period's CLOSE, which the existing `buildTpoProfile` in `app/es-candles/page.tsx` does not track (low/high only) — that is why this is a new module, not a reuse.
+
+`/scanner`: the `balance` tab (`BalanceImbalanceScanner`, `QUADRANT_META`, `QuadrantCell`) is REMOVED and replaced by `tpo` → `TpoStructuresScanner` — a 5-session letter profile on a shared price axis (canvas: several thousand cells, DOM would stall the tab), an "Open business" rail of unrepaired structures sorted by distance from spot, and a per-kind × age-bucket stats rollup. The profile canvas is pan/zoomable (drag to pan, wheel = price zoom anchored on the cursor, shift+wheel = width zoom; wheel bound natively because React's synthetic handler is passive) with a **Collapsed / Split** toggle — split mode parks each letter in its OWN period's column instead of packing left, so the gaps show the auction developing through time. The rail's stat column was renamed `TEST %` → `BASE %` after it read as a per-level probability when it is a base rate for the KIND at that AGE: it now bucket-scopes (0-5d / 6-20d / 20d+), prints `n=`, falls back to the all-ages figure below n=5, and renders a dash instead of a fake 0% on an empty sample. `lib/balanceImbalance.ts` survives only because `lib/tpo.ts` imports `groupRthByDate` from it; `classifyDay` / `backtestQuadrants` are now dead code. Stats come from the ~25 loaded sessions, NOT a backtest — the durable version needs a `tpo_structures` table + nightly recorder forward-filling `tested_at`/`repaired_at`, plus `scripts/backtest-tpo.mjs` over the 3yr ES CSV (the cited 97% IB-exceed / 70–80% VA-return figures are unverified folklore). RTH only — ETH single prints are a thin-book artifact, not an auction failure. Plan in `md files/TPO-ENGINE-PLAN.md`. **NOT build-verified** (bash sandbox down all session: `HYPERVISOR_VIRT_DISABLED`).
+
+## 2026-07-14 — Flow: 0DTE quick-filter + Recent dropdown z-index (`app/flow/page.tsx`)
+
+Added a `nearestExpiry` memo (today's ET date from the active expiry option list, else soonest future, else last) and a `0DTE` chip next to the Expiry label that sets `expiry = nearestExpiry` + clears Min/Max DTE, and toggles back to `all` on second click. Fixed the Recent-ticker dropdown rendering behind the Net Drift card: the filter-card host div now gets `position: relative; zIndex: 200` while `recentOpen`, and the menu itself was raised 80 → 200. Not build-verified.
+
+## 2026-07-13 — State Rail on the Greeks home tab (`components/dashboard/StateRail.tsx`, `components/dashboard/GreeksHomePanel.tsx`)
+
+New `StateRail.tsx` — a 4-row segmented power-bar rail (REGIME / CONVEXITY / DEX LEAN / OPT SKEW) plus a synthesized CURRENT PLAY chip, mounted above the gauges in `GreeksHomePanel`. Rows are bipolar −1..+1 `tanh(x / SCALE)` reads off feeds the tab already runs: REGIME ← net GEX ($B), DEX LEAN ← net DEX ($B), OPT SKEW ← 25Δ put/call IV via `derivePick(/api/gex)` (same source as `LiveSkewBand`). **CONVEXITY is a true volatility-expectancy read, not vol-sensitivity**: `v = 0.65·tanh(ln(RV/IV)/0.35) + 0.35·(−tanh(GEX/SCALE.gex))` — long gamma only pays when realized beats implied (½·Γ·move² − θ), tilted by the dealer regime since positive GEX suppresses future RV. RV is annualized in RTH trading time from close-to-close log returns of spot samples (`realizedVol()`, zero-mean, overnight gaps dropped, ≥8 samples); IV is live ATM 0DTE from the chain; the row prints `RV / IV · ±x%/d` (Rule of 16). CURRENT PLAY reads structure × premium (SELL PREMIUM / BUY CONVEXITY / WAIT-COILED / FADE RANGE / STAND ASIDE) — the long-gamma + expansion cell is the flip-break tell.
+
+Three bugs found via live console dump (`gex=67.6B dex=32B rv=0 iv=21 skew=106%`) and fixed: (1) `SCALE` was off ~20× (`gex 4→80`, `dex 8→40`, `skew 12→120`) so all four bars saturated `tanh` at 1.0; (2) **spot freeze** — `GreeksHomePanel`'s WS handler only took `spot` off `snapshot` frames, so during a stream of `gex` deltas spot sat at its seed value → identical samples → zero variance → `rv=0` → a fabricated, confident "SUPPRESSED"; now it takes spot off any frame carrying it; (3) belt-and-braces, `StateRail` builds its own fallback spot series from `/api/gex` `spotPrice` (already polled at 60s) and uses whichever series is actually moving, and `convexityRow` treats RV ≤ 1% annualized as NO DATA ("spot frozen — no RV", gray) rather than pinning the bar. `DEBUG_SCALES = true` is still ON — flip it off once the scales are confirmed over a session. Not build-verified. Open item: `bandFor()` in `SkewCalculator` is banded for 10–30% 30-day equity skew but live 0DTE skew reads ~106%, so `LiveSkewBand` is almost certainly pinned in its top bucket every day and needs re-banding.
+
+## 2026-07-13 — IB Stats: 14-rule live board, width-bucket backfill, session-date fix (`components/scanner/IbStatsTab.tsx`, `scripts/ib-wick-vs-close.mjs`, `scripts/ib-divergence-nq-es.mjs`)
+
+Rebuilt the `/scanner` → IB Stats live cards: the old `Playbook` card is replaced by `RuleBoard`, which now sits ABOVE the Today card, leads with the IB stat grid (live price, IB high/low/mid/width, **FORMED/FORMING**, status) and scores **all 14 rules** against the live session — split into IN PLAY / PENDING / NOT IN PLAY, where PENDING rules still show their "if it fires" conditional rate (projected side = `bias ?? first`) instead of a blank row. To make rules 5–14 gradeable live, the `live` memo now also computes bar volume (vol surge), a 15m FVG rebuilt from the IB bars, failed-break, retest + continuation, open type vs the prior RTH range, break-time bucket, and contained-at-14:00. Two real bugs fixed: bars were filtered by minute-of-day only, so **yesterday's RTH was blending into today's IB** (now split by true ET session date via a new `etDate()`), and the exported `ib-ES/NQ.json` carry `atr`/`avgIB`/`widthBucket` as `null` on every row — the reason the width-bucket tables rendered all zeros — so `deriveWidthBuckets()` backfills them client-side from trailing 14d day range / 20d IB width (trailing windows only, no lookahead). Sample sizes (`n=`, "thin") stripped from every customer-facing surface (RuleBoard, LiveGauges, Today card); the owner-gated historical tables keep theirs. Two offline research scripts added: `ib-wick-vs-close.mjs` (IB-high wick-only vs close-confirmed) and `ib-divergence-nq-es.mjs` (NQ breaks its IB high but ES doesn't — with a baseline/delta column and a mirror test to catch fake edges). NOT build-verified. Open caveat: the datasets are **1m bars** while the live board is fed by the **5m** candle sockets, so "close-confirmed break" and "failed" don't mean the same thing in both — a 5m re-export is the next step.
+
+## 2026-07-13 — GEX bubbles replace GEX Lines on /es-candles (`app/es-candles/page.tsx`)
+
+Removed the per-strike horizontal "GEX Lines" overlay (toggle + draw block) and replaced it with a `Bubbles` toggle plus a `bubble` size slider: one bubble per strike per minute, plotted at `x = minute`, `y = strike + basisAt(minute)`, radius on a `sqrt(|netGEX| / sessionMax)` curve so bubble AREA (not radius) tracks magnitude — cyan = +GEX, red = −GEX. `columnsRef` is floored to 5-min heatmap slots, too coarse for the trail, so added `minuteColsRef` holding the same cells at native 1-min resolution, fed by the live WS frames AND backfilled for today only from the existing `option-strike-gex-history` fetch (same rows, second bucket, filtered on `etDayKey === today`; newest snapshot within a minute wins, live never overwritten). Not build-verified.
+
+## 2026-07-13 — Historical ES↔SPX basis on /es-candles (`app/es-candles/page.tsx`, `lib/db.ts`, `app/api/snapshots/option-strike-gex-history/route.ts`, `server-v2/mvc-auto-snapshot.js`, `server-v2/state/retention-cleanup.js`, `components/shared/DataBox.tsx`)
+
+The heatmap and CB/MVC history plotted SPX-space strikes onto the ES axis with ONE live basis, mis-placing every past column (ES−SPX drifts with carry/divs, decays into expiry, steps at the roll). Added `basisAt(t)` in the overlay draw — one basis per ET session (median of that day's readings), held flat through ETH (SPX doesn't print overnight, so basis is unmeasurable then; never compute ES − stale SPX or the whole heatmap bends along with price). Sources, in order: live basis (today, cash open only), CB-snapshot readings, prior-day closes (ES 16:00 − SPX 16:00). Root causes found: `mvc-auto-snapshot.js` wrote `esPrice: spot` (SPX copied into the ES column → every historical basis = 0, now writes real `esFut` from market-state, 0 when unavailable); `effectiveBasis()` preferred the live `esFut − spot` even when cash was shut, which is a stale-price artifact (read 17 when true close basis was 50.6) — now gated on a real `isCashOpen()` check; `retention-cleanup.js` deleted all gex rows outside 09:30–16:00, which is why the heatmap went black 18:00→midnight (non-RTH rows now kept, thinned to the 5-min grid). Also: `option_strike_gex_history` slot queries now return `spot`; fixed a TDZ crash (500) from the bubble overlay's ref-sync effect sitting above its `useState`; snapshot PNG rendered the chart twice (html2canvas copies lightweight-charts' canvases now — clone's copies hidden so only the composited `takeScreenshot()` bitmap survives); GEX bubbles now solid-filled with a gamma-curved color ramp and per-column top-3 emphasis (size boost + color floor + glow). Not build-verified.
+
+## 2026-07-12 — Earnings calendar woven into the econ calendar (`server-v2/earnings-calendar-recorder.js`, `server-v2/ticker-logo.js`, `server-v2/server-with-proxy.js`, `components/dashboard/EconCalendarPanel.tsx`, `app/economic-calendar/page.tsx`)
+
+New `earnings-calendar-recorder.js` scrapes the Nasdaq earnings API (`api.nasdaq.com/api/calendar/earnings?date=`) for names with market cap ≥ $100B (`EARNINGS_MIN_MCAP`) into a new `earnings_calendar` table — Saturday 09:00–09:30 ET pulls the coming Mon–Fri, plus a boot backfill that scrapes the current week if it's empty; exposed via `GET /proxy/earnings-week` (today → Friday) and `POST /proxy/earnings-week-run?week=this|next`. New `ticker-logo.js` + `GET /proxy/ticker-logo?sym=&name=` 302-redirects to a transparent logo, resolving davidepalazzo/ticker-logos → Wikidata P154 → Commons `Special:FilePath`, caching hits and misses in a new `ticker_logos` table (delete a row to re-resolve a bad logo). Both `EconCalendarPanel` (home) and `/economic-calendar` now render earnings as rows *inside* the event table — a cyan PRE/MARKET row under the day header before the first news item, and an AFTER/HOURS row after the last event at/before 16:00 ET; `session = unknown` (Time TBD) names are dropped, and the old dead `/api/earnings-today` strip (route never existed) is gone. Not build-verified.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — Vol-only GEX speed column (`hooks/useVolGexSpeed.ts`, `app/home/HomeClient.tsx`, `components/dashboard/GexHeatmap.tsx`, `server-v2/server-with-proxy.js`)
+
+Added a per-strike **VOL GEX SPEED** column to the GEX heatmap: `Δ|netVolGEX|` over a rolling 30s/1m/5m window (+ = wall building, − = bleeding; raw signed Δ kept in the hook for tooltips), fed by new `hooks/useVolGexSpeed.ts` — a hybrid source that samples the live WS chain into a 2s ring buffer (6m retention) and falls back to a Postgres seed on reload via `/proxy/gex-history?basis=vol` (new param in `handleGexHistory`, reads `net_vol_gex` instead of `net_gex`; default unchanged, so existing callers are untouched — **server change, needs VPS rebuild**). Wired into `HomeClient` (6th column + 30s/1m/5m toggle beside the Intensity slider) and `GexHeatmap` (`showSpeed` prop; `/mobile` on, `/social-media` off); the column renders through the shared `dataCell`/`cellBg` path so it inherits the same palette, font size and color as every other column, but keeps its own magnitude scale since Δ$ is orders of magnitude below the level. A green/red "Building/Bleeding" movers rail (`components/dashboard/VolGexSpeedRail.tsx`) was built then removed at Brandon's request — the file is now unused dead code, safe to delete. Build gotcha hit and fixed: a `{/* */}` JSX comment placed in ternary-expression position in `app/mobile/page.tsx` broke the Docker build (TS1005). Caveat baked into the docs: vol-only GEX accumulates from the open, so the metric skews positive for the first ~30 min — rank across strikes, don't read the level.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — ICT: IFVG never fired + systemic lookahead bias across every detector (`lib/calculations/ictConcepts.ts`, `app/api/ict-setups/route.ts`, `scripts/backfill-ict.mjs`)
+
+Fixed IFVG (Inverse FVG) logging only 3 setups in a month: in `detectFVGs` the `into`/retouch branch ran BEFORE the `through` inversion check and `break`'d the loop, so a break candle (which almost always also trades into the gap) was misclassified as a retouch — inversion could only fire if the first candle to touch the gap also closed through it in one bar; also loosened sweep matching from exact-timestamp equality to a 15-min `sweptWithin()` window (sweep→displace is the canonical sequence, but KEPT the "first candle to take the pool" `break` — removing it made every bar resting beyond a pool a "sweep" and the gate a no-op, inflating IFVG 124→185), fixed `detect2022Model` matching entry gaps on `f.ts` instead of `invertedTs` (disqualified every IFVG setup) and `detectRangeLiquidity` filtering `!f.spent` (inverted gaps are spent by construction → no IFVG ever appeared as internal liquidity), adopted SMC-spec gap formation (`close[1]` confirmation, width filter w/ ticks|points|percent modes, 50% wick/close mitigation — deliberately NOT the Pine 9% default, which is a 540pt gap on ES), and fixed `detectPO3` reading the Asian range from the same ET day (20:00–24:00 occurs AFTER the NY session it sets up) instead of the prior day. Separately removed **systemic lookahead bias** that made every number on `/owner/dev/results` fiction: fractal pivots need k bars to their right to exist, but `detectStructure`/`detectLiquidity`/`liquiditySweepTimes`/`detectTurtleSoup`/`detectInducement` and the grader's `structuralStop` all gated on formation (`ts`/`idx`) not confirmation — added `Pivot.confirmIdx`/`confirmTs` + `LiquidityPool.confirmTs` and gated on those; then killed three trigger-timestamp leaks where a setup was stamped at the bar the pattern *points at* rather than the bar it was *confirmed on*: Order Block (entered at the pre-impulse OB candle → now trades the retest after `OrderBlock.confirmTs`), Judas (stamped at the session extreme, knowable only an hour later → now stamped at the window's final bar), Breaker (stamped at the BOS bar though it only exists because a later retest happened → now stamped at the retest). Added `scripts/backfill-ict.mjs` (replays `POST /api/ict-setups {action:"scan"}` per date; idempotent on `setup_key`; run via `docker compose run --rm -v /opt/dashboard/scripts:/app/scripts:ro -e ICT_BASE_URL=http://dashboard:3002 dashboard node scripts/backfill-ict.mjs --days=30`) — after a wipe + 18-session backfill IFVG went 3 → 124 setups and came off a fake 100% to **57.4% @ 2.60 avg R**, while `ob` (93.9% @ 11.22R) and `judas` (93.1% @ 7.87R) stood exposed as pure lookahead and are pending re-measurement after the next backfill. Every other detector now sits at 44–57% (coin-flip); only `cisd` (63.6%, n=56) shows daylight, and `avg_r` is MFE-based so it is NOT bankable without a realistic exit rule. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable all session); `npx tsc --noEmit` REQUIRED before push — `detectFVGs` moved from positional args to an options object and `Pivot`/`LiquidityPool`/`OrderBlock` gained required fields. Note `es_candles` history only starts 2026-06-17, so `--days=30` yields 18 sessions, and the managed PG needs `ssl:{rejectUnauthorized:false}` for ad-hoc `pg` queries.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — GEX Scanner Top-10 size cards + tab removals (`app/scanner/page.tsx`)
+
+In `GexScanner`: default `minOtm` changed `0 → 0.05` (opens at 15m / All / OTM 5%+), plus a new `topBySize` derivation (top 10 by `|latest_chg|`, sorted independently of the table) rendered as a 5×2 `classicCardAccentStyle` grid above the table showing strike, Δ GEX, expiry/spot, OTM%, % vs open, score and `SignalBadge`. Also removed the Greeks Sensitivity and Vol Pin tabs (tab buttons, render branches, `MainTab` union members, `SCAN_META` overview cards) — `GreeksScanner`/`VolPinScanner` left in-file as dead code since `SortTh`/`fmtPct` are shared by other tabs. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED`).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — Dark Pool feature removed (`app/flow/page.tsx`, `server-v2/*`)
+
+Ripped out the dark-pool (TRF print) feature end-to-end: deleted the Dark Pool card, `Darkpool*` types, `fmtShares()` and the 5s `/proxy/darkpool-levels` poller from `app/flow/page.tsx`; removed the `/proxy/darkpool-{history,accum,levels}` routes and `startDarkpoolRecorder()` from `server-v2/server-with-proxy.js`; dropped `darkpool_prints` from `server-v2/state/retention-cleanup.js` (RETENTION map, DELETE, VACUUM list) and `scripts/db-prune.sql`; de-jargoned the `/flow` copy in `components/explore/exploreContent.ts`. Sandbox was down (`HYPERVISOR_VIRT_DISABLED`) so the four orphaned modules — `server-v2/darkpool-{routes,stream,recorder}.js` and `server-v2/state/darkpool-history-writer.js` — still need a manual `git rm`, plus `DROP TABLE IF EXISTS darkpool_prints;` on the VPS. NOT build-verified.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-12 — IB Stats live gauges + owner-gated history (`components/scanner/IbStatsTab.tsx`)
+
+Added a `LiveGauges` card to the `/scanner` IB Stats tab: a direction-bias needle gauge (P(high breaks first), scored on the tightest matching sample ≥40 sessions via `bestSample()` over today's bias + formation order + width bucket + ORB), an expansion matrix (single-break / rotation / contained), an active tactical-rule card with live edge rate, and one signed −100…+100 overall BULLISH/BEARISH break verdict (halved while the IB is still forming). The 14 historical stat tables + rule ranking are now collapsed behind an owner-only toggle (`useAuth().isOwnerClaim`, falling back to `NEXT_PUBLIC_OWNER_USER_ID`) — cosmetic gate only, `public/data/ib-*.json` is still publicly fetchable. Also diagnosed the failed VPS build: `ReferenceError: tab is not defined` on `/trading` prerender came from an uncommitted local deletion of the tab-strip block in `app/trading/page.tsx` never reaching `origin/prod`. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-11 — IB Stats scanner tab (`lib/ibStats.ts`, `components/scanner/IbStatsTab.tsx`, `app/scanner/page.tsx`, `ib-backtest-esu6.html`, `public/data/ib-ES.json`, `ib-NQ.json`)
+
+Added an Initial Balance (09:30–10:30 ET) rule backtest as a new `/scanner` tab: 14 IB rules + a 0.25-fib-pullback rule (two variants: 0.25 of the IB range vs 0.25 retrace of the post-break impulse), break-time distribution, day-of-week slice, IB width buckets (narrow `<0.5×ATR14` or `<0.75×avgIB20` / wide `>1.5×ATR14` or `>1.25×avgIB20`), and a hit-rate ranking with sample-size verdicts — engine in `lib/ibStats.ts` (pure, interval-agnostic; break = bar CLOSE outside IB, failed break = back inside within 30 min). Heavy compute runs offline in the standalone `ib-backtest-esu6.html` (now auto-detects bar interval and exports a slim per-session JSON), so the tab just fetches `public/data/ib-{ES,NQ}.json` (~1.8MB each, 1m data since 2017) and aggregates client-side behind an ES/NQ switcher; themed with `variant="budget"` cards (no top accent strip), white 15px body, 16px LIGHT_BLUE titles. NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-10 — Flow GEX buy/sell accuracy + directional Vol GEX (`server-v2/computation/flow-gex.js`, `gex-calculator.js`, `server-v2/state/flow-gex-rehydrate.js`, `flow-gex-history.js`)
+
+Excluded `bucket:'neutral'` prints — trades `inferSide` couldn't classify as buy/sell from the bid/ask (mid/unknown or no fresh quote, which FlowProcessor coerces to `side:'buy'`) — from dealer inventory via a guard in `flow-gex.js` `ingestTape` plus an `AND (bucket IS NULL OR bucket <> 'neutral')` filter on the `flow-gex-rehydrate.js` rebuild query and both `flow-gex-history.js` tape CTEs, so unclassifiable volume stops leaking in as taker buys across live + restart + the persisted vol-history heatmap. Added a directional `netVolGexDir` field in `gex-calculator.js` that signs the day's REST volume by the observed `(dealerBuy−dealerSell)/total` buy/sell ratio (dealer polarity, same as `flowGEX`), falling back to raw `netVolGEX` on strikes with no classified flow — left additive (not yet wired to the client Vol toggle); NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-10 — GEX scanner combined-score ranking + Positive/Negative side-growth filter (`app/scanner/page.tsx`, `server-v2/server-with-proxy.js`)
+
+Added combined-score ranking to the GEX Change Scanner: `server-with-proxy.js` `/proxy/strike-growth/scanner` gained `sort=score` and a `score` column (min-max normalized `0.6·|latest_chg| + 0.4·|pct_open|`, ×100), and `app/scanner/page.tsx` got a "Best overall" sort, sortable Score column, and adjustable Strong/Big%/★Very-strong Signal badges persisted to localStorage. Replaced the All/OTM moneyness toggle on both the GexScanner and StrikeQueryScanner tabs with an All/Positive/Negative switch — Positive = strike above spot AND rising GEX (Δ>0), Negative = strike below spot AND falling GEX (Δ<0) — restored a standalone "min OTM" distance dropdown, and added a backend `dir` param (`strike>spot AND latest_chg>0` / mirror) in the scanner WHERE; NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable), backend needs VPS redeploy.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-10 — Home signals feed wired to the live engine (`components/dashboard/SignalsFeed.tsx`)
+
+Repointed the `/home` `SignalsFeed` to fetch the live GEX/CB/Flow engine (`GET /proxy/signals` → `server-v2/signals-engine.js`'s `trade_signals`) alongside the hand-authored `public/signals.txt` via `Promise.allSettled`, merging them newest-first, and added `mapApiRows`/`KIND_PAGE`/`etTime`/`etDateStr` helpers that map each engine row (flip_cross, wall_reject/break, cb_reject/break, confluence, bzila_confluence, flow_divergence) to a page-tagged chip filtered to today's ET. So CB/Flow/GEX-wall/flip alerts now auto-populate during the futures session while the other vocabulary tags stay txt-only until they get emitters — NOT build-verified (sandbox `HYPERVISOR_VIRT_DISABLED` unavailable this session).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-09 — `/new-home` iteration + options-chain contract sparkline fix (`app/new-home/page.tsx`, `components/dashboard/LiveGreeksGauges.tsx`, `components/dashboard/ChainStatsBar.tsx`, `app/options-chain/page.tsx`, `server-v2/state/flow-gex-history.js`, `server-v2/server-with-proxy.js`)
+
+Iterated `/new-home`: wired `OptionChainPanel` to the page-level ticker, rebuilt `LiveGreeksGauges` as label+value+zero-crossing sparkline (arc gauge removed), redesigned `ChainStatsBar` to 5m/15m wall tiles + Bull/Bear% + ITM/OTM% (dropped 30m), added an "Alerts" placeholder panel, fixed page-scroll-on-short-window and oversized-chain layout bugs (`minHeight:0` flex fixes), replaced the FAB's numeric sub-buttons with real popups (Economic Calendar, Option Flow settings+sparkline, Notes, Trader Dashboard/Analytics links) labeled by name, and removed the Overview/Chain/Flow tab switcher. On `app/options-chain/page.tsx`: restored the standalone `%` strikes dropdown while hiding the ticker input when embedded, auto-centered the ATM row on load, tightened cell padding/lightened font weight, made relative-GEX% render inline (one line per cell), and added a click-to-open Flow GEX history sparkline (`ContractFlowPopup`, via `lightweight-charts`) for 0DTE SPX cells; fixed that popup timing out by adding a single-strike fast path to `flow-gex-history.js` + the `/proxy/flow-gex-history` route in `server-with-proxy.js`, plus a 15s client timeout/retry.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-09 — Home page tabs (Flow/Greeks/Scanner/ES Candles) + SPX flow query perf (`app/home/HomeClient.tsx`, `components/dashboard/FlowNetPremPanel.tsx`, `GreeksHomePanel.tsx`, `ScannerHomePanel.tsx`, `EsCandlesFullPanel.tsx`, `server-v2/server-with-proxy.js`, `server-v2/state/flow-history-writer.js`)
+
+Added 4 new tabs (Flow, Greeks, Scanner, ES Candles) to the Economic Calendar section on `/home`, each a new self-contained component extracted from its source page and wired into `HomeClient.tsx`'s tab bar; not build-verified (sandbox unavailable all session). Fixed slow SPX flow loading by adding a covering index (`flow_prints_netprem_covering_idx`) for the `/proxy/flow-netprem` query and correcting a cache-TTL bug (4000ms→6000ms) that never actually cached solo-viewer polls, in `server-v2/server-with-proxy.js` (+ mirrored index in `flow-history-writer.js`).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-08 — Walls & Flows tab font sizing + ES Candles sidebar removal (`app/test/page.tsx`, `components/shared/GlobalToolbar.tsx`)
+
+Updated font sizing on Walls & Flows test page to 15px text and 16px titles across WallsFlowsCard, WallsFlowsTab, and TimingWindowChip components for consistency. Removed ES Candles from Quick Pages sidebar pin menu (deleted `/es-candles` entry from QUICK_META in GlobalToolbar.tsx line 94).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-07 — Dark Pool feature on /flow + font/color pass (`app/flow/page.tsx`, `server-v2/darkpool-stream.js`, `darkpool-recorder.js`, `state/darkpool-history-writer.js`, `darkpool-routes.js`, `proxy-thetadata.js`, `server-with-proxy.js`)
+
+Added an off-exchange "Dark Pool" feature to `/flow`: new `server-v2/darkpool-stream.js`/`darkpool-recorder.js`/`state/darkpool-history-writer.js`/`darkpool-routes.js` (plus two new volume fetchers in `proxy-thetadata.js`, wired into `server-with-proxy.js`) identify TRF-reported (exchange codes 57/58/59) stock prints and serve a `/proxy/darkpool-levels` endpoint, which `app/flow/page.tsx` renders as a "Heaviest Dark Levels" bar list positioned beside the Filters card, above the chart. Also bumped `/flow` body/title text to 15px/16px and converted remaining gray text to white across `app/flow/page.tsx`; NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable all session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-07 — IB card stats + Rules In Play on /analytics (`app/analytics/page.tsx`)
+
+Added IB HIGH/MID/LOW/RANGE stats display to the Initial Balance card and integrated Rules In Play section with dynamic rule evaluation (Inside Day Exception, Timing Curve, Single-Break Trend, Double Breach); applied dashboard theme colors to rules cards and fixed Confidence Score card logic to show "HIT" instead of "HIT · PIVOT" when later checkpoints drop lower. Card height fixed to 480px with scrollable rules section.
+
+## 2026-07-07 — ES Candles heatmap basis lock (`app/es-candles/page.tsx`)
+
+Locked basis calculation to set once on first WebSocket message and never update intraday, preventing heatmap position drift throughout the session. Modified lines 800–802 to guard `basisRef.current` updates with `!basisRef.current` check so strikes/levels stay fixed in chart coordinates as ES basis evolves.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-06 — Regime Engine tab build-out + layout fixes (`app/test/page.tsx`, `lib/regimeHmm.ts`)
+
+Built a new "Regime Engine" tab on `/test` (3-state Gaussian HMM — Trend/Chop/Panic — Baum-Welch fit on ESU/NQU 5m candles, ticker toggle, hidden-state graph, live regime probability chart, K=3 probability tree with EV/tail estimates, real lightweight-charts candlestick with regime bands, naive-vs-gated Donchian backtest comparison); retrofitted to the Budget UI style (`LIGHT_BLUE`/`SOFT_RED`, one accent, no top bars) per uploaded `BUDGET_UI_STYLE.md`, then fixed `ProbabilityStackChart`/`ProbabilityTreeChart` so their SVGs grow via `flex:"1 1 auto"` to fill the stretched Card height instead of leaving blank space. Also tightened `StrikeLevelTable` (GEX Levels tab) to show only rows within ±$300 of spot with the rest scrollable. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable all session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-06 — Fixed missing Edit/Delete on "Words from Bzila" (`app/traders-dashboard/page.tsx`)
+
+The new card's owner gate relied only on `isOwnerClaim`; widened it to also accept a `NEXT_PUBLIC_OWNER_USER_ID` env match (same cosmetic-gate pattern as the Discord share button in `DataBox.tsx`), so Edit/Delete now render reliably. Confirmed `AuthProvider.tsx`'s `isOwnerClaim` still exists post-migration (now derived from `user?.isOwner` instead of a Supabase JWT claim) — no further change needed there. NOT build-verified this session.
+
+## 2026-07-06 — Full custom auth + billing migration off Supabase Auth (`lib/db.ts`, `lib/auth/*`, `lib/supabase/server.ts`+`middleware.ts`, `middleware.ts`, `app/api/auth/*`, `app/auth/callback`, Stripe routes, `server-v2/ws-auth.js`, `scripts/migrate-users-from-supabase.mjs`)
+
+Replaced Supabase Auth entirely with a custom `users`/`sessions`/`password_resets` schema in the existing Render Postgres (scrypt hashing w/ legacy-bcrypt verify + auto-upgrade, opaque session cookies, custom Google OAuth via `lib/auth/google.ts`), keeping all ~40 existing `getServerUserId`/`getServerIsOwner` call sites untouched by preserving their signatures; simplified Stripe webhook/checkout (dropped the cross-DB Supabase claim mirror), rewrote the WS auth gate, admin email/activity routes, and kept Supabase alive only for `/chat` Realtime via a minted JWT (`app/api/auth/chat-token`). Migration script run live (29/29 Supabase users migrated, owner verified); fixed a template-literal syntax bug + a dev-only CSP `unsafe-eval` issue found during local testing, and added a branded reset-password email (`lib/emails/reset-password.ts`); pushed via `push.ps1` — NOT yet confirmed live on prod post-push.
+
+## 2026-07-06 — "Words from Bzila" owner note card (`app/traders-dashboard/page.tsx`)
+
+Added a collapsible "Words from Bzila" card near the top of `/traders-dashboard`, backed by a new singleton `bzila_note` table (`lib/db.ts`) and `app/api/bzila-note/route.ts` (GET public, POST/DELETE gated by `getServerIsOwner()`); the page shows Edit/Save/Delete controls only when `useAuth().isOwnerClaim` is true. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable this session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-06 — Vol Pin Scanner status ranking + sortable columns (`app/scanner/page.tsx`)
+
+Refactored `PinStatus` into a shared `pinStatusRank()` (0=PINNING/1=SQUEEZING/2=WATCHING/3=none) so the label and row ordering use one source of truth, and added a `PinSortKey`/`pinSortValue()` + `SortTh` header component giving every column (Symbol, Spot, Dist, Pin OI, ATM IV, RV, IV-RV%, Spread Trend, Range, Range Trend, Status) click-to-sort with asc/desc toggle and a ▲/▼ indicator, defaulting to Status ascending. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) unavailable this session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-06 — Options Positioning: per-user customizable watchlist row + scanner sweep fix
+
+Diagnosed the Positioning tab's stuck "needs a scanner sweep" state to a literal `SCANNER_TICKERS=A,AAL,AAPL,...` value in the VPS `.env.local` (a doc-example string saved verbatim, never actually SPX/NDX/SPY/QQQ) — fixed via `SCANNER_TICKERS=SCANNER` + `docker compose up -d --force-recreate`, confirmed with a forced `POST /proxy/scanner-run`. Split `OptionsPositioningTab` in `app/test/page.tsx` into a fixed SPX/NDX/SPY/QQQ row (`useScannerRows` + `PositioningCardGrid`) plus a second "Your Watchlist" row backed by a new `positioning_ticker_prefs` Postgres table (`lib/db.ts`) and `app/api/positioning-tickers/route.ts`, editable via 4 plain-text ticker inputs (also added `GET /proxy/scanner-tickers` in `server-v2/server-with-proxy.js`, not currently used by the client). NOT build-verified — sandbox unavailable all session (HYPERVISOR_VIRT_DISABLED).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-05 — TPO box profile, GEX rail thickness fix, What's New owner-edit
+
+Added a `showTpo` overlay to `app/es-candles/page.tsx` (`buildTpoProfile()` + canvas draw block) rendering a rolling ETH(6pm-9:30am)/RTH(9:30am-4pm)/ETH/RTH box-profile strip — VAH/VAL/POC/Mid only, half-width gray boxes, each anchored to its own fixed session window via `ts.timeToCoordinate` — and uncapped `components/dashboard/EsGexRail.tsx`'s bar-thickness formula plus added wheel/pointermove listeners so rail bars track live Y-axis zoom instead of a 5s-lagged 9px-capped size. Also removed 3 stale bullets from `CUSTOMER_CHANGELOG.md` and added an owner-only delete button on `/whats-new` (`WhatsNewClient.tsx` + new `app/api/whats-new/route.ts` DELETE, Supabase `getServerUserId()`-gated) so entries can be struck from the page without hand-editing the file. NOT build-verified — sandbox (`HYPERVISOR_VIRT_DISABLED`) was unavailable the entire session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-05 — GEX Levels tab 3rd pass (`app/test/page.tsx`) + AM TBR source line removed (`app/es-candles/page.tsx`)
+
+Reworked `GexLevelsTab` layout to a two-column split (History+Strike table left; Net Gamma/Net Delta bar charts, Open Interest by Date, and a new `OiVolHeatmap` right), added `useChartHover`/`ChartTooltip` for hover tooltips, and swapped `SOFT_RED`→`HOME_THEME.red` across GexLevelsTab/OptionsPositioningTab/ToggleSwitch to match the rest of the dashboard's red. Also removed the "Source concept: nqstats.com/am_tbr.html" attribution line from `AmTbrPanel`'s description text on `/es-candles`. NOT build-verified — no shell access this session.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-05 — /test wired into nav dropdown + Overview landing tab
+
+Added `{label:"Test Lab", href:"/test"}` to `GEX_ITEMS`/`ROUTE_SYMBOL` in `components/shared/NavMenu.tsx` and `QUICK_META` in `components/shared/GlobalToolbar.tsx` so `/test` is reachable from the toolbar hamburger and pinnable to Quick Pages. Added a new default "Overview" tab to `app/test/page.tsx` (`TestTab` union now overview/gexlevels/flow/positioning) with one themed card per existing tab (GEX Levels, Flow Inventory, Options Positioning) describing what it does + an "Open →" jump button, plus a banner noting these are early-stage test pages linking to `/feedback`. NOT build-verified — sandbox had no shell access this session (HYPERVISOR_VIRT_DISABLED).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-05 — AM TBR overlay moved onto the real ES candle chart (`app/es-candles/page.tsx`)
+
+Removed the standalone AM TBR SVG mini-chart (mock candle generator, rescaled-real-ES normalizer, its own `useEsCandles` fetch, Mock/Live toggle) and replaced it with a new "section 4" in the existing canvas `draw()` overlay that paints the TBR Open/±0.25 lines and MAE/MFE bands directly over the real candles via `series.priceToCoordinate`/`ts.timeToCoordinate`, anchored to today's real 8am ES open computed by a new `computeAmTbrInfo()`/`amTbrInfo` memo off the same merged `rows`; `AmTbrPanel` is now a status/legend card fed by `amTbrInfo` instead of a duplicate chart. NOT build-verified — sandbox failed to start this session.
+
+## 2026-07-05 — Delayed-preview tier for unpaid signed-in users (/preview, /home, /mult-greek) + nav/drawer gating
+
+Built a "delayed" free tier: `app/preview/page.tsx` (new), plus `app/home/page.tsx`+`HomeClient.tsx` and `app/mult-greek/page.tsx`+`MultGreekClient.tsx` (split into server/client) branch on `getAccess()` to render frozen snapshots — new `preview_snapshots`, `home_static_snapshots`, `mult_greek_static_snapshots` tables/helpers in `lib/db.ts` — instead of live WS/chain data, fed every 30m by `server-v2/{preview,home,mult-greek}-snapshot-recorder.js` (+ `/proxy/*-snapshot?force=1` manual triggers) and gated in `middleware.ts` (PAID_EXEMPT now redirects unpaid users to `/home` instead of `/pricing`), with a CB-BETA 50%-off promo banner on all three. Added `isPaid`/`isOwnerClaim` JWT-claim fields to `components/auth/AuthProvider.tsx` so `components/shared/NavMenu.tsx` and `GexDock.tsx` can lock every page except Home/Multi Greek behind an "Upgrade" prompt for unpaid viewers, and GexDock's default tile now auto-swaps Home↔Multi Greek depending which one you opened it from.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-04 — EM grader Theta cutover fixed (Estimated Moves scoring restored, 379 scored)
+
+Fixed Theta-based EM grading (was scoring 0 for the whole roster → now 379 evaluated, 279 hit / 100 miss) with two edits to `server-v2/proxy-thetadata.js`: `ymdCompact` now formats a JS `Date` → `YYYYMMDD` (it was passing a raw `Date.toString()` and 500-ing `/v3/stock/history/eod` with "Cannot parse date string"), and `_mapDailyOhlc` now derives each bar's date from the `created`/`last_trade` column since the v3 stock/index EOD JSON has no `date` field (every row was being dropped → "No finalized weekly candle"). Supporting edits: per-ticker skip-logging in `server-v2/levels-engine.js` `evaluateCompletedWeek` (this is what surfaced both bugs), `seedUpcomingWeek` now runs on retries in `server-v2/levels-auto-publish.js`, and the evaluate-route base port aligned `3000`→`3001` in `app/api/em-tracker/evaluate/route.ts`; shipped as direct VPS edits + `docker compose build --no-cache` (routine `--build` kept caching the `COPY . .` layer) — still needs a git reconcile so the next deploy doesn't revert.
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-07-04 — ES Candles: actionable GEX/CB signals engine (alerts-only)
+
+Added `server-v2/signals-engine.js`, which polls `marketState.getState()` every ~3s and turns the ES Candles heatmap levels into long/short **ES-futures** signals in ES-price space — flip cross, Call/Put wall reject+break, size-gated CB reaction (`mvcValueOIVol` ≥ `CB_MIN_SIZE`), and multi-level confluence — scored 1–5, deduped per (kind,direction,level) with a cooldown, persisted to a self-creating `trade_signals` table, and optionally pushed to Discord (`SIGNALS_DISCORD_WEBHOOK`); alerts only, never places orders. Wired `startSignalsEngine(PORT)` + `GET /proxy/signals` + `POST /proxy/signals-run` into `server-v2/server-with-proxy.js`, added a "Signals" dock toggle + live bottom strip (polls `/proxy/signals`) to `app/es-candles/page.tsx`, and shipped `server-v2/signals-engine.selftest.js` (9-case pure-logic test) + `server-v2/SIGNALS_ENGINE.md`; hand-trace fixed a break-detection bug (must be a threshold-cross through ±brk, not merely "currently beyond," else spurious CB breaks every cooldown). NOT build-verified — sandbox down (HYPERVISOR_VIRT_DISABLED); needs `next build` + VPS `dashboard` rebuild.
+
+## 2026-07-04 — EM Customer: Recent Track Record (last week hit/miss + trailing-5 %)
+
+Added a **Recent Track Record** card to `components/dashboard/EmCustomer.tsx` with two theme-matched boxes — last finalized week HIT/MISS (with week label) and trailing-5-week hit % — fed by a new per-ticker `fetchTrackerRows()` hit to `/api/em-tracker?ticker=` (ES/NQ alias-folded ESU↔ESM, NQU↔NQM; forming/unevaluated weeks excluded via the `result` filter, so "last week" is always the last closed candle). Not build-verified (sandbox down); needs VPS rebuild.
+
+## 2026-07-03 — Options Chain: grand-total greek readout in toolbar
+
+Added a `grandTotal` useMemo in `app/options-chain/page.tsx` summing the active greek (`greekMode`) across all strikes and all loaded expiration columns, and rendered it in the Dock toolbar as `Total <greek>: <value>` styled to match sibling labels (11px, cyan `HT.cyan`, uppercase). Not build-verified.
+
+## 2026-07-03 — GEX drawer pop-out + embed fixes + shared card system
+
+Added a right-side GEX-groups pop-out drawer launched from a new 🧮 toolbar button next to Notes: new `components/shared/GexDock.tsx` (2/5-width `40vw` panel, single compact row of 9 page-selector tiles) + `GexPanelContext.tsx` (persisted open state), mounted in `LayoutShell.tsx` and toggled from `GlobalToolbar.tsx`. Tiles render each non-owner page (all nav GEX pages except Options Chain + the not-live ICT/Journal/Order-Flow) in-drawer via `?embed=1` iframes. Fixed `app/es-candles/page.tsx` in the drawer: chart re-fits once real size lands (zero-size iframe parking bug), GEX rail auto-collapses under 560px, and the dock toolbar is wrapped in `FitScale` (min 0.2) to scale-to-fit. Forced `app/mult-greek/page.tsx` SPX/SPY/QQQ panels to stay side-by-side in embed mode and softened its bright `#ffffff` value text to `#c3ccda`. Added the Budget/gex2 card system to `components/shared/homeTheme.ts` (`LIGHT_BLUE`, `SOFT_RED`, `classicCardStyle`, `dissolveCardStyle`, `statTileStyle`) as the single source of truth, gave shared `Card` a `variant` prop (gloss/classic/dissolve), and deduped es-candles + gex2 onto the shared styles. UNVERIFIED — sandbox down, no build; needs VPS rebuild.
+
+## 2026-07-03 — Greeks: Vol Skew Calculator + if-this-then-that matrix
+
+Added `components/greeks/SkewCalculator.tsx` (manual OTM-put/OTM-call/ATM IV inputs → live `skew=(Pput−Pcall)/ATM` %, vol-point spread, auto-highlighted regime band, and a 5-row if-this-then-that table); wired it into `app/greeks/page.tsx` below `<VolCard>`. Themed via HOME_THEME/LIGHT_BLUE tokens, no hardcoded chrome; not build-verified.
+
+## 2026-07-02 — Options Flow: Combined (all-tickers) tab + dashboard-theme controls + $5M floor + all-day backfill
+
+Added a **By Ticker / Combined** view toggle to `app/flow/page.tsx`: Combined replaces the watchlist with an All / All−Indices scope control (indices = SPX/NDX/RUT/XSP/VIX/DJX via `INDEX_TICKERS`), keeps every filter, drops the per-ticker Net Drift chart (chart card kept mounted-but-hidden so the once-created `lightweight-charts` ref survives tab switches), keeps the premium split, and shows a combined tape with an added Ticker column (rendered rows capped at 800 with a "showing X of Y" note; totals span the full set). Combined pulls the all-tickers day from `/proxy/flow-history` (no `underlying`) and merges with the live multi-ticker WS tape; Min Premium now goes to **$5M** in Combined (step $50k, clamps back to $1M for single-ticker). Restyled the tabs + all segmented buttons + active watchlist chip to the dashboard `DOCK_THEME` language (cyan gloss tile + cyan text + glow). Server: added an optional `minPremium` param to `/proxy/flow-history` in `server-v2/server-with-proxy.js` (filters in SQL **before** the 20k cap so a floored combined pull spans the whole session); client passes the current floor (debounced 400ms, 15s refresh). UNVERIFIED — sandbox down, no build; needs VPS rebuild for the `/proxy/flow-history` change.
+
+## 2026-07-02 — Greeks page: gauges + single WS feed + zero-cross log; frozen-spot root cause + guards + owner health/link
+
+Reworked `app/greeks/page.tsx`: replaced the four GEX/DEX/CHEX/VEX sparkline cards with a 4-across center-zero gauge cluster (new `GreeksGauge`, 0 at 12 o'clock, green +/red −) under the toolbar; removed the Gamma Logic Feed and put a GEX/DEX **Zero-Line Crossings** log in its slot (new `zeroCrossings` state machine with an 8%-of-scale deadband + 2-sample confirm to reject frozen-spot outliers). Converted the greeks feed from the `/api/insights/gex` 60s REST poll to the single `/ws/gex` WebSocket (new `pointFromTotals`; reads gex/snapshot totals + spot frames, ignores flow tape), gated by a new DATA on/off toggle; VIX/IV stays a 60s `/api/insights/vix` poll; history de-dup widened 5s→15s bucket, cap 300→1500; dropped the page's `saveGreeksSnapshot` write (was double-writing `greeks_ts` on a conflicting basis). Root-caused false zero-crosses to a frozen SPX spot (7483.23 in ~81% of `greeks_ts` rows): added `spotAt`/`spotAgeMs` to `/proxy/gex` + `/proxy/status` (`server-v2/server-with-proxy.js`), `server-v2/greeks-ts-writer.js` now skips writes when spot is stale (`SPOT_STALE_MS`/`GREEKS_TS_SPOT_STALE_MS`, 120s), and `app/owner/dev/owner/page.tsx` gained a `SpotFeedHealth` card (polls `/proxy/status`, HEALTHY/SLOW/STALE) plus an "Open Greeks →" link. Repointed `discord-bot.js` `exposure-stack` `/insights`→`/home`; the dead `/insights` redirect stub (`app/insights/`) still needs manual deletion (sandbox delete unavailable). STILL OPEN: index-stream watchdog to auto re-subscribe after a Theta bounce; all edits UNVERIFIED / not pushed.
+
+## 2026-07-02 — Options Flow page redesign: per-ticker Net Drift chart + scalable aggregation
+
+Rebuilt `app/flow/page.tsx` into a per-ticker Net Drift (Premium) view: watchlist chips + add, premium slider, cumulative call/put net-premium lines on a hardcoded 9:30–4:00 ET axis (`lightweight-charts` v5, fixed 1-min bins, ET `tickMarkFormatter`), volume histogram pane, call/put split bar, and a raw tape scoped to the active ticker. Because SPX prints are hundreds of thousands/day (20k rows = ~6 min), moved the chart off raw prints to a new server-aggregated endpoint `/proxy/flow-netprem` (SQL `GROUP BY` 1-min bins, per-ticker via `flowRootsFor`, 4s in-memory cache) in `server-v2/server-with-proxy.js`, polled every 5s (self-heals transient DB blanks); also added per-ticker `underlying` filter to `/proxy/flow-history` and pinned all tape/axis times to ET. Ops: set `FLOW_TICKERS=EM` + `FLOW_BULK_STREAM=1` on VPS to record the full EM roster. Needs VPS rebuild.
+
+## 2026-07-02 — Analytics page duplicate candle fetch dedupe
+
+Diagnosed the analytics-page waterfall: `app/analytics/page.tsx` mounts `useEsCandles(true)` twice (lines 867 + 979), so both `queryEsCandlesToday` (`candles?date=…&limit=2000`) and `queryEsCandlesHistorical` (`candles?daysBack=20&limit=10000`, ~139 kB) fired twice on load. Added a 5s in-flight/TTL dedupe (`_dedupeCandles`) in `lib/snapdb.ts` so concurrent hook mounts share one request; global fix, live bars still stream via /ws/gex. Needs VPS rebuild.
+
+## 2026-06-30 — Home GEX SSR first-paint + 0DTE Volume Net GEX fix + @supabase/ssr dep (502)
+
+Made `app/home/page.tsx` a server component that reads the hot `/proxy/gex` snapshot and seeds `app/home/HomeClient.tsx` via an `initial` prop, so the GEX chart paints from the first HTML frame instead of the client hydrate→open `/ws/gex`→await-first-frame waterfall; `HEAVY_FRAME_MS` 1500→750 (env `NEXT_PUBLIC_HEAVY_FRAME_MS`) and added env-tunable `GEX_GATE_DISABLED` (paint on first recompute, skip readiness gate) + `GEX_DEBUG` (logs `_recompute` active/oiHits/gkHits) in `server-v2/proxy-tastytrade.js`, plus paid-Theta speed env (`THETA_GREEKS_MS=2000`, `OI_REFRESH_MS=30000`, `OI_READY_GRACE_MS=8000`) since the old readiness brakes existed to ration the free dxLink/TT feed (now on paid Theta Pro). Fixed 0DTE blank Volume Net GEX: `server-v2/proxy-thetadata.js fetchVolumeTheta` keeps only today-timestamped OHLC bars (stale prior-session bars → 0) and `proxy-tastytrade.js _recompute` uses `Math.max(liveVol, restVol)` so a 0/partial live-stream value no longer shadows the real Theta REST volume — verified live (`netVolGEX -1746` at 6870). Added `@supabase/ssr`+`@supabase/supabase-js` to `package.json` (was uninstalled → `tsc` errors + prod 502). NOTE: see the feed-always-warm entry below — the spot:0 boot failures this session traced to Theta JVM OOM, fixed there.
+
+## 2026-06-30 — Feed always-warm: compose depends_on Theta health + feed-start retry + keep-warm watchdog (slow /home root cause = Theta JVM OOM, NOT threading)
+
+Diagnosed a "60s home load / make it multi-threaded" request as a cold live feed, NOT a server/CPU problem: server-v2 answered `/` in ~0.5ms and the browser Performance trace showed full load in ~5s with no 60s hang — the cold `spot:0`/empty-`gexRows` state came from Theta Terminal hitting `java.lang.OutOfMemoryError: Java heap space`, going `unhealthy`, and starving the feed (`[SERVER-V2] Feed failed to start: fetch failed`). Fixes: `docker-compose.yml` dashboard service gained `depends_on: theta-terminal: condition: service_healthy` (Theta's healthcheck already lives in `deploy/theta/compose.theta.yml`) so it won't boot ahead of Theta; `server-v2/server-with-proxy.js` feed bootstrap rewritten from log-and-give-up to `startFeedWithRetry()` (backoff 2s→4s→8s…cap 30s, retries until Theta answers, clears `marketState.setError`) plus a 30s keep-warm `setInterval` watchdog that restarts the feed when it goes cold (no live spot), both idle-kill-switch-aware (verified `proxy.spot`/`marketState.getSpot()`/`proxy.stop()` exist; `getStatus()` does NOT — corrected). OPEN (root cause still live): raise Theta JVM `-Xmx` in `deploy/theta/Dockerfile.theta` (folder not synced to Desktop repo — needs `cat` + `free -h` to size); `docker restart theta-terminal` clears the OOM short-term; my retry/watchdog edits NOT yet built into the running container (push from Windows → VPS `git pull` → `up -d --build dashboard`).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-06-30 — Local dev OAuth redirect fix + snap-button audit (page 1)
+
+Fixed local dev sign-in bouncing to prod: `app/auth/callback/route.ts` `publicOrigin()` short-circuited on `NEXT_PUBLIC_SITE_URL`/`APP_URL` (set to prod) even locally, so Google OAuth redirected to cbedge.net — added a `NODE_ENV !== "production"` branch that trusts the request `host` header first (dev returns to localhost:3002). Also began the snap-button (`BoxSnapBtn`/`captureElement` in `components/shared/DataBox.tsx`) page-by-page audit on live prod: home GEX Heatmap + GEX Chart snaps both verified capturing correctly (title + watermark + full content); only flaw is a few heatmap cells showing gray icon-placeholder squares where small badge images don't render in html2canvas.
+
+## 2026-06-30 — Ops: Theta entitlement reconcile after deploy
+
+Diagnosed a VPS metrics spike (CPU ~300%, disk write ~150 MBps) as a routine dashboard force-recreate/deploy, not a leak — confirmed via `docker stats`/`ps` that baseline returned (~1.5 vCPU: theta java + server-v2 node). `theta-terminal` came up unhealthy with partial greeks, so ran `docker restart theta-terminal` then `docker compose up -d --force-recreate dashboard`; entitlement reconciled to all-PRO (Stock/Options/Index PROFESSIONAL, FPSS STOCK.PRO/OPTION.PRO/INDEX.PRO) and feed restored (gkHits 458/458, oiHits 424). No repo files changed.
+
+## 2026-06-30 — Migrate auth Clerk → Supabase Auth (LIVE on prod) + /home quotes waterfall fix + es-candles heatmap banding fix
+
+Replaced Clerk with native Supabase Auth (Google OAuth + email/password, fresh-start users) across ~50 files: new `lib/supabase/{client,server,middleware}.ts` SSR clients, `components/auth/{AuthProvider,AuthForm}.tsx` + `components/shared/UserMenu.tsx`, themed `app/sign-in`/`sign-up` + `app/auth/callback/route.ts`; rewrote `middleware.ts` + `components/shared/ownerGuard.tsx` + `lib/subscription.ts` + ~15 API routes from Clerk `auth()` to `getServerUserId()`/`getSupabaseServer()`; `server-v2/ws-auth.js` now verifies the Supabase session cookie; `supabase/migrations/supabase-auth-rls.sql` moves `chat_messages` RLS to `auth.uid()::text`; removed `@clerk/*` from `package.json`/`Dockerfile`/`docker-compose.yml`. Shipped to prod (commits af9babe, b9ec870) — fixed a proxy-origin bug where `app/auth/callback/route.ts` used `new URL(req.url).origin` (internal localhost behind Cloudflare) and redirected OAuth users to localhost, now resolves via `NEXT_PUBLIC_SITE_URL`/`x-forwarded-host`. Also fixed `components/dashboard/NquQuotePill.tsx` second-quotes-wave waterfall (only `setQuoteList` when prefs differ) + `app/api/quote-symbols/route.ts` private 30s cache, and `app/es-candles/page.tsx` heatmap banding (carry each column to next column's left edge so unchanged-GEX slots don't leave gaps). OPEN: /chat realtime live-push (deferred), flip `WS_AUTH_REQUIRED=1`, fold `supabase-auth` branch to main, gitignore-clean committed `node_modules/.package-lock.json`.
+
+## 2026-06-29 — Fix: Volume Net GEX blank on /home (Theta migration dropped option volume)
+
+Volume Net GEX (`netVolGEX`, the Vol-Only column) was 0 chain-wide because the ThetaData options migration left `_refreshOI()` in `server-v2/proxy-tastytrade.js` pulling only the OI snapshot in `useTheta()` mode and hardcoding `volume: prev.volume || 0` (~L1741) — nothing ever sourced Theta day-volume, so every strike had `volume=0` and `netVolGEX` (computed in `app/home/page.tsx:164` from `callVolume`/`putVolume`) was always 0. Added `fetchVolumeTheta()` to `server-v2/proxy-thetadata.js` (whole-expiry `/v3/option/snapshot/ohlc`, keyed `exp|strike|type` → day volume), exported it, and wired it into `_refreshOI` via `Promise.all([fetchOpenInterestTheta, fetchVolumeTheta])`, merging `volMap` into `restOI` (prior-value fallback when the volume snapshot is empty pre-open). OPEN: confirm the v3 `ohlc` snapshot volume field key (`volume` vs `day_volume`) against a live response, then VPS rebuild + restart server-v2.
+
+## 2026-06-29 — Clerk prod-instance cutover attempt (REVERTED) + security false-alarm review
+
+No repo files changed; all work was in the Clerk dashboard and VPS `/opt/dashboard/.env.local` (gitignored). Reviewed a third-party "security audit" claim and confirmed it was a false alarm — the flagged `display_config`/Turnstile site key are public by design, no `sk_` secret was ever client-side (verified via repo grep + dashboard), and signup abuse was already blocked (Restricted mode + Bot/Turnstile + email verification all ON). Attempted to point cbedge.net auth at the Clerk **Production** instance by swapping `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY` to `pk_live`/`sk_live` and updating `OWNER_USER_ID`/`NEXT_PUBLIC_OWNER_USER_ID` to the prod user id, but the prod instance's Frontend API is misconfigured (key decoded to `clurk.cbedge.net`, host returns persistent **503** despite DNS Verified + SSL Issued), causing a sign-in outage; **reverted `.env.local` to the working dev `pk_test`/`sk_test` keys + original dev owner id and rebuilt** to restore login. OPEN: prod Clerk instance still broken — escalate to Clerk support (Frontend API 503 with correct base domain); rotate the dev `sk_test` key (exposed in chat during recovery); separate known issue = slow `/home` SPX-chain load (client-render waterfall; fix = `/home-fast` server-render refactor, still pending).
+
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+CHAT CLOSED
+
+## 2026-06-29 — ThetaData hybrid cutover (Phase 0→5) + VPS deploy + spot/VIX staged
+
+Built the full ThetaData migration behind flags: `server-v2/config/data-source.js` (`DATA_SOURCE` + `INDEX_SOURCE` flags), `server-v2/proxy-thetadata.js` (REST chain/OI/greeks adapter, FPSS Trade+Quote flow stream, index price stream, EOD/OI/greeks history helpers), and wired into `server-v2/proxy-tastytrade.js` `_refreshOI`/`_refreshGreeksTheta`/`_onThetaIndex` with dxLink option-flow + SPX/VIX branches gated off in theta mode. Validated OI 178/178 vs TT and GEX walls matching; backfilled 2y EOD GEX into `eod_gex` (`server-v2/scripts/theta-backfill-eod.mjs`); deployed the Theta Terminal as a Docker sibling service (`deploy/theta/`); removed the dead CBOE OI cross-check; spot/VIX-on-Theta staged flag-off pending an RTH real-time check.
+
+## 2026-06-29 — ThetaData migration completed: options + stock + index fully on Theta
+
+`server-v2/proxy-tastytrade.js`: `start()` now builds the options chain from `thetaAdapter.fetchChainTheta(SYMBOL)` when `useTheta()` (synthesizing `streamerSymbol` via `streamerSymbolFromContract`) instead of TT's nested chain, and `_resubscribe()` no longer subscribes option contracts to dxLink in theta mode (dxLink carries spot + ES/NQ candles only); added `fetchUnderlyingQuotes` equity branch → `fetchStockQuoteTheta` with per-symbol TT fallback. `server-v2/proxy-thetadata.js`: added + exported `fetchStockQuoteTheta` (v3 `/stock/snapshot/quote`). `.env.local`: set `DATA_SOURCE=theta` + `INDEX_SOURCE=theta`. Deployed to prod (`v6.29.x`); verified `/proxy/gex` rows 185 + walls populated on Theta, incl. next-day expiry on BS-gamma fallback. OPEN: confirm live SPX spot + greeks coverage at market open; verify v3 stock field keys.
+
+## 2026-06-29 — Fails page: OPEN state, sticky Failed status, sorted Live Status, fail-rate moved + perf
+
+`lib/failLevels.ts`: `FailEvent` gained a `stopped` flag (true only when price actually traded through the stop) so in-progress fades aren't mislabeled; Live Status `state` made sticky-"failed" for the rest of the session once a level is faded (was reverting to "idle" after ~10 min). `app/fails/page.tsx`: result label now WIN / OPEN / LOSS (open = not yet 1R and not stopped) in both the tally and table; Live Status cards sorted by price (highest left → lowest right); removed the Fail Rate card, Recent Fail Log, and the heavy 20-day `computeStats` rebuild, and cut the candle fetch from 20→8 days. `hooks/useEsCandles.ts`: added `historyDays` param (default 20) to size the initial candle pull. `app/dev/results/page.tsx`: added "Fail Rate" tab (per-level fail rate + Recent Fail Log, full 20-day window) alongside ICT/Confidence.
+
+## 2026-06-29 — Diagnosis: /whats-new blank in prod
+
+Diagnosed `app/whats-new/page.tsx` rendering empty in deployment: it reads `CUSTOMER_CHANGELOG.md` via `path.join(process.cwd(), ...)`, which isn't traced into the Next.js `output: "standalone"` Docker bundle, so `readFile` throws → `catch` returns `[]` → "No updates yet." Works in `next dev` only. No code changed; fix is to add the file to `outputFileTracingIncludes` or inline/import the data.
+
+## 2026-06-29 — Confidence Score fallbacks + MVC checkpoint tracking
+
+`/api/confidence` (`app/api/confidence/route.ts`): when no MVC snapshot exists for the requested date (weekend/pre-market/holiday) the route now resolves to the most recent prior day with data via `effDate` (all queries — SPX series, session progress, analogs, ES candles, isFinal — keyed off it), plus a prior-day SPX fallback for `cur.spx`; response gained `requestedDate`, `stale`, and `mvcTimestamp`. `/confidence-score` (`app/confidence-score/page.tsx`): header now shows when the MVC was captured + a STALE badge, and the toggle was relabeled "0DTE / OPEX" → "OPEX". Added new `/api/confidence/checkpoints` route and a "Confidence" tab on `/dev/results` (`app/dev/results/page.tsx`) tracking the 9:45/10:30/12:00 MVCs per day — strike, closest SPX approach, and hit (within 8 pts) with per-checkpoint hit-rate roll-ups.
+
+## 2026-06-29 — ICT Results clickable play log + build fix
+
+`/dev/results` (`app/dev/results/page.tsx`): made each ICT setup StatCard clickable, opening a new `SetupLogModal` that lists the individual logged plays for that kind (date, time, dir, entry/target/inval, MFE, R, outcome, note) from the `setups` array the API already returns. Fixed an `Invalid time value` crash on click by coercing pg string fields to numbers and guarding `etDate`/`etClock`. Also added `export const dynamic = "force-dynamic"` to `app/api/quote-symbols/route.ts` to fix a `next build` export failure (auth route was being statically prerendered).
+
+## 2026-06-28 — Options Chain ATM/MVC + ICT chart overhaul
+
+Options Chain (`app/options-chain/page.tsx`): recolored the MVC blink (`mvcGlow` keyframe + cell borders) from white to gold, clipped the box-shadow so no divider shows between the strike/value cells (`.mvc-peak-left`/`.mvc-peak-right`), and added a white border + "ATM" gold sticker on the ATM strike row. NavMenu (`components/shared/NavMenu.tsx`): Quick Pages font now gold (no highlight) and removed Feedback from the GEX group. ICT page (`app/ict/page.tsx`): gray current-price line, live cards sorted to top, Hover Info on/off toggle, 7-day historical window (`weekCandles` from hook `historical`+session), 5m/15m/30m/1h timeframe switcher (`tfCandles` aggregation), all overlays default off, FVG button relabeled, and restyled the whole toggle bar into the toolbar pill theme with theme-token buttons.
+
+## 2026-06-28 — Net Greeks card writer (Analytics page)
+
+Fixed the Analytics page "Net Greeks" card (`app/analytics/page.tsx`) showing "No greeks series for today yet" — root cause was that nothing wrote the `greeks_ts` table during the session (only manual /dev and /database POSTs). Added `server-v2/greeks-ts-writer.js`, a 5-minute RTH writer (modeled on `eod-gex-recorder.js`) that reads `$SPX` gexRows from `/proxy/gex`, sums net GEX/DEX/CHEX/VEX on the OI+Vol basis, and writes gex/dex in $B + chex/vex in $M to match the card's scale; self-creates the table, guards on <20 populated strikes, and fires once ~20s after boot. Wired into `server-v2/server-with-proxy.js` next to `startEodGexRecorder` plus a manual `POST /proxy/greeks-ts-run`.
+
+## 2026-06-28 — Home Econ Calendar card collapsible
+
+Made the Economic Calendar / Signals card on `app/home/page.tsx` collapsible via a chevron toggle in its existing tab bar (no toolbar added; expanded by default). Added `econCollapsed` state, a chevron button with `marginLeft:auto` in the tab header, and the card's `flex` now drops to `0 0 auto` when collapsed. Fix: initial implementation conditionally unmounted the panel, wiping its loaded events and forcing a refetch each toggle — switched to a `display:none` hide on the body wrapper so `EconCalendarPanel`/`SignalsPanel` stay mounted and retain data + filter state.
+
+## 2026-06-28 — App-wide dock-theme sweep, portal dropdowns, owner toolbar + carded layouts
+
+Swept the app onto the shared dock theme page-by-page. New shared components: `components/shared/ThemedSelect.tsx` and `components/shared/ThemedMonthPicker.tsx` (both now portal their menus to `document.body` via `createPortal`/`position:fixed` so they overlay cards everywhere — replaces the old `onOpenChange` z-index hack), and `components/shared/OwnerQuickLinks.tsx` (cyan pill links to every owner-group route, dropped into the headers of `app/dev/owner`, `app/dev/admin`, `app/database`, `app/dev`, `app/logs`, `app/changelog`, and `components/dashboard/EstimatedMoves.tsx`). Retrofitted native `<select>`/date controls to themed pickers and mapped chrome literals to `HOME_THEME` tokens across `app/analytics`, `app/trading` (alternating card accents), `app/dev`, `app/budget` (ThemedMonthPicker + scroll + per-account balance now mirrors the saved value), `app/personal/todo`, `app/database` (DockCalendar + segmented tabs), `app/economic-calendar` (dock filter menu), `app/greeks` (shell + dock-card accents + accent baseline on ZeroCross charts), `components/greeks/RegimeMatrix.tsx`, `app/es-candles` (centered floating Dock toolbar + net-greek stat boxes + dock DTE menu), `components/dashboard/EmCustomer.tsx` (full token retrofit + CB Edge logo + carded search), `app/docs` (shell + accented Cards/Figures). Rebuilt `app/options-chain/page.tsx` so each expiry renders as its own all-cyan card (shared strike rail, single universal scroll, total-on-top, full-row heatmap fill, observed-holiday filter) and converted its toolbar to `Dock`. Overhauled `app/dev/owner/page.tsx`: fixed clipped section/stat cards (removed `overflow:hidden`, dropped fragile container-query font units), varied accents on Overview + FE/BE tabs, color-coded Page Activity status dots, themed scrollbar, feedback list scroll-capped and moved to page bottom. Bumped CB Edge logo in `components/shared/GlobalToolbar.tsx` (34→48px) and removed the now-empty feedback dropdown.
+
+## 2026-06-28 — Subscriber chat (Supabase Realtime) + owner erase-all
+
+Built a single-room subscriber chat on Supabase Realtime with Clerk native third-party auth (no JWT template): `supabase/migrations/0001_chat_messages.sql` (table + RLS authed-read/insert-own + realtime publication + `replica identity full`), `lib/supabase.ts` (Clerk-authed browser client, no-arg `getToken()`), `hooks/useChat.ts` (load + realtime INSERT/DELETE subscriptions + send; fixes: `realtime.setAuth()` before subscribe, unique per-mount channel name), and `components/shared/ChatPanel.tsx` (one-line messages, username-first display name) mounted at the bottom of `components/shared/NotesDock.tsx`. Added owner-only erase-all: `app/api/chat/clear/route.ts` (owner-gated, service-role key bypasses RLS) + red "🗑️ Erase all chat" button in `app/dev/owner/page.tsx` Controls; live DELETE broadcast clears all open clients without refresh. New env: `SUPABASE_SERVICE_ROLE_KEY`.
+
+## 2026-06-28 — Beta/prelaunch pricing gate, theming pass + email unsubscribe system
+
+Reworked the signed-out `/pricing` page (`app/pricing/page.tsx`) into a beta/prelaunch flow: new `components/pricing/BetaGate.tsx` shows a live countdown + locked CTA until beta opens (6/30 9:30am ET, anchored to a server `serverNow` baseline advanced by `performance.now()` so a wrong client clock can't open it early), then swaps to "Join the beta" → `/sign-up`; retheme to shared `homeGlossPanelStyle`/`homeHeaderStyle` cards with real color hierarchy (cyan/green/orange accents + dimmed-white body via a local `DIM`), updated `PLATFORM_RECAP` (500+ stocks EM, ES candles heatmap, net-premium tape) plus a `PLATFORM_UPCOMING` "Footprint & order-flow — Expected Aug 2026" row; landing CTAs in `components/landing/LandingClient.tsx` relabeled to "Join the beta" with beta/launch dates. Added a compliant unsubscribe system: `lib/unsubscribe.ts` (HMAC stateless tokens + HTML/text footers, `UNSUBSCRIBE_SECRET`/`NEXT_PUBLIC_APP_URL`), `app/api/unsubscribe/route.ts` (JSON + RFC 8058 one-click), themed `app/unsubscribe/page.tsx`, `unsubscribed_at` column + `unsubscribeWaitlistEmail()` in `lib/db.ts`, public routing in `middleware.ts`, and `app/api/admin/send-email/route.ts` switched to per-recipient sends with auto-appended unsubscribe footer + `List-Unsubscribe` headers. Created marketing templates `public/beta-coming-soon.html` (1200×630 social card) and `components/landing/BetaComingSoonBanner.tsx`.
+
+## 2026-06-27 — Universal toolbar (floating pill) + ticker click-to-quotes + EM Buy Zone accent
+
+Rebuilt `components/shared/GlobalToolbar.tsx` into the V2 "floating pill" design: rounded full-width bar with a blue→teal gradient border and a cursor-follow cyan highlight, round hamburger (opens real `NavMenu`) with hover lift, `/cb-edge-logo.png` logo menu, centered live `ToolbarTicker` between divider rules, ET clock with seconds, round pencil Notes button with live count badge, and Clerk `UserButton`; mockups iterated in `app/toolbar-preview/page.tsx` (kept V2 only). Made the whole ticker open the quotes dropdown: `components/dashboard/NquQuotePill.tsx` accepts an optional `buttonRef` and ignores `[data-quotes-trigger]` clicks in its outside-close handler, and `components/shared/ToolbarTicker.tsx` wraps VIX/ESU/SPX in a clickable group that forwards to the NQU button. Fixed `components/dashboard/EmCustomer.tsx` Buy Zone border to true green `#00e67640` (was `HOME_THEME.green` = light blue `#8ECAE6`) so it matches the Sell Zone red accent.
+
+## 2026-06-27 — Nav restructure (GEX trim, Backend, Owner order)
+
+Restructured `NAV_GROUPS` in both `components/shared/NavMenu.tsx` (active) and `components/NavMenu.tsx`: trimmed GEX to Home, Traders Dashboard, Options Chain, Estimated Moves (renamed from "Estimated Moves Front End"), Analytics, ES Candles, ICT, Journal; moved Multi Greek, Greeks, Confidence, Fails, Premarket, Economic Calendar into the `devOnly` Backend group; kept Owner as its own `devOnly` group and ordered groups GEX → Backend → Owner.
+
+## 2026-06-27 — Customer-facing "What's New" changelog (/whats-new)
+
+Added a public daily changelog: new `CUSTOMER_CHANGELOG.md` (root, compiles per day under `## Weekday M/D/YYYY` headings, plain-language bullets) read by new `app/whats-new/page.tsx` (parses `##` date headings + `*`/`-` bullets into styled dated cards, force-dynamic). Wired into `components/shared/NavMenu.tsx` as a centered uppercase bordered-pill link (matching the Disclaimer & Legal button) directly above the legal footer, visible to all users, with a `✦` route glyph; `/close` skill updated to also append simplified per-day customer entries.
+
+## 2026-06-27 — EM Tracker partial-candle scoring fix + levels-publish guards
+
+Fixed `server-v2/levels-engine.js` `fetchWeeklyClose()` to score against the finalized Monday-anchored weekly candle (refuses intraweek forming bars / pre-Friday-close), then re-scored week 2026-06-22 (cleared 383 rows → `/api/em-tracker/evaluate`, MSFT now hit; 222/161). Also hardened `server-v2/levels-auto-publish.js` (auto-retry unpriced tickers + stuck-flag watchdog) and `server-v2/server-with-proxy.js` + `components/dashboard/LevelsPublish.tsx` + `app/dev/owner/page.tsx` (server-side `confirm:"PUBLISH"` token gate on `/proxy/levels-publish`); audit/runbook in `em-tracker-misscored-2026-06-22.md` + `RUNBOOK-rescore-week-0622.md`.
+
+
+## 2026-06-27 — Dashboard-wide dock toolbar rollout + Inter global font
+
+Created `components/shared/DockToolbar.tsx` (Dock, SegGroup, ToggleTile, DockButton, DockSlider, DockExpiryPicker, DockCalendar — glossy flat full-width bar w/ cyan gradient top-line, portal'd pickers) and converted every chart/filter toolbar to it: `GexToolbar.tsx`, `app/es-candles`, `app/greeks`, `app/mult-greek`, `EstimatedMoves.tsx`, `app/fails`, `app/confidence-score`, `app/social-media`, plus the global `GlobalToolbar.tsx` (top accent line + ET clock moved top-right). Also fixed Inter never actually loading (now via `next/font` in `app/layout.tsx` + `tailwind.config.ts` `font-sans` + ~30 hardcoded stacks routed through `var(--font-inter)`), removed the GEX snapshot button/header, and fixed the dropdown-under-chart z-index bug via portals.
+
+
+## 2026-06-26 — toolbar-preview quotes/dropdown examples + per-user add-ticker
+
+`app/toolbar-preview/page.tsx`: added three dock-themed standalone previews (Quotes panel w/ sparklines + sort toggle, DTE/Expiry "Day Date" dropdown, month-grid Calendar) laid out in a 3-column row. `app/api/quotes-batch/route.ts`: sparkline now falls back to the prior session's curve when the market is closed. `components/dashboard/NquQuotePill.tsx`: restyled the live toolbar Quotes dropdown to the dock theme and added per-user add/remove ticker, backed by new `app/api/quote-symbols/route.ts` + `quote_symbol_prefs` table and `getQuoteSymbols`/`upsertQuoteSymbols` in `lib/db.ts`.
+
+## 2026-06-26 — NavMenu restyle + drag-and-drop + monochrome glyphs
+
+`components/shared/NavMenu.tsx`: restyled the flyout to the frosted dock theme (cyan top-accent, gradient active tiles, themed cyan scrollbar) and removed the social icons + Clerk avatar (legal-only footer). Added direct row drag-and-drop to reorder within groups and drop into Quick Pages (cap 4, replace-at-slot when full; persisted to `sidebar-group-order-v1`), removed the grip handles and star pin buttons, added per-route monochrome Unicode glyphs, and made all groups collapse on every menu open.
+
+## 2026-06-26 — Toolbar vertical-centering + middle-aligned ticker, removed search/expiry
+
+`components/shared/GlobalToolbar.tsx`: switched the bar to `box-sizing: border-box` so `align-items:center` vertically centers content on every page (global — rendered once in LayoutShell). Made the live ticker absolutely centered over the whole toolbar (`position:absolute`, left/top 50% + translate) instead of a flex spacer, and removed the Search-tickers box, the expiration date chip, and their now-unused `query` state and `SearchIcon`/`ChevronDown` components; Notes stays pinned top-right.
+
+
+## 2026-06-26 — Local WS `verify-error` triage + stray env-file cleanup
+
+Debug session (no code changes). Local `npm run dev` was logging `[WS] upgrade rejected (verify-error)` on `/ws/gex`.
+
+- **Root cause:** stale local dev process still holding `WS_AUTH_REQUIRED=1` from before the env edit. Root `.env.local` was already `=0`; prod container has the var unset (gate off, owner streaming confirmed). Fix = clean kill + relaunch of `npm run dev` (env is read at process start).
+- **Confirmed prod is fine:** `docker compose exec dashboard printenv WS_AUTH_REQUIRED` → empty → `=== '1'` false → `verifyWsRequest` never called. Rejects were local-only.
+- **Security cleanup:** found a stray full copy of `.env.local` (all live secrets in plaintext) at `md files/.env.local`. Deleted it; confirmed via `git status` it was never tracked → no history leak. Root `.env.local` remains the single source.
+
+
+## 2026-06-26 — WS auth gate, perf hardening, server-render POC (v17)
+
+Pre-launch session: closed the one real launch blocker (unauthenticated `/ws/gex`) and shipped perf fixes. Diagnosed (and prototyped) the perceived sluggishness as a client-render waterfall, not a data/architecture problem.
+
+### WS authentication gate (launch blocker — fixed & live)
+- **`/ws/gex` was unauthenticated** — anyone with the URL could stream paid GEX free (upgrade handler only checked path). **`server-v2/ws-auth.js`** (new) — `verifyWsRequest` reads the Clerk session cookie via `@clerk/backend` `authenticateRequest` (cookie-based → zero client changes across the 7+ WS call sites), resolves userId, then owner/active/trialing check against `subscriptions` (mirrors `lib/subscription.getAccessForUser`; PAID_STATUSES kept in sync).
+- **`server-v2/websocket-server.js`** — upgrade handler verifies BEFORE `handleUpgrade` so no snapshot reaches an unauthorized socket; rejects 401 + `socket.destroy()`. Gated by env `WS_AUTH_REQUIRED` (default off → unchanged behavior). Needs production Clerk (cookie unreliable on dev instance). Enabled in prod with `WS_AUTH_REQUIRED=1` + `CLERK_AUTHORIZED_PARTIES=https://cbedge.net`; owner confirmed still streaming.
+
+### Performance
+- **`app/database/page.tsx`** — removed the unused client-side Excel export (271 KB `xlsx`/SheetJS off First Load; `/database` ~200→~130 kB). `xlsx` stays for the server-side `scripts/import-mvc.js`.
+- **`middleware.ts`** — maintenance flag check is now stale-while-revalidate (30s TTL, background refresh) so it no longer blocks every page on a `/proxy/maintenance` round-trip; only the first request after boot waits.
+- **`next.config.js`** — wired `@next/bundle-analyzer` (`npm run analyze`, env-scoped so dev/build never trigger it).
+
+### Server-render POC (perceived speed — full work deferred to post-launch)
+- **`app/home-fast/`** (new, `page.tsx` + `HomeFastLive.tsx`) — proves server-rendering the GEX snapshot from the hot in-process feed (`/proxy/gex`) into the initial HTML, so a live card paints with real data on first byte (no client fetch waterfall). The WS then handles updates. Full `/home` refactor planned after Monday launch + ThetaData swap.
+
+## 2026-06-26 — ICT setup recorder, owner Results page, glossary card manager
+
+Three-part session: auto-record every ICT setup to Postgres with auto-graded outcomes, surface the performance on a new owner-only Results page, and let each user show/hide glossary cards (persisted server-side). All detection reuses the existing client `analyzeICT` — no detection logic duplicated.
+
+### ICT setup recorder
+- **`lib/db.ts`** — new `ict_setups` table (UNIQUE `setup_key = <kind>:<dir>:<trigger_ts>:<round(price)>` so re-scans never double-log); cols kind/label/dir/trigger_ts/price/note/target/invalidation/outcome(pending|win|loss|chop)/mfe/mae/r_multiple/resolved_*. Fns: `insertIctSetup` (ON CONFLICT DO NOTHING), `updateIctSetupGrade`, `getIctSetups`, `getPendingIctSetups`, `getIctSetupSummary`.
+- **`app/api/ict-setups/route.ts`** (new) — POST `action:"scan"` runs `analyzeICT` over `/api/snapshots/candles`, flattens every point-in-time setup (BOS/CHOCH/MSS, displacement, liquidity/EQH-EQL sweeps, FVG/IFVG, valid OBs, OTE entry, model signals), records new + grades pending by follow-through (win = reaches target before invalidation; loss = invalidation first; chop = neither within ~12 bars / session close). GET returns `{setups, summary}`; token-gated writes.
+- **`server-v2/ict-setup-tracker.js`** (new) — 5-min RTH loop (holiday-aware, self-rescheduling) pokes the scan; wired into `server-with-proxy.js` after the es-gap tracker.
+
+### Owner Results page
+- **`app/dev/results/page.tsx`** (new) — owner-only (inherits `app/dev/layout.tsx` OwnerGuard). One card per setup kind: win-rate, W/L/chop split bar, wins/losses/chop/live counts, avg R, avg MFE; Today / Last 7d / All-time toggle + overall roll-up.
+- **`lib/db.ts`** — `getIctSetupSummary` extended to `{date?|sinceDate?}` and now returns `pending`, `avg_r`, `avg_mfe`.
+- **`app/api/ict-setups/route.ts`** — GET accepts `?since=N` (days) + `?all=1`.
+- **`components/shared/NavMenu.tsx`** — "Results" link added to the owner group (after Owner).
+
+### Glossary card manager (per-user show/hide)
+- **`lib/db.ts`** — new `ict_card_prefs` table (`clerk_user_id` PK, `hidden_cards` JSONB); fns `getIctCardPrefs` / `upsertIctCardPrefs`.
+- **`app/api/ict-prefs/route.ts`** (new) — Clerk `auth()`-gated GET/POST (mirrors traders-dashboard).
+- **`app/ict/page.tsx`** — "⚙ Manage cards" panel toggles each of the ~30 ICT concept cards on/off (Show all / Hide all), debounced save (500ms) to `/api/ict-prefs`; glossary grid filters out hidden ids. Persists per-user across devices (no localStorage).
+
+### Cleanup
+- **`app/ict/page.tsx`** — `SetupRecap` table + helpers removed; setup results now live ONLY on `/dev/results` (per request, no results reference on the ICT page).
+
+> Not built/typechecked this session — the Linux sandbox couldn't boot (HYPERVISOR_VIRT_DISABLED). Run the build on Windows before deploy. New tables auto-create via `ensureAllTables` on first DB touch.
+
+## 2026-06-26 (session 77) — Public marketing funnel + landing July 4th launch theme
+
+Built a no-flow marketing funnel so visitors can explore each feature and convert through a single pricing hub, and themed the launch messaging for the July 4th weekend launch.
+
+### `components/explore/exploreContent.ts` (new)
+- Shared config driving the 4 public feature pages (GEX, Confidence Score, Greeks & exposure, Estimated moves): title, tagline, body copy, highlight bullets, and a frozen static teaser stat block per feature. `EXPLORE_SLUGS` exported for params + cross-links.
+
+### `app/explore/[slug]/page.tsx` (new)
+- Public, statically-generated (`force-static` + `generateStaticParams`) marketing page per feature. Sell copy + highlights + clearly-labeled static teaser ("Preview · sample data") → **Join now** CTA to `/pricing?from=<slug>`. Cross-links the other 3 features. Unknown slug → `notFound()`. Matches the dark/cyan home theme.
+
+### `app/pricing/page.tsx` (rewritten)
+- Now the single conversion hub. Reads `?from=<slug>` ("Continuing from · X"). Platform recap + plan card. Branches on auth: signed-out → Clerk `SignUpButton` (+ sign-in fallback); signed-in without sub → Stripe checkout via existing `PricingActions`; subscribed → go-to-dashboard. Themed to match the rest of the app.
+
+### `components/landing/LandingClient.tsx`
+- 4 feature cards are now clickable `Link`s to `/explore/<slug>` with hover lift + "Explore →" affordance; added `slug` to the FEATURES config.
+- Replaced the dead "Sign up — coming soon" disabled button with a live **Join now** link → `/pricing?from=landing`; removed now-unused `comingSoonBtn` style.
+- "Launching soon" badge → "Launching **July** (red) **4th** (white) **Weekend** (blue)" with looping red/white/blue CSS fireworks.
+- Enlarged the X (Twitter) follow icon: button 30→44px, glyph 18→26px, radius 10→12px.
+
+### `components/landing/SplashScreen.tsx` (intro)
+- Launch line restyled into a bordered "bubble": "LAUNCHING **JULY** (red) **4TH** (white) **WEEKEND** (blue)" with red/white/blue fireworks bursting inside the outline (reduced-motion fallback). Removed the now-unused `LAUNCH_DATE` const.
+
+### `middleware.ts`
+- Added `/explore(.*)` and `/pricing` to `isPublicRoute` so signed-out visitors can browse the funnel. Left out of the maintenance-exempt list (maintenance mode still gates them).
+
+### Notes
+- Teaser stats are placeholders by design (swap in real figures/screenshots later).
+- Build not run this session (Linux sandbox failed to boot); verified by inspection. Run `npm run build` locally to confirm.
+
+## 2026-06-26 — ES Candles SPX heatmap: persist Vol-only GEX history
+
+Vol-only mode on the ES Candles SPX GEX heatmap showed no historical columns — only `net_gex` (OI+vol) was persisted, never the volume-only split. Added a `net_vol_gex` column end-to-end so Vol-only mode backfills on load.
+
+### `lib/db.ts`
+- `option_strike_gex_history`: added `net_vol_gex REAL` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration.
+- `insertOptionStrikeGexRows` + `OptionStrikeGexRecord`: write/carry `net_vol_gex` (NULL when absent).
+- `getOptionStrikeGexSlots`: selects + returns `net_vol_gex`.
+
+### `server-v2/state/gex-history-writer.js`
+- Persists `row.netVolGEX` alongside `net_gex` (NULL when feed omits it).
+- Added `ensureVolColumn()` — server-v2 connects to PG directly and never runs `lib/db.ts` `ensureAllTables`, so the writer self-adds the column on first write (fixes "write failed" errors from the unknown column).
+
+### `app/api/snapshots/option-strike-gex-history/route.ts`
+- Heatmap columns now return per-cell `netVol`; POST normalizer accepts `net_vol_gex`.
+
+### `app/es-candles/page.tsx`
+- Historical heatmap cells map real `netVol` instead of forcing `0`.
+
+Note: legacy rows (pre-column) stay `0` in Vol-only. Restart server-v2 to run the `ALTER` + new INSERT. The 6pm→next-day expiry rollover needs no change — writer date + reader date stay aligned in the 6pm–midnight window.
+
+## 2026-06-26 — NET GEX toolbar height fix
+
+Fixed the NET GEX toolbar growing taller when **OI + Vol** is selected vs **Vol Only**.
+
+### `components/dashboard/GexToolbar.tsx`
+- Root cause: in OI+Vol mode the extra ghost-overlay toggles (`5m` / `15m` / `30m`, gated by `ghostEnabled = net + oi-vol`) widen the row past the container, triggering the horizontal scrollbar — the added scrollbar track is what made the bar taller, not a row wrap.
+- Hid the scrollbar so the bar keeps the same single-row height as Vol Only: added `overflowY: "hidden"`, `scrollbarWidth: "none"`, `msOverflowStyle: "none"`, a `gex-toolbar-noscroll` class, and an inline `::-webkit-scrollbar{display:none}` rule. Content still scrolls horizontally.
+
+## 2026-06-26 — Owner page: short-window card clipping fix
+
+`/dev/owner` data-box cards (Backend tab: System KPIs, Hosting/Render metrics, DB row counts) clipped their label/value text when the window got short — fonts only reacted to card *width*, not height.
+
+### `app/dev/owner/page.tsx`
+- `StatCard` component: `containerType: "inline-size"` → `"size"` (+ `minHeight: 0`); all font/padding `clamp()` units switched from `cqw` → `cqmin` so text shrinks on whichever axis is smaller. Covers System + Hosting KPI cards.
+- Inline DB table-count cards: same `size` / `cqmin` treatment.
+- Frontend tab (Auth, Page Activity) needed no change — those use scrolling lists + pixel fonts, not shrink-to-fit data boxes.
+
+## 2026-06-25 (session 76) — ICT page (live detection + glossary)
+
+New `/ict` GEX page — an Inner Circle Trader command center that runs live ICT detection on the existing 5-min ES feed alongside a color-matched concept glossary. Added to the GEX nav group after ES Candles.
+
+### `lib/calculations/ictConcepts.ts` (new)
+- Pure, framework-agnostic ICT detectors over `IctCandle[]` (the ES session feed).
+- Core primitives: Fair Value Gaps (3-candle imbalance, mitigation + **endTs** so a box ENDS on the 2nd pass-through, **IFVG inversion** when a break sweeps liquidity), Displacement, **Order Blocks** refined to the textbook rule (requires a **liquidity sweep + following imbalance** → `valid` flag), swing pivots, market structure (BOS/CHOCH/MSS), liquidity pools (BSL/SSL + EQH/EQL clustering + `liquiditySweepTimes`), premium/discount + OTE dealing range, kill zones / Silver Bullet / macros (ET windows; **NY AM corrected to 7:00–10:00**), daily bias.
+- 10 model detectors added: Inducement, Turtle Soup, Judas Swing, Breaker, CISD, 2022 Model, Power of 3 (AMD), IRL/ERL, Candle Range Theory; MMXM via components. SMT intentionally left glossary-only (needs a 2nd NQ feed).
+- `analyzeICT()` aggregates everything in one call.
+
+### `app/ict/page.tsx` (new)
+- lightweight-charts ES candles with a canvas overlay drawing every concept in **one color per concept** (FVG blue, IFVG pink, OB green, Liquidity orange, Structure purple); direction shown via ↑/↓ labels. Valid OBs solid, weak OBs faint/dashed.
+- Toggle row doubles as a color legend; **Copyshot** button captures chart + panels to clipboard (html2canvas).
+- Right-side compact 2-col signal panels: Daily Bias, Active Windows (with ET time ranges pinned at the bottom), Open FVGs, Liquidity, Dealing Range, Models & Signals, Power of 3, CRT. (Market Structure panel removed.)
+- Glossary cards (4-wide) with per-concept **SVG thumbnail diagrams**, keyword highlighting colored to match the chart, and a dynamic **live/idle** badge that only reads "live" when a setup is actionable at the current time/price.
+
+### `components/shared/NavMenu.tsx`
+- Added "ICT" link to the GEX group after ES Candles.
+
+### Notes
+- Detectors are practical heuristics, not textbook-perfect; backtest before trusting. Sandbox was unavailable this session, so `tsc` was not run — typecheck locally before `/push`.
+
+## 2026-06-25 (session 75) — Traders Dashboard page
+
+New `/traders-dashboard` page — a morning command-center modeled on a provided mockup (countdown to open, schedule, overnight overview, pre-market tasks, weather). Wires live data, per-user persistence, and a 7am AI overview cron.
+
+### `app/traders-dashboard/page.tsx` (new)
+- Header with live countdown to 9:30 AM ET and a weather card (ZIP input → temp/conditions).
+- Editable Morning Schedule and Pre-Market Tasks (add/rename/delete, checkboxes + progress bar). Persisted per Clerk user via `/api/traders-dashboard`.
+- Overnight Market Overview reads the cached AI row from `/api/traders-dashboard/overview` (sentiment line + "Generated … ET" stamp).
+- Overnight Futures: live ES/NQ/YM via existing `/api/yahoo-quotes` (60s poll). Pre-Market Movers is a "live Monday" placeholder.
+- Key Drivers: AI job's drivers if present, else top high-impact USD events from `/api/calendar`.
+- Styled with `HOME_THEME`.
+
+### `components/shared/NavMenu.tsx`
+- Added "Traders Dashboard" link to the GEX group under Home.
+
+### `lib/db.ts`
+- New tables `td_user_prefs` (per-user zip/schedule/tasks JSONB) and `td_overview` (per-ET-date summary + drivers JSONB). Helpers: `getTdPrefs`/`upsertTdPrefs`, `getTdOverview`/`getLatestTdOverview`/`upsertTdOverview`.
+
+### `app/api/traders-dashboard/route.ts` (new)
+- GET/POST per-user prefs, Clerk-gated on `userId`.
+
+### `app/api/traders-dashboard/overview/route.ts` (new)
+- GET latest/by-date overview; POST writer gated by `INTERNAL_API_TOKEN` (middleware already passes the token through), mirroring `/api/es-gap`.
+
+### `app/api/weather/route.ts` (new)
+- Keyless: ZIP → lat/lon via Zippopotam, then current temp/condition via Open-Meteo (WMO code map). No secrets. (Host must allow `api.zippopotam.us` + `*.open-meteo.com`.)
+
+### `server-v2/overview-generator.js` (new)
+- Daily ~07:00 ET (weekdays) job: calls Anthropic (`claude-sonnet-4-6`) with the `web_search_20250305` tool to research overnight action, parses a JSON `{summary, drivers}`, and POSTs to `/api/traders-dashboard/overview`. Skips if already written for the ET date; startup catch-up probe.
+
+### `server-v2/server-with-proxy.js`
+- Starts `startOverviewGenerator(PORT)` after `server.listen()`, alongside the other cron jobs.
+
+### Deploy notes
+- Reuses the existing `ANTHROPIC_API_KEY` (already on the VPS, shared with social-media) — confirmed present.
+- Commit/push from Windows; VPS pulls + builds. Not yet built/verified (sandbox unavailable this session).
+
+## 2026-06-25 (session 74) — Fails page: LAF/LBF logic rewrite, scaled targets, perf + UI
+
+Reworked the `/fails` page fail definition, scoring, performance, and typography.
+
+### `lib/failLevels.ts` — fail detection rewrite
+- **PWH/PWL first-2-attempts cap** (`attemptCap`): prev-week levels only fade on the first 2 pierces per session; applied in `scanLevel` and `countPierces`.
+- **ONH/ONL RTH-only**: overnight levels now scan/activate only during RTH (9:30–16:00 ET) in `scanLevel`, `countPierces`, and live status (distance still shown overnight, state gated).
+- **Upgraded LAF/LBF "fail" criteria**: a fail now requires (1) a probe of 0.5–12 ES pts past the level (sweep, not noise/runaway), (2) no acceptance (never 2 consecutive closes beyond), (3) a reclaim bar that closes back inside with a ≥50% rejection wick on the probe side AND forms a lower-high/higher-low vs the probe extreme.
+- **Reward = max favorable excursion from entry** over the rest of session until stop-out (probe extreme), replacing the old 2-bar follow-through measured from the level (which starved every winner → all-losses bug).
+- **Scaled targets** added to `FailEvent`: T1 = 50% to opposite ref, T2 = full opposite ref (PDH↔PDL / ONH↔ONL / PWH↔PWL), T3 = 2× entry→opposite (measured move). `tiersHit` = furthest tier the MFE reached; `maxR` = MFE/risk. Removed `targetPts`/`rrToTarget`.
+
+### `app/fails/page.tsx`
+- **Perf**: deferred the 20-day `computeStats` build into a `requestIdleCallback` keyed on a history-only signal (`historyKey`), and added coarse `candlesKey`/`historyKey` memo keys so heavy scans don't re-run on every WS tick (fixed slow load/scroll).
+- **Today's Fails summary box**: Wins (reached ≥T1) / Losses / Win Rate / Net R (summed maxR) + per-level fail counts.
+- **Fail table**: columns now Entry / Risk / Targets (T1/T2/T3 badges) / Max R / Result (`WIN T{n}` or LOSS).
+- **Fail Rate**: 6 cards across in one row; enlarged ~20-session total.
+- **Typography**: section titles via `SectionTitle big` (18px), bumped then toned down IB/live-status/table fonts; brighter outlined+shaded cards.
+- **Spacing**: `marginBottom: 16` between Day Type · AMT banner and Live IB panel.
+
+### `components/insights/IbLogic.tsx`
+- Enlarged then toned-down IB header, stat cards, rule cards, and "Rules In Play" title to match the page.
+
+---
+
+## 2026-06-25 (session 73) — Global toolbar responsive shrink + centered quotes
+
+Made the global toolbar (`GlobalToolbar`) shrink as a unit on narrow widths and fixed the live-quote alignment.
+
+### `components/shared/GlobalToolbar.tsx`
+- Live ticker (VIX/ESU/SPX/NQU) kept in-flow (`flexGrow:1`) and centered; briefly tried absolute-centering but it overlapped the search box, reverted.
+- Bar `gap` and horizontal `padding` now use `clamp()` so spacing compresses with viewport.
+- Search box: `flexShrink:1000` + `flexBasis:230` + `minWidth:44` so it collapses to an icon-only box **before** the ticker scales — search yields space first.
+- Date chip (`.toolbar-datechip`) and Notes label (`.toolbar-notes-label`) classed for responsive hiding.
+
+### `components/shared/ToolbarTicker.tsx`
+- Lowered fit-scale floor `0.85 → 0.55` so quotes shrink further instead of clipping/overlapping.
+
+### `app/globals.css`
+- `@media (max-width:1100px)` hides `.toolbar-datechip`; `@media (max-width:950px)` hides `.toolbar-notes-label`.
+
+## 2026-06-25 (session 72) — Owner-only route gating (test account saw owner pages)
+
+Test/customer accounts were signed in and could reach the owner pages (`/dev/*`, `/budget`, `/personal`) — middleware only checked signed-in vs signed-out, and the nav only checked `isSignedIn`. Added two independent layers gated on the owner's Clerk ID.
+
+### `middleware.ts`
+- Added `isOwnerRoute` matcher (`/dev`, `/budget`, `/personal`); signed-in non-owners are redirected to `/home`. Real server-side gate. Fails open (any signed-in user) only if `OWNER_USER_ID` is unset, to avoid owner lockout.
+
+### `components/shared/ownerGuard.tsx` (new)
+- Server component: re-checks `auth()` vs `OWNER_USER_ID` at request time, `notFound()` (404) for non-owners. Defense-in-depth — pages refuse to render even if middleware were bypassed. Trims the env value.
+
+### `app/dev/layout.tsx`, `app/budget/layout.tsx`, `app/personal/layout.tsx` (new)
+- Wrap each owner subtree in `<OwnerGuard>`; `export const dynamic = "force-dynamic"` (auth needs request context).
+
+### `components/shared/NavMenu.tsx`
+- `devOnly` groups (Owner/Backend) now filter on `isOwner` (via `NEXT_PUBLIC_OWNER_USER_ID`) instead of `isSignedIn`.
+
+### `components/shared/TopBar.tsx`
+- Personal nav item marked `ownerOnly`; filtered out of the page picker for non-owners (added `useUser`).
+
+### `.env.local`
+- Removed stray leading space in `OWNER_USER_ID=` value (line 47). Both vars use `user_3FM2m53hCocxxIJMO2lQQsVJOsE`. NOTE: fix the same space on the VPS `/opt/dashboard/.env.local` (gitignored, not pushed).
+
+Deploy: `OWNER_USER_ID` is runtime (recreate is enough for middleware + guard); `NEXT_PUBLIC_OWNER_USER_ID` is build-time (nav needs a rebuild).
+
+## 2026-06-25 (session 71) — MVC peak-GEX golden/white glowing box across heatmaps
+
+Highlighted the single strike with the highest **absolute net GEX** (MVC) with a box on the NET GEX cell across all gradient/heatmap views. Final style: **3px solid white** outline (`outlineOffset -3px`) with a **slow 2.4s pulsing glow** (`mvcGlow` keyframes, `.mvc-peak-cell`). Scoped to the GEX column only; coexists with the existing gold ★ star.
+
+### `components/dashboard/GexHeatmap.tsx`
+- Added `peakNetGexStrike` (max `|netGEX|` across visible rows); NET GEX cell gets the box. (Initial gold `#ffd700` version — component is currently unused/unimported.)
+
+### `app/home/page.tsx`
+- NET GEX `<td>` for `mvcStrikeHeatmap` gets the white glowing box (heatmap view only). Added `mvcGlow` keyframes + `.mvc-peak-cell` in the page `<style>`.
+
+### `app/mult-greek/page.tsx`
+- `isGexPeak` (gex col + `mvcStrike`) gets the white glowing box. Injected `mvcGlow`/`.mvc-peak-cell` `<style>` in the heatmap component return.
+
+### `app/options-chain/page.tsx`
+- `isMvc` cell (gex mode + per-column `mvcByCol`) gets the white glowing box. Added `mvcGlow`/`.mvc-peak-cell` `<style>` at the page root.
+
+- **Caveat:** untypechecked (Linux sandbox unavailable, `HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 70) — Owner page styling reset + admin Owner link
+
+### `app/dev/owner/page.tsx`
+- **Reverted a long styling exploration** (cyberpunk → glass → calm-fintech variants) back to the **shared `homeTheme`**, so the owner page now renders identically to every other page (same glassmorphic panels/blur/shell glow). Removed all scoped `data-owner-*` `<style>` overrides; restored `StatCard`, `StatChip`, `AccordionCard` header, tab buttons, and title to their original styles.
+- **Removed Quick Links** section.
+- **Moved System / Hosting / Database** sections to the **Back-End** tab (`SECTION_TAB`).
+- **Collapsable section headers** no longer get the cyan tint background (transparent open/closed).
+- **Deep-link support:** honors `?tab=overview|frontend|backend` on load (URL param wins over persisted `owner-tab`).
+
+### `app/dev/admin/page.tsx`
+- Added an **OWNER ↗** link in the header top-right (mirrors the owner page's ADMIN ↗ link), navigating to `/dev/owner?tab=overview`.
+
+- **Caveat:** untypechecked (Linux sandbox unavailable, `HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 69) — GEX chart MVC label tracks data mode
+
+### `components/dashboard/GexChart.tsx`
+- **MVC peak now mode-aware.** Previously the peak-strike label always reduced over OI-based `netGEX`. Added `peakVal(r)` selector: in **Vol Only** mode it reduces over `netVolGEX` (volume-based) so the MVC reflects the volume peak; **OI+Vol** mode unchanged (`netGEX`). `pv` (label color/position) now uses the same selector.
+- Label text switches with mode: `MVC·Vol <strike>` in Vol Only, `MVC <strike>` in OI+Vol.
+- **Caveat:** untypechecked (Linux sandbox unavailable, `HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 68) — Fails page: NQU tab + quote-sampled NQ Initial Balance
+
+### `app/fails/page.tsx`
+- Added an **ESU / NQU tab switcher** to the header (segmented control). ESU tab is unchanged (all existing fail/AMT/IB/log sections); the LIVE/OFFLINE dot + price readout now show only on the ESU tab. NQU tab renders the new `NqIbLive` component only (Initial Balance, per request).
+
+### `components/insights/NqIbLive.tsx` (new)
+- **Quote-sampled NQ Initial Balance tracker.** The backend feeds true 5m OHLCV only for ES, so NQ is approximated: polls `/api/tt-quotes` for `/NQU26` every 20s and buckets samples into client-side 5m OHLC bars, then computes the 9:30–10:30 ET IB high/low/mid/range, formed-first, live break state, and NQ-specific probability rules. Flagged "≈ Quote-sampled" — bars are approximate (snapshots, no volume) and the in-memory set resets on reload (no DB lock).
+- **Today-only manual IB seed:** live sampling missed today's 9:30–10:30 window, so `SEED_DATE = 2026-06-25` / `SEED_IB = { high: 30193, low: 29295.75, lowFirst: false }` (high formed first) is hardcoded. On the seed date `computeIb` uses the manual high/low and still tracks live `last` + break state against them; `done` is forced true. From the next session on, `seed` is null and the IB builds live from quote samples automatically. The seed block is inert after the date and can be deleted.
+- **Caveat:** untypechecked this session — the Linux sandbox failed to start (`HYPERVISOR_VIRT_DISABLED`); run lint/build before `/push`.
+
+## 2026-06-25 (session 67) — ES Candles: heatmap-to-right-edge, jitter fix, live SPX basis
+
+### `app/es-candles/page.tsx`
+- **Heatmap fills to the right axis:** the latest 5-min GEX column is now stretched to the plot's right edge (canvas width − price-axis gutter) so the band reaches the last print instead of stopping a bar short. The gutter width is cached in `hmScaleWRef` and only updated on ≥1px change, so the band edge doesn't shimmer with sub-pixel price-label wobble.
+- **Jitter fix:** overlay repaint triggers (both time-scale range subscriptions + the overlay `ResizeObserver`) are now coalesced through a single rAF (`schedule`), stopping the synchronous ping-pong that made the chart jitter back and forth on live ticks.
+- **Chart-resize guard:** the main chart `ResizeObserver` only re-applies width/height when the *rounded* container size actually changes (was re-applying on sub-pixel layout churn and nudging the time scale).
+- **SPX badge basis fix:** `effectiveBasis()` now prefers the LIVE basis (`esFut − spot` from the current /ws/gex frame) and only falls back to the frozen prior-day basis when no live frame exists. The frozen prior-day basis had gone stale intraday (badge read SPX ~90pt under ES when the true basis had drifted to ~70 — e.g. ES 7393.50 showed "SPX 7300.97" when real SPX was 7323). Caveat: if broker `spot` ever mis-scales (negative/implausible basis), the badge could be wrong again — no clamp added yet.
+
+## 2026-06-25 (session 66) — Fails page: RTH-only prev-day/week levels by true ET date
+
+### `lib/failLevels.ts`
+- Added `etSessionDate(c)` — derives a bar's ET session date from its timestamp instead of trusting the upstream `c.date`/slotKey tag, which can mis-date globex bars across the UTC-midnight boundary and leak overnight prints into the prev-day RTH set (pulling Prev Day Low below the true RTH low, e.g. ES 7404.25).
+- Added `rthBarsForDate(candles, date)` helper (isRthBar + etSessionDate match).
+- Prev Day H/L, Prev Week H/L, and `computeStats` per-day bars now use RTH-only bars grouped by true ET date. Overnight (ON-H/ON-L) levels left as-is (globex by design).
+
+## 2026-06-25 (session 65) — Removed /home2 page
+
+### Deleted (`app/home2/`)
+- Removed the entire `/home2` fintech-card dashboard page (`app/home2/page.tsx`) and its folder. The page mirrored `/home`'s live GEX feeds in a draggable card layout; no longer wanted.
+
+### Nav (`components/shared/NavMenu.tsx`)
+- Removed the "Home2" entry from the menu items array and the sidebar `<Link>` block (plus its divider comment).
+
+### Dev flow diagram (`app/dev/tree/FlowDiagram.tsx`)
+- Removed the `HOME2` node, its `HOME2 --> WS` edge, the `g2["Home2"]` GEX-tree node, and dropped `HOME2` from the `pg` class list.
+
+### Notes
+- `lib/layoutStore.ts` (IndexedDB store `CBEdge_Home2`) is now orphaned but left in place; a comment in `app/es-candles/page.tsx` still references the old HOME2 embed card. Both harmless — clean up later if desired.
+
+## 2026-06-24 (session 64) — Public legal pages + sidebar Disclaimer menu
+
+### Legal pages (`app/terms`, `app/risk-disclosure`, `app/privacy`, `app/disclaimer`)
+- Added four public legal pages tailored to a paid SPX GEX / options-flow tool: **Terms of Service**, **Risk Disclosure & Trading Disclaimer**, **Privacy Policy**, and a standalone **Disclaimer** (no-liability catch-all). Content covers "not financial advice," no-warranty, limitation of liability, 0DTE/options risk, Confidence Score / estimated-move hypothetical-results disclaimers, and a Privacy Policy matching the real stack (Clerk auth, waitlist, usage data, localStorage prefs).
+- New shared `components/legal/LegalShell.tsx`: full-bleed scrollable wrapper (CB Edge logo, back-to-site link, last-updated stamp, cross-links to the other 3 pages, © footer) so the pages don't duplicate chrome. Styled on HOME_THEME (dark + cyan glass).
+
+### Routing (`middleware.ts`, `components/shared/LayoutShell.tsx`)
+- Added the 4 routes to `isPublicRoute` (reachable pre-auth) and to the maintenance-mode exemption list (readable during downtime).
+- Added them to `BARE_ROUTES` so they render full-bleed without the dashboard sidebar/chrome — same treatment as `/`, `/sign-in`, `/sign-up`.
+
+### Landing footer (`components/landing/LandingClient.tsx`)
+- Added a bottom-pinned legal footer (Terms · Risk Disclosure · Privacy · Disclaimer) visible pre-auth; bumped the card scroll container's bottom padding so the footer never overlaps on short viewports.
+
+### Sidebar Disclaimer menu (`components/shared/Sidebar.tsx`)
+- Added a **Disclaimer** button directly under the Clerk `UserButton`. Click/hover opens an upward popover (sideways when collapsed) listing all 4 legal pages **plus Help & Docs** (`/docs`, from the GEX group). New `ShieldIcon`, `legalOpen` state, `LEGAL_LINKS` constant; matches the existing Tooltip/hover/glass patterns. Works in expanded + collapsed modes; closes on navigation.
+- NOTE: coexists with session 61's Notes-dock removal in the same file — verified on disk that both merged cleanly (no dangling `NoteIcon`/`NotesPanel`/`PencilIcon`/`user` refs; `CloseIcon` retained for Quick Pages).
+
+### Placeholders to fill before relying on these
+- Terms §14 governing-law/venue: `[STATE]` and `[COUNTY/STATE]`.
+- Contact email `support@cbedge.net` used throughout — change if not correct.
+- Not legal advice — have an attorney review before launch.
+
+## 2026-06-24 (session 63) — Social Media admin page: GEX read → shareable "SPX · Daily Levels" card
+
+### New route + page (`app/social-media/page.tsx`)
+- Built the Social Media admin page (App Router, sidebar Admin group entry already wired). v2 conventions: `'use client'`, `id="page-social-media"`, Arial, inline `<style>`. Token names from the design ref (`--bg0/--cyan/--text2…`) aliased onto the real global tokens (`--bg/--accent/--text…`) so nothing hardcodes a new color — the QuotesPanel vars the task referenced don't actually exist in globals.css and that route is a dead redirect.
+- **Left "Daily Input" panel** hydrates live from `/api/social-media/daily-input`: SPX spot, prior close, gamma flip, call/put walls, expected move, net GEX, ES overnight H/L. All fields editable (dirty-flag freezes auto-fill once edited; manual Refresh re-pulls). ES overnight is sourced via the Fails-page candle logic (`useEsCandles` + `computeRefLevels`).
+- **Gamma regime strip**: label is driven by the **sign of net GEX** (so it can never contradict the net-GEX value shown). Spot-vs-flip is context only, not a tiebreak — fixed the original OR bug where positive net GEX + spot-under-flip wrongly read "NEGATIVE GAMMA".
+- **Expected-move levels centered on the prior-day SPX close** (not live spot): UP = close + EM, DOWN = close − EM. `EmRangeReadout` shows `lower · Close X ±EM · upper`.
+
+### Output evolved to a shareable image card
+- Right column is now a single **SPX · Daily Levels** card (replaced the earlier AI X-post/thread/Discord cards). Auto-fills from the left; no model call. Sections: Estimated Move (CLOSE/EM/UP/DOWN), regime strip + bias, Upside/Downside levels, Overnight Action, CB Edge footer + disclaimer.
+- **Two actions**: "Copy card" renders the card to PNG via `html2canvas` (already a repo dep) and writes the **image** to the clipboard (`ClipboardItem`); "Copy & Open X" copies then opens the X composer to paste. Both fall back to a **PNG download** when the browser blocks clipboard image writes. Buttons flash status.
+
+### API routes
+- `app/api/social-media/daily-input/route.ts` — composes existing live sources only (no proxy-file edits): `/proxy/gex` (spot/walls/flip/net GEX/prevClose), EM from the SPX ATM straddle via `fetchChainFull` (same `0.84·IV·spot·√(dte/365)` math as EstimatedMoves), ES overnight H/L from `/api/snapshots/candles`. Exposes `spxPrevClose` + `emUpper`/`emLower` (close-anchored).
+- `app/api/social-media/generate/route.ts` — Anthropic `claude-sonnet-4-6`, CB Edge voice, strict JSON `{xPost, xThread[], discordDrop}`, brace-walking fence-stripper. **Left in place but unused** now that the page renders a card client-side (keep for future AI-post mode). Requires `ANTHROPIC_API_KEY` only if re-enabled.
+
+### Deploy notes (recurring — candidates for memory)
+- Linux sandbox down all session (`HYPERVISOR_VIRT_DISABLED`); verified by hand, not `tsc`/build.
+- Local build kept tripping `Cannot find module for page: /_document` (and `/disclaimer`, `/api/*`) — **stale `.next` cache**, fixed by `Remove-Item -Recurse -Force .next` + one build. Caused by running `npm run build` then `push.ps1` (a 2nd build) against the same dirty cache. Consider adding the `.next` clear to `push.ps1`.
+- VPS multi-line deploy must be pasted as a **single line** or the `\` continuations break (`NEXT_PUBLIC: command not found`). This deploy did NOT need `ANTHROPIC_API_KEY` forwarded (card is client-side). Shipped: image built, container started, live.
+- ⚠️ Verify on the card that **Call Wall < Gamma Flip** is real data, not swapped fields — it publishes as-is.
+
+## 2026-06-24 (session 62) — /fails: prev-day/week levels not tracking (string-timestamp bug) + fail log reframed as fade trades
+
+### Symptom
+- `/fails` Live Status showed only Overnight High/Low (ON-H/ON-L). Prev-Day (PDH/PDL) and Prev-Week (PWH/PWL) cards were absent, even though ES had taken out both prior-day extremes intraday.
+
+### Diagnosis (everything checked out except one thing)
+- DB had yesterday's 78 RTH bars (PDH 7491.00 / PDL 7415.25). Browser received them, the `historical` hook held all 1442 bars incl. 06-23, the deployed bundle had the full PD/PW logic, and `computeRefLevels` run standalone on that data returned all 6 levels. Yet the live component returned only 2.
+- **Root cause:** historical ES candles deserialize from Postgres with `timestamp` as a **STRING** (BIGINT → JSON). `isRthBar` did `new Date('1782187200000')` → **Invalid Date** → `etParts` NaN-guard → every prior-day bar's RTH check returned false → `pdBars.length === 0` → PDH/PDL/PWH/PWL silently dropped. Today's ON bars came from the live WS feed with **numeric** timestamps, so only those survived — which is why ON rendered and the rest didn't.
+- Why manual console tests passed: they coerced `+x.timestamp`; the component used the raw string. Caught by adding a temp `[computeRefLevels PD]` log that showed `pdBarCount: 0, ts: '1782187200000'` (quoted string).
+
+### Fix (two layers)
+- `lib/snapdb.ts` — added `normalizeCandle()` coercing `timestamp`/`open`/`high`/`low`/`close`/`volume` to `Number()` for both `queryEsCandlesToday` and `queryEsCandlesHistorical`.
+- `lib/failLevels.ts` — `etParts` now does `new Date(Number(ts))` as a backstop so no string timestamp can break RTH detection again.
+
+### Fail log reframed as fade trades (`app/fails/page.tsx` FailTable)
+- Per Brandon: "look above & fail" is the pattern, but he wants to see WINS / good R/R. Relabeled the table to a trade lens: **Trade** (Fade Short for above-fails / Fade Long for below-fails), **Entry**, **Risk** (poke past level = stop distance), **Reward** (follow-through), **R/R**, and a **Result** badge — **WIN when R/R ≥ 2**, else LOSS. Winning rows get a faint green wash. R/R shown is theoretical max (follow-through ÷ poke), not a guaranteed fill.
+
+### Also noted
+- `failLevels.ts` symbol filter on the page (`includes("ESU")`) is a no-op: stored symbol is `/ES`/`/ES:XCME`, so `esu` is always empty and it falls back to all candles. Harmless, left as-is.
+- Multiple `--no-cache` rebuilds with the same chunk hash (`7e092a33`) were a red herring — the chunk was unchanged because the source genuinely hadn't changed; the bug was runtime data typing, not a stale build.
+
+## 2026-06-24 (session 61) — Move Notes from sidebar to a right-side push dock (🖍️ NOTES)
+
+### What changed
+- Moved the per-user quick-jot Notes out of the **left sidebar** and into a new **🖍️ NOTES button in `GlobalToolbar`** that opens a **right-side companion panel**.
+- Final behavior (after two iterations): the panel is a **flex sibling of `<main>`** (Sidebar | main | NotesDock) that **pushes** page content like the left sidebar — no floating overlay, nothing blurred over content. Open = 320px, closed = `width: 0` (fully gone), opened only by the NOTES button (or its own ✕). Open/closed is persisted (`notes-dock-open-v1`) so it **stays out** across navigation/reloads.
+
+### Why the rewrite
+- First pass used a `position: fixed` slide-out *inside* the toolbar. The toolbar has `backdrop-filter: blur(16px)`, and a filter/backdrop-filter ancestor becomes the **containing block for `position: fixed` descendants** — so the panel was sized/placed against the 44px toolbar, not the viewport, producing the "slides too far and comes back" glitch. Brandon also wanted a push panel (no blur), so the fixed/portal approach was dropped entirely.
+
+### Files
+- **New `components/shared/notes.tsx`** — shared `Note` type, `useNotes` hook, `formatNoteTime`, `NoteIcon`, and reusable `NotesBody` (add box + list). Single source of truth so the dock and any future caller agree. Storage key unchanged (`sidebar-notes-v1:<userId>`) → existing notes carry over. Removed `autoFocus` from the input (would steal focus on every page load now that the body is always mounted).
+- **New `components/shared/NotesPanelContext.tsx`** — `open/openPanel/closePanel/togglePanel`, persisted to localStorage. Mirrors `MobileNavContext`.
+- **New `components/shared/NotesDock.tsx`** — the right-side push panel; animates `width` 0↔320 (`flexShrink:0`, `overflow:hidden`, fixed-width inner so content doesn't reflow while animating). Signed-in only.
+- **`components/shared/GlobalToolbar.tsx`** — right-slot 🖍️ NOTES button with live count; toggles the context. Portal/backdrop overlay removed.
+- **`components/shared/LayoutShell.tsx`** — wrapped `ShellInner` in `NotesPanelProvider`; rendered `<NotesDock />` as a sibling after `<main>`.
+- **`components/shared/Sidebar.tsx`** — stripped the old `NotesPanel`, local `useNotes`/`Note`/`formatNoteTime`/`NoteIcon`/`PencilIcon`, the `NOTES_STORAGE_PREFIX`, the `useNotes` call, and the sidebar mount block. Dropped now-unused `user` from `useUser()`.
+
+### Notes / caveats
+- ⚠️ Linux sandbox was down all session again (`HYPERVISOR_VIRT_DISABLED`); changes verified by hand, **not** by `tsc`/build. Run `npm run build` before pushing (push.ps1 now gates on it).
+- Open question (not done): whether the dock should *overlay* instead of *push* on narrow/mobile widths. Currently it pushes everywhere (capped at `92vw`).
+
+## 2026-06-23 (session 60) — Fix deploy pipeline: showHpay build break + push.ps1 staging bug
+
+### Root cause
+- VPS build failed repeatedly on `ReferenceError: showHpay is not defined` at `/budget` prerender. Local `app/budget/page.tsx` was already fixed (`showHpay` → `showRecurring`), but the **committed** file still had `showHpay` on line 272 — the edit was never committed.
+- Why: `push.ps1` staged only `git add package.json`, so every code edit (incl. the budget page) was silently dropped from commits while the version number still bumped. Surfaced after leaving Render because Render auto-pulled+built on push; the VPS requires a manual pull+build, so the missing files finally broke the build.
+
+### Fix (`push.ps1`)
+- Changed `git add package.json` → `git add -A` (stage all changes, not just the version file).
+- Added an `npm run build` gate before commit/push: aborts with a red message if the build fails, so prerender errors are caught locally (~50s) instead of on the VPS after a Docker rebuild.
+
+### Resolution
+- Committed all pending edits (`07356d8`); VPS `grep` confirmed `CLEAN`; build ran through and `dashboard-dashboard-1` started. Site live.
+
+### Workflow confirmed (saved to memory: deploy-windows-vs-vps)
+- Commit + push ONLY on Windows; VPS only pulls + builds (`git fetch && git reset --hard origin/main && docker compose up -d --build`). VPS has no git creds. A commit includes only STAGED files — `git add -A` stages everything in the folder (minus .gitignore) across all sessions.
+
+## 2026-06-23 (session 59) — Budget page rebuilt as owner-only check register + dark dropdowns
+
+### Budget check register (`app/budget/page.tsx`, `app/api/budget/route.ts`, `lib/db.ts`)
+- Rebuilt `/budget` from the old category/transaction UI into a **day-grouped check register** matching Brandon's spreadsheet. New tables in `lib/db.ts` (`budget_register`, `budget_recurring`, `budget_amazon`; auto-create in `ensureAllTables`).
+- Model: each row belongs to one bank (coastal/truist/secu) but the table shows a **single combined running BALANCE** seeded from per-bank BEGINNING balances. Columns: **DATE | LABEL | AMOUNT | BALANCE**. Day-group headers carry item count + **Daily Net** and **EOD Balance** together on the right; collapsible (▾). BEGINNING shows as a cyan **STARTING BALANCE** strip at the top (not inside a day group).
+- Per-bank current balances + SAVE editor sit top-right of the title banner (title = MONTH then **BUDGET**, 🏦 white). Income = green text, payments = red, no heavy fills/underline. Inline-editable label & amount; clear red row-delete buttons.
+- **Recurring** rules (weekly/biweekly/monthly) in `budget_recurring`; occurrences computed **live** per displayed month and merged into the register (not stored). Managed via 🔁 Recurring panel; AUTO badge (cyan) on those rows. Old hardcoded H PAY generator removed.
+- **Amazon** tab: Date / Pay / Gas / Net (= Pay − Gas) with month totals.
+
+### Budget access — owner-only (`app/api/budget/route.ts`, `lib/db.ts`)
+- Added `ownerGate()` via Clerk `auth()`: **401** if not signed in, **403** if `OWNER_USER_ID` is set and mismatched; falls back to any-signed-in when `OWNER_USER_ID` unset (anti-lockout). Works because the middleware matcher already includes `/(api)(.*)`.
+- Single stable profile key `"owner"`; `adoptDefaultBudgetProfile("owner")` renames the legacy shared `"Default"` profile on first load so existing data carries over. Client can no longer spoof which profile it writes to.
+
+### Global dark dropdowns (`app/globals.css`)
+- Added `select`/`option` styling (`color-scheme: dark` + custom cyan chevron, styled option list) to kill the gray native `<select>` popup **dashboard-wide**.
+
+### Deferred (saved to memory)
+- Full 4-role RBAC (Owner/Admin/Subscriber/Free via Clerk `publicMetadata.role`) + moving admin pages under `/admin/*` — **not built this session** (degraded tooling on a live dashboard). Only budget is gated so far.
+- ⚠️ Linux sandbox was down all session (`HYPERVISOR_VIRT_DISABLED`); changes verified by hand, **not** by `tsc`/build. Run `npm run build` before pushing.
+
+---
+
+## 2026-06-23 (session 58) — Sidebar Notes panel (per-user) + home stat-bar full-width stretch
+
+### Sidebar Notes panel (`components/shared/Sidebar.tsx`)
+- New per-user quick-jot **Notes** panel filling the empty space between the nav and the Collapse footer (expanded + signed-in only). `useNotes(user?.id)` hook persists to `localStorage` keyed `sidebar-notes-v1:${clerkUserId}` — survives resets, isolated per login, cleared on sign-out.
+- Add / edit / delete with timestamps (`formatNoteTime`: time-only if today, else "Mon D h:mm"). Header + add input share **one row** to save vertical space (single-line `<input>`, Enter saves). Each note card: **text + timestamp on the same first row** (timestamp right-aligned); edit/delete buttons collapse to 0 height at rest and slide open on hover, so a note is one line tall when idle.
+- Styling matches the app glass-card system: translucent `rgba(13,17,25,0.45)` + `blur(16px)`, ~14px radius, near-invisible hairline border, faint cyan tint + glow on hover; inputs same treatment; soft white-fade gradient divider above the panel.
+
+### Home stat bar full-width stretch (`app/home/page.tsx`)
+- Top ticker row (VIX/ESU/SPX/NQU) and the metrics row (NET GEX/CALL WALL/PUT WALL/FLIP/MVC) now `width:100%` + `justify-content: space-between` so they spread edge-to-edge and grow with the window (no cap) instead of sitting compressed on the left. Flattened the metrics row (removed the left-cluster wrapper + MVC `marginLeft:auto`) so all five items are evenly justified siblings.
+- `tickerBoxRef` switched from `inline-block` natural width to `width:100%`; the `tickerScale` auto-fit now only acts as a **clip guard** (shrinks via `scrollWidth/clientWidth` overflow ratio when items can't fit a narrow column), never wastes space on wide ones.
+
+---
+
+## 2026-06-23 (session 57) — Sidebar Quick Pages (drag-to-pin) + collapsed nested-anchor hydration fix
+
+Sidebar UX additions. All edits in `components/shared/Sidebar.tsx`.
+
+### Quick Pages pinned zone
+- New user-pinned shortcut zone rendered **directly above Home**. Up to 4 slots (`QUICK_MAX`).
+- Pin by expanding any group's dropdown and dragging an item up into the zone. Dropping onto an occupied slot **replaces** it; dropping on empty space appends. Pinned pages also remain in their original group.
+- Hover a pinned item to reveal an **×** unpin button; pinned items can be dragged to reorder within the zone.
+- Zone is hidden when empty unless a drag from a group is in progress (keeps the rail clean). Works collapsed (2-letter chips) and expanded (labeled rows).
+- Persisted to `localStorage` key `sidebar-quick-pages-v1`; stale hrefs (no longer in nav) are filtered on load. New `useQuickPages()` hook (pin/unpin/reorderQuick) + flat `NAV_ITEM_BY_HREF` lookup. Drag state extended with `dragSource` ("group" | "quick") so group drags pin and in-zone drags reorder.
+
+### Hydration fix (`<a>` cannot be a descendant of `<a>`)
+- Collapsed multi-item groups previously wrapped the hover-flyout (which contains item `<Link>`s) in an outer `<Link>` → invalid nested anchors + hydration error. Replaced the outer wrapper with a `role="link"` `<div>` that navigates via `useRouter().push` (Enter/Space supported). Single-item groups keep their `<Link>`.
+- Quick Pages expanded rows also avoid nesting: the unpin `<button>` is a sibling of the row `<Link>`, absolutely positioned, not a child.
+
+### ⚠️ Note (unresolved this session)
+- Localhost **WS data-loading issue** (`ws://localhost:3002/ws/gex` connection fails, chain stuck on "LOADING SPX CHAIN") was investigated but **not resolved**. Ruled out: server down (logs show feed + GEX broadcast healthy), data flow, `GEX_WS_PATH` override (unset), middleware (`ws` excluded from matcher), Next stealing the upgrade (no upgrade handler attached — `getRequestHandler` only). Code path (`websocket-server.js` upgrade handler, path match) looks correct → points to runtime/env. **Next step:** read the Network-tab `ws/gex` row status (101 vs failed/pending/absent) to localize. Unrelated to the Sidebar edits.
+
+---
+
+## 2026-06-23 (session 56) — ES Candles: dual-axis fix (ES/SPX), prior-day frozen basis, bubble rework + disappear fix, heatmap Vol/Vol+OI toggle, MVC decoupled
+
+Reworked `/es-candles` axis, footprint bubbles, and heatmap metric. All edits in `app/es-candles/page.tsx` + `hooks/useEsBigTrades.ts`.
+
+### Price axis (ES vs SPX)
+- Replaced the invisible left-scale companion-candle approach (was unreliable) — left axis hidden, **right axis = ES only**.
+- SPX shown as a cyan badge pinned at the live ES price + a white label that follows the crosshair (right gutter), via `chart.subscribeCrosshairMove` + last-close → `priceToCoordinate`.
+- **Frozen prior-day basis:** new effect reads prior-day ES 16:00 close from `historical` (the `time='16:00'`/`slotKey …T16:00` RTH bar — NOT the last overnight 23:55 bar) and prior-day SPX close from `/api/eod-gex?symbol=$SPX`; `prevBasisRef = esClose − spxClose`. `effectiveBasis()` prefers this frozen basis because the live feed `spot` (broker SPX) mis-scales and can read ABOVE ES (saw live basis −46.54 vs DB +72). 6/22 is the current source row.
+
+### Footprint bubbles ("bigger, bolder, fewer")
+- Larger radius range (`rCap` → `h*0.46`/`pitch*0.46`, `rMin` 3), `sqrt(t)` area scaling, bold fills (alpha 0.45→0.90) + bright rings; gate 40th pct / span to 95th pct.
+- **Disappear bug fixed at the source:** `useEsBigTrades.ingest` now MERGES — throttled/partial `esBigTrades` frames that omit `trades`/`delta` no longer reset them to `[]` (which blanked the lanes between full frames). Also fixes the Footprint page.
+- Lanes + heatmap now repaint on every candle update + a rAF-coalesced safety repaint on visible-time-range change (1s interval).
+
+### Heatmap metric toggle
+- New toolbar button **GEX: Vol+OI ↔ GEX: Vol**. `GexCell` now stores `netOiVol` (gamma×(OI+vol)) and `netVol` (gamma×vol, server `netVolGEX`); metric chosen at draw time via `gexMetricRef`, per-column max/top-3 recomputed for the active metric. Switch re-renders instantly from cached columns.
+- Limitation: history/non-front-expiry backfill only persists `net_gex` (OI) → **Vol-only mode is blank for historical columns**; would need `option_strike_gex_history` to also store `netVolGEX`.
+
+### MVC
+- Decoupled MVC from the Levels toggle: MVC step line + dashed marker now gated by `showMvcLine` ONLY; the `Levels` button controls just Call Wall / Put Wall / Flip.
+
+### ⚠️ Follow-ups
+- GEX level lines (Call/Put/Flip/MVC) still convert SPX→ES with the **live** basis — if the live basis is wrong they're mispositioned; consider switching them to `effectiveBasis()`.
+- `eod_gex` has only ONE SPX EOD row (6/22); the frozen basis needs the EOD recorder to populate daily (server-uptime issue — recorder logic is fine).
+
+---
+
+## 2026-06-23 (session 55, infra) — Render → Hetzner + Cloudflare migration; owner-dash Postgres health + Hetzner hosting metrics
+
+Migrated the whole stack off Render hosting onto a Hetzner Cloud VPS fronted by Cloudflare, with no app-logic changes. `server-v2` (Next.js + `/ws/gex` + TT/dxLink feed + in-process schedulers) runs as a single Node process in Docker on the box; Render Postgres (Virginia) kept as-is. Drivers: egress cost + overall cost.
+
+### Containerization / deploy
+- Added `Dockerfile` (node:20-bookworm-slim, multi-stage; tzdata + `TZ=America/New_York` for the ET-gated MVC/EOD/weekly schedulers; dropped chromium — puppeteer/tesseract/etc. are declared but unused at runtime), `docker-compose.yml` (`.env.local` as single source of truth for `PORT`/secrets, `APP_PORT` host mapping, `/proxy/health` healthcheck, restart policy), `.dockerignore`.
+- `npm ci || npm install` fallback (repo lockfile had a `picomatch` drift). `next build` needs Clerk + owner build-args inlined: `NEXT_PUBLIC_OWNER_USER_ID`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `NEXT_PUBLIC_APP_NAME` passed as ARG/ENV + compose `build.args`.
+- 2 GB swap on the 4 GB box so `next build` can't OOM.
+
+### Infrastructure
+- **VPS:** Hetzner CPX21 (3 vCPU / 4 GB / 80 GB), **Ashburn us-east** (next to Render's Virginia Postgres → single-digit-ms DB latency), Ubuntu 26.04, server `cb-edge-prod` (IP 178.156.137.36, server id 144288812).
+- **Cloudflare Tunnel** (`cloudflared`, no inbound ports): `/etc/cloudflared/config.yml` routes `cbedge.net`, `www.cbedge.net`, `dash.cbedge.net` → `127.0.0.1:3002`; systemd service. Old Render DNS (`A 216.24.57.1`, `www → dash-1fa2.onrender.com`) deleted; all three hostnames now proxied CNAMEs to the tunnel. SSL Full. Render web service suspended.
+- `DEPLOY_CLOUDFLARE.md` runbook (provisioning, tunnel, cache rules, **§2b secrets rotation**, cutover, verification).
+
+### Owner dashboard features
+- **Postgres health:** new `app/api/db/health/route.ts` (`SELECT 1` + latency via `lib/db` `pgQuery`). Owner page shows a "Postgres OK/DOWN" header badge + a "Postgres · OK · Nms" System card. (Route is auth-gated like the rest of `/api/*`.)
+- **Hetzner hosting metrics:** new `app/api/hetzner-metrics/route.ts` (CPU + network from the Hetzner Cloud API, normalized to the old Render shape so the UI renders unchanged). Hetzner has no RAM metric → memory box now reads the app's own RSS from a new `/proxy/self-metrics` route on `server-v2`. Owner section relabeled "Render · Hosting" → "Hetzner · Hosting"; metrics fetches repointed `render-metrics` → `hetzner-metrics`. New env: `HETZNER_API_TOKEN`, `HETZNER_SERVER_ID`.
+
+### ⚠️ Follow-ups
+- **Rotate exposed secrets** (shared in session / public in repo `.env`): Hetzner API token, TT refresh token + client secret, Postgres password, Render API key, Discord bot token, Google service-account key. See `DEPLOY_CLOUDFLARE.md` §2b.
+- Render web service is **suspended** (rollback safety), not deleted. Postgres kept.
+
+---
+
+## 2026-06-23 (session 54) — ES Candles page: GEX heatmap, footprint lanes, volume profile, session levels
+
+Built out `/es-candles` (Futures group) into a full futures order-flow chart on top of `useEsCandles` (SQL + `/ws/gex`). Versions bumped through `2026.6.22-v22`.
+
+### Candlesticks + axes
+- Wired the page to live 5m ES candles (`useEsCandles`); removed the disabled feed and the Last Close/Volume/Updated stat boxes.
+- Dual price axis: **right = ESU**, **left = SPX** (invisible companion candle series fed OHLC − live basis, so both axes align pixel-for-pixel at any zoom).
+- `fitContent()` only on first load (no auto-recenter); **double-click** recenters + resets both scales to autoscale. Crosshair lines/labels removed. Flat panel background (no red gradient).
+
+### GEX heatmap overlay
+- Canvas overlay behind the chart (candles on top) painting one column per 5-min GEX snapshot, exact `metricBg` gradient (cyan +GEX / red −GEX, top-3 rank floors, intensity slider). Offscreen-buffer blur for smooth blending; dimmed so candles read through.
+- Historical backfill from `option_strike_gex_history` (new `mode=heatmap` API + `getOptionStrikeGexSlots` db helper) seeds today's columns on load; column cap raised 200→600 so a full day persists. Custom dark **DTE picker** chooses which expiry drives the heatmap (front = live; non-front = history-only).
+
+### Footprint lanes (from `useEsBigTrades`)
+- **Big-trade bubbles** lane (one per 5-min slot, single row, color = dominant aggressor): per-session scaling (RTH / overnight / 3:45–4:15 EOD groups), volume-gated, log/linear sizing capped to column pitch, hover tooltip (time, total, buy/sell, net). Size toggle Total vs **Net Δ** (default Net).
+- **Delta lane**: 5-min net bars + a white **Cumulative Delta** line that resets at the 9:30 ET RTH open.
+
+### Levels
+- GEX level lines (Call Wall / Put Wall / Flip / MVC) — Flip computed via `findGEXFlip` (not in feed), MVC polled from `mvc_snapshots`. Single **Levels** toggle (off by default).
+- **MVC step line**: every today MVC plotted as horizontal segments (no vertical connectors), thick white, ES-basis adjusted.
+- **Session levels** (**PDH/ON** toggle, off by default): prior-day H/L + rolling overnight H/L (16:00→9:30 ET window that builds overnight, freezes at the open, resets at the next close).
+- **Volume profile** (right edge, off by default): POC/VAH/VAL/LVN from candle volume-by-price.
+
+---
+
+## 2026-06-22 (session 53) — GEX chart prior-state ghost overlay (5/15/30m)
+
+Added a "prior GEX" ghost layer to the NET GEX chart (`components/dashboard/GexChart.tsx`) showing the per-strike net GEX 5/15/30 min ago behind the live bars, plus supporting data plumbing and a toolbar control. Versions bumped through `2026.6.22-v21`.
+
+### Ghost overlay (GexChart.tsx)
+- New props: `baselines`, `showGhost5/15/30`. Renders a faded prior-state bar behind each live bar (Net GEX + OI+Vol mode only — baselines store OI-based net GEX).
+- Per-strike logic: GEX **down** → taller faded prior bar drawn behind (halo); GEX **up** → only the rise portion (live↔prior) shaded as a cap on top.
+- Outline color encodes direction using the chart's own palette: **yellow `#ffb300`** when GEX shrank, **blue `#29b6f6`** when it grew (replaced the initial white outline).
+- Legend shows the active timeframe with ↓/↑ in each color; on-chart note when a toggle is on but no history exists, or when in an unsupported mode.
+
+### Toolbar (GexToolbar.tsx) + home wiring (app/home/page.tsx)
+- Three `5m / 15m / 30m` toggles, shown only in Net GEX + OI+Vol mode.
+- Toggles are **mutually exclusive** — enabling one clears the others.
+- `show5/15/30` state added; chart baselines polled (full chain) whenever any toggle is on, via `chartBaselines`.
+
+### Data: nearest-snapshot fallback
+- `lib/db.ts`: new `getOptionStrikeNetGexAsOfOrNearest` — prefers the latest row at-or-before the target age, else the strike's nearest available row, so ghosts populate after-hours / right after the writer starts.
+- `app/api/snapshots/option-strike-gex-history/route.ts`: `tolerant=1` query param selects the nearest-fallback query (chart uses it; popup stays exact).
+- `hooks/useStrikeGexHistory.ts`: added `tolerant` arg threaded into the fetch URL.
+
+### UI cleanup
+- Removed the duplicate ticker-row clock from the top toolbar (`app/home/page.tsx`); the live ET clock now lives only in the NET GEX chart header.
+
+---
+
+## 2026-06-22 (session 52) — Confidence Score overhaul: two-stage model, MVC study anchoring, calibration tracker, UI consolidation
+
+Major rework of the `/confidence-score` page and its scoring engine (`lib/confidenceScore.ts` + `app/api/confidence/route.ts`), plus a new calibration system and a global date-picker fix. Versions bumped through `2026.6.22-v17`.
+
+### Scoring engine — new factors & two-stage model
+- Added **Net Wall Bias** (`pivot − break`, −100..100) as the single defend-vs-break decision read.
+- Added **rejection-rate boost**: same-cluster historical rejection rate (time-decayed, sample-size weighted) lifts Pivot and lowers Break — "history of actual rejections beats raw size."
+- Added **relative GEX rank** (1.0 = day's dominant MVC strike, 0.8 = 2nd…) computed from today's distinct MVC strikes; discounts strong-but-secondary walls in Pivot/Break.
+- **Two-stage probability model**: Hit = "Reach" (stands alone); Pivot/Chop/Break are now CONDITIONAL on a touch and renormalized to sum to 100%. Net Wall Bias and the bias line reason within the conditional split.
+
+### MVC study base rates (neutral wording — no source name)
+- Added a `STUDY` anchor: reach **75%** / pivot **55%** / chop **26%** / break **17%**, with **85%** open-at-MVC pivot. Each structural score is blended 50% toward the base rate so structure tilts around an empirical prior instead of a flat low base.
+- **Open-at-MVC 85% setup**: detected in the route (live session, first ~15 min, SPX within 8 pts of the level) → pulls Pivot toward 0.85 and surfaces a green call-out banner.
+- IV 16–45% validity window noted as a caveat (tooltip + hero footnote), not enforced.
+
+### Calibration tracker (answers "how accurate is it")
+- New `confidence_log` Postgres table + `upsertConfidenceLog`/`getGradedConfidenceLog` helpers in `lib/db.ts` (one graded row per day; held = pivot|chop, broke = clean break-through).
+- New `app/api/confidence/calibration/route.ts`: `?refresh=1` backfills + grades every completed day from `mvc_snapshots` (scored from the structural prior only, no self-referential history blend), buckets predictions, returns predicted-vs-actual reliability + Brier scores for Reach / Reject|touched / Break|touched, plus Net Wall Bias directional accuracy.
+- New collapsible **Calibration panel** on the page: reliability bars (actual fill + predicted tick), Brier verdicts, sample sizes, low-sample warning.
+
+### UI consolidation (data-overload cleanup)
+- Added a **hero MVC card** at the top of the Outcome box: MVC level + Reach% + on-touch Reject/Chop/Break split, folded-in metrics strip + headline note + study base reference (`55 / 26 / 17`) + IV caveat.
+- Removed the redundant **Analogs panel** (history now a compact badge in Live Structure) and the **"Read" notes panel** (folded into hero).
+- **Live Structure** condensed to a compact auto-fit factor grid with inline regime/history badges (~half the height); shorter labels, tighter label column.
+- Merged the standalone **Bias line into the Net Wall Bias meter**; trimmed the Outcome box to hero + So-far rollup + archetype narrative + timeline (dropped duplicate mechanics strip + status line). Moved the "So far" rollup to the top of the Outcome box.
+
+### Global fix
+- **Date-picker calendar icon**: replaced the `filter: invert(1)` rule in `app/globals.css` with a custom cyan calendar SVG indicator — guaranteed visible on every dark-themed date/time input across all pages (Confidence, Database, Trading, EM Tracker Admin).
+
+> Note: `next build` / `tsc` not run (sandbox virtualization disabled all session) — run `npx tsc --noEmit` and click "Re-grade history" once before relying on the calibration numbers.
+
+## 2026-06-22 (session 51) — New `/fails` page: ESU look-above/below fails + AMT + merged IB
+
+Built a standalone Fails page (`app/fails/page.tsx` + `lib/failLevels.ts`) tracking failed breakouts ("look above & fail" / "look below & fail") of key auction reference levels, driven entirely off the existing 5m ES candle feed (`useEsCandles`) — no new API/table. Linked in the sidebar under the Futures group.
+
+### Reference levels & fail detection (`lib/failLevels.ts`)
+- Computes overnight H/L (prior 18:00→09:30 ET globex), previous-day RTH H/L, and previous-week H/L from the candle history.
+- Fail = price pierces a level intrabar but a bar closes back through it within 2 bars; tracks poke distance, close-back, and follow-through. Live per-level status (idle/testing/broke/failed), today's fail log, and a ~20-session fail-rate stats engine (replays each prior day's levels).
+
+### Auction Market Theory layer
+- Today's Initial Balance (09:30–10:30 ET) + day-type classification (Trend ↑/↓, Balance, Reversal ↑/↓, Forming) from IB interaction.
+- Per-level AMT read: overnight = thin/weak acceptance (fade target), prior-day/week = strong acceptance (retest support/resistance), with long/short/neutral bias and an overall day bias line.
+- Entry-trigger detector (`detectTriggers`): rule-based scalping setups — A break-&-retest long, D breakdown-&-retest short, C/C′ IB-extension long/short (clearing ONH/ONL), E poor-high/low fades, F balance-to-imbalance breaks. Each emits entry/stop/target (ES pts), confluence note, and freshness (active ≤20m). Surfaced as an "Active Setups" grid.
+
+### ESU-only + value-area removed
+- Page is ESU-specific: candles filtered to symbols containing `ESU` (`/ESU6`, `/ESU26:XCME`, …) with a fallback to all candles during rollover. Dropped the SPX/ES toggle, the `/ws/gex` basis WebSocket, and all SPX conversion — prices display as raw ESU points.
+- Removed value-area logic entirely (no VAH/VAL/POC); day-type is pure IB + price, the VAL-rejection (B) trigger and VA-confluence tags are gone.
+
+### Merged IB from Insights
+- Exported `LiveIb` from `components/insights/IbLogic.tsx` and embedded it on `/fails` (locked-DB persistence, break alerts w/ timestamps, formed-first/vs-mid stats, rules-in-play engine). Removed the IB Logic tab from `/insights` (tab type, TABS entry, render, import) so it lives only on Fails. IB stays on the default /ES feed.
+- Rules-in-play now compute while the IB is still forming (pre-10:30) and render as PROVISIONAL with an amber "not locked" badge — previously hidden until lock. Rules cards laid out in a ~2-row grid.
+
+### Polish
+- Matched the shared `homeTheme` panel styling (shell/header/content/panel + hover lift). All gray fonts switched to white across `/fails` and the IB component (kept colored semantic text and the offline live-dot tint).
+
+> Note: `next build` / `tsc` not run any session (sandbox virtualization disabled this whole session) — verify locally before pushing.
+
+## 2026-06-22 (session 50) — New lean `/greeks` page: graphs, gamma-logic feed, velocity, vol
+
+Built a focused standalone Greeks page (`app/greeks/page.tsx`) because the Insights Exposure Stack had unreliable sparklines and hit-or-miss greek values. `/insights` left untouched; new page linked in the sidebar (GEX group, above Insights).
+
+### Core page
+- Four cards — GEX / DEX / CHEX / VEX — each with a robust zero-cross graph (green-above / red-below shading, bold zero baseline, glow line, Line/Bars toggle). Data from `/api/insights/gex` totals, seeded from `queryGreeksToday()` so graphs aren't blank on first paint; every live reading persisted via `saveGreeksSnapshot`. Polls every 30s, ignores empty/zero responses (no card-wipe), shows "feed idle" instead of `--`.
+- Removed the GEX+VEX card per request; grid is a clean 2×2.
+
+### Sparkline reliability + axis fixes
+- Old sparkline drew once into a 0-width canvas during layout → blank "half the time". New `ZeroCrossGraph` redraws on ResizeObserver + window resize + post-layout frame.
+- X-axis fixed to today's RTH window 9:30 AM–6:00 PM ET with hour gridlines. First `sessionBounds()` impl mis-computed the ET offset (axis read "6 AM"); rewrote with a correct `etOffsetMs()` UTC-offset calc.
+- Hover crosshair + tooltip (value + ET time). Fixed "Invalid Date": `timestamp` is a Postgres BIGINT → arrives as a string over JSON; coerce `Number(r.timestamp)` on seed, normalize seconds-vs-ms on live path.
+- Bars sized off the gap between consecutive points (not axis/count) so sparse data isn't one fat block.
+
+### Gamma-logic feed (if-this-then-that)
+- Rules engine (`evaluateGamma`) over current greeks + intraday percentiles → scrolling signal feed with active-now chips, timestamped history, **Edge:** action lines, and pulsing background for critical events. Priority-ordered per the spec (DEX flip → velocity → deep-neg gamma → regimes → tiers → neutral fallback). Dedups so the same condition doesn't re-spam every poll.
+
+### Velocity (rate of change)
+- `velocityOf()` measures ~10-min Δ per greek + acceleration (2nd derivative, interval-independent). Per-card `↑/↓ Δ/10m` readout. New feed signals: Rapid DEX Surge (>$15B), GEX Velocity Surge/Weakening (>30% range), CHEX Ramp, VEX Shift, Extreme Acceleration, Accelerating Dealer Alignment (bull/bear), Velocity Cooling.
+
+### Volatility card + vol-aware rules
+- VolCard below the grid: VIX 30D / VIX1D / 10D realized / IV Rank / VRP, IV FALLING▼/RISING▲ badge, regime read. Fed by `/api/insights/vix`. Rules added: High IV Rank + Neg GEX → straddles; Low IV + High Pos GEX → premium selling; Active Vanna Upside gated on IV actually falling.
+
+### Polish
+- Page now scrolls — was clipped by `<main>`'s `overflow:hidden`; wrapped content in `flex:1; minHeight:0; overflowY:auto`.
+- Per-Greek identity colors (cool neon): GEX cyan, DEX violet, CHEX teal, VEX magenta; Vol card slate/blue. All orange removed. Sign shown via a small green/red POSITIVE/NEGATIVE badge.
+
+> Note: `next build` not run this session (sandbox virtualization disabled) — verify locally before pushing.
+
+## 2026-06-22 (session 49) — Dev page CHEX/Vanna readout (REST probe BS-derived)
+
+Charm exposure (CHEX) and Vanna exposure showed "n/a" on the `/dev` Symbol Probe. Root cause was data-source, not a bug: the dev page probes via `/proxy/probe-rest`, and the TastyTrade REST greeks feed (`/market-data/by-type`) returns only gamma/delta/theta/vega — no charm or vanna — so the proxy hardcoded `charmExp: null` / `vannaExp: null`.
+
+### REST probe now derives vanna/charm from Black-Scholes
+- `server-v2/proxy-tastytrade.js` (`probeRest`, exposures block ~L682): added a `bsGreeks({ S: spot, K: best.strike, T: yearsToExpiry(best.expiration), sigma: g.iv, r: RISK_FREE, type })` call, gated on `spot>0 && iv>0 && T>0`. `vannaExp` and `charmExp` are now computed with the same conventions as the live `_recompute` path: BS per-year output unit-scaled (vanna ÷100 per 1% vol, charm ÷365 per day), then `sign · scaled · OI · 100 · spot` (calls +, puts −). Falls back to `null` when IV/T unavailable.
+- No client change needed — `app/dev/page.tsx` already renders `charmExp`/`vannaExp` rows; they just stop showing "n/a" once populated.
+- CHEX formula (reference): `charm = −φ(d₁)·(2rT − d₂σ√T)/(2Tσ√T)` per year → `/365` per day; per-strike `CHEX = (charmCall·callOI − charmPut·putOI)·spot·100`.
+- Restart server-v2 to pick up.
+
+## 2026-06-22 (session 48) — MVC auto-snapshot fix (internal-token auth), flow-tape big-order retention (v13)
+
+Fixed the MVC auto-collector that was never writing auto rows (all snapshots in the DB were manual), and the SPX Flow Tape showing nothing above the $100k filter.
+
+### MVC auto-snapshot — root cause: protected route returned HTML
+- `server-v2/mvc-auto-snapshot.js`: the collector's localhost `fetch('/api/gex')` carried no Clerk session, so middleware redirected it to `/` and returned landing-page HTML → `res.json()` threw `Unexpected token '<'` and every auto tick silently skipped. Added an `internalHeaders()` helper that sends `x-internal-token: INTERNAL_API_TOKEN` on both `/api/gex` (GET) and `/api/snapshots/mvc` (POST), matching the existing `levels-auto-publish.js` pattern.
+- Diagnostics + hardening: auto-pause and outside-RTH skips now log a reason; `setMvcAutoEnabled` logs ENABLED/PAUSED; default is env-controlled (`MVC_AUTO=0` to disable). Replaced the drift-prone `setInterval` with a self-rescheduling boundary timer locked to :00/:05/:10 (no `.unref()`), each tick logged. Confirmed working — 5-min cadence is writing.
+
+### SPX Flow Tape — big orders evicted before the client filter
+- `server-v2/computation/flow-processor.js`: the tape kept the most recent 200 prints of ALL underlyings with no premium floor, then filtered to SPX ≥$100k only on the client. SPX 0DTE prints hundreds/sec, so the window was always full of sub-$100k noise and real $100k+ blocks were evicted within seconds. Tape is now SPX/SPXW-only and rejects new entries below a $10k premium floor before they consume a cap slot (sweeps still coalesce into existing slots); cap raised 200→500. `prints` aggregation (net premium / buyPct) unchanged — still counts every underlying.
+
+## 2026-06-22 (session 47, ~10:10 ET) — Net-premium sparkline square-wave fix, DB connection retry, MVC writer hardening (v10)
+
+Fixed the "NET PREMIUM" sparkline that rendered as a square wave whipsawing between fixed rails (-$7.8M / +$21.2M), plus the DB-write 500s and MVC auto-collector reliability.
+
+### Net-premium sparkline — square-wave root cause
+- `hooks/useSpxFlow.ts`: `seed()` guarded `netPremium`/`callPremium`/`putPremium` with `Math.abs(new) > Math.abs(stored)` — but premium is a SIGNED live value that swings +/-, so it latched at the largest magnitude ever seen, freezing the readout and squaring off the sparkline. Now tracks the latest signed value. (Volume counters keep their monotonic `>` guard — that's correct for them.)
+- `components/dashboard/SnapshotPanel.tsx`: live in-memory net-premium series (`liveSeriesRef`/`liveSeries`) sampled from the corrected `netPremiumFlow` (~3s cadence, 600-pt cap) is now the source of truth. `premHistory` renders live; persisted `premium_flow` rows are stitched on only as a prefix for points OLDER than the first live sample, so corrupt/latched DB rows can't override live values.
+- Sparkline autoscale clamped to 2nd–98th percentile + `y()` clamps out-of-range points, so a couple of outlier rows can't crush the real signal into a flat rail.
+- Corrupt persisted rows purged: `DELETE FROM premium_flow WHERE date = '2026-06-22'` (1245 rows) via `scripts/purge-premium-flow.js` (one-off; remove it — has DB URL hardcoded).
+
+### DB connection — transient-drop retry
+- `lib/db.ts`: snapshot POSTs were 500ing on `Connection terminated unexpectedly` (Postgres restart/recovery / churn). The pool's `error` handler only covers IDLE clients; an in-flight drop rejected the query. Added `pgQuery()` + `isTransientConnError()` (matches `Connection terminated`/`ECONNRESET`/`57P01`/`08006`/`08003`), retries once on a fresh client after 150ms.
+- Routed `queryAll`, `insertPremiumFlow`, `insertBzilaSnapshot`, and `insertMvcSnapshot` through `pgQuery`.
+
+### MVC auto-collector
+- `server-v2/mvc-auto-snapshot.js` already fires every 5 min during RTH (`INTERVAL_MIN = 5`; stale "auto-30m" comments aside). The blocker was the shared DB-write failure above — now covered by the `insertMvcSnapshot` retry.
+
+## 2026-06-22 (session 46) — Bzila page removal, sidebar nav rebuild, To-Do reskin, top-bar/clock + socials
+
+Removed the `/bzila` page and its exclusive data layer, rebuilt the sidebar nav structure + styling, reskinned the To-Do page to match the dashboard UI, moved the GEX-chart clock, and refreshed the social buttons.
+
+### Bzila page + data layer removed (surgical)
+- Deleted `app/bzila/page.tsx` and the two routes it exclusively used: `app/api/snapshots/bzila-gex-history/` and `app/api/snapshots/bzila-strikes/`.
+- `lib/db.ts`: removed `bzila_gex_history` + `bzila_strike_gex_history` table/index DDL, interfaces (`BzilaGexPoint`, `BzilaStrikeGexRecord`), and functions (`insertBzilaGexPoint`, `getBzilaGexHistory`, `insertBzilaStrikeGexRows`, `getBzilaStrikeGexHistory`, the two `ensure*` stubs). **Kept** `bzila_snapshots` (+ all its functions) because the main dashboard's `SnapshotPanel.tsx` depends on it. Kept `OptionStrikeGexRecord` / `insertOptionStrikeGexRows`.
+- Removed both tables from `app/api/db/route.ts` allowlist, `app/database/page.tsx`, `app/dev/owner/page.tsx`, and the Bzila Flow row in `md files/agents.md`.
+- Dropped the two tables in Postgres via a one-time owner-gated route (`/api/debug/drop-bzila-gex`, since deleted). `migrations/drop_bzila_gex_history.sql` left for reference. `bzila_snapshots` confirmed retained.
+
+### Sidebar nav rebuild (`components/shared/Sidebar.tsx`)
+- New groups: **GEX** (Home, Multi Greek, Options Chain, Insights, Confidence, Estimated Moves Front End), **Futures** (Footprint), **Stock Market** (Premarket, Economic Calendar), **Personal** (Journal→/trading, Budget, To-Do→/personal/todo), **Admin** (Owner, Admin, Database, Dev, Estimated Moves BE, Logs, Changelog; owner-gated `devOnly`).
+- Replaced the five group SVG icons with detailed approximations (funnel, hourglass+contract, bull/bear+pit, house+safe+person, gear+key+badge).
+- Futures forced to accordion layout (`forceAccordion`) so its single "Footprint" item shows under the title.
+- Faint cyan hover tint on expanded nav items.
+- Collapsed mode: clicking a group icon now navigates to its top item.
+- All muted-grey nav text (group labels, items, flyout headers, chevrons, collapse toggle) → white.
+- Social row replaced with X / YouTube / TikTok (real URLs); always-on colored glow (brighter on hover), shared white border like X.
+- Clerk `UserButton` avatar enlarged 32→56px.
+
+### To-Do page reskin (`app/personal/todo/page.tsx`)
+- Full restyle to match Confidence Score: `homeShellStyle` shell, glassmorphic `homePanelStyle` panels, cyan/purple/orange/green `HOME_THEME` accents, `SectionTitle` bars, `conf-hover` lift, Inter font, cyan gradient buttons, cyan-glow trend chart. All functionality preserved (checklists, kanban, all-tasks table, analytics, modals). Removed dead Budget/Trading/Personal header tabs. Added `usePageLoadStatus`.
+
+### GEX chart clock + top bar
+- `app/home/page.tsx`: replaced the "Drag to pan · Scroll to zoom" hint in the NET GEX header with the live ET clock (`etTime`).
+- `components/shared/TopBar.tsx`: removed the clock + session from the VIX pill (freeing room for VIX/ESU/SPX) and deleted the now-unused `clock`/`session` state, clock tick effect, and `etClock`/`etSession` helpers.
+
+### Investigated (no code change)
+- Strike-detail popup Δ boxes (From Open / 5 / 15 / 30 min): confirmed the `option_strike_gex_history` writer is healthy (~120 points/30min) and the rolling query works. Open question left for next session: whether point-mode baselines come back populated, and the `selectedStrike`-gating on `app/home/page.tsx:729`.
+
+> Note: build verified green earlier this session (`next build`, 76 pages). Postgres tables dropped. No server-v2 changes. Sandbox hypervisor disabled — git commit must be run manually (commands below).
+
+## 2026-06-22 (session 45) — Multi-greek dropdown theming, SPY/QQQ volume refresh + greek basis, pre-open volume reset, version bump v7
+
+Fixed the mult-greek expiry dropdown styling, addressed SPY/QQQ option volume showing 0 (no auto-refresh + REST staleness), restored the VOL-only tab, and added a 9:30 ET pre-open volume reset so the new session starts clean.
+
+### Mult-greek expiry dropdown — dark theming
+- `app/mult-greek/page.tsx`: native `<select>` options inherited the OS light background. Styled each `<option>` with `background: #0b0f1a` + theme text color and added `colorScheme: "dark"` on the select so the popup renders dark in Chrome/Edge.
+
+### SPY/QQQ chain auto-refresh
+- `app/mult-greek/page.tsx` and `app/options-chain/page.tsx` loaded the chain only once (mount / GO / manual refresh) with no polling. Added a 60s `setInterval` that cache-bust re-pulls `/api/chains` while the market is open so per-strike volume accumulates through the session instead of staying frozen at the one-shot load.
+- `app/options-chain/page.tsx`: added `isSessionLive()` helper (trading day + 9:30–16:00 ET) gating the poll.
+
+### Greek contract basis
+- `app/mult-greek/page.tsx`: greek was computed volume-only in VOL mode, reading blank pre-open (session volume still 0). Confirmed OI+VOL is the default; restored the OI+VOL / VOL toggle so a VOL-only tab is available on demand while OI+VOL keeps the view populated pre-open.
+
+### Pre-open volume reset (server-v2)
+- `server-v2/proxy-tastytrade.js`: TastyTrade REST per-strike `volume` carries the PRIOR session's cumulative figure until their backend resets at the 9:30 ET cash open. Added `etMinutesNow()` / `isPreOpenEt()` helpers and zeroed `volume` in `fetchChainFull` before 9:30 ET. OI is untouched. Requires server-v2 restart.
+
+### Version
+- `package.json`: bumped to `2026.6.22-v7`.
+
+## 2026-06-22 (session 44) — Net-premium sparkline whole-night history, flow sell-side classifier fix, version bump v6
+
+Snapshot Flow panel: made the net-premium sparkline span the whole session, fixed the buy/sell flow misclassification that zeroed out sell volume, and removed the SPX price pill.
+
+### Net Premium sparkline — whole-night history
+- `components/dashboard/SnapshotPanel.tsx`: sparkline was built only from `flow.orders` (the server flow tape, hard-capped at ~200 prints in `flow-processor.js`), so it could never show more than the recent slice. Now hydrates a persisted `premium_flow` series for the active session and merges the live tail on top.
+- Added `sessionStartMs()` / `sessionDateKeys()` / `etMinutes()` / `etDateKey()` helpers: session breaks only at the two SPX opens — RTH 09:30 and EXT 18:00 — so 18:00→next-09:30 is one continuous line crossing midnight (fetched across both ET date partitions). 09:30–18:00 belongs to today's RTH.
+- `fetchSessionPremHistory()` bounds rows to the session-start instant and sorts ascending.
+- **Writer was missing:** `lib/snapdb.ts:savePremiumFlowSnapshot` existed but was never called on server-v2, so the `premium_flow` table had only one stale row (2026-06-16). Wired it into the existing 5s autosave loop in SnapshotPanel so net-premium points now persist.
+- Refresh no longer resets the sparkline: `doRefresh` only fetches when the night history never loaded, and neither refresh nor the 60s poll will replace a populated series with a smaller/empty one.
+
+### Flow buy/sell classifier — sell volume fix
+- `server-v2/computation/flow-processor.js`: `/proxy/flow` was showing `buyPct ~99.97%` (callSellVol 1, putSellVol 4) — nearly every print misclassified as a buy because `inferSide`'s `price >= ask` fired against stale, lagging cached quotes. Rewrote `inferSide` to always trust inside-spread classification, only trust at/outside-spread calls when the quote is fresh (≤2500ms), and otherwise fall back to the tick rule vs. the symbol's prior trade price.
+- Added per-symbol `lastTradePx` tracking in `addPrint` (cleared in `reset()`).
+- `server-v2/proxy-tastytrade.js`: Quote handler now stamps each cached quote with `t: Date.now()` for the freshness check.
+
+### Snapshot header
+- `components/dashboard/SnapshotPanel.tsx`: removed the `SPX <price>` pill next to the SNAPSHOT label.
+
+### Version
+- `package.json`: bumped `2026.6.22-v5` → `2026.6.22-v6`.
+
+> Note: server-v2 changes (classifier + quote timestamp) require a server restart to take effect. `tsc`/tests not run this session (sandbox hypervisor disabled) — verify with a local build before deploy.
+
+## 2026-06-22 (session 43) — Options chain strike ordering (descending), version bump v4
+
+Reversed the options-chain strike sort so higher strikes render at the top and lower strikes at the bottom.
+
+### Options chain — strike ordering
+- `app/options-chain/page.tsx:569`: `visibleRows` sort changed from `a.strike - b.strike` (ascending) to `b.strike - a.strike` (descending). Higher strikes now appear at top of the table, matching the intended "High to low" layout that the comment already described.
+
+### Version
+- `package.json`: bumped `2026.6.22-v3` → `2026.6.22-v4`.
+
+## 2026-06-22 (session 42) — Econ-calendar USA filters, Trump-calendar history trim, snapshot-flow hover, ticker data-box auto-scale, NET GEX units fix
+
+UI/UX and data-filtering pass on the home dashboard and economic calendar.
+
+### Economic calendar — USA-only Medium/Low filters
+- `app/economic-calendar/page.tsx` and `components/dashboard/EconCalendarPanel.tsx`: added `medium-usd` and `low-usd` filter options mirroring the existing `high-usd` (`impact === X && country === "USD"`). Homepage panel default-on set changed to `["high-usd", "medium-usd", "trump"]`.
+- `components/shared/EconCalendarDiscordBtn.tsx`: `includeTemplateEvent()` now restricts Medium to USD so the Discord-shared template image matches the default-on filters.
+
+### Trump calendar — drop historical events
+- `app/api/trump-calendar/route.ts`: added a `minDate()` cutoff (`LOOKBACK_DAYS = 0`, today-forward) so the 2,600+ historical factba.se events are filtered out before mapping.
+
+### Snapshot Flow — Net Premium hover tooltip
+- `components/dashboard/SnapshotPanel.tsx`: `buildHistory()` now returns `{ts, value}[]`; the Net Premium `Sparkline` gained mouse tracking with a crosshair, marker dot, and a tooltip showing time (ET) + net premium at the cursor.
+
+### Header ticker — single scaling "data box"
+- `app/home/page.tsx`: wrapped both ticker rows in a box that auto-scales via a JS ResizeObserver (measures natural width vs. column width, applies inline `transform: scale()`), so the clock/VIX/ESU/SPX/NQU row and the NET GEX/CALL WALL/PUT WALL/FLIP/MVC row shrink together as one unit and NQU never clips. Converted the rows' `vw`/clamp fonts to fixed px (top row larger than bottom). Bottom row indented 13px to align "NET GEX" under the clock digits.
+- `app/globals.css`: removed the prior progressive-hide / container-query CSS (scaling is now JS-driven).
+
+### NET GEX header units fix
+- `app/home/page.tsx`: `netGex` is denominated in billions but was passed to `fmtMoney` (expects raw dollars), rendering `+$7` instead of `+$7.20B`. Added `fmtMoneyB()` and used it for the header value.
+
+## 2026-06-22 (session 41) — SPX session-rollover OI/vol refresh, dev-page calls+puts+net, GEX sign/clarity fixes
+
+Diagnosed the "GEX chart looks identical to yesterday" issue, hardened the OI/volume refresh across SPX's ~23h session boundary, rebuilt the dev probe to show calls + puts + net in one shot, added an independent OI cross-check, and clarified the strike popup's OI-vs-Vol GEX so a negative bar with a positive composite is self-explaining. Version bumped to `2026.6.22-v3`.
+
+### SPX session rollover (`server-v2/proxy-tastytrade.js`)
+- Root cause: once OI coverage warms at startup the REST OI/volume poll stops, leaving the feed dependent on dxFeed pushing a fresh Summary/`dayVolume` reset at the ~6PM ET reopen — which it does only sometimes, freezing OI + volume (and the GEX chart) at the prior session.
+- Added a dxFeed-independent watcher: computes an SPX "session key" (ET date after the 6PM reopen), checks each minute, and on rollover clears `this.volumes` (so a stale `dayVolume` can't linger as a REST fallback) and re-arms the OI backfill (`oiReady=false` → fast re-poll). Pauses/resumes with idle. Env-tunable via `SESSION_ROLL_HOUR_ET` (18) and `SESSION_ROLL_CHECK_MS` (60000).
+
+### Independent OI cross-check (`server-v2/proxy-tastytrade.js`, `app/dev/page.tsx`)
+- Probe now also fetches the same contract's OI from an external source and returns an `oiCompare` block (ours vs reference, diff, %); dev page renders an "OI Check" panel + per-probe log line, color-coded by % gap.
+- Yahoo v7 options endpoint now 401s (needs crumb/cookie); switched to CBOE delayed-quotes with browser-style WAF headers. **Still 401 — open item to revisit** (likely needs a session cookie or a keyed provider).
+
+### Dev page — calls + puts + net (`app/dev/page.tsx`)
+- Removed the Call/Put toggle: one strike in → fetches both sides in parallel, renders three rows (Call cards, Put cards, combined Net Greeks summing GEX/DEX/VEX/theta/vanna/charm + total OI/volume).
+- Strike now auto-fills to the chain strike nearest live spot (from `/proxy/gex`), instead of a hardcoded value; manual edits suppress the auto-fill.
+
+### Strike popup (`components/dashboard/StrikeDetailPopup.tsx`)
+- Added a collapsible raw "GEX INPUTS (LIVE)" breakdown (spot, per-side gamma/OI, call/put/net GEX) for cross-checking against /dev.
+- Split the headline into OI-GEX (= the bar) vs Vol-GEX component chips, so a negative bar next to a positive OI+Vol composite is no longer confusing. (Confirmed not a bug: 7500 has put-heavy OI but call-heavy volume today.)
+
+### GEX sign fix (`lib/calculations/calculations.ts`)
+- `calculateNetGEX` now takes `Math.abs` of both gammas and forces puts negative, matching the server calculator — a stray negative gamma can no longer flip a put's contribution positive.
+
+### Landing + flow (`components/landing/LandingClient.tsx`, `components/dashboard/FlowTape.tsx`)
+- Mobile landing card shrinks to fit an iPhone viewport without scrolling (responsive logo/intro/feature/gap sizing; feature grid hides on short screens).
+- SPX flow tape now defaults to the 100K premium filter on load.
+
+## 2026-06-21 (session 40) — Overview NQU watchlist quote (broker AH-aware) + sidebar collapsed by default
+
+Added a new NQU quote to the Overview top-right toolbar with a click-to-open gainers dropdown, switched its prices to the real-time broker feed (extended-hours aware), and set the left sidebar to start collapsed.
+
+### NQU toolbar quote + dropdown (`components/dashboard/NquQuotePill.tsx` — new)
+- Inline NQU quote styled like the existing SPX/ESU/VIX tickers (label + price + `+chg (+pct%)` on the left), with a right-aligned sparkline, placed next to SPX with a divider.
+- Clicking the price opens a portal dropdown of the watchlist sorted **highest→lowest gainer**. Each row: label + price on line 1, `+/-` change and `+/-%` on line 2, a right-aligned sparkline + **EXT/REG** badge, with a faint gradient divider between rows.
+- Dropdown excludes **ESU, NQU, and VIX** (NQU still drives the main pill). Row fonts nudged up.
+- **REG/EXT label** is computed from the live ET clock (REG = 09:30–16:00 ET, EXT everything else), re-checked every 30s, so it flips at 4pm immediately without waiting on data.
+
+### Home toolbar (`app/home/page.tsx`)
+- Removed the "SPX / GEX" text label; moved the **clock to the start** of the top-right toolbar; kept VIX/ESU/SPX; added `<NquQuotePill />` inline after SPX.
+
+### Quotes API spark series (`app/api/quotes-batch/route.ts`)
+- Added `?spark=1` → returns a downsampled (~24-pt) intraday close series per symbol for the sparklines, plus a `session` field.
+- Sparkline window **resets at 09:30 ET and 20:00 ET** (DST-aware boundary math); REG/EXT classification is separate (REG = 09:30–16:00 ET).
+
+### Broker (Tastytrade) after-hours quotes
+- `server-v2/proxy-tastytrade.js`: new `fetchUnderlyingQuotes()` — batched `/market-data/by-type` per class (equity/index/future) returning `last`/`mark`/`close`/`prev-close` (update in extended hours). Futures resolve the **front active contract by product code** via new `resolveFrontFutureTtSymbol()` — fixes the `No streamer-symbol for future /NQU26` error (TT uses `/NQU6`, not the synthetic `/NQU26`).
+- Futures price prefers **last trade** (matches TradingView) over mark/mid.
+- TEMP manual prev-close override `FUT_PREVCLOSE_OVERRIDE = { NQ: 30719.75 }` for the holiday (no-settle) baseline — **remove after the next clean settle** (TODO in code).
+- `server-v2/server-with-proxy.js`: new `GET /proxy/quotes?symbols=` route. New Next forwarder `app/api/tt-quotes/route.ts`.
+- Pill fetches broker + Yahoo in parallel: broker drives price + baseline (4pm close in EXT, prior close in REG); Yahoo drives the sparkline; falls back to Yahoo if the broker is dark.
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- **Collapsed by default.** Only an explicit saved preference (`"0"`) expands it on load.
+
+### Open follow-ups
+- Remove `FUT_PREVCLOSE_OVERRIDE` once a clean CME settle prints.
+- AH **sparkline** is still Yahoo (delayed ~15m); only price/change are broker real-time.
+- Not type-checked this session — the Linux sandbox was unavailable (`HYPERVISOR_VIRT_DISABLED`); verified by inspection. Run a build / `/push` to confirm.
+
+---
+
+## 2026-06-21 (session 39) — Thor-style sidebar restyle + quotes removed
+
+Rebuilt the dashboard sidebar (`components/shared/Sidebar.tsx`) to match the supplied "Thor" reference, themed with `HOME_THEME`. No changes needed to `LayoutShell.tsx`.
+
+### Sidebar redesign (`components/shared/Sidebar.tsx`)
+- **Expanded (240px):** logo + `SPX / GEX` wordmark, labeled nav rows. Multi-item groups (Gex, Stock Market, Personal, Dev) are now expandable accordions with a nested left-rail item list; the active group auto-opens. Single-item groups (Footprint) render as direct links. Active route shows as a solid cyan pill.
+- **Collapsed (76px):** icon-only rail with dark hover-tooltip pills (caret); multi-item groups get a hover flyout of their items; social row collapses to a single `⋯` button that fans out on hover.
+- **Collapse toggle** ("Collapse Sidebar" row) above the socials, persisted to `localStorage` (`sidebar-collapsed-v1`). `mounted` guard avoids hydration mismatch on the stored width.
+- **Socials:** Telegram, Twitter, Discord, Reddit added with `href="#"` placeholders.
+- Replaced emoji group buttons + flyout-portal nav with inline SVG icons (placeholders pending user's icon swap).
+- Preserved: all routes, `NAV_GROUPS`, drag-reorder + `sidebar-nav-order-v1`, Clerk `UserButton`, dev-only gating.
+
+### Quotes removed
+- Deleted the live quotes ticker: the `Quotes` JSX section, `useSidebarQuotes` hook + call, `QUOTE_SYMBOLS`, and all quote helpers (`quoteNumber`, `normalizeSym`, `rawNum`, `pctFromQuote`, `fmtPct`). A flex spacer now pushes the footer to the bottom.
+
+### Notes
+- `tsc` not run this session (Linux sandbox unavailable: `HYPERVISOR_VIRT_DISABLED`); types reviewed manually against `strict`. Run `npx tsc --noEmit` / `npm run dev` to confirm.
+
+## 2026-06-21 (session 38) — GEX chart line cleanup + GEX-flip profile aligned to reference formula
+
+Removed two stray vertical lines from the Net GEX chart, then reworked the GEX-flip profile math to match the canonical SqueezeMetrics/perfiliev formula and respond to the OI+Vol / Vol Only toggle.
+
+### Net GEX chart line removal (`components/dashboard/GexChart.tsx`)
+- Removed the **zero-crossing shading** band — a faint-orange 3px `fillRect` drawn at the first net-GEX sign change (rendered as a stray full-height vertical at ~7,435). Deleted both the `fillRect` draw and the now-unused `zeroCrossX` scan loop. (Was hard to trace because it was a `fillRect`, not a stroked line; identified by hooking the live canvas context and dumping draw calls.)
+- Gated the **GEX-flip vertical marker** behind the `showFlipCurve` toggle. Previously it drew on every 0DTE view regardless of the `+ GEX Flip` button state (guard was `is0DTE && flip…`, now `showFlipCurve && is0DTE && flip…`).
+
+### GEX-flip profile math (`lib/calculations/calculations.ts` — `computeGEXProfile`)
+- Aligned the spot-sweep profile to the reference script: **60 levels** over **0.8×–1.2× spot** (was 401 over 0.75×–1.25×).
+- Trading-day annualization: `T = dte/262`, 0DTE floored to `1/262` (was `dte/365`, floored `1/252`).
+- Flip point now the **first** (lowest-strike) interpolated zero crossing via `posStrike − (posStrike−negStrike)·posGamma/(posGamma−negGamma)` (was nearest-to-spot).
+- GEX formula set to `Σ BS_gamma(P,K,IV,T) × contracts × 100 × P²` — dropped the `× 0.01` "per 1% move" factor (constant scale; does not move the flip, makes the curve 100× taller, auto-fit by the chart's independent profile scaling).
+- **Mode-aware contracts:** new `dataMode` param (`"oi-vol" | "vol-only"`). OI+Vol uses `OI + volume`; Vol Only uses `volume` only. Both the profile curve and the flip point now shift with the toggle. Wired through from `app/home/page.tsx` (`computeGEXProfile(chartRows, chartSpot, dataMode)`).
+- Note: ChainRow carries no expiration date, so the reference's Ex-Next / Ex-Monthly series are omitted (neither is plotted).
+
+### Home header total net GEX (`app/home/page.tsx`)
+- Rewrote `netGexLive` to match the **Insights → Exposure Stack** definition: full chain, `contracts = OI + volume`, `(callGamma·callContracts − putGamma·putContracts) · spot² · 0.01 · 100`, in $B. (Was windowed `netGEX + netVolGEX`.) **Verify the header formatter expects $B units.**
+
+### Open follow-ups
+- `findGEXFlip` (the fallback flip source) is not yet mode-aware.
+- `app/mobile/page.tsx` calls `computeGEXProfile` without passing `dataMode` (defaults to `oi-vol`, won't switch with its toggle).
+
+---
+
+## 2026-06-21 (session 37) — Toolbar ESU price/day-change fix + DB pool reconnect hardening
+
+Fixed the Overview top-bar **ESU** quote (wrong day-change %, flicker, off-grid price) and hardened the Postgres writers against a connection-drop log-spam loop.
+
+### ESU live price — single source, on-grid (`server-v2/proxy-tastytrade.js`, `components/shared/TopBar.tsx`)
+- TopBar now sources ESU **only** from the `/ws/gex` broker feed (`esFut` / `esFutPrevClose`); removed the Yahoo `quotes-batch` seed and the vanilla-app `prevCloses_v3` cache seed for ES (both caused a wrong-scale flash + flicker).
+- `esFut` reduced to a **single server-side writer**: the live ES Quote/Trade is published as the **last trade clamped into the current bid/ask**, snapped to the **0.25 tick** (`_publishEsFut`). Removed the competing candle-close writer and the raw Quote-mid writer that fought it. Client also snaps defensively in `pushPrices`.
+
+### ESU day-change baseline = CME official settle (`server-v2/proxy-tastytrade.js`)
+- Root cause of the wrong %: the baseline used Yahoo / a stale REST value / the 15:55 candle close (~6pt off settle), and the holiday (Juneteenth 06-19) made the auto-walkback pick the wrong prior date.
+- `resolveFrontEsSymbol` now also returns the **TT instrument symbol** (`/ESU6`); the `/market-data/by-type?future=` lookup previously used the dxLink streamer symbol (`/ESU26:XCME`) and returned `items:[]`. With the correct symbol it returns `prev-close=7570.75` (type **Final**, dated 06-18) — matching TradingView.
+- Baseline priority: **REST Final settle** (`_esRestSettle`) → dxLink Summary settle → candle 15:55 close (fallback only). Added an hourly `_refreshEsSettle` so the baseline self-updates across the ~5–6pm ET settlement rollover without a restart.
+- Candle-derived baseline retains the holiday/weekend skip (`ES_NON_SETTLE_DATES`) and 15:55-settle logic as the last-resort fallback. Empty `ES_MANUAL_BASELINE` map left in place for future holiday overrides.
+
+### DB pool reconnect hardening (`state/es-candle-writer.js`, `state/last-event-store.js`, `state/footprint-writer.js`, `state/gex-history-writer.js`)
+- Postgres restarting (recovery mode) triggered `Cannot use a pool after calling end on the pool` spam: the error-recovery regex didn't match the ended-pool / recovery messages, so the cached pool was never rebuilt and every write hammered the dead pool.
+- Widened the recovery regex in all four writers to also catch `after calling end`, `recovery mode`, `not yet accepting`, `cannot use a pool` → pool is nulled and rebuilt on the next call. Added a **5s throttle** on the "DB unavailable, will reconnect" warning so a draining backlog can't flood the console.
+
+### Tooling
+- Added `scripts/esu-price.ps1` — reads `/proxy/snapshot` to print live ESU price + prior settle + day-change (matches the toolbar).
+- Diagnostic logs left in `[FEED] ES REST prev-close=…` (concise) for monitoring the baseline source each session.
+
+## 2026-06-21 (session 36) — Footprint page: filter, order feed, sessions, persistence, pan/zoom
+
+Major buildout of the Footprint (Big Orders) page plus durable ES footprint persistence. Version bumped to `2026.6.21-v30`.
+
+### Min-size filter (`app/footprint/page.tsx`)
+- Added a **Min order size** slider (1–100, default 1) that visually filters which prints render in the bubbles, delta lane, and order feed. Raw feed data is untouched (`rawTrades`/`rawDelta` preserved); the delta lane rebuilds from filtered prints when the filter is active.
+- Lowered server floor `ES_BIG_TRADE_MIN` 25 → 1 so all prints reach the page (slider does the filtering).
+
+### Rolling order feed (`app/footprint/page.tsx`)
+- New **Order Feed** below the lanes: collapsible, scrollable (max 320px, capped 500 rows), newest-first, color-coded buy/sell with time/side/price/size.
+- **Raw / 1s** toggle: 1s mode combines same-side prints within each 1000ms window into one row (`×N` count badge), aggregating from raw prints then filtering combined size.
+- Page root made `overflow-y-auto` so the feed is reachable.
+
+### Two trading sessions for stat cards (`app/footprint/page.tsx`)
+- Net Delta / Buy / Sell / Biggest Print now reflect **only the current session**: Day 9:30–17:30 ET or Overnight 18:00–9:30 ET (wraps midnight); 17:30–18:00 dead zone excluded. Colored session badge added.
+- **Biggest Print** card follows the feed's Raw/1s toggle (shows "Biggest Order (1s)" with combined size in agg mode) via a shared `aggregatePrints` helper.
+
+### Bubble sizing (`app/footprint/page.tsx`)
+- Fixed compressed bubble scaling (minR 0.35→0.08 of max) so small minutes render small.
+- Added **net / total** metric toggle on the Bubbles lane (default net, which matches the Delta Profile bar). Per-minute session maxima computed for both metrics from filtered prints.
+
+### Delta Profile hover (`app/footprint/page.tsx`)
+- Added the same hover tooltip as the Bubbles lane (buy/sell/net/total per minute), full-column hit area.
+
+### Pan + zoom + 60-min window (`app/footprint/page.tsx`)
+- Window widened 30 → 60 min default; `windowMs` is now state.
+- **Mouse-wheel zoom** of the time axis (5 min–8 hr), cursor-anchored, via a **non-passive native wheel listener** (React's passive `onWheel` ignored `preventDefault`). Drag-to-pan unchanged. Live window-size label.
+- All page fonts set to solid white.
+
+### Footprint persistence (`server-v2/proxy-tastytrade.js`, `server-v2/state/footprint-writer.js`, `lib/db.ts`)
+- Retention changed from fixed-count caps to **time-based (current session day)** with day-rollover reset; high safety ceilings only.
+- Footprint mirrored to **Postgres** (`es_footprint` table, one JSON blob/day) AND a local disk file. On boot, restore prefers Postgres (today's row) then falls back to the file — so any machine on the same `DATABASE_URL` resumes the session. Restore runs before the live feed connects to avoid an empty-buffer race.
+- New `footprint-writer.js` (lazy pool, no-op without `DATABASE_URL`, reconnect-on-error with throttled warning).
+
+### Diagnostics (`server-v2/proxy-tastytrade.js`)
+- Added `[ES-DIAG]` logging of raw ES Trade sizes (running max + every print ≥50 with raw fields) to investigate why large MotiveWave prints (e.g. 300-lot) aren't reaching the dashboard — suspected dxFeed `Trade`-event conflation (`acceptAggregationPeriod: 1`); candidate fix is subscribing to `TimeAndSale`. **Open / unresolved.**
+
+## 2026-06-21 (session 35) — Owner dashboard control surface, maintenance mode, Render sparklines
+
+Turned the owner dashboard from monitor-only into a control surface, added maintenance mode, and made the metrics cards responsive. Version bumped to `2026.6.21-v29`.
+
+### Owner control surface (`app/dev/owner/page.tsx`, `server-v2/server-with-proxy.js`)
+- New **Controls** section (placed under the Database · Today cards) with toggles and action buttons, each showing transient busy/result state.
+- Toggles: **Idle Mode** (feed pause/resume), **MVC Auto (5m)**, **Maintenance**.
+- Actions: **Reconnect Feed**, **Run EOD GEX now**, **MVC Snapshot now**, **Redeploy (Render)** — reconnect & redeploy double-confirm.
+- New `/proxy/*` routes: `reconnect`, `eod-gex-run`, `mvc-snapshot`, `mvc-auto` (GET/POST), `redeploy` (needs `RENDER_DEPLOY_HOOK_URL`), `maintenance` (GET/POST).
+- `proxy.reconnect()` added (stop + reset idle + start). `collectEodGex(base,{force})` bypasses the 3:55–4:05 ET window and returns `{date,saved[]}`. `collectOnce(base,{manual})` returns a result; MVC auto gains runtime on/off (`setMvcAutoEnabled`/`isMvcAutoEnabled`).
+
+### Idle toggle moved off the sidebar (`components/shared/Sidebar.tsx`)
+- Removed the cogwheel Settings menu, `SettingsIcon`, and all idle state from the sidebar (UserButton remains). Idle now lives in the dashboard Controls.
+
+### Maintenance mode (`middleware.ts`, `app/maintenance/page.tsx`, `server-v2/server-with-proxy.js`)
+- Owner-toggled gate: when ON, middleware redirects non-owner users to a branded `/maintenance` page; owner (`OWNER_USER_ID` env, trimmed) bypasses. Flag held in the proxy (`/proxy/maintenance`, default from `MAINTENANCE_MODE` env), read by middleware with a 5s cache. Falls back to "any signed-in user" if `OWNER_USER_ID` is unset, to avoid self-lockout.
+
+### Responsive metric cards + sparklines (`app/dev/owner/page.tsx`, `app/api/render-metrics/route.ts`)
+- System / Render / Database card rows forced to a single row (`repeat(N, minmax(0,1fr))`) that shrinks with the window; fonts/padding now use container-query units (`cqw` + `clamp`) so text scales down instead of wrapping.
+- Render route emits a downsampled `spark[]` for bandwidth, memory, and CPU; new inline `Sparkline` SVG renders a trend area in each card (flat line for a single point; live bandwidth pulls a wider 6h series since 1h is too coarse).
+
+### Version card now live (`next.config.js`, `app/dev/owner/page.tsx`)
+- `NEXT_PUBLIC_APP_VERSION` injected from `package.json` at build time; the Version card reads it instead of a hardcoded string, so `/push` bumps now show on redeploy.
+
+## 2026-06-21 (session 34) — Header readability, ESU baseline fix, candle flush cadence
+
+Three targeted fixes to the home dashboard header and ES feed.
+
+### Header strip readability (`app/home/page.tsx`)
+- NET GEX / CALL WALL / PUT WALL / FLIP / MVC strip was hard to read (small font, esp. the green NET GEX value).
+- Labels bumped `clamp(8px,0.78vw,11px)` → `clamp(10px,0.95vw,13px)`; values `clamp(10px,1.05vw,15px)` weight-700 → `clamp(13px,1.3vw,18px)` weight-800.
+
+### ESU day-change baseline (`server-v2/proxy-tastytrade.js`)
+- ESU change % was inaccurate on the Sunday-evening reopen: `esFutPrevClose` was set only once from TT's REST `prev-close` at connect, which lags a session.
+- The live dxLink `Summary.prevDayClosePrice` for the ES symbol now updates `esFutPrevClose` — the exchange's official prior-session settle (= Friday's settle on a Sunday reopen). `setAux` already allows the live value to overwrite the stale REST one.
+
+### ES candle flush cadence (`server-v2/proxy-tastytrade.js`)
+- The 5s `_flushEsCandles` timer (hardcoded ×2) is now a `CANDLE_FLUSH_MS` constant, default 10000ms, env-tunable. Halves the live-candle delta broadcast rate while keeping the forming bar accurate (still aggregates every tick).
+
+## 2026-06-21 (session 33) — Bandwidth leak hunt: subscriber-first REST, candle delta, reconnect leak
+
+Version bump: `2026.6.21-v20` → `2026.6.21-v22`.
+
+Investigated high bandwidth usage. Root cause was **duplicate upstream traffic**, not a security leak: REST-path pages each re-fetched from Tastytrade instead of reading the already-running subscriber, and the ES candle WS push re-sent the full 600-bar array every 5s to every tab.
+
+### Subscriber-first chain/marks serve (`server-v2/proxy-tastytrade.js`, `server-with-proxy.js`)
+- New `serveChainFromLive(ticker, expiration)` and `serveOptionMarksFromLive(occSymbols)` on `TastytradeProxy` — rebuild the nested chain / marks payloads from the live subscriber maps (`quotes`/`greeks`/`summaries`/`restOI`/`volumes`/`spot`), byte-compatible with `fetchChainFull` / `fetchOptionMarks`.
+- All-or-nothing coverage guard: serves live ONLY for the subscribed SYMBOL, active expiry, in-window strikes, warm feed, every leg present — else returns null → REST fallback unchanged. No blank strikes, no mixed staleness.
+- Wired into `/proxy/api/tt/chains/:ticker` and `/proxy/api/tt/option-marks` (try live, fall back to REST). Response carries `context`/`source: "live"|"rest"`.
+- Confirmed working on dev: `/api/chains?ticker=SPX` → `live`.
+- Added `CHAIN_LIVE_DEBUG=1` gated logging to report which guard sends a request to REST.
+
+### Chain cache (`server-v2/proxy-tastytrade.js`)
+- `REST_CHAIN_TTL_MS` 60s → 10 min (env-tunable). The ~30k-contract SPX chain structure rarely changes intraday; per-strike data is pulled separately and fresher.
+- Added in-flight coalescing (`_restChainInFlight`) so concurrent cold-cache misses for the same ticker share one upstream fetch.
+
+### ES candle delta broadcast (`server-v2/proxy-tastytrade.js`, `state/market-state.js`, `websocket-server.js`)
+- Was re-sending all 600 bars every 5s to every tab; only the forming bar (±a just-closed one) actually changes.
+- Track changed slot keys (`esCandlesDirtySlots`); flush writes the full array via new `setStateSilent` (no `change` emit, backs the connect-time snapshot) and broadcasts only moved bars as `esCandlesDelta`, re-typed as an `esCandles` message so the client's existing slotKey merge ingests it with zero client change.
+- ~99% cut on this stream. New tabs still get full history via connect snapshot.
+
+### `useTastytradeStream.ts` reconnect leak (dormant hook)
+- Cleanup only closed the socket but never cancelled the pending `setTimeout(connect)`, so unmount spawned a self-perpetuating reconnect loop (each iteration a new WS + TT OAuth round-trip).
+- Added `unmountedRef` guard, reconnect timer ref cleared on cleanup, handlers nulled before close, exponential backoff (3s→30s), post-await unmount check. Matches the safe `/ws/gex` hook pattern.
+
+### Pre-existing tsc errors cleared (unrelated to this work)
+- `app/trading/page.tsx`: removed duplicate `flex`/`minHeight` keys in a style literal.
+- `components/dashboard/EmCustomer.tsx`: widened `data` state to `Partial<Levels> | null` to match the zones-only fallback payload. `npx tsc --noEmit` now clean.
+
+### GEX rows delta — deferred
+- Considered applying the same delta to the 2s GEX broadcast; deferred. GEX changes many strikes per recompute (smaller, riskier win) and the client read-path needs verification first. Measure bandwidth post-deploy before revisiting.
+
+---
+
+## 2026-06-21 (session 32) — Owner page: "EM Grabbed" timestamp on Levels Publish panel
+
+Added an **EM Grabbed** field beside **Last Published** in the Levels Publish · /em feed panel (`app/dev/owner/page.tsx`), so the owner can see when the EM/straddle data was actually captured — distinct from when the publish job ran.
+
+- `levels` state extended with `emGrabbed: string | null`.
+- `/api/levels` fetch now derives the newest `em_updated_at` across all rows (alongside the existing `updated_at` → `lastRun`).
+- New "EM Grabbed" column renders `fmtLastRun(levels.emGrabbed)` next to "Last Published".
+- Verified `/api/levels` GET (`SELECT *`) returns `em_updated_at`; column exists, is back-filled, and only advances when `em` actually changes — so "EM Grabbed" reflects the true capture time, not the publish time.
+
+---
+
+## 2026-06-21 (session 31) — EM Freeze Guard, Snapshots → Postgres, Backend Table = Frozen Source
+
+Version bump: `2026.6.21-v18` → `2026.6.21-v20`.
+
+### Weekly EM freeze guard (`app/api/levels/route.ts`)
+- The customer-facing weekly `em` is now write-once per week. `em`/`close`/`up`/`down` only change when the supplied `em` is non-null AND the caller is either the trusted publisher (`x-internal-token` === `INTERNAL_API_TOKEN`) OR the row has no `em` frozen since this week's Saturday-09:00-ET boundary.
+- Added `lastSaturday9amET()` helper to compute the freeze boundary; passed as `$13` (trusted) / `$14` (weekStart) into the upsert.
+- Fixes the 128 → 105 → 95 drift: the backend dashboard's live recompute can no longer overwrite the Saturday-9am value. Zones/pivot/labels still refresh freely.
+
+### Snapshots moved from IndexedDB → Postgres (`app/api/snapshots/route.ts`, `[id]/route.ts`, `components/dashboard/EstimatedMoves.tsx`)
+- New `em_snapshots` table (JSONB `payload` + promoted `view`/`ts`/`date`/`time`/`period` columns). Route rewritten: GET (list, `?view=` / legacy `?period=`), POST (save), DELETE (`?id=`).
+- Component `dbSaveSnapshot`/`dbGetAll`/`dbDeleteSnapshot` helpers now fetch the API instead of IndexedDB; `dbRef` is a vestigial ready flag.
+- One-time `migrateLegacyIndexedDb()` lifts any remaining IndexedDB snapshots into Postgres (localStorage `em_snapshots_migrated=1` guard).
+- `[id]` DELETE now tries `em_snapshots` then legacy `snapshots`; legacy `estimated-moves.js` still works via the rewritten route.
+
+### Backend Estimated Moves table = frozen source
+- Estimated view now loads the frozen `/api/levels` rows (`loadFrozenLevels()`) on mount and on Refresh — no live recompute, and the backend no longer pushes `em` to `/api/levels` at all (publisher owns it exclusively).
+- Added an owner-only **Compute Live** button (inspection only; never writes), and a toolbar **Source** chip: "Weekly publish — &lt;timestamp&gt; ET" (from `em_updated_at`) or amber "Live (not saved)".
+
+### Backend table column cleanup
+- Removed the **vs 4-Wk** and **vs 12-Wk** columns from the backend Estimated Moves table (headers + cells); dropped the now-dead `tickerStats` state, `TickerEmStats` type, and per-ticker stats fetch. Customer `/em` page's historical-average display is unchanged.
+
+## 2026-06-21 (session 30) — Landing Page: X Follow Button + Feature Copy
+
+Updated the public landing page (`components/landing/LandingClient.tsx`).
+
+### X follow button
+- Added a clickable X (Twitter) logo button linking to `https://x.com/bzilatrades` (opens new tab).
+- Positioned absolute in the card's top-right, aligned to the "Launching soon" badge line and card padding (`clamp(24px, 4vw, 40px)`); 30×30, same glass style as the sign-in button.
+- Glows cyan on hover (React `xHover` state — inline styles can't use `:hover`), with a smooth color/border/box-shadow transition.
+
+### Feature grid copy
+- Box 2: replaced "Options flow tape" with "Confidence Score" — each key level scored 0–100 for Hit/Pivot/Chop, live positioning blended with historical analogs.
+- Box 4: "Estimated moves" reworded to weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results.
+
+Version bumped to `2026.6.21-v17`.
+
+## 2026-06-21 (session 29) — EM Weekly Publisher: Stop Re-runs + Retry Not-Found Only
+
+Fixed the Estimated-Move weekly publisher re-running on restarts (overwriting the good Saturday-9am snapshot with worse mid-week/weekend numbers, which made the "not found" list appear to grow). Added per-ticker failure reasons and a manual "retry not-found only" path.
+
+### Stop unwanted re-runs (`server-v2/levels-auto-publish.js`)
+- Root cause: the once-per-week guard (`lastPublishedWeek`) was in-memory only, so any server-v2 restart reset it and the Sat/Sun poll re-published.
+- Persist the published-week key to disk (`server-v2/.levels-last-week`), seeded on startup, so restarts remember the week was already published.
+- Sunday branch documented as catch-up only (shares the week key with Saturday, so once Saturday publishes the guard blocks Sunday).
+
+### Per-ticker failure reasons (`server-v2/levels-engine.js`)
+- `computeAllLevels(base, opts)` now accepts `opts.only` (subset roster for retries) and returns `{ payloads, failReasons }`.
+- `failReasons` maps each failed ticker to why it failed (no quote / no options / straddle unpriced, etc.). Zones + em_tracker seeding skipped on subset retries.
+
+### Retry not-found only (`server-v2/levels-auto-publish.js`, `server-v2/server-with-proxy.js`)
+- `publishOnce(base, reason, opts)` consumes reasons; `failedEm` is now `[{ ticker, reason }]`. Subset retries MERGE into the prior run — fixed tickers drop off, still-failing ones refresh their reason, `emOk/emTotal` stays against the full roster.
+- New `POST /proxy/levels-retry-failed` route recomputes ONLY the last run's not-found tickers.
+
+### Owner page (`app/dev/owner/page.tsx`)
+- Not-found list shows each ticker with its reason; added "↻ Retry not-found only" button. Backward-compatible with the legacy `string[]` shape via `normFailedEm`.
+
+### Misc
+- **`.gitignore`** — ignore `server-v2/.levels-last-week`.
+
+## 2026-06-20 (session 28) — CB Edge Rebrand + Landing Card Polish
+
+Rebranded the app from **BzilaTrades** to **CB Edge** ("Real Edge — Real Orderflow") and refined the landing card to the dark glassmorphic + cyan-accent theme.
+
+### Rebrand (sitewide)
+- **`app/layout.tsx`** — metadata title → "CB Edge Dashboard", description updated with tagline.
+- **`.env.local`** — `NEXT_PUBLIC_APP_NAME=CB Edge`.
+- **`components/shared/Navbar.tsx`** — logo `src` → `/cb-edge-logo.png`, alt + wordmark → "CB Edge".
+- **`components/shared/TopBar.tsx`** — logo `src` → `/cb-edge-logo.png`, alt → "CB Edge".
+- **`components/dashboard/EmCustomer.tsx`** — kicker → "CB Edge".
+- **`components/landing/LandingClient.tsx`** — fallback `APP_NAME` → "CB Edge".
+
+### Landing card polish (`components/landing/LandingClient.tsx`)
+- Stronger glass: gradient fill, 22px blur, cyan-tinted border + inset highlight, layered shadow.
+- Radial cyan→purple accent glow bleeding through the top of the card.
+- Accent-tinted feature cells (cyan gradient + cyan border).
+- Added CB Edge logo (transparent PNG) as the sole brand element at 88px; **removed** the redundant "CB Edge" `<h1>` title and "Real Edge — Real Orderflow" tagline (logo carries both).
+
+### Notes
+- Logo file: `public/cb-edge-logo.png` (transparent). `.env.local` change requires a dev-server restart to take effect.
+- Version bumped `2026.6.20-v19` → `2026.6.20-v20`.
+
+## 2026-06-20 (session 27) — Glassmorphic UI Theme: Tab Panels, Custom Dropdowns, Card Accents
+
+Continued the glassmorphic dark fintech theme rollout across all remaining pages and embedded tab panels.
+
+### Tab panels themed (`components/dashboard/`)
+- **`EconCalendarPanel.tsx`** — Shell bg transparent (embeds cleanly in home card), header `panelBgStrong` + blur, filter dropdown glassmorphic, event rows get horizontal gradient wash from impact color (red/amber/etc.) + inset glow on time column left bar.
+- **`SnapshotPanel.tsx`** — Shell bg transparent, `MetricCard` upgraded: `borderTop: 2px solid accent`, radial glow from top, larger value text with `textShadow`. `TopFlowList` same accent treatment with `barColor`. Net Premium sparkline box now `flex: 1` to fill all remaining vertical space; canvas `height: 100%` scales with container.
+- **`FlowTape.tsx`** — Root bg transparent, container gets `borderTop: 2px solid cyan` + radial cyan glow from top. Toggle bg `rgba(0,0,0,0.4)`. Live/waiting badge uses rgba colors.
+
+### Home page tab embed fix (`app/home/page.tsx`)
+- Added `.tab-panel-embed > div:first-child { background: transparent !important }` CSS — but inline styles beat it. Fix: set `background: "transparent"` directly after `...homeShellStyle` spread in each panel root, overriding the `#05060A` solid bg.
+
+### Custom dropdown (`app/options-chain/page.tsx`)
+- Replaced both native `<select>` elements with `CustomDropdown<T>` generic component. Glassmorphic panel: `rgba(13,17,25,0.97)` bg, `blur(20px)`, cyan active item, outside-click close. Accepts `T[] | readonly T[]` to handle both mutable and const arrays.
+
+### Owner dashboard (`app/dev/owner/page.tsx`)
+- **Levels Publish · /em feed** section: now auto-collapsed by default (`useState(true)`), wrapped in `homePanelStyle` panel box, clickable header row toggles expand/collapse with border-bottom separator when open.
+
+---
+
+
+## 2026-06-20 (session 26) — /em Customer Page: Confidence Score, Win Rate Bar, EM vs Historical Avg
+
+Enhanced the customer-facing `/em` page with three new data points surfaced per-ticker lookup, plus UI polish.
+
+### New features (`components/dashboard/EmCustomer.tsx`)
+- **MVC Confidence %** — fetches `/api/confidence` after each lookup; shown as a color-coded stat cell (green ≥70%, amber ≥45%, red below) inside the Estimated Move card.
+- **EM Hit Rate bar** — fetches `/api/em-tracker` + `/api/em-tracker/history` and merges live DB + historical JSON tally (same logic as the tracker page) so the combined win rate is accurate. Displayed as a pressure-bar: red→green gradient, fills left-to-right by win %, with Miss (N) / Hit (N) labels. Headline reads "X% Hit".
+- **vs Historical EM Average card** — new `/api/em/ticker-em-stats` endpoint queries `em_tracker` for the last 4 and 12 weeks of recorded EM values; shows `▲/▼ X.X%` vs each average. Card moved to the bottom of the page (below Buy/Sell Zones).
+
+### New API (`app/api/em/ticker-em-stats/route.ts`)
+- `GET /api/em/ticker-em-stats?ticker=X` — returns `recentAvg` (last 4 weeks), `midAvg` (last 12 weeks), `sampleSize` from `em_tracker`.
+
+### UI polish (`components/dashboard/EmCustomer.tsx`)
+- Removed pivot row.
+- All gray/muted text (`#9fb4cc`, `#7ab8ff`, `#7a92ad`) replaced with white (`#eef7ff`).
+
+---
+
+## 2026-06-20 (session 25) — EOD GEX Recorder + Dashboard Save Status
+
+Added a full EOD GEX pipeline: Postgres table, recorder module wired into server-v2, REST endpoint, and save-status UI in both the owner dashboard and the database page.
+
+### New files
+- **`server-v2/eod-gex-recorder.js`** — Polls every 60s; fires during 3:55–4:05 PM ET window (Mon–Fri, market days). $SPX reads totalNetGex + spot from live market-state via `/proxy/gex` (no re-computation). SPY/QQQ fetch chain on-demand via `/api/expirations` + `/api/chains`, then run `computeGexRows()` from `gex-calculator.js`. Data quality guard: skips write if fewer than 20 strikes have non-zero gamma + OI. Upserts (never duplicates) one row per (date, symbol). Lazy PG pool with auto-rebuild on error.
+- **`app/api/eod-gex/route.ts`** — `GET /api/eod-gex?date=&symbol=&limit=` returns rows from the `eod_gex` table.
+
+### Modified files
+- **`lib/db.ts`** — Added `eod_gex` table DDL to `ensureAllTables()`, `EodGexRecord` interface, `upsertEodGex()`, and `getEodGex()`.
+- **`server-v2/server-with-proxy.js`** — Wired `startEodGexRecorder(PORT)` alongside `startMvcAutoSnapshot()`.
+- **`app/api/db/route.ts`** — Added `eod_gex: { dateCol: "date" }` to the allowlist.
+- **`app/database/page.tsx`** — Added `EOD GEX` as first tab (default); shows date-filtered rows with full table viewer.
+- **`app/dev/owner/page.tsx`** — Added `EodGexRow` interface, `eodGex` state, fetch in `refresh()`, `fmtGex()` helper, and "EOD GEX · Today" section showing green/red dot + GEX value + spot + computed-at time for each of $SPX, SPY, QQQ. Updated `TABLES` array to reflect all 9 daily-recording tables (removed `trades`; added `bzila_snapshots`, `bzila_gex_history`, `flow_calls`).
+
+---
+
+## 2026-06-20 (session 24) — Owner Dashboard: collapseable levels section, font & card style polish
+
+### Changed (`app/dev/owner/page.tsx`)
+- **Collapseable Levels panel** — added `levelsCollapsed` state + Expand/Collapse toggle button in the "Levels Publish · /em feed" section header; panel body hidden when collapsed.
+- **Font size bump** — `SectionLabel` headings `9px → 12px`; stat card labels and DB table card labels `9px → 11px`.
+- **Card color accents** — `StatCard` and DB table cards now have a left border + diagonal gradient tint derived from each card's accent color; border/label at ~33% opacity, gradient fades `18→06→transparent` for a light, blended look; value text softened to `dd` alpha.
+
+---
+
+## 2026-06-20 (session 23) — Estimated Moves: SPX/NDX/NQU fixes, 200+ ticker roster, on-demand zones, manual publish
+
+Fixed the Estimated Moves table where SPX/NDX/ESU/NQU showed blank/`--`/"Invalid price". Root causes were strike-centering on the wrong spot (Yahoo ^GSPC ~6000 vs the dashboard's broker SPX ~7500) and intolerant quote lookups. Then expanded the customer `/em` feed from ~20 to a 200+ ticker roster (EM pre-published weekly, zones computed on demand), added a manual publish trigger with results UI, and stale-EM flagging.
+
+### Fixed (Estimated Moves / levels)
+- **`server-v2/proxy-tastytrade.js`** — strike walk now centers on the broker chain `underlyingPrice` (added `chainUnderlyingPrice`), not the Yahoo quote. SPX/NDX strikes are denominated in the broker scale (~7500); Yahoo gave ~6000 so the ATM straddle never matched. Reverted an incorrect `index-option[]` by-type param guess — TastyTrade REST has NO `index-option[]`; SPX/NDX options price under `equity-option[]` (params: index[], equity[], equity-option[], future[], future-option[], cryptocurrency[]).
+- **`components/dashboard/EstimatedMoves.tsx` + `server-v2/levels-engine.js`** — tolerate null Yahoo quotes for indices AND the NQ future (recover spot from chain underlyingPrice; futures fall back to a zero basis); guarded the proxy-index second quote call (was throwing "Invalid price for NDX, NaN" on NQU); capped the ATM strike walk at 8 nearest strikes (killed a per-strike `option-marks` request storm + multi-second refresh); only refetch option-marks when a leg has no usable price.
+- **`server-v2/proxy-tastytrade.js`** — added `fetchOptionMarks` + `/proxy/api/tt/option-marks` adapter (was 404ing every per-strike fallback call).
+- **`app/api/levels/route.ts`** — added `em_updated_at` column (advances only on a fresh EM) so stale EMs are detectable; fixed `$4::text` cast (Postgres "could not determine data type" on null em).
+
+### New (200+ roster + on-demand zones + manual publish)
+- **`server-v2/em-tickers.js`** — roster lives here now (`EQUITY_TICKERS`, ~370 names, deduped). `SYMBOLS` imported by the engine; `ZONE_SYMBOLS` = core set pre-published with zones.
+- **`app/api/em-zones/route.ts` + `/proxy/api/tt/em-zones`** — on-demand Buy/Sell zones for any ticker (static for the week from last week's OHLC), cached to `ticker_levels` (NULL-aware, never clobbers EM). `EmCustomer.tsx` fetches zones when a looked-up ticker has EM but no zones (or no row at all).
+- **`server-v2/levels-auto-publish.js`** — removed startup publish (was overwriting the weekend snapshot on every restart); levels now publish Sat ~9am ET only and hold Mon–Fri. Added manual `/proxy/levels-publish` (fire-and-forget) + `/proxy/levels-status`; `publishOnce` returns a run summary (emOk/emTotal, posted, failedEm).
+- **`app/dev/owner/page.tsx`** — "Publish Now" button (double-confirm) with live "Publishing…" state, last-run result row (EM coverage, rows, duration, time), "No EM priced" failed-ticker list, and orange STALE-EM chips for tickers serving a carried-over value.
+- **`server-v2/em-tickers.js`** chunked the quotes-batch call (40/req) so a 200+ roster doesn't blow the URL length.
+
+### Notes
+- Workspace Linux sandbox was DOWN all session (HYPERVISOR_VIRT_DISABLED) — no `node --check`/git run from the assistant side; user restarted + tested. SPX/NDX/NQU confirmed working by the user.
+- First load / re-publish: hit **Publish Now** on `/dev/owner` (or `POST /proxy/levels-publish`); ~370 tickers take a few minutes.
+- Leftover: one-time `[CHAIN-MD DEBUG]` log line still in `proxy-tastytrade.js` (logs once per by-type param) — safe to remove.
+- `BRK.B` may need `BRK-B`/`BRK/B`; `SPCX` unverified (possibly meant `SPCE`) — illiquid/invalid names just won't get a row.
+
+## 2026-06-20 (session 22) — v2 dashboard audit, two bug fixes, build verified, legacy removed
+
+Box-by-box static audit of every page linked in the v2 sidebar. Found and fixed two real bugs, verified a clean production build (`✓ Compiled successfully`, 78/78 pages, no TS/ESLint errors), and removed the deprecated Legacy section.
+
+### Fixed
+- **`app/economic-calendar/page.tsx`** — `load()` never fetched; the event list was permanently empty ("No events match"). Wired it to `GET /api/calendar`, added a separate non-blocking warning banner (so a stale-feed fallback no longer hides loaded events).
+- **`app/changelog/page.tsx`** — `readFile(CHANGELOG.md)` had no error handling and would 500 if the file were ever missing/gitignored. Wrapped in try/catch with fallback text.
+
+### Removed
+- **`app/legacy/`** (index page + `view/[page]/route.ts`) — deprecated vanilla-site archive, slated for removal. Deleted, plus its nav entries in `components/shared/Sidebar.tsx`, `components/shared/TopBar.tsx`, and `app/dev/owner/page.tsx` (NAV_GROUPS copy).
+
+### Notes
+- Build verified clean locally this session (`next build`, Next 15.5.19). Render deploy path (`npm ci && npm run build`) should pass; confirm `CHANGELOG.md`, `app/api/econ-calendar/events.json`, and `package-lock.json` are committed.
+- Audit report written to `AUDIT-v2-2026-06-20.md` (root). Minor non-blocking items logged there: `/dev/admin` is mock data, hardcoded version string on `/dev/owner`, `{cat.spent}` label on `/trading`, `/premarket` WS not wired (runs on Yahoo).
+
+## 2026-06-20 (session 21) — EM Tracker: win/loss record, Saturday auto-eval, Discord OCR backfill
+
+Built an Estimated-Move win/loss tracker keyed to the rule **close inside the EM band = win, outside = loss** (close-only). Seeded the verified 31-week history, added a Saturday 9am auto-evaluator that scores each completed week from weekly OHLC, and a Discord OCR pipeline to backfill ~2 years of weekly EM boards (91 weeks captured) with a review/confirm UI.
+
+### New
+- **`app/api/em-tracker/route.ts`** — list/summary GET (+ `week_start&status=pending`), upsert/seed POST, set-result, and DELETE with `?all=1` / `?source=` bulk reset. `computeResult` lives in `lib/em-tracker/computeResult.ts`.
+- **`app/api/em-tracker/evaluate/route.ts`** — "Evaluate Now" + manual OHLC backfill; runs the server-v2 engine via a webpack-safe runtime require (`eval("require")`, `runtime="nodejs"`).
+- **`app/api/em-tracker/commit-history/route.ts`** — commits reviewed historical bands and scores them against weekly OHLC (breach + close-inside win).
+- **`app/api/em-tracker/discord-preview/route.ts` + `history/route.ts`** — serve the OCR preview and the verified 31-week tally (`data/em-tracker-history.json`).
+- **`components/dashboard/EmTrackerAdmin.tsx`** — EM Tracker UI: per-ticker hit-rate table, per-week detail (band/close/Δedge/breach/result), add-week form, Discord review panel (roster-driven rows, red OCR flags, orange blanks, cyan auto-repaired dropped-decimals, editable ticker for futures rolls, per-week + bulk commit, reset).
+- **`scripts/import-em-from-discord.mjs`** — reads the EM channel history (no privileged intent needed), OCRs boards (tesseract.js), parses title date + ticker/up/down (last-two-numbers, EU decimal handling, ticker fuzzy-resolve), `--limit`/`--debug`, writes `data/em-discord-preview.json`.
+- **`server-v2/em-tracker-auto-eval.js`** — Saturday ~9am ET in-process evaluator (mirrors levels-auto-publish); wired in `server-with-proxy.js`.
+
+### Added
+- **`server-v2/levels-engine.js`** — `evaluateCompletedWeek`, `evaluateHistoricalWeeks`, `seedUpcomingWeek`, `fetchWeeklyOhlcMap`.
+- **`lib/db.ts`** — `em_tracker` table (keyed `UNIQUE(ticker, week_start)` so multi-year weeks don't collide), `breach` column + migration, and helpers (upsert/summary/pending/clear/ohlc).
+- **`server-v2/levels-auto-publish.js`** — seeds the upcoming week's EM band after each publish.
+- **`package.json`** — added `tesseract.js`.
+
+### Notes
+- Build not run this session (sandbox unavailable) — run `npm run build` before deploy.
+- 91 Discord weeks captured and pending review/commit in the EM Tracker tab.
+
+## 2026-06-19 (session 20) — Unify MVC across chart, top-bar, and snapshot
+
+Fixed the long-standing mismatch where the purple top-bar MVC (e.g. 7,550) disagreed with the on-chart MVC label (e.g. 7,500). Root cause: three independent computations using different metrics/data sources. Settled on a single source of truth — **largest |netGEX| only** — so the chart label, purple top-bar value, and Save/Now snapshot all agree.
+
+### Changed
+- **`components/dashboard/GexChart.tsx`** — MVC peak now selected from the full raw `chain` by `|netGEX|` (was densified+windowed `data` respecting `dataMode`/call-put). Label is hidden when the peak strike is outside the visible window (`peakIdx < 0`).
+- **`app/home/page.tsx`** — `mvcStrike` now uses `|netGEX|` only (dropped the `netGEX + netVolGEX` composite and the Vol-Only branch); removed `dataMode` from its deps. Also coerced `chartRowByStrike.get(Number(row.strike))` to fix a string/number key TS error.
+
+### Added
+- **`lib/em-tracker/computeResult.ts`** — extracted `computeResult` out of `app/api/em-tracker/route.ts` (Next.js route files may not export non-handlers; this resolved the generated `.next/types` TS2344 error). Both `app/api/em-tracker/route.ts` and `app/api/em-tracker/evaluate/route.ts` now import from here.
+
+## 2026-06-19 (session 19) — Disable hover lift on home page data boxes
+
+Removed the dashboard-wide card hover lift/shadow on the home page only; it felt off on that page's dense data boxes. Every other page keeps the effect. Version bumped to `2026.6.19-v3`.
+
+### Changed
+- **`app/home/page.tsx`** — added `className="home-no-hover"` to the page's root `<main>`.
+- **`app/globals.css`** — added `main.home-no-hover [style*="border-radius:16px"]:hover` override that cancels `transform` / `box-shadow` / `border-color` (resets to `none`/`inherit`), scoping out the auto-applied lift for the home page.
+- **`package.json`** — version `2026.6.19-v2` → `2026.6.19-v3`.
+
+## 2026-06-19 (session 18) — Customer `/em` levels page + all-symbol zones + weekend auto-publish
+
+Built a customer-facing Estimated-Move + Buy/Sell-Zone page fed by the existing (now backend) Estimated Moves page via a push→Postgres→pull pipeline, extended No-Short/No-Long zones to all 20 symbols, and added a weekly auto-publisher.
+
+### New
+- **`app/em/page.tsx` + `components/dashboard/EmCustomer.tsx`** — customer page: ticker input → `GET /api/levels?ticker=` → renders Estimated Move (Close/EM/Up/Down) + Buy Zone (noShort) + Sell Zone (noLong). Read-only, deep-linkable via `?ticker=`.
+- **`app/api/levels/route.ts`** — per-ticker `ticker_levels` Postgres table (NULL-aware upsert like es-stats); GET resolves aliases (ES/`/ES`/ESM/ESU26 → ESU, NQ→NQU).
+- **`server-v2/levels-engine.js`** — Node port of `estimateMove` + `fetchNoShortNoLongZones`; calls localhost Next API endpoints so chain/normalization edge cases can't drift. All fetches carry the internal token (`ifetch`).
+- **`server-v2/levels-auto-publish.js`** — weekly publisher: **Sat ~09:00 ET** (Sun catch-up + startup run); `weekKeyET` keys to the upcoming Monday. Wired into `server-with-proxy.js` after `listen()`.
+
+### Changed
+- **`components/dashboard/EstimatedMoves.tsx`** — zones extended from ES/NQ to all 20 SYMBOLS (`zoneSymbol()` maps futures/index/equity dxLink weekly symbols); `ZoneLevels.ticker` widened to `string`; zones tab is now row-per-symbol; pushes EM + zones to `/api/levels` on Refresh; muted gray/blue text → white.
+- **`server-v2/proxy-tastytrade.js`** — added `fetchDailyHistory()` backing the previously-404'ing `/proxy/api/tt/market-data/history/:symbol`; sources **weekly candles from Yahoo Finance** (`interval=1wk`; SPX→^GSPC, NDX→^NDX, ES→ES=F, NQ→NQU). Fixes zones never working on server-v2.
+- **`server-v2/server-with-proxy.js`** — history route handler (passthrough of Yahoo weekly bars).
+- **`middleware.ts`** — bypass Clerk auth when `x-internal-token === INTERNAL_API_TOKEN`, so in-process jobs reach `/api/*` (they were being redirected to `/` → "Unexpected token '<'" HTML).
+- **`.env.local`** — added `INTERNAL_API_TOKEN`.
+- **`app/database/page.tsx` + `app/api/db/route.ts`** — added **Levels (/em)** and **ES Stats** tabs (`ticker_levels`, `es_stats`).
+- **`app/dev/owner/page.tsx`** — added **Levels Publish · /em feed** panel (last-run time, Current/Stale badge, ticker count, schedule).
+- **`components/dashboard/EmCustomer.tsx`** — NEAR/FAR + muted labels → readable white/light-gray; popular chips ES/NQ → ESU/NQU.
+- **`components/shared/Sidebar.tsx`** — Est. Move → `/em` (customer); Est. Move (BE) → `/estimated-move`.
+
+### Fixes
+- NDX/NQM "Invalid price for NDX: NaN" — `fetchAllQuotes` alias step no longer lets a null `$NDX` row clobber the priced `NDX` row.
+- ESU/NQU not showing on `/em` — lookup key mismatch (chip "ES" vs stored "ESU"); fixed via chips + GET alias resolution.
+
+### Verified
+- `[levels-pub] published 20/20 tickers`; `/api/levels?ticker=ESU` and `?ticker=ES` both return the full ESU row (EM + zones).
+
+## 2026-06-19 (session 17) — Standardize intensity sliders + heatmap coloring to Multi-Greek format
+
+Unified every Greek heatmap's intensity slider and `metricBg()` coloring to match the **Multi-Greek panel** (the reference standard), so increments and color response are identical across the GEX Heatmap, Options Chain, and mobile views.
+
+### Canonical spec (from `app/mult-greek/page.tsx`)
+- **Slider:** `min 0.5 / max 3 / step 0.01`, `width 80 / height 3`, accent `#00e5ff`, 9px label, 10px monospace readout, default `1.75`.
+- **Coloring:** rank 1/2/3 → fixed alpha `0.90 / 0.45 / 0.25`; rest → `min(0.18, 0.02 + (ratio × intensity)^1.4 × 0.16)`; blue `rgba(41,182,246,…)` positive / red `rgba(255,71,87,…)` negative.
+
+### Changes
+- **`app/home/page.tsx`** (LIVE GEX HEATMAP panel) — replaced divergent `metricBg` (0.82/0.6/0.4 floors, uncapped) with canonical formula; slider 0.1–3 → 0.5–3; default 0.4 → 1.75.
+- **`app/options-chain/page.tsx`** — slider 0.2–3 → 0.5–3, restyled to canonical; default 0.4 → 1.75.
+- **`components/dashboard/GexHeatmap.tsx`** — replaced `cellBg()` additive-boost math (alpha up to ~1.0) with canonical alpha math (rank fixed alphas + 0.18 cap); fixes mobile heatmap looking uniformly over-saturated.
+- **`md files/INTENSITY_SLIDER_GRADIENT_LOGIC.md`** — rewritten to document the new canonical slider + formula and list all four consuming files.
+
+## 2026-06-19 (session 16) — Footprint page: live ES big-order bubbles + delta profile
+
+New **Footprint → Big Orders** page (`/footprint`) showing real-time large prints on the front ES future (ESU6) as a Big Trade Bubbles lane + a Delta Profile lane, fed by a new server-v2 trade-classification pipeline. Includes an offline seed-replay path for reviewing a past session's transcribed time & sales.
+
+### Server-v2 (live ES big-order pipeline)
+- **`server-v2/proxy-tastytrade.js`** — capture the front-ES bid/ask (`this.esQuote`) instead of discarding it; classify each ES `Trade` tick as aggressive **buy** (≥ ask) / **sell** (≤ bid) via `_recordEsPrint()`. Ring buffer of big prints (≥`ES_BIG_TRADE_MIN`=25 contracts, cap 80) + per-minute signed-delta buckets; flushed to state every 1s by `_flushEsFootprint()` (`seeded:false`). New env tunables `ES_BIG_TRADE_MIN`, `ES_BIG_TRADES_MAX`, `ES_DELTA_BUCKET_MS`, `ES_DELTA_BUCKETS_MAX`. Timer started/stopped alongside the candle flush (incl. idle path).
+- **`server-v2/state/market-state.js`** — new `esBigTrades` state key.
+- **`server-v2/websocket-server.js`** — `esBigTrades` added to the snapshot + broadcast on change (new `esBigTrades` WS message).
+- **`server-v2/es-seed-loader.js`** (new) — `ES_SEED=1` loads a transcribed T&S file, rebuilds ET timestamps + big-print/delta payload with the same thresholds, and pushes to `esBigTrades`; re-applies every 10s and backs off once the live feed publishes real prints. Wired into `server-v2/server-with-proxy.js`.
+- **`server-v2/data/es-seed-ts.json`** (new) — ~165 transcribed ESU6 prints (session Jun-18), side from tape color.
+
+### Client
+- **`hooks/useEsBigTrades.ts`** (new) — connects `/ws/gex`, ingests `esBigTrades` snapshot + live messages; exposes `trades`, `delta`, `seeded`, `connected`.
+- **`app/footprint/page.tsx`** (new) — two canvas lanes with a shared 30-min time axis:
+  - **Big Trade Bubbles** — one bubble per 1-minute bar, aggregated by total volume, colored by dominant side. Solid diagonal-gradient orbs (green buys / red sells) with a soft glow; **session-wide** size reference so a bubble means the same in any window; non-overlap radius cap; small gray dot on every empty minute; hover tooltip (buy/sell split, net, count, time).
+  - **Delta Profile** — per-minute cumulative net bars, **session-wide** height reference, active (forming) minute highlighted.
+  - 30-minute viewport with click-drag to pan history + Live/Jump-to-latest button; SEEDED/REPLAY badges; accent-colored stat cards (net delta, buy/sell orders, biggest print).
+- **`components/shared/Sidebar.tsx`** — added **Big Orders** (`/footprint`) under the Footprint nav group.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection; confirm with `npm run build`.
+- Entry point is `node server-v2/server-with-proxy.js`; requires a restart for the proxy changes. Live bubbles need an active ES quote (RTH); use `ES_SEED=1` (PowerShell: `$env:ES_SEED=1; node server-v2/server-with-proxy.js`) to replay the seed after hours.
+
+## 2026-06-19 (session 15) — Market Quality Terminal (new Insights tab) + live VIX data + VIX regime interpretation
+
+Added a **Market Quality Terminal** as its own Insights tab, wired the VIX/Vol meters to live data, and replaced the VIX Interpretation block with a regime-based if-this-then-that engine.
+
+### Market Quality Terminal
+- **`app/api/insights/market-quality/route.ts`** (new) — computes a 0–100 Global Market Score from five weighted pillars: **Volatility 25% / Trend 20% / Breadth 20% / Momentum 25% / Macro 10%**. All inputs from the Yahoo Finance v8 chart endpoint (same source as `/api/quotes-batch`) — `^VIX`, `^GSPC`, `TLT`, `UUP`, and 11 sector ETFs. Computes SMAs, RSI-14, annualized realized vol, sector 5-day performance, sizing band (FULL/REDUCED/MINIMAL), banner (CLEAR/CAUTION/DANGER), and a rule-based market assessment paragraph. No Google Sheets / credentials needed.
+- **`components/insights/MarketQualityTerminal.tsx`** (new) — self-fetching (60s refresh) UI: banner + global score block, 5 animated **ring gauges** (gradient stroke, glow filter, dashed track texture, sweeping white end-cap dot), 5 detail panels, sector-performance bars, scoring-weights table, and the generated assessment. `.card-hover` on all cards.
+- **`app/insights/page.tsx`** — new **"Market Quality"** tab (between VIX/Vol and IB Logic & AI) with Snap/Discord share buttons via a `mqtRef` wrapper.
+
+### Live VIX data
+- **`app/api/insights/vix/route.ts`** — replaced the 501 stub with a real Yahoo-backed route returning `vix_spot` (`^VIX`), `vix_1d` (`^VIX1D`, falls back to spot), `realized_10d` (SPX 10D annualized RV), and `iv_rank` / `iv_percentile` from trailing 1Y VIX history. The existing `setVix` wiring consumes it unchanged.
+
+### VIX tab layout + regime interpretation
+- **VIX/Vol tab** — top 4 GEX MetricCards now 4-across; 3 VIX meters in an even 3-col row (fixed the scrunched layout); fixed the `VixMeter` progress bar overlapping the value text (`flexShrink:0` + `marginTop:auto`). Added Snap/Discord buttons + `.card-hover` on Interpretation/IV Rank/IV Percentile cards.
+- **`classifyVixRegime()`** (new, in `app/insights/page.tsx`) — if-this-then-that engine from `vix.txt`: High Fear → Term-Structure Inversion → Elevated RV + Near-Term Calm → Low Vol Calm → Strong Calm Discount → Normal Balanced. Renders active regime badge, mode, interpretation, VIX1D/VIX ratio + VRP readouts with zone labels, and recommended trading actions.
+
+### Styling
+- Market Quality terminal: muted gray/blue text → white; enlarged fonts throughout (assessment 13→17px, panels, sector bars, weights table, section headers); ring gauge accents.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection; confirm with `npm run build`.
+- Market Quality pillars + live VIX derive from Yahoo daily closes, not the internal dxLink/server-v2 feed. The "AI assessment" is deterministic template prose (no LLM key in repo).
+
+## 2026-06-19 (session 14) — Strike-detail popup + GEX chart default $200 window + heatmap tweaks
+
+Added a click-to-open **strike-detail popup** on the GEX chart and heatmap, defaulted the GEX chart to a $200 (±$100 ATM) window, removed the heatmap's 30-min rolling column, and dimmed the heatmap value text.
+
+### Strike-detail popup
+- **`components/dashboard/StrikeDetailPopup.tsx`** (new) — click a bar/cell to open a popup showing: SPX strike, live composite **net GEX (OI+Vol)** headline, a **2×2 rolling-difference grid** (Δ from open / 5m / 15m / 30m; cyan = building, red = unwinding), and the **OTM contract price** (call mark if strike > spot, put mark if strike < spot). Three switchable styles — **card | drawer | modal** — toggled live from the toolbar (`PopupStyle`). Esc/outside-click closes; `window` access guarded for SSR.
+- **`hooks/useStrikeGexHistory.ts`** (new) — polls point-in-time net GEX baselines (open + each age) for the active expiry; only polls while a popup is open. Baselines are OI-based (matches the history writer), so the diff compares against the live row's `netGEX`.
+- **API `app/api/snapshots/option-strike-gex-history/route.ts`** — added `mode=point&ages=5,15,30` returning per-strike `baselines[strike] = { open, "5", "15", "30" }`.
+- **`lib/db.ts`** — added `getOptionStrikeNetGexAsOf` (nearest reading ≤ N min ago via `DISTINCT ON`) and `getOptionStrikeNetGexAtOpen` (first reading of the session).
+- **Contract price passthrough** — `server-v2/computation/gex-calculator.js` + `server-v2/proxy-tastytrade.js` now thread the live contract price (quote mid, else REST mark) onto each row as `callMark`/`putMark`; added to `ChainRow` in `lib/calculations/calculations.ts`.
+- **Wiring** — `onStrikeClick` added to `GexChart` (drag-vs-click guarded), the home-page heatmap `<tr>`, and the standalone `GexHeatmap` component; popup state + style toggle wired in `app/home/page.tsx` and `components/dashboard/GexToolbar.tsx`.
+
+### GEX chart default window
+- **`components/dashboard/GexChart.tsx`** — default visible range changed from $600 to **$200** ($100 either side of ATM) in all three spots: initial draw, expiry-reset effect, and double-click recenter. Scroll-zoom still adjusts from there.
+
+### Heatmap tweaks (home page)
+- Removed the **30 Min Rolling Net GEX** column (header, data cell, colgroup, divider `colSpan` 6→5, and the coloring `cols` array). Remaining 4 data columns rebalanced to 22.5% each. (`rollingByStrike` state/poll left in place, now unused.)
+- Dimmed numeric value text from `#fff` → ~62% white (ATM rows ~82%) for a softer look; cell background intensity coloring untouched.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection; confirm with `npm run build`.
+- Rolling-difference boxes require the Postgres `option_strike_gex_history` table populated (`DATABASE_URL` + gex-history writer running); they show "—" gracefully until snapshots exist. "From open" needs ≥1 snapshot from session start. Strike, headline GEX, and OTM contract price work immediately from live data.
+- Mobile/bzila popup wiring intentionally skipped per request.
+
+## 2026-06-19 (session 13) — Confidence Score page + MVC import/auto-collection + dashboard card hover
+
+Built a new **Confidence Score** page (`/confidence-score`) that scores the current MVC level 0–100 for **Hit / Pivot / Chop**, backfilled historical MVC data, added in-process 30-min auto-collection, and applied a standard card hover effect dashboard-wide.
+
+### Confidence Score
+- **`lib/confidenceScore.ts`** — pure scoring engine. Blends a live structural prior (proximity-to-EM, GEX dominance, gamma regime, DEX bias, flip proximity, time weight) with historical analog rates. History weight saturates `0.65 · n/(n+10)`, capped at 65%, so it works day one and strengthens as data grows.
+- **`app/api/confidence/route.ts`** — reads latest `mvc_snapshots` for the date; finds prior days with the same gamma regime + similar GEX dominance; replays each day's **SPX series** (no ES-candle dependency) to classify hit/pivot/chop around that day's MVC strike; returns blended scores, analogs, thresholds, and a debug block.
+  - Fixed `pickLevel` to use the **strike** (price) as the level, not the $B GEX value.
+  - SPX-driven throughout (ES kept only as a display reference).
+  - Tunables: `HIT_PTS=8`, `PIVOT_PTS=10`, `CHOP_BAND=15`, `ANALOG_GEX_TOL=0.25`.
+- **`app/confidence-score/page.tsx`** — gauges (per-metric color identity: Hit=cyan, Pivot=purple, Chop=orange), pulse/glow on Hit ≥85%, LIVE/PAUSED indicator + timestamp, Auto-refresh toggle (10 min, default off), significant-shift banner, factor bars with tooltips, actionable Bias line, analog badges with outcome icons, color-coded Read bullets, collapsible Tuning Reference.
+- Registered **Confidence** in the Sidebar **Gex** group.
+
+### MVC data import + auto-collection
+- **`scripts/import-mvc.js`** — backfills daily `server-v2/MVC/*.xlsx` into `mvc_snapshots`. Maps human-readable headers → DB columns, synthesizes `timestamp` from Date+Time, falls back ES→SPX and Vol→OI totals, dedupes on `(date,timestamp)`, dry-run by default (`--commit` to write). Loads `.env.local` then `.env`. **Imported 196 rows.**
+- **`server-v2/mvc-auto-snapshot.js`** — in-process collector started from `server-with-proxy.js` after `server.listen`. Every 30 min during RTH (Mon–Fri 9:30–4:00 ET), self-calls `/api/gex` → `/api/snapshots/mvc` (`triggerType: auto-30m`), aligned to :00/:30 with a ~20s startup test run. No browser / no Claude app needed. Replaces the disabled Claude scheduled task.
+
+### Dashboard-wide card hover
+- **`app/globals.css`** — added `.card-hover` (translateY -2px + soft shadow + faint cyan border, .15s ease) and an auto-rule for 16px-radius panels inside `<main>` (scoped away from the sidebar).
+- Applied to Insights `.greek-card`, VIX/Vol `MetricCard`/`VixMeter`, and the live IB card (`components/insights/IbLogic.tsx`).
+- Documented the pattern in `md files/HOME_PAGE_DESIGN_SYSTEM.md` (new subsection + template + checklist) so new pages inherit it.
+
+### Notes
+- `tsc`/`next build` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verified by inspection against `lib/db.ts` schema; confirm with `npm run build`.
+- Confidence history pool is small (≈9 days at session end) — scores lean on the live prior until the auto-collector accumulates more. Thresholds are reasonable defaults, not yet calibrated.
+
+## 2026-06-19 (session 12) — Estimated Moves: NDX/NQU blank-row fixes (in progress)
+
+Investigated why NDX and NQU render blank on the Estimated Moves tab (`components/dashboard/EstimatedMoves.tsx`). Server data confirmed healthy (chains + expirations return for NDX; pinned 6/26 chain returns full bid/ask/iv when fetched WITHOUT forceSub). Four fixes applied; still blank as of session end — likely holiday/closed-market data, revisit when NDXP weeklies quote cleanly.
+
+### Fixes
+- **Dropped `&forceSub=1`** from the primary chain fetch in `estimateMove`. On server-v2 the forceSub path returns an all-zero (bid/ask/mark/iv = 0) chain for index weeklies (NDXP), zeroing every straddle → row dropped. Plain `&noSubscribe=1` returns full pricing.
+- **Priced-quote picker** in `fetchQuoteDetail`: `/api/quotes-batch` returns an all-null `$NDX`/`NQM` row (Yahoo `^NDX`/futures fail) alongside priced `NDX`/`/NQU26`. Now scores candidates and picks the first with a real price.
+- **Futures price fallback**: when `/api/em/em-closes` 404s (not implemented on server-v2), futures fall back to `q.last`/`q.mark`/`prev-close` instead of leaving `close` NaN.
+- **All-unpriced snap**: if a pinned expiration returns all-zero options, refetch unpinned and snap to the nearest PRICED expiration.
+- **Title fix**: `targetDateLabel` now uses `getTargetExpiration` (prefers Friday) instead of `weeklyExps[0]` (first Thu/Fri), so the header shows 6/26 not 6/25.
+
+### Notes
+- `tsc` not run (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verify with `npm run build`.
+- Open item: NDX/NQU still blank on 2026-06-19 (holiday). Re-test with live quotes; use `/dev` probe on the targeted expiration to diagnose.
+
+## 2026-06-19 (session 11) — Sidebar nav restructured into emoji pop-out groups
+
+Reworked the left sidebar (`components/shared/Sidebar.tsx`) from a single "Pages" pop-out into a Home button followed by five emoji-labeled group buttons, each opening a 2×2 grid pop-out. Pop-out items use white font, are drag-reorderable, and persist their order to `localStorage` (`sidebar-nav-order-v1`). Bumped version to `2026.6.19-v2`.
+
+### Sidebar groups
+- **📊 Gex** — Overview, Est. Move, Options Chain, Multi Greek, Insights
+- **👣 Footprint** — empty; shows a centered "Coming soon" placeholder instead of the grid
+- **📈 Stock Market** — Premarket, Database, Econ Calendar
+- **🧑 Personal** — Trading, Budget
+- **🛠️ Dev** — Legacy, Dev, Logs, Changelog; `devOnly` flag gates it to signed-in users via Clerk `useUser()` (not yet locked to a specific account)
+
+### Implementation
+- `NAV_GROUPS` typed config (`NavItem`/`NavGroup`); empty `items` renders the "Coming soon" state.
+- `useNavOrder()` hook reads/writes per-group order to `localStorage`, appends any new items not yet in saved order.
+- Drag-and-drop reorder via native `draggable` + `onDragStart/onDragOver/onDrop`.
+- Removed the old single-list Grid pop-out, the standalone Dev link, and unused `GridIcon`/`CalendarIcon`/`UserIcon` components.
+- Note: `tsc` not run this session (Linux sandbox unavailable, HYPERVISOR_VIRT_DISABLED) — verify with `npm run build`.
+
+## 2026-06-19 (session 10) — Live ES 5m candle pipeline → Relative Volume + live IB Logic (locked)
+
+Wired a real live + historical 5-minute ES futures OHLCV feed through server-v2 and built it into the Insights page: a working Relative Volume card (5/14-day baseline toggle) and a live Initial Balance tracker that locks the IB high/low into the database at 10:30 ET so it never resets. Also blocked public sign-up pre-launch.
+
+### Sign-up lockdown
+- `app/sign-up/[[...sign-up]]/page.tsx` now redirects to `/` (no public registration pre-launch).
+- `app/layout.tsx` — `ClerkProvider` given `signUpUrl="/"` so the modal's sign-up link goes to the landing page. (Still need to disable public sign-ups in the Clerk Dashboard for a hard lock.)
+
+### Live ES 5m candle pipeline (server-v2)
+- `server-v2/proxy-tastytrade.js` — dxLink client now subscribes to the front ES future's 5m Candle stream (`${esSymbol}{=5m}`) with a 15-day `fromTime` for a historical snapshot on connect. Added `Candle` to FEED_SETUP/COMPACT_FIELDS, a `subscribeCandle()` method, mixed pending-queue flush, ET 5-min slot aggregation (`etFiveMinSlot`, `this.esCandles`), and `_flushEsCandles()` (5s cadence → state + DB; cleaned up on idle).
+- `server-v2/state/es-candle-writer.js` (new) — lazy-pool Postgres writer upserting into `es_candles` (no-op without DATABASE_URL).
+- `server-v2/state/market-state.js` — new `esCandles` field.
+- `server-v2/websocket-server.js` — `esCandles` added to snapshot + new targeted `esCandles` WS message on `/ws/gex`.
+
+### Client — Insights
+- `hooks/useEsCandles.ts` (new) — connects `/ws/gex`, merges live bars with SQLite history (today + 20d), computes per-slot avg volume over previous **5 and 14** trading days (`avg5`/`avg14`).
+- `app/insights/page.tsx` — Relative Volume now reads real candles + true relVol%; added **5d/14d baseline toggle**. Removed the broken client-side candle loader/saver and dead helpers.
+- `components/insights/IbLogic.tsx` — new live IB panel: computes 9:30–10:30 ET high/low/mid/range from ES candles, marks IB done at 10:30, detects breaks (high/low/double/inside), formed-first, compression, timing; surfaces which reference rules apply. Static reference retained below.
+
+### IB locking (never resets)
+- `lib/db.ts` — new `ib_levels` table (one row/day, unique date) + `upsertIbLevels` (no-op once `locked=1`, via `WHERE locked = 0`) + `getIbLevels`.
+- `app/api/snapshots/ib/route.ts` (new) — GET/POST; refuses to overwrite a locked row.
+- `lib/snapdb.ts` — `saveIbLevels` / `queryIbLevels` client helpers.
+- `IbLogic.tsx` — at 10:30 ET freezes the IB once (`locked=1`); thereafter reads the immutable locked row (survives refresh/restart/ET rollover) and runs break detection live against the frozen levels. 🔒 Locked badge in the UI.
+
+**Notes:** requires a server-v2 restart; 5/14-day averages + IB history accumulate as `es_candles` fills. Couldn't run tsc/lint (sandbox unavailable) — recommend `npm run build` before deploy.
+
+## 2026-06-19 (session 9) — Public landing page + Clerk auth gating + Google Sheets waitlist export
+
+Added a public marketing landing page, Clerk-based authentication gating the paid dashboard, and real-time export of waitlist signups to both Postgres and Google Sheets.
+
+### Landing page (`/`)
+- `app/page.tsx` is now a server component: signed-in users redirect to `/home`; signed-out users see the landing page.
+- `components/landing/LandingClient.tsx` — blurred, unreadable decorative dashboard mock behind a glass card; explainer copy + feature grid; "Notify me at launch" email form; **Sign in** (Clerk modal) and a disabled **"Sign up — coming soon"** button.
+- `components/landing/DashboardMock.tsx` — static, data-free decorative dashboard (fake chart/heatmap/panels) rendered blurred behind the overlay.
+
+### Auth — Clerk (`@clerk/nextjs` ^6, `@clerk/themes`)
+- `middleware.ts` (new): `/`, `/sign-in`, `/sign-up`, `/api/waitlist` public; all else requires login. Signed-out users hitting a protected route are redirected to `/` (the front door).
+- `app/layout.tsx` wrapped in `ClerkProvider` (dark theme, cyan accent).
+- `app/sign-in/[[...sign-in]]/page.tsx` + `app/sign-up/[[...sign-up]]/page.tsx` fallback pages.
+- `components/shared/LayoutShell.tsx` renders bare (no sidebar) on `/`, `/sign-in`, `/sign-up`.
+- `components/shared/Sidebar.tsx` — old bottom logo replaced with Clerk `UserButton` (sign-out, `afterSignOutUrl="/"`).
+
+### Waitlist capture
+- `app/api/waitlist/route.ts` (new): POST validates + stores email; GET (admin-secret guarded) exports JSON.
+- `lib/db.ts` — new `waitlist` table + `addWaitlistEmail` / `listWaitlist` helpers (dedupe on unique email).
+- `lib/google-sheets.ts` (new): service-account JWT auth, appends each NEW signup to a Google Sheet (Email, Source, Referrer, User Agent, Signed Up); auto-creates header row; safe no-op when unconfigured. Wired into the route as fire-and-forget so a Sheets failure never breaks signup.
+
+### Config / deps
+- `package.json` — added `@clerk/nextjs`, `@clerk/themes`, `googleapis`.
+- `.env.local` — Clerk keys, `WAITLIST_ADMIN_SECRET`, Google Sheets vars (`WAITLIST_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`).
+- `LANDING-SETUP.md` (new) — full Clerk + Google service-account setup steps.
+
+### Notes
+- Verified working end-to-end: test signup appended to the Google Sheet in real time.
+- Paid-tier gating NOT yet wired — any signed-in user reaches the dashboard. Next step: gate on a Clerk `publicMetadata.paid` flag set from a payment-provider webhook.
+- **Security:** Clerk dev key + the Google service-account private key were pasted into chat this session and must be rotated. `.env.local` is gitignored.
+- Sandbox shell unavailable this session (`HYPERVISOR_VIRT_DISABLED`); `npm install` + clean boot must be run/verified locally. Run `npm install` for the new deps.
+
+## 2026-06-19 (session 8) — Options Chain + Multi-Greek wired to server-v2; proxy port fix; ATM row outline (v2026.6.19-v1)
+
+Fixed the Options Chain and Multi-Greek pages (no data / empty expiry dropdown) and added an ATM-row highlight.
+
+### Root cause — proxy port mismatch
+- server-v2 runs Next **and** `/proxy/*` in one process on `PORT` (`.env.local` = **3002**), but `next.config.js` rewrite and `lib/proxyForward.ts` both defaulted `/proxy/*` to a dead **3001** → every `/api/chains` + `/api/expirations` forward failed → "No live chain payload" / empty dropdown.
+- `lib/proxyForward.ts` + `next.config.js` now default to `127.0.0.1:${PORT||3002}`; added explicit `PROXY_URL=http://127.0.0.1:3002` to `.env.local`.
+
+### Server (`server-v2/proxy-tastytrade.js`, `server-with-proxy.js`)
+- server-v2 never implemented `/proxy/api/tt/chains/:ticker` or `/proxy/api/tt/expirations/:ticker` (only the single-symbol live-feed routes) → those forwards 404'd.
+- Added **`fetchChainFull(ticker, expiration)`** + **`fetchExpirations(ticker)`**: rebuild the legacy nested payload (`{ items:[{ "expiration-date", strikes:[{ "strike-price", call, put }] }], underlyingPrice, rootSymbol }`) from `getChainCached` contracts + batched `/market-data/by-type` (greeks, OI, volume, mark); spot via `index=`/`equity=`. Works after-hours (REST, not live dxLink).
+- Wired both `GET /proxy/api/tt/{chains,expirations}/:ticker` routes in `server-with-proxy.js`.
+
+### Pages (`app/options-chain/page.tsx`, `app/mult-greek/page.tsx`)
+- **Fixed infinite `/api/expirations` fetch loop** on options-chain: the expirations `useEffect` listed `loadChain` (recreated every render) as a dep → setState → render → re-fire. Dep array reduced to `[activeTicker]`.
+- **ATM row**: single clean white outline around the whole row (`outline: 1px solid rgba(255,255,255,.55)`, `outlineOffset: -1px`, `position: relative`, `zIndex: 1`) on both pages, replacing the old amber top/bottom borders.
+
+### Notes
+- Reverted exploratory edits to the dead legacy `server/proxy-tastytrade.js`.
+- Sandbox shell was unavailable this session (`HYPERVISOR_VIRT_DISABLED`); `node --check` not run — verify clean boot on restart. server-v2 + next.config + .env.local do **not** hot-reload.
+
+## 2026-06-19 (session 7) — Dev Symbol Probe rebuilt on REST: any ticker, all feeds, net greeks (v2026.6.18-v56)
+
+Reworked the `/dev` Symbol Probe so it actually loads. Root cause of "nothing loads" was a chain of dead paths: the live `/proxy/probe` needs the symbol subscribed in the SPX-only feed (empty overnight / for other tickers), and the old page's `/api/prev-closes`, `/api/proxy/tt/quote`, and the `/api/chains` forward target are now 501/missing stubs. Switched the page to a single REST request that has no feed dependency. Version `2026.6.18-v55` → `2026.6.18-v56`.
+
+### Server (`server-v2/proxy-tastytrade.js`, `server-with-proxy.js`)
+- New **`GET /proxy/probe-rest`** route (any ticker): fetch nested chain (cached 60s) → snap to nearest real strike → `/market-data/by-type` for the contract → underlying spot. Returns `{ found, resolvedSymbol, snapped, requestedStrike, resolvedStrike, result }`.
+- `result.feeds` groups the market-data item into **Quote / Trade / Summary / Greeks**, plus `raw` (full unmodified item).
+- `result.exposures` = per-contract **net greeks** using dashboard conventions: `GEX=|γ|·OI·S²`, `DEX=|δ|·OI·100·S`, `VEX=vega·OI·100·S`, `ThetaExp`, `GEX(vol)`. Vanna/charm = `n/a` (not in REST greeks).
+- `chainTicker()` maps weekly roots to chain roots (`SPXW→SPX`, `NDXP→NDX`, `RUTW→RUT`). `fetchChain()` parameterized by underlying.
+- `_resolveChainSymbol()` + earlier live-feed work (overnight **stale recall** via new `last_events` table, `last-event-store.js`) retained but no longer on the page's hot path.
+
+### Page (`app/dev/page.tsx`)
+- **Ticker** input (any symbol). All probes go through `/proxy/probe-rest` — one request, no polling.
+- Renders **all five panels at once**: Quote, Trade, Summary, Greeks, **Net Greeks**, + collapsible Raw response.
+- **Stop** button (AbortController), live **Elapsed** counter, color-coded **Log panel** (timestamped, 200-line cap, Clear).
+- Clear miss reporting: `no-expiry` (lists valid expirations) / `no-strike`.
+
+### Docs
+- Added `md files/DEV_SYMBOL_PROBE.md` documenting the data path, formulas, panels, endpoints, and the restart-the-proxy gotcha.
+
+### Verify on restart (sandbox unavailable — not syntax-checked here)
+- **Restart the proxy (port 3001)** — `server-v2/*.js` is not hot-reloaded; a stale process returns `404 unknown proxy route`.
+- Hit `/proxy/probe-rest?ticker=SPXW&expiry=<valid>&type=P&strike=7490` → expect `200` with feeds + exposures. Confirmed working in-session (OI/vol/mark/iv + greeks populated).
+
+
+## 2026-06-19 (session 6) — GEX chart readiness gating: greeks-coverage + DTE-scaled plateau release (v2026.6.19-v1)
+
+Investigated a reported GEX mismatch on the 7490 strike, traced it to stale prior-session data in the manual check (live `dayVolume`/gamma were correct), then hardened the chart's cold-start so it never renders a half-warmed/inflated frame. Version `2026.6.18-v56` → `2026.6.19-v1`.
+
+### Diagnosis (no bug in the calc)
+- 7490P bar (-124M vol-only) reconciled against live probe data (`dayVolume=562`, broker `gamma=0.00625`, delta≈-0.50 → strike was effectively ATM). The -27.9M hand calc used prior-session REST `volume:430` + an assumed OTM gamma. Webull's 430 was also prior-day. Conclusion: chart correct, manual check stale.
+
+### Server feed (`server-v2/proxy-tastytrade.js`, `state/market-state.js`)
+- Added a **greeks-coverage gate**: the GEX broadcast now requires both ≥85% OI backfill AND ≥85% of in-window legs carrying a real streamed broker gamma (not the BS/ATM-IV fallback that produced inflated cold-start bars). New `GREEKS_READY_RATIO` knob.
+- Added **plateau release** for both OI and greeks: when coverage stops climbing (gain <1%) for N consecutive cycles (`*_PLATEAU_HITS`, ~6s) above a floor, release instead of waiting out the 90s grace valve — fixes the ~20s wait on thinner expiries (e.g. Tuesday plateaued at ~83% OI, just under the 85% bar).
+- Made the plateau floor **DTE-scaled** (`PLATEAU_FLOOR_TIERS` / `plateauFloor()`): SPX OI/volume thins the further out the expiry, so the floor decreases with DTE (0–1 DTE 80% → 14+ DTE 30%). Starting curve; tune from real per-DTE coverage.
+- Readiness published in market-state `status` (`chartReady`, `oiCoverage`, `greeksCoverage`); reset on start and expiry switch.
+
+### Home page (`app/home/page.tsx`)
+- GEX chart now held behind a spinner + "Loading SPX chain…" loader until a warm `chartReady` snapshot/gex arrives; re-arms the loader on expiry change. No artificial delay — shows as soon as data is genuinely ready.
+- Heatmap left live (reads the same `gexChainRows`, so it matches the chart once a frame broadcasts).
+
+### Verify on restart (sandbox was unavailable — not syntax-checked here)
+- Confirm server boots clean; watch for `[READY] …` and `[OI] coverage plateaued at X% (floor Y% @ ZDTE)` logs.
+- Optionally grab `/proxy/status` on a near vs far expiry to dial in `PLATEAU_FLOOR_TIERS`.
+
+
+## 2026-06-18 (session 5) — GEX chart fixes, quote accuracy, OI gating, feed pinning (v2026.6.18-v50)
+
+Bug-fix and polish pass on the SPX home dashboard. Version `2026.6.18-v42` → `2026.6.18-v50`.
+
+### GEX chart (`components/dashboard/GexChart.tsx`)
+- Fixed GEX flip line being misaligned with the orange profile curve: introduced a single shared `xForStrike()` strike→X mapping (the index/bar axis) and routed the profile curve, spot line, and flip line through it so they all line up.
+- Fixed the "Profile" curve rendering as a flat-railed step: it was clamped onto the per-strike bar Y-axis and saturated. Now self-scales to its own symmetric magnitude around the zero line, showing the true profile shape crossing zero at the flip.
+- Added bar/border padding: `PAD_L`/`PAD_R` 4→16px.
+- Raised Y headroom 1.10→1.25 so the tallest bar (and MVC label) clears the top/bottom frame.
+
+### Home page (`app/home/page.tsx`)
+- Fixed style shorthand warning: `background`→`backgroundColor` (conflicted with `backgroundImage`).
+- VIX/ESU top-bar: added quotes-batch (Yahoo) fallback for prior closes when `/ws/gex` omits them; added absolute change value alongside % for both.
+- GEX heatmap now fits any window size: container `overflow: auto`→`hidden`, removed vertical cell padding (lineHeight 1.1), tighter header, font 13→12; rows compress to fill panel height.
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- Rewrote `pctFromQuote` to recompute % from last vs prev-close first, removed the over-aggressive ±20% null clamp, added fractional/whole-percent normalization.
+- Quote font bumped to 13 then dialed back to 11 per request.
+
+### Quotes API (`app/api/quotes-batch/route.ts`)
+- Fixed inflated day-% (e.g. AMD +10% vs real +4.86%): `meta.chartPreviousClose` is the close before the chart range window (~a week ago), not yesterday. Now prefers `regularMarketPreviousClose` → `previousClose` → second-to-last candle → chartPreviousClose.
+
+### Server feed (`server-v2/`)
+- OI backfill gating: hold the GEX broadcast until OI coverage ≥85% (`OI_READY_RATIO`) with a 90s grace valve, so the chart no longer renders half-filled on connect. Fast OI polling until ready, then 60s cadence. Re-gates on expiry switch.
+- Fixed wrong-underlying bug (home page showed NVDA): server now loads only `.env.local` with `override:true` (legacy `.env` no longer loaded), and `SYMBOL=SPX` pinned in `.env.local` so a stray shell `SYMBOL` var can't hijack the home feed.
+
+
+## 2026-06-18 (session 4) — Home dashboard UI/wiring pass (v2026.6.18-v42)
+
+Worked on server-v2 stack. Version bumped to `2026.6.18-v42`.
+
+### Home page (`app/home/page.tsx`)
+- Live GEX heatmap header: added refresh (↻), record-snapshot-to-DB (📸), screenshot snap, and Discord buttons.
+- Bumped all inline fonts +2 across the page.
+- Top toolbar: larger clock font + box; wired live VIX, ESU, SPX prices; SPX day-change from prevClose.
+- 2nd toolbar row rebuilt: NET GEX, Call Wall, Put Wall, Flip + right-aligned MVC + Snapshot button.
+- Taller GEX chart (flex 1.6); SnapshotPanel now fed by server `flow` message.
+- VIX/ESU day-change % computed live from Tastytrade prev-close (no Yahoo dependency).
+
+### GEX chart (`components/dashboard/GexChart.tsx`)
+- Flip line uses gamma-zero only, 0DTE-only; removed spurious bar-zero-crossing fallback.
+- Profile curve plotted on the same dollar axis as the bars (removed independent renormalization).
+- OI overlay = shaded red/green gradient; removed blue total-OI line.
+- Axis labels white + bigger (11px).
+- DEX line convention matched to heatmap (OI+Vol → netDEX+volNetDEX).
+
+### Econ calendar (`components/dashboard/EconCalendarPanel.tsx`)
+- Bigger fonts; confirmed 7-day rolling window (≥5 days ahead) + stale events grayed/moved to bottom.
+
+### Sidebar (`components/shared/Sidebar.tsx`)
+- Deduped quotes (removed triple ESU/NQU); cogwheel settings popup with Idle Proxy toggle, turns red when idle.
+
+### Backend (server-v2)
+- `proxy-tastytrade.js`: subscribe VIX + front ES future; fetch their prev-closes; 500ms flow aggregation loop; `setIdle()` pausing compute/flow/OI loops.
+- `state/market-state.js`: `prevClose`/`vix`/`esFut`/`vixPrevClose`/`esFutPrevClose` + `idle` status, `setAux()`.
+- `websocket-server.js`: broadcasts aux quotes + prev-closes (`aux` message) and prevClose in `spot`.
+- `server-with-proxy.js`: `/proxy/idle` GET/POST + WS `SET_IDLE` routing.
+
+### Bug fixes
+- `app/database/page.tsx`: `load()` was stubbed (always empty) — wired to `/api/db` so saved snapshots render.
+- `app/api/quotes-batch/route.ts`: was a 501 stub — implemented over Yahoo for the sidebar's ~20 symbols.
+
+⚠️ Not type-checked/built this session (sandbox unavailable). Run `npm run build` before relying on prod.
+
+## 2026-06-18 (session 3) — Step 4 secret rotation/scrub + Step 5 merge to main (migration complete)
+
+Branch: `server-v2-wirein` → merged to `main`, pushed. Deployed to Render (`00fe33f`).
+
+### Step 4 — rotate & scrub exposed secrets (✓)
+- Read-only audit first: found live secrets not only in git history but hardcoded as
+  fallbacks in tracked current files — `server/proxy-tastytrade.js` (Schwab client id+secret,
+  Discord webhook) and `_ARCHIVED_DO_NOT_EDIT/Vanilla/` (bzila.pem RSA key, cert.pfx, dup
+  webhooks/secrets). Active `server-v2/` stack confirmed clean (all env-based).
+- Rotated at providers: Discord webhook + bot token, Tastytrade client secret + refresh
+  token (covers dxLink — token fetched at runtime via /api-quote-tokens), Postgres password.
+  Dropped/deleted: Schwab app, Massive key (no longer used).
+- Stripped hardcoded fallbacks in `server/proxy-tastytrade.js` (Schwab id/secret + webhook
+  → empty strings).
+- Deleted `_ARCHIVED_DO_NOT_EDIT/` entirely (dead vanilla stack; held keys/certs/dup secrets).
+- Hardened `.gitignore`: `*.pem *.pfx *.key *credentials*.json _ARCHIVED_DO_NOT_EDIT/`.
+- Deleted stale `.env` (all live config lives in `.env.local`, which is gitignored).
+- Added + redacted `SECURITY-AUDIT-step4.md` and `SECURITY-rotation-plan-step4.md`.
+- Git history scrub (git-filter-repo): removed bzila.pem/cert.pfx from BOTH paths
+  (`_ARCHIVED_DO_NOT_EDIT/Vanilla/` and older `Vanilla/`), replace-text redacted secret
+  strings. Verified zero hits across `git rev-list --all`. Mirror backup at
+  `../spx-gex-backup.git`. Force-pushed `main` + `server-v2-wirein`.
+
+### Step 5 — merge to main (✓)
+- `server-v2-wirein` → `main` fast-forward to `00fe33f`; `npm run build` clean (76/76 pages);
+  pushed to origin/main.
+- Build gotcha: stale `.next` cache caused phantom `PageNotFoundError` for
+  `/api/cache/expirations`, `/api/chains`, `/api/dxlink/candles`. Fix: `Remove-Item -Recurse
+  -Force .next` then rebuild. Not a source issue.
+
+### Deploy status
+- Render service `dash` (srv-d8mk8se7r5hc739t138g) auto-deployed `00fe33f` → live at
+  dash-1fa2.onrender.com.
+- KNOWN: deployed feed is empty ("Fetching SPX chain…", 0 OPTION SYMBOLS) because Render's
+  env vars still hold the OLD rotated secrets. `.env.local` does not propagate to Render.
+  TODO before go-live (planned Saturday): update Render Environment vars — TT_CLIENT_SECRET,
+  TT_REFRESH_TOKEN, DATABASE_URL, DISCORD_WEBHOOK_URL, DISCORD_BOT_TOKEN — then redeploy.
+- Staying on local dev until ~Sat 2026-06-20 to finish bringing everything up to date.
+
+### Still open (optional follow-ups)
+- Premarket page dead WS state (`setQuotes`/`setTs`) — finish or remove.
+- Home header chip "0 OPTION SYMBOLS / $TREAM" — unwired display binding, worth a look.
+
+---
+
+## 2026-06-18 (session 2) — verify raw greeks, build fix, restore SPX Flow tab
+
+Branch: `server-v2-wirein` (still ahead of `main`; not merged or pushed)
+
+### Step 1 — raw-greeks runtime verification (✓)
+- Verified `/proxy/gex` snapshot on both SYMBOL=NVDA and SYMBOL=SPX: `all-zero-gamma: 0`
+  across all strikes (26 NVDA / 228 SPX), `negative putDelta rows: 0`. Greeks physically
+  sane; live heatmap steady.
+- Confirmed put-delta sign is robust by design: `vex-chex.js` and `gex-calculator.js` both
+  take `Math.abs(delta)` and apply call/put sign structurally, so broker-vs-BS sign can't
+  break DEX. No code change needed.
+- Noted (left as-is) a cosmetic deep-ITM artifact ~600pts from spot where adjacent strikes
+  alternate broker-greek vs BS-underflow-to-~0; outside the visible window, no effect on totals.
+
+### Step 2 — production build (✓)
+- `npm run build` clean (76/76 pages).
+- Build-blocker fix in `app/premarket/page.tsx`: referenced undefined `wsLive` (page's WS
+  wiring was never finished; `setQuotes`/`setTs` are dead). Added
+  `const wsLive = Object.keys(allQuotes).length > 0 || yahooTs !== "";` before the return.
+
+### Step 3 — restore SPX Flow tab (✓)
+Tab previously rendered only a "Coming Soon" placeholder. Now live; build clean; tape
+verified at runtime (`prints: 1340, tape len: 200` on SPX, all `.SPXW`, correct
+action/bucket/isOtm/premium).
+- `server-v2/computation/flow-processor.js`: `addPrint` now retains strike/expiry/root and
+  accepts `spot`, building a capped (200) per-order `tape[]` in FlowOrder shape (computes
+  `action`, `bucket` bull/bear/neutral, `isOtm`). `bucket()` emits the tape filtered
+  SPX-only (`underlying === 'SPX' || 'SPXW'`); `reset()` clears it.
+- `server-v2/proxy-tastytrade.js`: passes `spot: this.spot` into `addPrint`.
+- `app/home/page.tsx`: imports `FlowTape` + `FlowOrder` type, adds `flowOrders` state,
+  handles `case "flow"` (reads `data.tape`), renders `<FlowTape orders={flowOrders}
+  connected={status==="LIVE"} />`.
+- Architecture note: `hooks/useSpxFlow.ts` is NOT the live path (pure state container, no
+  socket despite its header comment); live tape flows server → `flow` WS msg → FlowTape.
+  `FlowOrder` type still lives in useSpxFlow.ts and is imported by both consumers.
+- No change to `server-v2/websocket-server.js` — the `flow` broadcast already existed.
+
+### Docs
+- Added `HANDOFF-server-v2.md` (resume guide for a new chat; pick up at Step 4).
+
+### Still open (next session)
+- Step 4: rotate exposed secrets (TT token/secret, Discord bot+webhook, Postgres pw,
+  Massive key, Schwab secret) — REQUIRED before any push; repo public with secrets in git
+  history. Audit read-only first.
+- Step 5: merge `server-v2-wirein` → `main` (Brandon does this himself after verifying).
+
+---
+
+## 2026-06-18 — server-v2 wire-in, heatmap rework, raw greeks
+
+Branch: `server-v2-wirein` (ahead of `main`; not yet merged or pushed)
+
+### Migration: legacy `server/` → `server-v2/`
+- Wrote the missing `/ws/gex` consumer in `app/home/page.tsx` (connect, reconnect,
+  message routing for snapshot/gex/spot/status, SET_EXPIRY on (re)connect via ref).
+- Confirmed server-v2 `gexRows` already match the dashboard `ChainRow` shape (no mapping layer needed).
+- Replaced the 501 stubs `/api/gex` and `/api/gex/expirations` with thin adapters over
+  server-v2 `/proxy/gex` and `/proxy/expirations` (same-origin, `PROXY_V2_URL` override).
+- Added a Postgres GEX-history writer (`server-v2/state/gex-history-writer.js`) wired into
+  the recompute loop; rate-limited, no-ops without `DATABASE_URL`.
+- Port story: server-v2 runs Next + proxy in one process on `PORT` (kept 3002); commented
+  out legacy `PROXY_URL` and `NEXT_PUBLIC_WS_URL` in `.env.local`.
+- `package.json`: `dev`/`start` now run server-v2; added `dev:old`/`start:old` fallbacks.
+- Fixed corrupted `DATABASE_URL` in `.env.local` (three typo chars); connection verified.
+- Flow tab (SPX Flow / useSpxFlow) intentionally deferred — left inert (no old connections).
+
+### Heatmap (`app/home/page.tsx`)
+- Window is now 20 strikes above + ATM + 20 below; stretches to fill panel height (fixed
+  table layout + per-row percentage height).
+- Columns changed to: Strike, Net GEX, Vol Only GEX, DEX, GEX + VEX, 30 Min Rolling Net GEX.
+- "GEX + VEX" = net GEX + vanna; "30 Min Rolling" polls `/api/snapshots/option-strike-gex-history`.
+- Added INTENSITY slider (0.2–3.0, default 0.4) with ported `metricBg` opacity logic
+  (rank-based floors + power curve; cyan positive / red negative).
+- Narrowed strike column (~10%); fixed ATM-row cell shift (removed `position:relative` on
+  `<tr>`, ATM emphasis now via cell borders).
+- Net GEX header: "OI + Vol" mode now sums OI-based + volume-based GEX; display throttled to 1s.
+
+### GEX chart (`components/dashboard/GexChart.tsx`)
+- Bars now blend slightly toward white by relative magnitude (lighter tip on higher GEX).
+
+### Greeks source (`server-v2/proxy-tastytrade.js`)
+- Switched to RAW dxFeed Greeks (delta/gamma/vega/IV) instead of solving IV from price + BS.
+- Vanna/charm still BS-derived but fed with the raw broker IV (stable); BS is fallback only
+  when a strike has no Greeks tick yet. Removes the noisy price-based IV solve.
+
+### Fixes
+- `gex-history-writer.js`: snap subnormal floats (`|x| < 1e-30`) to 0 before insert
+  (Postgres `real` can't store values below ~1.2e-38); pool now rebuilds only on real
+  connection errors, not data errors.
+
+### Security (still OUTSTANDING — rotate before any push; repo is public)
+- Stripped hardcoded Schwab/Discord secrets from `lib/proxy/config.ts` (env-only now).
+- Still in git history / env files and need rotation: TT refresh token + client secret,
+  Discord bot token + webhook, Postgres password, Massive API key, Schwab secret.
+
+### Next steps
+1. Verify the raw-greeks change at runtime (steadier heatmap, no all-zero strikes after open, put-delta signs).
+2. `npm run build` — confirm clean production build.
+3. (Optional) Restore SPX Flow: extend server-v2 `FlowProcessor` to emit a capped per-order tape over the `flow` WS message.
+4. Rotate the exposed secrets.
+5. Merge `server-v2-wirein` → `main` when verified.

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getUserByEmail, createUser } from "@/lib/db";
 import { hashPassword } from "@/lib/auth/password";
-import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC } from "@/lib/auth/session";
+import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC, sessionCookieOptions } from "@/lib/auth/session";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { rateLimit, clientIp } from "@/lib/rateLimit";
 
@@ -69,12 +69,6 @@ export async function POST(req: NextRequest) {
   });
 
   const res = NextResponse.json({ ok: true, session: true });
-  res.cookies.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_COOKIE_MAX_AGE_SEC,
-  });
+  res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(SESSION_COOKIE_MAX_AGE_SEC));
   return res;
 }

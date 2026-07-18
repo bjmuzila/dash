@@ -1,6 +1,940 @@
-import Placeholder from "./Placeholder";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useRefreshButton } from "../hooks/useRefreshButton";
+import RegimeMatrix from "../components/RegimeMatrix";
+import SkewCalculator from "../components/SkewCalculator";
+import { Dock, SegGroup, DockButton, DockGap } from "../components/DockToolbar";
+import { HOME_THEME, homeShellStyle } from "../lib/theme";
 
-/** Greeks — port of app/greeks/page.tsx. Body lands in a later pass. */
+/* ────────────────────────────────────────────────────────────────────────────
+ * Lean Greeks page.
+ *
+ * Built deliberately small: GEX / DEX / CHEX / VEX / GEX+VEX, each with a graph
+ * that makes the positive↔negative transition obvious. No regime engine, no
+ * playbook feed, no VIX/IB/MQT tabs — just the greeks and their trend.
+ *
+ * Data: same source as the heatmap (/api/insights/gex totals), seeded from
+ * today's persisted snapshots (queryGreeksToday) so the graphs are never blank
+ * on first paint. Every fresh snapshot is persisted so history survives reload.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+interface GreekPoint {
+  ts: number;
+  // Each greek carries its active-basis value plus OI+Vol and Vol-only variants,
+  // so the single basis toggle can remap EVERY greek the way GEX already does.
+  gex: number;       // billions — net GEX at active basis (defaults OI+Vol)
+  gexOiVol?: number; // billions — OI+Vol net GEX (heatmap / mult-greek basis)
+  gexVol?: number;   // billions — Vol-only net GEX
+  dex: number;       // billions — at active basis
+  dexOiVol?: number; // billions — OI+Vol net DEX
+  dexVol?: number;   // billions — Vol-only net DEX
+  chex: number;      // millions — at active basis
+  chexOiVol?: number;// millions — OI+Vol net CHEX
+  chexVol?: number;  // millions — Vol-only net CHEX
+  vex: number;       // millions — at active basis
+  vexOiVol?: number; // millions — OI+Vol net VEX
+  vexVol?: number;   // millions — Vol-only net VEX
+  spot: number;
+}
+
+// OI+Vol (default, matches heatmap / mult-greek) or Volume-only.
+type GexBasis = "oivol" | "vol";
+
+interface VolData {
+  vix_spot?: number;     // 30D VIX
+  vix_1d?: number;       // 1-day VIX proxy
+  realized_10d?: number; // 10-day realized vol
+  iv_rank?: number;      // 0-100
+  iv_percentile?: number;
+}
+
+// ── Formatting ───────────────────────────────────────────────────────────────
+function fmtB(v: number | null): string {
+  if (v == null || !isFinite(v)) return "--";
+  const a = Math.abs(v);
+  const s = v >= 0 ? "+" : "-";
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(2)}T`;
+  if (a >= 1)   return `${s}${a.toFixed(3)}B`;
+  return `${s}${(a * 1e3).toFixed(1)}M`;
+}
+function fmtM(v: number | null): string {
+  if (v == null || !isFinite(v)) return "--";
+  const a = Math.abs(v);
+  const s = v >= 0 ? "+" : "-";
+  if (a >= 1e3) return `${s}${(a / 1e3).toFixed(3)}B`;
+  if (a >= 1)   return `${s}${a.toFixed(3)}M`;
+  return `${s}${(a * 1e3).toFixed(1)}K`;
+}
+
+function etTime(ts = Date.now()): string {
+  return new Date(ts).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  });
+}
+
+// ── Volatility / IV card ──────────────────────────────────────────────────────
+function VolStat({ label, value, suffix = "", color }: { label: string; value?: number; suffix?: string; color: string }) {
+  return (
+    <div style={{ flex: "1 1 120px", minWidth: 110 }}>
+      <div style={{ fontSize: 9.5, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 900, color, fontFamily: "var(--font-mono)" }}>
+        {value != null && isFinite(value) ? value.toFixed(value < 1 ? 2 : 1) : "--"}<span style={{ fontSize: 13 }}>{suffix}</span>
+      </div>
+    </div>
+  );
+}
+
+function VolCard({ vol }: { vol: VolData | null }) {
+  const spot = vol?.vix_spot;
+  const oneD = vol?.vix_1d;
+  const ivFalling = oneD != null && spot != null ? oneD < spot : null;
+  const ivRank = vol?.iv_rank;
+  const vrp = spot != null && vol?.realized_10d != null ? spot - vol.realized_10d : null;
+
+  const arrow = ivFalling == null ? "" : ivFalling ? "▼" : "▲";
+  const arrowColor = ivFalling == null ? "#9fb3c8" : ivFalling ? "#00e676" : "#ff5252";
+  const regimeMsg =
+    ivRank == null ? "Awaiting IV data."
+    : ivRank >= 60 ? "Elevated IV — convexity is rich; favor momentum / long premium in negative-gamma breaks."
+    : ivRank <= 30 ? "Subdued IV — premium-selling friendly when gamma is positive (condors / flies)."
+    : "Mid-range IV — let GEX/DEX lead; size normally.";
+
+  return (
+    <section className="card-hover" style={{
+      marginTop: 14, border: `1px solid ${HOME_THEME.border}`,
+      borderRadius: 16, padding: 16, backdropFilter: "blur(16px)",
+      background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.12) 0%, transparent 60%), rgba(13,17,25,0.45)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{
+            width: 30, height: 30, borderRadius: 8, border: "1px solid rgba(96,165,250,.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", color: "#60a5fa", fontWeight: 800, fontSize: 15,
+          }}>〜</div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Volatility</div>
+            <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>VIX / Implied Vol</div>
+          </div>
+        </div>
+        {arrow && (
+          <div style={{ fontSize: 11, fontWeight: 800, color: arrowColor, border: `1px solid ${arrowColor}55`, padding: "4px 9px", borderRadius: 5 }}>
+            IV {ivFalling ? "FALLING" : "RISING"} {arrow}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+        <VolStat label="VIX (30D)" value={spot} color="#60a5fa" />
+        <VolStat label="VIX1D" value={oneD} color="#93c5fd" />
+        <VolStat label="10D Realized" value={vol?.realized_10d} color="#818cf8" />
+        <VolStat label="IV Rank" value={ivRank} suffix="%" color="#38bdf8" />
+        <VolStat label="IV %ile" value={vol?.iv_percentile} suffix="%" color="#22d3ee" />
+        <VolStat label="VRP" value={vrp ?? undefined} color={vrp != null && vrp >= 0 ? "#00e676" : "#ff5252"} />
+      </div>
+      <div style={{ marginTop: 10, fontSize: 12, color: "#d7e6e8", lineHeight: 1.5 }}>{regimeMsg}</div>
+    </section>
+  );
+}
+
+// ── Gamma-logic rules engine ──────────────────────────────────────────────────
+// If-this-then-that signals derived from the current greeks, their intraday
+// percentile within today's range, and DEX velocity / zero-line flips.
+interface GammaSignal {
+  id: string;          // stable key so the feed dedups
+  priority: number;    // lower = more important (sorts to top)
+  title: string;
+  desc: string;
+  edge: string;        // actionable edge
+  color: string;       // accent
+  pulse?: boolean;     // blinking background for critical events
+}
+
+// percentile of `v` within the session min/max → 0..1
+function pctInRange(v: number, vals: number[]): number {
+  if (!vals.length) return 0.5;
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  if (hi === lo) return 0.5;
+  return (v - lo) / (hi - lo);
+}
+
+// ── Velocity (rate of change) over the recent window ──────────────────────────
+// Velocity = current − value ~`windowMs` ago. Acceleration = velocity now vs the
+// prior equal window (2nd derivative). Both per-Greek. Used to catch dealers
+// re-hedging before it shows in absolute levels — the earliest 0DTE edge.
+interface Vel { dv: number; accel: number; rising: boolean }
+function velocityOf(history: GreekPoint[], pick: (p: GreekPoint) => number, windowMs = 600_000): Vel {
+  const n = history.length;
+  if (n < 2) return { dv: 0, accel: 0, rising: false };
+  const cur = history[n - 1];
+  const findAtOrBefore = (t: number) => {
+    // nearest point at/just before time t
+    let best = history[0];
+    for (const p of history) { if (p.ts <= t) best = p; else break; }
+    return best;
+  };
+  const t0 = cur.ts - windowMs;
+  const t1 = cur.ts - windowMs * 2;
+  const p0 = findAtOrBefore(t0);
+  const p1 = findAtOrBefore(t1);
+  const dvNow = pick(cur) - pick(p0);     // velocity over last window
+  const dvPrev = pick(p0) - pick(p1);     // velocity over prior window
+  return { dv: dvNow, accel: dvNow - dvPrev, rising: Math.abs(dvNow) > Math.abs(dvPrev) };
+}
+
+// % of today's range a metric moved over the window (for GEX/CHEX/VEX thresholds)
+function rangePct(dv: number, vals: number[]): number {
+  if (!vals.length) return 0;
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  const span = hi - lo;
+  return span > 0 ? Math.abs(dv) / span : 0;
+}
+
+function evaluateGamma(history: GreekPoint[], vol?: VolData | null): GammaSignal[] {
+  if (!history.length) return [];
+  const cur = history[history.length - 1];
+  const sigs: GammaSignal[] = [];
+
+  // Vol context: IV falling/rising + IV rank tier.
+  const ivFalling = vol?.vix_1d != null && vol?.vix_spot != null ? vol.vix_1d < vol.vix_spot : null;
+  const ivRank = vol?.iv_rank ?? null;
+  const ivHigh = ivRank != null && ivRank >= 60;
+  const ivLow = ivRank != null && ivRank <= 30;
+
+  const gexVals = history.map(h => h.gex);
+  const dexVals = history.map(h => h.dex);
+  const chexVals = history.map(h => h.chex);
+  const vexVals = history.map(h => h.vex);
+
+  const gexPos = pctInRange(cur.gex, gexVals);
+  const dexPos = pctInRange(cur.dex, dexVals);
+  const chexPos = pctInRange(cur.chex, chexVals);
+  const vexPos = pctInRange(cur.vex, vexVals);
+
+  // Look back a few intervals for DEX flip / velocity.
+  const lookback = history.slice(-4);
+  const prevDex = lookback.length > 1 ? lookback[0].dex : cur.dex;
+
+  // ── Velocity (rate of change over ~10 min) for every Greek ──
+  const WIN = 600_000;
+  const dexVel = velocityOf(history, p => p.dex, WIN);   // billions
+  const gexVel = velocityOf(history, p => p.gex, WIN);   // billions
+  const chexVel = velocityOf(history, p => p.chex, WIN); // millions
+  const vexVel = velocityOf(history, p => p.vex, WIN);   // millions
+  const arrow = (v: number) => v > 0 ? "↑" : v < 0 ? "↓" : "→";
+
+  // Range-relative move sizes (for GEX/CHEX/VEX % thresholds).
+  const gexRangePct = rangePct(gexVel.dv, gexVals);
+  const chexRangePct = rangePct(chexVel.dv, chexVals);
+  const vexRangePct = rangePct(vexVel.dv, vexVals);
+
+  // ── 1. Critical DEX flip (zero-line cross) ──
+  if (lookback.length > 1 && Math.sign(prevDex) !== 0 && Math.sign(cur.dex) !== 0 && Math.sign(prevDex) !== Math.sign(cur.dex)) {
+    const dir = cur.dex > 0 ? "Negative → Positive" : "Positive → Negative";
+    sigs.push({
+      id: "dex-flip", priority: 0, color: "#ff3b3b", pulse: true,
+      title: "CRITICAL: DEX Flip Detected",
+      desc: `DEX has violently flipped the zero-line (${dir}).`,
+      edge: "Immediate structural shift in dealer hedging. Expect sudden, aggressive directional momentum — treat as a high-conviction regime change.",
+    });
+  } else {
+    // ── 1b. Pre-flip warning: range spikes ≥2× prior 15-min avg while avg stalls ──
+    const now = cur.ts;
+    const recent = history.filter(h => now - h.ts <= 300_000);          // last 5 min
+    const prior  = history.filter(h => now - h.ts > 300_000 && now - h.ts <= 1_200_000); // prior 15 min
+    if (recent.length >= 3 && prior.length >= 3) {
+      const rng  = (a: GreekPoint[]) => Math.max(...a.map(p => p.dex)) - Math.min(...a.map(p => p.dex));
+      const mean = (a: GreekPoint[]) => a.reduce((s, p) => s + p.dex, 0) / a.length;
+      const priRange  = rng(prior) || 1e-6;
+      const rangeMult = rng(recent) / priRange;
+      const avgStall  = Math.abs(mean(recent) - mean(prior)) < priRange;
+      if (rangeMult >= 2 && avgStall) {
+        // Backtest (13 RTH days): open/close windows carry the signal (~58% @2×, 80% @3×);
+        // 13:00–14:00 ET midday fires went 0-for-4. Tag reliability by ET time-of-day.
+        const etM = (() => { const s = new Date(cur.ts).toLocaleString("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }); return Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5)); })();
+        const primeWindow = (etM >= 570 && etM < 690) || (etM >= 840 && etM < 960); // 09:30–11:30 or 14:00–16:00
+        const ctx = primeWindow ? "Prime window (open/close)" : "Midday — lower reliability";
+        sigs.push({
+          id: "dex-preflip", priority: 0, color: primeWindow ? "#fbbf24" : "#a3a3a3", pulse: primeWindow && rangeMult >= 3,
+          title: `WARNING: DEX Pre-Flip Instability (${rangeMult.toFixed(1)}×)`,
+          desc: `DEX 5-min range is ${rangeMult.toFixed(1)}× the prior 15-min while the average stalls. ${ctx}.`,
+          edge: "Consolidation is ending — internal range is exploding while price stays flat. A sharp DEX move or zero-line flip is likely imminent.",
+        });
+      }
+    }
+  }
+
+  // ── Rapid DEX velocity surge (|Δ| > $15B over window) ──
+  const dexSurge = Math.abs(dexVel.dv) > 15;
+  if (dexSurge && Math.sign(prevDex) === Math.sign(cur.dex)) {
+    sigs.push({
+      id: "dex-velocity", priority: 1, color: "#ff4fd8",
+      title: `Rapid DEX Velocity Surge ${arrow(dexVel.dv)}`,
+      desc: `DEX shifted by ${fmtB(dexVel.dv)} over ~10 min.`,
+      edge: "Dealers are chasing delta. Don't fight the move until velocity cools (Δ drops below ~50% of peak).",
+    });
+  }
+
+  // ── GEX velocity: surge (>30% of range) ──
+  if (gexRangePct > 0.30) {
+    const weakening = cur.gex > 0 && gexVel.dv < 0;
+    sigs.push({
+      id: weakening ? "gex-vel-weak" : "gex-velocity", priority: 2,
+      color: "#facc15",
+      title: weakening
+        ? `GEX Velocity Weakening ${arrow(gexVel.dv)}`
+        : `GEX Velocity Surge ${arrow(gexVel.dv)}`,
+      desc: `GEX moved ${fmtB(gexVel.dv)} (${(gexRangePct * 100).toFixed(0)}% of session range) in ~10 min.`,
+      edge: weakening
+        ? "Positive gamma dropping fast — pinning is weakening. Prepare for a directional break."
+        : "Gamma accelerating — if negative GEX, expect a stronger breakout; if positive, explosive pinning. Trade with the move.",
+    });
+  }
+
+  // ── CHEX velocity ramp (late-day buying pressure) ──
+  if (chexRangePct > 0.40 && chexVel.dv > 0) {
+    sigs.push({
+      id: "chex-velocity", priority: 4, color: "#2dd4bf",
+      title: `CHEX Velocity Ramp ${arrow(chexVel.dv)}`,
+      desc: `Charm surged ${fmtM(chexVel.dv)} (${(chexRangePct * 100).toFixed(0)}% of range).`,
+      edge: "Strong charm ramp = structural buying pressure into the close. Weighs more after 2 PM ET.",
+    });
+  }
+
+  // ── VEX velocity (vol-triggered flows) ──
+  if (vexRangePct > 0.30) {
+    sigs.push({
+      id: "vex-velocity", priority: 4, color: "#22d3ee",
+      title: `VEX Velocity Shift ${arrow(vexVel.dv)}`,
+      desc: `Vanna moved ${fmtM(vexVel.dv)} (${(vexRangePct * 100).toFixed(0)}% of range) — IV-driven re-hedging.`,
+      edge: "Pair with VIX direction: rising VEX + falling IV supports upside; confirm with price action.",
+    });
+  }
+
+  // ── Extreme acceleration (velocity itself rising across windows) ──
+  const accelHits = [
+    Math.abs(dexVel.dv) > 8 && dexVel.rising,
+    gexRangePct > 0.20 && gexVel.rising,
+  ].filter(Boolean).length;
+  if (accelHits >= 1 && (dexVel.rising || gexVel.rising)) {
+    sigs.push({
+      id: "extreme-accel", priority: 1, color: "#ff3b3b", pulse: true,
+      title: "Extreme Acceleration ⚡",
+      desc: `Velocity is increasing across intervals (DEX ${arrow(dexVel.dv)} / GEX ${arrow(gexVel.dv)}).`,
+      edge: "Cascading flows likely. Tighten stops, reduce size, or join with momentum (long calls/puts aligned with the velocity).",
+    });
+  }
+
+  // ── 2. GEX (Gamma) ──
+  if (cur.gex > 0 && gexPos > 0.65) {
+    sigs.push({
+      id: "gex-pin", priority: 4, color: "#00e676",
+      title: "High Positive Gamma (Pin Risk)",
+      desc: "Positive GEX is high for the session. Dealers are suppressing volatility.",
+      edge: "Favors pinning & mean reversion around strike walls. Fade extreme moves — stronger near 0DTE/expiration.",
+    });
+  } else if (cur.gex > 0 && gexPos < 0.35) {
+    sigs.push({
+      id: "gex-fading", priority: 5, color: "#9ae6b4",
+      title: "Fading Positive Gamma",
+      desc: "GEX is positive but has drifted to the lower end of today's range.",
+      edge: "Mean reversion still in play but dealer support is weakening. Watch for broader directional moves.",
+    });
+  } else if (cur.gex < 0 && gexPos < 0.35) {
+    sigs.push({
+      id: "gex-deep-neg", priority: 2, color: "#ff5252",
+      title: "Deep Negative Gamma",
+      desc: "GEX is deeply negative relative to the session. Dealers forced to sell into weakness.",
+      edge: "High-vol environment. Favor momentum breakouts / long straddles, respect trendlines, keep tight stops.",
+    });
+  }
+
+  // ── 3. CHEX (Charm) ──
+  if (cur.chex > 0 && chexPos > 0.7) {
+    sigs.push({
+      id: "chex-support", priority: 6, color: "#ffd166",
+      title: "Strong Charm Support",
+      desc: "CHEX is trending at the highs of the session.",
+      edge: "Time decay aggressively supports bids — grows more important later in the session. Look for late-day buying pressure.",
+    });
+  }
+
+  // ── 4. VEX (Vanna) — only a clean upside signal when IV is actually falling ──
+  if (cur.vex > 0 && vexPos > 0.6) {
+    const confirmed = ivFalling === true;
+    sigs.push({
+      id: "vex-upside", priority: confirmed ? 5 : 6, color: "#a78bfa",
+      title: confirmed ? "Active Vanna Upside (IV Falling)" : "Vanna Elevated (await IV drop)",
+      desc: ivFalling == null
+        ? "VEX is elevated — dealers highly sensitive to IV fluctuations."
+        : confirmed
+          ? "VEX elevated and VIX is ticking lower — vanna tailwind is live."
+          : "VEX elevated but VIX is flat/rising — upside vanna not yet confirmed.",
+      edge: "IV crush supports upside momentum. Per logic: only trade the upside bias while VIX/IV is actively declining.",
+    });
+  }
+
+  // ── 5. Static DEX inventory (only when no velocity surge) ──
+  if (!dexSurge && cur.dex > 0 && dexPos > 0.75) {
+    sigs.push({
+      id: "dex-up-inv", priority: 7, color: "#67e8f9",
+      title: "Upside Inventory Pressure",
+      desc: "Dealers hold significant upside inventory pressure near spot.",
+      edge: "Watch for resistance at key levels.",
+    });
+  } else if (!dexSurge && cur.dex < 0 && dexPos < 0.25) {
+    sigs.push({
+      id: "dex-down-inv", priority: 7, color: "#fca5a5",
+      title: "Downside Inventory Pressure",
+      desc: "Dealers hold heavy downside pressure.",
+      edge: "Expect aggressive short-covering if the market catches a bid.",
+    });
+  }
+
+  // ── 7. High-impact combined regimes ──
+  if (cur.gex > 0 && gexPos > 0.6 && cur.chex > 0 && chexPos > 0.6 && cur.vex > 0 && vexPos > 0.55) {
+    sigs.push({
+      id: "regime-bull", priority: 3, color: "#00e676", pulse: true,
+      title: "Dealer-Supported Bullish Regime",
+      desc: "High positive GEX + strong charm + active vanna.",
+      edge: "Strong tendency to grind higher with low realized vol. Bias long, use dips as entry.",
+    });
+  }
+  if (cur.gex < 0 && gexPos < 0.4 && cur.dex < 0 && dexPos < 0.4) {
+    sigs.push({
+      id: "regime-bear", priority: 3, color: "#ff3b3b", pulse: true,
+      title: "Dealer-Amplified Bearish Regime",
+      desc: "Deep negative GEX + downside DEX pressure.",
+      edge: "High risk of cascading moves. Reduce long exposure, favor shorts or vol products.",
+    });
+  }
+
+  // ── Velocity-driven regime (acceleration reinforces the main regime) ──
+  // Bearish: negative GEX getting more negative + DEX falling.
+  if (cur.gex < 0 && gexVel.dv < 0 && dexVel.dv < 0 && (gexRangePct > 0.2 || Math.abs(dexVel.dv) > 8)) {
+    sigs.push({
+      id: "vel-regime-bear", priority: 1, color: "#ff3b3b", pulse: true,
+      title: "Accelerating Dealer Alignment (Bearish)",
+      desc: `Negative GEX deepening (${arrow(gexVel.dv)}) with DEX falling (${arrow(dexVel.dv)}).`,
+      edge: "Velocity reinforcing the bearish regime → higher conviction, larger moves. Favor momentum shorts; respect stops.",
+    });
+  }
+  // Bullish: positive GEX building + DEX rising.
+  if (cur.gex > 0 && gexVel.dv > 0 && dexVel.dv > 0 && (gexRangePct > 0.2 || Math.abs(dexVel.dv) > 8)) {
+    sigs.push({
+      id: "vel-regime-bull", priority: 1, color: "#00e676", pulse: true,
+      title: "Accelerating Dealer Alignment (Bullish)",
+      desc: `Positive GEX building (${arrow(gexVel.dv)}) with DEX rising (${arrow(dexVel.dv)}).`,
+      edge: "Velocity reinforcing the bullish regime → explosive pinning / squeeze risk. Bias long with momentum.",
+    });
+  }
+  // Cooling: velocities decelerating → potential reversal/consolidation.
+  if (!dexVel.rising && !gexVel.rising && (Math.abs(dexVel.dv) > 5 || gexRangePct > 0.15)) {
+    sigs.push({
+      id: "vel-cooling", priority: 6, color: "#9fb3c8",
+      title: "Velocity Cooling",
+      desc: "Exposure velocity is decelerating across intervals.",
+      edge: "Momentum fading — watch for reversal or consolidation. Scale out of velocity-driven entries near GEX walls.",
+    });
+  }
+
+  // ── Volatility & regime context (from logic file) ──
+  if (ivHigh && cur.gex < 0) {
+    sigs.push({
+      id: "vol-highiv-neggex", priority: 3, color: "#60a5fa",
+      title: "High IV Rank + Negative GEX",
+      desc: `IV Rank ${ivRank!.toFixed(0)} with negative gamma.`,
+      edge: "Favor long straddles or momentum — convexity is cheap relative to realized risk.",
+    });
+  }
+  if (ivLow && cur.gex > 0 && gexPos > 0.6) {
+    sigs.push({
+      id: "vol-lowiv-posgex", priority: 5, color: "#22d3ee",
+      title: "Low IV + High Positive GEX",
+      desc: `IV Rank ${ivRank!.toFixed(0)} with strong positive gamma.`,
+      edge: "Premium-selling environment — iron condors / butterflies. Pinning suppresses realized vol.",
+    });
+  }
+
+  // ── 8. Fallback ──
+  if (!sigs.length) {
+    sigs.push({
+      id: "neutral", priority: 9, color: "#9fb3c8",
+      title: "Consolidation / Neutral",
+      desc: "Metrics are hovering near the middle of today's range.",
+      edge: "Dealer flows balanced. Rely on price action & technical levels. Monitor for intraday shifts.",
+    });
+  }
+
+  return sigs.sort((a, b) => a.priority - b.priority);
+}
+
+// ── Greek gauge (C×D hybrid: split ring + glowing value arc, 0 at 12 o'clock) ──
+// Left half = negative (red), right half = positive (green), zero pinned at top.
+// Self-scaling: `fullScale` is the max |value| seen today, so the arc stays
+// readable regardless of the greek's magnitude.
+function GreeksGauge({
+  label, value, fmt, fullScale,
+}: {
+  label: string; value: number | null; fmt: (v: number | null) => string; fullScale: number;
+}) {
+  const cx = 66, cy = 70, r = 50;
+  const GREEN = "#00e676", RED = "#ff5252";
+  const uid = `gg-${label}`;
+  // deg measured clockwise from top (0 = 12 o'clock).
+  const pt = (deg: number) => ({
+    x: cx + r * Math.sin((deg * Math.PI) / 180),
+    y: cy - r * Math.cos((deg * Math.PI) / 180),
+  });
+  const arc = (d0: number, d1: number) => {
+    const a = pt(d0), b = pt(d1);
+    const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
+    const sweep = d1 > d0 ? 1 : 0;
+    return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
+  };
+  const v = value ?? 0;
+  const f = fullScale > 0 ? Math.max(-1, Math.min(1, v / fullScale)) : 0;
+  const valDeg = f * 135;
+  const pos = v > 0, neg = v < 0;
+  const col = pos ? GREEN : neg ? RED : "#9fb3c8";
+  const valuePath = f >= 0 ? arc(0, valDeg) : arc(valDeg, 0);
+  const has = value != null && isFinite(value);
+
+  return (
+    <div className="card-hover" style={{
+      border: `1px solid ${HOME_THEME.border}`,
+      background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.12) 0%, transparent 62%), ${HOME_THEME.panelBg}`,
+      backdropFilter: "blur(16px)", borderRadius: 14, padding: "12px 8px 10px",
+      display: "flex", flexDirection: "column", alignItems: "center",
+    }}>
+      <svg viewBox="0 0 132 108" width="100%" style={{ display: "block", maxWidth: 150 }}>
+        <defs>
+          <filter id={uid} x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="2.4" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        {/* negative half track (left) */}
+        <path d={arc(-135, 0)} fill="none" stroke="#2a1a20" strokeWidth={8} strokeLinecap="round" />
+        {/* positive half track (right) */}
+        <path d={arc(0, 135)} fill="none" stroke="#15242b" strokeWidth={8} strokeLinecap="round" />
+        {/* glowing value arc */}
+        {has && Math.abs(valDeg) > 0.5 && (
+          <path d={valuePath} fill="none" stroke={col} strokeWidth={8} strokeLinecap="round" filter={`url(#${uid})`} />
+        )}
+        {/* zero marker at top */}
+        <line x1={cx} y1={cy - r - 8} x2={cx} y2={cy - r + 2} stroke="#fff" strokeWidth={1.5} />
+        <circle cx={cx} cy={cy - r} r={2.6} fill="#fff" />
+        <text x={cx} y={cy + 2} textAnchor="middle" fontSize={19} fontWeight={800} fill="#fff" fontFamily="monospace">
+          {has ? fmt(value) : "--"}
+        </text>
+        <text x={cx} y={cy + 20} textAnchor="middle" fontSize={10} letterSpacing="2" fill="#9fb3c8">{label}</text>
+      </svg>
+    </div>
+  );
+}
+
+// ── Zero-cross detection ──────────────────────────────────────────────────────
+// Times a series flips sign (through 0). Derived from persisted history, so
+// today's crossings reconstruct on reload without a dedicated table.
+//
+// Noise-hardened so a single outlier tick near zero can't register a flip:
+//   1. Deadband (hysteresis) — the value must clear ±CROSS_BAND_FRAC of today's
+//      scale past zero. Ticks inside the band are "neutral" and change nothing.
+//   2. Confirmation — a new side must hold for CROSS_CONFIRM consecutive samples
+//      before the flip is recorded. A lone spike (count 1) is ignored.
+// The recorded time is the FIRST sample of the confirmed run (true crossing),
+// not the confirming sample.
+const CROSS_BAND_FRAC = 0.08; // must clear 8% of today's typical |scale| past zero
+const CROSS_CONFIRM = 2;      // consecutive samples on the new side to confirm
+const CROSS_HOLD_MS = 60_000; // …or hold the new side this long (sustained flip)
+const CROSS_BAND_PCTL = 0.90; // robust scale = 90th pctile of |value| (not max)
+
+// Robust band. The band MUST NOT key off max|value|: a single bad print (e.g. a
+// −645 DEX spike on a day whose real range is ±45) makes the band wider than the
+// entire series, every sample reads "neutral", and NO crossing can ever be
+// logged. A high percentile ignores the outlier and tracks the real magnitude.
+function crossBand(pts: { value: number }[], fullScale: number): number {
+  const mags = pts.map(p => Math.abs(p.value)).filter(v => isFinite(v) && v > 0).sort((a, b) => a - b);
+  const p = mags.length ? mags[Math.min(mags.length - 1, Math.floor(mags.length * CROSS_BAND_PCTL))] : 0;
+  const scale = p > 0 ? p : (fullScale || 0);
+  return Math.max(1e-9, scale * CROSS_BAND_FRAC);
+}
+
+interface ZeroCross { ts: number; label: string; up: boolean } // up = − → +
+function zeroCrossings(pts: { ts: number; value: number }[], label: string, fullScale: number): ZeroCross[] {
+  const band = crossBand(pts, fullScale);
+  const out: ZeroCross[] = [];
+  let committed = 0;                       // -1 / 0 / +1 : the confirmed side
+  let pendSign = 0, pendCount = 0, pendTs = 0;
+
+  for (const p of pts) {
+    const v = p.value;
+    if (!isFinite(v)) continue;
+    const side = v > band ? 1 : v < -band ? -1 : 0; // 0 = inside deadband
+    // Neutral = inside the deadband = NO INFORMATION. Do not clear a pending
+    // candidate here: a series chopping across zero dips in and out of the band
+    // constantly, so resetting on neutral meant a real, sustained flip could
+    // never accumulate CROSS_CONFIRM consecutive samples and was never logged.
+    if (side === 0) continue;
+
+    if (committed === 0) {
+      // Establish the initial side (no crossing recorded for the first commit).
+      if (side === pendSign) pendCount++;
+      else { pendSign = side; pendCount = 1; pendTs = p.ts; }
+      if (pendCount >= CROSS_CONFIRM) { committed = side; pendSign = 0; pendCount = 0; }
+      continue;
+    }
+
+    // Back on the committed side — that DOES kill the candidate.
+    if (side === committed) { pendSign = 0; pendCount = 0; continue; }
+
+    // Opposing side — candidate flip, needs confirmation: either CROSS_CONFIRM
+    // samples out past the band, or the new side simply holding for CROSS_HOLD_MS.
+    if (side === pendSign) pendCount++;
+    else { pendSign = side; pendCount = 1; pendTs = p.ts; }
+    if (pendCount >= CROSS_CONFIRM || p.ts - pendTs >= CROSS_HOLD_MS) {
+      out.push({ ts: pendTs, label, up: side > 0 });
+      committed = side; pendSign = 0; pendCount = 0;
+    }
+  }
+  return out;
+}
+
+// ── totals → GreekPoint ───────────────────────────────────────────────────────
+// Shared mapping from a market-state `totals` object (same shape whether it
+// arrives via the WS gex/snapshot frame or the old REST route) into a GreekPoint
+// carrying all three bases. Returns null if every greek is zero (empty/partial).
+function pointFromTotals(
+  t: Record<string, number> | null | undefined,
+  spotVal: number | null | undefined,
+  updatedAtRaw: number | null | undefined,
+): GreekPoint | null {
+  if (!t) return null;
+  const dexOi    = Number(t.totalDeltaCall ?? 0) + Number(t.totalDeltaPut ?? 0);
+  const dexOiVol = Number(t.totalDeltaOiVol ?? dexOi);
+  const dexVol   = Number(t.totalDeltaVol ?? 0);
+  const vexOi    = Number(t.totalVEX ?? 0);
+  const vexOiVol = Number(t.totalVEXOiVol ?? vexOi);
+  const vexVol   = Number(t.totalVEXVol ?? 0);
+  const chexOi    = Number(t.totalCHEX ?? 0);
+  const chexOiVol = Number(t.totalCHEXOiVol ?? chexOi);
+  const chexVol   = Number(t.totalCHEXVol ?? 0);
+  let ts = Number(updatedAtRaw);
+  if (!Number.isFinite(ts) || ts <= 0) ts = Date.now();
+  else if (ts < 1e12) ts = ts * 1000; // seconds → ms
+  const gexOiVolB = Number(t.totalGEXOiVol ?? t.totalGEX ?? 0) / 1e9;
+  const gexVolB   = Number(t.totalGEXVol ?? 0) / 1e9;
+  const snap: GreekPoint = {
+    ts,
+    gex: gexOiVolB, gexOiVol: gexOiVolB, gexVol: gexVolB,
+    dex: dexOiVol / 1e9, dexOiVol: dexOiVol / 1e9, dexVol: dexVol / 1e9,
+    chex: chexOiVol / 1e6, chexOiVol: chexOiVol / 1e6, chexVol: chexVol / 1e6,
+    vex: vexOiVol / 1e6, vexOiVol: vexOiVol / 1e6, vexVol: vexVol / 1e6,
+    spot: Number(spotVal ?? 0) || 0,
+  };
+  return (snap.gex || snap.dex || snap.chex || snap.vex) ? snap : null;
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function Greeks() {
-  return <Placeholder title="Greeks" sourceRoute="/greeks" />;
+  const [history, setHistory] = useState<GreekPoint[]>([]);
+  const [latest, setLatest] = useState<GreekPoint | null>(null);
+  const [lastRefresh, setLastRefresh] = useState("--");
+  const [lastPoll, setLastPoll] = useState("--"); // last auto-poll attempt (alive-check, independent of data)
+  const [stale, setStale] = useState(false);
+  const [dataOn, setDataOn] = useState(false); // live poll gate — defaults OFF; also auto-off after 5min idle
+  const [gexBasis, setGexBasis] = useState<GexBasis>("oivol");
+  const [vol, setVol] = useState<VolData | null>(null);
+  const [, setFeed] = useState<(GammaSignal & { time: string; key: number })[]>([]);
+  const feedIdRef = useRef(0);
+  const lastSigIdsRef = useRef<Set<string>>(new Set());
+  const mountedRef = useRef(true);
+
+  // Set true on (re)mount, false on unmount. Previously this only set false on
+  // cleanup — under React 18 Strict Mode (dev) the mount→unmount→remount cycle
+  // latched it false on the throwaway mount and never restored it, so the 30s
+  // poll fired but every tick saw mountedRef=false and skipped the update. Only
+  // the manual button (which ignores mountedRef) worked. Restoring true on mount
+  // keeps the auto-refresh alive.
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // Auto-off after 5min of no user activity, so a forgotten open tab doesn't
+  // keep the WS feed + VIX poll running all day. Any interaction resets the
+  // timer; only fires while dataOn is actually true.
+  useEffect(() => {
+    if (!dataOn) return;
+    const IDLE_MS = 5 * 60_000;
+    let t: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { if (mountedRef.current) setDataOn(false); }, IDLE_MS);
+    };
+    const events: (keyof WindowEventMap)[] = ["mousemove", "keydown", "click", "scroll", "touchstart"];
+    events.forEach(ev => window.addEventListener(ev, reset, { passive: true }));
+    reset();
+    return () => { clearTimeout(t); events.forEach(ev => window.removeEventListener(ev, reset)); };
+  }, [dataOn]);
+
+  const applySnap = useCallback((snap: GreekPoint) => {
+    setLatest(snap);
+    setStale(false);
+    setHistory(prev => {
+      // De-dup into 15s buckets so the ~2s WS feed doesn't pile up, while keeping
+      // enough points (cap 1500 ≈ 6h at 15s) to cover a full session for the chart
+      // and zero-cross log.
+      const bucket = Math.floor(snap.ts / 15000);
+      const filtered = prev.filter(r => Math.floor(r.ts / 15000) !== bucket);
+      return [...filtered, snap].sort((a, b) => a.ts - b.ts).slice(-1500);
+    });
+    // NOTE: this page no longer writes to greeks_ts. The server-v2 greeks-ts-writer
+    // owns that table 24/7 on the canonical OI+Vol basis. The page's own write used
+    // a different basis (/api/insights/gex totals) and only ran while the page was
+    // open, injecting conflicting-sign rows every 60s. Display stays in-memory only.
+    setLastRefresh(etTime(snap.ts));
+  }, []);
+
+  // Greeks now arrive over the /ws/gex WebSocket (see the WS effect below), the
+  // single feed the home/flow pages use. This callback only refreshes the VIX/IV
+  // side (not on the WS) and stamps the poll clock; the manual Refresh button
+  // re-pulls VIX on demand.
+  const doRefresh = useCallback(async () => {
+    setLastPoll(etTime());
+    fetch("/api/insights/vix", { cache: "no-store" })
+      .then(res => res.ok ? res.json() : null)
+      .then(j => { if (j && mountedRef.current) setVol((j?.data ?? j) as VolData); })
+      .catch(() => {});
+  }, []);
+
+  const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(doRefresh);
+
+  // VIX/IV poll every 60s while live data is ON (greeks themselves stream over WS).
+  useEffect(() => {
+    if (!dataOn) return;
+    doRefresh();
+    const t = setInterval(() => { if (mountedRef.current) doRefresh(); }, 60_000);
+    return () => clearInterval(t);
+  }, [doRefresh, dataOn]);
+
+  // ── Greeks feed: single /ws/gex WebSocket ────────────────────────────────────
+  // Reads the gex/snapshot frames (totals) + spot frames; ignores the flow tape.
+  // Gated by the DATA toggle: ON connects, OFF closes the socket (page keeps
+  // painting from persisted history). Same feed home/flow use — no more REST poll.
+  useEffect(() => {
+    if (!dataOn) { setStale(true); return; }
+    let unmounted = false;
+    let ws: WebSocket | null = null;
+    let reconnect: ReturnType<typeof setTimeout> | null = null;
+    const latest: { totals: Record<string, number> | null; spot: number | null; updatedAt: number } =
+      { totals: null, spot: null, updatedAt: 0 };
+
+    const tryApply = () => {
+      if (!latest.totals || !mountedRef.current) return;
+      const snap = pointFromTotals(latest.totals, latest.spot, latest.updatedAt || Date.now());
+      if (snap) applySnap(snap);
+    };
+
+    const handle = (raw: string) => {
+      let m: Record<string, unknown>;
+      try { m = JSON.parse(raw); } catch { return; }
+      const type = String(m.type ?? "");
+      const d = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
+      if (type === "snapshot" || type === "gex") {
+        if (d.totals) latest.totals = d.totals as Record<string, number>;
+        if (type === "snapshot" && d.spot != null) latest.spot = Number(d.spot);
+        if (d.updatedAt) latest.updatedAt = Number(d.updatedAt);
+        tryApply();
+      } else if (type === "spot") {
+        if (d.spot != null) { latest.spot = Number(d.spot); tryApply(); }
+      }
+      // 'flow' / 'esCandles' / 'status' frames are ignored here.
+    };
+
+    const scheduleReconnect = () => {
+      if (unmounted) return;
+      if (reconnect) clearTimeout(reconnect);
+      reconnect = setTimeout(connect, 2000);
+    };
+
+    function connect() {
+      if (unmounted) return;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
+      catch { scheduleReconnect(); return; }
+      ws.onopen = () => { setStale(false); };
+      ws.onmessage = (evt) => handle(String(evt.data));
+      ws.onerror = () => { try { ws?.close(); } catch {} };
+      ws.onclose = () => { if (!unmounted) { setStale(true); scheduleReconnect(); } };
+    }
+
+    connect();
+    return () => {
+      unmounted = true;
+      if (reconnect) clearTimeout(reconnect);
+      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
+    };
+  }, [dataOn, applySnap]);
+
+  // Basis toggle: OI+Vol (heatmap / mult-greek) by default, or Volume-only.
+  // Each greek already holds the OI+Vol value in its base field; when Vol-only is
+  // chosen we remap EVERY greek to its *Vol variant so ALL downstream consumers
+  // (cards, velocity, chart, signals) switch basis together — same as GEX.
+  const applyBasis = useCallback(
+    (p: GreekPoint): GreekPoint =>
+      gexBasis === "vol"
+        ? {
+            ...p,
+            gex: p.gexVol ?? p.gex,
+            dex: p.dexVol ?? p.dex,
+            chex: p.chexVol ?? p.chex,
+            vex: p.vexVol ?? p.vex,
+          }
+        : p,
+    [gexBasis],
+  );
+  const historyView = history.map(applyBasis);
+  const latestView = latest ? applyBasis(latest) : null;
+
+  // Display values (fall back to last historical point if no live snap yet).
+  const history2 = historyView;
+  const d = latestView ?? (history2.length ? history2[history2.length - 1] : null);
+  const gexVal = d?.gex ?? null;
+  const dexVal = d?.dex ?? null;
+  const chexVal = d?.chex ?? null;
+  const vexVal = d?.vex ?? null;
+
+  const gexData    = history2.map(r => ({ ts: r.ts, value: r.gex }));
+  const dexData    = history2.map(r => ({ ts: r.ts, value: r.dex }));
+  const chexData   = history2.map(r => ({ ts: r.ts, value: r.chex }));
+  const vexData    = history2.map(r => ({ ts: r.ts, value: r.vex }));
+
+  // Gauge full-scale = today's max |value| per greek (falls back to |current|),
+  // so each gauge self-scales to its own magnitude with 0 pinned at the top.
+  const scaleOf = (arr: { value: number }[], cur: number | null) => {
+    const m = Math.max(0, ...arr.map(p => Math.abs(p.value)), Math.abs(cur ?? 0));
+    return m > 0 ? m : 1;
+  };
+  const gexScale  = scaleOf(gexData, gexVal);
+  const dexScale  = scaleOf(dexData, dexVal);
+  const chexScale = scaleOf(chexData, chexVal);
+  const vexScale  = scaleOf(vexData, vexVal);
+
+  // Today's GEX/DEX zero-line crossings, newest first (derived from persisted history).
+  const zeroCross = [
+    ...zeroCrossings(gexData, "GEX", gexScale),
+    ...zeroCrossings(dexData, "DEX", dexScale),
+  ].sort((a, b) => b.ts - a.ts);
+
+  // Append newly-fired signals to the scrolling feed (dedup against the last
+  // evaluation so we don't spam the same condition every 30s poll).
+  useEffect(() => {
+    if (!history.length) return;
+    const sigs = evaluateGamma(history, vol);
+    const nowIds = new Set(sigs.map(s => s.id));
+    const fresh = sigs.filter(s => !lastSigIdsRef.current.has(s.id));
+    if (fresh.length) {
+      const time = etTime();
+      setFeed(prev => {
+        const added = fresh.map(s => ({ ...s, time, key: ++feedIdRef.current }));
+        return [...added, ...prev].slice(0, 60);
+      });
+    }
+    lastSigIdsRef.current = nowIds;
+  }, [history, vol]);
+
+  return (
+    <div style={{ ...homeShellStyle, height: "100%", overflowY: "auto" }}>
+    <div style={{ padding: "18px 20px 40px", maxWidth: 1280, margin: "0 auto" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: HOME_THEME.text, letterSpacing: ".03em" }}>Greeks</div>
+          <div style={{ fontSize: 11, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em" }}>
+            SPX dealer exposure · updated {lastRefresh} ET{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
+          </div>
+        </div>
+        <Dock className="dock-noscroll">
+          <SegGroup
+            options={[{ label: "OI+Vol", value: "oivol" }, { label: "Vol Only", value: "vol" }]}
+            active={gexBasis}
+            onChange={(v) => setGexBasis(v as GexBasis)}
+          />
+          <DockGap />
+          <DockButton
+            onClick={() => setDataOn(v => !v)}
+            title={dataOn ? "Live data ON — click to stop the feed" : "Live data OFF — click to start"}
+            style={{ color: dataOn ? "#00e676" : "#ff5252" }}
+          >{dataOn ? "● DATA ON" : "○ DATA OFF"}</DockButton>
+          <DockGap />
+          <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
+        </Dock>
+      </div>
+
+      {/* Greek gauges — 0 at 12 o'clock, positive green / negative red */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10, marginBottom: 14 }}>
+        <GreeksGauge label="GEX"  value={gexVal}  fmt={fmtB} fullScale={gexScale} />
+        <GreeksGauge label="DEX"  value={dexVal}  fmt={fmtB} fullScale={dexScale} />
+        <GreeksGauge label="CHEX" value={chexVal} fmt={fmtM} fullScale={chexScale} />
+        <GreeksGauge label="VEX"  value={vexVal}  fmt={fmtM} fullScale={vexScale} />
+      </div>
+
+      {/* Regime matrix — live regime highlighted, one-flip neighbors dimly lit */}
+      <RegimeMatrix gex={gexVal} dex={dexVal} chex={chexVal} vex={vexVal} hasData={!!d} updatedTs={d ? (latestView?.ts ?? null) : null} />
+
+      {/* Volatility / IV context */}
+      <VolCard vol={vol} />
+
+      {/* Vol skew calculator + if-this-then-that matrix */}
+      <SkewCalculator />
+
+      {/* GEX / DEX zero-line crossings — recorded from today's history */}
+      <style>{`
+        .greek-feed-scroll::-webkit-scrollbar{width:8px;}
+        .greek-feed-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:4px;}
+      `}</style>
+      <section style={{
+        marginTop: 14, border: "1px solid rgba(255,255,255,.1)", borderRadius: 12,
+        background: "linear-gradient(180deg,rgba(8,12,18,.6),rgba(0,0,0,.3))", overflow: "hidden",
+      }}>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,.08)",
+        }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Zero-Line Crossings</div>
+            <div style={{ fontSize: 10, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>
+              GEX / DEX sign flips · {zeroCross.length} today
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: dataOn ? "#00e676" : "#7e8ea0", fontWeight: 800 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: dataOn ? "#00e676" : "#7e8ea0", boxShadow: dataOn ? "0 0 8px #00e676" : "none" }} />
+            {dataOn ? "LIVE" : "PAUSED"}
+          </div>
+        </div>
+
+        {/* Scrolling history */}
+        <div className="greek-feed-scroll" style={{ maxHeight: 320, overflowY: "auto" }}>
+          {zeroCross.length === 0 ? (
+            <div style={{ padding: "24px 16px", fontSize: 12, color: "#9fb3c8", textAlign: "center" }}>
+              No GEX/DEX crossings recorded today.
+            </div>
+          ) : zeroCross.map((c, i) => (
+            <div key={`${c.label}-${c.ts}-${i}`} style={{
+              display: "flex", alignItems: "center", gap: 12, padding: "11px 16px",
+              borderBottom: "1px solid rgba(255,255,255,.05)",
+              borderLeft: `3px solid ${c.up ? "#00e676" : "#ff5252"}`,
+            }}>
+              <div style={{ fontSize: 11, color: "#7e8ea0", fontFamily: "var(--font-mono)", minWidth: 74 }}>
+                {new Date(c.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true })}
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#eef7ff", minWidth: 44 }}>{c.label}</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: c.up ? "#00e676" : "#ff5252", fontFamily: "var(--font-mono)" }}>
+                {c.up ? "− → +  crossed positive" : "+ → −  crossed negative"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+    </div>
+  );
 }

@@ -6,10 +6,10 @@ import NotFound from './pages/NotFound.tsx'
 
 // owner-vite — standalone Vite recreation of the /owner backend section.
 // One router, one persistent shell (OwnerShell), a page per sidebar route.
-// Served under /owner3/ in prod → BrowserRouter basename matches the Vite base.
+// Served at the root of owner.cbedge.net → BrowserRouter basename is "/".
 export default function App() {
   return (
-    <BrowserRouter basename="/owner3">
+    <BrowserRouter basename="/">
       <Routes>
         <Route element={<OwnerShell />}>
           <Route index element={<Navigate to="/owner" replace />} />

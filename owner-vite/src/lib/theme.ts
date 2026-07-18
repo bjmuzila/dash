@@ -172,6 +172,71 @@ export const ownerTitleText: CSSProperties = { fontSize: 16, fontWeight: 700, co
 export const ownerHeaderText: CSSProperties = { fontSize: 16, fontWeight: 700, color: OWNER_THEME.text, letterSpacing: "0.01em" };
 export const ownerLabelText: CSSProperties = { fontSize: 13, fontWeight: 400, color: OWNER_THEME.text, letterSpacing: "0.01em" };
 
+/** Dissolve card: borderless, edge-feathered glass (chart/overview panels). */
+export const dissolveCardStyle: CSSProperties = {
+  background:
+    "radial-gradient(120% 130% at 50% 0%, rgba(13,17,25,0.34) 0%, rgba(13,17,25,0.22) 45%, rgba(13,17,25,0.06) 80%, transparent 100%)",
+  backdropFilter: "blur(44px) saturate(1.15)",
+  WebkitBackdropFilter: "blur(44px) saturate(1.15)",
+  borderRadius: 28,
+  border: "none",
+  boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
+  maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+  WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+};
+
+// ── DOCK theme — frosted dropdown/menu language (ThemedSelect, dock menus) ────
+export const DOCK_THEME = {
+  cyanTop: rgba(OWNER_THEME.cyan, 0.5),
+  bg: `radial-gradient(circle at 50% 0%, ${rgba(OWNER_THEME.cyan, 0.07)} 0%, transparent 55%), rgba(10,13,20,0.98)`,
+  shadow: "0 1px 0 rgba(255,255,255,0.06) inset, 0 20px 44px -14px rgba(0,0,0,0.75), 0 6px 16px rgba(0,0,0,0.45)",
+  activeTile: `linear-gradient(180deg, ${rgba(OWNER_THEME.cyan, 0.16)}, ${rgba(OWNER_THEME.cyan, 0.04)})`,
+  activeBorder: rgba(OWNER_THEME.cyan, 0.3),
+  activeGlow: `0 0 14px ${rgba(OWNER_THEME.cyan, 0.22)}`,
+  hoverTile: rgba(OWNER_THEME.cyan, 0.1),
+} as const;
+
+// ── Refresh button — themed style keyed on state (useRefreshButton) ───────────
+export type RefreshState = "idle" | "refreshing" | "success" | "error";
+const REFRESH_GREEN = "#1FD98A";
+export function homeRefreshButtonStyle(state: RefreshState): CSSProperties {
+  return {
+    fontSize: 9,
+    padding: "2px 10px",
+    border: `1px solid ${
+      state === "success" ? REFRESH_GREEN : state === "error" ? OWNER_THEME.red : rgba(OWNER_THEME.cyan, 0.4)
+    }`,
+    borderRadius: 2,
+    background:
+      state === "success" ? rgba(REFRESH_GREEN, 0.1) :
+      state === "error"   ? rgba(OWNER_THEME.red, 0.1) : rgba(OWNER_THEME.cyan, 0.08),
+    color:
+      state === "success" ? REFRESH_GREEN :
+      state === "error"   ? OWNER_THEME.red :
+      state === "refreshing" ? "#888" : OWNER_THEME.cyan,
+    textShadow:
+      state === "success" ? `0 0 12px ${rgba(REFRESH_GREEN, 0.5)}` :
+      state === "error"   ? `0 0 12px ${rgba(OWNER_THEME.red, 0.5)}` : "none",
+    cursor: state === "refreshing" ? "not-allowed" : "pointer",
+    opacity: state === "refreshing" ? 0.6 : 1,
+    fontWeight: 700,
+    flexShrink: 0,
+    transition: "all 0.15s",
+  };
+}
+
+// Toolbar top accent bar — bright cyan center fading to transparent edges.
+export const homeToolbarAccentBar: CSSProperties = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  height: 2,
+  pointerEvents: "none",
+  background: `linear-gradient(90deg, transparent 0%, ${rgba(OWNER_THEME.cyan, 0.12)} 15%, ${rgba(OWNER_THEME.cyan, 0.9)} 50%, ${rgba(OWNER_THEME.cyan, 0.12)} 85%, transparent 100%)`,
+  boxShadow: `0 0 8px ${rgba(OWNER_THEME.cyan, 0.35)}`,
+};
+
 export function ownerStatusPill(ok: boolean): CSSProperties {
   const c = ok ? OWNER_THEME.green : OWNER_THEME.red;
   return {

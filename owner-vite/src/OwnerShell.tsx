@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
 import { Link, useLocation, Outlet } from "react-router-dom";
 import { OWNER_SIDEBAR_GROUPS } from "./lib/nav";
 import { OWNER_THEME } from "./lib/theme";
+import OwnerToolbar from "./OwnerToolbar";
 
 /**
  * OwnerShell — persistent left rail + content outlet for the owner-vite app.
@@ -129,22 +130,20 @@ export default function OwnerShell() {
 
   const content = (
     <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <Outlet />
+      <Suspense
+        fallback={
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: OWNER_THEME.cyan, fontSize: 13, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.7 }}>
+            Loading…
+          </div>
+        }
+      >
+        <Outlet />
+      </Suspense>
     </main>
   );
 
-  if (!isMobile) {
-    return (
-      <div style={{ display: "flex", flex: 1, minHeight: 0, height: "100%" }}>
-        {rail}
-        {content}
-      </div>
-    );
-  }
-
-  // Mobile: floating toggle + backdrop + off-canvas drawer.
-  return (
-    <div style={{ display: "flex", flex: 1, minHeight: 0, height: "100%" }}>
+  const mobileControls = isMobile && (
+    <>
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Owner menu"
@@ -178,8 +177,18 @@ export default function OwnerShell() {
           style={{ position: "fixed", inset: 0, zIndex: 119, background: "rgba(0,0,0,0.5)" }}
         />
       )}
-      {rail}
-      {content}
+    </>
+  );
+
+  // Universal toolbar on top, then the rail + page content row beneath it.
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }}>
+      <OwnerToolbar />
+      <div style={{ display: "flex", flex: 1, minHeight: 0, position: "relative" }}>
+        {mobileControls}
+        {rail}
+        {content}
+      </div>
     </div>
   );
 }

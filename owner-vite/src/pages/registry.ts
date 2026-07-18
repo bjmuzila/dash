@@ -1,41 +1,28 @@
-import type { ComponentType } from "react";
-import Hub from "./Hub";
-import ControlPanel from "./ControlPanel";
-import Admin from "./Admin";
-import Sales from "./Sales";
-import Probe from "./Probe";
-import Results from "./Results";
-import Backtests from "./Backtests";
-import Tree from "./Tree";
-import Greeks from "./Greeks";
-import Dev from "./Dev";
-import Database from "./Database";
-import EstimatedMove from "./EstimatedMove";
-import Changelog from "./Changelog";
-import SocialMedia from "./SocialMedia";
-import Emails from "./Emails";
-import PostStudio from "./PostStudio";
-import Budget from "./Budget";
-import Todo from "./Todo";
+import { lazy } from "react";
+import type { ComponentType, LazyExoticComponent } from "react";
 
-/** key (from lib/nav.ts) → page component. */
-export const PAGES: Record<string, ComponentType> = {
-  Hub,
-  ControlPanel,
-  Admin,
-  Sales,
-  Probe,
-  Results,
-  Backtests,
-  Tree,
-  Greeks,
-  Dev,
-  Database,
-  EstimatedMove,
-  Changelog,
-  SocialMedia,
-  Emails,
-  PostStudio,
-  Budget,
-  Todo,
+/**
+ * key (from lib/nav.ts) → page component, code-split so each route's bundle
+ * loads on demand (the giants — Budget, Control Panel, Social Media — stay out
+ * of the initial payload).
+ */
+export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
+  Hub: lazy(() => import("./Hub")),
+  ControlPanel: lazy(() => import("./ControlPanel")),
+  Admin: lazy(() => import("./Admin")),
+  Sales: lazy(() => import("./Sales")),
+  Probe: lazy(() => import("./Probe")),
+  Results: lazy(() => import("./Results")),
+  Backtests: lazy(() => import("./Backtests")),
+  Tree: lazy(() => import("./Tree")),
+  Greeks: lazy(() => import("./Greeks")),
+  Dev: lazy(() => import("./Dev")),
+  Database: lazy(() => import("./Database")),
+  EstimatedMove: lazy(() => import("./EstimatedMove")),
+  Changelog: lazy(() => import("./Changelog")),
+  SocialMedia: lazy(() => import("./SocialMedia")),
+  Emails: lazy(() => import("./Emails")),
+  PostStudio: lazy(() => import("./PostStudio")),
+  Budget: lazy(() => import("./Budget")),
+  Todo: lazy(() => import("./Todo")),
 };

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { randomUUID } from "crypto";
 import { exchangeCodeForTokens, verifyGoogleIdToken } from "@/lib/auth/google";
 import { getUserByGoogleSub, getUserByEmail, setUserGoogleSub, createUser } from "@/lib/db";
-import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC } from "@/lib/auth/session";
+import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC, sessionCookieOptions } from "@/lib/auth/session";
 
 /**
  * Google OAuth callback (replaces Supabase's exchangeCodeForSession). Same
@@ -81,13 +81,7 @@ export async function GET(req: NextRequest) {
 
     const res = NextResponse.redirect(`${origin}${next}`);
     clearOAuthCookies(res);
-    res.cookies.set(SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: SESSION_COOKIE_MAX_AGE_SEC,
-    });
+    res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(SESSION_COOKIE_MAX_AGE_SEC));
     return res;
   } catch (err) {
     console.error("[auth/callback] Google sign-in failed:", err);

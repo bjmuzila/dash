@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserByEmail, updateUserPasswordHash } from "@/lib/db";
 import { verifyPassword, hashPassword } from "@/lib/auth/password";
-import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC } from "@/lib/auth/session";
+import { createSession, SESSION_COOKIE, SESSION_COOKIE_MAX_AGE_SEC, sessionCookieOptions } from "@/lib/auth/session";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { rateLimit, rateLimitReset, clientIp } from "@/lib/rateLimit";
 
@@ -76,12 +76,6 @@ export async function POST(req: NextRequest) {
   rateLimitReset(`login:${ip}`);
 
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_COOKIE_MAX_AGE_SEC,
-  });
+  res.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(SESSION_COOKIE_MAX_AGE_SEC));
   return res;
 }

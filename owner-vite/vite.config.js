@@ -37,10 +37,10 @@ export default defineConfig(({ mode }) => {
   const httpTarget = { target: BACKEND, changeOrigin: true, secure: false, configure: auth }
   return {
     plugins: [react()],
-    // Served under cbedge.net/owner3/ in prod → asset URLs must be prefixed so
-    // /owner3/assets/*.js resolve. Relative API paths stay root-absolute and hit
-    // the same-origin backend directly.
-    base: '/owner3/',
+    // Served at the ROOT of its own subdomain (owner.cbedge.net) → assets live at
+    // /assets/*. Relative API paths (/api, /ws, /proxy) stay root-absolute and are
+    // reverse-proxied to the dashboard backend by the owner.cbedge.net nginx.
+    base: '/',
     css: { postcss: { plugins: [] } },
     server: {
       port: 5174,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { consumePasswordReset, updateUserPasswordHash, deleteAllSessionsForUser } from "@/lib/db";
 import { hashPassword } from "@/lib/auth/password";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/session";
 
 // Consumes a /api/auth/forgot-password token and sets a new password. Signs
 // the user out everywhere (deleteAllSessionsForUser) so a leaked old session
@@ -43,6 +43,6 @@ export async function POST(req: NextRequest) {
   await deleteAllSessionsForUser(consumed.user_id);
 
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
+  res.cookies.set(SESSION_COOKIE, "", sessionCookieOptions(0));
   return res;
 }

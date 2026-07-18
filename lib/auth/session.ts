@@ -15,6 +15,28 @@ import { insertSession, getSessionWithUser, deleteSession, type SessionWithUser 
 export const SESSION_COOKIE = "cbe_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Optional parent-domain for the session cookie. Set SESSION_COOKIE_DOMAIN=.cbedge.net
+// in PRODUCTION so a single sign-in is shared across cbedge.net and its subdomains
+// (e.g. owner.cbedge.net, which serves the standalone owner-vite app). Leave it
+// UNSET in local dev — browsers reject a dotted domain on localhost and would
+// silently drop the cookie, logging you out. Empty string → undefined → host-only.
+const SESSION_COOKIE_DOMAIN = (process.env.SESSION_COOKIE_DOMAIN || "").trim() || undefined;
+
+// Canonical attributes for the cbe_session cookie. Centralized so every SET and
+// CLEAR (login / signup / google-callback / logout) uses the SAME name+domain+path
+// — a cookie can only be overwritten or cleared by a Set-Cookie that matches how
+// it was created. Call with the max-age to set; pass 0 (with value "") to clear.
+export function sessionCookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+    domain: SESSION_COOKIE_DOMAIN,
+    maxAge,
+  };
+}
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }

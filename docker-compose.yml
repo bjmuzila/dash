@@ -139,3 +139,20 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s   # runtime jar download + auth handshake takes a bit
+
+  # owner.cbedge.net — builds the standalone owner-vite SPA (owner-vite/Dockerfile:
+  # node build stage → nginx) and reverse-proxies /api /ws /proxy to the dashboard
+  # container (same compose network → dashboard:3002). Reached only via the
+  # Cloudflare Tunnel (ingress owner.cbedge.net → 127.0.0.1:8082). No host npm
+  # needed — `docker compose build owners` builds the SPA inside Docker.
+  owners:
+    build:
+      context: ./owner-vite
+    image: owners-web:latest
+    container_name: owners-web
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8082:8082"
