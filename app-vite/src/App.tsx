@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/components/auth/AuthProvider'
+import Nav from './Nav'
 // Existing Next client pages, compiled directly via the '@' alias + next/* shims.
 import TradersDashboard from '@/app/traders-dashboard/page'
 import Analytics from '@/app/analytics/page'
@@ -32,25 +33,28 @@ export default function App() {
     <BrowserRouter basename="/app">
       <AuthProvider>
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', minHeight: 0 }}>
-          <Routes>
-            <Route path="/traders-dashboard" element={<TradersDashboard />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/home" element={S(<Home />)} />
-            <Route path="/options-chain" element={S(<OptionsChain />)} />
-            <Route path="/mult-greek" element={S(<MultGreek />)} />
-            <Route path="/em" element={S(<Em />)} />
-            <Route path="/flow" element={S(<Flow />)} />
-            <Route path="/es-candles" element={S(<EsCandles />)} />
-            <Route path="/scanner" element={S(<Scanner />)} />
-            <Route path="/ict" element={S(<Ict />)} />
-            <Route path="/trading" element={S(<Trading />)} />
-            <Route path="/greeks" element={S(<Greeks />)} />
-            <Route path="/confidence-score" element={S(<Confidence />)} />
-            <Route path="/fails" element={S(<Fails />)} />
-            <Route path="/premarket" element={S(<Premarket />)} />
-            <Route path="/economic-calendar" element={S(<EconCalendar />)} />
-            <Route path="*" element={<Navigate to="/traders-dashboard" replace />} />
-          </Routes>
+          <Nav />
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <Routes>
+              <Route path="/home" element={S(<Home />)} />
+              <Route path="/traders-dashboard" element={<TradersDashboard />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/options-chain" element={S(<OptionsChain />)} />
+              <Route path="/mult-greek" element={S(<MultGreek />)} />
+              <Route path="/em" element={S(<Em />)} />
+              <Route path="/flow" element={S(<Flow />)} />
+              <Route path="/es-candles" element={S(<EsCandles />)} />
+              <Route path="/scanner" element={S(<Scanner />)} />
+              <Route path="/ict" element={S(<Ict />)} />
+              <Route path="/trading" element={S(<Trading />)} />
+              <Route path="/greeks" element={S(<Greeks />)} />
+              <Route path="/confidence-score" element={S(<Confidence />)} />
+              <Route path="/fails" element={S(<Fails />)} />
+              <Route path="/premarket" element={S(<Premarket />)} />
+              <Route path="/economic-calendar" element={S(<EconCalendar />)} />
+              <Route path="*" element={<Navigate to="/home" replace />} />
+            </Routes>
+          </div>
         </div>
       </AuthProvider>
     </BrowserRouter>
