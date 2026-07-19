@@ -27,6 +27,7 @@ import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useContractStats, useLiveSpots } from "@/hooks/useContractStats";
 import ContractDrawer from "@/components/dashboard/ContractDrawer";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
+import { initDV, pushDV } from "@/lib/dislocationVelocity";
 
 const C = HOME_THEME;
 
@@ -200,6 +201,29 @@ function writeNetBinsCache(key: string, bins: NetBin[]) {
 function urlParam(name: string): string | null {
   if (typeof window === "undefined") return null;
   return new URLSearchParams(window.location.search).get(name);
+}
+
+// Local 1-minute OHLC, built in component state from a live spot poll. Kept
+// deliberately isolated from useEsCandles / the es_candles map so it can never
+// touch the 5-minute bars (the ES_1M_CANDLES leak). Coarse range (~1 sample /
+// poll) — fine for the dislocation-velocity impulse read.
+function useMinuteBars(price: number | undefined, maxBars = 90) {
+  const [bars, setBars] = useState<{ high: number; low: number; close: number; min: number }[]>([]);
+  const curRef = useRef<{ high: number; low: number; close: number; min: number } | null>(null);
+  useEffect(() => {
+    if (!(price && price > 0)) return;
+    const min = Math.floor(Date.now() / 60000);
+    const c = curRef.current;
+    if (!c || c.min !== min) {                       // minute rollover → seal prev, open new
+      const next = { high: price, low: price, close: price, min };
+      curRef.current = next;
+      setBars((b) => [...(c ? [...b, c] : b), next].slice(-maxBars));
+    } else {                                          // same minute → extend range
+      c.high = Math.max(c.high, price); c.low = Math.min(c.low, price); c.close = price;
+      setBars((b) => (b.length ? [...b.slice(0, -1), { ...c }] : [{ ...c }]));
+    }
+  }, [price]);
+  return bars;
 }
 
 export default function FlowPage() {
@@ -605,6 +629,16 @@ export default function FlowPage() {
     [visibleRows],
   );
   const spotByTicker = useLiveSpots(visibleTickers, shouldConnect);
+
+  // ── Dislocation velocity — z-scored 1m bar-range deviation, gated on close
+  // location. Bars built locally from SPX spot (isolated from es_candles). ──
+  const spxSpot = useLiveSpots(["SPX"], shouldConnect);
+  const dvBars = useMinuteBars(spxSpot["SPX"]);
+  const dv = useMemo(() => {
+    let st = initDV(); let out;
+    for (const b of dvBars) ({ state: st, out } = pushDV(st, b, { lambda: 0.05, zThresh: 2 }));
+    return out;
+  }, [dvBars]);
 
   // ── Expanded whale row (variant D: expands in place, no modal). Keyed by the
   // same identity the row key uses so it survives a tape refresh. ──
@@ -1201,6 +1235,27 @@ export default function FlowPage() {
           {view === "ticker" && !chartOnly && renderPremiumSplit()}
         </Card>
       </div>
+
+      {/* ── Dislocation velocity ─────────────────────────────────────── */}
+      {!chartOnly && (
+        <Card variant="budget" style={{ flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>Dislocation Velocity · SPX 1m</div>
+              <div style={{ fontSize: 32, fontWeight: 800, lineHeight: 1.1,
+                color: dv && dv.velocity > 0 ? BUY_GREEN : dv && dv.velocity < 0 ? C.red : C.muted }}>
+                {dv ? dv.velocity.toFixed(2) : "—"}
+              </div>
+            </div>
+            <div style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: C.muted, textAlign: "right" }}>
+              <div>z {dv ? dv.z.toFixed(1) : "—"} · clv {dv ? dv.clv.toFixed(2) : "—"}</div>
+              <div style={{ fontWeight: 700, color: dv?.regime === "quiet" || !dv ? C.muted : dv.regime === "two-sided" ? C.cyan : dv.velocity > 0 ? BUY_GREEN : C.red }}>
+                {dv ? dv.regime : "building bars…"}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {view === "combined" && (
         <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
