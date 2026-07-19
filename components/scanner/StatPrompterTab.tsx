@@ -1236,18 +1236,30 @@ const PROMPTS: Prompt[] = [
       const view = s.view || "streaks";
 
       if (view === "streaks") {
+        // cont at run r = P(reach r+1 | already at r). The RATE column is that
+        // one-step extension prob (what the user asked for: "at N in a row, odds
+        // it goes to N+1"). "reach from fresh" is the cumulative survival — the
+        // product of every extension up to here — i.e. odds a brand-new 1-bar
+        // move ever gets this long.
+        let surv = 1;
         return {
-          headline: `${head} Rate column = the next bar CONTINUES the streak. 50% is a coin flip and means the streak carries no information.`,
-          cols: ["edge vs coin flip"],
-          rows: A.streaks.byRun.map((r) => ({
-            label: `After ${r.run} consecutive ${r.run === 1 ? "bar" : "bars"} the same way`,
-            n: r.n,
-            k: Math.round(r.cont * r.n),
-            emphasis: Math.abs(r.cont - 0.5) > 0.02,
-            extra: { "edge vs coin flip": `${r.cont >= 0.5 ? "+" : ""}${(100 * (r.cont - 0.5)).toFixed(1)} pts` },
-          })),
+          headline: `${head} RATE = at a run of N, the odds the NEXT bar extends it to N+1. "reach from fresh" = odds a brand-new move ever gets this long (cumulative). 50% extension = a coin flip.`,
+          cols: ["edge vs 50%", "reach from fresh"],
+          rows: A.streaks.byRun.map((r) => {
+            surv *= r.cont;
+            return {
+              label: `${r.run} in a row → ${r.run + 1} in a row`,
+              n: r.n,
+              k: Math.round(r.cont * r.n),
+              emphasis: Math.abs(r.cont - 0.5) > 0.02,
+              extra: {
+                "edge vs 50%": `${r.cont >= 0.5 ? "+" : ""}${(100 * (r.cont - 0.5)).toFixed(1)} pts`,
+                "reach from fresh": `${(100 * surv).toFixed(1)}%`,
+              },
+            };
+          }),
           verdict:
-            "Almost every streak on index futures lands within a point or two of 50%. That is the honest answer, and it kills most 'three bars up so it keeps going' systems. If a row is meaningfully off 50, check the bar count before you believe it.",
+            "The RATE column answers it directly: at 2 in a row, that's your odds of a 3rd; at 3, your odds of a 4th; and so on. On index futures each step sits within a point or two of 50%, so the streak itself carries almost no directional edge — but 'reach from fresh' still falls off fast because you're multiplying near-coin-flips (≈50% → 25% → 12%…). If a single step is meaningfully off 50, check the bar count before trusting it.",
         };
       }
 

@@ -2610,6 +2610,53 @@ function BzilaPanel({
         })}
       </div>
 
+      {/* CB Edge — rolling month-by-month sales vs expenses (no day drill-down) */}
+      {(() => {
+        const cbedgeMonths = data.months
+          .map((m) => {
+            const rows = m.rows.filter((r) => r.stream === "cbedge");
+            const inAmt = rows.reduce((s, r) => s + r.inAmt, 0);
+            const outAmt = rows.reduce((s, r) => s + r.outAmt, 0);
+            return { ym: m.ym, inAmt, outAmt, net: inAmt - outAmt };
+          })
+          .filter((m) => m.inAmt !== 0 || m.outAmt !== 0);
+        const t = data.streams.cbedge;
+        return (
+          <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: HOME_THEME.cyan }} />
+              <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" }}>CB Edge · Monthly</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted }}>{year} · sales vs expenses</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+              <span>Month</span>
+              <span style={{ textAlign: "right" }}>Sales</span>
+              <span style={{ textAlign: "right" }}>Expenses</span>
+              <span style={{ textAlign: "right" }}>Net</span>
+            </div>
+            {cbedgeMonths.length === 0 && (
+              <div style={{ padding: "22px 16px", textAlign: "center", color: HOME_THEME.muted }}>No CB Edge activity in {year} yet.</div>
+            )}
+            {cbedgeMonths.map((m) => (
+              <div key={m.ym} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "11px 16px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
+                <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
+                <span style={{ textAlign: "right", color: m.outAmt > 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(m.outAmt, currency)}</span>
+                <span style={{ textAlign: "right", fontWeight: 900, color: m.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(m.net, currency)}</span>
+              </div>
+            ))}
+            {cbedgeMonths.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 14, fontWeight: 900 }}>
+                <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
+                <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(t.inAmt, currency)}</span>
+                <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(t.outAmt, currency)}</span>
+                <span style={{ textAlign: "right", color: t.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(t.net, currency)}</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Monthly ledger */}
       <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
