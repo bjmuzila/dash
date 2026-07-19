@@ -287,7 +287,7 @@ export default function TradersDashboardPage() {
     <PageShell maxWidth={1200}>
 
         {/* Header */}
-        <Card accent="cyan" padding={20} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <Card accent="cyan" variant="classic" padding={20} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, background: `linear-gradient(90deg,${HT.cyan},${HT.purple})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
               Traders Dashboard
@@ -320,14 +320,14 @@ export default function TradersDashboardPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
             {/* Countdown */}
-            <Card accent="orange" padding="28px 20px" style={{ textAlign: "center" }}>
+            <Card accent="orange" variant="classic" padding="28px 20px" style={{ textAlign: "center" }}>
               <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 10 }}>{phase === "close" ? "Countdown to Market Close" : "Countdown to Market Open"}</div>
               <div style={{ fontSize: "clamp(48px,8vw,84px)", fontWeight: 800, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{countdown}</div>
               <div style={{ color: HT.muted, fontSize: 14, marginTop: 8 }}>{targetLabel}</div>
             </Card>
 
             {/* Overnight Overview */}
-            <Card accent="green" padding={20}>
+            <Card accent="green" variant="classic" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700 }}>📈 Overnight Market Overview</div>
                 {overview && Number(overview.generated_at) > 0 && (
@@ -416,7 +416,7 @@ export default function TradersDashboardPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
             {/* Quick Links */}
-            <Card accent="cyan" padding={20}>
+            <Card accent="cyan" variant="classic" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>🔗 Quick Links</div>
                 <button onClick={() => setEditLinks((v) => !v)} style={miniBtn}>{editLinks ? "Done" : "Edit"}</button>
@@ -455,7 +455,7 @@ export default function TradersDashboardPage() {
             </Card>
 
             {/* Schedule */}
-            <Card accent="red" padding={20}>
+            <Card accent="red" variant="classic" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.red }}>🕐 Morning Schedule</div>
                 <button onClick={() => setEditSched((v) => !v)} style={miniBtn}>{editSched ? "Done" : "Edit"}</button>
@@ -481,7 +481,7 @@ export default function TradersDashboardPage() {
             </Card>
 
             {/* Tasks */}
-            <Card accent="green" padding={20}>
+            <Card accent="green" variant="classic" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.green }}>✅ Pre-Market Tasks</div>
                 <button onClick={() => setEditTasks((v) => !v)} style={miniBtn}>{editTasks ? "Done" : "Edit"}</button>
