@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { C, panelStyle } from './theme'
+import { C, panelStyle, ledgerHead, hairline } from './theme'
 import { useGexFeed } from './useGexFeed'
 import {
   netGEXTotal, callWallOf, putWallOf, findGEXFlip, netGEXOf, computeGEXProfile,
@@ -114,6 +114,10 @@ export default function Dashboard() {
         {/* Left column */}
         <div style={{ width: '55%', display: 'flex', flexDirection: 'column', minWidth: 0, gap: 24, minHeight: 0 }}>
           <div style={{ ...panelStyle, display: 'flex', flexDirection: 'column', flex: '1.6 1 0', minHeight: 0, overflow: 'hidden' }}>
+            <div style={ledgerHead}>
+              {view === 'escandles' ? 'ES Candles' : 'Net GEX by Strike'}
+              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'none', color: '#fff', opacity: 0.6 }}>SPX · {expiry || '0DTE'}</span>
+            </div>
             <GexToolbar
               view={view} onView={setView}
               mode={mode} onMode={setMode}
@@ -163,16 +167,17 @@ export default function Dashboard() {
 
         {/* Right column */}
         <div style={{ width: '45%', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-          <div style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16, borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ flexShrink: 0, marginBottom: 16 }}>
+            <div style={ledgerHead}>Signals <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'none', color: '#fff', opacity: 0.6 }}>newest first · live</span></div>
             <SignalsFeed />
           </div>
           <div style={{ ...panelStyle, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
-            <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, borderBottom: `1px solid ${C.border}`, flexWrap: 'wrap' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#fff', fontWeight: 700, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                <span style={{ color: C.cyan }}>▦</span> Live GEX Heatmap
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexShrink: 0, paddingBottom: 8, marginBottom: 10, borderBottom: `1px solid ${hairline}`, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 800, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.12em', color: C.cyan }}>
+                Live GEX Heatmap
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-                <span style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Intensity</span>
+                <span style={{ fontSize: 9, color: '#fff', opacity: 0.65, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Intensity</span>
                 <input type="range" min={0.5} max={5} step={0.01} value={intensity} onChange={(e) => setIntensity(Number(e.target.value))} style={{ width: 90, accentColor: C.cyan }} />
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: C.cyan, fontWeight: 700 }}>{intensity.toFixed(2)}X</span>
               </span>

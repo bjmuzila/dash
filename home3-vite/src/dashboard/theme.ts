@@ -13,8 +13,22 @@ export const C = {
   border: 'rgba(255,255,255,0.10)',
 }
 
+// Ledger style: panels are no longer bento cards — transparent, borderless,
+// separated by whitespace + hairline section rules instead of boxes.
 export const panelStyle: React.CSSProperties = {
-  background: 'radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)',
-  borderRadius: 16,
-  border: '1px solid rgba(255,255,255,0.10)',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 0,
+}
+
+export const hairline = 'rgba(255,255,255,0.14)'
+export const hairlineSoft = 'rgba(255,255,255,0.08)'
+
+// Ledger section header — cyan uppercase label on a hairline underline.
+export const ledgerHead: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10,
+  flexShrink: 0, fontSize: 13, fontWeight: 800, letterSpacing: '0.12em',
+  textTransform: 'uppercase', color: '#219EBC',
+  padding: '0 2px 8px', margin: '0 0 12px',
+  borderBottom: `1px solid ${hairline}`,
 }
