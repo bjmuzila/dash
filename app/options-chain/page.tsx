@@ -128,21 +128,195 @@ function CustomDropdown<T extends string | number>({
   );
 }
 
-const QUOTE_PANEL_TICKERS = [
-  "VIX",
-  "SPX",
-  "SPCX",
-  "QQQ",
-  "SMH",
-  "AAPL",
-  "AMD",
-  "AMZN",
-  "GOOGL",
-  "META",
-  "MSFT",
-  "NVDA",
-  "TSLA",
+// ── Full scanner ticker universe (mirrors server-v2/scanner-tickers.js) ──────
+// Kept in sync manually — if that server list drifts, update these arrays.
+const SCANNER_MAIN = [
+  "SPY", "QQQ", "SPX", "NDX", "VIX",
+  "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
 ];
+const SCANNER_SHARES = [
+  "AAPU", "ASTS", "AVGO", "BYND", "CMG", "COIN", "CWVX", "ETHA", "FBL", "FIG",
+  "GME", "HIMZ", "HOOD", "IBIT", "LLYX", "MSFU", "NFLX", "NOK", "NVDX", "OSCR",
+  "PLTR", "PONY", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
+  "SOXL", "TQQQ", "TSLL", "UUUU",
+];
+const SCANNER_SPREADS = [
+  "ABNB", "AFRM", "ARM", "BA", "BABA", "CCJ", "CHWY", "COST", "CRCL", "CRM",
+  "CRWD", "CRWV", "DJT", "FDX", "GS", "HIMS", "INTC", "IREN", "IWM", "LAC",
+  "LLY", "MA", "MARA", "MCD", "MRK", "MRNA", "MU", "NIO", "NKE", "NNE",
+  "NXE", "OKLO", "OPEN", "OXY", "PDD", "PFE", "PTON", "RBLX", "RIOT", "RKLB",
+  "ROKU", "SE", "SMH", "SNDK", "SNOW", "TGT", "TSM", "TTD", "U", "UNH",
+  "UPS", "UPST", "V", "XPEV", "XYZ",
+];
+const SCANNER_OPTVOL = [
+  "ORCL", "SKHY", "MSTR", "WBD", "WULF", "NBIS", "MRVL", "PYPL", "BE", "IBM",
+  "HTZ", "BAC", "ONDS", "GOOG", "NOW", "RKT", "QXO", "FHN", "SLS", "BMNR",
+  "BTDR", "FRMI", "WEN", "CORZ", "ADBE", "PBR", "LCID", "CIFR", "VFC", "WMT",
+  "BB", "IONQ",
+  "TLT", "HYG", "FXI", "DRAM", "EWZ", "EEM", "XLF", "GLD", "LQD", "EFA",
+  "USO", "XLB", "XLE", "GDX", "KWEB", "KRE", "XLI", "EWY", "ARKK", "IGV",
+  "KORU", "SOXX", "XBI", "XLU", "DIA", "XLP",
+];
+const SCANNER_TICKERS: string[] = [
+  ...new Set([...SCANNER_MAIN, ...SCANNER_SHARES, ...SCANNER_SPREADS, ...SCANNER_OPTVOL]),
+].map((t) => t.trim().toUpperCase()).filter(Boolean);
+
+// Favorite tickers (starred in the ticker dropdown) persisted in the browser.
+const FAV_TICKERS_KEY = "options-chain-fav-tickers-v1";
+function loadFavTickers(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FAV_TICKERS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((t): t is string => typeof t === "string") : [];
+  } catch { return []; }
+}
+function saveFavTickers(list: string[]): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(FAV_TICKERS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+
+// ── Ticker picker: searchable dropdown over the full scanner universe, with
+// star-to-favorite (favorites float to the top, persisted in localStorage). ──
+function TickerListDropdown({ activeTicker, onSelect }: { activeTicker: string; onSelect: (t: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [favs, setFavs] = useState<string[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => { setFavs(loadFavTickers()); }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setRect({ left: r.left, top: r.bottom + 3 });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const toggleFav = (t: string) =>
+    setFavs((prev) => {
+      const next = prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t];
+      saveFavTickers(next);
+      return next;
+    });
+
+  const favSet = new Set(favs);
+  const q = query.trim().toUpperCase();
+  const matches = SCANNER_TICKERS.filter((t) => !q || t.includes(q));
+  const favList = matches.filter((t) => favSet.has(t)).sort();
+  const rest = matches.filter((t) => !favSet.has(t));
+  const rows: Array<{ t: string; fav: boolean; divider?: boolean }> = [
+    ...favList.map((t) => ({ t, fav: true })),
+    ...(favList.length && rest.length ? [{ t: "__divider__", fav: false, divider: true }] : []),
+    ...rest.map((t) => ({ t, fav: false })),
+  ];
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        ref={btnRef}
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          fontSize: 10, fontWeight: 700, padding: "5px 10px",
+          border: `1px solid ${HT.border}`, borderRadius: 6,
+          background: "rgba(255,255,255,0.04)", color: HT.text,
+          cursor: "pointer", outline: "none",
+          display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+          letterSpacing: "0.08em", textTransform: "uppercase",
+        }}
+      >
+        Tickers
+        <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
+      </button>
+      {open && rect && createPortal(
+        <div ref={menuRef} style={{
+          position: "fixed", left: rect.left, top: rect.top, zIndex: 9999, width: 200,
+          background: "rgba(13,17,25,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+          border: `1px solid ${HT.border}`, borderTop: `2px solid ${rgba(HT.cyan, 0.5)}`, borderRadius: 6,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.7)", overflow: "hidden",
+        }}>
+          <div style={{ padding: 6, borderBottom: `1px solid ${HT.border}` }}>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value.toUpperCase())}
+              placeholder="Search…"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                width: "100%", boxSizing: "border-box", fontSize: 11, fontWeight: 700,
+                padding: "5px 8px", border: `1px solid ${HT.border}`, borderRadius: 5,
+                background: "rgba(255,255,255,0.04)", color: HT.text, outline: "none",
+                letterSpacing: "0.06em",
+              }}
+            />
+          </div>
+          <div style={{ maxHeight: 300, overflowY: "auto", padding: "3px 0" }}>
+            {rows.length === 0 && (
+              <div style={{ padding: "8px 12px", fontSize: 10, color: HT.muted }}>No match</div>
+            )}
+            {rows.map((row) => {
+              if (row.divider) {
+                return <div key="div" style={{ height: 1, background: HT.border, margin: "3px 8px" }} />;
+              }
+              const active = row.t === activeTicker.toUpperCase();
+              return (
+                <div
+                  key={row.t}
+                  onClick={() => { onSelect(row.t); setOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "5px 10px", fontSize: 11, fontWeight: active ? 800 : 600,
+                    cursor: "pointer", whiteSpace: "nowrap",
+                    color: active ? HT.cyan : HT.text,
+                    background: active ? "rgba(33,158,188,0.10)" : "transparent",
+                    letterSpacing: "0.04em",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = active ? "rgba(33,158,188,0.15)" : "rgba(255,255,255,0.05)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = active ? "rgba(33,158,188,0.10)" : "transparent")}
+                >
+                  <span
+                    onClick={(e) => { e.stopPropagation(); toggleFav(row.t); }}
+                    title={row.fav ? "Unfavorite" : "Favorite"}
+                    style={{
+                      cursor: "pointer", fontSize: 12, lineHeight: 1,
+                      color: row.fav ? "#ffd600" : "rgba(255,255,255,0.28)",
+                    }}
+                  >
+                    {row.fav ? "★" : "☆"}
+                  </span>
+                  <span>{row.t}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
 
 // Recent tickers (most-recent-first, max 7) persisted in the browser.
 const RECENT_TICKERS_KEY = "options-chain-recent-tickers-v1";
@@ -935,6 +1109,12 @@ export default function OptionsChainPage({
     if (exp) setSelectedExpiry(exp);
   }, []);
   const [displayPercent, setDisplayPercent] = useState<number>(10);
+  // Auto strike window per ticker: SPX renders 10% (huge chain), everything
+  // else 30%. Re-applies whenever the active ticker changes; the user can still
+  // override via the % dropdown for the current ticker.
+  useEffect(() => {
+    setDisplayPercent(activeTicker.toUpperCase() === "SPX" ? 10 : 30);
+  }, [activeTicker]);
   const [refreshSeed, setRefreshSeed] = useState(0);
   const [intensity, setIntensity] = useState(1.75);
   // Grid colors read this deferred copy so dragging the Intensity slider stays
@@ -1567,9 +1747,12 @@ export default function OptionsChainPage({
           <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
         </div>
       )}
-      {/* Toolbar sits in normal flow at the top (scrolls away with the page) but
-          is fully opaque so grid rows never bleed through underneath it. */}
-      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
+      {/* ONE scroll container holds BOTH the toolbar and the grid: the toolbar
+          lives in the scroll flow so it scrolls away with the data, while the
+          grid's expiry-date header row stays stuck to the top (position:sticky
+          inside this same scroll context). */}
+      <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, position: "relative" }}>
+      <div style={{ display: "flex", padding: "6px 10px 2px", position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
@@ -1602,8 +1785,9 @@ export default function OptionsChainPage({
               }}
             />
             <datalist id="options-chain-tickers">
-              {QUOTE_PANEL_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
+              {SCANNER_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
             </datalist>
+            <TickerListDropdown activeTicker={activeTicker} onSelect={selectTicker} />
           </>
         )}
 
@@ -1692,7 +1876,7 @@ export default function OptionsChainPage({
       </div>
 
       {!visibleStrikes.length ? (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88", padding: "100px 0" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
               {chainError ? "No Live Chain Data" : "Select ticker, expiry & % strikes"}
@@ -1705,7 +1889,7 @@ export default function OptionsChainPage({
       ) : (
         /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
            inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
-        <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
+        <div style={{ padding: "8px 10px 10px" }}>
           <ChainMatrix
             columns={columns}
             gridCols={gridCols}
@@ -1734,6 +1918,7 @@ export default function OptionsChainPage({
           />
         </div>
       )}
+      </div>
 
       {contractPopup && (
         <ContractFlowPopup

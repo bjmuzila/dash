@@ -1262,6 +1262,32 @@ async function main() {
         })();
         return;
       }
+      // ── Day-over-day GEX movers ──────────────────────────────────────────
+      //   GET /proxy/strike-dod?limit=1000
+      // Latest session's biggest OI+Vol net-GEX day-over-day mover per ticker
+      // (one row per symbol, kept at its intraday peak). Feeds the /test DoD tab.
+      if (pathname === '/proxy/strike-dod' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(2000, Number(u.searchParams.get('limit') || 1000));
+            const { rows } = await p.query(
+              `SELECT to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry, spot,
+                      net_today, net_yest, vol_today, delta, peak_abs,
+                      EXTRACT(EPOCH FROM ts) * 1000 AS t
+               FROM strike_dod_max
+               WHERE date = (SELECT max(date) FROM strike_dod_max)
+               ORDER BY peak_abs DESC LIMIT $1`,
+              [limit]
+            );
+            sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire (testing): POST /proxy/gex-levels-history-run
       if (pathname === '/proxy/gex-levels-history-run' && req.method === 'POST') {
         const { collectGexLevelsHistory } = require('./gex-levels-history-recorder');

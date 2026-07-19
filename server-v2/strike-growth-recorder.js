@@ -196,12 +196,15 @@ async function ensureSchema() {
       spot      DOUBLE PRECISION,
       net_today DOUBLE PRECISION,
       net_yest  DOUBLE PRECISION,
+      vol_today DOUBLE PRECISION,
       delta     DOUBLE PRECISION,
       peak_abs  DOUBLE PRECISION NOT NULL DEFAULT 0,
       ts        TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (date, symbol)
     );
   `);
+  // vol_today added after first ship — self-heal older tables.
+  await p.query(`ALTER TABLE strike_dod_max ADD COLUMN IF NOT EXISTS vol_today DOUBLE PRECISION`);
 
   // Seed watchlist once from the full EM roster (~380 names). All seed ACTIVE so
   // a fresh DB/redeploy records the entire EM list from the start — the roster is
@@ -381,27 +384,28 @@ async function rollupDayOverDay(p, date) {
       ORDER BY symbol, strike, date DESC, ts DESC
     ),
     cur AS (
-      SELECT DISTINCT ON (symbol, strike) symbol, strike, expiry, spot, (gex_now + gex_open) AS net
+      SELECT DISTINCT ON (symbol, strike) symbol, strike, expiry, spot,
+             (gex_now + gex_open) AS net, gex_now AS vol
       FROM strike_growth WHERE date = $1
       ORDER BY symbol, strike, ts DESC
     ),
     d AS (
       SELECT c.symbol, c.strike, c.expiry, c.spot,
-             c.net AS net_today, p.net AS net_yest, (c.net - p.net) AS delta
+             c.net AS net_today, p.net AS net_yest, c.vol AS vol_today, (c.net - p.net) AS delta
       FROM cur c JOIN prev p USING (symbol, strike)
     ),
     top AS (
-      SELECT DISTINCT ON (symbol) symbol, strike, expiry, spot, net_today, net_yest, delta
+      SELECT DISTINCT ON (symbol) symbol, strike, expiry, spot, net_today, net_yest, vol_today, delta
       FROM d ORDER BY symbol, abs(delta) DESC
     )
     INSERT INTO strike_dod_max
-      (date, symbol, strike, expiry, spot, net_today, net_yest, delta, peak_abs, ts)
-    SELECT $1, symbol, strike, expiry, spot, net_today, net_yest, delta, abs(delta), now()
+      (date, symbol, strike, expiry, spot, net_today, net_yest, vol_today, delta, peak_abs, ts)
+    SELECT $1, symbol, strike, expiry, spot, net_today, net_yest, vol_today, delta, abs(delta), now()
     FROM top
     ON CONFLICT (date, symbol) DO UPDATE SET
       strike=EXCLUDED.strike, expiry=EXCLUDED.expiry, spot=EXCLUDED.spot,
       net_today=EXCLUDED.net_today, net_yest=EXCLUDED.net_yest,
-      delta=EXCLUDED.delta, peak_abs=EXCLUDED.peak_abs, ts=now()
+      vol_today=EXCLUDED.vol_today, delta=EXCLUDED.delta, peak_abs=EXCLUDED.peak_abs, ts=now()
     WHERE EXCLUDED.peak_abs > strike_dod_max.peak_abs
   `, [date]);
 }

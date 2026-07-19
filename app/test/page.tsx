@@ -2094,13 +2094,14 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "gexlevels" | "obook" | "squeeze";
+type TestTab = "overview" | "flow" | "gexlevels" | "obook" | "squeeze" | "dodmovers";
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
     { key: "overview", label: "Overview" },
     { key: "squeeze", label: "Squeeze" },
     { key: "gexlevels", label: "GEX Levels" },
+    { key: "dodmovers", label: "DoD Movers" },
     { key: "flow", label: "Flow Inventory" },
     { key: "obook", label: "Order Book" },
   ];
@@ -2190,6 +2191,176 @@ function FlowInventoryTab() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DoD Movers — biggest day-over-day change in OI+Vol net GEX per ticker, at the
+// strike that moved most (kept at its intraday peak). Reads server-v2
+// /proxy/strike-dod (strike_dod_max, written by strike-growth-recorder's
+// rollupDayOverDay). All columns click-to-sort.
+// ─────────────────────────────────────────────────────────────────────────────
+type DodRow = {
+  date: string; symbol: string; strike: number; expiry: string | null; spot: number;
+  net_today: number; net_yest: number; vol_today: number; delta: number; peak_abs: number; t: number;
+};
+type DodKey =
+  | "rank" | "symbol" | "expiry" | "strike" | "spot"
+  | "net_yest" | "net_today" | "vol_today" | "delta" | "peak_abs" | "t";
+
+const dodGex = (v: number): string => {
+  const a = Math.abs(v), s = v < 0 ? "-" : "";
+  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(0)}M`;
+  return `${s}$${Math.round(a).toLocaleString("en-US")}`;
+};
+const dodSigned = (v: number): string => (v >= 0 ? "+" : "") + dodGex(v);
+const dodNum = (v: number): string =>
+  (Number(v) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dodExp = (e: string | null): string => (e && e.length >= 10 ? `${e.slice(5, 7)}/${e.slice(8, 10)}` : (e || "—"));
+const dodTime = (t: number): string =>
+  t ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(t)) : "—";
+
+function DodMoversTab() {
+  const [rows, setRows] = useState<DodRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [sortKey, setSortKey] = useState<DodKey>("peak_abs");
+  const [sortDir, setSortDir] = useState<1 | -1>(-1);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const r = await fetch("/proxy/strike-dod?limit=2000", { cache: "no-store" });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "load failed");
+      setRows(Array.isArray(j.rows) ? j.rows : []);
+    } catch (e) { setErr(String((e as Error)?.message || e)); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const asOf = rows[0]?.date || "";
+  const maxAbs = useMemo(() => Math.max(1, ...rows.map((d) => d.peak_abs || 0)), [rows]);
+
+  const view = useMemo(() => {
+    const needle = q.trim().toUpperCase();
+    const filtered = needle ? rows.filter((d) => d.symbol.includes(needle)) : rows;
+    if (sortKey === "rank") return filtered;
+    return [...filtered].sort((a, b) => {
+      const x = (a as unknown as Record<string, unknown>)[sortKey];
+      const y = (b as unknown as Record<string, unknown>)[sortKey];
+      if (typeof x === "string" || typeof y === "string")
+        return (String(x ?? "") < String(y ?? "") ? -1 : String(x ?? "") > String(y ?? "") ? 1 : 0) * sortDir;
+      return ((Number(x) || 0) - (Number(y) || 0)) * sortDir;
+    });
+  }, [rows, q, sortKey, sortDir]);
+
+  const onSort = (k: DodKey) => {
+    if (k === sortKey) setSortDir((d) => (d === 1 ? -1 : 1));
+    else { setSortKey(k); setSortDir(k === "symbol" || k === "expiry" ? 1 : -1); }
+  };
+
+  const cols: { k: DodKey; label: string; l?: boolean }[] = [
+    { k: "rank", label: "#", l: true },
+    { k: "symbol", label: "Ticker", l: true },
+    { k: "expiry", label: "Exp", l: true },
+    { k: "strike", label: "Top Strike" },
+    { k: "spot", label: "Spot" },
+    { k: "net_yest", label: "Yest Net GEX" },
+    { k: "net_today", label: "Today Net GEX" },
+    { k: "vol_today", label: "Today (vol only)" },
+    { k: "delta", label: "Δ Net GEX" },
+    { k: "peak_abs", label: "|Δ Net GEX|" },
+    { k: "t", label: "Updated" },
+  ];
+
+  const th: CSSProperties = {
+    position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 2, textAlign: "right",
+    padding: "10px 12px", fontSize: 11, fontWeight: 800, color: HOME_THEME.green,
+    letterSpacing: "0.05em", textTransform: "uppercase", borderBottom: `1px solid ${HOME_THEME.border}`,
+    cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+  };
+  const td: CSSProperties = {
+    padding: "8px 12px", textAlign: "right", borderBottom: "1px solid rgba(255,255,255,0.05)",
+    whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+  };
+  const posNeg = (v: number): CSSProperties => ({ color: v >= 0 ? HOME_THEME.green : HOME_THEME.red });
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
+          {loading ? "Loading day-over-day movers…"
+            : asOf ? `Biggest OI+Vol net-GEX change vs prior session · ${asOf} · ${rows.length} tickers`
+            : "No day-over-day rows yet (needs 2 sessions of history)"}
+        </div>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Filter ticker…"
+          style={{ ...homeInputStyle, minWidth: 170 }}
+        />
+        <button onClick={() => void load()} style={homeButtonStyle}>Refresh</button>
+      </div>
+      {err && <div style={{ fontSize: 14, color: HOME_THEME.red }}>Error: {err}</div>}
+      <Card variant="budget" accent={HOME_THEME.cyan} title="Day-over-Day GEX Movers">
+        <div style={{ maxHeight: "72vh", overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                {cols.map((c) => (
+                  <th
+                    key={c.k}
+                    onClick={() => onSort(c.k)}
+                    style={{ ...th, textAlign: c.l ? "left" : "right" }}
+                  >
+                    {c.label}{sortKey === c.k ? (sortDir < 0 ? " ▼" : " ▲") : ""}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {view.map((d, i) => {
+                const w = ((d.peak_abs || 0) / maxAbs) * 100;
+                return (
+                  <tr key={d.symbol}>
+                    <td style={{ ...td, textAlign: "left", color: HOME_THEME.green, opacity: 0.7 }}>{i + 1}</td>
+                    <td style={{ ...td, textAlign: "left", fontWeight: 800, letterSpacing: "0.03em" }}>{d.symbol}</td>
+                    <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, opacity: 0.7 }}>{dodExp(d.expiry)}</td>
+                    <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{dodNum(d.strike)}</td>
+                    <td style={{ ...td, opacity: 0.7 }}>{dodNum(d.spot)}</td>
+                    <td style={{ ...td, ...posNeg(d.net_yest) }}>{dodSigned(d.net_yest)}</td>
+                    <td style={{ ...td, ...posNeg(d.net_today) }}>{dodSigned(d.net_today)}</td>
+                    <td style={{ ...td, ...posNeg(d.vol_today) }}>{dodSigned(d.vol_today)}</td>
+                    <td style={{ ...td, ...posNeg(d.delta), fontWeight: 700 }}>{dodSigned(d.delta)}</td>
+                    <td style={{ ...td, position: "relative", fontWeight: 800 }}>
+                      <div style={{
+                        position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)",
+                        height: "58%", width: `${w}%`, borderRadius: 3,
+                        background: `linear-gradient(90deg, ${HOME_THEME.cyan}44, ${HOME_THEME.cyan}0D)`, zIndex: 0,
+                      }} />
+                      <span style={{ position: "relative", zIndex: 1 }}>{dodGex(d.peak_abs)}</span>
+                    </td>
+                    <td style={{ ...td, opacity: 0.6 }}>{dodTime(d.t)}</td>
+                  </tr>
+                );
+              })}
+              {!loading && !view.length && (
+                <tr><td colSpan={cols.length} style={{ ...td, textAlign: "center", opacity: 0.6, padding: 22 }}>
+                  No movers to show.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 8, lineHeight: 1.6 }}>
+          Δ = today − yesterday on the OI+Vol basis (gex_now + gex_open). &ldquo;Today (vol only)&rdquo; is today&rsquo;s traded-volume GEX at that strike.
+          One row per ticker = its single biggest overnight→now shift, frozen at the session&rsquo;s peak.
+        </div>
+      </Card>
+    </>
+  );
+}
+
 export default function TestPage() {
   const [tab, setTab] = useState<TestTab>("overview");
   return (
@@ -2203,6 +2374,8 @@ export default function TestPage() {
         <GexLevelsTab />
       ) : tab === "obook" ? (
         <ObookView />
+      ) : tab === "dodmovers" ? (
+        <DodMoversTab />
       ) : (
         <FlowInventoryTab />
       )}
