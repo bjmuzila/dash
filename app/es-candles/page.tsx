@@ -978,7 +978,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // OR the 1D/5D range toggle changes: clears the column map and reloads.
   const heatmapExpiry = selectedExpiry || feedExpiry;
   useEffect(() => {
-    if (!heatmapExpiry) return;
+    // Front mode keys on the time WINDOW alone (anyExpiry), so it can load with
+    // no live expiry — critical off-hours/weekends when the WS never publishes
+    // one (feedExpiry stays ""). Only an explicit DTE pick needs the string.
+    const isFront = !selectedExpiry;
+    if (!isFront && !heatmapExpiry) return;
+    // Ignored server-side under anyExpiry=1; just needs to be non-empty so the
+    // route's `expiry is required` guard passes.
+    const queryExpiry = heatmapExpiry || "front";
     let cancelled = false;
     // When the picker or range changes, wipe the existing columns so we don't
     // mix expiries or leave stale far-back columns after switching to 1D.
@@ -991,10 +998,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // trading day, so ask the server to ignore the expiry filter and pull
         // by time window alone (anyExpiry=1) — otherwise backfill only ever
         // matches today. An explicit DTE pick keeps the exact expiry match.
-        const isFront = !selectedExpiry;
-        const minutes = heatmapDays * 1440;
+        // When replaying a PAST day the 1D/5D window (counted back from now) may
+        // not reach that day, so widen to the full 5-day cap so the replayed
+        // session's GEX (heatmap columns + bubble trail) is included.
+        const minutes = replayOn ? 7200 : heatmapDays * 1440;
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(heatmapExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -1013,7 +1022,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // 5-min flooring). Same rows, different bucket — the heatmap coarsens
         // them, the bubbles don't.
         const mmap = minuteColsRef.current;
-        const todayKey = etDayKey(Date.now());
+        // Bubbles are single-day: live → today, replay → the day being scrubbed.
+        const targetKey = replayOn && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
         for (const col of sortedRaw) {
           const slotTs = slotFloorMs(col.slotTs);
           const cells: GexCell[] = col.cells
@@ -1024,7 +1034,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           const colSpot = Number(col.spot ?? 0);
           const spot = colSpot > 0 ? colSpot : undefined;
 
-          if (etDayKey(col.slotTs) === todayKey && cells.length) {
+          if (etDayKey(col.slotTs) === targetKey && cells.length) {
             const minTs = Math.floor(col.slotTs / 60_000) * 60_000;
             if (!mmap.has(minTs)) mmap.set(minTs, { slotTs: minTs, cells, spot });
           }
@@ -1036,7 +1046,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       } catch { /* live feed still populates the front expiry going forward */ }
     })();
     return () => { cancelled = true; };
-  }, [heatmapExpiry, heatmapDays]);
+  }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
   // ES conversion happens at draw time with the live basis.

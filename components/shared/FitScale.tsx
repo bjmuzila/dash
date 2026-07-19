@@ -62,7 +62,18 @@ export default function FitScale({
     const content = box.firstElementChild as HTMLElement | null;
     if (content) ro.observe(content);
     fit();
-    return () => ro.disconnect();
+    // Re-measure after async layout settles. Web fonts swapping in and
+    // late-loading labels widen the content WITHOUT changing box/host
+    // border-boxes, so the ResizeObserver above never fires — the initial
+    // pass under-measures, scale stays 1, and the right-side buttons overflow
+    // off-screen until a manual window resize. rAF catches post-paint layout;
+    // fonts.ready catches the font swap; the timeout is a backstop.
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => { if (!cancelled) fit(); }));
+    const t = setTimeout(() => { if (!cancelled) fit(); }, 250);
+    const fonts = (typeof document !== "undefined" ? (document as unknown as { fonts?: { ready?: Promise<unknown> } }).fonts : undefined);
+    fonts?.ready?.then(() => { if (!cancelled) fit(); });
+    return () => { cancelled = true; cancelAnimationFrame(raf); clearTimeout(t); ro.disconnect(); };
   }, [min]);
 
   return (
