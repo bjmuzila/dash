@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -735,168 +735,6 @@ function TickerPanel({
   );
 }
 
-// ── Higher-Order Greeks reference matrix ──────────────────────────────────────
-// Static reference table pinned to the bottom of the page. Signs are for the
-// typical construction at/near initiation. Cell tint: green=+, red=−, grey=≈0.
-
-type Sgn = "pos" | "neg" | "neu";
-interface RiskRow {
-  strategy: string;
-  vega: [string, Sgn];
-  vomma: [string, Sgn];
-  vanna: [string, Sgn];
-  gamma: [string, Sgn];
-  charm: [string, Sgn];
-  veta: string;
-  vetaSgn: "help" | "hurt";
-  bias: string;
-  design: string;
-}
-
-const RISK_ROWS: RiskRow[] = [
-  {
-    strategy: "Put broken-wing butterfly",
-    vega: ["−", "neg"], vomma: ["+", "pos"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Helps", vetaSgn: "help", bias: "Neutral / bearish",
-    design: "Built near-the-money with negative delta, usually for a credit and no upside risk. Short-vega, short-gamma income trade — one of the “negative-vega bearish” structures flagged as poorly designed for a real decline. +Vomma cushions vega on IV shifts; +vanna means vega moves against the trade as spot moves; −charm adds a little bearishness each day; −gamma is the directional risk.",
-  },
-  {
-    strategy: "Unbalanced put condor",
-    vega: ["−", "neg"], vomma: ["+", "pos"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Helps", vetaSgn: "help", bias: "Neutral (some upside protection)",
-    design: "Placed left of the money with a flat delta; the unbalanced wing buys some upside protection. Short vega / short gamma. Vanna and charm are near zero when symmetric and are driven by strike placement and skew.",
-  },
-  {
-    strategy: "Iron condor",
-    vega: ["−", "neg"], vomma: ["+", "pos"], vanna: ["− / ≈0", "neg"], gamma: ["−", "neg"], charm: ["+ / ≈0", "pos"],
-    veta: "Helps", vetaSgn: "help", bias: "Neutral (ATM, flat delta)",
-    design: "Sell an OTM put spread and an OTM call spread. Dominant risk is strong short gamma — each day the market sits off-center, and near expiry, risk rises. Long-wing vomma makes net vega convex. Vanna/charm ≈ 0 when symmetric; skew and placement set their sign.",
-  },
-  {
-    strategy: "Bull put credit spread",
-    vega: ["−", "neg"], vomma: ["+", "pos"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Helps", vetaSgn: "help", bias: "Bullish",
-    design: "Sell a higher-strike put, buy a lower-strike put; starts with positive delta. Negative charm bleeds that initial +delta toward zero as expiry nears — fine if price holds. The real danger is the down-and-vol-up move: short gamma and short vega both work against it.",
-  },
-  {
-    strategy: "Calendar (long, same strike)",
-    vega: ["+", "pos"], vomma: ["Flat / ≈0", "neu"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Hurts slowly (long vega)", vetaSgn: "hurt", bias: "Neutral; use when IV is low and expected to rise",
-    design: "Sell the front month, buy the back month at the same strike — net long vega with roughly flat vomma. Profits from the faster decay of the front leg. Because it is long vega it gains if IV rises, which is why it is deployed when IV is low.",
-  },
-  {
-    strategy: "Naked short put (“Negative Put”)",
-    vega: ["− (strong)", "neg"], vomma: ["−", "neg"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Helps", vetaSgn: "help", bias: "Bullish",
-    design: "A single short OTM put. Starts with strong negative vega; in a selloff the negative vega snowballs because −vomma and +vanna both push vega more negative as price falls and IV rises. The classic short-volatility danger.",
-  },
-  {
-    strategy: "Put ratio (front) spread",
-    vega: ["−", "neg"], vomma: ["− ⚠", "neg"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Helps (theta)", vetaSgn: "help", bias: "Neutral to bullish (naked puts)",
-    design: "Sells more puts than it buys, so it carries naked puts. ⚠ Any move much beyond ~1% to the downside causes large losses: when the market declines and vol rises, the negative vega grows faster than a plain naked put would, because of −vomma and +vanna. The notes' “worst vega positioning.”",
-  },
-  {
-    strategy: "Call ratio backspread",
-    vega: ["+", "pos"], vomma: ["+", "pos"], vanna: ["+", "pos"], gamma: ["+", "pos"], charm: ["−", "neg"],
-    veta: "Hurts (long vega)", vetaSgn: "hurt", bias: "Bullish",
-    design: "Sell 1 near-money call, buy 2 (or more) OTM calls; net long calls, long vega and long gamma. Initial delta of a 1×2 call ratio backspread is positive. Unlimited upside with defined risk when structured for a credit; costs theta while waiting.",
-  },
-  {
-    strategy: "Put ratio backspread",
-    vega: ["+", "pos"], vomma: ["+", "pos"], vanna: ["−", "neg"], gamma: ["+", "pos"], charm: ["+", "pos"],
-    veta: "Hurts (long vega)", vetaSgn: "hurt", bias: "Very bearish",
-    design: "The well-designed bearish trade: buy more lower-strike puts than the higher-strike puts you sell — net long puts, long vega AND long vomma. Profit is substantial and risk is limited (though larger than the initial cost); max profit if the underlying falls sharply below the long strike. Its −vanna is a virtue — as spot falls, vega shifts even more positive, so it accelerates in a flash crash.",
-  },
-  {
-    strategy: "Put front ratio spread",
-    vega: ["− (snowballs as IV rises)", "neg"], vomma: ["−", "neg"], vanna: ["+", "pos"], gamma: ["−", "neg"], charm: ["−", "neg"],
-    veta: "Helps (theta)", vetaSgn: "help", bias: "Neutral / short-vol",
-    design: "Sell more OTM puts than the closer-to-the-money puts you buy — plenty of theta and a relatively flat delta at entry. Called “the worst vega positioning you could possibly design … a perfect example of trading against volatility,” because a down-move plus an IV spike turns the negative vega catastrophic. Same family as the put ratio spread above.",
-  },
-];
-
-const SGN_CELL: Record<Sgn, { bg: string; color: string }> = {
-  pos: { bg: "rgba(34,197,94,0.15)",  color: "#4ade80" },
-  neg: { bg: "rgba(239,68,68,0.15)",  color: "#f4948e" },
-  neu: { bg: "rgba(148,163,184,0.10)", color: "#94a3b8" },
-};
-
-const GREEK_HEADERS: { key: "vega" | "vomma" | "vanna" | "gamma" | "charm"; label: string }[] = [
-  { key: "vega", label: "Vega" }, { key: "vomma", label: "Vomma" }, { key: "vanna", label: "Vanna" },
-  { key: "gamma", label: "Gamma" }, { key: "charm", label: "Charm" },
-];
-
-function RiskMatrix() {
-  const th: CSSProperties = {
-    padding: "8px 8px", textAlign: "center", color: HT.cyan, fontSize: 11, fontWeight: 800,
-    textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${HT.border}`,
-    background: HT.panelBgStrong, whiteSpace: "normal",
-  };
-  const td: CSSProperties = {
-    padding: "8px 8px", fontSize: 12, borderBottom: `1px solid ${HT.border}`, verticalAlign: "top",
-    color: SOFT_WHITE,
-  };
-  return (
-    <Card variant="budget" padding={0} style={{ margin: "8px 8px 16px", overflow: "hidden", borderRadius: 16, flexShrink: 0 }}>
-      <div style={{ padding: "14px 16px 10px" }}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: HT.text, letterSpacing: "0.02em" }}>
-          Higher-Order Greeks — Risk Matrix for Options Strategies
-        </div>
-        <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4, lineHeight: 1.45 }}>
-          Signs are for the typical construction at/near initiation. Vanna, vomma, charm flip with moneyness and time;
-          symmetric condors sit near zero (sign set by strike placement and skew).{" "}
-          <span style={{ color: "#4ade80" }}>Green=positive</span>,{" "}
-          <span style={{ color: "#f4948e" }}>red=negative</span>,{" "}
-          <span style={{ color: "#94a3b8" }}>grey=≈0/flat</span>.
-        </div>
-      </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 900 }}>
-          <colgroup>
-            <col style={{ width: 150 }} />
-            {GREEK_HEADERS.map(h => <col key={h.key} style={{ width: 62 }} />)}
-            <col style={{ width: 120 }} />
-            <col style={{ width: 150 }} />
-            <col />
-          </colgroup>
-          <thead>
-            <tr>
-              <th style={{ ...th, textAlign: "left" }}>Strategy</th>
-              {GREEK_HEADERS.map(h => <th key={h.key} style={th}>{h.label}</th>)}
-              <th style={th}>Veta (vega decay)</th>
-              <th style={th}>Directional bias</th>
-              <th style={{ ...th, textAlign: "left" }}>Design &amp; key risk</th>
-            </tr>
-          </thead>
-          <tbody>
-            {RISK_ROWS.map((r) => (
-              <tr key={r.strategy}>
-                <td style={{ ...td, fontWeight: 800, color: HT.text }}>{r.strategy}</td>
-                {GREEK_HEADERS.map(h => {
-                  const [txt, sgn] = r[h.key];
-                  const c = SGN_CELL[sgn];
-                  return (
-                    <td key={h.key} style={{ ...td, textAlign: "center", background: c.bg, color: c.color, fontWeight: 700, whiteSpace: "nowrap" }}>
-                      {txt}
-                    </td>
-                  );
-                })}
-                <td style={{ ...td, color: r.vetaSgn === "help" ? "#4ade80" : "#f4948e", fontWeight: 600 }}>{r.veta}</td>
-                <td style={{ ...td, color: "#cbd5e1" }}>{r.bias}</td>
-                <td style={{ ...td, lineHeight: 1.5 }}>{r.design}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ padding: "8px 16px 12px", textAlign: "right", fontSize: 11, color: "#64748b" }}>
-        ©2026 nextSignals, Stephen Harlin
-      </div>
-    </Card>
-  );
-}
-
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function MultGreekClient({
@@ -1315,7 +1153,7 @@ export function MultGreekClient({
     // exported PNG kept a huge black void to the right (captureElement crops to
     // el.scrollWidth = shell width). Hugging the widest child (the panels row)
     // makes the toolbar + crop match the actual content width.
-    <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", width: isCapturing ? "fit-content" : "100%", minWidth: isCapturing ? "min-content" : undefined, overflow: isCapturing ? "visible" : "auto" }}>
+    <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", width: isCapturing ? "fit-content" : "100%", minWidth: isCapturing ? "min-content" : undefined, overflow: isCapturing ? "visible" : "hidden" }}>
 
       {isStatic && (
         <div
@@ -1435,7 +1273,7 @@ export function MultGreekClient({
           sized to hug its own (trimmed) content — without flex-start here,
           the row would stretch the shorter panels back out to match the
           tallest one, reintroducing the blank void this was meant to fix. */}
-      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: isCapturing ? 0 : "72vh", flexShrink: 0 }}>
+      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}
@@ -1455,9 +1293,6 @@ export function MultGreekClient({
           />
         ))}
       </div>
-
-      {/* Higher-order greeks reference matrix — excluded from screenshots. */}
-      {!isCapturing && <RiskMatrix />}
     </div>
   );
 }

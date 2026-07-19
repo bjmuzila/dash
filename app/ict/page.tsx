@@ -999,6 +999,9 @@ export default function IctPage() {
             </Panel>
           )}
         </div>
+
+        {/* HTF Fair Value Gaps — daily / weekly / monthly, own data feed */}
+        <HtfFvgCard instrument={instrument} lastPrice={candles.length ? candles[candles.length - 1].close : null} />
       </div>
 
       {/* Glossary */}
@@ -1260,6 +1263,119 @@ function ConceptIcon({ id, size = 1 }: { id: string; size?: number }) {
       return <IconFrame size={size}><Candle x={8} o={24} c={16} hi={28} lo={14} up /><Candle x={22} o={18} c={24} hi={28} lo={16} up={false} />
         <Candle x={36} o={20} c={12} hi={24} lo={10} up /></IconFrame>;
   }
+}
+
+// ── HTF Fair Value Gaps (daily / weekly / monthly) ───────────────────────────
+// Separate data feed from the live 5m chart: HTF gaps need months of history, so
+// this pulls aggregated OHLC straight from the dxLink history proxy
+// (/api/dxlink/candles) using the {=d}/{=w}/{=mo} streamer suffixes. A 3-candle
+// gap is unmitigated until a later bar trades fully back through it.
+type HtfBar = { time: number; open: number; high: number; low: number; close: number };
+type HtfGap = { dir: "bull" | "bear"; top: number; bottom: number; time: number; touched: boolean };
+
+function parseHtfBars(json: unknown): HtfBar[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const j = json as any;
+  const items: unknown[] = j?.data?.items || j?.data?.candles || j?.candles || [];
+  return items
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((it: any) => {
+      const rawT = it.time ?? it.datetime ?? it.timestamp ?? it.startsAt ?? it.date;
+      const time = typeof rawT === "number" ? rawT : typeof rawT === "string" ? Date.parse(rawT) : NaN;
+      return { time, open: Number(it.open), high: Number(it.high), low: Number(it.low), close: Number(it.close) };
+    })
+    .filter((b) => Number.isFinite(b.time) && Number.isFinite(b.high) && Number.isFinite(b.low) && b.close > 0)
+    .sort((a, b) => a.time - b.time);
+}
+
+// Unmitigated 3-candle FVGs, newest first. A gap ends the moment a later bar
+// closes fully through it (bull → a low ≤ bottom; bear → a high ≥ top).
+function detectHtfGaps(bars: HtfBar[]): HtfGap[] {
+  const out: HtfGap[] = [];
+  for (let i = 1; i < bars.length - 1; i++) {
+    const a = bars[i - 1], c = bars[i + 1];
+    let g: HtfGap | null = null;
+    if (c.low > a.high) g = { dir: "bull", top: c.low, bottom: a.high, time: bars[i].time, touched: false };
+    else if (a.low > c.high) g = { dir: "bear", top: a.low, bottom: c.high, time: bars[i].time, touched: false };
+    if (!g) continue;
+    let filled = false;
+    for (let k = i + 2; k < bars.length; k++) {
+      if (g.dir === "bull") { if (bars[k].low <= g.bottom) { filled = true; break; } if (bars[k].low <= g.top) g.touched = true; }
+      else { if (bars[k].high >= g.top) { filled = true; break; } if (bars[k].high >= g.bottom) g.touched = true; }
+    }
+    if (!filled) out.push(g);
+  }
+  return out.sort((a, b) => b.time - a.time);
+}
+
+function HtfFvgCard({ instrument, lastPrice }: { instrument: "ES" | "NQU"; lastPrice: number | null }) {
+  const base = instrument === "NQU" ? "/NQ" : "/ESU6";
+  const TFS = useMemo(() => ([
+    { key: "Daily", sfx: "{=d}", iv: "1Day" },
+    { key: "Weekly", sfx: "{=w}", iv: "1Week" },
+    { key: "Monthly", sfx: "{=mo}", iv: "1Month" },
+  ] as const), []);
+  const [gaps, setGaps] = useState<Record<string, HtfGap[]>>({});
+  const [state, setState] = useState<"loading" | "ok" | "err">("loading");
+
+  useEffect(() => {
+    let alive = true;
+    const ac = new AbortController();
+    setState("loading");
+    (async () => {
+      try {
+        const entries = await Promise.all(TFS.map(async (tf) => {
+          const url = `/api/dxlink/candles?symbol=${encodeURIComponent(base + tf.sfx)}&interval=${tf.iv}`;
+          const r = await fetch(url, { cache: "no-store", signal: ac.signal });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return [tf.key, detectHtfGaps(parseHtfBars(await r.json()))] as const;
+        }));
+        if (alive) { setGaps(Object.fromEntries(entries)); setState("ok"); }
+      } catch { if (alive) setState("err"); }
+    })();
+    return () => { alive = false; ac.abort(); };
+  }, [base, TFS]);
+
+  return (
+    <div className="rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300">HTF Fair Value Gaps</span>
+        <span className="text-[10px] text-white/40">{instrument === "NQU" ? "NQ" : "ES"} · unmitigated · newest first</span>
+        {state === "loading" && <span className="ml-auto text-[10px] text-white/40">loading…</span>}
+        {state === "err" && <span className="ml-auto text-[10px] text-[#ff6b6b]">feed unavailable</span>}
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {TFS.map((tf) => {
+          const list = (gaps[tf.key] ?? []).slice(0, 6);
+          return (
+            <div key={tf.key} className="rounded-lg border border-white/10 bg-white/[0.02] p-2">
+              <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-white/70">{tf.key}</div>
+              {state === "ok" && list.length === 0 ? (
+                <p className="text-[11px] text-white/50">No open gaps.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {list.map((g, i) => {
+                    const inZone = lastPrice != null && lastPrice >= g.bottom && lastPrice <= g.top;
+                    return (
+                      <li key={i} className="flex items-center justify-between font-mono text-[11px]">
+                        <span style={{ color: g.dir === "bull" ? "#30d158" : "#ff5b5b" }}>
+                          {g.dir === "bull" ? "↑ FVG" : "↓ FVG"}{g.touched ? "*" : ""}
+                        </span>
+                        <span className="text-white" style={inZone ? { color: "#7fd4ff", fontWeight: 700 } : undefined}>
+                          {g.bottom.toFixed(2)}–{g.top.toFixed(2)}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[10px] text-white/35">* = price has tapped the gap (partial mitigation). Blue = price inside the gap now.</p>
+    </div>
+  );
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
