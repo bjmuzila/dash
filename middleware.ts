@@ -172,20 +172,6 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url, 308);
   }
 
-  // Owner dashboard now lives in the standalone owner-vite app on the
-  // owner.cbedge.net subdomain (routes keep the /owner prefix, so the path is
-  // preserved 1:1). Send the OWNER there; the cbe_session cookie is
-  // domain=.cbedge.net so it carries across the subdomain, and Cloudflare Access
-  // gates the subdomain. Non-owners fall through to the owner gate below (→ /home),
-  // so their behavior is unchanged. 307 (temporary) keeps this reversible and
-  // uncached while the subdomain beds in — flip OWNER_APP_ORIGIN or remove this
-  // block to roll back. Only the bare-domain page routes redirect; /api, /ws and
-  // /proxy never match /^\/owner/ and keep hitting this backend.
-  const OWNER_APP_ORIGIN = (process.env.OWNER_APP_ORIGIN || "https://owner.cbedge.net").replace(/\/$/, "");
-  if (isOwner && /^\/owner(\/.*)?$/.test(path)) {
-    return NextResponse.redirect(`${OWNER_APP_ORIGIN}${path}${req.nextUrl.search}`, 307);
-  }
-
   // Signed-out users hitting a protected page get sent to the landing page.
   if (!userId) {
     const url = req.nextUrl.clone();
@@ -196,14 +182,13 @@ export async function middleware(req: NextRequest) {
 
   // ── Paid-subscription gate (covers EVERY protected route) ────────────────────
   // Owners always pass. Routes needed to actually buy/see pricing stay
-  // reachable, plus /home, /mult-greek, and /preview (the lighter predecessor,
-  // still linked from /pricing) for unpaid-but-signed-in users. /home and
+  // reachable, plus /home and /mult-greek for unpaid-but-signed-in users. /home and
   // /mult-greek both render in "delayed" mode for them (see their page.tsx —
   // reads a frozen *_static_snapshots row instead of the live feed, no live
   // WS/chain loop), so on-the-fence signups land on the real dashboard with
   // real (delayed) data instead of a hard paywall. Everything else still
   // redirects to /home.
-  const PAID_EXEMPT = /^\/(pricing|preview|home|mult-greek|api\/stripe|api\/preview|api\/home-snapshot|api\/mult-greek-snapshot)(\/.*)?$/;
+  const PAID_EXEMPT = /^\/(pricing|home|mult-greek|api\/stripe|api\/home-snapshot|api\/mult-greek-snapshot)(\/.*)?$/;
   if (!isOwner && !isPaid && !PAID_EXEMPT.test(path)) {
     const url = req.nextUrl.clone();
     url.pathname = "/home";
