@@ -113,7 +113,7 @@ export function ThemedDatePicker({
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%",
           padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
-          fontSize: 13, fontWeight: 700, color: HOME_THEME.text, background: "rgba(0,0,0,0.30)",
+          fontSize: 14, fontWeight: 700, color: HOME_THEME.text, background: "rgba(0,0,0,0.30)",
           border: open ? `1px solid ${DOCK_THEME.activeBorder}` : `1px solid ${HOME_THEME.border}`,
           boxShadow: open ? DOCK_THEME.activeGlow : "none",
           transition: "border-color .14s, box-shadow .14s",
@@ -157,7 +157,7 @@ export function ThemedDatePicker({
             >
               <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
             </button>
-            <span style={{ fontSize: 13, fontWeight: 800 }}>{MONTHS_LONG[viewMonth]} {viewYear}</span>
+            <span style={{ fontSize: 14, fontWeight: 800 }}>{MONTHS_LONG[viewMonth]} {viewYear}</span>
             <button
               type="button"
               style={navBtn}

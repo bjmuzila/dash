@@ -123,12 +123,12 @@ export default function EsCandlesCard() {
     <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 0 }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
       {sessionCandles.length === 0 && (
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#6f7d8c", fontSize: 11 }}>
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#6f7d8c", fontSize: 12 }}>
           {connected ? "Loading ES candles…" : "Connecting…"}
         </div>
       )}
       {last && (
-        <div style={{ position: "absolute", left: 8, top: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#dbe7f0", background: "rgba(5,8,13,.6)", padding: "2px 7px", borderRadius: 6, pointerEvents: "none" }}>
+        <div style={{ position: "absolute", left: 8, top: 6, fontSize: 12, fontFamily: "var(--font-mono)", color: "#dbe7f0", background: "rgba(5,8,13,.6)", padding: "2px 7px", borderRadius: 6, pointerEvents: "none" }}>
           ES {last.close.toFixed(2)}
         </div>
       )}

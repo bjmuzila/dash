@@ -42,7 +42,7 @@ const th: React.CSSProperties = { padding: "6px 10px", textAlign: "right", fontW
 const td: React.CSSProperties = { padding: "6px 10px", textAlign: "right", color: HOME_THEME.text };
 
 const seg = (active: boolean): React.CSSProperties => ({
-  padding: "6px 14px", borderRadius: 8, fontSize: 15, cursor: "pointer", fontWeight: 700,
+  padding: "6px 14px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
   border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
   background: active ? "rgba(33,158,188,0.15)" : "transparent",
   color: active ? HOME_THEME.text : "rgba(255,255,255,0.7)",
@@ -149,15 +149,15 @@ function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
           style={{ ...classicCardAccentStyle, cursor: "pointer", padding: "18px 20px" }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>{s.title}</span>
+            <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>{s.title}</span>
           </div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: s.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: s.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
             {s.scope}
           </div>
-          <div style={{ fontSize: 15, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>
+          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>
             {s.what}
           </div>
-          <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
             <span style={{ color: s.accent, fontWeight: 800 }}>Tells you: </span>{s.tells}
           </div>
         </div>
@@ -299,7 +299,7 @@ function GexScanner() {
   useEffect(() => { const t = setInterval(() => load(), 60_000); return () => clearInterval(t); }, [load]);
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>GEX Change Scanner</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>GEX Change Scanner</span>}
       subtitle={`Stocks only · biggest ${win}m moves${sort === "z" ? " ranked by anomaly" : sort === "score" ? " ranked by combined score" : " by size"}${dir !== "all" ? ` · ${dir === "pos" ? "above spot · Δ↑" : dir === "neg" ? "below spot · Δ↓" : "building walls only"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 16 }}>
@@ -323,10 +323,10 @@ function GexScanner() {
           <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Call wall ↑</button>
           <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Put wall ↑</button>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }} title="How far OTM the strike must sit vs spot">
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.orange }} title="How far OTM the strike must sit vs spot">
           min OTM
           <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={0}>any</option>
             <option value={0.02}>2%+</option>
             <option value={0.05}>5%+</option>
@@ -335,10 +335,10 @@ function GexScanner() {
             <option value={0.20}>20%+</option>
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.green }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.green }}>
           min z
           <select value={minZ} onChange={(e) => setMinZ(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={0}>any</option>
             <option value={1.5}>1.5+</option>
             <option value={2}>2.0+</option>
@@ -346,20 +346,20 @@ function GexScanner() {
           </select>
         </label>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.cyan }} title="Strong signal: |Δ GEX| at or above this — real money moving">
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.cyan }} title="Strong signal: |Δ GEX| at or above this — real money moving">
           strong ≥ $
           <select value={minDollar} onChange={(e) => setMinDollar(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={250_000}>250K</option>
             <option value={500_000}>500K</option>
             <option value={1_000_000}>1M</option>
             <option value={2_000_000}>2M</option>
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }} title="Big relative: |% vs open| at or above this — big % jump even on smaller strikes">
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.orange }} title="Big relative: |% vs open| at or above this — big % jump even on smaller strikes">
           big % ≥
           <select value={minPct} onChange={(e) => setMinPct(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={20}>20%</option>
             <option value={30}>30%</option>
             <option value={50}>50%</option>
@@ -367,15 +367,15 @@ function GexScanner() {
           </select>
         </label>
         <span style={{ color: HOME_THEME.border }}>|</span>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.cyan }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.cyan }}>
           min expiry
           <input type="date" value={minExpiry} onChange={(e) => setMinExpiry(e.target.value)}
-            style={{ fontSize: 15, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
+            style={{ fontSize: 14, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.cyan }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.cyan }}>
           max expiry
           <input type="date" value={maxExpiry} onChange={(e) => setMaxExpiry(e.target.value)}
-            style={{ fontSize: 15, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
+            style={{ fontSize: 14, padding: "5px 8px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }} />
         </label>
         {(minExpiry || maxExpiry) && (
           <button onClick={() => { setMinExpiry(""); setMaxExpiry(""); }} style={seg(false)}>Clear</button>
@@ -388,7 +388,7 @@ function GexScanner() {
       {/* Top 10 by size — biggest |Δ GEX| in the window, always sorted by size regardless of table sort */}
       {!!topBySize.length && (
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.orange, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.orange, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
             Top 10 · biggest {win}m size
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
@@ -408,7 +408,7 @@ function GexScanner() {
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>
+                    <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>
                       <span style={{ color: "rgba(255,255,255,0.35)", marginRight: 6 }}>{i + 1}</span>{r.symbol}
                     </span>
                     <span style={{ fontSize: 14, color: "rgba(255,255,255,0.6)" }}>{r.strike}</span>
@@ -438,9 +438,9 @@ function GexScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
               <th style={th}>Spot</th>
@@ -458,7 +458,7 @@ function GexScanner() {
                     userSelect: "none",
                     whiteSpace: "nowrap",
                   }}>
-                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 15 }}>{arrow}</span>
+                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 14 }}>{arrow}</span>
                   </th>
                 );
               })}
@@ -477,7 +477,7 @@ function GexScanner() {
                     userSelect: "none",
                     whiteSpace: "nowrap",
                   }}>
-                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 15 }}>{arrow}</span>
+                    {label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 14 }}>{arrow}</span>
                     {col === "score" && <> <ScoreInfo align="right" side="bottom" /></>}
                   </th>
                 );
@@ -498,7 +498,7 @@ function GexScanner() {
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>
                   <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot > 0 ? r.spot.toFixed(2) : "—"}</td>
                   <td style={td}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 15 }}>{r.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: col, fontWeight: 800 }}>{fmtB(r.latest_chg)}</td>
                   <td style={td}>{fmtB(r.mean_chg)}</td>
                   <td style={{ ...td, color: zColor(r.z), fontWeight: 800 }}>
@@ -525,7 +525,7 @@ function GexScanner() {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14, color: "rgba(255,255,255,0.4)" }}>
         <span>Score = 0.6·|Δ| + 0.4·|% vs open|, normalized 0–100</span>
         <span><span style={{ color: HOME_THEME.cyan }}>Strong</span> = |Δ| ≥ {fmtB(minDollar).replace("+", "")}</span>
         <span><span style={{ color: HOME_THEME.orange }}>Big %</span> = |% vs open| ≥ {minPct}%</span>
@@ -618,7 +618,7 @@ function GreeksScanner() {
   const isTg = mode === "tg";
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Greeks Sensitivity Scanner</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>Greeks Sensitivity Scanner</span>}
       subtitle={`SPX · ${meta.label} · ${win}m window${loading ? " · refreshing…" : ""}`}>
 
       {/* Mode selector */}
@@ -639,11 +639,11 @@ function GreeksScanner() {
           <button key={w} onClick={() => setWin(w)} style={seg(win === w)}>{w}m</button>
         ))}
         <button onClick={() => load()} style={{ ...seg(false), marginLeft: 4 }}>↻</button>
-        <span style={{ fontSize: 15, color: "rgba(255,255,255,0.5)", marginLeft: 8 }}>{meta.subtitle}</span>
+        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", marginLeft: 8 }}>{meta.subtitle}</span>
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 14 }}>
           {err.includes('no DB') || err.includes('503')
             ? "Recorder hasn't started yet — data appears after the first 5-min RTH snapshot."
             : err}
@@ -651,9 +651,9 @@ function GreeksScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <th style={th}>Spot</th>
               <th style={th}>Strike</th>
@@ -689,7 +689,7 @@ function GreeksScanner() {
                   </td>
                   <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{r.spot_now > 0 ? r.spot_now.toFixed(2) : "—"}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 15 }}>{r.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.6)", fontSize: 14 }}>{r.expiry}</td>
                   <td style={{ ...td, color: chgCol, fontWeight: 800 }}>{fmtB(chg)}</td>
                   {!isTg && <td style={td}>{fmtB(r.mean_chg)}</td>}
                   {!isTg && (
@@ -716,7 +716,7 @@ function GreeksScanner() {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14, color: "rgba(255,255,255,0.4)" }}>
         <span>◆ near spot (&lt;2%)</span>
         {!isTg && <span>z ≥ 2σ = <span style={{ color: HOME_THEME.orange }}>unusual</span></span>}
         {!isTg && <span>z ≥ 3σ = <span style={{ color: HOME_THEME.red }}>extreme</span></span>}
@@ -787,10 +787,10 @@ function SortTh({ label, col, sortKey, sortDir, onSort, align = "right" }: {
 
 function PinStatus({ r }: { r: PinRow }) {
   const rank = pinStatusRank(r);
-  if (rank === 0) return <span style={{ color: HOME_THEME.red, fontWeight: 800, fontSize: 15 }}>PINNING</span>;
-  if (rank === 1) return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 15 }}>SQUEEZING</span>;
-  if (rank === 2) return <span style={{ color: HOME_THEME.cyan, fontWeight: 600, fontSize: 15 }}>WATCHING</span>;
-  return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 15 }}>—</span>;
+  if (rank === 0) return <span style={{ color: HOME_THEME.red, fontWeight: 800, fontSize: 14 }}>PINNING</span>;
+  if (rank === 1) return <span style={{ color: HOME_THEME.orange, fontWeight: 700, fontSize: 14 }}>SQUEEZING</span>;
+  if (rank === 2) return <span style={{ color: HOME_THEME.cyan, fontWeight: 600, fontSize: 14 }}>WATCHING</span>;
+  return <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 14 }}>—</span>;
 }
 
 type PinSortKey = "symbol" | "spot" | "dist" | "pinOi" | "atmIv" | "rv" | "ivRv"
@@ -851,11 +851,11 @@ function PinEventLog() {
   useEffect(() => { const t = setInterval(() => load(), 90_000); return () => clearInterval(t); }, [load]);
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Pin / Squeeze Event Log</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>Pin / Squeeze Event Log</span>}
       subtitle={`First occurrence per symbol/day/status · last 14 days${loading ? " · refreshing…" : ""}`}>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 14 }}>
           {err.includes('503') || err.includes('no DB')
             ? "Recorder not yet active — events appear after the first PINNING/SQUEEZING sweep."
             : err}
@@ -863,9 +863,9 @@ function PinEventLog() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>Date</th>
               <th style={{ ...th, textAlign: "left" }}>Time (ET)</th>
               <th style={{ ...th, textAlign: "left" }}>Symbol</th>
@@ -958,14 +958,14 @@ function VolPinScanner() {
 
   return (
     <>
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Volatility Pin Scanner</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>Volatility Pin Scanner</span>}
       subtitle={`Stocks · IV-RV spread + range contraction → pin candidates${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.green }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.green }}>
           min snapshots
           <select value={minSnaps} onChange={(e) => setMinSnaps(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={2}>2 (early)</option>
             <option value={3}>3 (15 min)</option>
             <option value={6}>6 (30 min)</option>
@@ -973,13 +973,13 @@ function VolPinScanner() {
           </select>
         </label>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
+        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
           Refreshes every 90s · recorder runs every 5m during RTH
         </span>
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 14 }}>
           {err.includes('503') || err.includes('no DB')
             ? "Recorder not yet active — data appears after first RTH sweep."
             : err}
@@ -987,9 +987,9 @@ function VolPinScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
               <SortTh label="Symbol" col="symbol" align="left" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               <SortTh label="Spot" col="spot" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
@@ -1061,7 +1061,7 @@ function VolPinScanner() {
       </div>
 
       {/* Legend */}
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14, color: "rgba(255,255,255,0.4)" }}>
         <span><span style={{ color: HOME_THEME.red }}>PINNING</span> = spread ↓ + range ↓ + within 0.5% of pin strike</span>
         <span><span style={{ color: HOME_THEME.orange }}>SQUEEZING</span> = spread ↓ + range ↓</span>
         <span>Pin strike = highest OI within ±10% of spot (front expiry)</span>
@@ -1220,11 +1220,11 @@ function StrikeQueryScanner() {
   ];
 
   const lbl: React.CSSProperties = {
-    fontSize: 15, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em",
+    fontSize: 14, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em",
   };
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Strike GEX Query</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>Strike GEX Query</span>}
       subtitle={`Top movers by strike · ${symbol === "ALL" ? "all watched tickers" : symbol}${dir !== "all" ? ` · ${dir === "pos" ? "above spot · Δ↑" : "below spot · Δ↓"}` : ""}${minOtm > 0 ? ` · OTM ≥${(minOtm * 100).toFixed(0)}%` : ""}${loading ? " · loading…" : ""}`}>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
@@ -1249,10 +1249,10 @@ function StrikeQueryScanner() {
           <button onClick={() => setDir("pos")} style={{ ...seg(dir === "pos"), ...(dir === "pos" ? { color: HOME_THEME.green, borderColor: HOME_THEME.green } : {}) }}>Positive</button>
           <button onClick={() => setDir("neg")} style={{ ...seg(dir === "neg"), ...(dir === "neg" ? { color: HOME_THEME.red, borderColor: HOME_THEME.red } : {}) }}>Negative</button>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 15, color: HOME_THEME.orange }} title="How far OTM the strike must sit vs spot">
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.orange }} title="How far OTM the strike must sit vs spot">
           min OTM
           <select value={minOtm} onChange={(e) => setMinOtm(Number(e.target.value))}
-            style={{ fontSize: 15, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
+            style={{ fontSize: 14, padding: "6px 10px", borderRadius: 6, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: "1px solid rgba(255,255,255,0.15)" }}>
             <option value={0}>any</option>
             <option value={0.02}>2%+</option>
             <option value={0.05}>5%+</option>
@@ -1262,15 +1262,15 @@ function StrikeQueryScanner() {
           </select>
         </label>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
+        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>click a column header to sort</span>
       </div>
 
-      {err && <div style={{ color: HOME_THEME.red, marginBottom: 12, fontSize: 15 }}>{err}</div>}
+      {err && <div style={{ color: HOME_THEME.red, marginBottom: 12, fontSize: 14 }}>{err}</div>}
 
       {topCards.length > 0 && (
         <div style={{ marginBottom: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-            <span style={{ fontSize: 16, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <span style={{ fontSize: 17, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               Top 10 · {cols.find((c) => c.key === colSort.col)?.label} · SPX/SPY/QQQ 1 slot each
             </span>
             <div style={{ display: "flex", gap: 6 }}>
@@ -1290,16 +1290,16 @@ function StrikeQueryScanner() {
                   background: i % 2 ? "rgba(255,255,255,0.02)" : "rgba(33,158,188,0.06)",
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                    <span style={{ fontWeight: 800, fontSize: 16, color: HOME_THEME.text }}>{r.symbol}</span>
-                    <span style={{ fontSize: 15, color: "rgba(255,255,255,0.4)" }}>#{i + 1}</span>
+                    <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>{r.symbol}</span>
+                    <span style={{ fontSize: 14, color: "rgba(255,255,255,0.4)" }}>#{i + 1}</span>
                   </div>
-                  <div style={{ fontSize: 15, color: HOME_THEME.cyan, fontWeight: 700, margin: "2px 0" }}>
+                  <div style={{ fontSize: 14, color: HOME_THEME.cyan, fontWeight: 700, margin: "2px 0" }}>
                     ${r.strike} <span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}>{r.expiry}</span>
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: metricCol }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: metricCol }}>
                     {colSort.col === "strike" ? r.strike : fmtB(v)}
                   </div>
-                  <div style={{ fontSize: 15, color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>
+                  <div style={{ fontSize: 14, color: "rgba(255,255,255,0.4)", textTransform: "uppercase" }}>
                     {cols.find((c) => c.key === colSort.col)?.label}
                   </div>
                 </div>
@@ -1310,9 +1310,9 @@ function StrikeQueryScanner() {
       )}
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
-            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+            <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               {showSymbol && <th style={{ ...th, textAlign: "left" }}>Symbol</th>}
               {showExpiry && <th style={{ ...th, textAlign: "left" }}>Expiry</th>}
               <th style={th}>OTM%</th>
@@ -1324,7 +1324,7 @@ function StrikeQueryScanner() {
                     ...th, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
                     color: active ? HOME_THEME.cyan : HOME_THEME.green,
                   }}>
-                    {c.label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 15 }}>{arrow}</span>
+                    {c.label}<span style={{ opacity: active ? 1 : 0.4, fontSize: 14 }}>{arrow}</span>
                   </th>
                 );
               })}
@@ -1335,7 +1335,7 @@ function StrikeQueryScanner() {
               <tr key={`${r.symbol}-${r.expiry}-${r.strike}-${i}`}
                 style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
                 {showSymbol && <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.symbol}</td>}
-                {showExpiry && <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 15 }}>{r.expiry}</td>}
+                {showExpiry && <td style={{ ...td, textAlign: "left", color: "rgba(255,255,255,0.7)", fontSize: 14 }}>{r.expiry}</td>}
                 <td style={{ ...td, color: otmDist(r) * 100 >= 5 ? HOME_THEME.orange : "rgba(255,255,255,0.7)" }}>
                   {r.spot ? `${(otmDist(r) * 100).toFixed(1)}%` : "—"}
                 </td>
@@ -1516,12 +1516,12 @@ function WatchThisScanner() {
   useEffect(() => { loadOutcomes(); }, [loadOutcomes]);
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Watch This — Far CB</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>Watch This — Far CB</span>}
       subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · EM watchlist${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
-        <span style={{ fontSize: 15, color: HOME_THEME.text }}>
+        <span style={{ fontSize: 14, color: HOME_THEME.text }}>
           Refreshes every 2m · recorder sweeps every 30m during RTH
         </span>
       </div>
@@ -1534,7 +1534,7 @@ function WatchThisScanner() {
           placeholder="Add a ticker (e.g. RDDT)"
           maxLength={6}
           style={{
-            fontSize: 15, padding: "7px 10px", borderRadius: 6, width: 160,
+            fontSize: 14, padding: "7px 10px", borderRadius: 6, width: 160,
             background: "rgba(0,0,0,0.30)", color: HOME_THEME.text,
             border: "1px solid rgba(255,255,255,0.15)", colorScheme: "dark",
           }}
@@ -1543,14 +1543,14 @@ function WatchThisScanner() {
           {adding ? "Adding…" : "+ Add"}
         </button>
         {addStatus && (
-          <span style={{ fontSize: 15, color: addStatus.kind === "ok" ? LIGHT_BLUE : HOME_THEME.red }}>
+          <span style={{ fontSize: 14, color: addStatus.kind === "ok" ? LIGHT_BLUE : HOME_THEME.red }}>
             {addStatus.msg}
           </span>
         )}
       </div>
 
       {err && (
-        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 15 }}>
+        <div style={{ color: HOME_THEME.orange, marginBottom: 12, fontSize: 14 }}>
           {err.includes("no DB") || err.includes("503")
             ? "Recorder hasn't run yet — data appears after the first RTH sweep."
             : err}
@@ -1576,26 +1576,26 @@ function WatchThisScanner() {
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
                 <span style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                  <span style={{ fontWeight: 800, fontSize: 15, color: up ? HOME_THEME.green : HOME_THEME.red }}>{r.symbol}</span>
-                  <span style={{ fontSize: 15, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red, opacity: 0.85 }}>${r.spot.toFixed(2)}</span>
+                  <span style={{ fontWeight: 800, fontSize: 14, color: up ? HOME_THEME.green : HOME_THEME.red }}>{r.symbol}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red, opacity: 0.85 }}>${r.spot.toFixed(2)}</span>
                 </span>
-                <span style={{ fontSize: 15, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH THIS</span>
               </div>
-              <div style={{ fontSize: 15, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
+              <div style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, marginBottom: 4 }}>
                 ${r.strike} <span style={{ color: HOME_THEME.text, fontWeight: 400 }}>· {r.expiry} · {r.dte_days}d</span>
               </div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.5, marginBottom: 8 }}>
+              <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, marginBottom: 8 }}>
                 Highest GEX level for {r.symbol} is the ${r.strike} strike ({r.expiry}), {r.otm_pct.toFixed(0)}% away from spot (${r.spot.toFixed(2)}) —
                 farther out than the usual near-the-money CB. {up ? "Call-side" : "Put-side"} dominant.
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
-                  <span style={{ fontSize: 15, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
-                    <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600, fontSize: 15 }}>OI+VOL </span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
+                    <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600, fontSize: 14 }}>OI+VOL </span>
                     {fmtB(r.gex_value)}
                   </span>
-                  <span style={{ fontSize: 15, fontWeight: 700, color: (r.gex_value_vol ?? 0) >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                    <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600, fontSize: 15 }}>VOL </span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: (r.gex_value_vol ?? 0) >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                    <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600, fontSize: 14 }}>VOL </span>
                     {r.gex_value_vol != null ? fmtB(r.gex_value_vol) : "—"}
                   </span>
                 </span>
@@ -1603,7 +1603,7 @@ function WatchThisScanner() {
                   href={chainHref}
                   target={isEmbed ? "_top" : undefined}
                   rel={isEmbed ? "noopener" : undefined}
-                  style={{ fontSize: 15, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}
+                  style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}
                 >
                   View chain →
                 </a>
@@ -1613,7 +1613,7 @@ function WatchThisScanner() {
         })}
       </div>
 
-      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 15, color: HOME_THEME.text }}>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 14, color: HOME_THEME.text }}>
         <span>Basis: OI+Vol net GEX (canonical) · single highest |GEX| strike per ticker across expiries ≤30 DTE</span>
         <span>Flagged when that strike is &gt;{threshold ?? 15}% away from spot</span>
       </div>
@@ -1621,7 +1621,7 @@ function WatchThisScanner() {
       {/* Tracked results — did the flagged strike ever get touched? */}
       <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
+          <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
           <div style={{ display: "flex", gap: 6 }}>
             {(["all", "open", "touched", "expired"] as const).map((s) => (
               <button key={s} onClick={() => setOutcomeStatus(s)} style={seg(outcomeStatus === s)}>
@@ -1629,15 +1629,15 @@ function WatchThisScanner() {
               </button>
             ))}
           </div>
-          <span style={{ fontSize: 15, color: HOME_THEME.text }}>
+          <span style={{ fontSize: 14, color: HOME_THEME.text }}>
             Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract&apos;s NBBO mid, % since its own open (live rows only)
           </span>
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
-              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
                 <th style={{ ...th, textAlign: "left" }}>Symbol</th>
                 <th style={th}>Strike</th>
                 <th style={{ ...th, textAlign: "left" }}>Expiry</th>
@@ -1662,8 +1662,8 @@ function WatchThisScanner() {
                   }}>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
                   <td style={{ ...td, fontWeight: 700, color: o.side === "above" ? HOME_THEME.green : HOME_THEME.red }}>${o.strike}</td>
-                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.expiry}</td>
-                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 15 }}>{o.first_flagged}</td>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.expiry}</td>
+                  <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.first_flagged}</td>
                   <td style={{ ...td, fontWeight: 700, color: o.opt_price != null ? LIGHT_BLUE : HOME_THEME.text }}>
                     {o.opt_price != null
                       ? `$${o.opt_price.toFixed(2)}${o.opt_type ? ` ${o.opt_type}` : ""}`
@@ -1684,7 +1684,7 @@ function WatchThisScanner() {
                   </td>
                   <td style={{ ...td, textAlign: "left" }}>
                     <span style={{
-                      fontSize: 15, fontWeight: 800, letterSpacing: "0.05em",
+                      fontSize: 14, fontWeight: 800, letterSpacing: "0.05em",
                       color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? HOME_THEME.text : HOME_THEME.green,
                     }}>
                       {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
@@ -1728,7 +1728,7 @@ function WatchThisScanner() {
                   {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
                 </div>
                 {detail && (
-                  <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
+                  <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
                     Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
                     <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
                       {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
@@ -1750,9 +1750,9 @@ function WatchThisScanner() {
             )}
             {detail && !!detail.days.length && (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                   <thead>
-                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 15, textTransform: "uppercase" }}>
+                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
                       <th style={{ ...th, textAlign: "left" }}>Date</th>
                       <th style={th}>Spot</th>
                       <th style={th}>Spot Δ%</th>
@@ -1863,8 +1863,8 @@ function RingGauge({ score, label, sub }: { score: number; label: string; sub: s
         </text>
       </svg>
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>{label}</div>
-        <div style={{ fontSize: 15, color: HOME_THEME.text }}>{sub}</div>
+        <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text, textTransform: "uppercase" }}>{label}</div>
+        <div style={{ fontSize: 14, color: HOME_THEME.text }}>{sub}</div>
       </div>
     </div>
   );
@@ -1876,7 +1876,7 @@ function MqPanel({ title, accent, children }: { title: string; accent: string; s
   return (
     <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px", background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 65%), rgba(13,17,25,0.25)` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.05em", color: accent, textTransform: "uppercase" }}>{title}</span>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.05em", color: accent, textTransform: "uppercase" }}>{title}</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{children}</div>
     </div>
@@ -1885,7 +1885,7 @@ function MqPanel({ title, accent, children }: { title: string; accent: string; s
 
 function MqRow({ label, value, valueColor }: { label: string; value: React.ReactNode; valueColor?: string }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
       <span style={{ color: HOME_THEME.text }}>{label}</span>
       <span style={{ fontWeight: 700, color: valueColor ?? HOME_THEME.text }}>{value}</span>
     </div>
@@ -1924,15 +1924,15 @@ function MarketQualityScanner() {
 
   if (err) {
     return (
-      <Card variant="budget" title={<span style={{ fontSize: 16 }}>Market Quality Terminal</span>} subtitle="Global market regime score">
-        <div style={{ color: HOME_THEME.red, fontSize: 15 }}>{err}</div>
+      <Card variant="budget" title={<span style={{ fontSize: 17 }}>Market Quality Terminal</span>} subtitle="Global market regime score">
+        <div style={{ color: HOME_THEME.red, fontSize: 14 }}>{err}</div>
       </Card>
     );
   }
   if (!data) {
     return (
-      <Card variant="budget" title={<span style={{ fontSize: 16 }}>Market Quality Terminal</span>} subtitle="Loading…">
-        <div style={{ color: HOME_THEME.text, fontSize: 15, padding: 24, textAlign: "center" }}>Fetching live index / sector data…</div>
+      <Card variant="budget" title={<span style={{ fontSize: 17 }}>Market Quality Terminal</span>} subtitle="Loading…">
+        <div style={{ color: HOME_THEME.text, fontSize: 14, padding: 24, textAlign: "center" }}>Fetching live index / sector data…</div>
       </Card>
     );
   }
@@ -1947,27 +1947,27 @@ function MarketQualityScanner() {
   const execToneColor = (tone: boolean | null) => tone == null ? HOME_THEME.orange : tone ? HOME_THEME.green : HOME_THEME.red;
 
   return (
-    <Card variant="budget" title={<span style={{ fontSize: 16 }}>Market Quality Terminal</span>}
+    <Card variant="budget" title={<span style={{ fontSize: 17 }}>Market Quality Terminal</span>}
       subtitle={`Global market regime score · ${asOfLocal}${loading ? " · refreshing…" : ""}`}>
 
       {/* Decision + Banner + global score + 5 rings + Position Size */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center", marginBottom: 22 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 90 }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.06em" }}>Decision</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.06em" }}>Decision</span>
           <div style={{
-            borderRadius: 8, padding: "8px 18px", fontSize: 15, fontWeight: 800, letterSpacing: "0.04em",
+            borderRadius: 8, padding: "8px 18px", fontSize: 14, fontWeight: 800, letterSpacing: "0.04em",
             color: decisionColor, border: `1px solid ${decisionColor}55`, background: `${decisionColor}15`,
           }}>{decision}</div>
-          <span style={{ fontSize: 15, color: HOME_THEME.text }}>Swing Trading</span>
+          <span style={{ fontSize: 14, color: HOME_THEME.text }}>Swing Trading</span>
         </div>
 
         <div style={{
           borderRadius: 12, padding: "14px 20px", minWidth: 150,
           border: `1px solid ${bannerColor}55`, background: `${bannerColor}15`,
         }}>
-          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", color: bannerColor }}>{banner.label}</div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, lineHeight: 1.1 }}>{globalScore}<span style={{ fontSize: 16, color: HOME_THEME.text }}>/100</span></div>
-          <div style={{ fontSize: 15, color: bannerColor, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>{banner.sizing}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", color: bannerColor }}>{banner.label}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, lineHeight: 1.1 }}>{globalScore}<span style={{ fontSize: 17, color: HOME_THEME.text }}>/100</span></div>
+          <div style={{ fontSize: 14, color: bannerColor, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>{banner.sizing}</div>
         </div>
 
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
@@ -1982,16 +1982,16 @@ function MarketQualityScanner() {
           borderRadius: 12, padding: "14px 20px", minWidth: 140, marginLeft: "auto",
           border: `1px solid ${HOME_THEME.border}`, background: "rgba(13,17,25,0.35)",
         }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Position Size</div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: bannerColor, letterSpacing: "0.04em" }}>{banner.sizeLabel}</div>
-          <div style={{ fontSize: 15, color: HOME_THEME.text }}>{banner.sizeNote}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Position Size</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: bannerColor, letterSpacing: "0.04em" }}>{banner.sizeLabel}</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text }}>{banner.sizeNote}</div>
         </div>
       </div>
 
       {/* FOMC / event banner */}
       {event.fomc.label && (
         <div style={{
-          borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 15, fontWeight: 600,
+          borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 14, fontWeight: 600,
           color: HOME_THEME.text, background: `${HOME_THEME.orange}12`, border: `1px solid ${HOME_THEME.orange}45`,
         }}>
           <span style={{ fontWeight: 800, color: HOME_THEME.orange }}>⚠ {event.fomc.label}</span>
@@ -2026,7 +2026,7 @@ function MarketQualityScanner() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
             {pillars.breadth.sectors.map((s) => (
               <span key={s.symbol} style={{
-                fontSize: 15, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+                fontSize: 14, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
                 color: s.above == null ? HOME_THEME.text : s.above ? HOME_THEME.green : HOME_THEME.red,
                 background: s.above == null ? "transparent" : s.above ? `${HOME_THEME.green}18` : `${HOME_THEME.red}18`,
               }}>
@@ -2057,23 +2057,23 @@ function MarketQualityScanner() {
       <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(260px, 1.3fr) minmax(220px, 1fr)", gap: 16 }}>
         <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em" }}>
               Execution Window
             </span>
-            <span style={{ fontSize: 15, fontWeight: 800, color: scoreColor(executionWindow.score) }}>{executionWindow.score}</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: scoreColor(executionWindow.score) }}>{executionWindow.score}</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {executionWindow.items.map((it) => (
-              <div key={it.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+              <div key={it.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
                 <span style={{ color: HOME_THEME.text }}>{it.label}</span>
-                <span style={{ fontWeight: 700, color: execToneColor(it.tone) }}>{it.value} <span style={{ fontSize: 15, fontWeight: 500 }}>{it.sub}</span></span>
+                <span style={{ fontWeight: 700, color: execToneColor(it.tone) }}>{it.value} <span style={{ fontSize: 14, fontWeight: 500 }}>{it.sub}</span></span>
               </div>
             ))}
           </div>
         </div>
 
         <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
             Sector Performance (5-Day)
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -2082,7 +2082,7 @@ function MarketQualityScanner() {
               const pos = v >= 0;
               const widthPct = (Math.abs(v) / maxAbsBar) * 100;
               return (
-                <div key={b.symbol} style={{ display: "grid", gridTemplateColumns: "48px 1fr 60px", alignItems: "center", gap: 8, fontSize: 15 }}>
+                <div key={b.symbol} style={{ display: "grid", gridTemplateColumns: "48px 1fr 60px", alignItems: "center", gap: 8, fontSize: 14 }}>
                   <span style={{ fontWeight: 700, color: HOME_THEME.text }}>{b.symbol}</span>
                   <div style={{ position: "relative", height: 14, background: "rgba(255,255,255,0.05)", borderRadius: 4 }}>
                     <div style={{
@@ -2100,12 +2100,12 @@ function MarketQualityScanner() {
         </div>
 
         <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.green, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
             Scoring Weights
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
-              <tr style={{ color: HOME_THEME.text, fontSize: 15, textTransform: "uppercase" }}>
+              <tr style={{ color: HOME_THEME.text, fontSize: 14, textTransform: "uppercase" }}>
                 <th style={{ textAlign: "left", padding: "4px 0" }}>Pillar</th>
                 <th style={{ textAlign: "right", padding: "4px 0" }}>Score</th>
                 <th style={{ textAlign: "right", padding: "4px 0" }}>Weight</th>
@@ -2135,7 +2135,7 @@ function MarketQualityScanner() {
               </tr>
             </tbody>
           </table>
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: 3, fontSize: 15 }}>
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: 3, fontSize: 14 }}>
             <span style={{ color: HOME_THEME.green, fontWeight: 700 }}>60-100: YES (press risk)</span>
             <span style={{ color: HOME_THEME.orange, fontWeight: 700 }}>40-59: CAUTION (selective)</span>
             <span style={{ color: HOME_THEME.red, fontWeight: 700 }}>&lt;40: NO (preserve capital)</span>
@@ -2146,16 +2146,16 @@ function MarketQualityScanner() {
       {/* AI-generated assessment */}
       <div style={{ marginTop: 20, borderRadius: 12, border: `1px solid ${HOME_THEME.cyan}30`, padding: "14px 16px", background: `${HOME_THEME.cyan}0A` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.cyan, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.cyan, textTransform: "uppercase", letterSpacing: "0.06em" }}>
             ⚡ AI-Generated Market Assessment
           </span>
-          <button onClick={copyAssessment} style={{ ...seg(false), fontSize: 15, padding: "4px 10px" }}>
+          <button onClick={copyAssessment} style={{ ...seg(false), fontSize: 14, padding: "4px 10px" }}>
             {copyStatus === "copied" ? "Copied ✓" : "Copy Shot"}
           </button>
         </div>
-        <div style={{ fontSize: 15, fontWeight: 800, color: decisionColor, marginBottom: 8 }}>{headline}</div>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.6, marginBottom: 10 }}>{body}</div>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.6, fontStyle: "italic" }}>{suggestedAction}</div>
+        <div style={{ fontSize: 14, fontWeight: 800, color: decisionColor, marginBottom: 8 }}>{headline}</div>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.6, marginBottom: 10 }}>{body}</div>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.6, fontStyle: "italic" }}>{suggestedAction}</div>
       </div>
     </Card>
   );
@@ -2480,7 +2480,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
   }, [sessions, spot, binSize, w, split, labels, zx, zy, ox, oy]);
 
   const btn = (active: boolean): React.CSSProperties => ({
-    padding: "3px 10px", borderRadius: 6, fontSize: 15, cursor: "pointer", fontWeight: 700,
+    padding: "3px 10px", borderRadius: 6, fontSize: 14, cursor: "pointer", fontWeight: 700,
     border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
     background: active ? "rgba(33,158,188,0.15)" : "transparent",
     color: active ? HOME_THEME.text : "rgba(255,255,255,0.6)",
@@ -2499,7 +2499,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
         <button onClick={() => setZx((z) => Math.min(6, z * 1.25))} style={btn(false)}>Width +</button>
         <button onClick={() => setZx((z) => Math.max(0.4, z / 1.25))} style={btn(false)}>Width −</button>
         <button onClick={reset} style={btn(false)}>Reset</button>
-        <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
+        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
           drag to pan · wheel = price zoom · shift+wheel = width zoom · hover a structure for detail
         </span>
       </div>
@@ -2551,11 +2551,11 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
           <div style={{ color: hover.hit.color, fontWeight: 700, fontSize: 12 }}>
             {KIND_TITLE[hover.hit.s.kind]}
           </div>
-          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 3, lineHeight: 1.35 }}>
+          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginTop: 3, lineHeight: 1.35 }}>
             {KIND_NOTE[hover.hit.s.kind]}
           </div>
           <div style={{
-            color: "rgba(255,255,255,0.45)", fontSize: 11, marginTop: 5,
+            color: "rgba(255,255,255,0.45)", fontSize: 12, marginTop: 5,
             fontVariantNumeric: "tabular-nums",
           }}>
             {hover.hit.s.date} ·{" "}
@@ -2603,10 +2603,10 @@ function StructureRow({ s, spot, base }: {
       gap: 8, alignItems: "center",
       padding: "9px 12px",
       borderBottom: "1px solid rgba(255,255,255,0.06)",
-      fontSize: 15,
+      fontSize: 14,
     }}>
       <span title={KIND_MEANING[s.kind]} style={{
-        justifySelf: "start", fontSize: 13, fontWeight: 700,
+        justifySelf: "start", fontSize: 14, fontWeight: 700,
         padding: "2px 9px", borderRadius: 999, cursor: "help",
         whiteSpace: "nowrap",
         color, border: `1px solid ${color}55`, background: `${color}1A`,
@@ -2626,7 +2626,7 @@ function StructureRow({ s, spot, base }: {
           {s.kind === "hole" ? "—" : pctOrDash(base.rate)}
         </span>
         {s.kind !== "hole" && base.rate != null && (
-          <span style={{ fontSize: 15, color: "rgba(255,255,255,0.35)" }}>n={base.n}</span>
+          <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)" }}>n={base.n}</span>
         )}
       </span>
 
@@ -2682,7 +2682,7 @@ function AmtSignalRow({ s, spot, livePad }: { s: AmtSignal; spot: number | null;
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ color: dg.c }}>{dg.g}</span>{s.title}
         </span>
         <span style={{ fontSize: 14, color: "rgba(255,255,255,0.62)", lineHeight: 1.45 }}>{s.detail}</span>
@@ -2734,8 +2734,8 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
 
   if (!amt.ok) {
     return (
-      <Card variant="budget" title={<span style={{ fontSize: 16 }}>AMT — auction read &amp; live signals</span>}>
-        <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+      <Card variant="budget" title={<span style={{ fontSize: 17 }}>AMT — auction read &amp; live signals</span>}>
+        <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
           {amt.reason}
         </div>
       </Card>
@@ -2749,14 +2749,14 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
       display: "flex", flexDirection: "column", gap: 3, minWidth: 0,
     }}>
       <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)" }}>{label}</span>
-      <span style={{ fontSize: 16, fontWeight: 800, color: color ?? HOME_THEME.text }}>{value}</span>
-      {note && <span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", lineHeight: 1.4 }}>{note}</span>}
+      <span style={{ fontSize: 17, fontWeight: 800, color: color ?? HOME_THEME.text }}>{value}</span>
+      {note && <span style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", lineHeight: 1.4 }}>{note}</span>}
     </div>
   );
 
   return (
     <Card variant="budget"
-      title={<span style={{ fontSize: 16 }}>AMT — auction read &amp; live signals</span>}
+      title={<span style={{ fontSize: 17 }}>AMT — auction read &amp; live signals</span>}
       subtitle={`Day-timeframe read vs prior value${liveCount ? ` · ${liveCount} live` : ""}${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
       {/* headline read */}
@@ -2771,20 +2771,20 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
       <div style={{
         padding: "10px 14px", borderRadius: 10, marginBottom: 14,
         border: `1px solid ${stateColor}40`, background: `${stateColor}0F`,
-        fontSize: 15, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5,
+        fontSize: 14, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5,
       }}>
         {amt.bias}
-        <div style={{ fontSize: 13, fontWeight: 400, color: "rgba(255,255,255,0.5)", marginTop: 4 }}>{amt.location}</div>
+        <div style={{ fontSize: 14, fontWeight: 400, color: "rgba(255,255,255,0.5)", marginTop: 4 }}>{amt.location}</div>
       </div>
 
       {/* signal rail */}
-      <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)", marginBottom: 8 }}>
+      <div style={{ fontSize: 14, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)", marginBottom: 8 }}>
         Signals &amp; alerts <span style={{ textTransform: "none", letterSpacing: 0 }}>— a row lights green when spot reaches its trigger</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {signals.map((s) => <AmtSignalRow key={s.id} s={s} spot={spot} livePad={livePad} />)}
         {!signals.length && (
-          <div style={{ padding: 16, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+          <div style={{ padding: 16, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
             No actionable auction signals yet — waiting on IB and structure to form.
           </div>
         )}
@@ -2798,7 +2798,7 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
         </div>
       </details>
 
-      <div style={{ marginTop: 12, fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
+      <div style={{ marginTop: 12, fontSize: 14, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
         Auction read is derived from 5-min RTH profiles — opening type is approximate (no tick tape). Responsive = fade back to value; initiative = follow. Not financial advice.
       </div>
     </Card>
@@ -2880,7 +2880,7 @@ function TpoStructuresScanner() {
 
       {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
       <Card variant="budget"
-        title={<span style={{ fontSize: 16 }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
+        title={<span style={{ fontSize: 17 }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
         subtitle={`${instr} · ${binSize}-pt bins (4 ticks) · 30-min periods · RTH only · shared price axis`}>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
@@ -2891,20 +2891,20 @@ function TpoStructuresScanner() {
             <button key={n} onClick={() => setNSessions(n)} style={seg(nSessions === n)}>{n}D</button>
           ))}
           {nSessions === 30 && shown.length < 30 && (
-            <span style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>
+            <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)" }}>
               {shown.length} loaded — SQLite history only goes back so far
             </span>
           )}
         </div>
 
         {!shown.length && (
-          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
             Waiting on RTH candles.
           </div>
         )}
         {!!shown.length && <TpoLetterProfile sessions={shown} spot={spot} binSize={binSize} />}
 
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 15 }}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 14 }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
             <span style={{ width: 12, height: 12, borderRadius: 2, background: HOME_THEME.red, display: "inline-block" }} />
             A–B · initial balance (09:30–10:30)
@@ -2929,7 +2929,7 @@ function TpoStructuresScanner() {
     <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
 
       {/* ── Open Business rail ───────────────────────────────────────────── */}
-      <Card variant="budget" title={<span style={{ fontSize: 16 }}>Open business</span>}
+      <Card variant="budget" title={<span style={{ fontSize: 17 }}>Open business</span>}
         subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
@@ -2939,7 +2939,7 @@ function TpoStructuresScanner() {
         </div>
 
         {!enoughHistory && (
-          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
             Needs at least two completed RTH sessions to have any structure to forward-fill.
           </div>
         )}
@@ -2951,7 +2951,7 @@ function TpoStructuresScanner() {
               gridTemplateColumns: GRID,
               gap: 8, padding: "6px 12px",
               borderBottom: "1px solid rgba(255,255,255,0.12)",
-              fontSize: 15, color: "rgba(255,255,255,0.45)",
+              fontSize: 14, color: "rgba(255,255,255,0.45)",
               textTransform: "uppercase", letterSpacing: "0.05em",
             }}>
               <span>kind</span><span>level</span><span>age</span><span>dist</span>
@@ -2966,7 +2966,7 @@ function TpoStructuresScanner() {
             ))}
 
             {!open.length && (
-              <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+              <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
                 No open business — every structure in the loaded history has been repaired.
               </div>
             )}
@@ -2977,11 +2977,11 @@ function TpoStructuresScanner() {
       {/* ── Today's session + stats rollup ──────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-        <Card variant="budget" title={<span style={{ fontSize: 16 }}>Today&apos;s profile</span>}
+        <Card variant="budget" title={<span style={{ fontSize: 17 }}>Today&apos;s profile</span>}
           subtitle={today ? `${today.date} · ${today.periods} periods · ${today.singles.length} single prints` : "—"}>
-          {!today && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 15 }}>No RTH session yet.</div>}
+          {!today && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 14 }}>No RTH session yet.</div>}
           {today && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 15 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 14 }}>
               <div>VAH <b style={{ color: HOME_THEME.cyan }}>{today.vah.toFixed(2)}</b></div>
               <div>IB high <b style={{ color: HOME_THEME.text }}>{today.ibHigh?.toFixed(2) ?? "—"}</b></div>
               <div>POC <b style={{ color: LIGHT_BLUE }}>{today.poc.toFixed(2)}</b></div>
@@ -2993,7 +2993,7 @@ function TpoStructuresScanner() {
                   .filter((s) => s.kind !== "naked_poc")
                   .map((s) => (
                     <span key={s.id} title={KIND_MEANING[s.kind]} style={{
-                      fontSize: 15, fontWeight: 700, padding: "3px 9px", borderRadius: 6,
+                      fontSize: 14, fontWeight: 700, padding: "3px 9px", borderRadius: 6,
                       color: KIND_COLOR[s.kind],
                       border: `1px solid ${KIND_COLOR[s.kind]}55`,
                       background: `${KIND_COLOR[s.kind]}1A`,
@@ -3002,7 +3002,7 @@ function TpoStructuresScanner() {
                     </span>
                   ))}
                 {today.structures.filter((s) => s.kind !== "naked_poc").length === 0 && (
-                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
                     No extremes or holes formed today.
                   </span>
                 )}
@@ -3011,13 +3011,13 @@ function TpoStructuresScanner() {
           )}
         </Card>
 
-        <Card variant="budget" title={<span style={{ fontSize: 16 }}>Structure stats</span>}
+        <Card variant="budget" title={<span style={{ fontSize: 17 }}>Structure stats</span>}
           subtitle={`${res.sessions.length} sessions loaded · graded once ≥1 later session exists`}>
           <div style={{
             display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
             gap: 6, padding: "4px 0 6px",
             borderBottom: "1px solid rgba(255,255,255,0.12)",
-            fontSize: 15, color: "rgba(255,255,255,0.45)",
+            fontSize: 14, color: "rgba(255,255,255,0.45)",
             textTransform: "uppercase", letterSpacing: "0.05em",
           }}>
             <span>kind</span><span>n</span><span>test %</span><span>repair %</span><span>med d</span>
@@ -3028,7 +3028,7 @@ function TpoStructuresScanner() {
               <div key={s.kind} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "7px 0" }}>
                 <div style={{
                   display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
-                  gap: 6, fontSize: 15,
+                  gap: 6, fontSize: 14,
                 }}>
                   <span style={{ color: KIND_COLOR[s.kind], fontWeight: 700 }}>{KIND_LABEL[s.kind]}</span>
                   <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.n}</span>
@@ -3039,7 +3039,7 @@ function TpoStructuresScanner() {
                 {/* age buckets — a 2-day-old excess is a different bet than a 3-week-old one */}
                 <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
                   {bks.map((b) => (
-                    <span key={b.bucket} style={{ fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
+                    <span key={b.bucket} style={{ fontSize: 14, color: "rgba(255,255,255,0.4)" }}>
                       {b.bucket}{" "}
                       <b style={{ color: b.n >= 5 ? HOME_THEME.text : "rgba(255,255,255,0.4)" }}>
                         {pctOrDash(b.testRate)}
@@ -3052,7 +3052,7 @@ function TpoStructuresScanner() {
             );
           })}
           {!res.stats.some((s) => s.n > 0) && (
-            <div style={{ padding: 16, color: "rgba(255,255,255,0.4)", fontSize: 15 }}>
+            <div style={{ padding: 16, color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
               Not enough history loaded to grade anything yet.
             </div>
           )}
@@ -3061,7 +3061,7 @@ function TpoStructuresScanner() {
         <div style={{
           padding: "10px 14px", borderRadius: 10,
           border: `1px solid ${LIGHT_BLUE}30`, background: `${LIGHT_BLUE}0A`,
-          fontSize: 15, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+          fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
         }}>
           <b style={{ color: LIGHT_BLUE }}>Base % is a prior on the TYPE, not this level. </b>
           It answers &ldquo;how often does a structure of this kind, at this age, eventually get
@@ -3074,7 +3074,7 @@ function TpoStructuresScanner() {
         <div style={{
           padding: "10px 14px", borderRadius: 10,
           border: `1px solid ${HOME_THEME.orange}30`, background: `${HOME_THEME.orange}0A`,
-          fontSize: 15, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+          fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
         }}>
           <b style={{ color: HOME_THEME.orange }}>Small sample: </b>
           these rates are computed from whatever candle history is currently loaded
@@ -3084,7 +3084,7 @@ function TpoStructuresScanner() {
           until then treat every number here as directional, not tradeable.
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 15, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 14, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
           <span>TPO = one touch per 30-min period per {binSize}-pt bin — TIME, not volume. RTH only.</span>
           <span>Excess = singles at an extreme whose period closed back INSIDE (rejection → level holds). Tail = same singles but the period closed away (trend continuation → do not fade).</span>
           <span>Poor high/low = flat stack at the extreme, no tail → unfinished, expect it taken out. Hole = mid-profile singles → price accelerates through, never target inside.</span>
@@ -3103,7 +3103,7 @@ export default function ScannerPage() {
   const [tab, setTab] = useState<MainTab>("gex");
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding: "8px 20px", borderRadius: 8, fontSize: 15, cursor: "pointer", fontWeight: 700,
+    padding: "8px 20px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
     border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
     background: active ? "rgba(33,158,188,0.15)" : "transparent",
     color: active ? HOME_THEME.text : "rgba(255,255,255,0.55)",
@@ -3120,7 +3120,7 @@ export default function ScannerPage() {
         onChange={(e) => setTab(e.target.value as MainTab)}
         style={{
           display: "none", width: "100%", padding: "8px 10px", borderRadius: 8,
-          fontSize: 13, fontWeight: 700, marginBottom: 4,
+          fontSize: 14, fontWeight: 700, marginBottom: 4,
           border: `1px solid ${HOME_THEME.cyan}`,
           background: "rgba(0,0,0,0.5)", color: HOME_THEME.text,
         }}

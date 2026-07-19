@@ -180,10 +180,10 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
     border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.35)", padding: "10px 12px",
   };
   const kl: React.CSSProperties = {
-    fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, opacity: 0.6,
+    fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, opacity: 0.6,
   };
-  const kv: React.CSSProperties = { fontSize: 18, fontWeight: 800, fontFamily: "var(--font-mono)", marginTop: 4 };
-  const note: React.CSSProperties = { fontSize: 11, color: C.muted, opacity: 0.5, fontFamily: "var(--font-mono)", marginTop: 2 };
+  const kv: React.CSSProperties = { fontSize: 17, fontWeight: 800, fontFamily: "var(--font-mono)", marginTop: 4 };
+  const note: React.CSSProperties = { fontSize: 12, color: C.muted, opacity: 0.5, fontFamily: "var(--font-mono)", marginTop: 2 };
 
   return (
     <div style={{
@@ -193,7 +193,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
     }}>
       {/* ── Drawer header ── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.text }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.text }}>
           ↳ {ticker} {order.strike.toLocaleString()}{order.type} · {order.expiration ?? "—"}
           {dte != null && <span style={{ color: C.muted, opacity: 0.6 }}> · {dte} DTE</span>}
           <span style={{ color: bull ? BULL : BEAR, marginLeft: 8 }}>{bull ? "▲ BULL" : "▼ BEAR"}</span>
@@ -209,7 +209,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
                 onClick={() => setTf(t.id)}
                 title={t.id === "today" ? "The session this alert printed in" : `Since the alert (${fillDate}) → now`}
                 style={{
-                  fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+                  fontSize: 12, fontWeight: 700, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
                   letterSpacing: "0.04em", textTransform: "uppercase",
                   border: `1px solid ${tf === t.id ? C.cyan : C.border}`,
                   background: tf === t.id ? DOCK_THEME.activeTile : "rgba(0,0,0,0.4)",
@@ -224,7 +224,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
             onClick={onClose}
             title="Collapse"
             style={{
-              fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+              fontSize: 12, fontWeight: 700, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
               border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.muted,
             }}
           >
@@ -282,7 +282,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
 
           <div style={kpi}>
             <div style={kl}>Peak / Trough</div>
-            <div style={{ ...kv, fontSize: 15 }}>
+            <div style={{ ...kv, fontSize: 14 }}>
               <span style={{ color: BULL }}>{track ? fmtPct(track.peakPct) : "—"}</span>
               <span style={{ color: C.muted, opacity: 0.3 }}> / </span>
               <span style={{ color: BEAR }}>{track ? fmtPct(track.troughPct) : "—"}</span>
@@ -298,7 +298,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
 
           <div style={{ ...kpi, borderColor: "rgba(251,133,1,0.4)" }}>
             <div style={kl}>Vol / OI</div>
-            <div style={{ ...kv, color: C.orange, fontSize: 15 }}>
+            <div style={{ ...kv, color: C.orange, fontSize: 14 }}>
               {stat?.vol != null && stat?.oi ? (stat.vol / stat.oi).toFixed(2) : "—"}
             </div>
             <div style={note}>{fmtNum(stat?.vol)} vol · {fmtNum(stat?.oi)} oi</div>
@@ -306,7 +306,7 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
 
           <div style={kpi}>
             <div style={kl}>IV · % OTM</div>
-            <div style={{ ...kv, fontSize: 15 }}>
+            <div style={{ ...kv, fontSize: 14 }}>
               {stat?.iv != null ? `${(stat.iv * 100).toFixed(1)}%` : "—"}
               <span style={{ color: C.muted, opacity: 0.3 }}> · </span>
               <span style={{ color: otmPct == null ? C.muted : otmPct >= 0 ? C.cyan : BEAR }}>

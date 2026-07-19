@@ -124,7 +124,7 @@ function QuickCircle({
         border: `1px solid ${cyanA(0.3)}`,
         background: "rgba(255,255,255,0.04)",
         color: HOME_THEME.text,
-        fontSize: 15,
+        fontSize: 14,
         lineHeight: 1,
         fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
         transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
@@ -139,7 +139,7 @@ function QuickCircle({
       <span
         style={{
           maxWidth: NAV_ITEM_W,
-          fontSize: 8,
+          fontSize: 10,
           fontWeight: 600,
           color: HOME_THEME.text,
           opacity: 0.8,
@@ -575,7 +575,7 @@ export default function GlobalToolbar() {
                       borderRadius: 999,
                       background: CYAN,
                       color: "#04222b",
-                      fontSize: 9,
+                      fontSize: 10,
                       fontWeight: 800,
                       display: "flex",
                       alignItems: "center",

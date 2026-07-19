@@ -257,7 +257,7 @@ export default function RegimeMatrix({
           <div style={{ fontSize: 17, fontWeight: 900, color: "#67e8f9", letterSpacing: ".02em" }}>
             Options Flow Regime Canvas
           </div>
-          <div style={{ fontSize: 13, color: "#9fb3c8", marginTop: 3, lineHeight: 1.55 }}>
+          <div style={{ fontSize: 14, color: "#9fb3c8", marginTop: 3, lineHeight: 1.55 }}>
             4-Greek matrix tracking Gamma (GEX), Vanna (VEX), Delta (DEX) and Charm (CEX).
             Each cell&apos;s <span style={{ color: "#00e676", fontWeight: 700 }}>name color</span> is
             its bias — <span style={{ color: "#00e676", fontWeight: 700 }}>green = bullish</span>,
@@ -289,7 +289,7 @@ export default function RegimeMatrix({
         {/* ── Selector grid ── */}
         <div style={{ minWidth: 0, overflowX: "auto" }}>
           <div style={{
-            fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+            fontSize: 12, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
             textTransform: "uppercase", marginBottom: 8,
           }}>Regime Selector Grid</div>
 
@@ -311,8 +311,8 @@ export default function RegimeMatrix({
                   background: live ? "rgba(33,158,188,.08)" : "rgba(255,255,255,.02)",
                   borderRadius: 8, padding: "6px 6px", textAlign: "center",
                 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "var(--font-mono)" }}>{c.label}</div>
-                  <div style={{ fontSize: 9, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{c.sub}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: live ? "#67e8f9" : "#cdd9e5", fontFamily: "var(--font-mono)" }}>{c.label}</div>
+                  <div style={{ fontSize: 10, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{c.sub}</div>
                 </div>
               );
             })}
@@ -353,7 +353,7 @@ export default function RegimeMatrix({
             display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 8,
           }}>
             <div style={{
-              fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+              fontSize: 12, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
               textTransform: "uppercase",
             }}>Behavior Demonstration</div>
             {updatedTs != null && hasData && (
@@ -369,7 +369,7 @@ export default function RegimeMatrix({
             background: "linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92))",
           }}>
             <PriceSketch curve={detail.curve} color={detailColor} />
-            <div style={{ fontSize: 8.5, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
               SIMULATED PRICE ACTION
             </div>
           </div>
@@ -380,10 +380,10 @@ export default function RegimeMatrix({
             background: `linear-gradient(180deg,${detailColor}12,rgba(0,0,0,.3))`,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-              <div style={{ fontSize: 18, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
+              <div style={{ fontSize: 17, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
               {activeR === liveRow && activeC === liveCol && hasData && (
                 <span style={{
-                  fontSize: 9, fontWeight: 800, letterSpacing: ".08em", color: "#00e676",
+                  fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: "#00e676",
                   border: "1px solid rgba(0,230,118,.5)", background: "rgba(0,230,118,.12)",
                   padding: "2px 7px", borderRadius: 5,
                 }}>● LIVE</span>
@@ -403,10 +403,10 @@ export default function RegimeMatrix({
               marginTop: 10, border: "1px solid rgba(33,158,188,.25)", borderRadius: 8,
               background: "rgba(33,158,188,.06)", padding: "9px 11px",
             }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
                 ◆ Trading Implications (0DTE / SPX)
               </div>
-              <div style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
+              <div style={{ fontSize: 14, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
             </div>
           </div>
         </div>
@@ -441,8 +441,8 @@ function RowFragment({
         background: liveRowHdr ? "rgba(33,158,188,.08)" : "rgba(255,255,255,.02)",
         borderRadius: 8, padding: "6px 6px", display: "flex", flexDirection: "column", justifyContent: "center",
       }}>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "var(--font-mono)" }}>{rd.label}</div>
-        <div style={{ fontSize: 9, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{rd.sub}</div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: liveRowHdr ? "#67e8f9" : "#cdd9e5", fontFamily: "var(--font-mono)" }}>{rd.label}</div>
+        <div style={{ fontSize: 10, color: "#7e8ea0", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", marginTop: 2 }}>{rd.sub}</div>
       </div>
 
       {/* 4 regime cells */}
@@ -479,12 +479,12 @@ function RowFragment({
           >
             {isLive && (
               <span style={{
-                position: "absolute", top: 4, right: 5, fontSize: 9, fontWeight: 900,
+                position: "absolute", top: 4, right: 5, fontSize: 10, fontWeight: 900,
                 color: tone, letterSpacing: ".06em",
               }}>● LIVE</span>
             )}
             <div style={{
-              fontSize: 12.5, fontWeight: 800, lineHeight: 1.2,
+              fontSize: 12, fontWeight: 800, lineHeight: 1.2,
               color: isLive ? "#ffffff" : oneFlip ? "#e3edf5" : "#9aa9bb",
             }}>{cell.name}</div>
             {/* sign pills — DEX + CEX, filled in the bias color, readable arrows */}
@@ -541,7 +541,7 @@ function SignDial({ label, value }: { label: string; value: number | null }) {
         </div>
       </div>
       <span style={{
-        fontSize: 11, fontWeight: 800, letterSpacing: ".1em", color: col, fontFamily: "var(--font-mono)",
+        fontSize: 12, fontWeight: 800, letterSpacing: ".1em", color: col, fontFamily: "var(--font-mono)",
       }}>{label}</span>
     </div>
   );
@@ -566,7 +566,7 @@ function SignPill({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
       padding: "2px 6px", borderRadius: 999, lineHeight: 1,
       fontFamily: "var(--font-inter), 'Inter', system-ui, sans-serif",
     }}>
-      {lbl}<span style={{ fontSize: 9 }}>{up ? "▲" : "▼"}</span>
+      {lbl}<span style={{ fontSize: 10 }}>{up ? "▲" : "▼"}</span>
     </span>
   );
 }
@@ -574,8 +574,8 @@ function SignPill({ lbl, s, dim }: { lbl: string; s: Sign; dim: boolean }) {
 function DetailRow({ label, body }: { label: string; body: string }) {
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{body}</div>
+      <div style={{ fontSize: 12, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, color: "#d7e6e8", lineHeight: 1.5 }}>{body}</div>
     </div>
   );
 }
@@ -643,7 +643,7 @@ export function BehaviorDemo({
       {!detailOnly && (
         <>
           <div style={{
-            fontSize: 12.5, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
+            fontSize: 12, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".1em",
             textTransform: "uppercase", marginBottom: 8,
           }}>Behavior Demonstration</div>
 
@@ -652,7 +652,7 @@ export function BehaviorDemo({
             background: "linear-gradient(180deg,rgba(5,8,13,.96),rgba(8,12,18,.92))",
           }}>
             <PriceSketch curve={detail.curve} color={detailColor} />
-            <div style={{ fontSize: 8.5, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: "#64748b", letterSpacing: ".18em", textAlign: "right", marginTop: 2 }}>
               SIMULATED PRICE ACTION
             </div>
           </div>
@@ -664,10 +664,10 @@ export function BehaviorDemo({
         background: `linear-gradient(180deg,${detailColor}12,rgba(0,0,0,.3))`,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-          <div style={{ fontSize: 18, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
+          <div style={{ fontSize: 17, fontWeight: 900, color: "#eef7ff" }}>{detail.name}</div>
           {hasData && (
             <span style={{
-              fontSize: 9, fontWeight: 800, letterSpacing: ".08em", color: "#00e676",
+              fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: "#00e676",
               border: "1px solid rgba(0,230,118,.5)", background: "rgba(0,230,118,.12)",
               padding: "2px 7px", borderRadius: 5,
             }}>● LIVE</span>
@@ -684,10 +684,10 @@ export function BehaviorDemo({
           marginTop: 10, border: "1px solid rgba(33,158,188,.25)", borderRadius: 8,
           background: "rgba(33,158,188,.06)", padding: "9px 11px",
         }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#67e8f9", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
             ◆ Trading Implications (0DTE / SPX)
           </div>
-          <div style={{ fontSize: 13, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
+          <div style={{ fontSize: 14, color: "#d7e6e8", lineHeight: 1.5 }}>{detail.implication}</div>
         </div>
       </div>
     </div>

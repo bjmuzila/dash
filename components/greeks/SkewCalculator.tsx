@@ -204,16 +204,16 @@ export default function SkewCalculator() {
     set: (v: string) => void, accent: string,
   ) => (
     <div style={{ flex: "1 1 150px", minWidth: 140 }}>
-      <div style={{ fontSize: 13, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 4 }}>
+      <div style={{ fontSize: 14, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 4 }}>
         {label}
       </div>
       <div style={{ position: "relative" }}>
         <input
           type="number" inputMode="decimal" placeholder={hint} value={val}
           onChange={(e) => set(e.target.value)}
-          style={{ ...homeInputStyle, width: "100%", paddingRight: 30, borderColor: `${accent}55`, fontFamily: "var(--font-mono)", fontSize: 19, fontWeight: 700 }}
+          style={{ ...homeInputStyle, width: "100%", paddingRight: 30, borderColor: `${accent}55`, fontFamily: "var(--font-mono)", fontSize: 17, fontWeight: 700 }}
         />
-        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: "#7e8ea0", fontWeight: 700 }}>%</span>
+        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "#7e8ea0", fontWeight: 700 }}>%</span>
       </div>
     </div>
   );
@@ -228,18 +228,18 @@ export default function SkewCalculator() {
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12, flexWrap: "wrap" }}>
         <div style={{
           width: 30, height: 30, borderRadius: 8, border: `1px solid ${LIGHT_BLUE}66`,
-          display: "flex", alignItems: "center", justifyContent: "center", color: LIGHT_BLUE, fontWeight: 800, fontSize: 15,
+          display: "flex", alignItems: "center", justifyContent: "center", color: LIGHT_BLUE, fontWeight: 800, fontSize: 14,
         }}>◱</div>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Vol Skew Calculator</div>
-          <div style={{ fontSize: 13, color: LIGHT_BLUE, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase" }}>
+          <div style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase" }}>
             (OTM Put IV − OTM Call IV) / ATM IV
           </div>
         </div>
 
         {/* Live-link control */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 800, letterSpacing: ".06em",
+          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 800, letterSpacing: ".06em",
             color: feedErr ? "#ff5252" : linked ? "#00e676" : "#7e8ea0" }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%",
               background: feedErr ? "#ff5252" : linked ? "#00e676" : "#7e8ea0",
@@ -248,11 +248,11 @@ export default function SkewCalculator() {
           </span>
           {linked ? (
             <button onClick={fetchLive} disabled={loading} title="Refresh 0DTE IVs"
-              style={{ ...homeInputStyle, padding: "6px 12px", fontSize: 13, fontWeight: 800, letterSpacing: ".06em",
+              style={{ ...homeInputStyle, padding: "6px 12px", fontSize: 14, fontWeight: 800, letterSpacing: ".06em",
                 textTransform: "uppercase", cursor: loading ? "wait" : "pointer", borderColor: `${LIGHT_BLUE}55`, color: LIGHT_BLUE }}>↻ Sync</button>
           ) : (
             <button onClick={relink} title="Re-link to live SPX 0DTE IVs"
-              style={{ ...homeInputStyle, padding: "6px 12px", fontSize: 13, fontWeight: 800, letterSpacing: ".06em",
+              style={{ ...homeInputStyle, padding: "6px 12px", fontSize: 14, fontWeight: 800, letterSpacing: ".06em",
                 textTransform: "uppercase", cursor: "pointer", borderColor: "#00e67655", color: "#00e676" }}>⟲ Link live</button>
           )}
         </div>
@@ -260,7 +260,7 @@ export default function SkewCalculator() {
 
       {/* Source line — which SPX 0DTE strikes feed the calc */}
       {pick && (
-        <div style={{ fontSize: 13.5, color: "#9fb3c8", fontWeight: 600, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
+        <div style={{ fontSize: 14, color: "#9fb3c8", fontWeight: 600, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
           SPX 0DTE{pick.expiry ? ` ${pick.expiry}` : ""} · spot {pick.spot.toFixed(0)} · 25Δ put {pick.putK}
           {" "}· 25Δ call {pick.callK} · ATM {pick.atmK}
         </div>
@@ -278,7 +278,7 @@ export default function SkewCalculator() {
           border: `1px solid ${active ? COLORS[active.tone] : HOME_THEME.border}55`,
           background: active ? `${COLORS[active.tone]}12` : "rgba(0,0,0,0.25)",
         }}>
-          <div style={{ fontSize: 13, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" }}>Skew</div>
+          <div style={{ fontSize: 14, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" }}>Skew</div>
           <div style={{ fontSize: 38, fontWeight: 900, fontFamily: "var(--font-mono)", color: active ? COLORS[active.tone] : "#9fb3c8", lineHeight: 1.1 }}>
             {skewPct != null ? `${skewPct >= 0 ? "+" : ""}${skewPct.toFixed(1)}%` : "--"}
           </div>
@@ -294,8 +294,8 @@ export default function SkewCalculator() {
           marginTop: 12, padding: "10px 14px", borderRadius: 10,
           borderLeft: `3px solid ${COLORS[active.tone]}`, background: `${COLORS[active.tone]}0e`,
         }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: COLORS[active.tone], marginBottom: 3 }}>{active.label}</div>
-          <div style={{ fontSize: 15, color: "#d7e6e8", lineHeight: 1.5 }}>{active.thenThat}</div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: COLORS[active.tone], marginBottom: 3 }}>{active.label}</div>
+          <div style={{ fontSize: 14, color: "#d7e6e8", lineHeight: 1.5 }}>{active.thenThat}</div>
         </div>
       )}
 
@@ -303,7 +303,7 @@ export default function SkewCalculator() {
       <div style={{ marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(120px,1.1fr) minmax(150px,1.4fr) minmax(200px,2.4fr)", background: "rgba(255,255,255,.04)", borderBottom: `1px solid ${HOME_THEME.border}` }}>
           {["Skew band", "If this", "Then that"].map((h) => (
-            <div key={h} style={{ padding: "8px 12px", fontSize: 13, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".08em", textTransform: "uppercase" }}>{h}</div>
+            <div key={h} style={{ padding: "8px 12px", fontSize: 14, fontWeight: 800, color: "#9fb3c8", letterSpacing: ".08em", textTransform: "uppercase" }}>{h}</div>
           ))}
         </div>
         {BANDS.map((b) => {
@@ -316,19 +316,19 @@ export default function SkewCalculator() {
               background: isActive ? `${COLORS[b.tone]}12` : "transparent",
             }}>
               <div style={{ padding: "10px 12px" }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: COLORS[b.tone] }}>{b.label}</div>
-                <div style={{ fontSize: 13, color: "#7e8ea0", fontFamily: "var(--font-mono)", marginTop: 2 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: COLORS[b.tone] }}>{b.label}</div>
+                <div style={{ fontSize: 14, color: "#7e8ea0", fontFamily: "var(--font-mono)", marginTop: 2 }}>
                   {b.lo === -Infinity ? "< 0%" : b.hi === Infinity ? `> ${b.lo}%` : `${b.lo}–${b.hi}%`}
                 </div>
               </div>
-              <div style={{ padding: "10px 12px", fontSize: 14.5, color: "#c9d7db", lineHeight: 1.45 }}>{b.ifThis}</div>
-              <div style={{ padding: "10px 12px", fontSize: 14.5, color: "#d7e6e8", lineHeight: 1.45 }}>{b.thenThat}</div>
+              <div style={{ padding: "10px 12px", fontSize: 14, color: "#c9d7db", lineHeight: 1.45 }}>{b.ifThis}</div>
+              <div style={{ padding: "10px 12px", fontSize: 14, color: "#d7e6e8", lineHeight: 1.45 }}>{b.thenThat}</div>
             </div>
           );
         })}
       </div>
 
-      <div style={{ marginTop: 10, fontSize: 13.5, color: "#7e8ea0", lineHeight: 1.5 }}>
+      <div style={{ marginTop: 10, fontSize: 14, color: "#7e8ea0", lineHeight: 1.5 }}>
         Convention: positive skew = puts richer = downside fear. Keep the put/call legs at a consistent moneyness
         (25-delta, or a fixed ±5-10% from spot) so readings are comparable across sessions.
       </div>

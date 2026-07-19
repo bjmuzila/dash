@@ -71,8 +71,8 @@ function addOiVol(ex?: Record<string, unknown>) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontSize: 15, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{children}</div>
+      <div style={{ fontSize: 14, fontWeight: 400, color: HOME_THEME.muted, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{children}</div>
     </div>
   );
 }
@@ -111,21 +111,21 @@ const EXPOSURE_ROWS: { key: string; label: string }[] = [
 function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> | undefined; accent?: string }) {
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>Greeks</div>
-      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
+      <div style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>Greeks</div>
+      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 14 }}>—</div>}
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {EXPOSURE_ROWS.map(({ key, label }) => {
             const v = data[key];
             const na = v == null;
             return (
-              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 14 }}>
                 <span style={{ color: C.label }}>{label}</span>
                 <span style={{ color: na ? NA : (typeof v === "number" && v < 0 ? NEG : POS), fontWeight: 700 }}>{na ? "n/a" : fmtExp(v)}</span>
               </div>
             );
           })}
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 14, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
             <span>spot</span><span>{fmt(data.spot)}</span>
           </div>
         </div>
@@ -138,7 +138,7 @@ function ExposurePanel({ data, accent = WARN }: { data: Record<string, unknown> 
 function RowLabel({ text, color }: { text: string; color: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18 }}>
-      <span style={{ fontSize: 16, fontWeight: 500, color, letterSpacing: "0.01em" }}>{text}</span>
+      <span style={{ fontSize: 17, fontWeight: 500, color, letterSpacing: "0.01em" }}>{text}</span>
       <div style={{ flex: 1, height: 1, background: C.border }} />
     </div>
   );
@@ -203,7 +203,7 @@ function ShareActions({ targetRef, caption }: { targetRef: React.RefObject<HTMLD
     }
     finally { setSending(false); setTimeout(() => setSent(null), 2500); }
   }
-  const btn: React.CSSProperties = { fontSize: 15, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };
+  const btn: React.CSSProperties = { fontSize: 14, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer", border: `1px solid ${C.border}`, fontFamily: "inherit", letterSpacing: "0.04em" };
   return (
     <div style={{ display: "flex", gap: 8 }} data-html2canvas-ignore="true">
       <button onClick={copy} style={{ ...btn, background: "#10203033", color: copied ? POS : VAL }}>{copied ? "✓ Copied" : "⧉ Copy img"}</button>
@@ -221,12 +221,12 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
     <div ref={cardRef} style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${NET}`, borderRadius: 8, padding: "14px 18px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Net Greeks · Call + Put</span>
-          <span style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
+          <span style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Net Greeks · Call + Put</span>
+          <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 6, background: `${NET}1a`, border: `1px solid ${NET}40` }}>{ticker || "?"} · {strike || "?"}</span>
         </div>
         <ShareActions targetRef={cardRef} caption={caption} />
       </div>
-      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
+      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 14 }}>—</div>}
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {NET_ROWS.map(({ key, label }) => {
@@ -234,7 +234,7 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
             const na = v == null;
             const isCount = key === "oi" || key === "volume";
             return (
-              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+              <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 14 }}>
                 <span style={{ color: C.label }}>{label}</span>
                 <span style={{ color: na ? NA : isCount ? VAL : (typeof v === "number" && v < 0 ? NEG : POS), fontWeight: 700 }}>
                   {na ? "n/a" : isCount ? fmt(v) : fmtExp(v)}
@@ -242,7 +242,7 @@ function NetExposurePanel({ data, ticker, strike }: { data: Record<string, unkno
               </div>
             );
           })}
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 14, color: C.label, marginTop: 4, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
             <span>spot</span><span>{fmt(data.spot)}</span>
           </div>
         </div>
@@ -263,17 +263,17 @@ function OiComparePanel({ data, accent = NET }: { data: Record<string, unknown> 
   const diffColor = aPct == null ? NA : aPct <= 2 ? POS : aPct <= 10 ? WARN : NEG;
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Theta vs TT REST</div>
-      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
+      <div style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>OI Check · Theta vs TT REST</div>
+      {!data && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 14 }}>—</div>}
       {ok && !matched && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "var(--font-mono)", fontSize: 14 }}>
           <div style={{ color: WARN }}>Partial — one source missing</div>
           {theta != null && <div style={{ color: C.label }}>Theta OI: <span style={{ color: VAL }}>{fmt(theta)}</span></div>}
           {tt != null && <div style={{ color: C.label }}>TT OI: <span style={{ color: VAL }}>{fmt(tt)}</span></div>}
         </div>
       )}
       {matched && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-mono)", fontSize: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <span style={{ color: C.label }}>Theta (OPRA)</span><span style={{ color: VAL, fontWeight: 700 }}>{fmt(theta)}</span>
           </div>
@@ -300,11 +300,11 @@ function FeedPanel({ name, data, accent = C.cyan }: { name: string; data: Record
   const entries = data ? Object.entries(data).filter(([k]) => !k.startsWith("bs")) : [];
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>{name}</div>
-      {entries.length === 0 && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 15 }}>—</div>}
+      <div style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", marginBottom: 10 }}>{name}</div>
+      {entries.length === 0 && <div style={{ color: C.label, fontFamily: "var(--font-mono)", fontSize: 14 }}>—</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {entries.map(([k, v]) => (
-          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontFamily: "var(--font-mono)", fontSize: 14 }}>
             <span style={{ color: C.label }}>{k}</span>
             <span style={{ color: v == null || v === "" ? NA : VAL, fontWeight: 700 }}>{fmt(v)}</span>
           </div>
@@ -361,8 +361,8 @@ function FlowGexCalcPanel({
   const pFlow = pGamma != null && pNet != null && s2 != null ? pGamma * pNet * s2 : null;
   const netFlow = cFlow == null && pFlow == null ? null : (cFlow ?? 0) + (pFlow ?? 0);
   const cols = "48px 1fr 1fr 1fr 1.1fr 1.25fr";
-  const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 13, fontWeight: 400, textAlign: "right" };
-  const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 15, textAlign: "right" };
+  const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 14, fontWeight: 400, textAlign: "right" };
+  const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 14, textAlign: "right" };
   const legs = [
     { tag: "Call", tagColor: CALLS, gamma: cGamma, buy: inv?.callBuyVol ?? null, sell: inv?.callSellVol ?? null, net: cNet, flow: cFlow },
     { tag: "Put", tagColor: PUTS, gamma: pGamma, buy: inv?.putBuyVol ?? null, sell: inv?.putSellVol ?? null, net: pNet, flow: pFlow },
@@ -370,10 +370,10 @@ function FlowGexCalcPanel({
   return (
     <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderLeft: `2px solid ${WARN}`, borderRadius: 8, padding: "14px 18px" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
-        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow GEX · raw calc</span>
+        <span style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Flow GEX · raw calc</span>
         <span style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>γ · dealer_net · Spot²  (dealer long +, short −, no put flip)</span>
       </div>
-      <div style={{ fontSize: 13, color: HOME_THEME.muted, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
+      <div style={{ fontSize: 14, color: HOME_THEME.muted, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
         dealer-inventory basis (live tape) · Spot {fmtSpot(spot)} · Spot² {fmtInt(s2)} · net = buyVol − sellVol
       </div>
       <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>
@@ -386,16 +386,16 @@ function FlowGexCalcPanel({
       </div>
       {legs.map((r) => (
         <div key={r.tag} style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "5px 0" }}>
-          <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 15 }}>{r.tag}</span>
+          <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 14 }}>{r.tag}</span>
           <span style={{ ...cell, color: r.gamma == null ? NA : VAL }}>{fmtGamma(r.gamma == null ? null : Math.abs(r.gamma))}</span>
-          <span style={{ ...cell, color: r.buy == null ? NA : VAL, fontSize: 13 }}>{r.buy == null ? "—" : `${fmtInt(r.buy)} / ${fmtInt(r.sell)}`}</span>
+          <span style={{ ...cell, color: r.buy == null ? NA : VAL, fontSize: 14 }}>{r.buy == null ? "—" : `${fmtInt(r.buy)} / ${fmtInt(r.sell)}`}</span>
           <span style={{ ...cell, color: r.net == null ? NA : r.net < 0 ? NEG : POS }}>{r.net == null ? "n/a" : fmtInt(r.net)}</span>
           <span style={{ ...cell, color: s2 == null ? NA : VAL }}>{fmtInt(s2)}</span>
           <span style={{ ...cell, color: r.flow == null ? NA : r.flow < 0 ? NEG : POS, fontWeight: 700 }}>{r.flow == null ? "n/a" : fmtExp(r.flow)}</span>
         </div>
       ))}
       <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 2 }}>
-        <span style={{ color: NET, fontWeight: 700, fontSize: 15 }}>Net</span>
+        <span style={{ color: NET, fontWeight: 700, fontSize: 14 }}>Net</span>
         <span /><span /><span /><span />
         <span style={{ ...cell, color: netFlow == null ? NA : netFlow < 0 ? NEG : POS, fontWeight: 800 }}>{netFlow == null ? "n/a" : fmtExp(netFlow)}</span>
       </div>
@@ -586,20 +586,20 @@ export default function DevPage() {
     }
   }
 
-  const inputStyle: React.CSSProperties = { background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 15, fontFamily: "var(--font-mono)", outline: "none" };
+  const inputStyle: React.CSSProperties = { background: "rgba(0,0,0,0.4)", color: HOME_THEME.text, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" };
 
   return (
     <PageShell>
       <div style={{ color: HOME_THEME.text }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <span style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Dev · Symbol probe</span>
-        <span style={{ fontSize: 15, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
-        <span style={{ fontSize: 15, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
+        <span style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Dev · Symbol probe</span>
+        <span style={{ fontSize: 14, color: C.label }}>Chain → strike resolve → market-data (any ticker)</span>
+        <span style={{ fontSize: 14, fontWeight: 500, padding: "2px 8px", borderRadius: 6, background: `${C.cyan}1a`, color: C.cyan, border: `1px solid ${C.border}` }}>REST</span>
       </div>
 
       {/* Controls */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 20 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
           Ticker
           <input
             value={ticker}
@@ -607,11 +607,11 @@ export default function DevPage() {
             style={{ ...inputStyle, width: 110 }}
           />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
           Strike
           <input value={strike} onChange={(e) => { strikeTouched.current = true; setStrike(e.target.value.replace(/[^\d.]/g, "")); }} style={{ ...inputStyle, width: 120 }} />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, color: HOME_THEME.muted, letterSpacing: "0.01em", fontWeight: 400 }}>
           Expiry
           <ThemedSelect
             value={expiry}
@@ -629,8 +629,8 @@ export default function DevPage() {
         </button>
       </div>
 
-      {error && <div style={{ color: HOME_THEME.red, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{error}</div>}
-      {statusMsg && !error && <div style={{ color: loading || statusMsg.startsWith("⚠") ? WARN : C.cyan, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{statusMsg}</div>}
+      {error && <div style={{ color: HOME_THEME.red, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{error}</div>}
+      {statusMsg && !error && <div style={{ color: loading || statusMsg.startsWith("⚠") ? WARN : C.cyan, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{statusMsg}</div>}
 
       {/* Readout */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
@@ -674,8 +674,8 @@ export default function DevPage() {
 
       {/* Raw market-data items — every field, nothing dropped */}
       <details style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", marginTop: 12 }}>
-        <summary style={{ fontSize: 15, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", cursor: "pointer" }}>Raw response (call + put)</summary>
-        <pre style={{ margin: "10px 0 0", fontSize: 15, fontFamily: "var(--font-mono)", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <summary style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", cursor: "pointer" }}>Raw response (call + put)</summary>
+        <pre style={{ margin: "10px 0 0", fontSize: 14, fontFamily: "var(--font-mono)", color: VAL, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {(callResult || putResult) ? JSON.stringify({ call: callResult, put: putResult }, null, 2) : "—"}
         </pre>
       </details>
@@ -683,10 +683,10 @@ export default function DevPage() {
       {/* Log panel */}
       <div style={{ background: C.card, border: `0.5px solid ${C.border}`, borderRadius: 8, padding: "14px 18px", marginTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <div style={{ fontSize: 16, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Log</div>
-          <button onClick={() => setLogs([])} style={{ ...inputStyle, padding: "4px 12px", fontSize: 15, cursor: "pointer" }}>Clear</button>
+          <div style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Log</div>
+          <button onClick={() => setLogs([])} style={{ ...inputStyle, padding: "4px 12px", fontSize: 14, cursor: "pointer" }}>Clear</button>
         </div>
-        <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 15, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
+        <div style={{ maxHeight: 240, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 14, lineHeight: 1.6, display: "flex", flexDirection: "column" }}>
           {!logs.length && <span style={{ color: C.label }}>—</span>}
           {logs.map((l, i) => {
             const color = l.level === "ok" ? POS : l.level === "warn" ? WARN : l.level === "err" ? HOME_THEME.red : HOME_THEME.text;

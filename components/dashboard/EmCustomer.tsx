@@ -347,7 +347,7 @@ export default function EmCustomer() {
                 return (
                   <div style={S.avgStat}>
                     <div style={S.statLabel}>{label} ({avg.toLocaleString("en-US", { maximumFractionDigits: 2 })})</div>
-                    <div style={{ ...S.statValue, color: isHigher ? "#00e676" : "#ff5a6a", fontSize: 18 }}>
+                    <div style={{ ...S.statValue, color: isHigher ? "#00e676" : "#ff5a6a", fontSize: 17 }}>
                       {isHigher ? "▲" : "▼"} {Math.abs(pct).toFixed(1)}%
                     </div>
                   </div>
@@ -443,7 +443,7 @@ const S = {
   wrap: { width: "100%", maxWidth: 720, margin: "0 auto" },
   header: { textAlign: "center" as const, marginBottom: 22 },
   kicker: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 700,
     letterSpacing: ".26em",
     textTransform: "uppercase" as const,
@@ -465,7 +465,7 @@ const S = {
     background: "rgba(0,0,0,0.4)",
     border: `1px solid ${HOME_THEME.border}`,
     color: HOME_THEME.text,
-    fontSize: 16,
+    fontSize: 17,
     padding: "12px 14px",
     borderRadius: 8,
     outline: "none",
@@ -543,7 +543,7 @@ const S = {
     letterSpacing: ".1em",
     fontWeight: 700,
   },
-  resultUpdated: { fontSize: 11, color: HOME_THEME.text, marginLeft: "auto" },
+  resultUpdated: { fontSize: 12, color: HOME_THEME.text, marginLeft: "auto" },
   card: {
     background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 55%), ${HOME_THEME.panelBg}`,
     border: `1px solid ${HOME_THEME.border}`,
@@ -595,7 +595,7 @@ const S = {
     gap: 14,
   },
   zoneCard: { marginBottom: 14 },
-  zoneHint: { fontSize: 11, color: HOME_THEME.text, margin: "0 0 14px", lineHeight: 1.45 },
+  zoneHint: { fontSize: 12, color: HOME_THEME.text, margin: "0 0 14px", lineHeight: 1.45 },
   zoneLine: {
     display: "flex",
     justifyContent: "space-between",
@@ -604,7 +604,7 @@ const S = {
     borderTop: "1px solid #0f1a28",
   },
   zoneLineLabel: {
-    fontSize: 11,
+    fontSize: 12,
     color: HOME_THEME.text,
     letterSpacing: ".1em",
     textTransform: "uppercase" as const,
@@ -613,17 +613,17 @@ const S = {
   zoneLineVal: { fontSize: 22, fontWeight: 700, fontFamily: mono },
   pivot: {
     textAlign: "center" as const,
-    fontSize: 13,
+    fontSize: 14,
     color: "#7a92ad",
     letterSpacing: ".1em",
     textTransform: "uppercase" as const,
     fontWeight: 700,
     margin: "4px 0 10px",
   },
-  pivotVal: { color: HOME_THEME.text, fontFamily: mono, marginLeft: 8, fontSize: 16 },
+  pivotVal: { color: HOME_THEME.text, fontFamily: mono, marginLeft: 8, fontSize: 17 },
   disclaimer: {
     textAlign: "center" as const,
-    fontSize: 11,
+    fontSize: 12,
     color: HOME_THEME.text,
     marginTop: 18,
     lineHeight: 1.5,

@@ -88,7 +88,7 @@ function CustomDropdown<T extends string | number>({
         }}
       >
         {label}
-        <span style={{ fontSize: 7, opacity: 0.7 }}>▾</span>
+        <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
       </button>
       {open && rect && createPortal(
         <div ref={menuRef} style={{
@@ -627,12 +627,12 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
         style={{ width: 520, maxWidth: "92vw", background: HT.panelBgStrong, border: `1px solid ${HT.border}`, borderRadius: 14, padding: 16 }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: HT.text }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: HT.text }}>
             SPX {strike} · {expiration} · Flow GEX
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: HT.text, opacity: 0.7, fontSize: 15 }}>✕</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: HT.text, opacity: 0.7, fontSize: 14 }}>✕</button>
         </div>
-        <div style={{ fontSize: 15, color: HT.muted, marginBottom: 10 }}>
+        <div style={{ fontSize: 14, color: HT.muted, marginBottom: 10 }}>
           {data ? `spot ${data.spot ? data.spot.toFixed(2) : "--"}` : error ? "" : "Loading…"}
           {latest != null && (
             <span style={{ marginLeft: 10, fontFamily: "var(--font-mono)", fontWeight: 800, color: (latest.flowGex ?? 0) >= 0 ? HT.green : HT.red }}>
@@ -642,17 +642,17 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
         </div>
         {error && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            <div style={{ fontSize: 15, color: HT.red }}>{error}</div>
+            <div style={{ fontSize: 14, color: HT.red }}>{error}</div>
             <button
               onClick={() => setRetryTick((t) => t + 1)}
-              style={{ fontSize: 15, color: HT.cyan, background: "none", border: `1px solid ${rgba(HT.cyan, 0.4)}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer", whiteSpace: "nowrap" }}
+              style={{ fontSize: 14, color: HT.cyan, background: "none", border: `1px solid ${rgba(HT.cyan, 0.4)}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer", whiteSpace: "nowrap" }}
             >
               Retry
             </button>
           </div>
         )}
         <div ref={chartContainerRef} style={{ width: "100%", height: 260, position: "relative", display: data ? "block" : "none" }} />
-        <div style={{ fontSize: 11, color: HT.muted, opacity: 0.6, marginTop: 8 }}>
+        <div style={{ fontSize: 12, color: HT.muted, opacity: 0.6, marginTop: 8 }}>
           Combined call+put flow GEX for this strike (approximation: latest known gamma, not gamma-at-that-instant).
         </div>
       </div>
@@ -723,7 +723,7 @@ const ChainMatrix = memo(function ChainMatrix({
       background: HT.panelBg,
     }}>
       {/* ── Header row: empty strike corner + one expiry header per column ── */}
-      <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
+      <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
         Strike
       </div>
       {renderIdx.map((i) => {
@@ -739,7 +739,7 @@ const ChainMatrix = memo(function ChainMatrix({
           <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
             <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
             {!isStandalone && (
-              <div style={{ fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+              <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                 {colTotal == null ? "—" : fmtMoney(colTotal)}
               </div>
             )}
@@ -800,7 +800,7 @@ const ChainMatrix = memo(function ChainMatrix({
             }}>
               {emTag && (
                 <span style={{
-                  fontSize: 8, fontWeight: 800, letterSpacing: "0.04em",
+                  fontSize: 10, fontWeight: 800, letterSpacing: "0.04em",
                   padding: "1px 4px", borderRadius: 4, marginRight: "auto",
                   background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
                   color: isATM ? "#0a0e14" : "#ffffff",
@@ -1571,7 +1571,7 @@ export default function OptionsChainPage({
           is fully opaque so grid rows never bleed through underneath it. */}
       <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
-        <span style={{ fontSize: 11, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
         </span>
 
@@ -1588,7 +1588,7 @@ export default function OptionsChainPage({
               autoComplete="off"
               spellCheck={false}
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 700,
                 padding: "5px 10px",
                 border: `1px solid rgba(33,158,188,.25)`,
@@ -1639,7 +1639,7 @@ export default function OptionsChainPage({
         {showGrandTotal && !isStandalone && (
           <>
             <span style={{ color: HT.border }}>|</span>
-            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
+            <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
               Total {greekMode}: {fmtMoney(grandTotal)}
               {autoPercentNote && (
                 <span style={{ color: "#fff", marginLeft: 8 }}>{autoPercentNote}</span>
@@ -1650,7 +1650,7 @@ export default function OptionsChainPage({
 
         <div style={{ flex: 1 }} />
 
-        <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
+        <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
         <input
           type="range" min={0.5} max={3} step={0.01}
           value={intensity}
@@ -1679,7 +1679,7 @@ export default function OptionsChainPage({
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
           <div style={{ width: 7, height: 7, borderRadius: "50%", background: HT.green }} />
-          <span style={{ fontSize: 9, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
+          <span style={{ fontSize: 10, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
         </div>
 
         <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
@@ -1694,10 +1694,10 @@ export default function OptionsChainPage({
       {!visibleStrikes.length ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88" }}>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
               {chainError ? "No Live Chain Data" : "Select ticker, expiry & % strikes"}
             </div>
-            <div style={{ fontSize: 11 }}>
+            <div style={{ fontSize: 12 }}>
               {chainError ?? "Then click GO to load chain"}
             </div>
           </div>

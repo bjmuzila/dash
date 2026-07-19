@@ -56,7 +56,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   if (gate.status === "checking") {
     return shell(
-      <div style={{ color: CY, fontSize: 13, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+      <div style={{ color: CY, fontSize: 14, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
         Checking access…
       </div>
     );
@@ -97,7 +97,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
           Sign out & switch account
         </a>
       )}
-      <div style={{ marginTop: 16, fontSize: 11, opacity: 0.5 }}>
+      <div style={{ marginTop: 16, fontSize: 12, opacity: 0.5 }}>
         Tip: lock this subdomain at the edge with Cloudflare Access too.
       </div>
       <div aria-hidden style={{ position: "fixed", inset: 0, pointerEvents: "none" }}>

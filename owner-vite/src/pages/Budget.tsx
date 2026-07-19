@@ -796,7 +796,7 @@ export default function Budget() {
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.28em", color: HOME_THEME.muted, opacity: 0.75 }}>{monthLabel.toUpperCase()}</div>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.28em", color: HOME_THEME.muted, opacity: 0.75 }}>{monthLabel.toUpperCase()}</div>
             <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4, textShadow: "0 0 34px rgba(125,211,252,0.55), 0 0 80px rgba(33,158,188,0.35)" }}>BUDGET</div>
           </div>
           <div style={{ marginTop: 14 }}>
@@ -815,7 +815,7 @@ export default function Budget() {
               🔁 Recurring{recurring.length ? ` (${recurring.filter((r) => r.active).length})` : ""}
             </button>
           )}
-          {loading && <span style={{ fontSize: 15, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
+          {loading && <span style={{ fontSize: 14, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
 
         {showRecurring && tab === "register" && (
@@ -1040,8 +1040,8 @@ function RecurringManager({
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 900 }}>Recurring entries</div>
-          <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
+          <div style={{ fontSize: 17, fontWeight: 900 }}>Recurring entries</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 3 }}>Anything that repeats — they appear on every month&apos;s Payments automatically.</div>
         </div>
         <button onClick={onClose} style={ghost()}>Done</button>
       </div>
@@ -1054,13 +1054,13 @@ function RecurringManager({
             return (
               <div key={rule.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.9fr 1fr auto auto", gap: 10, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 12px", opacity: rule.active ? 1 : 0.45 }}>
                 <span style={{ fontWeight: 800 }}>{rule.label}</span>
-                <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
-                <span style={{ fontSize: 15, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
                 <span style={{ fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(rule.amount, currency)}</span>
                 <button
                   onClick={() => onUpdate(rule.id, { active: rule.active ? 0 : 1 })}
                   title={rule.active ? "Pause (hide from Payments)" : "Resume"}
-                  style={{ ...ghost(), padding: "6px 10px", fontSize: 15 }}
+                  style={{ ...ghost(), padding: "6px 10px", fontSize: 14 }}
                 >
                   {rule.active ? "Pause" : "Resume"}
                 </button>
@@ -1158,7 +1158,7 @@ function monotonePath(pts: [number, number][]): string {
 function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
   if (series.length < 2) {
-    return <div style={{ height: 240, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 15 }}>Add entries to see the projection.</div>;
+    return <div style={{ height: 240, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 14 }}>Add entries to see the projection.</div>;
   }
   const W = 560, H = 240, padL = 4, padR = 4, padT = 8, padB = 18;
   const ys = series.map((p) => p.balance);
@@ -1201,8 +1201,8 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
       </svg>
       {hp && (
         <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
-          <div style={{ fontSize: 16, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
+          <div style={{ fontSize: 17, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
         </div>
       )}
     </div>
@@ -1240,7 +1240,7 @@ function CalendarGrid({
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
       {WD.map((w, i) => (
-        <div key={i} style={{ textAlign: "center", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+        <div key={i} style={{ textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
       ))}
       {cells.map((d, i) => {
         if (d === null) return <div key={`e${i}`} />;
@@ -1263,10 +1263,10 @@ function CalendarGrid({
               color: HOME_THEME.text, transition: "all 0.12s ease",
             }}
           >
-            <div style={{ fontSize: 16, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span>{d}</span>
             </div>
-            {g && <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+            {g && <div style={{ fontSize: 14, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
           </button>
         );
       })}
@@ -1313,8 +1313,8 @@ function MonthlyRegister({
     <div style={{ padding: 16 }}>
       {beginningBalance !== null && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "9px 12px", borderRadius: 10, background: "rgba(126,211,252,0.06)", border: `1px solid ${HOME_THEME.border}` }}>
-          <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
-          <span style={{ fontWeight: 900, fontSize: 19, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
+          <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.14em", color: "#7dd3fc" }}>STARTING BALANCE</span>
+          <span style={{ fontWeight: 900, fontSize: 17, color: beginningBalance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(beginningBalance, currency)}</span>
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1327,7 +1327,7 @@ function MonthlyRegister({
               style={{ borderRadius: 12, border: `1px solid ${isSel ? "#7dd3fc" : HOME_THEME.border}`, boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.35)" : "none", overflow: "hidden" }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.04)" }}>
-                <span style={{ fontWeight: 900, fontSize: 16 }}>{longDate(g.date)}</span>
+                <span style={{ fontWeight: 900, fontSize: 17 }}>{longDate(g.date)}</span>
               </div>
               {g.rows.map((r) => {
                 const isIncome = r.amount > 0;
@@ -1376,7 +1376,7 @@ function StatusPill({ status }: { status: "paid" | "owed" | "pastdue" }) {
     pastdue: { label: "Past due", color: SOFT_RED, bg: "rgba(244,148,142,0.14)", border: "rgba(244,148,142,0.4)" },
   }[status];
   return (
-    <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 }}>
+    <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: map.color, background: map.bg, border: `1px solid ${map.border}`, padding: "2px 8px", borderRadius: 999 }}>
       {map.label}
     </span>
   );
@@ -1400,7 +1400,7 @@ function DeleteButton({ onClick }: { onClick: () => void }) {
         background: hover ? "rgba(239,68,68,0.16)" : "rgba(239,68,68,0.07)",
         color: SOFT_RED,
         cursor: "pointer",
-        fontSize: 15,
+        fontSize: 14,
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
@@ -1432,7 +1432,7 @@ function EditButton({ onClick, title }: { onClick: () => void; title?: string })
         background: hover ? "rgba(33,158,188,0.16)" : "rgba(33,158,188,0.07)",
         color: HOME_THEME.cyan,
         cursor: "pointer",
-        fontSize: 16,
+        fontSize: 17,
         lineHeight: 1,
         display: "inline-flex",
         alignItems: "center",
@@ -1465,7 +1465,7 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
     );
   }
   return (
-    <span onClick={() => setEditing(true)} title="Change date (e.g. paid early)" style={{ cursor: "text", fontSize: 15, fontWeight: 700, color: HOME_THEME.muted, borderBottom: "1px dotted rgba(139,148,167,0.35)", whiteSpace: "nowrap" }}>
+    <span onClick={() => setEditing(true)} title="Change date (e.g. paid early)" style={{ cursor: "text", fontSize: 14, fontWeight: 700, color: HOME_THEME.muted, borderBottom: "1px dotted rgba(139,148,167,0.35)", whiteSpace: "nowrap" }}>
       {shortDate(value)}
     </span>
   );
@@ -1535,7 +1535,7 @@ function StatTile({ label, value, sub, valueColor, hero, delta, currency }: { la
 function IntelHeader({ title, right }: { title: string; right?: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
-      <div style={{ fontSize: 13, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>{title}</div>
+      <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>{title}</div>
       {right}
     </div>
   );
@@ -1549,9 +1549,9 @@ function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }
     <div style={{ ...card(), padding: 16, background: "#000000", border: `1px solid ${bRgba(LIGHT_BLUE, 0.6)}`, boxShadow: `${EDGE_LIGHT}, 0 0 36px -6px ${bRgba(LIGHT_BLUE, 0.55)}, 0 24px 60px -16px rgba(0,0,0,0.75)`, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Safe to Spend" />
       <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
-        {fmtMoney(intel.safePerDay, currency)}<span style={{ fontSize: 15, fontWeight: 800, opacity: 0.7 }}> /day</span>
+        {fmtMoney(intel.safePerDay, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> /day</span>
       </div>
-      <div style={{ marginTop: 10, display: "grid", gap: 6, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ marginTop: 10, display: "grid", gap: 6, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
         <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Free this month</span><b style={{ color: intel.safe < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(intel.safe, currency)}</b></div>
         <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Bills still due</span><b style={{ color: SOFT_RED }}>{fmtMoney(intel.billsLeft, currency)}</b></div>
         <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Days left</span><b>{intel.daysLeft}</b></div>
@@ -1560,7 +1560,7 @@ function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }
         <div style={{ height: 6, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
           <div style={{ width: `${pct}%`, height: "100%", borderRadius: 999, background: `linear-gradient(90deg, ${HOME_THEME.cyan}, ${LIGHT_BLUE})`, boxShadow: `0 0 12px ${bRgba(LIGHT_BLUE, 0.6)}` }} />
         </div>
-        <div style={{ marginTop: 5, fontSize: 11, opacity: 0.55 }}>Day {Math.max(intel.todayDay, 0)} of {intel.daysInMonth}</div>
+        <div style={{ marginTop: 5, fontSize: 12, opacity: 0.55 }}>Day {Math.max(intel.todayDay, 0)} of {intel.daysInMonth}</div>
       </div>
     </div>
   );
@@ -1581,7 +1581,7 @@ function SpendPaceCard({ intel, currency }: { intel: Intel; currency: string }) 
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader
         title="Spend Pace"
-        right={<span style={{ fontSize: 11, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>{over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")}</span>}
+        right={<span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>{over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")}</span>}
       />
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
         <defs>
@@ -1614,7 +1614,7 @@ function CategoryDonutCard({ slices, currency }: { slices: Intel["slices"]; curr
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Where It Went" />
       {total <= 0 ? (
-        <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 13 }}>No categorized spend yet.</div>
+        <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14 }}>No categorized spend yet.</div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 0 }}>
           <svg viewBox="0 0 120 120" width={128} height={128} style={{ flex: "none", filter: "drop-shadow(0 0 10px rgba(125,211,252,0.25))" }}>
@@ -1657,7 +1657,7 @@ function WeekPulseCard({ intel, currency }: { intel: Intel; currency: string }) 
       <IntelHeader
         title="7-Day Pulse"
         right={deltaPct !== null ? (
-          <span style={{ fontSize: 11, fontWeight: 900, padding: "3px 10px", borderRadius: 999, color: worse ? SOFT_RED : HOME_THEME.green, background: bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.4)}` }}>
+          <span style={{ fontSize: 12, fontWeight: 900, padding: "3px 10px", borderRadius: 999, color: worse ? SOFT_RED : HOME_THEME.green, background: bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.4)}` }}>
             {worse ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(0)}% vs prior wk
           </span>
         ) : undefined}
@@ -1687,7 +1687,7 @@ function WeekPulseCard({ intel, currency }: { intel: Intel; currency: string }) 
 function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { label: string; inflow: number; outflow: number }[]; currency: string; beginningBalance?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   if (!buckets.length) {
-    return <div style={{ height: 260, display: "grid", placeItems: "center", color: HOME_THEME.muted, opacity: 0.6, fontSize: 13 }}>No cash flow this period yet.</div>;
+    return <div style={{ height: 260, display: "grid", placeItems: "center", color: HOME_THEME.muted, opacity: 0.6, fontSize: 14 }}>No cash flow this period yet.</div>;
   }
   const max = Math.max(1, ...buckets.map((b) => Math.max(b.inflow, b.outflow)));
   const H = 240;
@@ -1716,7 +1716,7 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
       {/* y axis */}
       <div style={{ width: 52, height: H, position: "relative", flex: "none" }}>
         {grid.map((g) => (
-          <div key={g} style={{ position: "absolute", right: 6, top: (1 - g) * H - 7, fontSize: 11, color: HOME_THEME.muted, opacity: 0.5 }}>
+          <div key={g} style={{ position: "absolute", right: 6, top: (1 - g) * H - 7, fontSize: 12, color: HOME_THEME.muted, opacity: 0.5 }}>
             {g === 0 ? "0" : fmtMoney(max * g, currency).replace(/\.\d+$/, "")}
           </div>
         ))}
@@ -1739,7 +1739,7 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
                   <div style={{ flex: 1, maxWidth: 18, height: `${(b.outflow / max) * 100}%`, minHeight: b.outflow > 0 ? 2 : 0, background: `linear-gradient(180deg, ${SOFT_RED} 0%, ${bRgba(SOFT_RED, 0.45)} 100%)`, borderRadius: "4px 4px 0 0", boxShadow: hover === i ? `0 0 16px ${bRgba(SOFT_RED, 0.6)}` : `0 0 8px ${bRgba(SOFT_RED, 0.18)}`, transition: "box-shadow .15s ease" }} />
                   {hover === i && (
                     <div style={{ position: "absolute", bottom: "100%", left: "50%", transform: "translate(-50%, -6px)", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", zIndex: 5, boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
+                      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.7 }}>{b.label}</div>
                       <div style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green }}>In {fmtMoney(b.inflow, currency)}</div>
                       <div style={{ fontSize: 12, fontWeight: 800, color: SOFT_RED }}>Out {fmtMoney(b.outflow, currency)}</div>
                       <div style={{ fontSize: 12, fontWeight: 800, color: LIGHT_BLUE, marginTop: 2, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 3 }}>Bal {fmtMoney(balances[i], currency)}</div>
@@ -1769,21 +1769,21 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
           {pts.length > 1 && (
             <div style={{ position: "absolute", right: 0, top: 0, width: 42, height: H, pointerEvents: "none" }}>
               {balTicks.map((v, i) => (
-                <div key={i} style={{ position: "absolute", right: 0, top: lineY(v) - 7, fontSize: 11, fontWeight: 700, color: LIGHT_BLUE, opacity: 0.7, whiteSpace: "nowrap" }}>
+                <div key={i} style={{ position: "absolute", right: 0, top: lineY(v) - 7, fontSize: 12, fontWeight: 700, color: LIGHT_BLUE, opacity: 0.7, whiteSpace: "nowrap" }}>
                   {fmtMoney(v, currency).replace(/\.\d+$/, "")}
                 </div>
               ))}
             </div>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10, fontSize: 11, color: HOME_THEME.muted }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10, fontSize: 12, color: HOME_THEME.muted }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: HOME_THEME.green }} />In</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: SOFT_RED }} />Out</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 2, borderRadius: 2, background: LIGHT_BLUE }} />Running balance ($, right)</span>
         </div>
         <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 8, paddingRight: 44 }}>
           {buckets.map((b, i) => (
-            <div key={`${b.label}-l-${i}`} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 11, color: HOME_THEME.muted, opacity: hover === i ? 1 : 0.5, overflow: "hidden", whiteSpace: "nowrap" }}>
+            <div key={`${b.label}-l-${i}`} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 12, color: HOME_THEME.muted, opacity: hover === i ? 1 : 0.5, overflow: "hidden", whiteSpace: "nowrap" }}>
               {buckets.length > 16 && i % 2 === 1 ? "" : b.label}
             </div>
           ))}
@@ -1830,11 +1830,11 @@ function RentCountdown({
     <div style={{ ...card(), padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Rent</div>
-        <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>Due {shortDate(dueIso)} · the 5th</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>Due {shortDate(dueIso)} · the 5th</span>
       </div>
 
       {rentAmount === 0 ? (
-        <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.7, padding: "8px 0" }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.7, padding: "8px 0" }}>
           Add a recurring payment with “Rent” in the label to track the countdown.
         </div>
       ) : (
@@ -1843,15 +1843,15 @@ function RentCountdown({
             <span style={{ fontSize: 42, fontWeight: 900, letterSpacing: "-0.02em", color: accent, lineHeight: 1 }}>
               {paid ? "Paid" : daysUntil === 0 ? "Today" : daysUntil}
             </span>
-            {!paid && daysUntil > 0 && <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.muted }}>day{daysUntil === 1 ? "" : "s"} to rent</span>}
-            {paid && <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.green }}>✓ this month</span>}
+            {!paid && daysUntil > 0 && <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.muted }}>day{daysUntil === 1 ? "" : "s"} to rent</span>}
+            {paid && <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.green }}>✓ this month</span>}
           </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.muted, marginTop: 12 }}>
             <span>Rent</span>
             <span style={{ fontWeight: 800, color: HOME_THEME.text }}>{fmtMoney(rentAmount, currency)}</span>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.muted, marginTop: 4 }}>
             <span>On hand now</span>
             <span style={{ fontWeight: 800, color: available < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(available, currency)}</span>
           </div>
@@ -1859,7 +1859,7 @@ function RentCountdown({
           {!paid && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
               {/* What else lands before rent — e.g. both pay runs. */}
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted }}>
                 <span>Coming in before then</span>
                 <span style={{ color: incomingTotal > 0 ? HOME_THEME.green : HOME_THEME.muted }}>+{fmtMoney(incomingTotal, currency)}</span>
               </div>
@@ -1867,7 +1867,7 @@ function RentCountdown({
                 ? incoming.map((f, i) => flowLine(f, "in" + i, true))
                 : <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
 
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted, marginTop: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted, marginTop: 10 }}>
                 <span>Going out before then</span>
                 <span style={{ color: outgoingTotal > 0 ? SOFT_RED : HOME_THEME.muted }}>{outgoingTotal > 0 ? "−" : ""}{fmtMoney(outgoingTotal, currency)}</span>
               </div>
@@ -1878,7 +1878,7 @@ function RentCountdown({
               {/* Cash on hand the moment rent is due. */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 12 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>Projected on the 5th</span>
-                <span style={{ fontSize: 18, fontWeight: 900, color: accent }}>{fmtMoney(projected, currency)}</span>
+                <span style={{ fontSize: 17, fontWeight: 900, color: accent }}>{fmtMoney(projected, currency)}</span>
               </div>
             </div>
           )}
@@ -1888,13 +1888,13 @@ function RentCountdown({
           </div>
 
           {paid ? (
-            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.green, marginTop: 6 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.green, marginTop: 6 }}>
               Rent is paid for this month.
             </div>
           ) : covered ? (
             <div style={{ marginTop: 8, borderRadius: 10, background: bRgba(HOME_THEME.green, 0.10), border: `1px solid ${bRgba(HOME_THEME.green, 0.3)}`, padding: "10px 12px" }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Enough coming in — rent's covered.</div>
-              <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.8, marginTop: 2 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.green }}>Enough coming in — rent's covered.</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.8, marginTop: 2 }}>
                 {fmtMoney(surplus, currency)} to spare after rent{daysUntil > 0 ? ` on the 5th` : ""}.
               </div>
             </div>
@@ -1902,9 +1902,9 @@ function RentCountdown({
             <div style={{ marginTop: 8, borderRadius: 10, background: bRgba(SOFT_RED, 0.10), border: `1px solid ${bRgba(SOFT_RED, 0.3)}`, padding: "10px 12px" }}>
               <div style={{ fontSize: 12, color: HOME_THEME.muted }}>Still short by <span style={{ fontWeight: 800, color: SOFT_RED }}>{fmtMoney(shortfall, currency)}</span> after what's due{daysUntil > 0 ? ` in ${daysUntil} day${daysUntil === 1 ? "" : "s"}` : " today"}</div>
               <div style={{ fontSize: 20, fontWeight: 900, color: SOFT_RED, marginTop: 2 }}>
-                {fmtMoney(perDay, currency)}<span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.muted }}> /day extra</span>
+                {fmtMoney(perDay, currency)}<span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.muted }}> /day extra</span>
               </div>
-              <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.7, marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.7, marginTop: 2 }}>
                 to make rent {daysUntil > 0 ? `over the next ${daysUntil} day${daysUntil === 1 ? "" : "s"}` : "today"}
               </div>
             </div>
@@ -1948,27 +1948,27 @@ function BankAccountsCard({
     <div style={{ ...card(), padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
         <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Bank Accounts</div>
-        <span style={{ fontSize: 11, color: isToday ? HOME_THEME.green : HOME_THEME.muted, opacity: isToday ? 1 : 0.55 }}>
+        <span style={{ fontSize: 12, color: isToday ? HOME_THEME.green : HOME_THEME.muted, opacity: isToday ? 1 : 0.55 }}>
           {value ? (isToday ? "updated today" : `as of ${shortDate(value.day)}`) : "not set today"}
         </span>
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
         {ORDER.map((b) => (
           <div key={b} style={{ display: "grid", gridTemplateColumns: "1fr 130px", gap: 10, alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${HOME_THEME.border}` }}>
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.text }}>{BANK_LABEL[b]}</span>
+            <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.text }}>{BANK_LABEL[b]}</span>
             <input
               value={vals[b]}
               onChange={(e) => setVals((p) => ({ ...p, [b]: e.target.value }))}
               onKeyDown={(e) => e.key === "Enter" && save()}
               type="number"
               placeholder="0"
-              style={{ ...field(), padding: "7px 10px", fontSize: 13, textAlign: "right" }}
+              style={{ ...field(), padding: "7px 10px", fontSize: 14, textAlign: "right" }}
             />
           </div>
         ))}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0 4px" }}>
           <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>Total</span>
-          <span style={{ fontSize: 18, fontWeight: 900, color: total < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(total, currency)}</span>
+          <span style={{ fontSize: 17, fontWeight: 900, color: total < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(total, currency)}</span>
         </div>
       </div>
       <button onClick={save} style={{ ...primary(), marginTop: 10, width: "100%", padding: "9px 14px", fontSize: 12 }}>{saved ? "Saved ✓" : "Save balances"}</button>
@@ -1993,23 +1993,23 @@ function UpcomingPayCard({
     <div style={{ ...card(), padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
         <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Upcoming Pay</div>
-        <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.55 }}>{data.items.length} left</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55 }}>{data.items.length} left</span>
       </div>
 
       {pastDue.length > 0 && (
         <div style={{ marginBottom: 12, borderRadius: 10, background: bRgba(HOME_THEME.red, 0.10), border: `1px solid ${bRgba(HOME_THEME.red, 0.3)}`, overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", padding: "8px 12px" }}>
-            <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT_RED }}>{pastDue.length} Past due</span>
+            <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: SOFT_RED }}>{pastDue.length} Past due</span>
             <span style={{ fontSize: 14, fontWeight: 900, color: SOFT_RED }}>{fmtMoney(pastDueTotal, currency)}</span>
           </div>
           {pastDue.map((b) => (
             <div key={b.tag} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: "8px 12px", borderTop: `1px solid ${bRgba(HOME_THEME.red, 0.2)}` }}>
-              <span style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {b.label}
-                <span style={{ fontSize: 11, color: HOME_THEME.muted, fontWeight: 600 }}> · {-b.days}d ago</span>
+                <span style={{ fontSize: 12, color: HOME_THEME.muted, fontWeight: 600 }}> · {-b.days}d ago</span>
               </span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
-              <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "4px 8px", fontSize: 11, borderRadius: 8 }}>Pay</button>
+              <span style={{ fontSize: 14, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
+              <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "4px 8px", fontSize: 12, borderRadius: 8 }}>Pay</button>
             </div>
           ))}
         </div>
@@ -2019,15 +2019,15 @@ function UpcomingPayCard({
         <span style={{ fontSize: 22, fontWeight: 900, color: data.total > 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(data.total, currency)}</span>
       </div>
       {data.items.length === 0 ? (
-        <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>Nothing left to pay this month.</div>
+        <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.6 }}>Nothing left to pay this month.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column" }}>
           {data.items.slice(0, 5).map((b) => (
             <div key={b.tag} style={{ display: "grid", gridTemplateColumns: "48px 1fr auto auto", gap: 8, alignItems: "center", padding: "8px 0", borderTop: `1px solid ${HOME_THEME.border}` }}>
               <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.muted, opacity: 0.6 }}>{shortDate(b.date)}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label}</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
-              <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "4px 8px", fontSize: 11, borderRadius: 8 }}>Pay</button>
+              <span style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label}</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(Math.abs(b.amount), currency)}</span>
+              <button onClick={() => onMarkPaid({ date: b.date, label: b.label, bank: b.bank, amount: b.amount, tag: b.tag })} style={{ ...ghost(), padding: "4px 8px", fontSize: 12, borderRadius: 8 }}>Pay</button>
             </div>
           ))}
         </div>
@@ -2045,7 +2045,7 @@ function RecentTransactions({ rows, currency, categories = [] }: { rows: Registe
         <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Recent Transactions</div>
         <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55, marginTop: 2 }}>Logged this month · what has been paid</div>
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
         <thead>
           <tr>
             <th style={th("left")}>Date</th>
@@ -2067,16 +2067,16 @@ function RecentTransactions({ rows, currency, categories = [] }: { rows: Registe
                 <td style={{ padding: "11px 16px", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap" }}>{shortDate(r.entry_date)} <span style={{ opacity: 0.6 }}>{weekday(r.entry_date)}</span></td>
                 <td style={{ padding: "11px 16px", fontWeight: 700 }}>
                   {r.label}
-                  <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6, fontWeight: 600, letterSpacing: "0.06em" }}>{BANK_LABEL[r.bank]}</div>
+                  <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, fontWeight: 600, letterSpacing: "0.06em" }}>{BANK_LABEL[r.bank]}</div>
                 </td>
                 <td style={{ padding: "11px 16px" }}>
                   {cat ? (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: cc, background: bRgba(cc, 0.10), border: `1px solid ${bRgba(cc, 0.3)}` }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: cc, background: bRgba(cc, 0.10), border: `1px solid ${bRgba(cc, 0.3)}` }}>
                       <span style={{ width: 6, height: 6, borderRadius: 999, background: cc }} />
                       {cat.name}
                     </span>
                   ) : (
-                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: HOME_THEME.muted, background: bRgba("#ffffff", 0.04), border: `1px solid ${HOME_THEME.border}` }}>Unsorted</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 999, color: HOME_THEME.muted, background: bRgba("#ffffff", 0.04), border: `1px solid ${HOME_THEME.border}` }}>Unsorted</span>
                   )}
                 </td>
                 <td style={{ padding: "11px 16px", textAlign: "right", fontWeight: 800, color: inc ? HOME_THEME.green : SOFT_RED }}>{inc ? "+" : ""}{fmtMoney(r.amount, currency)}</td>
@@ -2120,7 +2120,7 @@ function CategorySpendCard({
             {fmtMoney(totalSpent, currency)} categorized this month
           </div>
         </div>
-        <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 11, borderRadius: 8 }}>Manage</button>
+        <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 12, borderRadius: 8 }}>Manage</button>
       </div>
 
       {unsortedCount > 0 && (
@@ -2133,16 +2133,16 @@ function CategorySpendCard({
             color: HOME_THEME.text,
           }}
         >
-          <span style={{ flex: 1, fontSize: 13 }}>
+          <span style={{ flex: 1, fontSize: 14 }}>
             {unsortedCount} unsorted transaction{unsortedCount === 1 ? "" : "s"} — {fmtMoney(unsortedTotal, currency)}
           </span>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>Sort now →</span>
+          <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.orange }}>Sort now →</span>
         </button>
       )}
 
       <div style={{ padding: "12px 16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
         {rows.length === 0 && (
-          <div style={{ padding: "18px 0", textAlign: "center", fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>
+          <div style={{ padding: "18px 0", textAlign: "center", fontSize: 14, color: HOME_THEME.muted, opacity: 0.6 }}>
             No categories yet — add them on the Categories tab.
           </div>
         )}
@@ -2155,8 +2155,8 @@ function CategorySpendCard({
             <div key={c.id}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: cc, flex: "none" }} />
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 700 }}>{c.name}</span>
-                <span style={{ fontSize: 13, fontWeight: 800, color: over ? SOFT_RED : HOME_THEME.text }}>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 700 }}>{c.name}</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: over ? SOFT_RED : HOME_THEME.text }}>
                   {fmtMoney(s, currency)}
                   <span style={{ color: HOME_THEME.muted, fontWeight: 600 }}> / {budget > 0 ? fmtMoney(budget, currency) : "—"}</span>
                 </span>
@@ -2215,29 +2215,29 @@ function CategoriesPanel({
   return (
     <div style={{ ...cardAccent(2), padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 16, fontWeight: 900 }}>Categories</div>
-        <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{categories.length} categor{categories.length === 1 ? "y" : "ies"}</span>
+        <div style={{ fontSize: 17, fontWeight: 900 }}>Categories</div>
+        <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{categories.length} categor{categories.length === 1 ? "y" : "ies"}</span>
       </div>
 
       {unsorted.length > 0 && (
         <div style={{ borderRadius: 12, border: `1px dashed ${bRgba("#7dd3fc", 0.3)}`, background: bRgba("#7dd3fc", 0.05), padding: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>🧠 Brain dump — to sort</div>
-              <div style={{ fontSize: 15, color: HOME_THEME.muted }}>Give each one a home</div>
+              <div style={{ fontSize: 14, fontWeight: 800 }}>🧠 Brain dump — to sort</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.muted }}>Give each one a home</div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(unsortedTotal, currency)}</div>
-              <div style={{ fontSize: 15, color: HOME_THEME.muted }}>{unsorted.length} item{unsorted.length === 1 ? "" : "s"}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: SOFT_RED }}>{fmtMoney(unsortedTotal, currency)}</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.muted }}>{unsorted.length} item{unsorted.length === 1 ? "" : "s"}</div>
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {unsorted.map((r) => (
               <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr 150px 90px", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
-                <span style={{ fontSize: 15, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
                 <ThemedSelect value="" onChange={(v) => onAssign(r.id, v ? Number(v) : null)} options={catOptions} />
-                <span style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED, textAlign: "right" }}>{fmtMoney(r.amount, currency)}</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: SOFT_RED, textAlign: "right" }}>{fmtMoney(r.amount, currency)}</span>
               </div>
             ))}
           </div>
@@ -2245,7 +2245,7 @@ function CategoriesPanel({
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-        {categories.length === 0 && <div style={{ fontSize: 15, color: HOME_THEME.muted, padding: "6px 2px" }}>No categories yet — add one below to start budgeting.</div>}
+        {categories.length === 0 && <div style={{ fontSize: 14, color: HOME_THEME.muted, padding: "6px 2px" }}>No categories yet — add one below to start budgeting.</div>}
         {categories.map((c) => {
           const s = spent[c.id] || 0;
           const budgetAmt = c.amount || 0;
@@ -2257,13 +2257,13 @@ function CategoriesPanel({
           return (
             <div key={c.id} onClick={() => setOpenCat(c)} title="View transactions in this category" style={{ ...card(), padding: 12, cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 800, minWidth: 0 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 800, minWidth: 0 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: dot, flex: "none" }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
-                  {count > 0 && <span style={{ fontSize: 15, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
+                  {count > 0 && <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
-                  <span style={{ fontSize: 15, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
+                  <span style={{ fontSize: 14, color: HOME_THEME.text }}>{fmtMoney(s, currency)} <span style={{ color: HOME_THEME.muted }}>/ {budgetAmt > 0 ? fmtMoney(budgetAmt, currency) : "—"}</span></span>
                   <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex" }}><DeleteButton onClick={() => onDelete(c.id)} /></span>
                 </span>
               </div>
@@ -2272,10 +2272,10 @@ function CategoriesPanel({
                   <div style={{ height: 5, borderRadius: 99, background: "rgba(255,255,255,0.06)", marginBottom: 6 }}>
                     <div style={{ height: 5, borderRadius: 99, background: over ? SOFT_RED : dot, width: `${pct}%` }} />
                   </div>
-                  <div style={{ fontSize: 15, color: over ? SOFT_RED : HOME_THEME.muted }}>{over ? `${fmtMoney(-left, currency)} over` : `${fmtMoney(left, currency)} left`}</div>
+                  <div style={{ fontSize: 14, color: over ? SOFT_RED : HOME_THEME.muted }}>{over ? `${fmtMoney(-left, currency)} over` : `${fmtMoney(left, currency)} left`}</div>
                 </>
               ) : (
-                <div style={{ fontSize: 15, color: HOME_THEME.muted }}>No budget — just tracking</div>
+                <div style={{ fontSize: 14, color: HOME_THEME.muted }}>No budget — just tracking</div>
               )}
             </div>
           );
@@ -2302,20 +2302,20 @@ function CategoriesPanel({
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 3, background: openCat.color || HOME_THEME.cyan, flex: "none" }} />
-                <span style={{ fontSize: 16, fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{openCat.name}</span>
-                <span style={{ fontSize: 15, color: HOME_THEME.muted, flex: "none" }}>{fmtMoney(spent[openCat.id] || 0, currency)} spent</span>
+                <span style={{ fontSize: 17, fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{openCat.name}</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>{fmtMoney(spent[openCat.id] || 0, currency)} spent</span>
               </div>
               <button onClick={() => setOpenCat(null)} style={{ ...ghost(), padding: "6px 12px" }}>Close</button>
             </div>
             <div style={{ padding: 12 }}>
               {(byCategory[openCat.id] || []).length === 0 ? (
-                <div style={{ padding: "24px 12px", textAlign: "center", color: HOME_THEME.muted, fontSize: 15 }}>No transactions in this category yet.</div>
+                <div style={{ padding: "24px 12px", textAlign: "center", color: HOME_THEME.muted, fontSize: 14 }}>No transactions in this category yet.</div>
               ) : (
                 (byCategory[openCat.id] || []).map((r) => (
                   <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto", gap: 10, alignItems: "center", padding: "8px 6px", borderBottom: `1px solid rgba(255,255,255,0.05)` }}>
-                    <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
-                    <span style={{ fontSize: 15, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
-                    <span style={{ fontSize: 15, fontWeight: 800, color: SOFT_RED, textAlign: "right", minWidth: 90 }}>{fmtMoney(r.amount, currency)}</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: SOFT_RED, textAlign: "right", minWidth: 90 }}>{fmtMoney(r.amount, currency)}</span>
                     <DeleteButton onClick={() => onDeleteRow(r.id)} />
                   </div>
                 ))
@@ -2383,12 +2383,12 @@ function YearlyPanel({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ ...dissolveCard(), padding: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 16, fontWeight: 900 }}>{year} — Year dashboard</div>
+        <div style={{ fontSize: 17, fontWeight: 900 }}>{year} — Year dashboard</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => onYear(year - 1)} style={{ ...ghost(), padding: "6px 12px" }}>◀</button>
-          <span style={{ fontSize: 16, fontWeight: 900, minWidth: 56, textAlign: "center" }}>{year}</span>
+          <span style={{ fontSize: 17, fontWeight: 900, minWidth: 56, textAlign: "center" }}>{year}</span>
           <button onClick={() => onYear(year + 1)} style={{ ...ghost(), padding: "6px 12px" }}>▶</button>
-          {loading && <span style={{ fontSize: 15, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
+          {loading && <span style={{ fontSize: 14, color: HOME_THEME.muted, marginLeft: 6 }}>Loading…</span>}
         </div>
       </div>
 
@@ -2397,10 +2397,10 @@ function YearlyPanel({
         {cards.map((c) => (
           <div key={c.label} style={{ ...dissolveCard(), padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 16 }}>{c.icon}</span>
+              <span style={{ fontSize: 17 }}>{c.icon}</span>
               <span style={labelCap()}>{c.label}</span>
             </div>
-            <div style={{ marginTop: 8, fontSize: 15, fontWeight: 900, color: c.color }}>{fmtMoney(c.value, currency)}</div>
+            <div style={{ marginTop: 8, fontSize: 14, fontWeight: 900, color: c.color }}>{fmtMoney(c.value, currency)}</div>
           </div>
         ))}
       </div>
@@ -2408,8 +2408,8 @@ function YearlyPanel({
       {/* Cash flow bar chart */}
       <div style={{ ...dissolveCard(), padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted }}>CASH FLOW</div>
-          <div style={{ display: "flex", gap: 14, fontSize: 15, color: HOME_THEME.muted }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted }}>CASH FLOW</div>
+          <div style={{ display: "flex", gap: 14, fontSize: 14, color: HOME_THEME.muted }}>
             <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: HOME_THEME.green, marginRight: 5 }} />Income</span>
             <span><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: SOFT_RED, marginRight: 5 }} />Expenses</span>
           </div>
@@ -2436,9 +2436,9 @@ function YearlyPanel({
       {/* Spending donut + budget overview */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
         <div style={{ ...dissolveCard(), padding: 16 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>SPENDING BREAKDOWN</div>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>SPENDING BREAKDOWN</div>
           {donutTotal <= 0 ? (
-            <div style={{ padding: "24px 0", color: HOME_THEME.muted, fontSize: 15 }}>No categorized spending this year yet.</div>
+            <div style={{ padding: "24px 0", color: HOME_THEME.muted, fontSize: 14 }}>No categorized spending this year yet.</div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
               <svg viewBox="0 0 140 140" width="140" height="140" style={{ flex: "none" }}>
@@ -2456,9 +2456,9 @@ function YearlyPanel({
                   <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                     <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                       <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color, flex: "none" }} />
-                      <span style={{ fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
+                      <span style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
                     </span>
-                    <span style={{ fontSize: 15, color: HOME_THEME.muted, flex: "none" }}>{Math.round((s.amount / donutTotal) * 100)}%</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>{Math.round((s.amount / donutTotal) * 100)}%</span>
                   </div>
                 ))}
               </div>
@@ -2467,9 +2467,9 @@ function YearlyPanel({
         </div>
 
         <div style={{ ...dissolveCard(), padding: 16 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BUDGET OVERVIEW</div>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>BUDGET OVERVIEW</div>
           {budgeted.length === 0 ? (
-            <div style={{ padding: "24px 0", color: HOME_THEME.muted, fontSize: 15 }}>No category budgets set.</div>
+            <div style={{ padding: "24px 0", color: HOME_THEME.muted, fontSize: 14 }}>No category budgets set.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {budgeted.map((c) => {
@@ -2481,10 +2481,10 @@ function YearlyPanel({
                 return (
                   <div key={c.id}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                      <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 15, fontWeight: 800 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 800 }}>
                         <span style={{ width: 10, height: 10, borderRadius: 3, background: dot }} />{c.name}
                       </span>
-                      <span style={{ fontSize: 15, color: HOME_THEME.muted }}>{fmtMoney(spent, currency)} <span style={{ opacity: 0.6 }}>/ {fmtMoney(annual, currency)}</span></span>
+                      <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{fmtMoney(spent, currency)} <span style={{ opacity: 0.6 }}>/ {fmtMoney(annual, currency)}</span></span>
                     </div>
                     <div style={{ height: 6, borderRadius: 99, background: "rgba(255,255,255,0.06)" }}>
                       <div style={{ height: 6, borderRadius: 99, background: over ? SOFT_RED : dot, width: `${pct}%` }} />
@@ -2499,8 +2499,8 @@ function YearlyPanel({
 
       {/* Month table */}
       <div style={{ ...dissolveCard(), padding: 16, overflowX: "auto" }}>
-        <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>YEAR OVERVIEW</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>YEAR OVERVIEW</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead>
             <tr>
               <th style={th("left")}>Month</th>
@@ -2525,7 +2525,7 @@ function YearlyPanel({
           </tbody>
           <tfoot>
             <tr style={{ borderTop: `2px solid ${HOME_THEME.border}` }}>
-              <td style={{ padding: 12, fontWeight: 900, textTransform: "uppercase", fontSize: 15, letterSpacing: "0.1em", color: HOME_THEME.muted }}>Total</td>
+              <td style={{ padding: 12, fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.1em", color: HOME_THEME.muted }}>Total</td>
               <td style={{ padding: 12, textAlign: "right", color: HOME_THEME.muted }}>{fmtMoney(data.start, currency)}</td>
               <td style={{ padding: 12, textAlign: "right", fontWeight: 900, color: HOME_THEME.green }}>{fmtMoney(data.totals.income, currency)}</td>
               <td style={{ padding: 12, textAlign: "right", fontWeight: 900, color: SOFT_RED }}>{fmtMoney(data.totals.expenses, currency)}</td>
@@ -2595,10 +2595,10 @@ function BzilaPanel({
                   <button onClick={onOpenPayments} style={{ ...ghost(), marginLeft: "auto", padding: "3px 8px", fontSize: 10, borderRadius: 7 }}>From Payments</button>
                 )}
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.muted }}>
                 <span>In</span><span style={{ fontWeight: 800, color: HOME_THEME.green }}>{fmtMoney(t.inAmt, currency)}</span>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: HOME_THEME.muted, marginTop: 3 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.muted, marginTop: 3 }}>
                 <span>Out</span><span style={{ fontWeight: 800, color: SOFT_RED }}>{fmtMoney(t.outAmt, currency)}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
@@ -2630,7 +2630,7 @@ function BzilaPanel({
             <div key={m.ym} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
               <button
                 onClick={() => setOpen(isOpen ? null : m.ym)}
-                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 15 }}
+                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 14 }}
               >
                 <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
                 <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
@@ -2641,7 +2641,7 @@ function BzilaPanel({
 
               {isOpen && (
                 <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
                     <span>Date</span><span>Stream</span><span>Item</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
                   </div>
                   {m.rows.map((r) => {
@@ -2671,7 +2671,7 @@ function BzilaPanel({
         })}
 
         {data.months.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 15, fontWeight: 900 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 14, fontWeight: 900 }}>
             <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
             <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalIn, currency)}</span>
             <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(data.totalOut, currency)}</span>
@@ -2689,7 +2689,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
   const totalGas = rows.reduce((s, r) => s + r.gas, 0);
   const totalNet = totalPay - totalGas;
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
       <thead>
         <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)", zIndex: 1 }}>
           <th style={th("left")}>Date</th>
@@ -2707,7 +2707,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
           <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
             <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
               <span style={{ fontWeight: 800 }}>{shortDate(r.work_date)}</span>
-              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 15 }}>{weekday(r.work_date)}</span>
+              <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 14 }}>{weekday(r.work_date)}</span>
             </td>
             <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
             <td style={{ padding: "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
@@ -2721,7 +2721,7 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
       {rows.length > 0 && (
         <tfoot>
           <tr style={{ position: "sticky", bottom: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)" }}>
-            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 15, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
+            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
             <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(totalNet, currency)}</td>
@@ -2746,7 +2746,7 @@ function EditableText({ value, onCommit, style }: { value: string; onCommit: (v:
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => { setEditing(false); if (draft !== value) onCommit(draft.trim()); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
-        style={{ ...field(), padding: "4px 8px", fontSize: 15 }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 14 }}
       />
     );
   }
@@ -2767,7 +2767,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => { setEditing(false); const n = Number(draft); if (n !== value && draft.trim() !== "") onCommit(n); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setDraft(String(value)); setEditing(false); } }}
-        style={{ ...field(), padding: "4px 8px", fontSize: 15, width: 100, textAlign: "right" }}
+        style={{ ...field(), padding: "4px 8px", fontSize: 14, width: 100, textAlign: "right" }}
       />
     );
   }
@@ -2775,7 +2775,7 @@ function EditableMoney({ value, onCommit }: { value: number; onCommit: (v: numbe
 }
 
 function th(align: "left" | "right" | "center"): React.CSSProperties {
-  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
+  return { textAlign: align, padding: "12px 16px", color: HOME_THEME.muted, fontWeight: 800, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.12em", borderBottom: `1px solid ${HOME_THEME.border}` };
 }
 // SOLID card surface — no gradients, no radial highlights, no backdrop blur.
 // One flat dark panel + hairline edge is the whole visual language of this page.
@@ -2802,10 +2802,10 @@ function dissolveCard(): React.CSSProperties {
   return card();
 }
 function field(): React.CSSProperties {
-  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.45)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.45)", transition: "border-color .15s ease, box-shadow .15s ease", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 15, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
+  return { padding: "10px 12px", borderRadius: 10, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.45)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.45)", transition: "border-color .15s ease, box-shadow .15s ease", color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 14, colorScheme: "dark", accentColor: HOME_THEME.cyan, appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const };
 }
 function labelCap(): React.CSSProperties {
-  return { fontSize: 15, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
+  return { fontSize: 14, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
   return { padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.60)", background: "linear-gradient(180deg, rgba(33,158,188,0.30), rgba(33,158,188,0.08))", boxShadow: "0 0 24px rgba(33,158,188,0.40), inset 0 1px 0 rgba(255,255,255,0.12)", color: LIGHT_BLUE, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", whiteSpace: "nowrap", transition: "box-shadow .15s ease, border-color .15s ease" };
@@ -2821,7 +2821,7 @@ function pill(active: boolean): React.CSSProperties {
     background: active ? "linear-gradient(180deg, rgba(33,158,188,0.30), rgba(33,158,188,0.10))" : "rgba(255,255,255,0.03)",
     boxShadow: active ? "0 0 22px rgba(33,158,188,0.50), inset 0 1px 0 rgba(255,255,255,0.10)" : "none",
     color: active ? HOME_THEME.cyan : "rgba(255,255,255,0.82)",
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 800,
     cursor: "pointer",
     transition: "border-color .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease",

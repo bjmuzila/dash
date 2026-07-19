@@ -4,7 +4,7 @@ import { HOME_THEME } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
 const p: React.CSSProperties = {
-  fontSize: 13.5,
+  fontSize: 14,
   color: HOME_THEME.text,
   lineHeight: 1.75,
   margin: "0 0 14px",
@@ -126,7 +126,7 @@ export default function AboutMePage() {
                 <span
                   key={t}
                   style={{
-                    fontSize: 12.5,
+                    fontSize: 12,
                     color: HOME_THEME.text,
                     lineHeight: 1.4,
                     padding: "6px 12px",

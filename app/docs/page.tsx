@@ -45,7 +45,7 @@ function H2({ children }: { children: React.ReactNode }) {
   return (
     <h2
       style={{
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: 800,
         margin: "30px 0 10px",
         color: C.text,
@@ -60,18 +60,18 @@ function H2({ children }: { children: React.ReactNode }) {
 
 function H3({ children }: { children: React.ReactNode }) {
   return (
-    <h3 style={{ fontSize: 16, fontWeight: 800, margin: "20px 0 6px", color: C.cyan, letterSpacing: "0.02em" }}>
+    <h3 style={{ fontSize: 17, fontWeight: 800, margin: "20px 0 6px", color: C.cyan, letterSpacing: "0.02em" }}>
       {children}
     </h3>
   );
 }
 
 function P({ children }: { children: React.ReactNode }) {
-  return <p style={{ fontSize: 15, lineHeight: 1.7, color: C.text, margin: "0 0 12px" }}>{children}</p>;
+  return <p style={{ fontSize: 14, lineHeight: 1.7, color: C.text, margin: "0 0 12px" }}>{children}</p>;
 }
 
 function Lead({ children }: { children: React.ReactNode }) {
-  return <p style={{ fontSize: 15, lineHeight: 1.65, color: C.text, margin: "0 0 18px" }}>{children}</p>;
+  return <p style={{ fontSize: 14, lineHeight: 1.65, color: C.text, margin: "0 0 18px" }}>{children}</p>;
 }
 
 /** Inline emphasis for a UI label or value the user will actually see on screen. */
@@ -80,7 +80,7 @@ function UI({ children }: { children: React.ReactNode }) {
     <span
       style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 15,
+        fontSize: 14,
         fontWeight: 700,
         color: C.cyan,
         background: "rgba(33,158,188,0.08)",
@@ -122,9 +122,9 @@ function LegendRow({ color, name, children, soft }: { color: string; name: strin
     <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
       <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 150, flexShrink: 0 }}>
         <Swatch color={color} soft={soft} />
-        <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{name}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{name}</span>
       </span>
-      <span style={{ fontSize: 15, lineHeight: 1.55, color: C.text }}>{children}</span>
+      <span style={{ fontSize: 14, lineHeight: 1.55, color: C.text }}>{children}</span>
     </div>
   );
 }
@@ -133,8 +133,8 @@ function LegendRow({ color, name, children, soft }: { color: string; name: strin
 function DefRow({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "9px 0", borderBottom: `1px solid ${C.border}` }}>
-      <span style={{ minWidth: 150, flexShrink: 0, fontSize: 15, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>{term}</span>
-      <span style={{ fontSize: 15, lineHeight: 1.6, color: C.text }}>{children}</span>
+      <span style={{ minWidth: 150, flexShrink: 0, fontSize: 14, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>{term}</span>
+      <span style={{ fontSize: 14, lineHeight: 1.6, color: C.text }}>{children}</span>
     </div>
   );
 }
@@ -162,10 +162,10 @@ function Callout({ kind = "note", title, children }: { kind?: CalloutKind; title
         backdropFilter: "blur(16px)",
       }}
     >
-      <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: m.c, marginBottom: 5 }}>
+      <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: m.c, marginBottom: 5 }}>
         {m.label}
       </div>
-      <div style={{ fontSize: 15, lineHeight: 1.6, color: C.text }}>{children}</div>
+      <div style={{ fontSize: 14, lineHeight: 1.6, color: C.text }}>{children}</div>
     </div>
   );
 }
@@ -197,7 +197,7 @@ function Steps({ items }: { items: React.ReactNode[] }) {
           >
             {i + 1}
           </span>
-          <span style={{ fontSize: 15, lineHeight: 1.6, color: C.text, paddingTop: 1 }}>{it}</span>
+          <span style={{ fontSize: 14, lineHeight: 1.6, color: C.text, paddingTop: 1 }}>{it}</span>
         </li>
       ))}
     </ol>
@@ -238,7 +238,7 @@ function Figure({ caption, maxWidth = 420, children }: { caption: React.ReactNod
         <span
           style={{
             position: "absolute", top: 8, right: 10,
-            fontSize: 8.5, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase",
+            fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase",
             color: C.muted, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px",
           }}
         >
@@ -246,7 +246,7 @@ function Figure({ caption, maxWidth = 420, children }: { caption: React.ReactNod
         </span>
         {children}
       </div>
-      <figcaption style={{ fontSize: 15, color: C.muted, lineHeight: 1.55, margin: "8px 4px 0", textAlign: "center" }}>
+      <figcaption style={{ fontSize: 14, color: C.muted, lineHeight: 1.55, margin: "8px 4px 0", textAlign: "center" }}>
         {caption}
       </figcaption>
     </figure>
@@ -417,12 +417,12 @@ function GreekMiniCard({ icon, label, sub, accent, value, sign }: {
           <div style={{ width: 22, height: 22, borderRadius: 6, border: `1px solid ${accent}59`, display: "flex", alignItems: "center", justifyContent: "center", color: accent, fontWeight: 800, fontSize: 12 }}>{icon}</div>
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, color: "#eef7ff", lineHeight: 1.1 }}>{label}</div>
-            <div style={{ fontSize: 7.5, color: accent, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase" }}>{sub}</div>
+            <div style={{ fontSize: 10, color: accent, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase" }}>{sub}</div>
           </div>
         </div>
-        <span style={{ fontSize: 7.5, color: signColor, border: `1px solid ${signColor}59`, padding: "2px 5px", borderRadius: 4, fontWeight: 800 }}>{sign}</span>
+        <span style={{ fontSize: 10, color: signColor, border: `1px solid ${signColor}59`, padding: "2px 5px", borderRadius: 4, fontWeight: 800 }}>{sign}</span>
       </div>
-      <div style={{ fontSize: 7.5, color: "#c9d7db", textTransform: "uppercase", letterSpacing: ".08em" }}>Current Value</div>
+      <div style={{ fontSize: 10, color: "#c9d7db", textTransform: "uppercase", letterSpacing: ".08em" }}>Current Value</div>
       <div style={{ fontSize: 20, fontWeight: 900, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1.15 }}>{value}</div>
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="30" style={{ marginTop: 6, display: "block" }} preserveAspectRatio="none">
         <line x1="0" y1={base - 0.4 * (h - 6)} x2={w} y2={base - 0.4 * (h - 6)} stroke="rgba(255,255,255,0.12)" strokeWidth="1" strokeDasharray="3 3" />
@@ -468,14 +468,14 @@ function MultiGreekExample() {
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", fontFamily: "var(--font-mono)" }}>
       {/* header */}
       <div style={{ display: "grid", gridTemplateColumns: grid, background: "rgba(13,17,25,0.9)", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ padding: "5px 4px", fontSize: 8, color: "#94a3b8", textAlign: "center", fontWeight: 800 }}>STRIKE</div>
-        {cols.map((c) => <div key={c} style={{ padding: "5px 4px", fontSize: 8, color: "#94a3b8", textAlign: "center", fontWeight: 800 }}>{c}</div>)}
+        <div style={{ padding: "5px 4px", fontSize: 10, color: "#94a3b8", textAlign: "center", fontWeight: 800 }}>STRIKE</div>
+        {cols.map((c) => <div key={c} style={{ padding: "5px 4px", fontSize: 10, color: "#94a3b8", textAlign: "center", fontWeight: 800 }}>{c}</div>)}
       </div>
       {/* totals row */}
       <div style={{ display: "grid", gridTemplateColumns: grid, background: "rgba(33,158,188,0.03)", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ padding: "4px", fontSize: 8.5, color: "#cbd5e1", textAlign: "center", fontWeight: 700 }}>TOTAL</div>
+        <div style={{ padding: "4px", fontSize: 10, color: "#cbd5e1", textAlign: "center", fontWeight: 700 }}>TOTAL</div>
         {totals.map((t, i) => (
-          <div key={i} style={{ padding: "4px", fontSize: 9, textAlign: "center", fontWeight: 800, color: totalPos[i] ? "#29b6f6" : "#ff4757" }}>
+          <div key={i} style={{ padding: "4px", fontSize: 10, textAlign: "center", fontWeight: 800, color: totalPos[i] ? "#29b6f6" : "#ff4757" }}>
             <span style={{ color: totalPos[i] ? "#22c55e" : "#ef4444" }}>{totalPos[i] ? "+" : "−"}</span>{t.replace(/[+−-]/, "")}
           </div>
         ))}
@@ -483,9 +483,9 @@ function MultiGreekExample() {
       {/* rows */}
       {rows.map((r) => (
         <div key={r.k} style={{ display: "grid", gridTemplateColumns: grid, background: r.atm ? "rgba(255,179,0,.07)" : "transparent", outline: r.atm ? "1px solid rgba(255,255,255,.5)" : "none", outlineOffset: -1, borderBottom: r.atm ? "none" : "1px solid rgba(30,48,80,.35)" }}>
-          <div style={{ padding: "6px 4px", fontSize: 9.5, textAlign: "center", fontWeight: 700, color: r.atm ? "#ffb300" : "#94a3b8", background: r.atm ? "rgba(255,179,0,.12)" : "transparent", borderRight: "1px solid rgba(255,255,255,.06)" }}>{r.k}</div>
+          <div style={{ padding: "6px 4px", fontSize: 10, textAlign: "center", fontWeight: 700, color: r.atm ? "#ffb300" : "#94a3b8", background: r.atm ? "rgba(255,179,0,.12)" : "transparent", borderRight: "1px solid rgba(255,255,255,.06)" }}>{r.k}</div>
           {r.v.map((v, ci) => (
-            <div key={ci} style={{ padding: "6px 4px", fontSize: 9, textAlign: "center", color: "#fff", background: cell(v) }}>
+            <div key={ci} style={{ padding: "6px 4px", fontSize: 10, textAlign: "center", color: "#fff", background: cell(v) }}>
               {v >= 0 ? "+" : "−"}{(Math.abs(v) * 9.9).toFixed(1)}B
             </div>
           ))}
@@ -518,7 +518,7 @@ function EstimatedMovesTableExample() {
         <thead>
           <tr style={{ background: "rgba(13,17,25,0.9)", color: "#219EBC", textAlign: "center" }}>
             {head.map((h, i) => (
-              <th key={h} style={{ padding: "6px 4px", fontSize: 9, letterSpacing: ".1em", textTransform: "uppercase", borderRight: i < head.length - 1 ? `1px solid ${C.border}` : undefined, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              <th key={h} style={{ padding: "6px 4px", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", borderRight: i < head.length - 1 ? `1px solid ${C.border}` : undefined, borderBottom: `1px solid ${C.border}` }}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -674,13 +674,13 @@ function OptionsChainExample() {
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "rgba(13,17,25,0.9)", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ padding: "5px", fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.green }}>CALLS</div>
-        <div style={{ padding: "5px", fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.cyan }}>STRIKE</div>
-        <div style={{ padding: "5px", fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.red }}>PUTS</div>
+        <div style={{ padding: "5px", fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.green }}>CALLS</div>
+        <div style={{ padding: "5px", fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.cyan }}>STRIKE</div>
+        <div style={{ padding: "5px", fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textAlign: "center", color: C.red }}>PUTS</div>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
-          <tr style={{ color: C.muted, fontSize: 8, textAlign: "center" }}>
+          <tr style={{ color: C.muted, fontSize: 10, textAlign: "center" }}>
             {cellHead("Bid")}{cellHead("Mid")}{cellHead("")}{cellHead("Bid")}{cellHead("Mid")}
           </tr>
         </thead>
@@ -698,19 +698,19 @@ function OptionsChainExample() {
   );
 }
 function cellHead(v: string) {
-  return <th style={{ padding: "3px 6px", fontSize: 7.5, fontWeight: 700, color: "#7e93ab", textAlign: "center" }}>{v}</th>;
+  return <th style={{ padding: "3px 6px", fontSize: 10, fontWeight: 700, color: "#7e93ab", textAlign: "center" }}>{v}</th>;
 }
 
 /** Traders Dashboard: a 2x2 mini layout — schedule, futures, key drivers, AI overview. */
 function TradersDashboardExample() {
   const panel = (title: string, accent: string, children: React.ReactNode) => (
     <div style={{ border: `1px solid ${accent}40`, background: `linear-gradient(180deg,${accent}10,rgba(0,0,0,.2))`, borderRadius: 8, padding: "8px 10px" }}>
-      <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: accent, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: accent, marginBottom: 6 }}>{title}</div>
       {children}
     </div>
   );
   const line = (a: string, b: string, bc: string) => (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, padding: "2px 0", color: "#cdd8e6", fontFamily: "var(--font-mono)" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, padding: "2px 0", color: "#cdd8e6", fontFamily: "var(--font-mono)" }}>
       <span>{a}</span><span style={{ color: bc, fontWeight: 700 }}>{b}</span>
     </div>
   );
@@ -731,7 +731,7 @@ function TradersDashboardExample() {
         {line("10:00  Fed speak", "MED", C.muted)}
       </>)}
       {panel("AI Overview", C.green, (
-        <div style={{ fontSize: 8.5, lineHeight: 1.5, color: "#cdd8e6" }}>
+        <div style={{ fontSize: 10, lineHeight: 1.5, color: "#cdd8e6" }}>
           Risk-on bias into CPI; ES holding above flip with the call wall overhead as the magnet…
         </div>
       ))}
@@ -1927,10 +1927,10 @@ export default function DocsPage() {
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 15, color: HOME_THEME.cyan, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800 }}>
+          <span style={{ fontSize: 14, color: HOME_THEME.cyan, letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800 }}>
             Knowledge Base
           </span>
-          <span style={{ fontSize: 16, fontWeight: 800, lineHeight: 1.2 }}>Help &amp; Docs</span>
+          <span style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.2 }}>Help &amp; Docs</span>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
           <input
@@ -1938,7 +1938,7 @@ export default function DocsPage() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search docs…"
             style={{
-              fontSize: 15,
+              fontSize: 14,
               padding: "7px 12px",
               width: 220,
               border: `1px solid ${C.border}`,
@@ -1965,13 +1965,13 @@ export default function DocsPage() {
           }}
         >
           {grouped.length === 0 && (
-            <div style={{ fontSize: 15, color: C.text, padding: "10px 8px" }}>No matching articles.</div>
+            <div style={{ fontSize: 14, color: C.text, padding: "10px 8px" }}>No matching articles.</div>
           )}
           {grouped.map(([group, items]) => (
             <div key={group} style={{ marginBottom: 18 }}>
               <div
                 style={{
-                  fontSize: 16,
+                  fontSize: 17,
                   fontWeight: 800,
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
@@ -2001,7 +2001,7 @@ export default function DocsPage() {
                       background: on ? "rgba(33,158,188,0.12)" : "transparent",
                       borderColor: on ? "rgba(33,158,188,0.3)" : "transparent",
                       color: on ? C.cyan : C.text,
-                      fontSize: 15,
+                      fontSize: 14,
                       fontWeight: on ? 700 : 500,
                       transition: "background 0.12s, color 0.12s",
                     }}
@@ -2029,10 +2029,10 @@ export default function DocsPage() {
           }}
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
-            <div style={{ fontSize: 15, color: C.text, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 6 }}>
+            <div style={{ fontSize: 14, color: C.text, letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 6 }}>
               {active.group}
             </div>
-            <h1 style={{ fontSize: 16, lineHeight: 1.3, margin: "0 0 18px", fontWeight: 800 }}>{active.title}</h1>
+            <h1 style={{ fontSize: 17, lineHeight: 1.3, margin: "0 0 18px", fontWeight: 800 }}>{active.title}</h1>
             {active.body()}
           </div>
         </article>

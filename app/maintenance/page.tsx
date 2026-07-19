@@ -75,7 +75,7 @@ export default function MaintenancePage() {
             marginTop: 26,
             paddingTop: 18,
             borderTop: `1px solid ${THEME.border}`,
-            fontSize: 11,
+            fontSize: 12,
             letterSpacing: "0.14em",
             textTransform: "uppercase",
             color: `${THEME.cyan}aa`,

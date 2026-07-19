@@ -22,7 +22,7 @@ export default function Placeholder({
   return (
     <div style={homeShellStyle}>
       <div style={homeHeaderStyle}>
-        <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "0.01em", color: OWNER_THEME.text }}>
+        <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "0.01em", color: OWNER_THEME.text }}>
           {title}
         </span>
         {right}
@@ -32,7 +32,7 @@ export default function Placeholder({
           <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
             Migration pending
           </div>
-          <p style={{ fontSize: 15, color: OWNER_THEME.text, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
+          <p style={{ fontSize: 14, color: OWNER_THEME.text, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
             {note ||
               `This page will be rebuilt from the Next backend route ${sourceRoute} — tab for tab, card for card. The shell, nav, and routing are live; the page body lands in a later pass.`}
           </p>

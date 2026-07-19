@@ -96,7 +96,7 @@ export default async function PricingPage({
             <>Get full access to <span style={{ color: T.cyan }}>CB Edge</span></>
           )}
         </h1>
-        <p style={{ color: DIM, fontSize: 18, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
+        <p style={{ color: DIM, fontSize: 17, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
           {access.ok
             ? "Your subscription is active — you have full access to the dashboard."
             : "One subscription unlocks the entire platform. Live dealer positioning, scored levels, and estimated moves — the moment they move."}
@@ -104,7 +104,7 @@ export default async function PricingPage({
 
         {userId && !access.ok && (
           <p style={{ margin: "0 0 36px" }}>
-            <Link href="/home" style={{ color: T.cyan, fontSize: 15, fontWeight: 700, textDecoration: "none" }}>
+            <Link href="/home" style={{ color: T.cyan, fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
               Not ready yet? Check out the dashboard with delayed data →
             </Link>
           </p>
@@ -124,20 +124,20 @@ export default async function PricingPage({
             <div style={{ ...sectionLabel, color: T.cyan }}>{"What's included"}</div>
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
               {PLATFORM_RECAP.map((item) => (
-                <li key={item} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 16, color: "rgba(255,255,255,0.86)" }}>
+                <li key={item} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 17, color: "rgba(255,255,255,0.86)" }}>
                   <span style={{ color: T.cyan, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
                   <span>{item}</span>
                 </li>
               ))}
               {PLATFORM_UPCOMING.map((item) => (
-                <li key={item.text} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 16, color: "rgba(255,255,255,0.6)" }}>
+                <li key={item.text} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 17, color: "rgba(255,255,255,0.6)" }}>
                   <span style={{ color: T.orange, fontWeight: 800, lineHeight: 1.5 }}>◷</span>
                   <span>
                     {item.text}{" "}
                     <span
                       style={{
                         display: "inline-block",
-                        fontSize: 11.5,
+                        fontSize: 12,
                         fontWeight: 800,
                         letterSpacing: "0.06em",
                         textTransform: "uppercase",
@@ -177,14 +177,14 @@ export default async function PricingPage({
                 textAlign: "center",
               }}
             >
-              <span style={{ fontSize: 13, color: DIM }}>Enter code </span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
-              <span style={{ fontSize: 13, color: DIM }}> or </span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
-              <span style={{ fontSize: 13, color: DIM }}> at checkout to lock in this price</span>
+              <span style={{ fontSize: 14, color: DIM }}>Enter code </span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
+              <span style={{ fontSize: 14, color: DIM }}> or </span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
+              <span style={{ fontSize: 14, color: DIM }}> at checkout to lock in this price</span>
             </div>
 
-            <p style={{ color: DIM, fontSize: 14.5, margin: "0 0 22px", lineHeight: 1.5 }}>
+            <p style={{ color: DIM, fontSize: 14, margin: "0 0 22px", lineHeight: 1.5 }}>
               Everything on the platform. Cancel anytime from your billing portal.
             </p>
 
@@ -201,7 +201,7 @@ export default async function PricingPage({
           </section>
         </div>
 
-        <div style={{ marginTop: 40, fontSize: 13, color: DIM, lineHeight: 1.6 }}>
+        <div style={{ marginTop: 40, fontSize: 14, color: DIM, lineHeight: 1.6 }}>
           By joining you agree to our{" "}
           <Link href="/terms" style={inlineLink}>Terms</Link>,{" "}
           <Link href="/risk-disclosure" style={inlineLink}>Risk Disclosure</Link> and{" "}
@@ -226,8 +226,8 @@ function PlanPrice({
 }) {
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-      <span style={{ fontSize: 13, fontWeight: 700, color: DIM, minWidth: 58 }}>{label}</span>
-      <span style={{ fontSize: 15, color: "rgba(255,255,255,0.4)", textDecoration: "line-through" }}>
+      <span style={{ fontSize: 14, fontWeight: 700, color: DIM, minWidth: 58 }}>{label}</span>
+      <span style={{ fontSize: 14, color: "rgba(255,255,255,0.4)", textDecoration: "line-through" }}>
         ${original}
       </span>
       <span style={{ fontSize: 24, fontWeight: 800, color: T.cyan }}>
@@ -245,7 +245,7 @@ function PlanPrice({
 const DIM = "rgba(255,255,255,0.62)";
 
 const sectionLabel: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 700,
   letterSpacing: "0.1em",
   textTransform: "uppercase",

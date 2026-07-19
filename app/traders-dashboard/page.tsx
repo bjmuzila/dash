@@ -274,9 +274,9 @@ export default function TradersDashboardPage() {
   const completed = tasks.filter((t) => t.done).length;
   const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
 
-  const sectionLabel = { fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: HT.muted };
+  const sectionLabel = { fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: HT.muted };
   const miniBtn = { padding: "3px 8px", borderRadius: 5, border: `1px solid ${HT.border}`, background: rgba(HT.text, 0.04), color: HT.cyan, fontSize: 10, fontWeight: 700, cursor: "pointer" } as const;
-  const inputStyle = { fontSize: 13, padding: "5px 8px", border: `1px solid ${HT.border}`, borderRadius: 5, background: "rgba(0,0,0,0.4)", color: HT.text, outline: "none" } as const;
+  const inputStyle = { fontSize: 14, padding: "5px 8px", border: `1px solid ${HT.border}`, borderRadius: 5, background: "rgba(0,0,0,0.4)", color: HT.text, outline: "none" } as const;
 
   // ── Mutators ──
   const updSchedule = (next: ScheduleItem[]) => { setSchedule(next); if (loaded) savePrefs({ schedule: next }); };
@@ -292,7 +292,7 @@ export default function TradersDashboardPage() {
             <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, background: `linear-gradient(90deg,${HT.cyan},${HT.purple})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
               Traders Dashboard
             </h1>
-            <div style={{ color: HT.muted, fontSize: 13, marginTop: 4 }}>{dateStr}</div>
+            <div style={{ color: HT.muted, fontSize: 14, marginTop: 4 }}>{dateStr}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             {weather ? (
@@ -321,9 +321,9 @@ export default function TradersDashboardPage() {
 
             {/* Countdown */}
             <Card accent="orange" padding="28px 20px" style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>{phase === "close" ? "Countdown to Market Close" : "Countdown to Market Open"}</div>
+              <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 10 }}>{phase === "close" ? "Countdown to Market Close" : "Countdown to Market Open"}</div>
               <div style={{ fontSize: "clamp(48px,8vw,84px)", fontWeight: 800, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{countdown}</div>
-              <div style={{ color: HT.muted, fontSize: 13, marginTop: 8 }}>{targetLabel}</div>
+              <div style={{ color: HT.muted, fontSize: 14, marginTop: 8 }}>{targetLabel}</div>
             </Card>
 
             {/* Overnight Overview */}
@@ -354,7 +354,7 @@ export default function TradersDashboardPage() {
                       const pos = (pct ?? 0) >= 0;
                       return (
                         <div key={f.sym} style={{ flex: 1, textAlign: "center", padding: "10px 6px", borderRadius: 8, border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.25)" }}>
-                          <div style={{ fontSize: 11, color: HT.muted, fontWeight: 700 }}>{f.sym}</div>
+                          <div style={{ fontSize: 12, color: HT.muted, fontWeight: 700 }}>{f.sym}</div>
                           <div style={{ fontSize: 14, fontWeight: 700, color: pct == null ? HT.muted : pos ? HT.green : HT.red }}>
                             {pct == null ? "—" : `${pos ? "+" : ""}${pct.toFixed(2)}%`}
                           </div>
@@ -378,7 +378,7 @@ export default function TradersDashboardPage() {
                             </div>
                             <div style={{ textAlign: "right" }}>
                               <span style={{ fontSize: 12, fontWeight: 700, color }}>{displayPct == null ? "—" : `${pos ? "+" : ""}${displayPct.toFixed(2)}%`}</span>
-                              {m.preMarketPct != null && <span style={{ fontSize: 9, color: HT.muted, marginLeft: 4 }}>PM</span>}
+                              {m.preMarketPct != null && <span style={{ fontSize: 10, color: HT.muted, marginLeft: 4 }}>PM</span>}
                             </div>
                           </div>
                         );
@@ -460,7 +460,7 @@ export default function TradersDashboardPage() {
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.red }}>🕐 Morning Schedule</div>
                 <button onClick={() => setEditSched((v) => !v)} style={miniBtn}>{editSched ? "Done" : "Edit"}</button>
               </div>
-              <div style={{ fontSize: 11, color: HT.muted, marginBottom: 12 }}>These are sample times — tap <span style={{ color: HT.cyan, fontWeight: 700 }}>Edit</span> to swap in your own routine.</div>
+              <div style={{ fontSize: 12, color: HT.muted, marginBottom: 12 }}>These are sample times — tap <span style={{ color: HT.cyan, fontWeight: 700 }}>Edit</span> to swap in your own routine.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {schedule.map((s, i) => editSched ? (
                   <div key={s.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -470,7 +470,7 @@ export default function TradersDashboardPage() {
                   </div>
                 ) : (
                   <div key={s.id} style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: HT.muted, fontWeight: 700, whiteSpace: "nowrap" }}>{s.time}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: HT.muted, fontWeight: 700, whiteSpace: "nowrap" }}>{s.time}</span>
                     <span style={{ fontWeight: i === schedule.length - 1 ? 700 : 500 }}>{s.label}</span>
                   </div>
                 ))}
@@ -486,7 +486,7 @@ export default function TradersDashboardPage() {
                 <div style={{ fontSize: 17, fontWeight: 700, color: HT.green }}>✅ Pre-Market Tasks</div>
                 <button onClick={() => setEditTasks((v) => !v)} style={miniBtn}>{editTasks ? "Done" : "Edit"}</button>
               </div>
-              <div style={{ fontSize: 11, color: HT.muted, marginBottom: 12 }}>Sample tasks — tap <span style={{ color: HT.green, fontWeight: 700 }}>Edit</span> to make them your own.</div>
+              <div style={{ fontSize: 12, color: HT.muted, marginBottom: 12 }}>Sample tasks — tap <span style={{ color: HT.green, fontWeight: 700 }}>Edit</span> to make them your own.</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {tasks.map((t) => editTasks ? (
                   <div key={t.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -505,7 +505,7 @@ export default function TradersDashboardPage() {
               )}
               {!editTasks && (
                 <div style={{ marginTop: 18 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: HT.muted, marginBottom: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: HT.muted, marginBottom: 6 }}>
                     <span>Task Progress</span><span>{progress}%</span>
                   </div>
                   <div style={{ height: 4, borderRadius: 2, background: rgba(HT.text, 0.08), overflow: "hidden" }}>

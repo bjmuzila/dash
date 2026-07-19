@@ -91,10 +91,10 @@ export default function SignalsPanel({ esPrice }: SignalsPanelProps = {}) {
             <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
           </svg>
         </div>
-        <div style={{ color: HT.cyan, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+        <div style={{ color: HT.cyan, fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>
           Overnight ES Gap
         </div>
-        <div style={{ color: "#5a6b85", fontSize: 11, letterSpacing: "0.06em", maxWidth: 360 }}>
+        <div style={{ color: "#5a6b85", fontSize: 12, letterSpacing: "0.06em", maxWidth: 360 }}>
           {loaded ? "Waiting for the 9:30 ET open — the gap posts on the bell." : "Loading…"}
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function SignalsPanel({ esPrice }: SignalsPanelProps = {}) {
         <span style={{ fontSize: 34, fontWeight: 800, color: dirColor, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
           {gapPts >= 0 ? "+" : ""}{fmt(gapPts)}
         </span>
-        <span style={{ fontSize: 13, fontWeight: 700, color: dirColor, textTransform: "uppercase", letterSpacing: ".1em" }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: dirColor, textTransform: "uppercase", letterSpacing: ".1em" }}>
           {dir === "up" ? "▲ Gap Up" : dir === "down" ? "▼ Gap Down" : "Flat"}
         </span>
         {gapPctOfClose != null && (
@@ -153,7 +153,7 @@ export default function SignalsPanel({ esPrice }: SignalsPanelProps = {}) {
           <span style={{ fontSize: 10, color: HT.muted, letterSpacing: ".08em", textTransform: "uppercase" }}>
             Gap Fill
           </span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: barColor, fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: barColor, fontVariantNumeric: "tabular-nums" }}>
             {pct.toFixed(0)}%
           </span>
         </div>
@@ -164,13 +164,13 @@ export default function SignalsPanel({ esPrice }: SignalsPanelProps = {}) {
           }} />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-          <span style={{ fontSize: 9, color: "#5a6b85" }}>Open</span>
-          <span style={{ fontSize: 9, color: "#5a6b85" }}>Prior close ({fmt(row.prior_close)})</span>
+          <span style={{ fontSize: 10, color: "#5a6b85" }}>Open</span>
+          <span style={{ fontSize: 10, color: "#5a6b85" }}>Prior close ({fmt(row.prior_close)})</span>
         </div>
       </div>
 
       {/* Status line */}
-      <div style={{ fontSize: 11, color: isFilled ? HT.green : HT.muted, marginTop: 2 }}>
+      <div style={{ fontSize: 12, color: isFilled ? HT.green : HT.muted, marginTop: 2 }}>
         {isFilled
           ? `Gap filled${row.fill_ts ? ` at ${fmtTime(row.fill_ts)}` : ""}.`
           : `Live ES ${fmt(esPrice && esPrice > 0 ? esPrice : null)} · ${fmt(Math.abs((row.prior_close ?? 0) - (esPrice && esPrice > 0 ? esPrice : row.open_0930 ?? 0)))} pts to fill.`}
@@ -185,10 +185,10 @@ function Stat({ label, value }: { label: string; value: string }) {
       background: "rgba(0,0,0,0.25)", border: `1px solid ${HT.border}`,
       borderRadius: 8, padding: "8px 10px",
     }}>
-      <div style={{ fontSize: 9, color: HT.muted, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
+      <div style={{ fontSize: 10, color: HT.muted, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 3 }}>
         {label}
       </div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: HT.text, fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ fontSize: 17, fontWeight: 700, color: HT.text, fontVariantNumeric: "tabular-nums" }}>
         {value}
       </div>
     </div>

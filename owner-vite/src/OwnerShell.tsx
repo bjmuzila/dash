@@ -85,7 +85,7 @@ export default function OwnerShell() {
         <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
             style={{
-              fontSize: 16,
+              fontSize: 17,
               fontWeight: 800,
               letterSpacing: "0.14em",
               textTransform: "uppercase",
@@ -107,7 +107,7 @@ export default function OwnerShell() {
                   gap: 8,
                   padding: "8px 10px",
                   borderRadius: 8,
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: here ? 800 : 600,
                   textDecoration: "none",
                   whiteSpace: "nowrap",
@@ -116,7 +116,7 @@ export default function OwnerShell() {
                   border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
                 }}
               >
-                <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 15 }}>
+                <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 14 }}>
                   {link.glyph}
                 </span>
                 {link.label}
@@ -132,7 +132,7 @@ export default function OwnerShell() {
     <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <Suspense
         fallback={
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: OWNER_THEME.cyan, fontSize: 13, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.7 }}>
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: OWNER_THEME.cyan, fontSize: 14, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.7 }}>
             Loading…
           </div>
         }

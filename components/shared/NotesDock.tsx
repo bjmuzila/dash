@@ -58,10 +58,10 @@ export default function NotesDock() {
         {/* header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexShrink: 0, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 18, lineHeight: 1 }} aria-hidden>🖍️</span>
-            <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>Notes</span>
+            <span style={{ fontSize: 17, lineHeight: 1 }} aria-hidden>🖍️</span>
+            <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>Notes</span>
             {notes.length > 0 && (
-              <span style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.muted }}>{notes.length}</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.muted }}>{notes.length}</span>
             )}
           </div>
           <button

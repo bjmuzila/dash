@@ -60,12 +60,12 @@ export default function LandingClient() {
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
-          .landing-card .landing-intro { font-size: 13.5px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
+          .landing-card .landing-intro { font-size: 14px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
           .landing-card .landing-trial { font-size: 10px !important; padding: 5px 11px !important; margin-bottom: 10px !important; letter-spacing: 0.08em !important; }
           .landing-card .landing-features { gap: 8px !important; }
           .landing-card .landing-feature { padding: 9px !important; }
-          .landing-card .landing-feature-t { font-size: 12.5px !important; margin-bottom: 2px !important; }
-          .landing-card .landing-feature-d { font-size: 11px !important; line-height: 1.35 !important; }
+          .landing-card .landing-feature-t { font-size: 12px !important; margin-bottom: 2px !important; }
+          .landing-card .landing-feature-d { font-size: 12px !important; line-height: 1.35 !important; }
           .landing-card .receipts { margin-top: 14px !important; padding: 12px 10px 9px !important; }
           .landing-card .receipts-grid { grid-template-columns: 1fr 1fr !important; gap: 7px !important; }
           .landing-card .receipts-cell { padding: 8px 9px !important; }
@@ -129,7 +129,7 @@ export default function LandingClient() {
             <span style={trialDot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
           </div>
 
-          <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
+          <p className="landing-intro" style={{ color: T.muted, fontSize: 17, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
             A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
             traders. See dealer positioning, flow, and key levels the moment they move.
           </p>
@@ -153,8 +153,8 @@ export default function LandingClient() {
                 className="landing-feature"
               >
                 <div className="landing-feature-t" style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{f.t}</div>
-                <div className="landing-feature-d" style={{ color: T.muted, fontSize: 12.5, lineHeight: 1.45 }}>{f.d}</div>
-                <div style={{ marginTop: 8, fontSize: 11.5, fontWeight: 700, color: T.cyan, letterSpacing: "0.04em" }}>
+                <div className="landing-feature-d" style={{ color: T.muted, fontSize: 12, lineHeight: 1.45 }}>{f.d}</div>
+                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: T.cyan, letterSpacing: "0.04em" }}>
                   Explore →
                 </div>
               </Link>
@@ -165,7 +165,7 @@ export default function LandingClient() {
           <div style={{ marginTop: 24 }}>
             <Link href="/pricing?from=landing&trial=1" style={{ ...ctaBtn, textDecoration: "none" }}>
               <span>Start your 2-day free trial</span>
-              <span style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
                 No charge up front · Cancel anytime
               </span>
             </Link>
@@ -237,7 +237,7 @@ const legalFooter: React.CSSProperties = {
   gap: 8,
   flexWrap: "wrap",
   padding: "12px 16px calc(12px + env(safe-area-inset-bottom, 0px))",
-  fontSize: 11.5,
+  fontSize: 12,
   color: T.muted,
   background: "linear-gradient(180deg, transparent, rgba(5,6,10,0.7))",
   // Fixed strip sits above the scrolling card (zIndex 2) — without this, its
@@ -265,7 +265,7 @@ const trialBadge: React.CSSProperties = {
   marginBottom: 16,
   padding: "7px 14px",
   borderRadius: 999,
-  fontSize: 11.5,
+  fontSize: 12,
   fontWeight: 800,
   letterSpacing: "0.12em",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -345,7 +345,7 @@ const ctaBtn: React.CSSProperties = {
   border: "1px solid rgba(33,158,188,0.65)",
   background: "linear-gradient(180deg, rgba(33,158,188,0.42), rgba(33,158,188,0.20))",
   color: T.text,
-  fontSize: 16,
+  fontSize: 17,
   fontWeight: 800,
   cursor: "pointer",
   display: "flex",
@@ -364,7 +364,7 @@ const signInLink: React.CSSProperties = {
   display: "block",
   marginTop: 14,
   textAlign: "center",
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 600,
   color: T.muted,
   textDecoration: "none",

@@ -512,6 +512,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       o REAL, h REAL, l REAL, c REAL,
       result TEXT,          -- 'hit' | 'miss' | NULL  (close inside band = hit)
       breach INTEGER,       -- 1 = high/low poked outside band intraweek, 0 = no, NULL = unknown
+      breach_day TEXT,      -- ISO date (YYYY-MM-DD) of the FIRST day the band broke, NULL if none/unknown
       result_source TEXT,   -- 'auto' | 'manual' | 'import'
       note TEXT,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -522,6 +523,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
 
     -- Migration: add breach column to pre-existing em_tracker tables.
     ALTER TABLE em_tracker ADD COLUMN IF NOT EXISTS breach INTEGER;
+    ALTER TABLE em_tracker ADD COLUMN IF NOT EXISTS breach_day TEXT;
 
     -- Uniqueness is per (ticker, week_start): week_label like "5/1" repeats every
     -- year, so 2 years of history would collide on (ticker, week_label). Keying on
@@ -2046,6 +2048,7 @@ export interface EmTrackerRow {
   c?: number | null;
   result?: "hit" | "miss" | null;
   breach?: number | null;
+  breach_day?: string | null;
   result_source?: "auto" | "manual" | "import" | "seed" | null;
   note?: string | null;
   created_at?: string | null;
@@ -2059,8 +2062,8 @@ export async function upsertEmTrackerRow(r: EmTrackerRow): Promise<void> {
   const pool = await getDb();
   await pool.query(
     `INSERT INTO em_tracker
-       (ticker, week_label, week_start, em, ref_close, up, down, o, h, l, c, result, breach, result_source, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       (ticker, week_label, week_start, em, ref_close, up, down, o, h, l, c, result, breach, breach_day, result_source, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      ON CONFLICT(ticker, week_start) DO UPDATE SET
        week_label    = COALESCE(EXCLUDED.week_label,    em_tracker.week_label),
        em            = COALESCE(EXCLUDED.em,            em_tracker.em),
@@ -2073,13 +2076,14 @@ export async function upsertEmTrackerRow(r: EmTrackerRow): Promise<void> {
        c             = COALESCE(EXCLUDED.c,             em_tracker.c),
        result        = COALESCE(EXCLUDED.result,        em_tracker.result),
        breach        = COALESCE(EXCLUDED.breach,        em_tracker.breach),
+       breach_day    = COALESCE(EXCLUDED.breach_day,    em_tracker.breach_day),
        result_source = COALESCE(EXCLUDED.result_source, em_tracker.result_source),
        note          = COALESCE(EXCLUDED.note,          em_tracker.note),
        updated_at    = CURRENT_TIMESTAMP`,
     [
       r.ticker.toUpperCase(), r.week_label, r.week_start ?? null, r.em, r.ref_close ?? null,
       r.up ?? null, r.down ?? null, r.o ?? null, r.h ?? null, r.l ?? null, r.c ?? null,
-      r.result ?? null, r.breach ?? null, r.result_source ?? null, r.note ?? null,
+      r.result ?? null, r.breach ?? null, r.breach_day ?? null, r.result_source ?? null, r.note ?? null,
     ]
   );
 }

@@ -118,16 +118,16 @@ function loadLS<T>(key: string, fallback: T): T {
 // ── Shared styles (HOME_THEME-based) ───────────────────────────────────────────
 
 const formLabel: React.CSSProperties = {
-  fontSize: 15, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".1em",
+  fontSize: 14, fontWeight: 700, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".1em",
 };
 const formInput: React.CSSProperties = {
-  ...homeInputStyle, width: "100%", fontSize: 15, colorScheme: "dark",
+  ...homeInputStyle, width: "100%", fontSize: 14, colorScheme: "dark",
 };
 const formGroup: React.CSSProperties = { marginBottom: 14, display: "flex", flexDirection: "column", gap: 6 };
 
 function SectionTitle({ text, accent }: { text: string; accent: string }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 16, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 17, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
       <span style={{ width: 14, height: 2, borderRadius: 2, background: accent, boxShadow: `0 0 6px ${rgba(accent, 0.6)}` }} />
       {text}
     </span>
@@ -138,7 +138,7 @@ function PBadge({ p }: { p: string }) {
   const col = p === "HIGH" ? HOME_THEME.red : p === "MED" ? HOME_THEME.orange : HOME_THEME.muted;
   return (
     <span style={{
-      fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+      fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
       textTransform: "uppercase", letterSpacing: ".08em",
       color: col, background: rgba(col, 0.12), border: `1px solid ${rgba(col, 0.35)}`,
     }}>
@@ -154,7 +154,7 @@ const btnPrimary: React.CSSProperties = { ...homeButtonStyle, ...btnBase };
 const btnGhost: React.CSSProperties = { ...homeSecondaryButtonStyle, ...btnBase };
 const btnDanger: React.CSSProperties = {
   ...btnBase, padding: "5px 10px", borderRadius: 6, cursor: "pointer",
-  fontSize: 15, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+  fontSize: 14, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
   color: HOME_THEME.red, background: rgba(HOME_THEME.red, 0.12), border: `1px solid ${rgba(HOME_THEME.red, 0.35)}`,
 };
 
@@ -314,8 +314,8 @@ export default function Todo() {
           }}>
             <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
-              <span style={{ fontSize: 16, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
-              <span style={{ fontSize: 15, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, padding: "1px 8px", borderRadius: 4, fontWeight: 700, color: HOME_THEME.text }}>{cols.length}</span>
+              <span style={{ fontSize: 17, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
+              <span style={{ fontSize: 14, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, padding: "1px 8px", borderRadius: 4, fontWeight: 700, color: HOME_THEME.text }}>{cols.length}</span>
             </div>
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
               {cols.map((t) => (
@@ -324,13 +324,13 @@ export default function Todo() {
                   padding: 12, cursor: "pointer",
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 15, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: ".05em", fontFamily: "var(--font-mono)" }}>{t.id}</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: ".05em", fontFamily: "var(--font-mono)" }}>{t.id}</span>
                     <PBadge p={t.priority} />
                   </div>
-                  <div style={{ fontSize: 15, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "6px 0 10px" }}>{t.subject}</div>
+                  <div style={{ fontSize: 14, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "6px 0 10px" }}>{t.subject}</div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8 }}>
-                    <span style={{ fontSize: 15, color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140 }}>{t.email}</span>
-                    <span style={{ fontSize: 15, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140 }}>{t.email}</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
                   </div>
                 </div>
               ))}
@@ -343,7 +343,7 @@ export default function Todo() {
 
   const vtab = (id: string, label: string) => (
     <button key={id} onClick={() => setView(id)} style={{
-      padding: "4px 12px", fontSize: 15, fontWeight: 700,
+      padding: "4px 12px", fontSize: 14, fontWeight: 700,
       letterSpacing: ".08em", textTransform: "uppercase", cursor: "pointer",
       borderRadius: 6,
       color: view === id ? HOME_THEME.cyan : HOME_THEME.text,
@@ -360,9 +360,9 @@ export default function Todo() {
         ...homePanelStyle, padding: "14px 18px",
         background: budgetRadial,
       }}>
-        <div style={{ fontSize: 15, color: HOME_THEME.muted, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div>
-        <div style={{ fontSize: 15, fontWeight: 800, color, lineHeight: 1, textShadow: `0 0 16px ${rgba(color, 0.3)}` }}>{value}</div>
-        <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 6 }}>{sub}</div>
+        <div style={{ fontSize: 14, color: HOME_THEME.muted, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div>
+        <div style={{ fontSize: 14, fontWeight: 800, color, lineHeight: 1, textShadow: `0 0 16px ${rgba(color, 0.3)}` }}>{value}</div>
+        <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 6 }}>{sub}</div>
       </div>
     );
   }
@@ -386,8 +386,8 @@ export default function Todo() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 16, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
-          <span style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
+          <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
             {checked}/{total} habits · {pct}%
           </span>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -416,7 +416,7 @@ export default function Todo() {
               <MetricCard label="Completed" value={done} sub="Shipped" color={HOME_THEME.red} />
               <MetricCard
                 label="Daily Progress"
-                value={<>{pct}<span style={{ fontSize: 15, color: HOME_THEME.muted }}>%</span></>}
+                value={<>{pct}<span style={{ fontSize: 14, color: HOME_THEME.muted }}>%</span></>}
                 sub={<span style={{ color: HOME_THEME.green }}>{checked} / {total} habits</span>}
                 color="#8ECAE6"
               />
@@ -432,7 +432,7 @@ export default function Todo() {
                       ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
                       background: budgetRadial,
                     }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />
                         <span
                           contentEditable suppressContentEditableWarning
@@ -447,7 +447,7 @@ export default function Todo() {
                         {items.length ? items.map((item) => (
                           <li key={item.id} style={{
                             display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8,
-                            fontSize: 15, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
+                            fontSize: 14, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
                           }}>
                             <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexGrow: 1 }}>
                               <input type="checkbox" checked={item.checked}
@@ -468,11 +468,11 @@ export default function Todo() {
                             </div>
                             <button onClick={() => deleteItem(box.key, item.id)} style={{
                               background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer",
-                              fontSize: 15, lineHeight: 1, padding: "0 2px",
+                              fontSize: 14, lineHeight: 1, padding: "0 2px",
                             }}>×</button>
                           </li>
                         )) : (
-                          <li style={{ color: HOME_THEME.muted, fontStyle: "italic", fontSize: 15 }}>No items yet</li>
+                          <li style={{ color: HOME_THEME.muted, fontStyle: "italic", fontSize: 14 }}>No items yet</li>
                         )}
                       </ul>
                       <div style={{ display: "flex", gap: 6, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 10, marginTop: "auto" }}>
@@ -480,7 +480,7 @@ export default function Todo() {
                           ref={(el) => { inlineRefs.current[box.key] = el; }}
                           type="text" placeholder="Add item..."
                           onKeyDown={(e) => { if (e.key === "Enter") inlineAdd(box.key); }}
-                          style={{ ...homeInputStyle, flex: 1, fontSize: 15, padding: "5px 8px" }}
+                          style={{ ...homeInputStyle, flex: 1, fontSize: 14, padding: "5px 8px" }}
                         />
                       </div>
                     </div>
@@ -502,12 +502,12 @@ export default function Todo() {
         {/* LIST */}
         {view === "list" && (
           <div style={{ ...homePanelStyle, padding: 16, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${HOME_THEME.border}` }}>
                   {["Task / Idea", "Category", "Priority", "Status", "Actions"].map((h, i) => (
                     <th key={h} style={{
-                      padding: "8px 12px", textAlign: i === 4 ? "right" : "left", fontSize: 15,
+                      padding: "8px 12px", textAlign: i === 4 ? "right" : "left", fontSize: 14,
                       letterSpacing: ".12em", textTransform: "uppercase", color: HOME_THEME.muted, fontWeight: 700, whiteSpace: "nowrap",
                     }}>{h}</th>
                   ))}
@@ -518,17 +518,17 @@ export default function Todo() {
                   <tr key={t.id} onClick={() => openTicket(t.id)} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, cursor: "pointer" }}>
                     <td style={{ padding: "8px 12px", color: HOME_THEME.text, fontWeight: 600, whiteSpace: "nowrap" }}>{t.subject}</td>
                     <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
-                      <span style={{ fontSize: 15, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
+                      <span style={{ fontSize: 14, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
                     </td>
                     <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}><PBadge p={t.priority} /></td>
                     <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[t.status] }} />
-                        <span style={{ color: HOME_THEME.text, fontSize: 15 }}>{t.status}</span>
+                        <span style={{ color: HOME_THEME.text, fontSize: 14 }}>{t.status}</span>
                       </div>
                     </td>
                     <td style={{ padding: "8px 12px", textAlign: "right", whiteSpace: "nowrap" }}>
-                      <button style={{ ...btnGhost, fontSize: 15, padding: "3px 8px" }}
+                      <button style={{ ...btnGhost, fontSize: 14, padding: "3px 8px" }}
                         onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }}>Delete</button>
                     </td>
                   </tr>
@@ -552,8 +552,8 @@ export default function Todo() {
         <div style={modalOverlay} onClick={() => setEditId(null)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, paddingBottom: 12, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-              <h2 style={{ fontSize: 16, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Edit Task</h2>
-              <button onClick={() => setEditId(null)} style={{ background: "none", border: "none", fontSize: 15, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
+              <h2 style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Edit Task</h2>
+              <button onClick={() => setEditId(null)} style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
             </div>
             <form onSubmit={saveEdit}>
               <div style={formGroup}><label style={formLabel}>Title</label>
@@ -583,8 +583,8 @@ export default function Todo() {
         <div style={modalOverlay} onClick={() => setShowCreate(false)}>
           <div style={modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, paddingBottom: 12, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-              <h2 style={{ fontSize: 16, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Add New Item</h2>
-              <button onClick={() => setShowCreate(false)} style={{ background: "none", border: "none", fontSize: 15, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
+              <h2 style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Add New Item</h2>
+              <button onClick={() => setShowCreate(false)} style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
             </div>
             <form onSubmit={createItem}>
               <div style={formGroup}><label style={formLabel}>Title</label>

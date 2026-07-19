@@ -1137,7 +1137,7 @@ export default function Gex3DPage() {
             <div
               style={{
                 position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                textAlign: "center", fontSize: 13, color: HOME_THEME.text, opacity: 0.7, padding: 24,
+                textAlign: "center", fontSize: 14, color: HOME_THEME.text, opacity: 0.7, padding: 24,
               }}
             >
               No GEX snapshots recorded for this session yet — the writer persists one column per
@@ -1154,7 +1154,7 @@ export default function Gex3DPage() {
               background: HOME_THEME.panelBgStrong,
               border: `1px solid ${HOME_THEME.border}`,
               color: HOME_THEME.text,
-              fontSize: 11,
+              fontSize: 12,
               padding: "6px 8px",
               borderRadius: 6,
               whiteSpace: "nowrap",

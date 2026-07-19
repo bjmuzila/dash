@@ -67,9 +67,9 @@ export default function PreviewPage() {
         }}
       >
         <span style={{ fontSize: 17, color: HOME_THEME.text, fontWeight: 700 }}>Use code </span>
-        <span style={{ fontSize: 19, fontWeight: 900, color: HOME_THEME.cyan, letterSpacing: "0.06em" }}>CB-BETA</span>
+        <span style={{ fontSize: 17, fontWeight: 900, color: HOME_THEME.cyan, letterSpacing: "0.06em" }}>CB-BETA</span>
         <span style={{ fontSize: 17, color: HOME_THEME.text, fontWeight: 700 }}> for </span>
-        <span style={{ fontSize: 19, fontWeight: 900, color: HOME_THEME.green }}>50% off</span>
+        <span style={{ fontSize: 17, fontWeight: 900, color: HOME_THEME.green }}>50% off</span>
       </div>
 
       <Card
@@ -77,18 +77,18 @@ export default function PreviewPage() {
         title="SPX Snapshot — Delayed Preview"
         subtitle={row ? `Updated ${minutesAgo(row.ts)} · ${row.date} ${row.time ?? ""} ET` : undefined}
       >
-        <p style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.6, marginBottom: 24 }}>
+        <p style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.6, marginBottom: 24 }}>
           A ~30-minute-delayed look at the same gamma-exposure levels the live
           dashboard tracks in real time. Refreshes automatically as new
           snapshots land.
         </p>
 
         {loading && !row ? (
-          <div style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.6 }}>Loading…</div>
+          <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.6 }}>Loading…</div>
         ) : error ? (
-          <div style={{ fontSize: 16, color: HOME_THEME.red }}>{error}</div>
+          <div style={{ fontSize: 17, color: HOME_THEME.red }}>{error}</div>
         ) : !row ? (
-          <div style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.6 }}>
+          <div style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.6 }}>
             No snapshot yet — check back once the market's open.
           </div>
         ) : (
@@ -102,7 +102,7 @@ export default function PreviewPage() {
       </Card>
 
       <Card accent="orange" title="Want it live?" subtitle="Real-time levels, Confidence Score, options flow & more.">
-        <p style={{ fontSize: 16, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.6, marginBottom: 22 }}>
+        <p style={{ fontSize: 17, color: HOME_THEME.text, opacity: 0.8, lineHeight: 1.6, marginBottom: 22 }}>
           Members see every level update the moment it happens — no 30-minute
           lag — plus the full dashboard: Confidence Score, live options flow,
           Estimated Moves, and the ES Candles GEX heatmap. Beta pricing is
@@ -133,7 +133,7 @@ const bigCtaButton: CSSProperties = {
 function Stat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+      <div style={{ fontSize: 14, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
         {label}
       </div>
       <div style={{ fontSize: 32, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>

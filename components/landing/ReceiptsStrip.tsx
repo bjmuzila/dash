@@ -93,7 +93,7 @@ const wrap: React.CSSProperties = {
 };
 
 const heading: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 10,
   fontWeight: 800,
   letterSpacing: "0.14em",
   textTransform: "uppercase",
@@ -134,14 +134,14 @@ const pctVal: React.CSSProperties = {
 
 // Sample size — same mono family, readable weight. Intentionally not fine print.
 const nVal: React.CSSProperties = {
-  fontSize: 11.5,
+  fontSize: 12,
   fontWeight: 700,
   color: T.muted,
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 12.5,
+  fontSize: 12,
   fontWeight: 700,
   color: T.text,
   lineHeight: 1.3,
@@ -149,7 +149,7 @@ const labelStyle: React.CSSProperties = {
 };
 
 const subStyle: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 10,
   color: T.muted,
   lineHeight: 1.35,
 };

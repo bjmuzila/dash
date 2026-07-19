@@ -114,8 +114,8 @@ function Gauge({ label, value, fmt, fullScale, spark }: { label: string; value: 
 
   return (
     <div className="card-hover" style={{ ...statTileStyle, padding: "8px 6px 7px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-      <div style={{ fontSize: 11, letterSpacing: "2px", color: "#fff" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 800, color: has ? col : "#9fb3c8", fontFamily: "monospace" }}>
+      <div style={{ fontSize: 12, letterSpacing: "2px", color: "#fff" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 800, color: has ? col : "#9fb3c8", fontFamily: "monospace" }}>
         {has ? fmt(value) : "--"}
       </div>
       <Sparkline points={spark} fullScale={fullScale} width={84} height={26} />

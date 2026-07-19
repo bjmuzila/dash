@@ -139,7 +139,7 @@ export default function OwnerSidebar() {
         <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
             style={{
-              fontSize: 16,
+              fontSize: 17,
               fontWeight: 800,
               letterSpacing: "0.14em",
               textTransform: "uppercase",
@@ -161,7 +161,7 @@ export default function OwnerSidebar() {
                   gap: 8,
                   padding: "8px 10px",
                   borderRadius: 8,
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: here ? 800 : 600,
                   textDecoration: "none",
                   whiteSpace: "nowrap",
@@ -170,7 +170,7 @@ export default function OwnerSidebar() {
                   border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
                 }}
               >
-                <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 15 }}>
+                <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 14 }}>
                   {link.glyph}
                 </span>
                 {link.label}

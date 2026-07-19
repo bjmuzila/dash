@@ -62,7 +62,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding: "6px 18px",
     borderRadius: 8,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: 700,
     cursor: "pointer",
     border: active ? `1px solid ${LIGHT_BLUE}80` : `1px solid ${HOME_THEME.border}`,
@@ -79,7 +79,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
         <div>
           <div style={{
             display: "inline-block",
-            fontSize: 11,
+            fontSize: 12,
             color: LIGHT_BLUE,
             letterSpacing: "0.2em",
             textTransform: "uppercase",
@@ -95,7 +95,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
           <h1 style={{ fontSize: 38, lineHeight: 1.1, margin: "0 0 8px", fontWeight: 800, letterSpacing: "-0.02em", color: HOME_THEME.text }}>
             What&apos;s New
           </h1>
-          <p style={{ margin: 0, fontSize: 15, color: HOME_THEME.muted + "99" }}>
+          <p style={{ margin: 0, fontSize: 14, color: HOME_THEME.muted + "99" }}>
             The latest improvements and what&apos;s coming next.
           </p>
         </div>
@@ -124,17 +124,17 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
       {tab === "updates" && (
         <>
           {localEntries.length === 0 && (
-            <div style={{ fontSize: 15, color: HOME_THEME.muted + "99" }}>No updates yet.</div>
+            <div style={{ fontSize: 14, color: HOME_THEME.muted + "99" }}>No updates yet.</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {localEntries.map((entry, i) => (
               <Card key={i} accent="cyan" padding="20px 24px">
-                <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.04em", color: LIGHT_BLUE, marginBottom: 14 }}>
+                <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", color: LIGHT_BLUE, marginBottom: 14 }}>
                   {entry.date}
                 </div>
                 <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 10 }}>
                   {entry.items.map((item, j) => (
-                    <li key={j} style={{ fontSize: 15, lineHeight: 1.65, color: HOME_THEME.text, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <li key={j} style={{ fontSize: 14, lineHeight: 1.65, color: HOME_THEME.text, display: "flex", gap: 10, alignItems: "flex-start" }}>
                       <span style={{ color: LIGHT_BLUE, marginTop: 3, flexShrink: 0 }}>▸</span>
                       <span style={{ flex: 1 }}>{item}</span>
                       {isOwner && (
@@ -151,7 +151,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                             background: "transparent",
                             color: HOME_THEME.muted + "cc",
                             cursor: "pointer",
-                            fontSize: 11,
+                            fontSize: 12,
                             lineHeight: 1,
                             display: "flex",
                             alignItems: "center",
@@ -174,7 +174,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
       {/* Coming Soon tab */}
       {tab === "coming-soon" && (
         <div>
-          <div style={{ fontSize: 15, color: HOME_THEME.muted + "99", marginBottom: 20 }}>
+          <div style={{ fontSize: 14, color: HOME_THEME.muted + "99", marginBottom: 20 }}>
             A look at what we&apos;re building — features actively in development or planned.
           </div>
 
@@ -211,7 +211,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
 
                   {/* Label */}
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 16, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 17, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5 }}>
                       {item.label}
                     </div>
                   </div>
@@ -220,7 +220,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                   <div style={{ flexShrink: 0 }}>
                     {item.eta ? (
                       <span style={{
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: 700,
                         letterSpacing: "0.06em",
                         color: HOME_THEME.orange,
@@ -234,7 +234,7 @@ export default function WhatsNewClient({ entries }: { entries: Entry[] }) {
                       </span>
                     ) : (
                       <span style={{
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: 700,
                         letterSpacing: "0.06em",
                         color: LIGHT_BLUE,

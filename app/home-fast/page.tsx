@@ -94,7 +94,7 @@ export default async function HomeFastPage() {
         padding: "14px 16px",
       }}
     >
-      <div style={{ fontSize: 11, letterSpacing: 0.5, color: "#8B94A7", textTransform: "uppercase" }}>
+      <div style={{ fontSize: 12, letterSpacing: 0.5, color: "#8B94A7", textTransform: "uppercase" }}>
         {label}
       </div>
       <div style={{ fontSize: 22, fontWeight: 700, color: accent ?? "#E6EDF5", marginTop: 4, fontFamily: "var(--font-mono)" }}>
@@ -120,7 +120,7 @@ export default async function HomeFastPage() {
         </p>
       ) : (
         <>
-          <p style={{ fontSize: 13, color: "#6b7689", margin: "8px 0 16px" }}>
+          <p style={{ fontSize: 14, color: "#6b7689", margin: "8px 0 16px" }}>
             SPX {snap.spotPrice ? snap.spotPrice.toFixed(2) : "—"} · {snap.rowCount} strikes ·
             exp {snap.expiration ?? "—"} · server time {snap.updatedAt ?? "—"}
           </p>

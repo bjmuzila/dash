@@ -126,7 +126,7 @@ const liveBadge: React.CSSProperties = {
   gap: 6,
   padding: "4px 9px",
   borderRadius: 999,
-  fontSize: 9.5,
+  fontSize: 10,
   fontWeight: 800,
   letterSpacing: "0.12em",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",

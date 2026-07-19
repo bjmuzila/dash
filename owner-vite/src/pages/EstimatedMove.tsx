@@ -1270,7 +1270,7 @@ export default function EstimatedMove() {
             <span
               title="Where the EM table values came from"
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 700,
                 letterSpacing: ".08em",
                 textTransform: "uppercase",
@@ -1290,7 +1290,7 @@ export default function EstimatedMove() {
 
           {activeView === "estimated" && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
-              <span style={{ fontSize: 11, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Exp</span>
+              <span style={{ fontSize: 12, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>Exp</span>
               <DockExpiryPicker
                 expirations={fridayExpirations}
                 value={expOverride}
@@ -1302,7 +1302,7 @@ export default function EstimatedMove() {
           )}
 
         <DockSpacer />
-        <span style={{ fontSize: 11, letterSpacing: ".10em", textTransform: "uppercase", color: status.color, whiteSpace: "nowrap", flexShrink: 0 }}>{status.text}</span>
+        <span style={{ fontSize: 12, letterSpacing: ".10em", textTransform: "uppercase", color: status.color, whiteSpace: "nowrap", flexShrink: 0 }}>{status.text}</span>
         <DockButton onClick={refresh} title="Refresh" style={{ opacity: loading ? 0.6 : 1, cursor: loading ? "not-allowed" : "pointer", color: HT.cyan }}>
           {started ? "Refresh" : "Start"}
         </DockButton>
@@ -1330,15 +1330,15 @@ export default function EstimatedMove() {
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
         <div style={{ width: 230, minWidth: 230, flexShrink: 0, background: HT.panelBg, backdropFilter: "blur(8px)", borderRight: `1px solid ${HT.border}`, boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "12px 14px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-            <div style={{ fontSize: 9, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>Last Sync</div>
-            <div style={{ fontSize: 13, color: "#e8edf5", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{lastSync}</div>
+            <div style={{ fontSize: 10, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>Last Sync</div>
+            <div style={{ fontSize: 14, color: "#e8edf5", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{lastSync}</div>
           </div>
 
           <div style={{ flex: 1, overflowY: "auto" }}>
             <button onClick={() => setDrawerOpen((open) => !open)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", background: "transparent", border: "none", borderBottom: `1px solid ${HT.border}`, cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 10, color: "#eef7ff", display: "inline-block", transform: drawerOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s" }}>{">"}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#e8edf5", letterSpacing: ".08em", textTransform: "uppercase" }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#e8edf5", letterSpacing: ".08em", textTransform: "uppercase" }}>
                   {activeView === "estimated" ? "Weekly" : "Zones"}
                 </span>
               </div>
@@ -1348,11 +1348,11 @@ export default function EstimatedMove() {
             {drawerOpen && (
               <div style={{ display: "flex", flexDirection: "column", gap: 1, background: HT.bg }}>
                 {filteredSnapshots.length === 0 ? (
-                  <div style={{ padding: "10px 14px", fontSize: 11, color: "#eef7ff" }}>No snapshots</div>
+                  <div style={{ padding: "10px 14px", fontSize: 12, color: "#eef7ff" }}>No snapshots</div>
                 ) : filteredSnapshots.map((snap) => (
                   <div key={snap.id} onClick={() => loadSnapshot(snap)} style={{ padding: "8px 14px", cursor: "pointer", borderBottom: `1px solid ${HT.border}`, background: HT.panelBg, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
-                      <div style={{ fontSize: 11, color: "#e8edf5", fontWeight: 700 }}>{snap.date}</div>
+                      <div style={{ fontSize: 12, color: "#e8edf5", fontWeight: 700 }}>{snap.date}</div>
                       <div style={{ fontSize: 10, color: "#eef7ff", fontVariantNumeric: "tabular-nums" }}>{snap.time}</div>
                     </div>
                     <button onClick={(e) => deleteSnapshot(e, snap.id!)} style={{ background: "none", border: "none", color: "#eef7ff", fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>×</button>
@@ -1363,10 +1363,10 @@ export default function EstimatedMove() {
           </div>
 
           <div style={{ padding: "10px 14px", borderTop: `1px solid ${HT.border}`, flexShrink: 0 }}>
-            <div style={{ fontSize: 9, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>Symbols</div>
+            <div style={{ fontSize: 10, color: "#eef7ff", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>Symbols</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
               {currentSymbols.map((symbol) => (
-                <span key={symbol} style={{ fontSize: 11, color: HT.text, background: HT.panelBg, border: `1px solid ${HT.border}`, padding: "3px 6px", borderRadius: 4 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
+                <span key={symbol} style={{ fontSize: 12, color: HT.text, background: HT.panelBg, border: `1px solid ${HT.border}`, padding: "3px 6px", borderRadius: 4 }}>{DISPLAY_LABEL[symbol] ?? symbol}</span>
               ))}
             </div>
           </div>
@@ -1376,7 +1376,7 @@ export default function EstimatedMove() {
           {activeView === "estimated" ? (
             <div style={{ width: "100%", maxWidth: 1100, margin: "0 auto", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
               <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(33,158,188,0.04)", padding: "10px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
                   <span>Weekly Estimated Move For <span style={{ color: "#219EBC" }}>{targetDateLabel || "--"}</span></span>
                   {confidenceScore != null && (
                     <span style={{
@@ -1395,9 +1395,9 @@ export default function EstimatedMove() {
                 </div>
               </div>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 16 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 17 }}>
                   <thead style={{ background: HT.panelBgStrong }}>
-                    <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#219EBC", textAlign: "center", fontSize: 13, letterSpacing: ".12em", textTransform: "uppercase" }}>
+                    <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#219EBC", textAlign: "center", fontSize: 14, letterSpacing: ".12em", textTransform: "uppercase" }}>
                       {["Ticker","Close","Exp","EM","Up","Down"].map((header, idx, arr) => (
                         <th key={header} style={{ padding: 10, borderRight: idx < arr.length - 1 ? `1px solid ${HT.border}` : undefined }}>{header}</th>
                       ))}
@@ -1427,7 +1427,7 @@ export default function EstimatedMove() {
           ) : (
             <div style={{ width: "100%", maxWidth: 980, margin: "0 auto", background: HT.panelBg, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 8, boxShadow: "0 18px 50px rgba(0,0,0,.35)" }}>
               <div style={{ borderBottom: `1px solid ${HT.border}`, background: "rgba(33,158,188,0.04)", padding: "10px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>
                   No Short / No Long Zones <span style={{ color: "#eef7ff" }}>· Last Week Candle</span>
                 </div>
               </div>
@@ -1437,7 +1437,7 @@ export default function EstimatedMove() {
                 ) : zoneLevels.length === 0 ? (
                   <div style={{ padding: 24, textAlign: "center", color: "#eef7ff" }}>Loading...</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                     <thead style={{ background: HT.panelBgStrong }}>
                       <tr style={{ borderBottom: `1px solid ${HT.border}`, color: "#219EBC", textAlign: "center", fontSize: 12, letterSpacing: ".1em", textTransform: "uppercase" }}>
                         {["Ticker", "Close", "Pivot", "Range", "No Long", "No Short"].map((header, idx) => (
@@ -1492,8 +1492,8 @@ export default function EstimatedMove() {
         {activeView === "estimated" ? (
           <>
             <div style={{ background: "#0b111b", padding: "14px 0", textAlign: "center", borderBottom: "2px solid #1a2a3a" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>Weekly Estimated Move For</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#219EBC", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#eef7ff", letterSpacing: ".16em", textTransform: "uppercase" }}>Weekly Estimated Move For</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#219EBC", letterSpacing: ".1em", marginTop: 2 }}>{targetDateLabel || "--"}</div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
@@ -1504,28 +1504,28 @@ export default function EstimatedMove() {
 
             {rows.slice(0, 13).filter((row) => !row.error).map((row) => (
               <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
-                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
-                <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
-                <div style={{ padding: "9px 0", textAlign: "center", color: "#EF4444", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 14 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 14 }}>{fmtPrice(row.ticker, row.up)}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", color: "#EF4444", fontSize: 14 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
             ))}
 
-            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: `1px solid ${HT.border}`, borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
+            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 12, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderBottom: `1px solid ${HT.border}`, borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
               x.com/bzilatrades
             </div>
 
             {rows.slice(13).filter((row) => !row.error).map((row) => (
               <div key={row.ticker} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", borderBottom: `1px solid ${HT.border}` }}>
-                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 15 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
-                <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 15 }}>{fmtPrice(row.ticker, row.up)}</div>
-                <div style={{ padding: "9px 0", textAlign: "center", color: "#EF4444", fontSize: 15 }}>{fmtPrice(row.ticker, row.down)}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", fontWeight: 700, color: "#e8edf5", fontSize: 14 }}>{DISPLAY_LABEL[row.ticker] ?? row.ticker}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", color: "#00e676", fontSize: 14 }}>{fmtPrice(row.ticker, row.up)}</div>
+                <div style={{ padding: "9px 0", textAlign: "center", color: "#EF4444", fontSize: 14 }}>{fmtPrice(row.ticker, row.down)}</div>
               </div>
             ))}
           </>
         ) : (
           <>
             <div style={{ background: "#0b111b", padding: "14px 0", textAlign: "center", borderBottom: "2px solid #1a2a3a" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>No Short / No Long Zones</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#eef7ff", letterSpacing: ".08em", textTransform: "uppercase" }}>No Short / No Long Zones</div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: "#0a0f18", borderBottom: `1px solid ${HT.border}` }}>
@@ -1546,7 +1546,7 @@ export default function EstimatedMove() {
               );
             })}
 
-            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 11, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
+            <div style={{ padding: "8px 0", textAlign: "center", fontSize: 12, color: "#eef7ff", letterSpacing: ".18em", textTransform: "uppercase", borderTop: `1px solid ${HT.border}`, background: "#04070c" }}>
               x.com/bzilatrades
             </div>
           </>

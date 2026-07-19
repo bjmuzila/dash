@@ -382,7 +382,7 @@ export function LiveIb() {
       </div>
 
       {!ib.hasData ? (
-        <div style={{ fontSize: 13, color: HOME_THEME.text, padding: "12px 0" }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, padding: "12px 0" }}>
           No ES candle data yet for today’s IB window. Live IB populates from the 5m ES candle feed during 9:30–10:30 ET.
         </div>
       ) : (
@@ -399,11 +399,11 @@ export function LiveIb() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 18, color: HOME_THEME.cyan, letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
+            <span style={{ fontSize: 17, color: HOME_THEME.cyan, letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>
               Rules In Play ({rules.length})
             </span>
             {!ib.done && (
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.orange, border: `1px solid ${rgba(HOME_THEME.orange, 0.33)}`, background: rgba(HOME_THEME.orange, 0.1), padding: "3px 8px", borderRadius: 6 }}>
+              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.orange, border: `1px solid ${rgba(HOME_THEME.orange, 0.33)}`, background: rgba(HOME_THEME.orange, 0.1), padding: "3px 8px", borderRadius: 6 }}>
                 Provisional · not locked
               </span>
             )}
@@ -428,7 +428,7 @@ export function LiveIb() {
                   padding: "10px 12px",
                   background: rgba(HOME_THEME.text, 0.02),
                 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: r.color }}>{r.title}</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: r.color }}>{r.title}</div>
                   <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, marginTop: 4 }}>{highlightPct(r.detail)}</div>
                 </div>
               ))}
@@ -551,7 +551,7 @@ export default function IbLogic() {
       {/* Title row — refresh / screenshot / discord, matching other tabs */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2, flexShrink: 0 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>IB Logic &amp; AI</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>IB Logic &amp; AI</div>
           <div style={{ fontSize: 10, color: "#ffffff", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>Initial Balance · ES Futures</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -566,7 +566,7 @@ export default function IbLogic() {
       {/* Static IB Logic Reference hidden from user view */}
       <div style={{ display: "none" }}>
       <div style={{ marginBottom: 6, marginTop: 8 }}>
-        <div style={{ fontSize: 11, color: "#ffffff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#ffffff", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Static IB Logic Reference
         </div>
         <div style={{ fontSize: 22, color: "#eef7ff", fontWeight: 800 }}>
@@ -581,10 +581,10 @@ export default function IbLogic() {
         border: "1px solid rgba(33,158,188,.18)", background: "rgba(33,158,188,.04)",
         borderRadius: 8, padding: 12,
       }}>
-        <div style={{ fontSize: 11, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Reference Summary
         </div>
-        <div style={{ fontSize: 13, color: "#ffffff", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 14, color: "#ffffff", lineHeight: 1.55 }}>
           IB logic is a probability map, not a prediction engine. The core read is:
           first hour sets the range, midpoint tells directional pressure, the first break
           matters most, and compressed days can expand fast.
@@ -602,12 +602,12 @@ export default function IbLogic() {
             padding: 14, background: "rgba(255,255,255,.02)",
           }}>
             <div style={{
-              fontSize: 13, color: row.color, fontWeight: 800,
+              fontSize: 14, color: row.color, fontWeight: 800,
               textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 8,
             }}>
               {row.title}
             </div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: "#ffffff", fontSize: 13, lineHeight: 1.55 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, color: "#ffffff", fontSize: 14, lineHeight: 1.55 }}>
               {row.items.map((item, i) => (
                 <li key={i} style={{ marginBottom: 6 }}>{item}</li>
               ))}

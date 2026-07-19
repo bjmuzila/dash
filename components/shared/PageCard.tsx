@@ -130,7 +130,7 @@ export function Card({
       {(title != null || subtitle != null) && (
         <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 2 }}>
           {title != null && (
-            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text }}>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text }}>
               {title}
             </div>
           )}

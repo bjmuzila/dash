@@ -387,7 +387,7 @@ const BTN_BASE: CSSProperties = {
   background: "rgba(255,255,255,0.04)",
   color: "#6b8aaa",
   cursor: "pointer",
-  fontSize: 9,
+  fontSize: 10,
   fontWeight: 700,
   letterSpacing: ".08em",
   fontFamily: "inherit",
@@ -446,7 +446,7 @@ export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, 
   const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
   return (
     <button onClick={run} disabled={s === "busy"} title="Copy screenshot to clipboard"
-      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 13 }}>
+      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 14 }}>
       {btnContent}
     </button>
   );
@@ -499,7 +499,7 @@ export function BoxDiscordBtn({
   const statusText = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : null;
   return (
     <button onClick={run} disabled={s === "busy"} title="Send screenshot to Discord"
-      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 13 }}>
+      style={{ ...BTN_BASE, color, borderColor: `${color}40`, padding: "2px 5px", fontSize: 14 }}>
       {statusText ?? <IconDiscord /> }
     </button>
   );
@@ -565,7 +565,7 @@ export default function DataBox({
           flexShrink: 0, minHeight: 26, ...headerStyle,
         }}>
           {title && (
-            <span style={{ fontSize: 9, color: "#3a5570", fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", userSelect: "none", flexShrink: 0 }}>
+            <span style={{ fontSize: 10, color: "#3a5570", fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", userSelect: "none", flexShrink: 0 }}>
               {title}
             </span>
           )}

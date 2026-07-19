@@ -81,7 +81,7 @@ export default function BzilaAlertsReportPage() {
     <PageShell>
       <div style={{ color: HOME_THEME.text }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 18, fontWeight: 500, letterSpacing: "0.01em" }}>Bzila alerts · reactions</span>
+          <span style={{ fontSize: 17, fontWeight: 500, letterSpacing: "0.01em" }}>Bzila alerts · reactions</span>
           <span style={{ fontSize: 14, color: C.muted }}>{rows.length} alerts · {totalUp} 👍 · {totalDown} 👎 · {totalTaps} taps</span>
           <span style={{ flex: 1 }} />
           <button
@@ -92,8 +92,8 @@ export default function BzilaAlertsReportPage() {
           </button>
         </div>
 
-        {error && <div style={{ color: HOME_THEME.red, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{error}</div>}
-        {!error && !loading && rows.length === 0 && <div style={{ color: C.muted, fontSize: 15 }}>No alerts yet.</div>}
+        {error && <div style={{ color: HOME_THEME.red, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>{error}</div>}
+        {!error && !loading && rows.length === 0 && <div style={{ color: C.muted, fontSize: 14 }}>No alerts yet.</div>}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {rows.map((a) => (
@@ -101,8 +101,8 @@ export default function BzilaAlertsReportPage() {
               <div style={{ display: "flex", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 240 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 16, fontWeight: 500 }}>{a.title || "(no title)"}</span>
-                    <span style={{ fontSize: 13, color: C.muted }}>{fmtDate(a.created_at)}</span>
+                    <span style={{ fontSize: 17, fontWeight: 500 }}>{a.title || "(no title)"}</span>
+                    <span style={{ fontSize: 14, color: C.muted }}>{fmtDate(a.created_at)}</span>
                   </div>
                   <div style={{ fontSize: 14, color: "rgba(255,255,255,0.85)", marginTop: 6, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{a.body}</div>
                 </div>
@@ -115,9 +115,9 @@ export default function BzilaAlertsReportPage() {
 
               <div style={{ marginTop: 14, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
                 {a.reactors.length === 0 ? (
-                  <span style={{ fontSize: 13, color: C.muted }}>No reactions yet.</span>
+                  <span style={{ fontSize: 14, color: C.muted }}>No reactions yet.</span>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, tableLayout: "fixed" }}>
                     <thead>
                       <tr style={{ color: C.muted, textAlign: "left" }}>
                         <th style={{ fontWeight: 400, padding: "4px 8px 4px 0", width: "50%" }}>Who</th>

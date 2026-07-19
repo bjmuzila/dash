@@ -155,7 +155,7 @@ export default function IbLevelCanvas() {
         const brokeColor = broke === "up" ? HOME_THEME.green : HOME_THEME.red;
         const pill = (bg: string, brd: string, color: string, extra?: React.CSSProperties): React.CSSProperties => ({
           display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 11px", borderRadius: 8,
-          fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+          fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
           background: bg, border: `1px solid ${brd}`, color, ...extra,
         });
         return (
@@ -177,7 +177,7 @@ export default function IbLevelCanvas() {
             </span>
             {ib.complete && (
               <span style={pill(`${LIGHT_BLUE}12`, `${LIGHT_BLUE}3B`, LIGHT_BLUE)}>
-                <span style={{ fontSize: 11 }}>🔒</span> LOCKED
+                <span style={{ fontSize: 12 }}>🔒</span> LOCKED
               </span>
             )}
           </div>
@@ -261,7 +261,7 @@ export default function IbLevelCanvas() {
         {/* ── the level rail ── */}
         <div style={{ flex: "1 1 260px", minWidth: 260, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
+            <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text }}>
               Targets — {broke === "up" ? "upside live" : broke === "down" ? "downside live" : "unbroken"}
             </span>
             <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: connected ? HOME_THEME.green : HOME_THEME.red }}>
@@ -271,7 +271,7 @@ export default function IbLevelCanvas() {
 
           {(broke === "down" ? dn : up).map((l) => (
             <div key={`${l.side}${l.mult}`} style={{ ...classicCardAccentStyle, padding: "10px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-              <span style={{ fontSize: 13, color: HOME_THEME.text, fontWeight: 700 }}>{l.mult}× extension</span>
+              <span style={{ fontSize: 14, color: HOME_THEME.text, fontWeight: 700 }}>{l.mult}× extension</span>
               <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", fontVariantNumeric: "tabular-nums" }}>{l.price.toFixed(2)}</span>
                 <span style={{ fontSize: 14, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: l.dist >= 0 ? LIGHT_BLUE : HOME_THEME.orange }}>
@@ -279,7 +279,7 @@ export default function IbLevelCanvas() {
                 </span>
                 <span
                   style={{
-                    fontSize: 11, fontWeight: 800, padding: "3px 8px", borderRadius: 6, fontVariantNumeric: "tabular-nums",
+                    fontSize: 12, fontWeight: 800, padding: "3px 8px", borderRadius: 6, fontVariantNumeric: "tabular-nums",
                     background: `${l.mult >= 1.5 ? HOME_THEME.red : l.mult >= 1 ? HOME_THEME.orange : LIGHT_BLUE}22`,
                     color: l.mult >= 1.5 ? HOME_THEME.red : l.mult >= 1 ? HOME_THEME.orange : LIGHT_BLUE,
                   }}
@@ -292,22 +292,22 @@ export default function IbLevelCanvas() {
 
           {rates && (
             <div style={{ ...classicCardAccentStyle, padding: "12px 14px" }}>
-              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.orange, marginBottom: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.orange, marginBottom: 6 }}>
                 If the break fails
               </div>
-              <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.62)", lineHeight: 1.5, marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", lineHeight: 1.5, marginBottom: 10 }}>
                 {rates.failRate != null ? `${(100 * rates.failRate).toFixed(1)}% of breaks close back inside within 30 minutes. Of those:` : ""}
               </div>
               <div style={{ display: "flex", gap: 18 }}>
                 <div>
                   <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Reach the mid</div>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: HOME_THEME.green, fontVariantNumeric: "tabular-nums" }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.green, fontVariantNumeric: "tabular-nums" }}>
                     {rates.fadeMid != null ? `${(100 * rates.fadeMid).toFixed(1)}%` : "—"}
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Full rotation</div>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: HOME_THEME.red, fontVariantNumeric: "tabular-nums" }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.red, fontVariantNumeric: "tabular-nums" }}>
                     {rates.fadeOpp != null ? `${(100 * rates.fadeOpp).toFixed(1)}%` : "—"}
                   </div>
                 </div>

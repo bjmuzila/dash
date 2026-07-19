@@ -70,7 +70,7 @@ export default function RecipesPage() {
         borderBottom: "1px solid rgba(255,255,255,0.08)",
         flexShrink: 0,
       }}>
-        <span style={{ color: C.cyan, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+        <span style={{ color: C.cyan, fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
           Recipes
         </span>
         <button
@@ -115,7 +115,7 @@ export default function RecipesPage() {
             maxWidth: 500,
             border: "1px solid rgba(255,255,255,0.1)",
           }}>
-            <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 16, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 16, textTransform: "uppercase", letterSpacing: "0.1em" }}>
               Import Recipe
             </h3>
             <textarea
@@ -131,7 +131,7 @@ export default function RecipesPage() {
                 background: "rgba(0,0,0,0.4)",
                 color: "#fff",
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
+                fontSize: 12,
                 outline: "none",
                 marginBottom: 16,
                 boxSizing: "border-box",
@@ -202,7 +202,7 @@ export default function RecipesPage() {
             placeholder="Search recipes..."
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: 14,
               padding: "8px 12px",
               border: "1px solid rgba(255,255,255,0.10)",
               borderRadius: 6,
@@ -230,7 +230,7 @@ export default function RecipesPage() {
               justifyContent: "center",
               height: 200,
               color: C.muted,
-              fontSize: 13,
+              fontSize: 14,
             }}>
               {recipes.length === 0 ? "No recipes yet. Import one to get started." : "No recipes match your search."}
             </div>
@@ -269,7 +269,7 @@ export default function RecipesPage() {
                     alignItems: "center",
                     justifyContent: "center",
                     color: C.muted,
-                    fontSize: 11,
+                    fontSize: 12,
                   }}>
                     No Image
                   </div>
@@ -279,7 +279,7 @@ export default function RecipesPage() {
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
                   <div>
                     <h3 style={{
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: 700,
                       margin: "0 0 8px 0",
                       lineHeight: 1.3,
@@ -295,7 +295,7 @@ export default function RecipesPage() {
                         <span
                           key={tag}
                           style={{
-                            fontSize: 9,
+                            fontSize: 10,
                             padding: "2px 6px",
                             background: `rgba(33,158,188,0.1)`,
                             borderRadius: 4,
@@ -314,7 +314,7 @@ export default function RecipesPage() {
                   <div style={{
                     display: "flex",
                     gap: 12,
-                    fontSize: 9,
+                    fontSize: 10,
                     color: C.muted,
                     flexWrap: "wrap",
                   }}>
@@ -338,7 +338,7 @@ export default function RecipesPage() {
                     <div style={{
                       display: "flex",
                       gap: 8,
-                      fontSize: 11,
+                      fontSize: 12,
                       color: C.muted,
                       flexWrap: "wrap",
                     }}>

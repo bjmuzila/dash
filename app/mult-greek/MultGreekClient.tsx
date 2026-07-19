@@ -556,7 +556,7 @@ function TickerPanel({
 
       {/* Panel header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <span style={{ fontSize: 18, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
+        <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
           {spot > 0 && (
             <>
@@ -569,13 +569,13 @@ function TickerPanel({
 
       {/* Column headers */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div title="Net GEX summed across ALL expirations" style={{ padding: "5px 2px", textAlign: "center", color: HT.muted, fontSize: 8, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden" }}>ΣEXP</div>
-        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
+        <div title="Net GEX summed across ALL expirations" style={{ padding: "5px 2px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden" }}>ΣEXP</div>
+        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
         {NET_COLS.map(c => {
           const isChangeCol = c === "gex" && isChangeActive;
           const isFlowCol = c === "gex" && !isChangeActive && contractMode === "flow";
           return (
-            <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: isChangeCol ? HT.orange : isFlowCol ? HT.green : HT.cyan, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: isChangeCol ? HT.orange : isFlowCol ? HT.green : HT.cyan, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
               {COL_LABELS[c]}{isChangeCol ? ` ·Δ${changeMode}` : isFlowCol ? " ·FLOW" : ""}
             </div>
           );
@@ -585,7 +585,7 @@ function TickerPanel({
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ borderRight: "1px solid rgba(255,255,255,.06)" }} />
-        <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
+        <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
           const isChangeCol = c === "gex" && isChangeActive;
           const v = isChangeCol ? (gexChange?.total ?? 0) : (totals?.[c] ?? 0);
@@ -606,11 +606,11 @@ function TickerPanel({
       {/* Body */}
       <div ref={bodyRef} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
         {!computed ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 12, color: "#475569", }}>
             Select an expiry and click GO
           </div>
         ) : computed.rows.length === 0 ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 11, color: "#475569", }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 12, color: "#475569", }}>
             No strikes in range
           </div>
         ) : computed.rows.map(r => {
@@ -670,7 +670,7 @@ function TickerPanel({
                 })()}
               </div>
               <div style={{
-                padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
+                padding: "4px 4px", fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
               }}>
@@ -690,7 +690,7 @@ function TickerPanel({
                 const isGexPeak = c === "gex" && !isChangeCol && r.strike === computed.mvcStrike;
                 return (
                   <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
-                    padding: "4px 4px", fontSize: 11, fontFamily: "var(--font-mono)",
+                    padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE,
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
@@ -701,7 +701,7 @@ function TickerPanel({
                   }}>
                     {topRank === 1 && (
                       <span style={{
-                        position: "absolute", top: 1, left: 2, fontSize: 9, lineHeight: 1,
+                        position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
@@ -1167,7 +1167,7 @@ export function MultGreekClient({
             padding: "18px 24px",
             background: "rgba(33,158,188,0.10)",
             borderBottom: `1px solid ${HT.cyan}55`,
-            fontSize: 16,
+            fontSize: 17,
             textAlign: "center",
           }}
         >
@@ -1188,7 +1188,7 @@ export function MultGreekClient({
                 border: "none",
                 background: `linear-gradient(180deg, ${HT.cyan}, #00b8c4)`,
                 color: "#04121a",
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: 800,
                 cursor: "pointer",
                 boxShadow: "0 0 28px 6px rgba(255,255,255,0.55)",
@@ -1206,7 +1206,7 @@ export function MultGreekClient({
 
         {/* Status dot */}
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: isStatic ? HT.cyan : (statusColors[status.state] ?? HT.muted), flexShrink: 0, display: "inline-block" }} />
-        <span style={{ fontSize: 9, fontWeight: 800, color: isStatic ? HT.cyan : (statusColors[status.state] ?? HT.text), letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>{status.msg}</span>
+        <span style={{ fontSize: 10, fontWeight: 800, color: isStatic ? HT.cyan : (statusColors[status.state] ?? HT.text), letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>{status.msg}</span>
 
         {/* Expiry picker — static mode only ever has the one captured expiry */}
         <DockExpiryPicker
@@ -1238,7 +1238,7 @@ export function MultGreekClient({
           onChange={(v) => setChangeMode(v as ChangeMode)}
         />
         {changeMode !== "live" && (
-          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
             color: TICKERS.some(tk => (changeMaps[tk]?.size ?? 0) > 0) ? HT.orange : HT.muted }}>
             {TICKERS.some(tk => (changeMaps[tk]?.size ?? 0) > 0)
               ? `Δ ${TICKERS.filter(tk => (changeMaps[tk]?.size ?? 0) > 0).join("/")}`

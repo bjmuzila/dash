@@ -79,7 +79,7 @@ export default async function ExplorePage({
               START MY 2-DAY FREE TRIAL ›
             </Link>
           </div>
-          <p style={{ margin: "12px 0 0", fontSize: 13.5, color: T.muted, opacity: 0.75 }}>
+          <p style={{ margin: "12px 0 0", fontSize: 14, color: T.muted, opacity: 0.75 }}>
             Two days of the full live dashboard — every ticker, every tool. Cancel anytime.
           </p>
         </div>
@@ -88,14 +88,14 @@ export default async function ExplorePage({
           {/* Body + highlights */}
           <section>
             {entry.body.map((p, i) => (
-              <p key={i} style={{ color: T.muted, fontSize: 16, lineHeight: 1.65, margin: "0 0 16px" }}>
+              <p key={i} style={{ color: T.muted, fontSize: 17, lineHeight: 1.65, margin: "0 0 16px" }}>
                 {p}
               </p>
             ))}
 
             <ul style={{ listStyle: "none", padding: 0, margin: "20px 0 0", display: "grid", gap: 10 }}>
               {entry.highlights.map((h) => (
-                <li key={h} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 15 }}>
+                <li key={h} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 14 }}>
                   <span style={{ color: T.cyan, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
                   <span style={{ color: T.text }}>{h}</span>
                 </li>
@@ -121,7 +121,7 @@ export default async function ExplorePage({
                 </div>
               ))}
             </div>
-            <p style={{ color: T.muted, fontSize: 11.5, margin: "14px 0 0", lineHeight: 1.4 }}>
+            <p style={{ color: T.muted, fontSize: 12, margin: "14px 0 0", lineHeight: 1.4 }}>
               Illustrative sample. Live data is available inside the dashboard for members.
             </p>
           </section>
@@ -138,7 +138,7 @@ export default async function ExplorePage({
           <h2 style={{ fontSize: "clamp(22px,4vw,30px)", fontWeight: 800, margin: "0 0 8px" }}>
             Get full access
           </h2>
-          <p style={{ color: T.muted, fontSize: 15, margin: "0 0 22px", maxWidth: 520 }}>
+          <p style={{ color: T.muted, fontSize: 14, margin: "0 0 22px", maxWidth: 520 }}>
             Join CB Edge for live {entry.title.toLowerCase()} plus the full dashboard — GEX, flow, estimated moves and more.
           </p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -150,7 +150,7 @@ export default async function ExplorePage({
 
         {/* Other features */}
         <div style={{ marginTop: 56, borderTop: `1px solid ${T.border}`, paddingTop: 28 }}>
-          <div style={{ fontSize: 13, color: T.muted, marginBottom: 14, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+          <div style={{ fontSize: 14, color: T.muted, marginBottom: 14, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>
             Explore more
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -186,9 +186,9 @@ function IctGlossary() {
         <h2 style={{ fontSize: "clamp(20px,3.5vw,28px)", fontWeight: 800, margin: 0 }}>
           Auto-charted &amp; auto-graded concepts
         </h2>
-        <span style={{ fontSize: 13, color: T.text }}>{liveCount} of {ICT_CONCEPTS.length} auto-charted</span>
+        <span style={{ fontSize: 14, color: T.text }}>{liveCount} of {ICT_CONCEPTS.length} auto-charted</span>
       </div>
-      <p style={{ color: T.text, fontSize: 15, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 700 }}>
+      <p style={{ color: T.text, fontSize: 14, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 700 }}>
         You draw nothing. Every concept below is detected and <strong>auto-charted</strong> on the live ES &amp; NQ 5-minute
         feed as it forms, then <strong>auto-graded</strong> once the session resolves it — so each setup carries its own
         outcome instead of a hindsight mark-up. An{" "}
@@ -198,7 +198,7 @@ function IctGlossary() {
         {ICT_CONCEPTS.map((c) => (
           <div key={c.id} style={glossaryCard}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 14.5, fontWeight: 800, color: T.text }}>{c.name}</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: T.text }}>{c.name}</span>
               {c.live && <span style={liveChip}>Auto</span>}
             </div>
             <p style={{ color: T.text, fontSize: 14, lineHeight: 1.55, margin: 0 }}>{c.body}</p>
@@ -214,7 +214,7 @@ function IctGlossary() {
 
 const badge: React.CSSProperties = {
   display: "inline-block",
-  fontSize: 11,
+  fontSize: 12,
   fontWeight: 700,
   letterSpacing: "0.12em",
   textTransform: "uppercase",
@@ -239,7 +239,7 @@ const demoBtn: React.CSSProperties = {
   gap: 8,
   padding: "14px 24px",
   borderRadius: 10,
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 900,
   letterSpacing: "0.04em",
   color: "#fff",
@@ -266,7 +266,7 @@ const teaserHead: React.CSSProperties = {
 };
 
 const previewTag: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 10,
   fontWeight: 700,
   letterSpacing: "0.08em",
   textTransform: "uppercase",
@@ -298,7 +298,7 @@ const joinBtn: React.CSSProperties = {
   border: "none",
   background: `linear-gradient(180deg, ${T.cyan}, #00b8c4)`,
   color: "#04121a",
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 800,
   textDecoration: "none",
   cursor: "pointer",
@@ -311,7 +311,7 @@ const otherLink: React.CSSProperties = {
   border: `1px solid ${T.border}`,
   background: "rgba(255,255,255,0.03)",
   color: T.text,
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 700,
   textDecoration: "none",
 };
@@ -323,7 +323,7 @@ const legalFooter: React.CSSProperties = {
   gap: 8,
   flexWrap: "wrap",
   padding: "20px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
-  fontSize: 11.5,
+  fontSize: 12,
   color: T.muted,
   borderTop: `1px solid ${T.border}`,
 };
@@ -352,7 +352,7 @@ const glossaryCard: React.CSSProperties = {
 };
 
 const liveChip: React.CSSProperties = {
-  fontSize: 9.5,
+  fontSize: 10,
   fontWeight: 800,
   letterSpacing: "0.1em",
   textTransform: "uppercase",

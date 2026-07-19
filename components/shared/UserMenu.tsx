@@ -80,7 +80,7 @@ export default function UserMenu() {
           background: avatarUrl ? `center/cover url(${avatarUrl})` : "rgba(33,158,188,0.22)",
           color: HOME_THEME.text,
           fontWeight: 700,
-          fontSize: 15,
+          fontSize: 14,
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
@@ -108,9 +108,9 @@ export default function UserMenu() {
           }}
         >
           <div style={{ padding: "6px 10px", marginBottom: 6 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text }}>{displayName}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text }}>{displayName}</div>
             {user?.email && (
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", wordBreak: "break-all" }}>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", wordBreak: "break-all" }}>
                 {user.email}
               </div>
             )}
@@ -127,7 +127,7 @@ export default function UserMenu() {
               border: "none",
               background: "transparent",
               color: resetSent ? HOME_THEME.cyan : HOME_THEME.text,
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: 500,
               cursor: "pointer",
             }}
@@ -144,7 +144,7 @@ export default function UserMenu() {
               padding: "8px 10px",
               borderRadius: 6,
               color: HOME_THEME.text,
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: 500,
               textDecoration: "none",
             }}
@@ -157,7 +157,7 @@ export default function UserMenu() {
               <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
               {discord.connected ? (
                 <div style={{ padding: "8px 10px" }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: HOME_THEME.text }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text }}>
                     Discord: {discord.username}
                   </div>
                   <button
@@ -168,7 +168,7 @@ export default function UserMenu() {
                       border: "none",
                       background: "transparent",
                       color: "rgba(255,255,255,0.5)",
-                      fontSize: 11,
+                      fontSize: 12,
                       cursor: "pointer",
                       textDecoration: "underline",
                     }}
@@ -184,7 +184,7 @@ export default function UserMenu() {
                     padding: "8px 10px",
                     borderRadius: 6,
                     color: HOME_THEME.text,
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: 500,
                     textDecoration: "none",
                   }}
@@ -208,7 +208,7 @@ export default function UserMenu() {
                 padding: "8px 10px",
                 borderRadius: 6,
                 color: HOME_THEME.text,
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: 500,
                 textDecoration: "none",
               }}
@@ -229,7 +229,7 @@ export default function UserMenu() {
               border: "none",
               background: "transparent",
               color: HOME_THEME.red,
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: 600,
               cursor: "pointer",
             }}

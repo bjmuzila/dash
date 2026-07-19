@@ -58,11 +58,11 @@ export default function LiveSkewBand() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{
             width: 24, height: 24, borderRadius: 7, border: `1px solid ${tone}66`,
-            display: "flex", alignItems: "center", justifyContent: "center", color: tone, fontWeight: 800, fontSize: 13,
+            display: "flex", alignItems: "center", justifyContent: "center", color: tone, fontWeight: 800, fontSize: 14,
           }}>◱</div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#eef7ff", letterSpacing: ".03em" }}>Skew Band</div>
-            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", color: feedErr ? "#ff5252" : "#60a5fa" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#eef7ff", letterSpacing: ".03em" }}>Skew Band</div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", color: feedErr ? "#ff5252" : "#60a5fa" }}>
               {feedErr ? "Feed err" : loading && !pick ? "Syncing…" : "Live SPX 0DTE"}
             </div>
           </div>
@@ -72,7 +72,7 @@ export default function LiveSkewBand() {
             {skewPct != null ? `${skewPct >= 0 ? "+" : ""}${skewPct.toFixed(1)}%` : "--"}
           </div>
           {pick && (
-            <div style={{ fontSize: 9, color: "#7e8ea0", fontFamily: "var(--font-mono)", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: "#7e8ea0", fontFamily: "var(--font-mono)", marginTop: 2 }}>
               spot {pick.spot.toFixed(0)} · 25Δ {pick.putK}/{pick.callK}
             </div>
           )}
@@ -83,11 +83,11 @@ export default function LiveSkewBand() {
       {band ? (
         <div style={{ background: `${tone}12`, borderRadius: 8, padding: "10px 12px" }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 15, fontWeight: 800, color: tone }}>{band.label}</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: tone }}>{band.label}</span>
             <span style={{ fontSize: 12, color: "#7e8ea0", fontFamily: "var(--font-mono)" }}>{rangeStr}</span>
           </div>
-          <div style={{ fontSize: 12.5, color: "#c9d7db", lineHeight: 1.45, marginBottom: 5 }}>{band.ifThis}</div>
-          <div style={{ fontSize: 12.5, color: "#d7e6e8", lineHeight: 1.5 }}>{band.thenThat}</div>
+          <div style={{ fontSize: 12, color: "#c9d7db", lineHeight: 1.45, marginBottom: 5 }}>{band.ifThis}</div>
+          <div style={{ fontSize: 12, color: "#d7e6e8", lineHeight: 1.5 }}>{band.thenThat}</div>
         </div>
       ) : (
         <div style={{ fontSize: 12, color: "#7e8ea0", padding: "10px 12px" }}>

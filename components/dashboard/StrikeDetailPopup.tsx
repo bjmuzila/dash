@@ -66,7 +66,7 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
           SPX {row.strike.toLocaleString()}
         </span>
         <span style={{ marginLeft: "auto", textAlign: "right" }}>
-          <span style={{ display: "block", fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>NET GEX (OI+VOL)</span>
+          <span style={{ display: "block", fontSize: 10, color: C.dim, letterSpacing: "0.1em" }}>NET GEX (OI+VOL)</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: compositeNetGex >= 0 ? C.pos : C.neg }}>
             {fmtGex(compositeNetGex)}
           </span>
@@ -76,40 +76,40 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
       {/* GEX breakdown */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "6px 9px" }}>
-          <div style={{ fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>OI+VOL GEX</div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: compositeNetGex >= 0 ? C.pos : C.neg }}>{fmtGex(compositeNetGex)}</div>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em" }}>OI+VOL GEX</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: compositeNetGex >= 0 ? C.pos : C.neg }}>{fmtGex(compositeNetGex)}</div>
         </div>
         <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "6px 9px" }}>
-          <div style={{ fontSize: 8, color: C.dim, letterSpacing: "0.1em" }}>VOL GEX</div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: (row.netVolGEX ?? 0) >= 0 ? C.pos : C.neg }}>{fmtGex(row.netVolGEX)}</div>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em" }}>VOL GEX</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: (row.netVolGEX ?? 0) >= 0 ? C.pos : C.neg }}>{fmtGex(row.netVolGEX)}</div>
         </div>
       </div>
 
       {/* OTM contract price */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(33,158,188,0.05)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 12px", marginBottom: 12 }}>
-        <span style={{ fontSize: 9, color: C.dim, letterSpacing: "0.1em" }}>OTM {otmSide} CONTRACT</span>
-        <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan }}>{fmtPrice(otmPrice)}</span>
+        <span style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em" }}>OTM {otmSide} CONTRACT</span>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan }}>{fmtPrice(otmPrice)}</span>
       </div>
 
       {/* GEX inputs */}
       <details style={{ marginTop: 4 }}>
-        <summary style={{ fontSize: 9, color: C.dim, letterSpacing: "0.1em", cursor: "pointer" }}>
+        <summary style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em", cursor: "pointer" }}>
           GEX INPUTS (LIVE — VERIFY VS /DEV)
         </summary>
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
             <span style={{ color: C.dim }}>spot (S)</span>
             <span style={{ color: "#fff", fontWeight: 700 }}>{fmtRaw(row.spotPrice ?? spotPrice)}</span>
           </div>
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
-            <div style={{ fontSize: 9, color: C.pos, letterSpacing: "0.08em", marginBottom: 3 }}>CALL</div>
+            <div style={{ fontSize: 10, color: C.pos, letterSpacing: "0.08em", marginBottom: 3 }}>CALL</div>
             <InputRow label="gamma" value={fmtRaw(row.callGamma)} />
             <InputRow label="OI" value={fmtRaw(row.callOI)} />
             <InputRow label="volume" value={fmtRaw(row.callVolume)} />
             <InputRow label="callGEX = |γ|·OI·S²" value={fmtGex(row.callGEX)} strong />
           </div>
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
-            <div style={{ fontSize: 9, color: C.neg, letterSpacing: "0.08em", marginBottom: 3 }}>PUT</div>
+            <div style={{ fontSize: 10, color: C.neg, letterSpacing: "0.08em", marginBottom: 3 }}>PUT</div>
             <InputRow label="gamma" value={fmtRaw(row.putGamma)} />
             <InputRow label="OI" value={fmtRaw(row.putOI)} />
             <InputRow label="volume" value={fmtRaw(row.putVolume)} />
@@ -126,7 +126,7 @@ function PopupBody({ row, spotPrice }: Pick<Props, "row" | "spotPrice">) {
 
 function InputRow({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, lineHeight: 1.7 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, lineHeight: 1.7 }}>
       <span style={{ color: C.dim }}>{label}</span>
       <span style={{ color: strong ? "#fff" : "#cfe", fontWeight: strong ? 800 : 600 }}>{value}</span>
     </div>

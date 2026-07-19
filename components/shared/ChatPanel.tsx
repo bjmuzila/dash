@@ -37,11 +37,11 @@ export default function ChatPanel() {
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
       {/* header */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginBottom: 10 }}>
-        <span style={{ fontSize: 16, lineHeight: 1 }} aria-hidden>💬</span>
-        <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>
+        <span style={{ fontSize: 17, lineHeight: 1 }} aria-hidden>💬</span>
+        <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>
           Chat
         </span>
-        <span style={{ fontSize: 15, color: loading ? HOME_THEME.muted : HOME_THEME.green }}>
+        <span style={{ fontSize: 14, color: loading ? HOME_THEME.muted : HOME_THEME.green }}>
           {loading ? "…" : "live"}
         </span>
       </div>
@@ -60,7 +60,7 @@ export default function ChatPanel() {
         }}
       >
         {!loading && messages.length === 0 && (
-          <div style={{ color: HOME_THEME.green, fontSize: 15, margin: "auto", textAlign: "center", opacity: 0.8 }}>
+          <div style={{ color: HOME_THEME.green, fontSize: 14, margin: "auto", textAlign: "center", opacity: 0.8 }}>
             No messages yet.
           </div>
         )}
@@ -75,7 +75,7 @@ export default function ChatPanel() {
                 alignItems: "baseline",
                 gap: 6,
                 flexShrink: 0,
-                fontSize: 15,
+                fontSize: 14,
                 lineHeight: 1.7,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
@@ -87,13 +87,13 @@ export default function ChatPanel() {
               <span style={{ flex: 1, minWidth: 0, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis" }}>
                 {m.body}
               </span>
-              <span style={{ flexShrink: 0, fontSize: 15, color: "rgba(255,255,255,0.4)" }}>{fmtTime(m.created_at)}</span>
+              <span style={{ flexShrink: 0, fontSize: 14, color: "rgba(255,255,255,0.4)" }}>{fmtTime(m.created_at)}</span>
             </div>
           );
         })}
       </div>
 
-      {error && <div style={{ color: HOME_THEME.red, fontSize: 15, marginTop: 6 }}>{error}</div>}
+      {error && <div style={{ color: HOME_THEME.red, fontSize: 14, marginTop: 6 }}>{error}</div>}
 
       {/* composer */}
       <form
@@ -108,7 +108,7 @@ export default function ChatPanel() {
           onChange={(e) => setDraft(e.target.value)}
           placeholder="Message…"
           maxLength={2000}
-          style={{ ...homeInputStyle, flex: 1, fontSize: 15 }}
+          style={{ ...homeInputStyle, flex: 1, fontSize: 14 }}
         />
         <button
           type="submit"
@@ -120,7 +120,7 @@ export default function ChatPanel() {
             background: draft.trim() ? "rgba(33,158,188,0.22)" : "rgba(255,255,255,0.04)",
             color: HOME_THEME.text,
             fontWeight: 700,
-            fontSize: 15,
+            fontSize: 14,
             cursor: draft.trim() ? "pointer" : "default",
           }}
         >

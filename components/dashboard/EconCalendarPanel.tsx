@@ -255,7 +255,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           boxShadow: faded ? "none" : `inset -1px 0 8px ${col}18`,
           gap: 2,
         }}>
-          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : "#fff", fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 14, color: faded ? "#1e2a38" : "#fff", fontFamily: "var(--font-mono)" }}>
             {ev.time_formatted || ev.time || "TBD"}
           </span>
         </div>
@@ -267,7 +267,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
             <span style={{ fontSize: 10, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: "0.1em" }}>
               {ev.impact}
             </span>
-            <span style={{ fontSize: 11, color: faded ? "#1e2a38" : "#fff", fontWeight: 600 }}>
+            <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#fff", fontWeight: 600 }}>
               {ev.country}
             </span>
           </div>
@@ -325,11 +325,11 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
             display: "flex", alignItems: "center", gap: 8,
           }}
         >
-          <span style={{ fontSize: 11, fontWeight: 800, color: isToday ? "#219EBC" : "#3a5570", letterSpacing: "0.1em" }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: isToday ? "#219EBC" : "#3a5570", letterSpacing: "0.1em" }}>
             {fullDayLabel(date, today)}
           </span>
           {isToday && (
-            <span style={{ fontSize: 8, fontWeight: 900, background: "#219EBC", color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
+            <span style={{ fontSize: 10, fontWeight: 900, background: "#219EBC", color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
               TODAY
             </span>
           )}
@@ -368,7 +368,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
             display: "flex", alignItems: "center", gap: 4,
           }}
         >
-          {filterLabel} <span style={{ fontSize: 7 }}>▾</span>
+          {filterLabel} <span style={{ fontSize: 10 }}>▾</span>
         </button>
         {dropOpen && (
           <div style={{
@@ -393,9 +393,9 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
                     border: `2px solid ${o.color}`,
                     background: on ? o.color : "transparent",
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 8, color: "#05080d", fontWeight: 900,
+                    fontSize: 10, color: "#05080d", fontWeight: 900,
                   }}>{on ? "✓" : ""}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: on ? "#fff" : "#6b7280" }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: on ? "#fff" : "#6b7280" }}>
                     {o.label}
                   </span>
                 </div>
@@ -425,10 +425,10 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
           position: "relative", zIndex: 30,
         }}>
-          <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
+          <span style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
             Economic Calendar
           </span>
-          <span style={{ fontSize: 9, color: "#3a5570", marginLeft: 2 }}>{today}</span>
+          <span style={{ fontSize: 10, color: "#3a5570", marginLeft: 2 }}>{today}</span>
         </div>
       ) : (
         <div style={{
@@ -437,7 +437,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
           position: "relative", zIndex: 30,
         }}>
-          <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
+          <span style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", fontWeight: 700 }}>
             📅 Econ Calendar
           </span>
           {controls}
@@ -447,7 +447,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
       {/* Quote — only shown when toolbar is visible */}
       {!hideToolbar && quote && (
         <div style={{ padding: "5px 10px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0, position: "relative", zIndex: 10 }}>
-          <p style={{ margin: 0, fontSize: 15, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "left" }}>
+          <p style={{ margin: 0, fontSize: 14, fontStyle: "italic", color: "#fff", lineHeight: 1.6, textAlign: "left" }}>
             &ldquo;{quote}&rdquo;
           </p>
         </div>
@@ -456,11 +456,11 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
       {/* Events (earnings rows woven in per day) */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {loading ? (
-          <div style={{ color: "#fff", fontSize: 11, padding: "8px 10px" }}>Loading…</div>
+          <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>Loading…</div>
         ) : error ? (
           <div style={{ color: "#ef4444", fontSize: 10, padding: "6px 10px", wordBreak: "break-all" }}>⚠ {error}</div>
         ) : weekEvents.length === 0 ? (
-          <div style={{ color: "#fff", fontSize: 11, padding: "8px 10px" }}>No events this week.</div>
+          <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>No events this week.</div>
         ) : (
           <>
             {renderWithDaySeparators(activeEvents, false)}
@@ -502,7 +502,7 @@ function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }
         <span style={{ fontSize: 10, color: EARN_COLOR, fontFamily: "var(--font-mono)", fontWeight: 800, lineHeight: 1.25 }}>
           {kind === "pre" ? "PRE" : "AFTER"}
         </span>
-        <span style={{ fontSize: 9, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
+        <span style={{ fontSize: 10, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
           {kind === "pre" ? "MKT" : "HRS"}
         </span>
       </div>
@@ -545,14 +545,14 @@ function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }
                       const s = document.createElement("span");
                       s.className = "logo-fallback";
                       s.textContent = e.symbol.slice(0, 4);
-                      s.style.cssText = "font-size:8px;font-weight:800;color:#219EBC;text-align:center;line-height:1;";
+                      s.style.cssText = "font-size: 10px;font-weight:800;color:#219EBC;text-align:center;line-height:1;";
                       p.appendChild(s);
                     }
                   }}
                 />
               </span>
               <span style={{
-                fontSize: 8, fontWeight: 700, color: "#fff",
+                fontSize: 10, fontWeight: 700, color: "#fff",
                 fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
                 maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               }}>

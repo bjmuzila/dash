@@ -195,7 +195,7 @@ export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
       onClick={handleClick}
       title={isSave ? "Save CB - Core Bullseye snapshot to the database page" : "Capture the GEX screenshot and send it to Discord"}
       style={{
-        fontSize: 13,
+        fontSize: 14,
         padding: "5px 7px",
         background,
         border: `1px solid ${borderColor}`,

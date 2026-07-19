@@ -63,7 +63,7 @@ export default function VolGexSpeedRail({
     items: ReturnType<typeof topSpeedMovers>["builders"]
   ) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.12em", color, textTransform: "uppercase", opacity: 0.85 }}>
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", color, textTransform: "uppercase", opacity: 0.85 }}>
         {title}
       </div>
       {items.length === 0 && (
@@ -89,8 +89,8 @@ export default function VolGexSpeedRail({
             {s.strike.toLocaleString()}
           </span>
           <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.15 }}>
-            <span style={{ fontSize: 9.5, fontWeight: 700, color, fontFamily: "var(--font-mono)" }}>{fmtSpeed(s.magDelta)}</span>
-            <span style={{ fontSize: 8, color: "#8da8c2", fontFamily: "var(--font-mono)" }}>{fmtSpeedPct(s.pct)}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color, fontFamily: "var(--font-mono)" }}>{fmtSpeed(s.magDelta)}</span>
+            <span style={{ fontSize: 10, color: "#8da8c2", fontFamily: "var(--font-mono)" }}>{fmtSpeedPct(s.pct)}</span>
           </span>
         </div>
       ))}
@@ -112,11 +112,11 @@ export default function VolGexSpeedRail({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: "#fff", textTransform: "uppercase" }}>
+        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: "#fff", textTransform: "uppercase" }}>
           Vol GEX Speed
         </span>
         {usingSeed && (
-          <span title="Live buffer is still filling — using the recorded 1-min/5-min baseline from Postgres." style={{ fontSize: 7, fontWeight: 800, color: "#FB8501", border: "1px solid #FB850155", background: "#FB850118", borderRadius: 2, padding: "0 3px", cursor: "help" }}>
+          <span title="Live buffer is still filling — using the recorded 1-min/5-min baseline from Postgres." style={{ fontSize: 10, fontWeight: 800, color: "#FB8501", border: "1px solid #FB850155", background: "#FB850118", borderRadius: 2, padding: "0 3px", cursor: "help" }}>
             SEED
           </span>
         )}
@@ -131,7 +131,7 @@ export default function VolGexSpeedRail({
               style={{
                 flex: 1,
                 padding: "2px 0",
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 700,
                 letterSpacing: "0.06em",
                 cursor: "pointer",

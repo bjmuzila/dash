@@ -139,12 +139,12 @@ function KpiCard({
 }) {
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }} title={tooltip}>
-      <div style={{ fontSize: 15, fontWeight: 600, color: T.gold, letterSpacing: "0.01em" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: T.gold, letterSpacing: "0.01em" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ fontSize: 15, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
+        <div style={{ fontSize: 14, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
         {spark && spark.length > 1 && <Sparkline points={spark} color={sparkColor ?? T.cyan} />}
       </div>
-      {sub && <div style={{ fontSize: 15, color: T.textSecondary }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 14, color: T.textSecondary }}>{sub}</div>}
     </div>
   );
 }
@@ -152,18 +152,18 @@ function KpiCard({
 function SetupBanner() {
   return (
     <div style={{ ...homePanelStyle, padding: "32px 28px", textAlign: "center", border: `1px solid ${T.cyan}33` }}>
-      <div style={{ fontSize: 15, marginBottom: 12 }}>💳</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: T.text, marginBottom: 8 }}>Stripe not configured</div>
-      <div style={{ fontSize: 15, color: T.muted, maxWidth: 480, margin: "0 auto 20px", lineHeight: 1.6 }}>
+      <div style={{ fontSize: 14, marginBottom: 12 }}>💳</div>
+      <div style={{ fontSize: 17, fontWeight: 700, color: T.text, marginBottom: 8 }}>Stripe not configured</div>
+      <div style={{ fontSize: 14, color: T.muted, maxWidth: 480, margin: "0 auto 20px", lineHeight: 1.6 }}>
         Add your Stripe secret key to enable real subscription data, MRR tracking, customer management, and live transaction logs.
       </div>
-      <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 8, padding: "14px 18px", fontFamily: "var(--font-mono)", fontSize: 15, color: T.cyan, textAlign: "left", maxWidth: 420, margin: "0 auto 20px", border: `1px solid ${T.border}` }}>
+      <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 8, padding: "14px 18px", fontFamily: "var(--font-mono)", fontSize: 14, color: T.cyan, textAlign: "left", maxWidth: 420, margin: "0 auto 20px", border: `1px solid ${T.border}` }}>
         <div style={{ color: T.muted, marginBottom: 6 }}># Add to .env.local on VPS</div>
         <div>STRIPE_SECRET_KEY=sk_live_...</div>
         <div>STRIPE_WEBHOOK_SECRET=whsec_...</div>
         <div style={{ color: T.muted, marginTop: 6 }}>NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...</div>
       </div>
-      <div style={{ fontSize: 15, color: T.muted }}>
+      <div style={{ fontSize: 14, color: T.muted }}>
         Then rebuild: <code style={{ color: T.cyan, fontFamily: "var(--font-mono)" }}>docker compose up -d --build dashboard</code>
       </div>
     </div>
@@ -181,7 +181,7 @@ function GranTabs({ value, onChange }: { value: Granularity; onChange: (g: Granu
           onClick={() => onChange(g)}
           style={{
             padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
-            fontSize: 15, fontWeight: 700, textTransform: "capitalize",
+            fontSize: 14, fontWeight: 700, textTransform: "capitalize",
             background: value === g ? T.cyan : "transparent",
             color: value === g ? "#04141a" : T.textSecondary,
           }}
@@ -277,8 +277,8 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
       <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Revenue Summary</div>
-            <div style={{ fontSize: 15, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Revenue Summary</div>
+            <div style={{ fontSize: 14, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
           </div>
           <GranTabs value={gran} onChange={setGran} />
         </div>
@@ -288,7 +288,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                 {b.count > 0 && (
-                  <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
                 )}
                 <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR added`} style={{
                   width: "100%",
@@ -298,7 +298,7 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
                   cursor: "default",
                 }} />
                 <span style={{
-                  fontSize: 9, color: T.muted, whiteSpace: "nowrap",
+                  fontSize: 10, color: T.muted, whiteSpace: "nowrap",
                   visibility: gran === "weekly" || gran === "yearly" || i % 2 === 0 ? "visible" : "hidden",
                 }}>
                   {b.label}
@@ -312,9 +312,9 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
       {/* Sale Summary — grouped bars: Subscriptions vs Expenses vs Combined, same granularity */}
       <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: T.gold }}>Sale Summary</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Sale Summary</div>
         </div>
-        <div style={{ fontSize: 15, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
+        <div style={{ fontSize: 14, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
 
         <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 150, flex: 1 }}>
           {rows.map((r, i) => (
@@ -333,12 +333,12 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
                   style={{ width: 6, height: Math.max(2, (Math.abs(r.combined) / maxSale) * 128), background: r.combined >= 0 ? T.green : T.orange, borderRadius: "2px 2px 0 0" }}
                 />
               </div>
-              <span style={{ fontSize: 9, color: T.muted, whiteSpace: "nowrap" }}>{r.label}</span>
+              <span style={{ fontSize: 10, color: T.muted, whiteSpace: "nowrap" }}>{r.label}</span>
             </div>
           ))}
         </div>
 
-        <div style={{ display: "flex", gap: 12, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 15, color: T.muted, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 14, color: T.muted, flexWrap: "wrap" }}>
           <span title={`New subscription revenue added that ${periodWord}`}><span style={{ color: T.cyan }}>■</span> Subscriptions</span>
           <span title={`${periodWord}ly-equivalent of the current expense run-rate`}><span style={{ color: T.red }}>■</span> Expenses</span>
           <span title="Subscriptions minus expenses"><span style={{ color: T.green }}>■</span> Combined</span>
@@ -354,10 +354,10 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: 16, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
-        <span style={{ fontSize: 15, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
+        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: SUB_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: SUB_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
         <span>Customer</span>
         <span>Discord</span>
         <span>Amount</span>
@@ -368,7 +368,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {subs.length === 0 ? (
-          <div style={{ padding: "32px 16px", textAlign: "center", color: T.muted, fontSize: 15 }}>
+          <div style={{ padding: "32px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>
             No active subscriptions found
           </div>
         ) : subs.map((s) => {
@@ -383,27 +383,27 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
               gap: 8,
               padding: "9px 16px",
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
-              fontSize: 15,
+              fontSize: 14,
               alignItems: "center",
             }}
           >
             <div style={{ minWidth: 0 }}>
               <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</div>
               {s.plan_name && s.plan_name !== "—" && (
-                <div style={{ fontSize: 15, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
+                <div style={{ fontSize: 14, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
                   {s.plan_name.startsWith("price_") ? s.plan_name.slice(0, 18) + "…" : s.plan_name}
                 </div>
               )}
             </div>
-            <span style={{ color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {discordName ?? "—"}
             </span>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14 }}>
               {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
             </span>
             <span>
               <span style={{
-                fontSize: 15, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
+                fontSize: 14, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
                 background: `${STATUS_COLORS[s.status] || T.muted}18`,
                 border: `1px solid ${STATUS_COLORS[s.status] || T.muted}44`,
                 color: STATUS_COLORS[s.status] || T.muted,
@@ -411,9 +411,9 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
                 {s.status}
               </span>
             </span>
-            <span style={{ color: T.text, fontSize: 15 }}>{fmtDateShort(s.current_period_end)}</span>
-            <span style={{ color: T.text, fontSize: 15 }}>{fmtDateShort(s.joined)}</span>
-            <span style={{ color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>{fmtMoney(s.total_spent)}</span>
+            <span style={{ color: T.text, fontSize: 14 }}>{fmtDateShort(s.current_period_end)}</span>
+            <span style={{ color: T.text, fontSize: 14 }}>{fmtDateShort(s.joined)}</span>
+            <span style={{ color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14 }}>{fmtMoney(s.total_spent)}</span>
           </div>
           );
         })}
@@ -445,9 +445,9 @@ const TAG_COLORS: Record<string, string> = {
 function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
     <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: T.gold, marginBottom: 12 }}>Recent Customers</div>
+      <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 12 }}>Recent Customers</div>
       {customers.length === 0 ? (
-        <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 15 }}>No customers yet</div>
+        <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 14 }}>No customers yet</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {customers.filter(c => c.email && c.email !== "—").map((c) => {
@@ -460,12 +460,12 @@ function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
-                  <div style={{ fontSize: 15, color: T.textSecondary }}>Joined {fmtDate(c.created)} · Spent {fmtMoney(c.total_spent)}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                  <div style={{ fontSize: 14, color: T.textSecondary }}>Joined {fmtDate(c.created)} · Spent {fmtMoney(c.total_spent)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                   <span style={{
-                    fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
+                    fontSize: 10, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
                     background: `${color}18`,
                     border: `1px solid ${color}44`,
                     color,
@@ -514,14 +514,14 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 16, fontWeight: 700, color: T.gold }}>Expenses</span>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Expenses</span>
         <span
           title="Sum of every recurring expense converted to a monthly-equivalent cost (yearly ÷ 12); one-off costs aren't counted in this run-rate."
-          style={{ fontSize: 15, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
+          style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${T.red}18`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
         >
           {fmtMoney(totalMonthly)}/mo
         </span>
-        <span style={{ fontSize: 15, color: T.textSecondary }}>recurring + one-off costs, netted against MRR above</span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>recurring + one-off costs, netted against MRR above</span>
         <button onClick={() => onAdd(name, category, parseFloat(amount), cadence)} style={{ display: "none" }} />
       </div>
 
@@ -533,9 +533,9 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           placeholder="expense name…"
-          style={{ flex: "1 1 160px", padding: "6px 10px", fontSize: 15, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
+          style={{ flex: "1 1 160px", padding: "6px 10px", fontSize: 14, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
         />
-        <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ padding: "6px 8px", fontSize: 15, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
+        <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ padding: "6px 8px", fontSize: 14, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
           {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <input
@@ -544,19 +544,19 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
           onChange={(e) => setAmount(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           placeholder="amount $"
-          style={{ width: 90, padding: "6px 10px", fontSize: 15, fontFamily: "var(--font-mono)", background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
+          style={{ width: 90, padding: "6px 10px", fontSize: 14, fontFamily: "var(--font-mono)", background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, outline: "none" }}
         />
-        <select value={cadence} onChange={(e) => setCadence(e.target.value as "monthly" | "yearly" | "once")} style={{ padding: "6px 8px", fontSize: 15, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
+        <select value={cadence} onChange={(e) => setCadence(e.target.value as "monthly" | "yearly" | "once")} style={{ padding: "6px 8px", fontSize: 14, background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text }}>
           <option value="monthly">Monthly</option>
           <option value="yearly">Yearly</option>
           <option value="once">One-off</option>
         </select>
-        <button onClick={submit} disabled={busy || !name.trim() || !amount} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 15, opacity: busy || !name.trim() || !amount ? 0.5 : 1 }}>
+        <button onClick={submit} disabled={busy || !name.trim() || !amount} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !name.trim() || !amount ? 0.5 : 1 }}>
           + Add
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 15, fontWeight: 600, color: T.muted, letterSpacing: "0.01em" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em" }}>
         <span>Item</span>
         <span>Category</span>
         <span>Amount</span>
@@ -566,25 +566,25 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
 
       <div style={{ maxHeight: 280, overflowY: "auto" }}>
         {error ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 15 }}>{error}</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 14 }}>{error}</div>
         ) : loading && !expenses ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 15 }}>Loading…</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
         ) : expenses && expenses.length === 0 ? (
-          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 15 }}>No expenses tracked yet</div>
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>No expenses tracked yet</div>
         ) : (
           expenses?.map((e) => (
             <div
               key={e.id}
               title={`${e.name} · ${e.category} · ${fmtMoney(e.amount_cents)} ${e.cadence} · added ${new Date(e.created_at).toLocaleDateString()}`}
-              style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 15, alignItems: "center" }}
+              style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 70px", gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center" }}
             >
               <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</span>
-              <span style={{ color: T.textSecondary, fontSize: 15 }}>{e.category}</span>
-              <span style={{ color: T.red, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 15 }}>
+              <span style={{ color: T.textSecondary, fontSize: 14 }}>{e.category}</span>
+              <span style={{ color: T.red, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14 }}>
                 {fmtMoney(e.amount_cents)}{e.cadence === "monthly" ? "/mo" : e.cadence === "yearly" ? "/yr" : ""}
               </span>
-              <span style={{ color: T.textSecondary, fontSize: 15, textTransform: "capitalize" }}>{e.cadence === "once" ? "One-off" : e.cadence}</span>
-              <button onClick={() => onRemove(e.id)} disabled={busy} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 15, opacity: busy ? 0.5 : 1 }}>
+              <span style={{ color: T.textSecondary, fontSize: 14, textTransform: "capitalize" }}>{e.cadence === "once" ? "One-off" : e.cadence}</span>
+              <button onClick={() => onRemove(e.id)} disabled={busy} style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 14, opacity: busy ? 0.5 : 1 }}>
                 Remove
               </button>
             </div>
@@ -736,18 +736,18 @@ export default function SalesDashboard() {
       {/* Header */}
       <div style={homeHeaderStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
+          <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "0.01em", color: T.text }}>
             Sales · Stripe
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 15, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
+            <span style={{ fontSize: 14, color: T.muted }}>Updated {lastRefresh.toLocaleTimeString()}</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             onClick={() => { load(); loadExpenses(); loadDiscord(); }}
             disabled={loading}
-            style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 15, opacity: loading ? 0.5 : 1 }}
+            style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 14, opacity: loading ? 0.5 : 1 }}
           >
             {loading ? "Loading…" : "↻ Refresh"}
           </button>
@@ -758,7 +758,7 @@ export default function SalesDashboard() {
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 20 }}>
 
         {loading && !data && (
-          <div style={{ ...homePanelStyle, padding: 32, textAlign: "center", color: T.muted, fontSize: 15 }}>
+          <div style={{ ...homePanelStyle, padding: 32, textAlign: "center", color: T.muted, fontSize: 14 }}>
             Loading Stripe data…
           </div>
         )}
@@ -829,12 +829,12 @@ export default function SalesDashboard() {
 
             {/* Stripe Dashboard link */}
             <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 15, color: T.muted }}>Full billing management, invoices, and payouts</span>
+              <span style={{ fontSize: 14, color: T.muted }}>Full billing management, invoices, and payouts</span>
               <a
                 href="https://dashboard.stripe.com"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ ...homeButtonStyle, fontSize: 15, padding: "6px 16px", textDecoration: "none" }}
+                style={{ ...homeButtonStyle, fontSize: 14, padding: "6px 16px", textDecoration: "none" }}
               >
                 Open Stripe Dashboard ↗
               </a>
@@ -844,8 +844,8 @@ export default function SalesDashboard() {
 
         {data?.error && data.configured && (
           <div style={{ ...homePanelStyle, padding: "16px 18px", border: `1px solid ${T.red}44` }}>
-            <div style={{ fontSize: 15, color: T.red, fontWeight: 600, marginBottom: 4 }}>Stripe API Error</div>
-            <div style={{ fontSize: 15, color: T.muted, fontFamily: "var(--font-mono)" }}>{data.error}</div>
+            <div style={{ fontSize: 14, color: T.red, fontWeight: 600, marginBottom: 4 }}>Stripe API Error</div>
+            <div style={{ fontSize: 14, color: T.muted, fontFamily: "var(--font-mono)" }}>{data.error}</div>
           </div>
         )}
 

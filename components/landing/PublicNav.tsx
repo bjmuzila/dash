@@ -79,7 +79,7 @@ export default function PublicNav({
           .pnav-cta, .pnav-ghost {
             height: 34px;
             padding: 0 11px;
-            font-size: 11px;
+            font-size: 12px;
             letter-spacing: 0.04em;
           }
         }
@@ -235,7 +235,7 @@ const ctaBtn: React.CSSProperties = {
   height: 38,
   padding: "0 18px",
   borderRadius: 999,
-  fontSize: 12.5,
+  fontSize: 12,
   fontWeight: 900,
   letterSpacing: "0.07em",
   color: "#fff",
@@ -251,7 +251,7 @@ const ghostBtn: React.CSSProperties = {
   height: 38,
   padding: "0 16px",
   borderRadius: 999,
-  fontSize: 12.5,
+  fontSize: 12,
   fontWeight: 800,
   letterSpacing: "0.07em",
   color: T.text,

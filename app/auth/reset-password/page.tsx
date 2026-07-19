@@ -80,7 +80,7 @@ function ResetPasswordForm() {
     background: "transparent",
     border: "none",
     cursor: "pointer",
-    fontSize: 16,
+    fontSize: 17,
     lineHeight: 1,
     padding: 4,
   };
@@ -98,7 +98,7 @@ function ResetPasswordForm() {
         }}
       >
         <h1 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: "0 0 4px" }}>Set a new password</h1>
-        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
+        <p style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
           {done ? "Password updated — redirecting to sign in…" : "Choose a new password for your account."}
         </p>
 

@@ -1238,14 +1238,14 @@ const CATS = ["All", "Cross-index", "Break quality", "Context", "Timing", "Sessi
 function ResultTable({ res }: { res: Result }) {
   const cols = res.cols ?? [];
   const th: React.CSSProperties = {
-    textAlign: "left", padding: "8px 10px", fontSize: 11, fontWeight: 800, letterSpacing: "0.08em",
+    textAlign: "left", padding: "8px 10px", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em",
     textTransform: "uppercase", color: "rgba(255,255,255,0.55)", borderBottom: `1px solid ${HOME_THEME.border}`,
   };
   const td: React.CSSProperties = { padding: "9px 10px", fontSize: 14, borderBottom: `1px solid ${HOME_THEME.border}`, fontVariantNumeric: "tabular-nums" };
 
   return (
     <div style={{ marginTop: 14 }}>
-      <div style={{ fontSize: 13, color: HOME_THEME.green, marginBottom: 10 }}>{res.headline}</div>
+      <div style={{ fontSize: 14, color: HOME_THEME.green, marginBottom: 10 }}>{res.headline}</div>
 
       {res.stack && (
         <div style={{ marginBottom: 18 }}>
@@ -1263,7 +1263,7 @@ function ResultTable({ res }: { res: Result }) {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      fontSize: 11,
+                      fontSize: 12,
                       fontWeight: 800,
                       color: "#05060A",
                       fontVariantNumeric: "tabular-nums",
@@ -1321,7 +1321,7 @@ function ResultTable({ res }: { res: Result }) {
                       </span>
                     )}
                   </td>
-                  <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 16, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
+                  <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 17, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
                     {r.k != null ? pctS(r.k, r.n) : "—"}
                   </td>
                   {cols.map((c) => (
@@ -1335,7 +1335,7 @@ function ResultTable({ res }: { res: Result }) {
       </div>
       {res.verdict && (
         <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, background: `${LIGHT_BLUE}12`, border: `1px solid ${LIGHT_BLUE}33`, fontSize: 14, color: HOME_THEME.text }}>
-          <strong style={{ letterSpacing: "0.06em", fontSize: 11, textTransform: "uppercase", color: LIGHT_BLUE }}>Verdict</strong>
+          <strong style={{ letterSpacing: "0.06em", fontSize: 12, textTransform: "uppercase", color: LIGHT_BLUE }}>Verdict</strong>
           <div style={{ marginTop: 4 }}>{res.verdict}</div>
         </div>
       )}
@@ -1413,7 +1413,7 @@ export default function StatPrompterTab() {
   );
 
   const chip = (on: boolean): React.CSSProperties => ({
-    padding: "6px 14px", borderRadius: 999, fontSize: 13, fontWeight: 700, cursor: "pointer",
+    padding: "6px 14px", borderRadius: 999, fontSize: 14, fontWeight: 700, cursor: "pointer",
     border: `1px solid ${on ? LIGHT_BLUE : HOME_THEME.border}`,
     background: on ? `${LIGHT_BLUE}1F` : "transparent",
     color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)",
@@ -1425,7 +1425,7 @@ export default function StatPrompterTab() {
       <Card title="Stat Prompter">
         <div style={{ color: HOME_THEME.red, fontSize: 14 }}>
           Couldn&apos;t load the IB datasets: {err}
-          <div style={{ color: "rgba(255,255,255,0.6)", marginTop: 6, fontSize: 13 }}>
+          <div style={{ color: "rgba(255,255,255,0.6)", marginTop: 6, fontSize: 14 }}>
             Export them from <code>ib-backtest-esu6.html</code> → &quot;Export JSON for dashboard&quot; into <code>public/data/</code>.
           </div>
         </div>
@@ -1452,7 +1452,7 @@ export default function StatPrompterTab() {
             onChange={(e) => setQ(e.target.value)}
             placeholder="filter prompts…"
             style={{
-              fontSize: 13, padding: "8px 12px", borderRadius: 8, outline: "none", minWidth: 200,
+              fontSize: 14, padding: "8px 12px", borderRadius: 8, outline: "none", minWidth: 200,
               border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text,
             }}
           />
@@ -1468,7 +1468,7 @@ export default function StatPrompterTab() {
             ]}
           />
         </div>
-        <div style={{ marginTop: 12, fontSize: 13, color: "rgba(255,255,255,0.55)" }}>
+        <div style={{ marginTop: 12, fontSize: 14, color: "rgba(255,255,255,0.55)" }}>
           {ctx
             ? `${ctx.paired.length} paired ES/NQ sessions loaded${since === "all" ? "" : ` since ${since}`} · ${ctx.es[0]?.date ?? "—"} → ${ctx.es[ctx.es.length - 1]?.date ?? "—"}`
             : "loading ib-ES.json + ib-NQ.json…"}
@@ -1514,7 +1514,7 @@ export default function StatPrompterTab() {
                 style={{
                   ...(isOpen ? homeSecondaryButtonStyle : homeButtonStyle),
                   padding: "8px 16px",
-                  fontSize: 11,
+                  fontSize: 12,
                   flexShrink: 0,
                   opacity: ctx ? 1 : 0.4,
                   cursor: ctx ? "pointer" : "not-allowed",

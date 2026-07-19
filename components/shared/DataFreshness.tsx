@@ -105,7 +105,7 @@ export default function DataFreshness({
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 600,
         letterSpacing: 0.3,
         color: s.text,

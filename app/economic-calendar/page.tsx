@@ -220,7 +220,7 @@ export default function EconomicCalendarPage() {
           boxShadow: faded ? "none" : `inset -1px 0 8px ${col}18`,
           gap: 2,
         }}>
-          <span style={{ fontSize: 13, color: faded ? "#1e2a38" : HT.text, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 14, color: faded ? "#1e2a38" : HT.text, fontFamily: "var(--font-mono)" }}>
             {ev.time_formatted || ev.time || "TBD"}
           </span>
         </div>
@@ -229,11 +229,11 @@ export default function EconomicCalendarPage() {
             <span style={{ fontSize: 10, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: "0.1em" }}>
               {ev.impact}
             </span>
-            <span style={{ fontSize: 11, color: faded ? "#1e2a38" : HT.text, fontWeight: 600 }}>
+            <span style={{ fontSize: 12, color: faded ? "#1e2a38" : HT.text, fontWeight: 600 }}>
               {ev.country}
             </span>
           </div>
-          <div style={{ fontSize: 15, fontWeight: ev.impact === "High" ? 700 : 500, color: faded ? "#1e2a38" : HT.text, lineHeight: 1.3 }}>
+          <div style={{ fontSize: 14, fontWeight: ev.impact === "High" ? 700 : 500, color: faded ? "#1e2a38" : HT.text, lineHeight: 1.3 }}>
             {ev.title}
           </div>
           {(ev.actual || ev.forecast || ev.previous) && (
@@ -269,11 +269,11 @@ export default function EconomicCalendarPage() {
             display: "flex", alignItems: "center", gap: 8,
           }}
         >
-          <span style={{ fontSize: 11, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
             {fullDayLabel(date, today)}
           </span>
           {isTod && (
-            <span style={{ fontSize: 8, fontWeight: 900, background: HT.cyan, color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
+            <span style={{ fontSize: 10, fontWeight: 900, background: HT.cyan, color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
               TODAY
             </span>
           )}
@@ -312,7 +312,7 @@ export default function EconomicCalendarPage() {
             📅 Economic Calendar
           </span>
           {lastRefresh && (
-            <span style={{ fontSize: 11, color: HT.text, fontFamily: "var(--font-mono)", background: HT.panelBg, padding: "2px 8px", borderRadius: 3 }}>
+            <span style={{ fontSize: 12, color: HT.text, fontFamily: "var(--font-mono)", background: HT.panelBg, padding: "2px 8px", borderRadius: 3 }}>
               {today}
             </span>
           )}
@@ -322,7 +322,7 @@ export default function EconomicCalendarPage() {
           {/* Multi-select dropdown */}
           <div ref={dropRef} style={{ position: "relative" }}>
             <button onClick={() => setDropOpen(o => !o)} style={{ ...homeButtonStyle, display: "flex", alignItems: "center", gap: 6 }}>
-              {filterLabel} <span style={{ fontSize: 8 }}>▾</span>
+              {filterLabel} <span style={{ fontSize: 10 }}>▾</span>
             </button>
             {dropOpen && (
               <div style={{
@@ -351,9 +351,9 @@ export default function EconomicCalendarPage() {
                         border: `2px solid ${o.color}`,
                         background: on ? o.color : "transparent",
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 9, color: "#05080d", fontWeight: 900,
+                        fontSize: 10, color: "#05080d", fontWeight: 900,
                       }}>{on ? "✓" : ""}</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: on ? HT.cyan : HT.text }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: on ? HT.cyan : HT.text }}>
                         {o.label}
                       </span>
                     </div>
@@ -377,7 +377,7 @@ export default function EconomicCalendarPage() {
       {/* Quote */}
       {quote && (
         <div style={{ padding: "10px 20px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0, textAlign: "center" }}>
-          <span style={{ fontSize: 13, fontStyle: "italic", color: HT.text, lineHeight: 1.7 }}>
+          <span style={{ fontSize: 14, fontStyle: "italic", color: HT.text, lineHeight: 1.7 }}>
             &ldquo;{quote}&rdquo;
           </span>
         </div>
@@ -385,7 +385,7 @@ export default function EconomicCalendarPage() {
 
       {/* Warning */}
       {warning && !error && (
-        <div style={{ padding: "6px 16px", fontSize: 11, color: "#f59e0b", background: "rgba(245,158,11,0.06)", borderBottom: "1px solid rgba(245,158,11,0.25)", flexShrink: 0 }}>
+        <div style={{ padding: "6px 16px", fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,0.06)", borderBottom: "1px solid rgba(245,158,11,0.25)", flexShrink: 0 }}>
           ⚠ Live feed unavailable — showing saved events. ({warning})
         </div>
       )}
@@ -393,7 +393,7 @@ export default function EconomicCalendarPage() {
       {/* Event list */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {error ? (
-          <div style={{ fontSize: 13, color: HT.red, padding: 16, margin: 16, border: `1px solid rgba(239,68,68,0.3)`, borderRadius: 4, background: "rgba(239,68,68,0.05)" }}>
+          <div style={{ fontSize: 14, color: HT.red, padding: 16, margin: 16, border: `1px solid rgba(239,68,68,0.3)`, borderRadius: 4, background: "rgba(239,68,68,0.05)" }}>
             ⚠ {error}
           </div>
         ) : loading && events.length === 0 ? (
@@ -474,13 +474,13 @@ function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }
                       const s = document.createElement("span");
                       s.className = "logo-fallback";
                       s.textContent = e.symbol.slice(0, 4);
-                      s.style.cssText = `font-size:9px;font-weight:800;color:${HT.cyan};text-align:center;line-height:1;`;
+                      s.style.cssText = `font-size: 10px;font-weight:800;color:${HT.cyan};text-align:center;line-height:1;`;
                       p.appendChild(s);
                     }
                   }}
                 />
               </span>
-              <span style={{ fontSize: 9, fontWeight: 700, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {e.symbol}
               </span>
             </a>

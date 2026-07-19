@@ -198,8 +198,8 @@ function StatTile({ label, value, color }: { label: string; value: string; color
         gap: 2,
       }}
     >
-      <div style={{ fontSize: 15, letterSpacing: "0.1em", color: HT.text, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono, monospace)", color: color ?? HT.text }}>{value}</div>
+      <div style={{ fontSize: 14, letterSpacing: "0.1em", color: HT.text, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 800, fontFamily: "var(--font-mono, monospace)", color: color ?? HT.text }}>{value}</div>
     </div>
   );
 }
@@ -250,19 +250,19 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
               display: "flex",
               flexDirection: "column",
               gap: 1,
-              fontSize: 15,
+              fontSize: 14,
             }}
           >
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ color: HT.text, opacity: 0.55, fontWeight: 700, fontSize: 15, minWidth: 26 }}>{w.age}m</span>
-              <span style={{ color: HT.text, opacity: 0.6, fontSize: 15 }}>Call</span>
+              <span style={{ color: HT.text, opacity: 0.55, fontWeight: 700, fontSize: 14, minWidth: 26 }}>{w.age}m</span>
+              <span style={{ color: HT.text, opacity: 0.6, fontSize: 14 }}>Call</span>
               <span style={{ color: HT.green, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, marginLeft: "auto" }}>
                 {fmtStrike(w.callWall?.strike ?? null)}
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ color: "transparent", fontWeight: 700, fontSize: 15, minWidth: 26 }}>{w.age}m</span>
-              <span style={{ color: HT.text, opacity: 0.6, fontSize: 15 }}>Put</span>
+              <span style={{ color: "transparent", fontWeight: 700, fontSize: 14, minWidth: 26 }}>{w.age}m</span>
+              <span style={{ color: HT.text, opacity: 0.6, fontSize: 14 }}>Put</span>
               <span style={{ color: HT.red, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, marginLeft: "auto" }}>
                 {fmtStrike(w.putWall?.strike ?? null)}
               </span>
@@ -281,7 +281,7 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            fontSize: 15,
+            fontSize: 14,
           }}
         >
           <span style={{ color: HT.text, opacity: 0.6 }}>Bull</span>
@@ -303,7 +303,7 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            fontSize: 15,
+            fontSize: 14,
           }}
         >
           <span style={{ color: HT.text, opacity: 0.6 }}>OTM</span>

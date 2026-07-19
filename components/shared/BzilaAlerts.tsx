@@ -87,7 +87,7 @@ function ThumbBtn({ dir, active, count, onClick }: { dir: "up" | "down"; active:
         lineHeight: 1,
       }}
     >
-      <span aria-hidden style={{ fontSize: 13 }}>{dir === "up" ? "👍" : "👎"}</span>
+      <span aria-hidden style={{ fontSize: 14 }}>{dir === "up" ? "👍" : "👎"}</span>
       {count > 0 && <span style={{ fontVariantNumeric: "tabular-nums" }}>{count}</span>}
     </button>
   );
@@ -270,7 +270,7 @@ export default function BzilaAlerts() {
   const inputStyle: React.CSSProperties = {
     width: "100%",
     boxSizing: "border-box",
-    fontSize: 13,
+    fontSize: 14,
     padding: "8px 10px",
     border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 8,
@@ -284,7 +284,7 @@ export default function BzilaAlerts() {
     border: `1px solid ${accent}`,
     background: "transparent",
     color: accent,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 700,
     letterSpacing: "0.04em",
     cursor: "pointer",
@@ -398,7 +398,7 @@ export default function BzilaAlerts() {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/bzila-hero.png" alt="" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover" }} />
-            <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, letterSpacing: "0.02em" }}>
+            <span style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, letterSpacing: "0.02em" }}>
               Bzila Alerts
             </span>
           </div>
@@ -450,7 +450,7 @@ export default function BzilaAlerts() {
 
           {/* list */}
           {alerts.length === 0 ? (
-            <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", padding: "8px 2px" }}>
+            <div style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", padding: "8px 2px" }}>
               No alerts yet.
             </div>
           ) : (
@@ -491,29 +491,29 @@ export default function BzilaAlerts() {
                     ) : (
                       <>
                         {a.title && (
-                          <div style={{ fontSize: 13.5, fontWeight: 800, color: HOME_THEME.text, marginBottom: 3 }}>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, marginBottom: 3 }}>
                             {a.title}
                           </div>
                         )}
-                        <div style={{ fontSize: 13, lineHeight: 1.5, color: "rgba(255,255,255,0.9)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        <div style={{ fontSize: 14, lineHeight: 1.5, color: "rgba(255,255,255,0.9)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                           {a.body}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
                           <ThumbBtn dir="up" active={a.mine === "up"} count={a.up ?? 0} onClick={() => react(a.id, "up")} />
                           <ThumbBtn dir="down" active={a.mine === "down"} count={a.down ?? 0} onClick={() => react(a.id, "down")} />
                           <span style={{ flex: 1 }} />
-                          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", fontWeight: 600 }}>{ago(a.created_at)}</span>
+                          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", fontWeight: 600 }}>{ago(a.created_at)}</span>
                           {isOwner && (
                             <span style={{ display: "flex", gap: 12, marginLeft: 4 }}>
                               <button
                                 onClick={() => { setEditingId(a.id); setEditTitle(a.title); setEditBody(a.body); }}
-                                style={{ background: "none", border: "none", padding: 0, color: CYAN, fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.04em" }}
+                                style={{ background: "none", border: "none", padding: 0, color: CYAN, fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.04em" }}
                               >
                                 Edit
                               </button>
                               <button
                                 onClick={() => del(a.id)}
-                                style={{ background: "none", border: "none", padding: 0, color: HOME_THEME.red, fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.04em" }}
+                                style={{ background: "none", border: "none", padding: 0, color: HOME_THEME.red, fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.04em" }}
                               >
                                 Delete
                               </button>
@@ -542,7 +542,7 @@ export default function BzilaAlerts() {
                 border: `1px solid ${cyanA(0.25)}`,
                 background: cyanA(0.06),
                 color: CYAN,
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 700,
                 letterSpacing: "0.06em",
                 textTransform: "uppercase",

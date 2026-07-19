@@ -414,8 +414,8 @@ export default function TopBar() {
           <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 7, background: "rgba(33,158,188,.08)", border: "1px solid rgba(33,158,188,.25)", color: "#219EBC", fontSize: 12, fontWeight: 700 }}>
             SPX
           </span>
-          <span style={{ color: "#5a7a99", fontSize: 18 }}>/</span>
-          <span style={{ color: "#e8edf5", fontSize: 18 }}>GEX</span>
+          <span style={{ color: "#5a7a99", fontSize: 17 }}>/</span>
+          <span style={{ color: "#e8edf5", fontSize: 17 }}>GEX</span>
         </div>
 
         {/* VIX */}
@@ -450,7 +450,7 @@ export default function TopBar() {
         <select
           value={pathname}
           onChange={e => router.push(e.target.value)}
-          style={{ background: "#07101b", color: "#219EBC", border: "1px solid #1e3050", borderRadius: 3, fontSize: 11, fontWeight: 700, padding: "0 8px", height: 34, cursor: "pointer", letterSpacing: ".04em", flexShrink: 0 }}
+          style={{ background: "#07101b", color: "#219EBC", border: "1px solid #1e3050", borderRadius: 3, fontSize: 12, fontWeight: 700, padding: "0 8px", height: 34, cursor: "pointer", letterSpacing: ".04em", flexShrink: 0 }}
         >
           {navItems.map(({ label, href }) => (
             <option key={href} value={href}>{label}</option>
@@ -478,13 +478,13 @@ export default function TopBar() {
             >
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: ttLive ? "#ffb300" : "#3a5570", display: "inline-block", flexShrink: 0 }} />
               {ttLive ? "TT LIVE" : "TT"}
-              <span style={{ fontSize: 16, lineHeight: 1, color: ttLive ? "rgba(255,179,0,.6)" : "#3a5570" }}>⋮</span>
+              <span style={{ fontSize: 17, lineHeight: 1, color: ttLive ? "rgba(255,179,0,.6)" : "#3a5570" }}>⋮</span>
             </button>
             {ddOpen && (
               <div style={{ position: "fixed", top: 46, right: 8, background: "#0a0f16", border: "1px solid #1a2a3a", borderRadius: 3, minWidth: 240, zIndex: 999999, boxShadow: "0 6px 20px rgba(0,0,0,.9)" }}>
                 <div style={{ padding: "6px 10px", borderBottom: "1px solid #1a2a3a", display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: ttLive ? "#00e676" : "#ff5252", display: "inline-block" }} />
-                  <span style={{ fontSize: 11, color: ttLive ? "#00e676" : "#ff5252", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase" }}>
+                  <span style={{ fontSize: 12, color: ttLive ? "#00e676" : "#ff5252", fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase" }}>
                     {ttLive ? "TT Connected" : "TT Disconnected"}
                   </span>
                 </div>

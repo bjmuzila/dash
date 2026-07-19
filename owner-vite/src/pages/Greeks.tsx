@@ -75,9 +75,9 @@ function etTime(ts = Date.now()): string {
 function VolStat({ label, value, suffix = "", color }: { label: string; value?: number; suffix?: string; color: string }) {
   return (
     <div style={{ flex: "1 1 120px", minWidth: 110 }}>
-      <div style={{ fontSize: 9.5, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 10, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase" }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 900, color, fontFamily: "var(--font-mono)" }}>
-        {value != null && isFinite(value) ? value.toFixed(value < 1 ? 2 : 1) : "--"}<span style={{ fontSize: 13 }}>{suffix}</span>
+        {value != null && isFinite(value) ? value.toFixed(value < 1 ? 2 : 1) : "--"}<span style={{ fontSize: 14 }}>{suffix}</span>
       </div>
     </div>
   );
@@ -108,15 +108,15 @@ function VolCard({ vol }: { vol: VolData | null }) {
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{
             width: 30, height: 30, borderRadius: 8, border: "1px solid rgba(96,165,250,.4)",
-            display: "flex", alignItems: "center", justifyContent: "center", color: "#60a5fa", fontWeight: 800, fontSize: 15,
+            display: "flex", alignItems: "center", justifyContent: "center", color: "#60a5fa", fontWeight: 800, fontSize: 14,
           }}>〜</div>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Volatility</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "#eef7ff", letterSpacing: ".04em" }}>Volatility</div>
             <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase" }}>VIX / Implied Vol</div>
           </div>
         </div>
         {arrow && (
-          <div style={{ fontSize: 11, fontWeight: 800, color: arrowColor, border: `1px solid ${arrowColor}55`, padding: "4px 9px", borderRadius: 5 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: arrowColor, border: `1px solid ${arrowColor}55`, padding: "4px 9px", borderRadius: 5 }}>
             IV {ivFalling ? "FALLING" : "RISING"} {arrow}
           </div>
         )}
@@ -848,7 +848,7 @@ export default function Greeks() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 900, color: HOME_THEME.text, letterSpacing: ".03em" }}>Greeks</div>
-          <div style={{ fontSize: 11, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em" }}>
+          <div style={{ fontSize: 12, color: "#9fb3c8", fontWeight: 700, letterSpacing: ".06em" }}>
             SPX dealer exposure · updated {lastRefresh} ET{lastPoll !== lastRefresh ? ` · checked ${lastPoll}` : ""}{stale ? " · feed idle" : ""}
           </div>
         </div>
@@ -923,10 +923,10 @@ export default function Greeks() {
               borderBottom: "1px solid rgba(255,255,255,.05)",
               borderLeft: `3px solid ${c.up ? "#00e676" : "#ff5252"}`,
             }}>
-              <div style={{ fontSize: 11, color: "#7e8ea0", fontFamily: "var(--font-mono)", minWidth: 74 }}>
+              <div style={{ fontSize: 12, color: "#7e8ea0", fontFamily: "var(--font-mono)", minWidth: 74 }}>
                 {new Date(c.ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true })}
               </div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#eef7ff", minWidth: 44 }}>{c.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#eef7ff", minWidth: 44 }}>{c.label}</div>
               <div style={{ fontSize: 12, fontWeight: 800, color: c.up ? "#00e676" : "#ff5252", fontFamily: "var(--font-mono)" }}>
                 {c.up ? "− → +  crossed positive" : "+ → −  crossed negative"}
               </div>

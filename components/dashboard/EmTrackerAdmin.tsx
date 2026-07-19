@@ -484,7 +484,7 @@ export default function EmTrackerAdmin() {
     return n;
   }, [review, reviewMedians]);
 
-  const lbl = { fontSize: 9, fontWeight: 800 as const, color: HOME_THEME.muted, textTransform: "uppercase" as const, letterSpacing: "0.12em" };
+  const lbl = { fontSize: 10, fontWeight: 800 as const, color: HOME_THEME.muted, textTransform: "uppercase" as const, letterSpacing: "0.12em" };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -502,7 +502,7 @@ export default function EmTrackerAdmin() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {totals.pct != null && (
-            <span style={{ fontSize: 11, color: HOME_THEME.muted }}>
+            <span style={{ fontSize: 12, color: HOME_THEME.muted }}>
               Overall&nbsp;
               <b style={{ color: pctColor(totals.pct) }}>{totals.pct.toFixed(1)}%</b>
               &nbsp;({totals.hits}/{totals.evald})
@@ -522,7 +522,7 @@ export default function EmTrackerAdmin() {
       </div>
 
       {msg && (
-        <div style={{ ...homePanelStyle, padding: "8px 14px", fontSize: 11, color: HOME_THEME.cyan, animation: "emfade .3s" }}>{msg}</div>
+        <div style={{ ...homePanelStyle, padding: "8px 14px", fontSize: 12, color: HOME_THEME.cyan, animation: "emfade .3s" }}>{msg}</div>
       )}
 
       {/* Discord OCR review panel */}
@@ -532,7 +532,7 @@ export default function EmTrackerAdmin() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ ...lbl }}>Review Discord Import · {review.weeks.length} week(s)</span>
               {reviewFlagCount > 0 && (
-                <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.red, padding: "2px 8px", borderRadius: 10, border: `1px solid ${HOME_THEME.red}55`, background: `${HOME_THEME.red}14` }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.red, padding: "2px 8px", borderRadius: 10, border: `1px solid ${HOME_THEME.red}55`, background: `${HOME_THEME.red}14` }}>
                   ⚠ {reviewFlagCount} cell{reviewFlagCount === 1 ? "" : "s"} flagged
                 </span>
               )}
@@ -544,7 +544,7 @@ export default function EmTrackerAdmin() {
               <button onClick={() => setReviewOpen(false)} style={homeSecondaryButtonStyle}>Close</button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: HOME_THEME.muted, marginBottom: 12, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, color: HOME_THEME.muted, marginBottom: 12, lineHeight: 1.5 }}>
             Every board shows the full ticker roster. <b style={{ color: HOME_THEME.red }}>Red</b> = likely OCR error (inverted, dropped decimal, off vs usual) — hover for why.
             <b style={{ color: HOME_THEME.orange }}> Orange</b> = blank (OCR missed it) — type the Up/Down from the image. The ticker name is editable for futures rolls (ESM↔ESU), and “+ Add ticker” handles extras. Blank rows are skipped on commit. Bands are scored against the actual weekly OHLC (win = close inside).
           </div>
@@ -556,22 +556,22 @@ export default function EmTrackerAdmin() {
               return (
               <div key={w.week_start + "_" + wi} style={{ border: `1px solid ${w.committed ? HOME_THEME.green + "55" : HOME_THEME.border}`, borderRadius: 10, opacity: w.committed ? 0.6 : 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: w.committed ? `${HOME_THEME.green}0d` : w.week_inferred ? "rgba(249,115,22,0.08)" : "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HOME_THEME.border}`, borderRadius: "10px 10px 0 0", flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>Week of</span>
-                  <input type="date" value={w.week_start} onChange={(e) => editReviewWeekStart(wi, e.target.value)} disabled={w.committed} style={{ ...homeInputStyle, padding: "5px 8px", fontSize: 13, width: 150 }} />
+                  <span style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>Week of</span>
+                  <input type="date" value={w.week_start} onChange={(e) => editReviewWeekStart(wi, e.target.value)} disabled={w.committed} style={{ ...homeInputStyle, padding: "5px 8px", fontSize: 14, width: 150 }} />
                   <span style={{ fontSize: 12, color: lowCount && !w.committed ? HOME_THEME.orange : HOME_THEME.muted }}>
                     board “{w.week_label}” · {filled}/{w.rows.length} filled{lowCount && !w.committed ? " ⚠ low — fill the blanks" : ""}
                   </span>
                   {w.week_inferred && !w.committed && (
-                    <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.orange, padding: "2px 7px", borderRadius: 10, border: `1px solid ${HOME_THEME.orange}55`, background: `${HOME_THEME.orange}14` }} title="Title date couldn't be read — week was inferred from the post date. Verify against the image.">
+                    <span style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.orange, padding: "2px 7px", borderRadius: 10, border: `1px solid ${HOME_THEME.orange}55`, background: `${HOME_THEME.orange}14` }} title="Title date couldn't be read — week was inferred from the post date. Verify against the image.">
                       ⚠ VERIFY WEEK
                     </span>
                   )}
                   <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
                     {w.source_url && (
-                      <a href={w.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: HOME_THEME.cyan, fontWeight: 700 }}>view image ↗</a>
+                      <a href={w.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: HOME_THEME.cyan, fontWeight: 700 }}>view image ↗</a>
                     )}
                     {w.committed ? (
-                      <span style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.green }}>✓ Committed</span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: HOME_THEME.green }}>✓ Committed</span>
                     ) : (
                       <button onClick={() => commitOneWeek(wi)} disabled={busy || filled === 0} style={{ ...homeButtonStyle, padding: "5px 14px", opacity: busy || filled === 0 ? 0.5 : 1 }} title="Save & score just this week now">
                         Commit Week
@@ -605,13 +605,13 @@ export default function EmTrackerAdmin() {
                           onChange={(e) => editReviewCell(wi, ri, "down", e.target.value)}
                           onBlur={() => flushReviewCell(wi, ri, "down")}
                           placeholder="down" style={{ ...homeInputStyle, width: 82, padding: "6px 8px", fontSize: 14, borderColor: bd, color: numColor }} title="Down" />
-                        <button onClick={() => deleteReviewRow(wi, ri)} title="Remove row" style={{ background: "none", border: "none", color: HOME_THEME.muted, fontSize: 16, cursor: "pointer", lineHeight: 1, padding: "0 2px" }}>×</button>
+                        <button onClick={() => deleteReviewRow(wi, ri)} title="Remove row" style={{ background: "none", border: "none", color: HOME_THEME.muted, fontSize: 17, cursor: "pointer", lineHeight: 1, padding: "0 2px" }}>×</button>
                       </div>
                     );
                   })}
                 </div>
                 <div style={{ padding: "0 14px 12px 14px" }}>
-                  <button onClick={() => addReviewRow(wi)} style={{ ...homeSecondaryButtonStyle, padding: "5px 12px", fontSize: 11 }}>+ Add ticker</button>
+                  <button onClick={() => addReviewRow(wi)} style={{ ...homeSecondaryButtonStyle, padding: "5px 12px", fontSize: 12 }}>+ Add ticker</button>
                 </div>
               </div>
             ); })}
@@ -640,7 +640,7 @@ export default function EmTrackerAdmin() {
                   <div style={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${m.combinedPct ?? 0}%`, background: pctColor(m.combinedPct), borderRadius: 3 }} />
                   </div>
-                  <span style={{ fontSize: 11, fontWeight: 800, color: pctColor(m.combinedPct), minWidth: 44 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: pctColor(m.combinedPct), minWidth: 44 }}>
                     {m.combinedPct != null ? m.combinedPct.toFixed(1) + "%" : "—"}
                   </span>
                 </div>
@@ -655,12 +655,12 @@ export default function EmTrackerAdmin() {
               {open && (
                 <div style={{ padding: "12px 16px 16px 16px", background: "rgba(0,0,0,0.2)", borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
                   {trows.length === 0 && (
-                    <div style={{ fontSize: 11, color: HOME_THEME.muted }}>
+                    <div style={{ fontSize: 12, color: HOME_THEME.muted }}>
                       No going-forward weeks recorded yet. Each Saturday the band is seeded for the coming week, then scored the following Saturday from the weekly close.
                     </div>
                   )}
                   {trows.length > 0 && (
-                    <div style={{ display: "grid", gridTemplateColumns: "70px 80px 150px 90px 90px 70px 70px", gap: 6, fontSize: 11, alignItems: "center" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "70px 80px 150px 90px 90px 70px 70px", gap: 6, fontSize: 12, alignItems: "center" }}>
                       {/* header */}
                       {["Week","EM","Band (Down → Up)","Close","Δ Edge","Breach","Result"].map((h, i) => (
                         <span key={h} style={{ ...lbl, textAlign: i >= 1 && i <= 4 ? "right" : (i >= 5 ? "center" : "left") }}>{h}</span>
@@ -699,8 +699,8 @@ export default function EmTrackerAdmin() {
                                 </span>
                               ) : (
                                 <span style={{ display: "inline-flex", gap: 3 }}>
-                                  <button onClick={(e) => { e.stopPropagation(); setResult(r.id, "hit"); }} style={{ ...homeSecondaryButtonStyle, padding: "1px 6px", fontSize: 9 }} title="Mark win">W</button>
-                                  <button onClick={(e) => { e.stopPropagation(); setResult(r.id, "miss"); }} style={{ ...homeSecondaryButtonStyle, padding: "1px 6px", fontSize: 9 }} title="Mark loss">L</button>
+                                  <button onClick={(e) => { e.stopPropagation(); setResult(r.id, "hit"); }} style={{ ...homeSecondaryButtonStyle, padding: "1px 6px", fontSize: 10 }} title="Mark win">W</button>
+                                  <button onClick={(e) => { e.stopPropagation(); setResult(r.id, "miss"); }} style={{ ...homeSecondaryButtonStyle, padding: "1px 6px", fontSize: 10 }} title="Mark loss">L</button>
                                 </span>
                               )}
                             </span>
@@ -709,7 +709,7 @@ export default function EmTrackerAdmin() {
                       })}
                     </div>
                   )}
-                  <div style={{ fontSize: 9, color: HOME_THEME.muted, marginTop: 10 }}>
+                  <div style={{ fontSize: 10, color: HOME_THEME.muted, marginTop: 10 }}>
                     Win = weekly close inside the band [down, up]. Δ Edge = distance from the nearer band edge (green = cushion inside, red = how far it broke out).
                   </div>
                 </div>
@@ -749,7 +749,7 @@ export default function EmTrackerAdmin() {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
+      <span style={{ fontSize: 10, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
       {children}
     </div>
   );

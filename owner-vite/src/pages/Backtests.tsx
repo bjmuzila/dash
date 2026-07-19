@@ -13,8 +13,8 @@ const SOFT_RED = HOME_THEME.red;
 type FieldType = "number" | "select" | "checkbox" | "text";
 type Field = { key: string; label: string; type: FieldType; def: string | number | boolean; options?: string[] };
 
-const th: CSSProperties = { textAlign: "left", padding: "7px 10px", fontSize: 15, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.55, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
-const td: CSSProperties = { padding: "7px 10px", fontSize: 15, color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+const th: CSSProperties = { textAlign: "left", padding: "7px 10px", fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.55, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+const td: CSSProperties = { padding: "7px 10px", fontSize: 14, color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
   if (!rows?.length) return null;
@@ -71,7 +71,7 @@ function Panel({ title, subtitle, test, fields }: { title: string; subtitle: str
     <Card variant="budget" accent={LIGHT_BLUE} title={title} subtitle={subtitle}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
         {fields.map((f) => (
-          <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 15, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+          <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
             {f.label}
             {f.type === "select" ? (
               <ThemedSelect
@@ -95,19 +95,19 @@ function Panel({ title, subtitle, test, fields }: { title: string; subtitle: str
         </button>
       </div>
 
-      {err && <div style={{ marginTop: 12, fontSize: 15, color: SOFT_RED }}>Error: {err}</div>}
+      {err && <div style={{ marginTop: 12, fontSize: 14, color: SOFT_RED }}>Error: {err}</div>}
       {data && (
         <div style={{ marginTop: 14 }}>
-          {typeof data.note === "string" && <div style={{ fontSize: 15, color: LIGHT_BLUE, marginBottom: 8, lineHeight: 1.5 }}>{data.note}</div>}
+          {typeof data.note === "string" && <div style={{ fontSize: 14, color: LIGHT_BLUE, marginBottom: 8, lineHeight: 1.5 }}>{data.note}</div>}
           {sections.map(([k, v]) => (
             <div key={k} style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>{k}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>{k}</div>
               <DataTable rows={v as Record<string, unknown>[]} />
             </div>
           ))}
           {detail && (
             <details style={{ marginTop: 6 }}>
-              <summary style={{ cursor: "pointer", fontSize: 15, color: LIGHT_BLUE }}>Per-day detail ({detail.length})</summary>
+              <summary style={{ cursor: "pointer", fontSize: 14, color: LIGHT_BLUE }}>Per-day detail ({detail.length})</summary>
               <DataTable rows={detail} />
             </details>
           )}
@@ -121,7 +121,7 @@ export default function Backtests() {
   return (
     <PageShell>
       <Card variant="budget" accent={LIGHT_BLUE} title="Backtests" subtitle="Re-runnable edge studies over the live Postgres data. Owner-only.">
-        <p style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.6, margin: 0 }}>
+        <p style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.6, margin: 0 }}>
           Each panel runs server-side against the same tables the dashboard writes. Adjust the inputs and hit Run.
           Samples are still small — treat results as directional. Expand “Per-day detail” to see the underlying rows.
         </p>

@@ -102,7 +102,7 @@ function NavGlyph({ href }: { href: string }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        fontSize: 15,
+        fontSize: 14,
         lineHeight: 1,
         fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
       }}
@@ -168,7 +168,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
     padding: "9px 12px",
     borderRadius: 10,
     textDecoration: "none",
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: active ? 700 : 500,
     color: active ? HOME_THEME.cyan : HOME_THEME.text,
     background: active ? ACTIVE_TILE : "transparent",
@@ -245,7 +245,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 gap: 10,
                 padding: "9px 12px",
                 borderRadius: 10,
-                fontSize: 15,
+                fontSize: 14,
                 fontWeight: 500,
                 color: HOME_THEME.muted,
                 opacity: 0.5,
@@ -278,7 +278,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 padding: "9px 12px",
                 borderRadius: 10,
                 textDecoration: "none",
-                fontSize: 15,
+                fontSize: 14,
                 fontWeight: 500,
                 color: HOME_THEME.muted,
                 opacity: 0.45,
@@ -287,7 +287,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
             >
               <NavGlyph href={item.href} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
-              <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.cyan, opacity: 1, flexShrink: 0 }}>
+              <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.cyan, opacity: 1, flexShrink: 0 }}>
                 <LockIcon size={11} />
                 Upgrade
               </span>
@@ -346,13 +346,13 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
             color: isActive("/whats-new") ? HOME_THEME.cyan : HOME_THEME.muted,
             background: isActive("/whats-new") ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.03)",
             border: `1px solid ${isActive("/whats-new") ? "rgba(33,158,188,0.28)" : HOME_THEME.border}`,
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
           }}
         >
-          <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>✦</span>
+          <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>✦</span>
           <span>What&apos;s New</span>
         </Link>
       </div>
@@ -374,7 +374,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
             color: legalOpen ? HOME_THEME.cyan : HOME_THEME.muted,
             background: legalOpen ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.03)",
             border: `1px solid ${legalOpen ? "rgba(33,158,188,0.28)" : HOME_THEME.border}`,
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
@@ -395,7 +395,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                   onClick={closeMenu}
                   style={{
                     padding: "7px 10px",
-                    fontSize: 12.5,
+                    fontSize: 12,
                     fontWeight: active ? 700 : 500,
                     color: active ? HOME_THEME.cyan : HOME_THEME.text,
                     textDecoration: "none",

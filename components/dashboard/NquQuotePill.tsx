@@ -123,7 +123,7 @@ function fmtChg(last: number | null, prev: number | null) {
 // Tiny inline sparkline. `up` tints the stroke/fill green or red.
 function Sparkline({ data, up, width = 88, height = 26 }: { data: number[]; up: boolean; width?: number; height?: number }) {
   if (!data || data.length < 2) {
-    return <div style={{ width, height, opacity: 0.25, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: MUTED }}>—</div>;
+    return <div style={{ width, height, opacity: 0.25, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: MUTED }}>—</div>;
   }
   const min = Math.min(...data);
   const max = Math.max(...data);
@@ -380,7 +380,7 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
       >
         {/* Text on the left — same inline style as SPX/ESU/VIX */}
         <span style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-          <span style={{ fontSize: 15, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          <span style={{ fontSize: 14, color: "#fff", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
             {pill?.label ?? "NQU"}
           </span>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 23, fontWeight: 800, color: "#fff" }}>
@@ -417,13 +417,13 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
         >
           {/* header */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px 8px" }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: MUTED, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quotes</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: MUTED, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quotes</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {(() => {
                 const ext = etSession === "EXT";
                 return (
                   <span style={{
-                    padding: "3px 7px", borderRadius: 6, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+                    padding: "3px 7px", borderRadius: 6, fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
                     color: ext ? "#f59e0b" : DOCK_CYAN,
                     background: ext ? "rgba(245,158,11,0.1)" : cyA(0.1),
                     border: `1px solid ${ext ? "rgba(245,158,11,0.4)" : cyA(0.35)}`,
@@ -470,8 +470,8 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
                 {/* Left: line 1 = label + price; line 2 = +/- change and +/-% */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-                    <span style={{ fontSize: 15, color: "#fff", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>{r.label}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 17.5, fontWeight: 900, color: "#fff" }}>{fmtPrice(r.last)}</span>
+                    <span style={{ fontSize: 14, color: "#fff", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>{r.label}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 17, fontWeight: 900, color: "#fff" }}>{fmtPrice(r.last)}</span>
                   </div>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color }}>
                     {chg && <span style={{ marginRight: 5 }}>{chg}</span>}({fmtPct(r.pct)})
@@ -481,7 +481,7 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <Sparkline data={r.spark} up={up} width={56} height={20} />
                   <span style={{
-                    padding: "2px 6px", borderRadius: 5, fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+                    padding: "2px 6px", borderRadius: 5, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
                     color: isExt ? "#f59e0b" : MUTED,
                     background: isExt ? "rgba(245,158,11,0.1)" : "rgba(255,255,255,0.04)",
                     border: `1px solid ${isExt ? "rgba(245,158,11,0.35)" : "rgba(255,255,255,0.08)"}`,
@@ -494,7 +494,7 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
                     onClick={(e) => { e.stopPropagation(); removeTicker(r.sym); }}
                     style={{
                       background: "transparent", border: "none", cursor: "pointer",
-                      color: MUTED, fontSize: 16, lineHeight: 1, padding: "2px 4px",
+                      color: MUTED, fontSize: 17, lineHeight: 1, padding: "2px 4px",
                       fontFamily: "inherit",
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.color = DOWN)}
@@ -521,7 +521,7 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
                   style={{
                     flex: 1, minWidth: 0, padding: "7px 10px", borderRadius: 8,
                     background: "rgba(255,255,255,0.05)", color: "#fff",
-                    border: `1px solid ${cyA(0.3)}`, fontSize: 13, fontWeight: 700,
+                    border: `1px solid ${cyA(0.3)}`, fontSize: 14, fontWeight: 700,
                     textTransform: "uppercase", fontFamily: "inherit", outline: "none",
                   }}
                 />

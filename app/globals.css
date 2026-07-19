@@ -452,7 +452,7 @@ input.dte-range::-moz-range-track {
     gap: 8px !important;
   }
   .flow-root .flow-filter-grid label {
-    font-size: 9px !important;
+    font-size: 10px !important;
     margin-bottom: 2px !important;
   }
   .flow-root .flow-filter-grid input,

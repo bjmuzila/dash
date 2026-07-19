@@ -115,7 +115,7 @@ function FutureDisplay({ label, pfx, data }: FutureDisplayProps) {
               textAlign: "center",
             }}
           >
-            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".08em", marginBottom: 2 }}>{cellLabel}</div>
+            <div style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".08em", marginBottom: 2 }}>{cellLabel}</div>
             <div style={{ fontSize: id === "1up" || id === "1dn" ? 14 : 13, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
               {val}
             </div>
@@ -216,7 +216,7 @@ export default function DailyEmPanel() {
         <span style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "#ffb300", fontWeight: 700 }}>
           Daily Est. Moves
         </span>
-        <span style={{ fontSize: 9, color: statusColor, fontWeight: 700, letterSpacing: ".08em" }}>{statusText}</span>
+        <span style={{ fontSize: 10, color: statusColor, fontWeight: 700, letterSpacing: ".08em" }}>{statusText}</span>
       </div>
 
       {/* ES */}
@@ -238,7 +238,7 @@ export default function DailyEmPanel() {
             background: "transparent",
             border: "1px solid #1e3050",
             color: "#3a5570",
-            fontSize: 9,
+            fontSize: 10,
             letterSpacing: ".1em",
             textTransform: "uppercase",
             cursor: "pointer",

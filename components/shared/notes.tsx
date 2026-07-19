@@ -114,7 +114,7 @@ export function NotesBody({
     border: "1px solid rgba(255,255,255,0.06)",
     borderRadius: 12,
     color: HOME_THEME.text,
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: "inherit",
     padding: "8px 10px",
     outline: "none",
@@ -135,7 +135,7 @@ export function NotesBody({
       {/* list (newest first) — scrolls if it grows */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12, overflowY: "auto", maxHeight: maxListHeight, flex: 1, minHeight: 0, scrollbarWidth: "thin" }}>
         {notes.length === 0 && (
-          <div style={{ fontSize: 15, color: HOME_THEME.muted, padding: "8px 2px", lineHeight: 1.5 }}>
+          <div style={{ fontSize: 14, color: HOME_THEME.muted, padding: "8px 2px", lineHeight: 1.5 }}>
             No notes yet. Type above and press Enter.
           </div>
         )}
@@ -178,8 +178,8 @@ export function NotesBody({
                 <>
                   {/* text + timestamp on the same first row */}
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                    <div style={{ flex: 1, minWidth: 0, fontSize: 15, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{n.text}</div>
-                    <span style={{ flexShrink: 0, fontSize: 15, color: HOME_THEME.muted, fontWeight: 600, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>{formatNoteTime(n.ts)}</span>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{n.text}</div>
+                    <span style={{ flexShrink: 0, fontSize: 14, color: HOME_THEME.muted, fontWeight: 600, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>{formatNoteTime(n.ts)}</span>
                   </div>
                   {/* edit/delete reveal on hover */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, height: hoveredId === n.id ? 22 : 0, marginTop: hoveredId === n.id ? 4 : 0, overflow: "hidden", transition: "height 0.15s, margin-top 0.15s" }}>

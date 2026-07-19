@@ -15,7 +15,7 @@ export default function BetaGate() {
       <Link href="/sign-in?next=/pricing" style={{ textDecoration: "none" }}>
         <button style={secondaryBtn}>I already have an account</button>
       </Link>
-      <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 11.5, margin: "4px 0 0", lineHeight: 1.4, textAlign: "center" }}>
+      <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, margin: "4px 0 0", lineHeight: 1.4, textAlign: "center" }}>
         You'll choose your plan right after creating your account.
       </p>
     </div>
@@ -31,7 +31,7 @@ const joinBtn: React.CSSProperties = {
   border: "none",
   background: `linear-gradient(180deg, ${T.cyan}, #00b8c4)`,
   color: "#04121a",
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 800,
   cursor: "pointer",
 };

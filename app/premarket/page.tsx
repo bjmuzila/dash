@@ -226,9 +226,9 @@ function RVSigmaPanel({ spxPrice, spxPrev }: { spxPrice: number | null; spxPrev:
             const esEquiv     = value != null ? (value + 50).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "—";
             return (
               <tr key={label} style={{ borderBottom: `1px solid ${HT.border}` }}>
-                <td style={{ padding: "5px 10px", fontSize: 11, color: labelColor, fontWeight: isClose ? 700 : 500 }}>{label}</td>
-                <td style={{ padding: "5px 10px", fontSize: 11, color: HT.text, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{valueStr}</td>
-                <td style={{ padding: "5px 10px", fontSize: 11, color: HT.text, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{esEquiv}</td>
+                <td style={{ padding: "5px 10px", fontSize: 12, color: labelColor, fontWeight: isClose ? 700 : 500 }}>{label}</td>
+                <td style={{ padding: "5px 10px", fontSize: 12, color: HT.text, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{valueStr}</td>
+                <td style={{ padding: "5px 10px", fontSize: 12, color: HT.text, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{esEquiv}</td>
               </tr>
             );
           })}
@@ -261,25 +261,25 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
         {/* Left col */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div>
-            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>EXPECTED OVERNIGHT ACTION</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#EF4444" : "#e8edf5" }}>
+            <div style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>EXPECTED OVERNIGHT ACTION</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#EF4444" : "#e8edf5" }}>
               {esPct == null ? "—" : esPct > 0 ? `Gap Up ~${esPct.toFixed(2)}%` : esPct < 0 ? `Gap Down ~${(esPct).toFixed(2)}%` : "Flat Open"}
             </div>
           </div>
 
           <div>
-            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 4 }}>INVENTORY</div>
+            <div style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".1em", marginBottom: 4 }}>INVENTORY</div>
             <div style={{ display: "grid", gridTemplateColumns: "80px 80px 80px", gap: 4, marginBottom: 4 }}>
               {["POSTURE","DELTA","VOLUME"].map(h => (
-                <div key={h} style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".06em" }}>{h}</div>
+                <div key={h} style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".06em" }}>{h}</div>
               ))}
             </div>
             {[["Overall","—","—","avg"],["Large (>5 lot)","—","—",""],["Small","—","—",""]].map(([name, posture, delta, vol]) => (
               <div key={name} style={{ display: "grid", gridTemplateColumns: "80px 80px 80px auto", gap: 4, marginBottom: 2 }}>
-                <span style={{ fontSize: 11, color: "#e8edf5" }}>{name}</span>
-                <span style={{ fontSize: 11, color: "#ffffff" }}>{posture}</span>
-                <span style={{ fontSize: 11, color: "#ffffff" }}>{delta}</span>
-                <span style={{ fontSize: 11, color: "#ffffff" }}>{vol}</span>
+                <span style={{ fontSize: 12, color: "#e8edf5" }}>{name}</span>
+                <span style={{ fontSize: 12, color: "#ffffff" }}>{posture}</span>
+                <span style={{ fontSize: 12, color: "#ffffff" }}>{delta}</span>
+                <span style={{ fontSize: 12, color: "#ffffff" }}>{vol}</span>
               </div>
             ))}
           </div>
@@ -288,20 +288,20 @@ function PositioningPanel({ esRow, spxRow }: { esRow: QuoteRow | undefined; spxR
         {/* Right col */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
-            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT SENTIMENT</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#EF4444" : "#e8edf5" }}>
+            <div style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT SENTIMENT</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: esPct == null ? "#3a5570" : esPct > 0 ? "#00e676" : esPct < 0 ? "#EF4444" : "#e8edf5" }}>
               {sentiment}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT RANGE</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
+            <div style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>OVERNIGHT RANGE</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#e8edf5", fontVariantNumeric: "tabular-nums" }}>
               {overnightRange}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 9, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>PROFILE SHAPE</div>
-            <div style={{ fontSize: 13, color: "#ffffff" }}>—</div>
+            <div style={{ fontSize: 10, color: "#ffffff", letterSpacing: ".1em", marginBottom: 3 }}>PROFILE SHAPE</div>
+            <div style={{ fontSize: 14, color: "#ffffff" }}>—</div>
           </div>
         </div>
       </div>
@@ -386,10 +386,10 @@ export default function PremarketPage() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <h1 style={{ color: "#219EBC", fontSize: 13, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", margin: 0 }}>
+          <h1 style={{ color: "#219EBC", fontSize: 14, fontWeight: 700, letterSpacing: ".14em", textTransform: "uppercase", margin: 0 }}>
             Premarket Positioning
           </h1>
-          <span style={{ fontSize: 11, color: "#ffffff" }}>As of {asOf}</span>
+          <span style={{ fontSize: 12, color: "#ffffff" }}>As of {asOf}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span

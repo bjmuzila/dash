@@ -55,7 +55,7 @@ export default function NetDriftExample() {
           <div style={{ fontSize: 17, fontWeight: 800 }}>
             Net Drift (Premium) — <span style={{ color: T.cyan }}>SPX</span>
           </div>
-          <div style={{ fontSize: 13, color: T.text, opacity: 0.7, marginTop: 2 }}>
+          <div style={{ fontSize: 14, color: T.text, opacity: 0.7, marginTop: 2 }}>
             Cumulative net premium, 0DTE, OTM only, prints ≥ $50K
           </div>
         </div>
@@ -139,7 +139,7 @@ export default function NetDriftExample() {
         ))}
       </svg>
 
-      <p style={{ fontSize: 13.5, color: T.text, opacity: 0.75, margin: "14px 0 0", lineHeight: 1.55 }}>
+      <p style={{ fontSize: 14, color: T.text, opacity: 0.75, margin: "14px 0 0", lineHeight: 1.55 }}>
         Green is cumulative net <strong>call</strong> premium, red is net <strong>put</strong> premium — both signed by
         side, so a bought call adds and a sold call subtracts. The bars are per-minute gross premium. On the live page this
         spans the real 9:30–4:00 session and moves with every filter you set.
@@ -168,7 +168,7 @@ const head: React.CSSProperties = {
 };
 
 const sampleTag: React.CSSProperties = {
-  fontSize: 10.5,
+  fontSize: 10,
   fontWeight: 800,
   letterSpacing: "0.09em",
   textTransform: "uppercase",

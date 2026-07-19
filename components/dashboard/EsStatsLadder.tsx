@@ -123,7 +123,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
       >
         <span
           style={{
-            fontSize: 8,
+            fontSize: 10,
             letterSpacing: "0.14em",
             textTransform: "uppercase",
             color: "#fff",
@@ -160,7 +160,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
               padding: "6px 10px",
               background: "var(--overview-bg, #05080d)",
               color: "#1e3050",
-              fontSize: 11,
+              fontSize: 12,
               zIndex: 5,
             }}
           >
@@ -190,7 +190,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 {/* Label side */}
                 <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 13, fontWeight: 700, letterSpacing: "0.1em",
+                    fontSize: 14, fontWeight: 700, letterSpacing: "0.1em",
                     textTransform: "uppercase", color: "#219EBC", whiteSpace: "nowrap",
                   }}>
                     ES NOW
@@ -211,7 +211,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
                 {/* Value side */}
                 <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 16, fontWeight: 700, color: "#219EBC",
+                    fontSize: 17, fontWeight: 700, color: "#219EBC",
                     fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
                   }}>
                     {fmtPrice(entry.val)}
@@ -242,7 +242,7 @@ export default function EsStatsLadder({ esSpot }: Props) {
               {/* Label side */}
               <div style={{ flex: 1, textAlign: "right", paddingRight: 10, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 13, fontWeight: 700, letterSpacing: "0.1em",
+                  fontSize: 14, fontWeight: 700, letterSpacing: "0.1em",
                   textTransform: "uppercase", color: "#fff", whiteSpace: "nowrap",
                 }}>
                   {row.label}
@@ -262,14 +262,14 @@ export default function EsStatsLadder({ esSpot }: Props) {
               {/* Value side */}
               <div style={{ flex: 1, paddingLeft: 8, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 16, fontWeight: 700, color: "#fff",
+                  fontSize: 17, fontWeight: 700, color: "#fff",
                   fontVariantNumeric: "tabular-nums", lineHeight: 1, whiteSpace: "nowrap",
                 }}>
                   {hasVal ? fmtPrice(val) : "—"}
                 </div>
                 {distStr && (
                   <div style={{
-                    fontSize: 11, color: distPos ? "#22c55e" : "#FB8501",
+                    fontSize: 12, color: distPos ? "#22c55e" : "#FB8501",
                     marginTop: 1, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
                   }}>
                     {distStr}

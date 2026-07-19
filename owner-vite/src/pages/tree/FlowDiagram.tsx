@@ -146,7 +146,7 @@ export default function FlowDiagram() {
     <button
       onClick={() => setMode(m)}
       style={{
-        padding: "7px 16px", borderRadius: 8, fontSize: 15, fontWeight: 600, cursor: "pointer",
+        padding: "7px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer",
         border: `1px solid ${mode === m ? "#22d3ee" : "rgba(255,255,255,0.12)"}`,
         background: mode === m ? "rgba(34,211,238,0.12)" : "transparent",
         color: mode === m ? "#22d3ee" : "rgba(255,255,255,0.55)",
@@ -163,17 +163,17 @@ export default function FlowDiagram() {
         {btn("data", "Data Flow")}
         <div style={{ display: "none", alignItems: "center", gap: 8, marginLeft: "auto" }}>
           <button onClick={() => setFit(true)}
-            style={{ padding: "6px 12px", borderRadius: 8, fontSize: 15, fontWeight: 600, cursor: "pointer",
+            style={{ padding: "6px 12px", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer",
               border: `1px solid ${fit ? "#22d3ee" : "rgba(255,255,255,0.12)"}`,
               background: fit ? "rgba(34,211,238,0.12)" : "transparent",
               color: fit ? "#22d3ee" : "rgba(255,255,255,0.55)" }}>Fit</button>
           <button onClick={() => { setFit(false); setZoom((z) => Math.max(0.6, +(z - 0.2).toFixed(2))); }}
-            style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "#9fc", fontSize: 16, cursor: "pointer" }}>−</button>
+            style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "#9fc", fontSize: 17, cursor: "pointer" }}>−</button>
           <input type="range" min={0.6} max={3} step={0.1} value={zoom}
             onChange={(e) => { setFit(false); setZoom(+e.target.value); }} style={{ width: 140 }} />
           <button onClick={() => { setFit(false); setZoom((z) => Math.min(3, +(z + 0.2).toFixed(2))); }}
-            style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "#9fc", fontSize: 16, cursor: "pointer" }}>+</button>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 15, width: 38 }}>{fit ? "fit" : Math.round(zoom * 100) + "%"}</span>
+            style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "transparent", color: "#9fc", fontSize: 17, cursor: "pointer" }}>+</button>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 14, width: 38 }}>{fit ? "fit" : Math.round(zoom * 100) + "%"}</span>
         </div>
       </div>
       <div

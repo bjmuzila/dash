@@ -68,7 +68,7 @@ export default function PricingActions({
     width: "100%",
     padding: "12px 16px",
     borderRadius: 10,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: 700,
     cursor: "pointer",
   };

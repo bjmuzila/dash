@@ -359,7 +359,7 @@ export default function MobileGexPage() {
             />
           </div>
           {spotPrice > 0 && (
-            <span style={{ fontSize: 11, color: HOME_THEME.cyan, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
+            <span style={{ fontSize: 12, color: HOME_THEME.cyan, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
               {spotPrice.toFixed(2)}
             </span>
           )}
@@ -377,7 +377,7 @@ export default function MobileGexPage() {
                 borderRadius: 2,
                 background: viewMode === mode ? "#1a2a3a" : "transparent",
                 color: viewMode === mode ? "#219EBC" : "#3a5570",
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 700,
                 cursor: "pointer",
                 textTransform: "uppercase",
@@ -402,7 +402,7 @@ export default function MobileGexPage() {
                 borderRadius: 2,
                 background: dataMode === m ? "#1a2a3a" : "transparent",
                 color: dataMode === m ? "#219EBC" : "#3a5570",
-                fontSize: 9,
+                fontSize: 10,
                 fontWeight: 700,
                 cursor: "pointer",
                 textTransform: "uppercase",

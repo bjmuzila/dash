@@ -81,10 +81,10 @@ function Card({ title, subtitle, children, accent = "cyan" }: {
       {(title != null || subtitle != null) && (
         <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 3 }}>
           {title != null && (
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: TITLE_COLORS[accent] ?? HOME_THEME.cyan }}>{title}</div>
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", color: TITLE_COLORS[accent] ?? HOME_THEME.cyan }}>{title}</div>
           )}
           {subtitle != null && (
-            <div style={{ fontSize: 15, color: HOME_THEME.text }}>{subtitle}</div>
+            <div style={{ fontSize: 14, color: HOME_THEME.text }}>{subtitle}</div>
           )}
         </div>
       )}
@@ -106,17 +106,17 @@ const rateColor = (p: number | null) =>
   : HOME_THEME.orange;
 
 const th: React.CSSProperties = {
-  padding: "7px 10px", textAlign: "right", fontWeight: 700, fontSize: 15,
+  padding: "7px 10px", textAlign: "right", fontWeight: 700, fontSize: 14,
   letterSpacing: "0.03em", color: HOME_THEME.text, whiteSpace: "nowrap",
 };
 const thL: React.CSSProperties = { ...th, textAlign: "left" };
 const td: React.CSSProperties = {
   padding: "7px 10px", textAlign: "right", color: HOME_THEME.text,
-  fontSize: 15, borderTop: "1px solid rgba(255,255,255,0.06)", whiteSpace: "nowrap",
+  fontSize: 14, borderTop: "1px solid rgba(255,255,255,0.06)", whiteSpace: "nowrap",
 };
 const tdL: React.CSSProperties = { ...td, textAlign: "left" };
-const tdDim: React.CSSProperties = { ...td, fontSize: 15 };
-const note: React.CSSProperties = { marginTop: 10, fontSize: 15, fontStyle: "italic", color: HOME_THEME.text };
+const tdDim: React.CSSProperties = { ...td, fontSize: 14 };
+const note: React.CSSProperties = { marginTop: 10, fontSize: 14, fontStyle: "italic", color: HOME_THEME.text };
 
 const statGrid: React.CSSProperties = {
   display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 14,
@@ -152,15 +152,15 @@ function Tbl({ head, children, footNote }: { head: string[]; children: React.Rea
 function Stat({ k, v, sub }: { k: string; v: string; sub?: string }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 12 }}>
-      <div style={{ fontSize: 15, letterSpacing: "0.03em", color: HOME_THEME.text }}>{k}</div>
+      <div style={{ fontSize: 14, letterSpacing: "0.03em", color: HOME_THEME.text }}>{k}</div>
       <div style={{ fontSize: 20, fontWeight: 800, marginTop: 3, color: HOME_THEME.text }}>{v}</div>
-      {sub && <div style={{ fontSize: 15, marginTop: 3, color: HOME_THEME.text }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 14, marginTop: 3, color: HOME_THEME.text }}>{sub}</div>}
     </div>
   );
 }
 
 const sectionRow = (text: string) => (
-  <tr><td colSpan={5} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 15, paddingTop: 14 }}>{text}</td></tr>
+  <tr><td colSpan={5} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 14, paddingTop: 14 }}>{text}</td></tr>
 );
 
 /* ── LIVE TODAY ───────────────────────────────────────────────────────────────
@@ -386,7 +386,7 @@ function LiveToday({ sym, win, ds, days, hist }: {
   if (!live) {
     return (
       <Card title={`Today — ${sym}`} subtitle={connected ? "Waiting for today's bars…" : "Candle feed disconnected"}>
-        <div style={{ fontSize: 15, color: HOME_THEME.text }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text }}>
           No RTH bars yet for the current session. This card fills in from 09:30 ET.
         </div>
       </Card>
@@ -531,7 +531,7 @@ function Gauge({ pHigh }: { pHigh: number }) {
         <div style={{ fontSize: 24, fontWeight: 800, color: HOME_THEME.text }}>
           {(hiSide ? pHigh : 100 - pHigh).toFixed(1)}%
         </div>
-        <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", color: hiSide ? HOME_THEME.green : HOME_THEME.red }}>
+        <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.04em", color: hiSide ? HOME_THEME.green : HOME_THEME.red }}>
           {Math.abs(pHigh - 50) < 2 ? "NO DIRECTIONAL EDGE" : hiSide ? "HIGH BREAK BIAS" : "LOW BREAK BIAS"}
         </div>
       </div>
@@ -542,7 +542,7 @@ function Gauge({ pHigh }: { pHigh: number }) {
 function Bar({ label, p, color }: { label: string; p: number; color: string }) {
   return (
     <div style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, color: HOME_THEME.text, marginBottom: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text, marginBottom: 4 }}>
         <span>{label}</span><span style={{ fontWeight: 800, color }}>{p.toFixed(1)}%</span>
       </div>
       <div style={{ height: 8, borderRadius: 6, background: "rgba(255,255,255,0.07)", overflow: "hidden" }}>
@@ -636,23 +636,23 @@ function LiveGauges({ live, days, dowName, win }: { live: any; days: SlimDay[]; 
         background: "rgba(255,255,255,0.03)", border: `1px solid ${sColor}`, borderRadius: 12, padding: "14px 18px", marginBottom: 14,
       }}>
         <div>
-          <div style={{ fontSize: 15, color: HOME_THEME.text }}>Overall break bias</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text }}>Overall break bias</div>
           <div style={{ fontSize: 26, fontWeight: 800, color: sColor, marginTop: 2 }}>
             {strength === "NEUTRAL" ? "NEUTRAL — no edge" : `${strength} ${bull ? "BULLISH" : "BEARISH"} BREAK`}
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 34, fontWeight: 800, color: sColor }}>{score >= 0 ? "+" : ""}{score.toFixed(0)}</div>
-          <div style={{ fontSize: 15, color: HOME_THEME.text }}>−100 bear … +100 bull</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text }}>−100 bear … +100 bull</div>
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 12 }}>
         {/* direction gauge */}
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, marginBottom: 6 }}>Breakout target bias</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, marginBottom: 6 }}>Breakout target bias</div>
           <Gauge pHigh={pHigh} />
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 15, color: HOME_THEME.text }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 14, color: HOME_THEME.text }}>
             <span>High first <b style={{ color: HOME_THEME.green }}>{pHigh.toFixed(1)}%</b></span>
             <span>Low first <b style={{ color: HOME_THEME.red }}>{(100 - pHigh).toFixed(1)}%</b></span>
           </div>
@@ -660,32 +660,32 @@ function LiveGauges({ live, days, dowName, win }: { live: any; days: SlimDay[]; 
 
         {/* expansion matrix */}
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, marginBottom: 10 }}>Expansion matrix</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, marginBottom: 10 }}>Expansion matrix</div>
           <Bar label="Single-side trend" p={pSingle} color={HOME_THEME.cyan} />
           <Bar label="Rotational chop (both)" p={pBoth} color={HOME_THEME.purple} />
           <Bar label="Contained range (none)" p={pNone} color={HOME_THEME.orange} />
-          <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 4 }}>
             {pBoth > 32 ? "Rotational risk HIGH — expect a two-sided day" : "One-sided break expected — opposite extreme protected"}
           </div>
         </div>
 
         {/* active rule */}
         <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${vColor}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text, marginBottom: 10 }}>Active tactical rule</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, marginBottom: 10 }}>Active tactical rule</div>
           {rule ? (
             <>
               <div style={{ fontSize: 17, fontWeight: 800, color: vColor }}>
                 {rule.verdict === "tradeable" ? "TRADEABLE EDGE" : rule.verdict === "fade" ? "FADE SETUP" : "NO EDGE"}
               </div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 6 }}>{rule.name}</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 6 }}>{rule.name}</div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 10 }}>
-                <span style={{ fontSize: 15, color: HOME_THEME.text }}>Edge rate</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.text }}>Edge rate</span>
                 <span style={{ fontSize: 24, fontWeight: 800, color: vColor }}>{rule.p.toFixed(1)}%</span>
               </div>
-              <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 4 }}>{rule.note}</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 4 }}>{rule.note}</div>
             </>
           ) : (
-            <div style={{ fontSize: 15, color: HOME_THEME.text }}>Waiting on the 10:30 ET close.</div>
+            <div style={{ fontSize: 14, color: HOME_THEME.text }}>Waiting on the 10:30 ET close.</div>
           )}
         </div>
       </div>
@@ -1007,7 +1007,7 @@ function scoreWithHistory(rules: LiveRule[], days: SlimDay[]): ScoredRule[] {
 
 /** oldest→newest hit/miss dots for a rule's last 5 in-play sessions */
 function Last5Dots({ arr }: { arr: boolean[] }) {
-  if (!arr.length) return <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.4 }}>no history</span>;
+  if (!arr.length) return <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.4 }}>no history</span>;
   return (
     <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
       {arr.map((w, i) => (
@@ -1056,16 +1056,16 @@ function RuleClusterBoard({ live, days, dowName, win }: { live: any; days: SlimD
     >
       {/* overall last-5 sessions — realized tape */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18, alignItems: "center" }}>
-        <span style={{ fontSize: 13, color: LIGHT_BLUE, fontWeight: 800, letterSpacing: "0.04em" }}>LAST 5 SESSIONS</span>
+        <span style={{ fontSize: 14, color: LIGHT_BLUE, fontWeight: 800, letterSpacing: "0.04em" }}>LAST 5 SESSIONS</span>
         {recent.map((d) => {
           const up = d.firstTouchSide === "H";
           const col = d.firstTouchSide == null ? HOME_THEME.orange : up ? HOME_THEME.green : HOME_THEME.red;
           const brk = d.neitherBroke ? "contained" : d.bothBroke ? "both broke" : d.singleBreak ? "single break" : "—";
           return (
             <span key={d.date} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2, border: `1px solid ${col}`, borderRadius: 8, padding: "5px 9px", minWidth: 74 }}>
-              <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>{d.date.slice(5)}</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: col }}>{d.firstTouchSide == null ? "—" : up ? "HIGH ↑" : "LOW ↓"}</span>
-              <span style={{ fontSize: 10.5, color: HOME_THEME.text, opacity: 0.6 }}>{brk}</span>
+              <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>{d.date.slice(5)}</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: col }}>{d.firstTouchSide == null ? "—" : up ? "HIGH ↑" : "LOW ↓"}</span>
+              <span style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.6 }}>{brk}</span>
             </span>
           );
         })}
@@ -1084,12 +1084,12 @@ function RuleClusterBoard({ live, days, dowName, win }: { live: any; days: SlimD
               borderRadius: 14, padding: 15, position: "relative",
             }}>
               {(fam.correlated || fam.hero) && (
-                <span style={{ position: "absolute", top: 12, right: 12, fontSize: 9.5, letterSpacing: "0.5px", textTransform: "uppercase", color: HOME_THEME.orange, border: `1px solid ${HOME_THEME.orange}`, borderRadius: 5, padding: "2px 6px" }}>
+                <span style={{ position: "absolute", top: 12, right: 12, fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase", color: HOME_THEME.orange, border: `1px solid ${HOME_THEME.orange}`, borderRadius: 5, padding: "2px 6px" }}>
                   {fam.hero ? "early tell" : "correlated · 1 idea"}
                 </span>
               )}
               <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text }}>{fam.title}</div>
-              <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.6, marginBottom: 10 }}>{fam.sub}</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6, marginBottom: 10 }}>{fam.sub}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
                 <span style={{ fontSize: 22, fontWeight: 800, color: verdCol }}>{verd}</span>
                 {avg != null && <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>avg conviction <b style={{ color: verdCol }}>{avg.toFixed(1)}%</b></span>}
@@ -1101,7 +1101,7 @@ function RuleClusterBoard({ live, days, dowName, win }: { live: any; days: SlimD
                       <div style={{ fontSize: 12, color: HOME_THEME.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.id} · {r.name}</div>
                       <div style={{ marginTop: 4 }}><Last5Dots arr={r.last5} /></div>
                     </div>
-                    <span style={{ fontSize: 15, fontWeight: 800, color: rateColor(r.p), fontVariantNumeric: "tabular-nums", flex: "none" }}>{r.p == null ? "—" : `${r.p.toFixed(1)}%`}</span>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: rateColor(r.p), fontVariantNumeric: "tabular-nums", flex: "none" }}>{r.p == null ? "—" : `${r.p.toFixed(1)}%`}</span>
                   </div>
                 ))}
               </div>
@@ -1144,7 +1144,7 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
           : ["NOT IN PLAY", HOME_THEME.red];
     return (
       <span style={{
-        fontSize: 15, fontWeight: 800, color: col, border: `1px solid ${col}`,
+        fontSize: 14, fontWeight: 800, color: col, border: `1px solid ${col}`,
         borderRadius: 6, padding: "1px 8px", whiteSpace: "nowrap",
       }}>{txt}</span>
     );
@@ -1158,7 +1158,7 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
 
   // 4-column section header — sample counts are owner-only, so this board has no Sample column
   const secRow = (text: string) => (
-    <tr><td colSpan={4} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 15, paddingTop: 14 }}>{text}</td></tr>
+    <tr><td colSpan={4} style={{ ...tdL, color: LIGHT_BLUE, fontWeight: 800, fontSize: 14, paddingTop: 14 }}>{text}</td></tr>
   );
 
   return (
@@ -1202,7 +1202,7 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
                 <div style={{ color: HOME_THEME.text, opacity: 0.85 }}>chance {r.question}</div>
               </td>
               <td style={td}>{sideChip(r.side)}</td>
-              <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 18 }}>
+              <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 17 }}>
                 {r.p == null ? "—" : `${r.p.toFixed(1)}%`}
               </td>
             </tr>
@@ -1217,7 +1217,7 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
                 <div style={{ color: HOME_THEME.text, opacity: 0.85 }}>chance {r.question}</div>
               </td>
               <td style={td}>{sideChip(r.side)}</td>
-              <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 18 }}>
+              <td style={{ ...td, color: rateColor(r.p), fontWeight: 800, fontSize: 17 }}>
                 {r.p == null ? "—" : `${r.p.toFixed(1)}%`}
               </td>
             </tr>
@@ -1373,15 +1373,15 @@ function PlaybookLegacy({ live, days, dowName }: { live: any; days: SlimDay[]; d
             border: `1px solid ${s.p != null && s.p >= 60 ? HOME_THEME.green : s.p != null && s.p <= 40 ? HOME_THEME.red : "rgba(255,255,255,0.08)"}`,
             borderRadius: 12, padding: 14,
           }}>
-            <div style={{ fontSize: 15, color: HOME_THEME.text, fontWeight: 700 }}>{s.label}</div>
+            <div style={{ fontSize: 14, color: HOME_THEME.text, fontWeight: 700 }}>{s.label}</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "8px 0 4px" }}>
               <span style={{ fontSize: 28, fontWeight: 800, color: rateColor(s.p) }}>
                 {s.p == null ? "—" : `${s.p.toFixed(0)}%`}
               </span>
-              <span style={{ fontSize: 15, color: HOME_THEME.text }}>chance {s.question}</span>
+              <span style={{ fontSize: 14, color: HOME_THEME.text }}>chance {s.question}</span>
             </div>
             {s.n < 40 && (
-              <div style={{ fontSize: 15, color: HOME_THEME.text }}>thin sample</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.text }}>thin sample</div>
             )}
           </div>
         ))}
@@ -1449,7 +1449,7 @@ export default function IbStatsTab() {
   const err = errs[key];
 
   const btn = (on: boolean): React.CSSProperties => ({
-    padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
+    padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 800, cursor: "pointer",
     border: `1px solid ${on ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
     background: on ? "rgba(33,158,188,0.15)" : "transparent",
     color: HOME_THEME.text, transition: "all 0.15s",
@@ -1470,8 +1470,8 @@ export default function IbStatsTab() {
     </div>
   );
 
-  if (err) return <div>{symTabs}<Card title={`${winLabel(win)} Stats — dataset not found`}><div style={{ color: HOME_THEME.red, fontSize: 15 }}>{err}</div></Card></div>;
-  if (!ds) return <div>{symTabs}<Card title={`${winLabel(win)} Stats`}><div style={{ color: HOME_THEME.text, fontSize: 15 }}>Loading {sym} {winLabel(win)} dataset…</div></Card></div>;
+  if (err) return <div>{symTabs}<Card title={`${winLabel(win)} Stats — dataset not found`}><div style={{ color: HOME_THEME.red, fontSize: 14 }}>{err}</div></Card></div>;
+  if (!ds) return <div>{symTabs}<Card title={`${winLabel(win)} Stats`}><div style={{ color: HOME_THEME.text, fontSize: 14 }}>Loading {sym} {winLabel(win)} dataset…</div></Card></div>;
 
   /* The exporter wrote atr / avgIB / widthBucket as null for every session, so the
    * width-bucket tables came up empty. Derive them here from the raw sessions:
@@ -1612,7 +1612,7 @@ export default function IbStatsTab() {
           <button
             onClick={() => setShowStats((v) => !v)}
             style={{
-              alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800, cursor: "pointer",
+              alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 800, cursor: "pointer",
               border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: HOME_THEME.text,
             }}
           >
@@ -1629,7 +1629,7 @@ export default function IbStatsTab() {
             <Stat k={`Median ${winLabel(win)} width`} v={`${f2(med(widths))} pts`} />
             <Stat k="Range as % of day range" v={`${f2((avg(days.map((d) => d.width / d.dayRange)) ?? 0) * 100)}%`} />
           </div>
-          <div style={{ fontSize: 15, color: HOME_THEME.text, lineHeight: 1.55 }}>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.55 }}>
             {winLabel(win)} = {winRange(win)} ET high/low. A <b>break</b> means a bar <b>close</b> outside the range — wick-only touches
             are tracked separately as the trap set. Extensions, MFE and MAE are quoted in multiples of range width, measured from the
             broken level. Every rule below is identical across windows, so the tabs above are directly comparable: the shorter the

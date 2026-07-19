@@ -74,7 +74,7 @@ const OP_CSS = `
   .op-wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-bottom: 44px; }
   .op-card { background: var(--bg1); border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
   .op-card-h { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text1); padding: 13px 16px; background: var(--bg2); border-bottom: 1px solid var(--sm-border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-  .op-card-h .sub { font-size: 11px; font-weight: 600; letter-spacing: 0.01em; text-transform: none; color: var(--sm-muted); }
+  .op-card-h .sub { font-size: 12px; font-weight: 600; letter-spacing: 0.01em; text-transform: none; color: var(--sm-muted); }
   .op-card-b { padding: 16px; }
   .op-entry { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
   .op-entry .contract { flex: 2; min-width: 220px; }
@@ -90,27 +90,27 @@ const OP_CSS = `
   .op-chip.side-p { border-color: rgba(251,133,1,0.5); color: var(--amber); background: rgba(251,133,1,0.08); }
   .op-hint { color: var(--sm-muted); }
   .op-err { margin-top: 12px; font-size: 12px; color: var(--sm-red); border-left: 2px solid var(--sm-red); padding: 6px 10px; background: rgba(239,68,68,0.06); border-radius: 0 6px 6px 0; }
-  .op-btn { font-family: var(--sm-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.03em; cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); }
+  .op-btn { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.03em; cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--sm-border); background: var(--bg3); color: var(--text1); }
   .op-btn:hover { border-color: var(--cyan); }
   .op-btn:disabled { opacity: 0.5; cursor: default; }
-  .op-link { font-family: var(--sm-mono); font-size: 11px; color: var(--cyan); text-decoration: none; }
+  .op-link { font-family: var(--sm-mono); font-size: 12px; color: var(--cyan); text-decoration: none; }
   .op-link:hover { text-decoration: underline; }
   .op-row { display: grid; grid-template-columns: 1.3fr 1.25fr 1fr auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--sm-border); }
   .op-row:last-child { border-bottom: none; }
-  .op-tick { font-size: 16px; font-weight: 800; color: var(--text1); }
+  .op-tick { font-size: 17px; font-weight: 800; color: var(--text1); }
   .op-badge { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
   .op-badge.c { color: var(--sm-green); background: rgba(142,202,230,0.12); border: 1px solid rgba(142,202,230,0.4); }
   .op-badge.p { color: var(--amber); background: rgba(251,133,1,0.12); border: 1px solid rgba(251,133,1,0.4); }
   .op-rowsub { font-size: 12px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
-  .op-px { font-family: var(--sm-mono); font-size: 13px; color: var(--text1); }
+  .op-px { font-family: var(--sm-mono); font-size: 14px; color: var(--text1); }
   .op-px .arrow { color: var(--sm-muted); margin: 0 6px; }
   .op-px .lbl { color: var(--sm-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 4px; }
-  .op-pnl { font-family: var(--sm-mono); font-size: 15px; font-weight: 800; text-align: right; }
-  .op-pnl .d { font-size: 11px; font-weight: 600; display: block; margin-top: 2px; }
-  .op-x { background: none; border: none; color: var(--sm-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; justify-self: end; }
+  .op-pnl { font-family: var(--sm-mono); font-size: 14px; font-weight: 800; text-align: right; }
+  .op-pnl .d { font-size: 12px; font-weight: 600; display: block; margin-top: 2px; }
+  .op-x { background: none; border: none; color: var(--sm-muted); cursor: pointer; font-size: 17px; line-height: 1; padding: 0 2px; justify-self: end; }
   .op-x:hover { color: var(--sm-red); }
-  .op-empty { padding: 26px; text-align: center; color: var(--sm-muted); font-size: 13px; }
-  .op-note { font-size: 11px; color: var(--sm-muted); line-height: 1.55; margin-top: 12px; }
+  .op-empty { padding: 26px; text-align: center; color: var(--sm-muted); font-size: 14px; }
+  .op-note { font-size: 12px; color: var(--sm-muted); line-height: 1.55; margin-top: 12px; }
   .op-shorthand { display: flex; gap: 10px; margin-bottom: 12px; }
   .op-shorthand .op-input { flex: 1; }
   .op-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
@@ -126,7 +126,7 @@ const OP_CSS = `
   .op-tcard-h { display: flex; align-items: center; justify-content: space-between; }
   .op-bigrow { margin: 10px 0 8px; }
   .op-big { font-family: var(--sm-mono); font-size: 24px; font-weight: 800; line-height: 1; }
-  .op-bigsub { font-family: var(--sm-mono); font-size: 13px; color: var(--text1); margin-top: 6px; }
+  .op-bigsub { font-family: var(--sm-mono); font-size: 14px; color: var(--text1); margin-top: 6px; }
   .op-bigsub .lbl { color: var(--sm-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 3px; }
   .op-bigsub .arrow { color: var(--sm-muted); margin: 0 6px; }
   .op-dollars { font-weight: 700; }
@@ -135,11 +135,11 @@ const OP_CSS = `
   .op-legend .dot.in { background: transparent; border: 1.5px solid var(--text1); }
   .op-legend .dot.now { background: var(--cyan); }
   .op-legend-ago { margin-left: auto; }
-  .op-sparkempty { font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); padding: 16px 0; text-align: center; }
+  .op-sparkempty { font-family: var(--sm-mono); font-size: 12px; color: var(--sm-muted); padding: 16px 0; text-align: center; }
   .op-tcard { cursor: pointer; transition: border-color 0.12s; }
   .op-tcard:hover { border-color: rgba(33,158,188,0.4); }
   .op-tcard.open { border-color: rgba(33,158,188,0.5); }
-  .op-chev { color: var(--sm-muted); font-size: 11px; margin-left: 6px; }
+  .op-chev { color: var(--sm-muted); font-size: 12px; margin-left: 6px; }
   .op-chartwrap { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--sm-border); cursor: default; }
   .op-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
   .op-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -148,7 +148,7 @@ const OP_CSS = `
   .op-tgl.on { color: var(--text1); background: rgba(255,255,255,0.08); }
   .op-tgl.on.cyan { color: #219EBC; background: rgba(33,158,188,0.12); border-color: rgba(33,158,188,0.4); }
   .op-chartempty { padding: 40px 0; text-align: center; color: var(--sm-muted); font-size: 12px; font-family: var(--sm-mono); }
-  .op-charthint { margin-top: 8px; font-family: var(--sm-mono); font-size: 11px; color: var(--sm-muted); letter-spacing: 0.04em; }
+  .op-charthint { margin-top: 8px; font-family: var(--sm-mono); font-size: 12px; color: var(--sm-muted); letter-spacing: 0.04em; }
 
   :root {
     --bg0: #05060a;
@@ -560,7 +560,7 @@ export default function OptionsProbe() {
         <div className="op-card-h">
           Tracked <span className="sub">{rows.length} contract{rows.length === 1 ? "" : "s"}{lastLoad ? ` · updated ${ago(lastLoad)}` : ""}</span>
           <span style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto" }}>
-            <span style={{ fontFamily: "var(--sm-mono)", fontSize: 11, color: "var(--sm-muted)" }}>click a card for the full chart</span>
+            <span style={{ fontFamily: "var(--sm-mono)", fontSize: 12, color: "var(--sm-muted)" }}>click a card for the full chart</span>
             <button type="button" className="op-btn" onClick={refreshPrices} disabled={refreshing}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>
           </span>
         </div>

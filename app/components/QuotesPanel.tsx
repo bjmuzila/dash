@@ -223,7 +223,7 @@ export default function QuotesPanel() {
 
         .quote-symbol {
           font-weight: 700;
-          font-size: 13px;
+          font-size: 14px;
           color: var(--cyan);
           letter-spacing: 0.5px;
           font-variant-numeric: tabular-nums;
@@ -231,14 +231,14 @@ export default function QuotesPanel() {
 
         .quote-price {
           font-weight: 600;
-          font-size: 13px;
+          font-size: 14px;
           color: #fff;
           font-variant-numeric: tabular-nums;
         }
 
         .quote-change {
           font-weight: 600;
-          font-size: 13px;
+          font-size: 14px;
           font-variant-numeric: tabular-nums;
           display: flex;
           align-items: center;
@@ -254,7 +254,7 @@ export default function QuotesPanel() {
         }
 
         .quote-change-arrow {
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 700;
           margin-right: 2px;
         }
@@ -262,7 +262,7 @@ export default function QuotesPanel() {
         .quote-bid-ask {
           display: flex;
           gap: 8px;
-          font-size: 11px;
+          font-size: 12px;
           color: #9fb0bf;
           font-variant-numeric: tabular-nums;
         }
@@ -298,8 +298,8 @@ export default function QuotesPanel() {
 
       {/* Toolbar */}
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px',background:'#0a0f16',borderBottom:'1px solid #1a2a3a',flexShrink:0}}>
-        <div style={{fontWeight:700,color:'var(--cyan)',fontSize:13}}>Quotes</div>
-        <input type="text" id="quote-search" placeholder="Search symbol..." style={{flex:1,maxWidth:200,padding:'4px 8px',fontSize:11,background:'#070c14',border:'1px solid #1a2a3a',borderRadius:3,color:'#fff'}} />
+        <div style={{fontWeight:700,color:'var(--cyan)',fontSize: 14}}>Quotes</div>
+        <input type="text" id="quote-search" placeholder="Search symbol..." style={{flex:1,maxWidth:200,padding:'4px 8px',fontSize: 12,background:'#070c14',border:'1px solid #1a2a3a',borderRadius:3,color:'#fff'}} />
         <button onClick={() => window.location.reload()} style={{padding:'4px 10px',fontSize:10,background:'#0d1825',border:'1px solid #1a3a5f',borderRadius:3,color:'#219EBC',cursor:'pointer',fontWeight:700}}>RELOAD</button>
       </div>
 

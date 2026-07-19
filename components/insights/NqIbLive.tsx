@@ -221,7 +221,7 @@ export function NqIbLive() {
 
   const stat = (label: string, value: string, color = "#eef7ff") => (
     <div style={{ border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, padding: "18px 20px", background: "rgba(255,255,255,.02)" }}>
-      <div style={{ fontSize: 11, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 12, color: "#ffffff", fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>{label}</div>
       <div style={{ fontSize: 28, fontWeight: 900, color, fontFamily: "var(--font-mono)", marginTop: 8 }}>{value}</div>
     </div>
   );
@@ -234,7 +234,7 @@ export function NqIbLive() {
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#219EBC", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "#219EBC", letterSpacing: ".16em", textTransform: "uppercase", fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
             Live IB · NQ Futures
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: connected ? "#00e676" : "#5a7a99", boxShadow: connected ? "0 0 8px rgba(0,230,118,.8)" : "none" }} />
           </div>
@@ -248,7 +248,7 @@ export function NqIbLive() {
       </div>
 
       {!ib.hasData ? (
-        <div style={{ fontSize: 13, color: "#ffffff", padding: "12px 0" }}>
+        <div style={{ fontSize: 14, color: "#ffffff", padding: "12px 0" }}>
           {nowMins < IB_OPEN
             ? "Waiting for the 9:30 ET open — NQ IB builds live from quote samples during 9:30–10:30 ET."
             : "Collecting NQ quote samples for today's IB window…"}
@@ -269,7 +269,7 @@ export function NqIbLive() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 10, color: "#219EBC", letterSpacing: ".14em", textTransform: "uppercase", fontWeight: 800 }}>Rules In Play ({rules.length})</span>
             {!ib.done && (
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#ffb300", border: "1px solid #ffb30055", background: "#ffb3001a", padding: "3px 8px", borderRadius: 6 }}>Provisional · not locked</span>
+              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: "#ffb300", border: "1px solid #ffb30055", background: "#ffb3001a", padding: "3px 8px", borderRadius: 6 }}>Provisional · not locked</span>
             )}
           </div>
           {rules.length === 0 ? (

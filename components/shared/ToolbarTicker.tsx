@@ -70,7 +70,7 @@ function Pill({
         {price > 0 ? (quarter ? fmtEsQuarter(price) : fmt(price)) : "—"}
       </span>
       {c && (
-        <span className="ticker-chg" style={{ fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 800, color: c.up ? UP : DOWN }}>
+        <span className="ticker-chg" style={{ fontFamily: "var(--font-mono)", fontSize: 17, fontWeight: 800, color: c.up ? UP : DOWN }}>
           {c.text}
         </span>
       )}

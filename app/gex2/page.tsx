@@ -328,7 +328,7 @@ export default function Gex2Page() {
           <BudgetCard title="Options → gamma density" subtitle={d ? `Density ${d.balanceLabel} (P/C ${fmt2(d.pcGamma)}) — ${d.balanceNote}` : ""}>
             {d ? <DensityChart rows={rows} d={d} /> : <Empty note="—" />}
             {d && (
-              <div style={{ display: "flex", gap: 18, marginTop: 12, fontSize: 11, color: rgba(HOME_THEME.text, 0.7) }}>
+              <div style={{ display: "flex", gap: 18, marginTop: 12, fontSize: 12, color: rgba(HOME_THEME.text, 0.7) }}>
                 <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(LIGHT_BLUE, 0.75), borderRadius: 2, marginRight: 6 }} />calls</span>
                 <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(SOFT_RED, 0.75), borderRadius: 2, marginRight: 6 }} />puts</span>
                 <span><span style={{ display: "inline-block", width: 10, height: 10, background: rgba(HOME_THEME.orange, 0.9), borderRadius: 2, marginRight: 6 }} />max pain</span>

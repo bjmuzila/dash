@@ -20,7 +20,7 @@ const T = HOME_THEME;
 
 function Label({ children }: { children: ReactNode }) {
   return (
-    <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
+    <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
       {children}
     </span>
   );
@@ -113,7 +113,7 @@ function UpdatedStamp({ at }: { at: number | null }) {
         timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
       }).format(at) + " ET";
   return (
-    <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.55, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
+    <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.55, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
       updated {text}
     </span>
   );
@@ -237,8 +237,8 @@ function MultiGreekCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
-        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>peak strike</span>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>peak strike</span>
       </Row>
       <PillSelect value={tk} options={["SPX", "QQQ", "SPY"] as const} onChange={setTk} />
       {loading || error || !hasAny ? (
@@ -251,7 +251,7 @@ function MultiGreekCard() {
               <div key={k} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 3 }}>
                 <Label>{k} · peak strike</Label>
                 <Value color={pk ? signColor(pk.value) : T.muted} size={20}>{pk ? pk.strike.toLocaleString() : "—"}</Value>
-                <span style={{ fontSize: 16, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
+                <span style={{ fontSize: 17, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
                   {pk ? fmtBig(pk.value) : "—"}
                 </span>
               </div>
@@ -318,9 +318,9 @@ function EstimatedMoveCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>weekly</span>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>weekly</span>
           <Link
             href="/em"
             style={{
@@ -442,15 +442,15 @@ function PremarketCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
-        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
       </Row>
       {loading || error || bullets.length === 0 || isStale ? (
         <CardState loading={loading} error={error ?? data?.error ?? null} empty={emptyMsg} />
       ) : (
         <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7, flex: 1, minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}>
           {bullets.map((b, i) => (
-            <li key={i} style={{ fontSize: 16, lineHeight: 1.45, color: T.text }}>{b}</li>
+            <li key={i} style={{ fontSize: 17, lineHeight: 1.45, color: T.text }}>{b}</li>
           ))}
         </ul>
       )}
@@ -626,12 +626,12 @@ function ConfidenceCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Confidence Score
-          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
+          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
         </span>
         {forDate && (
-          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{forDate}</span>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{forDate}</span>
         )}
       </Row>
       {loading || error || score == null ? (
@@ -643,7 +643,7 @@ function ConfidenceCard() {
               <Value color={bandColor} size={34}>{score}</Value>
               <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>/100</span>
             </div>
-            <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", color: bandColor }}>{band}</span>
+            <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.1em", color: bandColor }}>{band}</span>
           </Row>
           <div style={{ height: 6, borderRadius: 3, background: T.border, overflow: "hidden" }}>
             <div style={{ width: `${score}%`, height: "100%", background: bandColor }} />
@@ -710,7 +710,7 @@ function ConfidenceCard() {
                         paddingBottom: 6,
                       }}
                     >
-                      <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", color: T.muted }}>{cp.label}</span>
+                      <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: T.muted }}>{cp.label}</span>
                       <span style={{ textAlign: "right" }}>
                         <Value size={14} color={T.cyan}>{seg ? Math.round(seg.strike).toLocaleString() : "—"}</Value>
                       </span>
@@ -804,7 +804,7 @@ function GreeksCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
         <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
           {usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
         </span>
@@ -822,7 +822,7 @@ function GreeksCard() {
               <div key={g} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 5 }}>
                 <Label>{g}</Label>
                 <Value color={nowVal > 0 ? POS_GREEN : nowVal < 0 ? T.red : T.text} size={28}>{fmtBig(nowVal)}</Value>
-                <div style={{ display: "flex", gap: 10, fontFamily: "var(--font-mono)", fontSize: 13 }}>
+                <div style={{ display: "flex", gap: 10, fontFamily: "var(--font-mono)", fontSize: 14 }}>
                   <span style={{ opacity: d15 == null ? 0.5 : 1 }}>
                     <span style={{ color: T.text }}>15m</span>{" "}
                     <span style={{ color: d15 == null ? T.muted : signColor(d15) }}>{d15 == null ? "—" : fmtBig(d15)}</span>
@@ -952,8 +952,8 @@ function IbCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
-        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
       </Row>
 
       {/* Countdown bar (9:30–10:30 ET IB window). */}
@@ -984,11 +984,11 @@ function IbCard() {
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <Row style={{ marginBottom: 2 }}>
                   <span style={{ fontSize: 14, fontWeight: 800, color: leanColor }}>{amt?.dayTypeLabel ?? "—"}</span>
-                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: leanColor }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: leanColor }}>
                     {amt?.bias.lean ?? "neutral"}
                   </span>
                 </Row>
-                <span style={{ fontSize: 13, color: T.text, lineHeight: 1.4 }}>{amt?.bias.text}</span>
+                <span style={{ fontSize: 14, color: T.text, lineHeight: 1.4 }}>{amt?.bias.text}</span>
               </div>
             );
           })()}
@@ -1023,7 +1023,7 @@ function IbCard() {
                         gap: 3,
                       }}
                     >
-                      <span style={{ fontSize: 13, fontWeight: 800, color: themeColor }}>{rule.title}</span>
+                      <span style={{ fontSize: 14, fontWeight: 800, color: themeColor }}>{rule.title}</span>
                       <span style={{ fontSize: 12, color: T.text, lineHeight: 1.4 }}>{rule.detail}</span>
                     </div>
                   );
@@ -1126,8 +1126,8 @@ function LevelsCard() {
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
-        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
           {hasLiveSpot ? "live · ES" : connected ? "ES · closed" : "loading…"}
         </span>
       </Row>
@@ -1151,12 +1151,12 @@ function LevelsCard() {
               const showStrong = hasLiveSpot && (inPlay || s.state === "above" || s.state === "below");
               return (
                 <Row key={s.level.kind} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
-                  <span style={{ fontSize: 16, flex: 1, textAlign: "left" }}>{s.level.label}</span>
+                  <span style={{ fontSize: 17, flex: 1, textAlign: "left" }}>{s.level.label}</span>
                   <Value size={12}>{s.level.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Value>
                   <Value size={11} color={dist == null ? T.muted : above ? POS_GREEN : T.red}>
                     {dist == null ? "—" : `${above ? "+" : ""}${dist.toFixed(2)}`}
                   </Value>
-                  <span style={{ fontSize: 8, fontWeight: 800, textTransform: "uppercase", color: lbl.color, opacity: showStrong || (isOn && !rthNow) ? 1 : 0.4, minWidth: 56, textAlign: "right" }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: lbl.color, opacity: showStrong || (isOn && !rthNow) ? 1 : 0.4, minWidth: 56, textAlign: "right" }}>
                     {lbl.text}
                   </span>
                 </Row>
@@ -1168,7 +1168,7 @@ function LevelsCard() {
           <div style={divider} />
           <Label>Active setups</Label>
           {setups.length === 0 ? (
-            <span style={{ fontSize: 15, color: T.muted, opacity: 0.6 }}>
+            <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>
               {rthNow ? "No active setups." : "Waiting for the open."}
             </span>
           ) : (
@@ -1179,10 +1179,10 @@ function LevelsCard() {
                 return (
                   <div key={`${s.kind}-${s.ts}-${i}`} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
                     <Row>
-                      <span style={{ fontSize: 15, fontWeight: 700 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700 }}>
                         <span style={{ color: long ? POS_GREEN : T.red }}>{long ? "▲" : "▼"}</span> {s.title}
                       </span>
-                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
                     </Row>
                     <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted }}>
                       entry {fmt(s.entry)} · stop {fmt(s.stop)} · tgt {fmt(s.target)}
@@ -1314,8 +1314,8 @@ function ContractLookupCard() {
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
-        <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
           {rows.length} saved · click a card for stats
         </span>
       </Row>
@@ -1375,28 +1375,28 @@ function ContractLookupCard() {
               >
                 <Row>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{r.ticker}</span>
+                    <span style={{ fontSize: 17, fontWeight: 800, color: T.text }}>{r.ticker}</span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: r.side === "C" ? POS_GREEN : T.orange }}>
                       {r.strike}{r.side}
                     </span>
                   </span>
-                  <button onClick={(e) => remove(r.id, e)} title="Remove" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+                  <button onClick={(e) => remove(r.id, e)} title="Remove" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 17 }}>×</button>
                 </Row>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
                   {r.expiration}{r.note && <span style={{ fontStyle: "italic" }}> · {r.note}</span>}
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
                   <Value color={T.cyan} size={22}>{wFmt(s?.mark)}</Value>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: chgColor, fontFamily: "var(--font-mono)" }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: chgColor, fontFamily: "var(--font-mono)" }}>
                     {chg == null ? "—" : `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`}
                   </span>
                   {r.added_price != null && (
-                    <span style={{ fontSize: 11, color: T.muted, fontFamily: "var(--font-mono)" }}>
+                    <span style={{ fontSize: 12, color: T.muted, fontFamily: "var(--font-mono)" }}>
                       added @ {wFmt(r.added_price)}
                     </span>
                   )}
                 </div>
-                <span style={{ fontSize: 11, color: T.muted }}>Updated {wTimeAgo(s?.ts)}</span>
+                <span style={{ fontSize: 12, color: T.muted }}>Updated {wTimeAgo(s?.ts)}</span>
 
                 {isOpen && (
                   <div
@@ -1517,12 +1517,12 @@ function StrategyBuilderCard() {
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
       <Row>
-        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
           Strategy Builder
-          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
+          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
         </span>
         {planDate && active && (
-          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
             {isStale ? `last · ${planDate}` : planDate}
           </span>
         )}
@@ -1540,19 +1540,19 @@ function StrategyBuilderCard() {
           {/* Bias + headline */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{
-              fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+              fontSize: 17, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
               color: biasColor(plan!.bias), border: `1px solid ${biasColor(plan!.bias)}`,
               borderRadius: 8, padding: "4px 12px",
             }}>
               {plan!.bias ?? "neutral"}
             </span>
             {plan!.headline && (
-              <span style={{ fontSize: 18, fontWeight: 700, color: T.text, flex: 1 }}>{plan!.headline}</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: T.text, flex: 1 }}>{plan!.headline}</span>
             )}
           </div>
 
           {plan!.summary && (
-            <p style={{ fontSize: 15, lineHeight: 1.65, color: T.text, margin: 0, opacity: 0.92 }}>{plan!.summary}</p>
+            <p style={{ fontSize: 14, lineHeight: 1.65, color: T.text, margin: 0, opacity: 0.92 }}>{plan!.summary}</p>
           )}
 
           <div style={divider} />
@@ -1568,18 +1568,18 @@ function StrategyBuilderCard() {
                 plan!.levels!.map((lv, i) => (
                   <div key={i} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6, display: "flex", flexDirection: "column", gap: 2 }}>
                     <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: T.cyan }}>{lv.label ?? "—"}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: T.cyan }}>{lv.label ?? "—"}</span>
                       {lv.price != null && String(lv.price) !== "" && (
                         <>
                           <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
-                          <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: T.text }}>
+                          <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: T.text }}>
                             {String(lv.price)}
                             <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, opacity: 0.65, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
                           </span>
                         </>
                       )}
                     </div>
-                    {lv.note && <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.45 }}>{lv.note}</span>}
+                    {lv.note && <span style={{ fontSize: 14, color: T.muted, lineHeight: 1.45 }}>{lv.note}</span>}
                   </div>
                 ))
               )}
@@ -1591,7 +1591,7 @@ function StrategyBuilderCard() {
               {plan!.idea ? (
                 <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                   <Row>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: biasColor(plan!.idea.direction) }}>
+                    <span style={{ fontSize: 17, fontWeight: 800, color: biasColor(plan!.idea.direction) }}>
                       {plan!.idea.direction === "long" ? "▲ LONG" : plan!.idea.direction === "short" ? "▼ SHORT" : "—"}
                     </span>
                   </Row>
@@ -1601,7 +1601,7 @@ function StrategyBuilderCard() {
                     <Stat label="Target" value={withSpx(plan!.idea.target)} color={POS_GREEN} size={16} />
                   </div>
                   {plan!.idea.rationale && (
-                    <span style={{ fontSize: 15, color: T.muted, lineHeight: 1.5 }}>{plan!.idea.rationale}</span>
+                    <span style={{ fontSize: 14, color: T.muted, lineHeight: 1.5 }}>{plan!.idea.rationale}</span>
                   )}
                 </div>
               ) : (
@@ -1614,7 +1614,7 @@ function StrategyBuilderCard() {
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
                   {plan!.triggers!.map((t, i) => (
-                    <li key={i} style={{ fontSize: 16, lineHeight: 1.5, color: T.text }}>{t}</li>
+                    <li key={i} style={{ fontSize: 17, lineHeight: 1.5, color: T.text }}>{t}</li>
                   ))}
                 </ul>
               )}
@@ -1624,7 +1624,7 @@ function StrategyBuilderCard() {
           {plan!.risk && (
             <>
               <div style={divider} />
-              <span style={{ fontSize: 16, color: T.muted, lineHeight: 1.55 }}>
+              <span style={{ fontSize: 17, color: T.muted, lineHeight: 1.55 }}>
                 <span style={{ fontWeight: 800, color: T.orange, letterSpacing: "0.06em" }}>RISK · </span>
                 {plan!.risk}
               </span>

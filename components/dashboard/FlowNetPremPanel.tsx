@@ -248,7 +248,7 @@ export default function FlowNetPremPanel() {
     fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
     color: C.green, marginBottom: 4, display: "block",
   };
-  const fieldStyle: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 11, padding: "6px 8px" };
+  const fieldStyle: React.CSSProperties = { ...homeInputStyle, width: "100%", fontSize: 12, padding: "6px 8px" };
   const segWrapStyle: React.CSSProperties = {
     display: "flex", border: `1px solid ${C.border}`, borderRadius: 6, background: "rgba(0,0,0,0.4)", overflow: "hidden",
   };
@@ -273,13 +273,13 @@ export default function FlowNetPremPanel() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", flexShrink: 0, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <select
-            style={{ ...homeInputStyle, fontSize: 11, padding: "4px 8px", width: 84 }}
+            style={{ ...homeInputStyle, fontSize: 12, padding: "4px 8px", width: 84 }}
             value={active}
             onChange={(e) => setActive(e.target.value)}
           >
             {TICKERS.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-          <span style={{ fontSize: 11, fontWeight: 800, color: C.text, whiteSpace: "nowrap" }}>Net Premium</span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: C.text, whiteSpace: "nowrap" }}>Net Premium</span>
           {loading && <span style={{ fontSize: 10, color: C.muted }}>· loading…</span>}
         </div>
 
@@ -307,7 +307,7 @@ export default function FlowNetPremPanel() {
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
         <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
         {!netSeries.hasData && !loading && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 11, pointerEvents: "none" }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12, pointerEvents: "none" }}>
             No {active} flow yet for the current filters.
           </div>
         )}

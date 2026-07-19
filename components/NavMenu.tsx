@@ -199,7 +199,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
     padding: "9px 12px",
     borderRadius: 10,
     textDecoration: "none",
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: active ? 700 : 500,
     color: active ? HOME_THEME.cyan : HOME_THEME.text,
     background: active ? ACTIVE_TILE : "transparent",
@@ -251,7 +251,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
         <div style={{ marginBottom: 4 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px 4px", color: HOME_THEME.muted }}>
             <StarIcon size={12} />
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quick Pages</span>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>Quick Pages</span>
           </div>
           {quick.map((href) => {
             const item = NAV_ITEM_BY_HREF.get(href);
@@ -301,7 +301,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                 borderRadius: 10,
                 cursor: "pointer",
                 color: groupActive || isOpen ? HOME_THEME.cyan : HOME_THEME.text,
-                fontSize: 15,
+                fontSize: 14,
                 fontWeight: groupActive || isOpen ? 700 : 500,
                 ...(groupActive || isOpen
                   ? { background: ACTIVE_TILE, border: "1px solid rgba(33,158,188,0.30)", boxShadow: "0 0 14px rgba(33,158,188,0.18)" }
@@ -338,7 +338,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                           paddingRight: 30,
                           borderRadius: 9,
                           textDecoration: "none",
-                          fontSize: 14.5,
+                          fontSize: 14,
                           fontWeight: active ? 700 : 500,
                           color: active ? HOME_THEME.cyan : HOME_THEME.text,
                           background: active ? ACTIVE_TILE : "transparent",
@@ -390,7 +390,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
             color: legalOpen ? HOME_THEME.cyan : HOME_THEME.muted,
             background: legalOpen ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.03)",
             border: `1px solid ${legalOpen ? "rgba(33,158,188,0.28)" : HOME_THEME.border}`,
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
@@ -410,7 +410,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
                   onClick={closeMenu}
                   style={{
                     padding: "7px 10px",
-                    fontSize: 12.5,
+                    fontSize: 12,
                     fontWeight: active ? 700 : 500,
                     color: active ? HOME_THEME.cyan : HOME_THEME.text,
                     textDecoration: "none",

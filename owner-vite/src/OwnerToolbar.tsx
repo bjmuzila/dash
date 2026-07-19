@@ -74,7 +74,7 @@ export default function OwnerToolbar() {
 
       <Link to="/owner" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
         <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto" }} />
-        <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.18em", color: CY, textTransform: "uppercase" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.18em", color: CY, textTransform: "uppercase" }}>
           Owner
         </span>
       </Link>
@@ -83,7 +83,7 @@ export default function OwnerToolbar() {
 
       <span
         title="Eastern Time"
-        style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", whiteSpace: "nowrap" }}
+        style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", whiteSpace: "nowrap" }}
       >
         {clock} ET
       </span>

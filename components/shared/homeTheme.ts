@@ -133,7 +133,7 @@ export const statTileStyle: CSSProperties = {
 };
 
 export const homeInputStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 14,
   padding: "8px 12px",
   border: `1px solid ${HOME_THEME.border}`,
   borderRadius: 6,
@@ -206,7 +206,7 @@ export type RefreshState = "idle" | "refreshing" | "success" | "error";
 const REFRESH_GREEN = "#1FD98A";
 export function homeRefreshButtonStyle(state: RefreshState): CSSProperties {
   return {
-    fontSize: 9,
+    fontSize: 10,
     padding: "2px 10px",
     border: `1px solid ${
       state === "success" ? REFRESH_GREEN : state === "error" ? HOME_THEME.red : themeRgba(HOME_THEME.cyan, 0.4)

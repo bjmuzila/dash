@@ -243,7 +243,7 @@ function Legend({ slices }: { slices: Slice[] }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {slices.map((s) => (
-        <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15 }}>
+        <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14 }}>
           <span style={{ width: 12, height: 12, borderRadius: 3, background: s.color, flexShrink: 0 }} />
           <span style={{ color: HOME_THEME.text }}>{s.label}</span>
           <span style={{ color: HOME_THEME.text, fontWeight: 700, marginLeft: "auto" }}>{s.pct}%</span>
@@ -259,7 +259,7 @@ function pillStyle(bg: string): CSSProperties {
     textAlign: "center",
     padding: "9px 14px",
     borderRadius: 6,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 800,
     color: HOME_THEME.bg,
     background: bg,
@@ -290,14 +290,14 @@ function DataRow({ label, value, tone }: Row) {
         alignItems: "center",
         padding: "8px 12px",
         borderRadius: 4,
-        fontSize: 15,
+        fontSize: 14,
         background: tone === "highlight" ? `${HOME_THEME.purple}55` : "transparent",
       }}
     >
       <span style={{ color: HOME_THEME.text, fontWeight: tone === "highlight" ? 700 : 500 }}>
         {label}
       </span>
-      <span style={{ color: rowValueColor(tone), fontWeight: 700, fontSize: 15, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
+      <span style={{ color: rowValueColor(tone), fontWeight: 700, fontSize: 14, fontFamily: "var(--font-mono, monospace)" }}>{value}</span>
     </div>
   );
 }
@@ -305,7 +305,7 @@ function DataRow({ label, value, tone }: Row) {
 function SideBox({ title, rows }: { title: string; rows: { label: string; value: string }[] }) {
   return (
     <div style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: 16, display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.orange, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+      <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.orange, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
         {title}
       </div>
       {rows.map((r) => (
@@ -325,11 +325,11 @@ function Footer({ data }: { data: SymbolData }) {
         borderTop: `1px solid ${HOME_THEME.border}`,
         paddingTop: 14,
         marginTop: 18,
-        fontSize: 15,
+        fontSize: 14,
       }}
     >
       <div>
-        <div style={{ fontSize: 16, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Filters</div>
+        <div style={{ fontSize: 17, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Filters</div>
         {data.filters.map((f) => (
           <div key={f} style={{ color: HOME_THEME.text }}>
             {f}
@@ -337,14 +337,14 @@ function Footer({ data }: { data: SymbolData }) {
         ))}
       </div>
       <div>
-        <div style={{ fontSize: 16, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Series</div>
+        <div style={{ fontSize: 17, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Series</div>
         <div style={{ color: HOME_THEME.text }}>{data.series}</div>
       </div>
       <div style={{ textAlign: "right" }}>
-        <div style={{ fontSize: 16, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        <div style={{ fontSize: 17, color: HOME_THEME.green, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           Total Premium
         </div>
-        <div style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, fontSize: 15 }}>{data.totalPremium}</div>
+        <div style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)", fontWeight: 700, fontSize: 14 }}>{data.totalPremium}</div>
       </div>
     </div>
   );
@@ -365,7 +365,7 @@ function SymbolPanel({ data }: { data: SymbolData }) {
         <div>
           <div
             style={{
-              fontSize: 16,
+              fontSize: 17,
               fontWeight: 800,
               color: HOME_THEME.orange,
               textTransform: "uppercase",
@@ -404,10 +404,10 @@ function SymbolPanel({ data }: { data: SymbolData }) {
 function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 16, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+      <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
         {label}
       </div>
-      <div style={{ fontSize: 15, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
+      <div style={{ fontSize: 14, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
     </div>
   );
 }
@@ -560,12 +560,12 @@ function deriveGexLevels(s: GexLevelsSnapshot | null): GexLevelsDerived | null {
 }
 
 function GlEmpty({ note }: { note: string }) {
-  return <div style={{ padding: 32, textAlign: "center", fontSize: 15, color: HOME_THEME.text, opacity: 0.5 }}>{note}</div>;
+  return <div style={{ padding: 32, textAlign: "center", fontSize: 14, color: HOME_THEME.text, opacity: 0.5 }}>{note}</div>;
 }
 
 function ChartLegend({ items }: { items: { label: string; color: string }[] }) {
   return (
-    <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 15, color: HOME_THEME.text, opacity: 0.75 }}>
+    <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 14, color: HOME_THEME.text, opacity: 0.75 }}>
       {items.map((it) => (
         <span key={it.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: it.color, display: "inline-block" }} />
@@ -608,7 +608,7 @@ function SemiGauge({
         <circle cx={cx} cy={cy} r={4.5} fill={HOME_THEME.text} />
         <text x={cx} y={cy - 18} textAnchor="middle" fontSize={15} fontWeight={800} fill={HOME_THEME.text}>{valueLabel}</text>
       </svg>
-      <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.7, marginTop: -6, textAlign: "center" }}>{label}</div>
     </div>
   );
 }
@@ -718,7 +718,7 @@ function ChartTooltip({ x, y, children }: { x: number; y: number; children: Reac
         border: `1px solid ${HOME_THEME.border}`,
         borderRadius: 8,
         padding: "8px 12px",
-        fontSize: 15,
+        fontSize: 14,
         lineHeight: 1.5,
         color: HOME_THEME.text,
         pointerEvents: "none",
@@ -1194,7 +1194,7 @@ function OiByExpiryMiniChart({ rows, valueKey, color, label }: { rows: OiByExpir
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color, textAlign: "center", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color, textAlign: "center", marginBottom: 2 }}>{label}</div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 200 }} onMouseLeave={hide}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
         {rows.map((r, i) => {
@@ -1242,12 +1242,12 @@ function OiByExpirationPanel({ symbol, expirations }: { symbol: string; expirati
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
           {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · once/day (OPRA OI)` : "—"}
         </div>
-        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 15, marginLeft: "auto" }}>Refresh</button>
+        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
       </div>
-      {err && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 8 }}>OI-by-expiration error: {err}</div>}
+      {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>OI-by-expiration error: {err}</div>}
       {!rows.length && !err ? (
         <GlEmpty note={loading ? "loading expirations…" : "no data yet"} />
       ) : (
@@ -1382,12 +1382,12 @@ function EodGexPanel() {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.6 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
           {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · one bar per session (eod_gex)` : "—"}
         </div>
-        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 15, marginLeft: "auto" }}>Refresh</button>
+        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
       </div>
-      {err && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 8 }}>EOD GEX error: {err}</div>}
+      {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>EOD GEX error: {err}</div>}
       {!rows.length && !err ? (
         <GlEmpty note={loading ? "loading eod_gex…" : "no data yet"} />
       ) : (
@@ -1551,8 +1551,8 @@ function GlCurveSpark({ curve, neutral }: { curve?: { k: number; c: number }[] |
 }
 
 function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
-  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 16, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
-  const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 15, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
+  const th: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 17, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6, borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" };
+  const td: CSSProperties = { textAlign: "right", padding: "6px 8px", fontSize: 14, fontFamily: "var(--font-mono, monospace)", color: HOME_THEME.text, borderBottom: `1px solid ${HOME_THEME.border}` };
 
   return (
     <div style={{ maxHeight: 320, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
@@ -1676,7 +1676,7 @@ function DragHandle({ onDragStart, onDragEnd }: { onDragStart: (e: DragEvent) =>
       onDragEnd={onDragEnd}
       onMouseDown={(e) => e.stopPropagation()}
       title="Drag to reorder"
-      style={{ cursor: "grab", color: HOME_THEME.text, opacity: 0.4, fontSize: 16, lineHeight: 1, padding: "2px 6px", userSelect: "none", flexShrink: 0 }}
+      style={{ cursor: "grab", color: HOME_THEME.text, opacity: 0.4, fontSize: 17, lineHeight: 1, padding: "2px 6px", userSelect: "none", flexShrink: 0 }}
     >
       ⠿
     </span>
@@ -1686,7 +1686,7 @@ function DragHandle({ onDragStart, onDragEnd }: { onDragStart: (e: DragEvent) =>
 function CardTitleRow({ label, onDragStart, onDragEnd }: { label: string; onDragStart: (e: DragEvent) => void; onDragEnd: () => void }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-      <span style={{ fontSize: 16 }}>{label}</span>
+      <span style={{ fontSize: 17 }}>{label}</span>
       <DragHandle onDragStart={onDragStart} onDragEnd={onDragEnd} />
     </div>
   );
@@ -1759,16 +1759,16 @@ function GexLevelsTab() {
       <Card
         variant="budget"
         accent={LIGHT_BLUE}
-        title={<span style={{ fontSize: 16 }}>{snap?.symbol ?? "SPX"} · GEX Levels</span>}
+        title={<span style={{ fontSize: 17 }}>{snap?.symbol ?? "SPX"} · GEX Levels</span>}
         subtitle={d ? `${snap?.expiry ?? "0DTE"} expiry · spot ${glFmt2(d.spot)} · as of ${asOf} ET` : "loading live /proxy/gex snapshot…"}
       >
-        {err && <div style={{ fontSize: 15, color: HOME_THEME.red, marginBottom: 10 }}>Feed error: {err}</div>}
+        {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 10 }}>Feed error: {err}</div>}
         {!d && !err && <GlEmpty note="waiting on /proxy/gex…" />}
         {d && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 120 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
-              <div style={{ ...homeInputStyle, fontSize: 15, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Stock Filter</div>
+              <div style={{ ...homeInputStyle, fontSize: 14, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
             </div>
             <AmTbrStat label="Stock Price" value={glFmt2(d.spot)} accent={HOME_THEME.text} />
             <AmTbrStat label="Resistance" value={d.resistance != null ? glFmt0(d.resistance) : "—"} accent={LIGHT_BLUE} />
@@ -1798,7 +1798,7 @@ function GexLevelsTab() {
               ]}
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 170 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>Expiry Filter</div>
               <ThemedSelect
                 value={snap?.expiry ?? ""}
                 options={(snap?.expirations?.length ? snap.expirations : [snap?.expiry ?? ""]).filter(Boolean).map((e) => ({ value: e as string, label: e as string }))}
@@ -1810,7 +1810,7 @@ function GexLevelsTab() {
             <button style={refreshStyle} onClick={trigger}>{label}</button>
           </div>
         )}
-        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.45, marginTop: 12 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45, marginTop: 12 }}>
           Single shared 0DTE feed — Stock/Expiry filters are read-only displays so this tab can&apos;t move the live feed everyone else is on.
         </div>
       </Card>
@@ -1990,14 +1990,14 @@ function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: Tes
     <Card variant="classic" accent={def.accent} padding={24}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <FlaskIcon color={def.accent} />
-        <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
       </div>
-      <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
         {def.blurb}
       </div>
       <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
         {def.points.map((p) => (
-          <li key={p} style={{ display: "flex", gap: 8, fontSize: 15, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
+          <li key={p} style={{ display: "flex", gap: 8, fontSize: 14, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
             <span style={{ color: def.accent, flexShrink: 0 }}>›</span>
             <span>{p}</span>
           </li>
@@ -2012,7 +2012,7 @@ function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: Tes
           border: `1px solid ${def.accent}`,
           background: `${def.accent}1a`,
           color: def.accent,
-          fontSize: 15,
+          fontSize: 14,
           fontWeight: 800,
           letterSpacing: "0.06em",
           textTransform: "uppercase",
@@ -2032,8 +2032,8 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <FlaskIcon color={HOME_THEME.orange} size={26} />
           <div style={{ flex: 1, minWidth: 240 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text }}>Welcome to the Test Lab</div>
-            <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>Welcome to the Test Lab</div>
+            <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
               These are the beginning stages of test pages — features being tried out before they graduate to the
               main dashboard. Expect rough edges. Please leave feedback so we know what to fix or build out next.
             </div>
@@ -2047,7 +2047,7 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
               border: `1px solid ${HOME_THEME.orange}`,
               background: `${HOME_THEME.orange}1a`,
               color: HOME_THEME.orange,
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: 800,
               letterSpacing: "0.06em",
               textTransform: "uppercase",
@@ -2085,7 +2085,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
       onChange={(e) => onChange(e.target.value as TestTab)}
       style={{
         display: "none", width: "100%", padding: "8px 10px", borderRadius: 8,
-        fontSize: 13, fontWeight: 700,
+        fontSize: 14, fontWeight: 700,
         border: `1px solid ${HOME_THEME.cyan}`,
         background: "rgba(0,0,0,0.5)", color: HOME_THEME.text,
       }}
@@ -2107,7 +2107,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
                 ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
                 : "rgba(255,255,255,0.04)",
               color: isActive ? HOME_THEME.cyan : HOME_THEME.text,
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: 800,
               letterSpacing: "0.06em",
               textTransform: "uppercase",
@@ -2129,7 +2129,7 @@ function FlowInventoryTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 15, color: HOME_THEME.text, opacity: 0.7 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
           {loadedAt
             ? `Live flow tape · updated ${new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(loadedAt))} ET`
             : "Loading live flow tape…"}
@@ -2137,7 +2137,7 @@ function FlowInventoryTab() {
         <button onClick={reload} style={homeButtonStyle}>Refresh</button>
       </div>
       {errorEntries.length > 0 && (
-        <div style={{ fontSize: 15, color: HOME_THEME.red }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.red }}>
           Flow data error: {errorEntries.map(([ticker, msg]) => `${ticker}: ${msg}`).join(" · ")}
         </div>
       )}
@@ -2147,14 +2147,14 @@ function FlowInventoryTab() {
           if (d) return <SymbolPanel key={ticker} data={d} />;
           return (
             <Card key={ticker} variant="budget" accent={LIGHT_BLUE} title={ticker}>
-              <div style={{ fontSize: 15, color: errors[ticker] ? HOME_THEME.red : HOME_THEME.text, opacity: errors[ticker] ? 1 : 0.6 }}>
+              <div style={{ fontSize: 14, color: errors[ticker] ? HOME_THEME.red : HOME_THEME.text, opacity: errors[ticker] ? 1 : 0.6 }}>
                 {errors[ticker] ? `Error: ${errors[ticker]}` : "Loading…"}
               </div>
             </Card>
           );
         })}
       </div>
-      <div style={{ fontSize: 15, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 14, color: HOME_THEME.text, textAlign: "center", marginTop: 6, lineHeight: 1.6 }}>
         Methodology (reference): &ldquo;Assessing Option Demand from Signed Volume Order Flow&rdquo; — Garrett DeSimone, Ph.D., Head of Quantitative
         Research, OptionMetrics
       </div>

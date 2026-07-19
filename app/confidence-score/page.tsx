@@ -196,7 +196,7 @@ function Tip({ text, children }: { text: string; children: ReactNode }) {
 
 function SectionTitle({ text, accent }: { text: string; accent: string }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
       <span style={{ width: 14, height: 2, borderRadius: 2, background: accent, boxShadow: `0 0 6px ${rgba(accent, 0.6)}` }} />
       {text}
     </span>
@@ -222,7 +222,7 @@ function Gauge({ label, value, hint, tip, accent }: { label: string; value: numb
       minWidth: 180,
       animation: hot ? "confPulse 1.8s ease-in-out infinite" : undefined,
     }}>
-      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: accent }}>
+      <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: accent }}>
         <Tip text={tip}>{label}</Tip>
       </span>
       <div style={{ position: "relative", width: 130, height: 130 }}>
@@ -263,7 +263,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
     <div className="conf-hover" style={{ ...budgetCard, padding: "14px 18px", display: "flex",
       flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: col }}>
+        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: col }}>
           <Tip text="Net Wall Bias = Pivot − Break. Positive = expect defense; negative = respect the break.">Net Wall Bias</Tip>
         </span>
         <span style={{ fontSize: 24, fontWeight: 800, fontFamily: "var(--font-mono)", color: col, textShadow: `0 0 16px ${rgba(col, 0.4)}` }}>
@@ -277,7 +277,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
           background: `linear-gradient(90deg, ${rgba(col, 0.45)}, ${col})`,
           boxShadow: `0 0 10px ${rgba(col, 0.5)}`, transition: "all .45s cubic-bezier(.4,0,.2,1)" }} />
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, fontFamily: "var(--font-mono)",
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "var(--font-mono)",
         textTransform: "uppercase", letterSpacing: ".06em", color: HOME_THEME.muted }}>
         <span style={{ color: rgba(HOME_THEME.red, 0.8) }}>← Break</span>
         <span style={{ color: rgba(HOME_THEME.green, 0.8) }}>Defend →</span>
@@ -286,7 +286,7 @@ function BiasMeter({ value, note, noteColor }: { value: number; note?: string; n
       {note && (
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8, paddingTop: 8, marginTop: 2,
           borderTop: `1px solid ${HOME_THEME.border}` }}>
-          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase",
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase",
             color: noteColor ?? HOME_THEME.muted, flexShrink: 0, marginTop: 2 }}>Bias</span>
           <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{note}</span>
         </div>
@@ -307,7 +307,7 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
     : `linear-gradient(90deg, ${rgba(color, 0.45)}, ${color})`;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <span style={{ width: 78, fontSize: 11, color: HOME_THEME.text, opacity: 0.85, flexShrink: 0 }}>
+      <span style={{ width: 78, fontSize: 12, color: HOME_THEME.text, opacity: 0.85, flexShrink: 0 }}>
         <Tip text={tip}>{label}</Tip>
       </span>
       <div style={{ flex: 1, height: h, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden",
@@ -320,7 +320,7 @@ function FactorBar({ label, value, tip, signed = false, accent = HOME_THEME.cyan
           transition: "width .45s cubic-bezier(.4,0,.2,1)",
         }} />
       </div>
-      <span style={{ width: 48, textAlign: "right", fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700, color }}>
+      <span style={{ width: 48, textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", fontWeight: 700, color }}>
         {signed ? (value >= 0 ? "+" : "") : ""}{(value * 100).toFixed(0)}
       </span>
     </div>
@@ -357,7 +357,7 @@ function MvcHero({
     pct <= 0 ? null : (
       <div title={`${label} ${pct}%`} style={{ width: `${pct}%`, background: `linear-gradient(180deg, ${rgba(color, 0.85)}, ${color})`,
         display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
-        {pct >= 12 && <span style={{ fontSize: 11, fontWeight: 800, color: "#0b0e14", fontFamily: "var(--font-mono)" }}>{pct}%</span>}
+        {pct >= 12 && <span style={{ fontSize: 12, fontWeight: 800, color: "#0b0e14", fontFamily: "var(--font-mono)" }}>{pct}%</span>}
       </div>
     );
 
@@ -378,8 +378,8 @@ function MvcHero({
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: reachColor }}>
             <Tip text="Reach = probability price gets to / interacts with the CB - Core Bullseye level today (the Hit score).">Reach</Tip>
           </span>
-          <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, color: reachColor, textShadow: `0 0 22px ${rgba(reachColor, 0.4)}` }}>{reach}<span style={{ fontSize: 18, opacity: 0.7 }}>%</span></span>
-          <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>{reach >= 70 ? "likely to get there" : reach >= 45 ? "could get there" : "out of range for now"}</span>
+          <span style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, color: reachColor, textShadow: `0 0 22px ${rgba(reachColor, 0.4)}` }}>{reach}<span style={{ fontSize: 17, opacity: 0.7 }}>%</span></span>
+          <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>{reach >= 70 ? "likely to get there" : reach >= 45 ? "could get there" : "out of range for now"}</span>
         </div>
       </div>
 
@@ -389,7 +389,7 @@ function MvcHero({
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
             If touched{provisional ? " · live" : ""}
           </span>
-          <span style={{ fontSize: 13, fontWeight: 800, color: leanColor }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: leanColor }}>
             {lean ? `Rejects ${reject}%` : `Breaks ${breakP}%`}
             <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}> {lean ? "— wall likely defends" : "— wall likely fails"}</span>
           </span>
@@ -411,7 +411,7 @@ function MvcHero({
 
       {/* Headline read (top structural note) */}
       {headline && (
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
           <span style={{ color: leanColor, marginTop: 1, flexShrink: 0 }}>▸</span>
           <span>{headline}</span>
         </div>
@@ -420,7 +420,7 @@ function MvcHero({
       {/* Mechanics strip — folded in from the old Read panel */}
       {metrics && (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", paddingTop: 4, borderTop: `1px solid ${HOME_THEME.border}`,
-          fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.85 }}>
+          fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.85 }}>
           <span>Net GEX {fmt(metrics.netGex, 0)}</span>
           <span>Net DEX {fmt(metrics.netDex, 0)}</span>
           <span>Flip {fmt(metrics.gexFlip)}</span>
@@ -461,7 +461,7 @@ function SoFarRollup({ timeline }: { timeline: MvcSegment[] }) {
     <div style={{ ...budgetCard, padding: "10px 14px", display: "flex", alignItems: "center",
       gap: 12, flexWrap: "wrap", background: "rgba(255,255,255,0.02)", borderLeft: `2px solid ${rgba(SCENARIO[cur.kind].color, 0.5)}` }}>
       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted }}>So far</span>
-      <span style={{ fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
+      <span style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
         <strong style={{ color: SCENARIO[cur.kind].color }}>{fmt(cur.strike)}</strong> is the live CB - Core Bullseye
         {cur.distAtStart != null && <> — SPX <strong>{cur.distAtStart} pts</strong> away</>}, {curVerb}.
         {" "}{timeline.length} strike{timeline.length === 1 ? "" : "s"} have anchored today:
@@ -470,7 +470,7 @@ function SoFarRollup({ timeline }: { timeline: MvcSegment[] }) {
         {chips.length === 0 ? (
           <span style={{ fontSize: 12, color: HOME_THEME.muted }}>none resolved yet</span>
         ) : chips.map((x) => (
-          <span key={x.label} style={{ fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
+          <span key={x.label} style={{ fontSize: 12, fontFamily: "var(--font-mono)", fontWeight: 700,
             padding: "2px 8px", borderRadius: 4, color: x.color,
             background: rgba(x.color, 0.1), border: `1px solid ${rgba(x.color, 0.3)}` }}>
             {x.n} {x.label}
@@ -493,7 +493,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
   const Stat = ({ label, value }: { label: string; value: string }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
       <span style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
-      <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
+      <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", fontWeight: 700, color: HOME_THEME.text }}>{value}</span>
     </div>
   );
   return (
@@ -503,7 +503,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
       <button onClick={() => setOpen((v) => !v)}
         style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, fontSize: 14,
           padding: "9px 12px", background: "transparent", border: "none", cursor: "pointer", color: HOME_THEME.text, textAlign: "left" }}>
-        <span style={{ color: HOME_THEME.muted, fontSize: 11, width: 12 }}>{open ? "▾" : "▸"}</span>
+        <span style={{ color: HOME_THEME.muted, fontSize: 12, width: 12 }}>{open ? "▾" : "▸"}</span>
         <span style={{ color: sc.color, fontSize: 17, width: 18, textAlign: "center" }}>{sc.icon}</span>
         <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, width: 64 }}>{fmt(seg.strike)}</span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, opacity: 0.6, width: 108 }}>{win}</span>
@@ -549,7 +549,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
             : part(startPx, seg.distAtStart);
           return (
             <span title="SPX price (distance from strike): start of reign → handoff to next CB - Core Bullseye"
-              style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: HOME_THEME.text, whiteSpace: "nowrap" }}>
+              style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: HOME_THEME.text, whiteSpace: "nowrap" }}>
               {text}
             </span>
           );
@@ -570,7 +570,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
             ✓ Hit later
           </span>
         )}
-        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700 }}>
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9, fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 700 }}>
           <span style={{ color: METRIC.hit }}>{seg.score.hit}</span>
           <span style={{ color: METRIC.pivot }}>{seg.score.pivot}</span>
           <span style={{ color: METRIC.chop }}>{seg.score.chop}</span>
@@ -580,7 +580,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
             const c = Math.abs(b) < 12 ? METRIC.chop : b >= 0 ? HOME_THEME.green : HOME_THEME.red;
             return (
               <span title={`Net Wall Bias ${b >= 0 ? "+" : ""}${b} (pivot − break)`}
-                style={{ color: c, fontSize: 11, padding: "1px 6px", borderRadius: 4,
+                style={{ color: c, fontSize: 12, padding: "1px 6px", borderRadius: 4,
                   background: rgba(c, 0.1), border: `1px solid ${rgba(c, 0.3)}` }}>
                 {b >= 0 ? "+" : ""}{b}
               </span>
@@ -594,7 +594,7 @@ function TimelineRow({ seg, nextSpx }: { seg: MvcSegment; nextSpx: number | null
           <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.55 }}>{seg.detail}</div>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 14, lineHeight: 1.55,
             padding: "10px 12px", borderRadius: 6, background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.2)}` }}>
-            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 3 }}>Next</span>
+            <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 3 }}>Next</span>
             <span>{seg.forward}</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(86px,1fr))", gap: 10 }}>
@@ -676,13 +676,13 @@ function ReliabilityBlock({ title, accent, table }: { title: string; accent: str
   return (
     <div style={{ flex: 1, minWidth: 240, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: accent }}>{title}</span>
+        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: accent }}>{title}</span>
         <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: v.color }}>
           Brier {table.brier ?? "—"} · {v.text}
         </span>
       </div>
       {table.rows.length === 0 ? (
-        <span style={{ fontSize: 11, color: HOME_THEME.muted }}>No graded samples yet.</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No graded samples yet.</span>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {table.rows.map((r) => {
@@ -690,7 +690,7 @@ function ReliabilityBlock({ title, accent, table }: { title: string; accent: str
             const err = Math.abs(r.predicted - r.actual);
             const errColor = err <= 10 ? HOME_THEME.green : err <= 20 ? METRIC.chop : HOME_THEME.red;
             return (
-              <div key={r.bucket} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontFamily: "var(--font-mono)" }}>
+              <div key={r.bucket} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "var(--font-mono)" }}>
                 <span style={{ width: 64, color: HOME_THEME.muted }}>{r.bucket}</span>
                 <div style={{ flex: 1, height: 14, position: "relative", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>
                   {/* predicted marker */}
@@ -733,7 +733,7 @@ function CalibrationPanel() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <button onClick={() => setOpen((v) => !v)}
           style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0,
-            fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.purple,
+            fontSize: 12, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.purple,
             display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span>{open ? "▾" : "▸"}</span> Calibration · How accurate is this?
         </button>
@@ -756,7 +756,7 @@ function CalibrationPanel() {
             </span>
           ) : (
             <>
-              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.85 }}>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.85 }}>
                 <span>{data.gradedDays} graded days</span>
                 <span>{data.touchedDays} reached the level</span>
                 {data.netWallBias.accuracy != null && (
@@ -768,7 +768,7 @@ function CalibrationPanel() {
                 <ReliabilityBlock title="Reject | touched" accent={METRIC.pivot} table={data.reject} />
                 <ReliabilityBlock title="Break | touched" accent={METRIC.break} table={data.break} />
               </div>
-              <div style={{ fontSize: 11, color: HOME_THEME.muted, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: HOME_THEME.muted, lineHeight: 1.5 }}>
                 Bars = actual outcome rate; the vertical tick = what the score predicted for that bucket. Aligned = trustworthy.
                 {" "}{data.note} <span style={{ opacity: 0.7 }}>({data.heldRule})</span>
               </div>
@@ -887,9 +887,9 @@ export default function ConfidenceScorePage() {
           </div>
         )}
         {error ? (
-          <div style={{ ...budgetCard, padding: 24, color: HOME_THEME.red, fontSize: 13 }}>{error}</div>
+          <div style={{ ...budgetCard, padding: 24, color: HOME_THEME.red, fontSize: 14 }}>{error}</div>
         ) : !data || !s ? (
-          <div style={{ ...budgetCard, padding: 24, color: HOME_THEME.text, fontSize: 13 }}>
+          <div style={{ ...budgetCard, padding: 24, color: HOME_THEME.text, fontSize: 14 }}>
             {loading ? "Computing…" : "No data for this date."}
           </div>
         ) : (
@@ -924,7 +924,7 @@ export default function ConfidenceScorePage() {
                 borderLeft: `3px solid ${HOME_THEME.green}` }}>
                 <span style={{ fontSize: 22, color: HOME_THEME.green }}>⤞</span>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.green }}>Opened AT the CB - Core Bullseye — 85% pivot setup</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.green }}>Opened AT the CB - Core Bullseye — 85% pivot setup</span>
                   <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.85 }}>
                     Study: price pivots within the first 15 min and closes the overnight gap ~85% of the time.
                   </span>
@@ -937,7 +937,7 @@ export default function ConfidenceScorePage() {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                 <SectionTitle text="Live Structure" accent={HOME_THEME.cyan} />
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+                  <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
                     color: s.factors.gammaRegime === "positive" ? HOME_THEME.green : s.factors.gammaRegime === "negative" ? HOME_THEME.red : HOME_THEME.text,
                     background: "rgba(255,255,255,0.05)", border: `1px solid ${rgba(s.factors.gammaRegime === "positive" ? HOME_THEME.green : s.factors.gammaRegime === "negative" ? HOME_THEME.red : HOME_THEME.muted, 0.3)}` }}>
                     {s.factors.gammaRegime} gamma
@@ -945,7 +945,7 @@ export default function ConfidenceScorePage() {
                   <span title={s.sampleSize > 0
                     ? `Score blends ${Math.round(s.historyWeight * 100)}% historical from ${s.sampleSize} analog day${s.sampleSize === 1 ? "" : "s"}.`
                     : "No analog history yet — live-structure prior only."}
-                    style={{ fontSize: 9, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+                    style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
                     color: s.sampleSize > 0 ? HOME_THEME.purple : HOME_THEME.muted, background: "rgba(255,255,255,0.05)",
                     border: `1px solid ${rgba(s.sampleSize > 0 ? HOME_THEME.purple : HOME_THEME.muted, 0.3)}` }}>
                     {s.sampleSize > 0 ? `${Math.round(s.historyWeight * 100)}% hist · ${s.sampleSize}` : "live only"}
@@ -972,7 +972,7 @@ export default function ConfidenceScorePage() {
                   borderLeft: `2px solid ${rgba(sc.color, 0.55)}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                     <SectionTitle text="Outcome" accent={sc.color} />
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 9, fontWeight: 800,
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800,
                       letterSpacing: ".1em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 4,
                       color: o.final ? HOME_THEME.green : HOME_THEME.orange,
                       background: rgba(o.final ? HOME_THEME.green : HOME_THEME.orange, 0.1),
@@ -1010,20 +1010,20 @@ export default function ConfidenceScorePage() {
                   <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 28, lineHeight: 1, color: sc.color, textShadow: `0 0 16px ${rgba(sc.color, 0.4)}` }}>{sc.icon}</span>
                     <span style={{ fontSize: 20, fontWeight: 800, color: sc.color }}>{o.title}</span>
-                    <span style={{ fontSize: 13, color: o.touched ? sc.color : HOME_THEME.muted, fontWeight: 700 }}>{o.status}</span>
+                    <span style={{ fontSize: 14, color: o.touched ? sc.color : HOME_THEME.muted, fontWeight: 700 }}>{o.status}</span>
                   </div>
 
                   {/* What happened */}
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 15, color: HOME_THEME.text, lineHeight: 1.55 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.55 }}>
                     <span style={{ color: sc.color, marginTop: 2, flexShrink: 0 }}>▸</span>
                     <span>{o.detail}</span>
                   </div>
 
                   {/* If/then forward read */}
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 15, lineHeight: 1.55,
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 14, lineHeight: 1.55,
                     padding: "12px 14px", borderRadius: 8,
                     background: rgba(sc.color, 0.06), border: `1px solid ${rgba(sc.color, 0.22)}` }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 3 }}>Next</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: sc.color, flexShrink: 0, marginTop: 3 }}>Next</span>
                     <span style={{ color: HOME_THEME.text }}>{o.forward}</span>
                   </div>
 
@@ -1040,7 +1040,7 @@ export default function ConfidenceScorePage() {
                             {data.mvcSummary.distinctStrikes} strikes · {data.mvcSummary.changes} change{data.mvcSummary.changes === 1 ? "" : "s"} · {data.mvcSummary.engaged} engaged
                           </span>
                         )}
-                        <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--font-mono)", opacity: 0.6, display: "flex", gap: 6 }}>
+                        <span style={{ marginLeft: "auto", fontSize: 12, fontFamily: "var(--font-mono)", opacity: 0.6, display: "flex", gap: 6 }}>
                           <span style={{ color: METRIC.hit }}>Hit</span>
                           <span style={{ color: METRIC.pivot }}>Pivot</span>
                           <span style={{ color: METRIC.chop }}>Chop</span>
@@ -1059,11 +1059,11 @@ export default function ConfidenceScorePage() {
                   )}
 
                   {/* Data-source provenance (mechanics now live in the timeline rows) */}
-                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: HOME_THEME.text, fontFamily: "var(--font-mono)", opacity: 0.85 }}>
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: HOME_THEME.text, fontFamily: "var(--font-mono)", opacity: 0.85 }}>
                     <span title={o.seriesSource === "es5m"
                       ? `True 5-min SPX reconstructed from ES candles · basis ${o.basis ?? "—"} · ${o.bars ?? "?"} bars`
                       : `30-min MVC snapshots (no ES candles for this date) · ${o.bars ?? "?"} pts`}
-                      style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 9, fontWeight: 800,
+                      style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 10, fontWeight: 800,
                         letterSpacing: ".06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 4,
                         color: o.seriesSource === "es5m" ? METRIC.hit : HOME_THEME.muted,
                         background: rgba(o.seriesSource === "es5m" ? METRIC.hit : HOME_THEME.muted, 0.1),
@@ -1083,7 +1083,7 @@ export default function ConfidenceScorePage() {
               <div style={{ ...budgetCard, padding: 16 }}>
                 <button onClick={() => setShowTuning((v) => !v)}
                   style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0,
-                    fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted,
+                    fontSize: 12, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HOME_THEME.muted,
                     display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <span>{showTuning ? "▾" : "▸"}</span> Tuning Reference
                 </button>
@@ -1097,8 +1097,8 @@ export default function ConfidenceScorePage() {
                       ["Analog scan cap", `${data.thresholds.analogMax} days`, "Max prior days scanned for analogs."],
                     ] as const).map(([k, v, d]) => (
                       <div key={k} title={d} className="conf-hover" style={{ padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
-                        <div style={{ fontSize: 9, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".06em" }}>{k}</div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{v}</div>
+                        <div style={{ fontSize: 10, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: ".06em" }}>{k}</div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{v}</div>
                       </div>
                     ))}
                   </div>

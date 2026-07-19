@@ -334,9 +334,9 @@ export default function StateRail({ gex, dex, spots = [], hasData = true }: Stat
             padding: "5px 0",
           }}
         >
-          <div style={{ textAlign: "right", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: "#fff" }}>
+          <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, letterSpacing: ".1em", color: "#fff" }}>
             {row.key}
-            <span style={{ display: "block", fontSize: 8, fontWeight: 400, letterSpacing: ".06em", color: C.dim, marginTop: 2 }}>
+            <span style={{ display: "block", fontSize: 10, fontWeight: 400, letterSpacing: ".06em", color: C.dim, marginTop: 2 }}>
               {row.sub}
             </span>
           </div>
@@ -344,7 +344,7 @@ export default function StateRail({ gex, dex, spots = [], hasData = true }: Stat
           <div>
             <div style={{ fontSize: 10, letterSpacing: ".1em", color: row.color }}>{row.label}</div>
             {row.note && (
-              <div style={{ fontSize: 8, letterSpacing: ".04em", color: C.dim, marginTop: 2 }}>{row.note}</div>
+              <div style={{ fontSize: 10, letterSpacing: ".04em", color: C.dim, marginTop: 2 }}>{row.note}</div>
             )}
           </div>
         </div>
@@ -361,7 +361,7 @@ export default function StateRail({ gex, dex, spots = [], hasData = true }: Stat
           paddingTop: 12,
         }}
       >
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: "#fff" }}>CURRENT PLAY</span>
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: ".1em", color: "#fff" }}>CURRENT PLAY</span>
         <span style={{ flex: 1, textAlign: "right", fontSize: 10, letterSpacing: ".08em", color: C.dim }}>
           {hasData ? play.text : "Awaiting live greeks…"}
         </span>

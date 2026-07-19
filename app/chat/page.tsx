@@ -58,7 +58,7 @@ function DisabledChatPageOldBody() {
           }}
         >
           {!loading && messages.length === 0 && (
-            <div style={{ color: HOME_THEME.green, fontSize: 13, margin: "auto" }}>
+            <div style={{ color: HOME_THEME.green, fontSize: 14, margin: "auto" }}>
               No messages yet — say something.
             </div>
           )}
@@ -118,7 +118,7 @@ function DisabledChatPageOldBody() {
               background: draft.trim() ? "rgba(33,158,188,0.22)" : "rgba(255,255,255,0.04)",
               color: HOME_THEME.text,
               fontWeight: 700,
-              fontSize: 13,
+              fontSize: 14,
               cursor: draft.trim() ? "pointer" : "default",
             }}
           >

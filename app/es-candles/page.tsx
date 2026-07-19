@@ -2382,7 +2382,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           {leading}
           {leading && <DockGap />}
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
-            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 15, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
+            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 14, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
             {(() => {
               // effectiveBasis() ONLY — never levels.basis. The server basis is
               // esFut-derived and freezes on the expired contract across a roll.
@@ -2395,10 +2395,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             })()}
           </div>
           {/* status + count badges */}
-          <span style={{ fontSize: 11, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
             {status.toUpperCase()}
           </span>
-          <span style={{ fontSize: 11, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
             {`${rows.length} candles`}
           </span>
 
@@ -2605,7 +2605,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 onChange={(v) => { setReplayPlaying(false); setReplayIdx(Math.round(v)); }}
                 title="Scrub through the session"
               />
-              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
                 {fmtEtHM(replayFrames[Math.min(replayIdx, replayFrames.length - 1)])} · {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}
               </span>
               <div className="flex items-center gap-2">
@@ -2639,8 +2639,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 WebkitBackdropFilter: "blur(20px)",
               }}
             >
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>{label}</span>
-              <span style={{ fontSize: 15, fontWeight: 900, fontFamily: "var(--font-mono)", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
+              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>{label}</span>
+              <span style={{ fontSize: 14, fontWeight: 900, fontFamily: "var(--font-mono)", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
             </div>
           );
           return (
@@ -2680,7 +2680,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 // in the pill in the Snap/Discord PNG (fine in the browser, which
                 // centres the line box). Pinning both makes the box 18px tall
                 // (12 + 3 + 3), matching the -9 half-height offset above.
-                fontSize: 11,
+                fontSize: 12,
                 lineHeight: "12px",
                 padding: "3px 6px",
               }}
@@ -2699,7 +2699,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 color: "#001018",
                 whiteSpace: "nowrap",
                 // Same explicit metrics as the live badge above — see note there.
-                fontSize: 11,
+                fontSize: 12,
                 lineHeight: "12px",
                 padding: "3px 6px",
               }}

@@ -95,7 +95,7 @@ function UnsubscribeInner() {
                   border: "none",
                   background: state === "working" ? "rgba(255,255,255,0.08)" : `linear-gradient(180deg, ${T.cyan}, #00b8c4)`,
                   color: state === "working" ? "rgba(255,255,255,0.6)" : "#04121a",
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: 800,
                   cursor: state === "working" ? "default" : "pointer",
                 }}
@@ -105,12 +105,12 @@ function UnsubscribeInner() {
             )}
 
             {state === "error" && (
-              <p style={{ color: T.red, fontSize: 13, marginTop: 14, marginBottom: 0 }}>{msg}</p>
+              <p style={{ color: T.red, fontSize: 14, marginTop: 14, marginBottom: 0 }}>{msg}</p>
             )}
           </>
         )}
 
-        <div style={{ marginTop: 22, fontSize: 12.5 }}>
+        <div style={{ marginTop: 22, fontSize: 12 }}>
           <Link href="/" style={{ color: "rgba(255,255,255,0.55)", textDecoration: "none" }}>
             ← Back to cbedge.net
           </Link>

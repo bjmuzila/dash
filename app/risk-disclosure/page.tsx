@@ -119,7 +119,7 @@ export default function RiskDisclosurePage() {
         <a href="/disclaimer">Disclaimer</a>, which you should also read.
       </p>
 
-      <p style={{ marginTop: 26, fontSize: 12.5, color: "#8B94A7" }}>
+      <p style={{ marginTop: 26, fontSize: 12, color: "#8B94A7" }}>
         If you do not understand or do not agree to this Risk Disclosure, do not use the Service. If you have
         questions, contact us at <a href="mailto:support@cbedge.net">support@cbedge.net</a> before proceeding.
       </p>

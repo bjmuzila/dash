@@ -58,7 +58,7 @@ export default function FeedbackPage() {
               style={{ height: 224, width: "auto", display: "block" }}
             />
             <div>
-              <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.02em" }}>Feedback</div>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>Feedback</div>
               <div style={{ fontSize: 12, color: HOME_THEME.green, marginTop: 4 }}>
                 Your feedback shapes CB Edge — every bug you flag, idea you share, or note you leave helps make this platform one of the best out there. It always starts with you, the customer.
               </div>
@@ -68,8 +68,8 @@ export default function FeedbackPage() {
           {done ? (
             <div style={{ textAlign: "center", padding: "32px 8px" }}>
               <div style={{ fontSize: 34, marginBottom: 10 }}>✅</div>
-              <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Thanks — got it!</div>
-              <div style={{ fontSize: 13, color: HOME_THEME.green, marginBottom: 20 }}>
+              <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 6 }}>Thanks — got it!</div>
+              <div style={{ fontSize: 14, color: HOME_THEME.green, marginBottom: 20 }}>
                 Your feedback was sent. We read every note.
               </div>
               <DockButton onClick={() => setDone(false)} style={{ height: 36, padding: "0 18px", fontSize: 12 }}>
@@ -79,7 +79,7 @@ export default function FeedbackPage() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8, textAlign: "center" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8, textAlign: "center" }}>
                   Type
                 </div>
                 <div className="seg-pill">
@@ -113,7 +113,7 @@ export default function FeedbackPage() {
               </div>
 
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8 }}>
                   Message
                 </div>
                 <textarea

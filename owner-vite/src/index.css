@@ -10,6 +10,10 @@ html, body {
   background: #05060A;
   color: #fff;
   font-family: var(--font-inter);
+  /* Site type scale baseline — body 14px. Inline fontSize overrides the tier it
+     needs (title 17 / subhead 15 / body 14 / label 12 / micro 10). */
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 

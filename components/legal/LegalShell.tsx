@@ -99,7 +99,7 @@ export default function LegalShell({
         <div style={card}>
           <div
             style={{
-              fontSize: 11,
+              fontSize: 12,
               color: T.muted,
               letterSpacing: "0.18em",
               textTransform: "uppercase",
@@ -115,7 +115,7 @@ export default function LegalShell({
           {subtitle && (
             <p style={{ margin: "0 0 6px", fontSize: 14, color: "#B7C2D2", lineHeight: 1.5 }}>{subtitle}</p>
           )}
-          <p style={{ margin: "0 0 4px", fontSize: 12.5, color: T.muted }}>
+          <p style={{ margin: "0 0 4px", fontSize: 12, color: T.muted }}>
             Last updated: <span style={{ color: T.cyan, fontWeight: 600 }}>{lastUpdated}</span>
           </p>
 
@@ -165,21 +165,21 @@ export default function LegalShell({
           })}
         </div>
 
-        <p style={{ marginTop: 22, textAlign: "center", fontSize: 11.5, color: T.muted, lineHeight: 1.6 }}>
+        <p style={{ marginTop: 22, textAlign: "center", fontSize: 12, color: T.muted, lineHeight: 1.6 }}>
           © {new Date().getFullYear()} CB Edge. All rights reserved. · cbedge.net
         </p>
       </div>
 
       {/* Shared typography for legal body content */}
       <style>{`
-        .legal-body { font-size: 14.5px; line-height: 1.72; color: #D4DCE7; }
+        .legal-body { font-size: 14px; line-height: 1.72; color: #D4DCE7; }
         .legal-body h2 {
-          font-size: 18px; font-weight: 800; color: #FFFFFF;
+          font-size: 17px; font-weight: 800; color: #FFFFFF;
           margin: 30px 0 10px; letter-spacing: 0.01em;
         }
         .legal-body h2:first-child { margin-top: 0; }
         .legal-body h3 {
-          font-size: 15px; font-weight: 700; color: #EAF1F8; margin: 20px 0 6px;
+          font-size: 14px; font-weight: 700; color: #EAF1F8; margin: 20px 0 6px;
         }
         .legal-body p { margin: 0 0 12px; }
         .legal-body ul, .legal-body ol { margin: 0 0 14px; padding-left: 22px; }
@@ -188,14 +188,14 @@ export default function LegalShell({
         .legal-body a { color: #219EBC; text-decoration: none; }
         .legal-body a:hover { text-decoration: underline; }
         .legal-body .lead {
-          font-size: 13px; color: #8B94A7; background: rgba(33,158,188,0.04);
+          font-size: 14px; color: #8B94A7; background: rgba(33,158,188,0.04);
           border: 1px solid rgba(33,158,188,0.12); border-radius: 10px;
           padding: 12px 14px; margin: 0 0 22px; line-height: 1.6;
         }
         .legal-body .callout {
           border-left: 3px solid #FB8501; background: rgba(249,115,22,0.06);
           border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 0 0 18px;
-          color: #F4D9C4; font-size: 13.5px; line-height: 1.65;
+          color: #F4D9C4; font-size: 14px; line-height: 1.65;
         }
         .legal-body .callout strong { color: #FFD9BC; }
       `}</style>

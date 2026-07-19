@@ -543,7 +543,7 @@ export default function OwnerBrainGraph() {
             onMouseEnter={() => setFocus(c.id)}
             onMouseLeave={() => setFocus(zoomedRef.current)}
             style={{
-              display: "flex", alignItems: "center", gap: 6, fontSize: 11,
+              display: "flex", alignItems: "center", gap: 6, fontSize: 12,
               color: "#c7d4e8", background: "rgba(255,255,255,.04)",
               border: "1px solid rgba(255,255,255,.07)", padding: "3px 8px",
               borderRadius: 20, cursor: "pointer",
@@ -556,8 +556,8 @@ export default function OwnerBrainGraph() {
       </div>
 
       <div style={{ position: "absolute", top: 14, right: 16, textAlign: "right", zIndex: 5, pointerEvents: "none" }}>
-        <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: ".5px", color: "#e7f0ff" }}>CB&nbsp;EDGE&nbsp;·&nbsp;BRAIN&nbsp;3D</div>
-        <div style={{ fontSize: 11, color: "#7f93b0", marginTop: 2 }}>{total} routes · drag to orbit · wheel to zoom · click to open</div>
+        <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: ".5px", color: "#e7f0ff" }}>CB&nbsp;EDGE&nbsp;·&nbsp;BRAIN&nbsp;3D</div>
+        <div style={{ fontSize: 12, color: "#7f93b0", marginTop: 2 }}>{total} routes · drag to orbit · wheel to zoom · click to open</div>
       </div>
 
       <div

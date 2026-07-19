@@ -253,7 +253,7 @@ function Sparkline({ data, color }: { data: HistPoint[]; color: string }) {
           position: "absolute", top: 2,
           left: Math.min(Math.max(hover.x - 48, 0), (wrapRef.current?.offsetWidth ?? 220) - 96),
           pointerEvents: "none", background: "rgba(8,16,26,0.95)", border: "1px solid #2a3f55",
-          borderRadius: 4, padding: "3px 6px", fontSize: 9, lineHeight: 1.35, whiteSpace: "nowrap",
+          borderRadius: 4, padding: "3px 6px", fontSize: 10, lineHeight: 1.35, whiteSpace: "nowrap",
           fontVariantNumeric: "tabular-nums", zIndex: 5, boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
         }}>
           <div style={{ color: "#8aa4be" }}>{fmtClock(hover.pt.ts)} ET</div>
@@ -285,9 +285,9 @@ function MetricCard({
       padding: "8px 6px",
       textAlign: "center",
     }}>
-      <div style={{ fontSize: 9, color: HT.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color, fontVariantNumeric: "tabular-nums", textShadow: `0 0 16px ${color}55` }}>{value}</div>
-      <div style={{ fontSize: 9, color: HT.muted, marginTop: 3 }}>{detail}</div>
+      <div style={{ fontSize: 10, color: HT.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 800, color, fontVariantNumeric: "tabular-nums", textShadow: `0 0 16px ${color}55` }}>{value}</div>
+      <div style={{ fontSize: 10, color: HT.muted, marginTop: 3 }}>{detail}</div>
     </div>
   );
 }
@@ -313,16 +313,16 @@ function TopFlowList({
       padding: "6px 8px",
       display: "flex", flexDirection: "column", gap: 3,
     }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: barColor, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: barColor, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</div>
       {!items.length ? (
-        <div style={{ color: "#fff", fontSize: 9 }}>Waiting...</div>
+        <div style={{ color: "#fff", fontSize: 10 }}>Waiting...</div>
       ) : (
         items.map((item, index) => {
           const width = Math.max((item.gex / maxGex) * 100, 4);
           return (
             <div key={`${label}-${item.strike}-${index}`} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, flex: "0 0 auto", padding: "1px 0" }}>
               <span style={{ width: 12, color: "#fff", fontWeight: 700, flexShrink: 0 }}>{index + 1}</span>
-              <span style={{ width: 40, fontWeight: 700, color: "#e0e8f0", fontVariantNumeric: "tabular-nums", flexShrink: 0, fontSize: 11 }}>{item.strike}</span>
+              <span style={{ width: 40, fontWeight: 700, color: "#e0e8f0", fontVariantNumeric: "tabular-nums", flexShrink: 0, fontSize: 12 }}>{item.strike}</span>
               <div style={{ flex: 1, height: 8, background: "#0d1a26", borderRadius: 3, overflow: "hidden", minWidth: 0 }}>
                 <div
                   style={{
@@ -674,7 +674,7 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
     <div ref={panelRef} style={{ ...homeShellStyle, background: "transparent", height: "100%", overflow: "hidden" }}>
       <div style={{ padding: "5px 10px", background: HT.panelBgStrong, backdropFilter: "blur(16px)", borderBottom: `1px solid ${HT.border}`, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, display: "inline-block", background: flow.connected ? "#00e676" : "#ef4444" }} />
-        <span style={{ fontSize: 8, fontWeight: 800, color: "#219EBC", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
+        <span style={{ fontSize: 10, fontWeight: 800, color: "#219EBC", textTransform: "uppercase", letterSpacing: "0.14em" }}>Snapshot</span>
         <button onClick={trigger} style={{ marginLeft: "auto", ...homeButtonStyle }}>
           {btnLabel}
         </button>
@@ -692,13 +692,13 @@ export default function SnapshotPanel({ orders: serverOrders, bucket: serverBuck
 
         <div style={{ flex: "1 1 90px", minHeight: 90, background: HT.panelBg, backdropFilter: "blur(8px)", border: `1px solid ${HT.border}`, borderRadius: 4, padding: "5px 7px", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
-            <div style={{ fontSize: 9, color: "#fff", fontWeight: 700, textTransform: "uppercase" }}>Net Premium</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: netPrem >= 0 ? "#00e676" : "#EF4444", fontVariantNumeric: "tabular-nums" }}>{fmtPrem(netPrem)}</div>
+            <div style={{ fontSize: 10, color: "#fff", fontWeight: 700, textTransform: "uppercase" }}>Net Premium</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: netPrem >= 0 ? "#00e676" : "#EF4444", fontVariantNumeric: "tabular-nums" }}>{fmtPrem(netPrem)}</div>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
             <Sparkline data={premHistory} color="#ff9f40" />
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3, fontSize: 9, color: "#5a7a99", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3, fontSize: 10, color: "#5a7a99", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
             <span>{premHistory.length ? fmtPrem(histMin) : "-"}</span>
             <span>{premHistory.length ? fmtPrem(histMax) : "-"}</span>
           </div>

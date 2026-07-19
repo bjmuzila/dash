@@ -6,7 +6,7 @@ export default function NotFound() {
     <div style={{ ...homeShellStyle, alignItems: "center", justifyContent: "center" }}>
       <div style={{ ...classicCardAccentStyle, padding: "26px 30px", textAlign: "center", maxWidth: 440 }}>
         <div style={{ fontSize: 40, fontWeight: 900, color: LIGHT_BLUE, marginBottom: 6 }}>404</div>
-        <p style={{ fontSize: 15, color: OWNER_THEME.text, opacity: 0.85, marginBottom: 14 }}>
+        <p style={{ fontSize: 14, color: OWNER_THEME.text, opacity: 0.85, marginBottom: 14 }}>
           No owner page here.
         </p>
         <Link

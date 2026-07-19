@@ -75,7 +75,7 @@ const td: React.CSSProperties = { padding: "7px 10px", textAlign: "right", color
 function Tile({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
     <div style={{ flex: "1 1 150px", padding: "12px 16px", borderRadius: 14, background: "rgba(13,17,25,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>{label}</div>
+      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4, color: color ?? HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{value}</div>
       {sub && <div style={{ fontSize: 12, marginTop: 2, color: "rgba(255,255,255,0.55)" }}>{sub}</div>}
     </div>
@@ -122,7 +122,7 @@ export default function SemisTab() {
     "Broad — breadth agrees with the index move.";
 
   const segBtn = (b: Basis, label: string, disabled?: boolean): React.CSSProperties => ({
-    padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer",
+    padding: "6px 14px", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer",
     border: `1px solid ${effBasis === b ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
     background: effBasis === b ? "rgba(33,158,188,0.15)" : "transparent",
     color: disabled ? "rgba(255,255,255,0.3)" : effBasis === b ? HOME_THEME.text : "rgba(255,255,255,0.65)",
@@ -134,10 +134,10 @@ export default function SemisTab() {
       <Card>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text }}>
+            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.text }}>
               Semiconductor Strength Index
             </div>
-            <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", marginTop: 4 }}>
+            <div style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", marginTop: 4 }}>
               SMH-weighted composite of the top 10 holdings vs {baseLabel.toLowerCase()} · Tastytrade
             </div>
           </div>
@@ -166,7 +166,7 @@ export default function SemisTab() {
           )}
         </div>
 
-        {err && <div style={{ marginTop: 14, color: DOWN, fontSize: 13 }}>Failed to load: {err}</div>}
+        {err && <div style={{ marginTop: 14, color: DOWN, fontSize: 14 }}>Failed to load: {err}</div>}
 
         {view && (
           <>
@@ -177,11 +177,11 @@ export default function SemisTab() {
                   {view.ssi.toFixed(0)}
                 </span>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.06em", color: ssiColor(view.ssiLabel) }}>{view.ssiLabel}</div>
-                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>0–100 · 50 = flat · vs {baseLabel.toLowerCase()}</div>
+                  <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", color: ssiColor(view.ssiLabel) }}>{view.ssiLabel}</div>
+                  <div style={{ fontSize: 14, color: "rgba(255,255,255,0.5)" }}>0–100 · 50 = flat · vs {baseLabel.toLowerCase()}</div>
                 </div>
               </div>
-              <div style={{ fontSize: 15 }}>
+              <div style={{ fontSize: 14 }}>
                 <span style={{ color: "rgba(255,255,255,0.55)" }}>Composite move </span>
                 <span style={{ color: signColor(view.compositePct), fontWeight: 800 }}>{fmtPct(view.compositePct)}</span>
               </div>
@@ -199,7 +199,7 @@ export default function SemisTab() {
                 color={view.soxlConfirm?.status === "confirming" ? UP : view.soxlConfirm?.status === "lagging" ? DOWN : HOME_THEME.orange} />
             </div>
 
-            <div style={{ marginTop: 12, fontSize: 12.5, color: "rgba(255,255,255,0.55)" }}>{divNote}</div>
+            <div style={{ marginTop: 12, fontSize: 12, color: "rgba(255,255,255,0.55)" }}>{divNote}</div>
           </>
         )}
       </Card>
@@ -236,7 +236,7 @@ export default function SemisTab() {
                               left: c >= 0 ? "50%" : `calc(50% - ${w / 2}%)`,
                               width: `${w / 2}%` }} />
                           </div>
-                          <span style={{ minWidth: 52, textAlign: "right", color: signColor(n.contribution), fontVariantNumeric: "tabular-nums", fontSize: 13 }}>
+                          <span style={{ minWidth: 52, textAlign: "right", color: signColor(n.contribution), fontVariantNumeric: "tabular-nums", fontSize: 14 }}>
                             {n.contribution == null ? "—" : `${c >= 0 ? "+" : ""}${c.toFixed(2)}`}
                           </span>
                         </div>

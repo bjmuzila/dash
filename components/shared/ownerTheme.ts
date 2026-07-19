@@ -112,7 +112,7 @@ export function homeGlossPanelStyle(_accent: string = OWNER_THEME.cyan): CSSProp
 
 // ── Inputs (drop-in for homeInputStyle) ──────────────────────────────────────
 export const homeInputStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: 14,
   padding: "10px 12px",
   border: `1px solid ${OWNER_THEME.border}`,
   borderRadius: 10,
@@ -128,7 +128,7 @@ export const homeButtonStyle: CSSProperties = {
   border: "1px solid rgba(33,158,188,0.25)",
   background: "linear-gradient(180deg, rgba(33,158,188,0.16), rgba(33,158,188,0.05))",
   color: OWNER_THEME.cyan,
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 800,
   letterSpacing: "0.02em",
   cursor: "pointer",
@@ -140,7 +140,7 @@ export const homeSecondaryButtonStyle: CSSProperties = {
   border: `1px solid ${OWNER_THEME.border}`,
   background: "rgba(255,255,255,0.04)",
   color: OWNER_THEME.text,
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 700,
   letterSpacing: "0.02em",
   cursor: "pointer",
@@ -155,7 +155,7 @@ export function ownerPanel(): CSSProperties {
 
 /** Body text — 15px default. */
 export const ownerBodyText: CSSProperties = {
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 400,
   color: OWNER_THEME.text,
   letterSpacing: "0.01em",
@@ -163,7 +163,7 @@ export const ownerBodyText: CSSProperties = {
 
 /** Title text — 16px for all headings. */
 export const ownerTitleText: CSSProperties = {
-  fontSize: 16,
+  fontSize: 17,
   fontWeight: 700,
   color: OWNER_THEME.text,
   letterSpacing: "0.01em",
@@ -171,7 +171,7 @@ export const ownerTitleText: CSSProperties = {
 
 /** Quiet section/card header text. */
 export const ownerHeaderText: CSSProperties = {
-  fontSize: 16,
+  fontSize: 17,
   fontWeight: 700,
   color: OWNER_THEME.text,
   letterSpacing: "0.01em",
@@ -179,7 +179,7 @@ export const ownerHeaderText: CSSProperties = {
 
 /** Small label. */
 export const ownerLabelText: CSSProperties = {
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 400,
   color: OWNER_THEME.text,
   letterSpacing: "0.01em",
@@ -194,7 +194,7 @@ export function ownerStatusPill(ok: boolean): CSSProperties {
     gap: 5,
     padding: "3px 9px",
     borderRadius: 999,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 700,
     background: ownerRgba(c, 0.12),
     border: `1px solid ${ownerRgba(c, 0.28)}`,

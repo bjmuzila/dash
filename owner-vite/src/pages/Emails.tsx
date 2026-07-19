@@ -180,7 +180,7 @@ export default function Emails() {
   }
 
   const label = (t: string) => (
-    <div style={{ fontSize: 15, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8 }}>
+    <div style={{ fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: HOME_THEME.green, marginBottom: 8 }}>
       {t}
     </div>
   );
@@ -189,14 +189,14 @@ export default function Emails() {
     <PageShell maxWidth={680} align="center">
       <Card accent="cyan">
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>📧 Email Broadcast</div>
-          <div style={{ fontSize: 15, color: HOME_THEME.green, marginTop: 4 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>📧 Email Broadcast</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.green, marginTop: 4 }}>
             Send an announcement to your users. Recipients are hidden via BCC.
           </div>
         </div>
 
         {configured === false && (
-          <div style={{ fontSize: 15, color: HOME_THEME.red, fontWeight: 600, marginBottom: 16,
+          <div style={{ fontSize: 14, color: HOME_THEME.red, fontWeight: 600, marginBottom: 16,
                         padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.red}55`,
                         background: `${HOME_THEME.red}14` }}>
             RESEND_API_KEY is not set on the server. Add it to .env.local and the VPS Docker env before sending.
@@ -212,7 +212,7 @@ export default function Emails() {
                   <DockButton
                     key={p.id}
                     onClick={() => loadPreset(p.id)}
-                    style={{ height: 32, padding: "0 14px", fontSize: 15, opacity: loadingPreset === p.id ? 0.6 : 1 }}
+                    style={{ height: 32, padding: "0 14px", fontSize: 14, opacity: loadingPreset === p.id ? 0.6 : 1 }}
                   >
                     {loadingPreset === p.id ? "Loading…" : `📨 ${p.label}`}
                   </DockButton>
@@ -259,7 +259,7 @@ export default function Emails() {
                 );
               })}
             </div>
-            <div style={{ fontSize: 15, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
               <span>
                 {recipientCount} recipient{recipientCount === 1 ? "" : "s"}
                 {from ? ` · from ${from}` : ""}
@@ -268,13 +268,13 @@ export default function Emails() {
                 <>
                   <button
                     onClick={() => setShowList((s) => !s)}
-                    style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 15, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                    style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 14, cursor: "pointer", padding: 0, textDecoration: "underline" }}
                   >
                     {showList ? "Hide list" : "View list"}
                   </button>
                   <button
                     onClick={editList}
-                    style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 15, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                    style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 14, cursor: "pointer", padding: 0, textDecoration: "underline" }}
                   >
                     Edit list
                   </button>
@@ -285,7 +285,7 @@ export default function Emails() {
             {showList && audience !== "custom" && lists && (
               <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.25)" }}>
                 {listFor(audience).map((email) => (
-                  <div key={email} style={{ fontSize: 15, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "var(--font-mono)" }}>
+                  <div key={email} style={{ fontSize: 14, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "var(--font-mono)" }}>
                     {email}
                   </div>
                 ))}
@@ -296,7 +296,7 @@ export default function Emails() {
           {audience === "custom" && (
             <div>
               {label("Recipients")}
-              <div style={{ fontSize: 15, color: HOME_THEME.muted, opacity: 0.75, marginBottom: 6 }}>
+              <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.75, marginBottom: 6 }}>
                 Delete any address to remove them from this send. Separate with commas, spaces, or new lines.
               </div>
               <textarea
@@ -304,7 +304,7 @@ export default function Emails() {
                 onChange={(e) => setCustomTo(e.target.value)}
                 placeholder="email@example.com, another@example.com"
                 rows={6}
-                style={{ ...homeInputStyle, fontSize: 15, width: "100%", resize: "vertical", fontFamily: "inherit" }}
+                style={{ ...homeInputStyle, fontSize: 14, width: "100%", resize: "vertical", fontFamily: "inherit" }}
               />
             </div>
           )}
@@ -316,7 +316,7 @@ export default function Emails() {
               onChange={(e) => setSubject(e.target.value)}
               placeholder="Subject line"
               maxLength={200}
-              style={{ ...homeInputStyle, fontSize: 15, width: "100%", fontFamily: "inherit" }}
+              style={{ ...homeInputStyle, fontSize: 14, width: "100%", fontFamily: "inherit" }}
             />
           </div>
 
@@ -328,13 +328,13 @@ export default function Emails() {
               placeholder="<p>Hello…</p>"
               rows={10}
               maxLength={50000}
-              style={{ ...homeInputStyle, fontSize: 15, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
+              style={{ ...homeInputStyle, fontSize: 14, width: "100%", resize: "vertical", lineHeight: 1.5, fontFamily: "inherit" }}
             />
             {body.trim() && (
               <div style={{ marginTop: 10 }}>
                 <button
                   onClick={() => setShowPreview((s) => !s)}
-                  style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 15, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                  style={{ background: "none", border: "none", color: HOME_THEME.cyan, fontSize: 14, cursor: "pointer", padding: 0, textDecoration: "underline" }}
                 >
                   {showPreview ? "Hide preview" : "Show rendered preview"}
                 </button>
@@ -350,8 +350,8 @@ export default function Emails() {
             )}
           </div>
 
-          {error && <div style={{ fontSize: 15, color: HOME_THEME.red, fontWeight: 600 }}>{error}</div>}
-          {result && <div style={{ fontSize: 15, color: HOME_THEME.green, fontWeight: 600 }}>✅ {result}</div>}
+          {error && <div style={{ fontSize: 14, color: HOME_THEME.red, fontWeight: 600 }}>{error}</div>}
+          {result && <div style={{ fontSize: 14, color: HOME_THEME.green, fontWeight: 600 }}>✅ {result}</div>}
 
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <DockButton
@@ -359,7 +359,7 @@ export default function Emails() {
               style={{
                 height: 38,
                 padding: "0 22px",
-                fontSize: 15,
+                fontSize: 14,
                 color: HOME_THEME.cyan,
                 border: `1px solid ${HOME_THEME.cyan}59`,
                 background: "linear-gradient(180deg,rgba(33,158,188,.18),rgba(33,158,188,.05))",
@@ -375,17 +375,17 @@ export default function Emails() {
 
       <Card accent="cyan" style={{ marginTop: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>📜 Sent history</div>
+          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>📜 Sent history</div>
           <button
             onClick={historyRefresh}
-            style={{ background: "none", border: "none", color: (historyRefreshStyle.color as string) ?? HOME_THEME.cyan, fontSize: 15, cursor: "pointer", textDecoration: "underline", padding: 0 }}
+            style={{ background: "none", border: "none", color: (historyRefreshStyle.color as string) ?? HOME_THEME.cyan, fontSize: 14, cursor: "pointer", textDecoration: "underline", padding: 0 }}
           >
             {historyRefreshLabel}
           </button>
         </div>
 
         {history.length === 0 ? (
-          <div style={{ fontSize: 15, color: HOME_THEME.muted, opacity: 0.6 }}>No emails sent yet.</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.6 }}>No emails sent yet.</div>
         ) : (
           <div style={{ maxHeight: 280, overflowY: "auto" }}>
             {history.map((h) => (
@@ -401,14 +401,14 @@ export default function Emails() {
                 }}
               >
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {h.subject}
                   </div>
-                  <div style={{ fontSize: 15, color: HOME_THEME.green, marginTop: 2 }}>
+                  <div style={{ fontSize: 14, color: HOME_THEME.green, marginTop: 2 }}>
                     {new Date(h.created_at).toLocaleString()} · {h.audience}
                   </div>
                 </div>
-                <div style={{ fontSize: 15, whiteSpace: "nowrap", textAlign: "right" }}>
+                <div style={{ fontSize: 14, whiteSpace: "nowrap", textAlign: "right" }}>
                   <span style={{ color: HOME_THEME.cyan, fontWeight: 700 }}>{h.sent_count} sent</span>
                   {h.failed_count > 0 && (
                     <span style={{ color: HOME_THEME.red, marginLeft: 8 }}>{h.failed_count} failed</span>

@@ -130,7 +130,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
                 border: "1px solid var(--border)",
                 borderRadius: 4,
                 padding: "2px 6px",
-                fontSize: 11,
+                fontSize: 12,
                 fontFamily: "var(--font-mono)",
                 outline: "none",
               }}

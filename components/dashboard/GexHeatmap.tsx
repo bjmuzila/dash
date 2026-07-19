@@ -248,11 +248,11 @@ export default function GexHeatmap({
         top: 0,
         zIndex: 2,
       }}>
-        <div style={{ padding: "5px 8px", fontSize: 9, fontWeight: 700, color: "#ffffff", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+        <div style={{ padding: "5px 8px", fontSize: 10, fontWeight: 700, color: "#ffffff", textTransform: "uppercase", letterSpacing: "0.1em" }}>
           STRIKE
         </div>
         {COLS.map(c => (
-          <div key={c.key} style={{ padding: "5px 6px", fontSize: 9, fontWeight: 700, color: "#ffffff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center" }}>
+          <div key={c.key} style={{ padding: "5px 6px", fontSize: 10, fontWeight: 700, color: "#ffffff", textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center" }}>
             {c.label}
           </div>
         ))}
@@ -292,7 +292,7 @@ export default function GexHeatmap({
             >
               <div style={{
                 padding: "4px 8px",
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 700,
                 fontFamily: "inherit",
                 color: isATM ? "#219EBC" : "#7a9ab8",
@@ -303,10 +303,10 @@ export default function GexHeatmap({
               }}>
                 {row.strike.toLocaleString()}
                 {isATM && (
-                  <span style={{ fontSize: 7, color: "#219EBC", background: "#062030", padding: "1px 3px", borderRadius: 2 }}>ATM</span>
+                  <span style={{ fontSize: 10, color: "#219EBC", background: "#062030", padding: "1px 3px", borderRadius: 2 }}>ATM</span>
                 )}
                 {rank && (
-                  <span style={{ fontSize: 8, fontWeight: 800, color: rankColors[rank], background: `${rankColors[rank]}22`, padding: "0 3px", borderRadius: 2, border: `1px solid ${rankColors[rank]}44` }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: rankColors[rank], background: `${rankColors[rank]}22`, padding: "0 3px", borderRadius: 2, border: `1px solid ${rankColors[rank]}44` }}>
                     #{rank}
                   </span>
                 )}

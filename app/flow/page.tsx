@@ -672,7 +672,7 @@ export default function FlowPage() {
     Object.assign(tooltip.style, {
       position: "absolute", display: "none", pointerEvents: "none", zIndex: "20",
       minWidth: "230px", padding: "0", borderRadius: "12px", overflow: "hidden",
-      fontSize: "15px", lineHeight: "1.4",
+      fontSize: "14px", lineHeight: "1.4",
       background: "radial-gradient(circle at 50% 0%, rgba(33,158,188,0.10) 0%, transparent 60%), rgba(10,13,20,0.96)",
       border: `1px solid ${C.border}`, borderTop: "2px solid rgba(33,158,188,0.5)",
       color: C.text, whiteSpace: "nowrap",
@@ -750,13 +750,13 @@ export default function FlowPage() {
           `</div>`
         );
       }).join("");
-      const more = orders.length > MAX_ROWS ? `<div style="color:#fff;font-family:var(--font-mono);font-size:15px;padding:4px 8px 0">+${orders.length - MAX_ROWS} more…</div>` : "";
+      const more = orders.length > MAX_ROWS ? `<div style="color:#fff;font-family:var(--font-mono);font-size: 14px;padding:4px 8px 0">+${orders.length - MAX_ROWS} more…</div>` : "";
       tip.innerHTML =
         `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.08)">` +
-          `<span style="color:#fff;font-weight:500;font-size:16px">${et}</span>` +
-          `<span style="color:#fff;font-size:15px;font-family:var(--font-mono);letter-spacing:.06em">OTM · ${orders.length} print${orders.length === 1 ? "" : "s"}</span>` +
+          `<span style="color:#fff;font-weight:500;font-size: 17px">${et}</span>` +
+          `<span style="color:#fff;font-size: 14px;font-family:var(--font-mono);letter-spacing:.06em">OTM · ${orders.length} print${orders.length === 1 ? "" : "s"}</span>` +
         `</div>` +
-        `<div style="padding:8px 10px;font-family:var(--font-mono);font-size:15px;display:flex;flex-direction:column;gap:5px">${rows}${more}</div>`;
+        `<div style="padding:8px 10px;font-family:var(--font-mono);font-size: 14px;display:flex;flex-direction:column;gap:5px">${rows}${more}</div>`;
       tip.style.display = "block";
       const hostW = host.clientWidth, tipW = tip.offsetWidth;
       let left = param.point.x + 16;
@@ -850,7 +850,7 @@ export default function FlowPage() {
 
   // ── Styles ──
   const labelStyle: React.CSSProperties = {
-    fontSize: 15, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+    fontSize: 14, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
     color: C.green, marginBottom: 4, display: "block",
   };
   const fieldStyle: React.CSSProperties = { ...homeInputStyle, width: "100%" };
@@ -861,7 +861,7 @@ export default function FlowPage() {
   // + glow; inactive = transparent with dimmed text. Matches the toolbar/nav.
   function segBtn(activeState: boolean): React.CSSProperties {
     return {
-      flex: 1, padding: "8px 6px", fontSize: 15, fontWeight: 700, cursor: "pointer",
+      flex: 1, padding: "8px 6px", fontSize: 14, fontWeight: 700, cursor: "pointer",
       textTransform: "uppercase", letterSpacing: "0.06em", border: "none",
       background: activeState ? DOCK_THEME.activeTile : "transparent",
       color: activeState ? C.cyan : C.text,
@@ -895,8 +895,8 @@ export default function FlowPage() {
             return (
               <div key={c.label} style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: "rgba(0,0,0,0.4)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
-                  <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted }}>{c.label}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", color }}>{c.bull ? "▲ BULL" : "▼ BEAR"}</span>
                 </div>
                 <span style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{fmtPremium(c.value)}</span>
                 <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
@@ -945,7 +945,7 @@ export default function FlowPage() {
           0–7DTE ≥$500K OTM
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
+          <label style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.green }}>Session</label>
           <ThemedDatePicker
             value={date}
             onChange={(v) => setDate(v || todayYmdET())}
@@ -955,13 +955,13 @@ export default function FlowPage() {
             <button
               className="flow-chip"
               onClick={() => setDate(todayYmdET())}
-              style={{ padding: "6px 12px", fontSize: 15, fontWeight: 700, cursor: "pointer", letterSpacing: "0.04em", borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.cyan }}
+              style={{ padding: "6px 12px", fontSize: 14, fontWeight: 700, cursor: "pointer", letterSpacing: "0.04em", borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.cyan }}
             >
               Today
             </button>
           )}
           {!isToday && (
-            <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: "rgba(142,202,230,0.12)", color: C.cyan }}>
+            <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: "rgba(142,202,230,0.12)", color: C.cyan }}>
               HISTORICAL
             </span>
           )}
@@ -994,7 +994,7 @@ export default function FlowPage() {
                     className="flow-chip"
                     onClick={() => selectTicker(t)}
                     style={{
-                      padding: "6px 12px", fontSize: 15, fontWeight: 700, cursor: "pointer",
+                      padding: "6px 12px", fontSize: 14, fontWeight: 700, cursor: "pointer",
                       letterSpacing: "0.04em", borderRadius: 6,
                       border: `1px solid ${on ? DOCK_THEME.activeBorder : C.border}`,
                       background: on ? DOCK_THEME.activeTile : "rgba(0,0,0,0.4)",
@@ -1027,7 +1027,7 @@ export default function FlowPage() {
                 onClick={addTicker}
                 disabled={!tickerInput.trim()}
                 style={{
-                  padding: "6px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.06em",
+                  padding: "6px 12px", fontSize: 14, fontWeight: 800, letterSpacing: "0.06em",
                   borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)",
                   color: C.cyan, cursor: tickerInput.trim() ? "pointer" : "not-allowed",
                   opacity: tickerInput.trim() ? 1 : 0.45,
@@ -1043,7 +1043,7 @@ export default function FlowPage() {
                     onClick={() => setRecentOpen((o) => !o)}
                     onBlur={() => setTimeout(() => setRecentOpen(false), 120)}
                     style={{
-                      padding: "6px 12px", fontSize: 15, fontWeight: 700, letterSpacing: "0.04em",
+                      padding: "6px 12px", fontSize: 14, fontWeight: 700, letterSpacing: "0.04em",
                       borderRadius: 6, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)",
                       color: C.text, cursor: "pointer",
                     }}
@@ -1065,7 +1065,7 @@ export default function FlowPage() {
                           onMouseDown={() => { selectTicker(t); setRecentOpen(false); }}
                           style={{
                             display: "block", width: "100%", textAlign: "left", cursor: "pointer",
-                            padding: "7px 12px", fontSize: 15, fontWeight: 700, border: "none",
+                            padding: "7px 12px", fontSize: 14, fontWeight: 700, border: "none",
                             background: t === active ? DOCK_THEME.activeTile : "transparent",
                             color: t === active ? C.cyan : C.text,
                           }}
@@ -1161,7 +1161,7 @@ export default function FlowPage() {
               className="flow-chip"
               onClick={resetFilters}
               style={{
-                width: "100%", padding: "8px 6px", fontSize: 15, fontWeight: 700,
+                width: "100%", padding: "8px 6px", fontSize: 14, fontWeight: 700,
                 textTransform: "uppercase", letterSpacing: "0.06em", cursor: "pointer",
                 border: `1px solid ${C.border}`, borderRadius: 6, background: "rgba(255,255,255,0.04)", color: C.text,
               }}
@@ -1182,19 +1182,19 @@ export default function FlowPage() {
       <div id="flow-chart-capture" style={{ display: view !== "ticker" ? "none" : chartOnly ? "block" : "contents" }}>
         <Card variant="budget" padding={0} style={{ flexShrink: 0, opacity: netSwitching ? 0.55 : 1, transition: "opacity 0.15s" }}>
           <div style={{ padding: "16px 20px 8px", textAlign: "center" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>
               Net Drift (Premium) — <span style={{ color: C.cyan }}>{active}</span>
-              {netSwitching && <span style={{ marginLeft: 8, fontSize: 15, fontWeight: 700, color: C.muted }}>· loading…</span>}
+              {netSwitching && <span style={{ marginLeft: 8, fontSize: 14, fontWeight: 700, color: C.muted }}>· loading…</span>}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 15, fontWeight: 700, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 14, fontWeight: 700, flexWrap: "wrap" }}>
             <span style={{ color: BULLISH }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
             <span style={{ color: BEARISH }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
             <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
           </div>
           <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
           {!netSeries.hasData && (
-            <p style={{ fontSize: 15, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
+            <p style={{ fontSize: 14, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
               {!isToday ? `No ${active} flow recorded for ${date}.` : status === "LIVE" ? `No ${active} flow yet for the current filters.` : "Connecting to feed…"}
             </p>
           )}
@@ -1205,7 +1205,7 @@ export default function FlowPage() {
       {view === "combined" && (
         <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
           <div style={{ padding: "16px 20px 4px", textAlign: "center" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.02em" }}>
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>
               Premium Split — <span style={{ color: C.cyan }}>{combinedLabel}</span>
             </div>
           </div>
@@ -1218,21 +1218,21 @@ export default function FlowPage() {
       <Card variant="budget" padding={0} style={{ flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 22, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>
-            {view === "ticker" && historySwitching && <span style={{ fontSize: 15, fontWeight: 700, color: C.muted }}>loading…</span>}
-            <span style={{ fontSize: 15, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
-            <span style={{ fontSize: 15, color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtPremium(totals.prem)}</strong></span>
-            <span style={{ fontSize: 15, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
-            <span style={{ fontSize: 15, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
+            <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: C.text }}>Flow Tape — {view === "combined" ? combinedLabel : active}</span>
+            {view === "ticker" && historySwitching && <span style={{ fontSize: 14, fontWeight: 700, color: C.muted }}>loading…</span>}
+            <span style={{ fontSize: 14, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
+            <span style={{ fontSize: 14, color: C.muted }}>Total <strong style={{ color: C.text }}>{fmtPremium(totals.prem)}</strong></span>
+            <span style={{ fontSize: 14, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
+            <span style={{ fontSize: 14, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
           </div>
-          <span style={{ fontSize: 15, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: (!isToday || status === "LIVE") ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: (!isToday || status === "LIVE") ? C.cyan : C.red }}>
+          <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", padding: "2px 10px", borderRadius: 4, background: (!isToday || status === "LIVE") ? "rgba(142,202,230,0.12)" : "rgba(239,68,68,0.12)", color: (!isToday || status === "LIVE") ? C.cyan : C.red }}>
             {isToday ? status : `${date} · HISTORICAL`}
           </span>
         </div>
 
         <div style={{ overflowX: "auto" }}>
         <div style={{ minWidth: view === "combined" ? 1180 : 1116 }}>
-        <div style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID, gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 14, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, flexShrink: 0 }}>
           {view === "combined" && <span>Ticker</span>}
           <span>Time</span>
           <span>Side</span>
@@ -1253,7 +1253,7 @@ export default function FlowPage() {
 
         <div>
           {tapeRows.length === 0 ? (
-            <p style={{ fontSize: 15, padding: 24, color: C.muted }}>
+            <p style={{ fontSize: 14, padding: 24, color: C.muted }}>
               {!isToday ? `No ${view === "combined" ? combinedLabel : active} flow recorded for ${date}.` : status === "LIVE" ? `No ${view === "combined" ? combinedLabel : active} flow matches the current filters.` : "Connecting to feed…"}
             </p>
           ) : (
@@ -1296,7 +1296,7 @@ export default function FlowPage() {
                     style={{
                       display: "grid", gridTemplateColumns: view === "combined" ? GRID_COMBINED : GRID,
                       gap: 8, padding: "8px 20px", borderBottom: `1px solid ${C.border}`,
-                      fontSize: 15, fontFamily: "var(--font-mono)", alignItems: "center",
+                      fontSize: 14, fontFamily: "var(--font-mono)", alignItems: "center",
                       cursor: whale ? "pointer" : "default",
                       background: open ? "rgba(33,158,188,0.10)" : "transparent",
                       outline: open ? `1px solid rgba(33,158,188,0.4)` : "none",
@@ -1310,7 +1310,7 @@ export default function FlowPage() {
                     <span style={{ textAlign: "center", color: sideColor, fontWeight: 700 }}>{o.type}</span>
                     <span style={{ textAlign: "right", color: C.text }} title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
                       {o.size.toLocaleString()}
-                      {o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 11 }}> ×{o.fills}</span> : null}
+                      {o.fills && o.fills > 1 ? <span style={{ color: C.muted, fontSize: 12 }}> ×{o.fills}</span> : null}
                     </span>
                     <span style={{ textAlign: "right", color: C.text }}>{fmtContractCost(o.price)}</span>
                     {/* Whale premium reads bold — the one column you scan for. */}
@@ -1330,7 +1330,7 @@ export default function FlowPage() {
                     </span>
                     <span style={{ textAlign: "right", color: C.muted }}>{d == null ? "—" : `${d}d`}</span>
                     <span style={{ textAlign: "right", color: C.muted }}>{o.expiration ?? "—"}</span>
-                    <span style={{ textAlign: "center", fontWeight: 800, fontSize: 15, color: biasColor }}>
+                    <span style={{ textAlign: "center", fontWeight: 800, fontSize: 14, color: biasColor }}>
                       {bull ? "▲ BULL" : "▼ BEAR"}
                     </span>
                   </div>
@@ -1348,7 +1348,7 @@ export default function FlowPage() {
             })
           )}
           {tapeRows.length > MAX_TAPE_ROWS && (
-            <p style={{ fontSize: 15, padding: "10px 20px", color: C.muted, textAlign: "center" }}>
+            <p style={{ fontSize: 14, padding: "10px 20px", color: C.muted, textAlign: "center" }}>
               Showing newest {MAX_TAPE_ROWS.toLocaleString()} of {tapeRows.length.toLocaleString()} — tighten filters to narrow.
             </p>
           )}

@@ -1218,7 +1218,7 @@ export function HomeClient({
           onClick={() => setGexView(v.id)}
           style={{
             padding: "7px 12px",
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             textTransform: "uppercase",
             letterSpacing: "0.08em",
@@ -1250,7 +1250,7 @@ export function HomeClient({
             padding: "18px 24px",
             background: "rgba(33,158,188,0.10)",
             borderBottom: `1px solid ${C.cyan}55`,
-            fontSize: 16,
+            fontSize: 17,
             textAlign: "center",
           }}
         >
@@ -1271,7 +1271,7 @@ export function HomeClient({
                 border: "none",
                 background: `linear-gradient(180deg, ${C.cyan}, #00b8c4)`,
                 color: "#04121a",
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: 800,
                 cursor: "pointer",
                 boxShadow: "0 0 28px 6px rgba(255,255,255,0.55)",
@@ -1343,8 +1343,8 @@ export function HomeClient({
                   { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
                 ].map((t) => (
                   <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
-                    <span style={{ fontSize: 9, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 800, color: t.color }}>{t.value}</span>
+                    <span style={{ fontSize: 10, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: t.color }}>{t.value}</span>
                   </div>
                 ))}
               </div>
@@ -1377,8 +1377,8 @@ export function HomeClient({
                   <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "#05080d" }}>
                     <style>{`@keyframes gexspin{to{transform:rotate(360deg)}}`}</style>
                     <div style={{ width: 44, height: 44, borderRadius: "50%", border: `3px solid rgba(33,158,188,0.15)`, borderTopColor: C.cyan, animation: "gexspin 0.8s linear infinite" }} />
-                    <div style={{ color: C.cyan, fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>Loading SPX chain…</div>
-                    <div style={{ color: "#5a6b85", fontSize: 11, letterSpacing: "0.06em" }}>Warming OI &amp; greeks for accurate GEX</div>
+                    <div style={{ color: C.cyan, fontSize: 14, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>Loading SPX chain…</div>
+                    <div style={{ color: "#5a6b85", fontSize: 12, letterSpacing: "0.06em" }}>Warming OI &amp; greeks for accurate GEX</div>
                   </div>
                 )}
               </div>
@@ -1397,7 +1397,7 @@ export function HomeClient({
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
                   { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
                 ] as const).map((tab) => (
-                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
                   </button>
                 ))}
@@ -1479,7 +1479,7 @@ export function HomeClient({
                     otherwise overflow the card and get clipped on a narrow window. */}
                 <FitScale min={0.42}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
                     {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
                     {heatmapView === "chain" && (
@@ -1494,7 +1494,7 @@ export function HomeClient({
                         spellCheck={false}
                         placeholder="SPX"
                         title="Type a ticker + Enter. Reverts to SPX when you switch tabs."
-                        style={{ marginLeft: 10, width: 70, fontSize: 11, fontWeight: 700, padding: "3px 8px", border: "1px solid rgba(33,158,188,0.35)", borderRadius: 6, background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))", color: C.cyan, outline: "none", textTransform: "uppercase", letterSpacing: "0.08em" }}
+                        style={{ marginLeft: 10, width: 70, fontSize: 12, fontWeight: 700, padding: "3px 8px", border: "1px solid rgba(33,158,188,0.35)", borderRadius: 6, background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))", color: C.cyan, outline: "none", textTransform: "uppercase", letterSpacing: "0.08em" }}
                       />
                       <datalist id="home-chain-tickers">
                         {["SPX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD", "NDX"].map((t) => <option key={t} value={t} />)}
@@ -1503,7 +1503,7 @@ export function HomeClient({
                     )}
                     {heatmapView !== "chain" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
-                      <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
+                      <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
                         type="range" min={0.5} max={5} step={0.01}
                         value={intensity}
@@ -1516,7 +1516,7 @@ export function HomeClient({
                           already show both bases side by side. */}
                       <span
                         title="Basis for the SPY 0DTE / QQQ 0DTE columns. OI+Vol = open interest + volume (full positioning). Vol Only = today's volume (intraday flow)."
-                        style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginLeft: 6, cursor: "help" }}
+                        style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginLeft: 6, cursor: "help" }}
                       >
                         SPY/QQQ{sideLoading ? " …" : ""}
                       </span>
@@ -1531,7 +1531,7 @@ export function HomeClient({
                             title={b.tip}
                             style={{
                               padding: "2px 7px",
-                              fontSize: 9,
+                              fontSize: 10,
                               fontWeight: 700,
                               cursor: "pointer",
                               border: "none",
@@ -1552,7 +1552,7 @@ export function HomeClient({
                     <>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
-                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
+                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     </>
@@ -1567,7 +1567,7 @@ export function HomeClient({
                           onClick={() => setHeatmapView(v)}
                           style={{
                             padding: "2px 10px",
-                            fontSize: 9,
+                            fontSize: 10,
                             fontWeight: 700,
                             textTransform: "uppercase",
                             letterSpacing: "0.08em",
@@ -1601,7 +1601,7 @@ export function HomeClient({
                     <col style={{ width: "17%" }} />
                     <col style={{ width: "19%" }} />
                   </colgroup>
-                  <thead style={{ fontSize: 11, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
+                  <thead style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {[
                         { label: "Strike", tip: undefined as string | undefined },

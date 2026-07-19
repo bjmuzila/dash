@@ -658,7 +658,7 @@ export default function EsCandlesFullPanel() {
           title={showHeatmap ? "Hide GEX heatmap" : "Show GEX heatmap"}
           style={{
             position: "absolute", right: 8, top: 6, zIndex: 3,
-            fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+            fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
             padding: "3px 8px", borderRadius: 6, cursor: "pointer",
             border: `1px solid ${showHeatmap ? "rgba(41,182,246,0.5)" : HOME_THEME.border}`,
             background: showHeatmap ? "rgba(41,182,246,0.16)" : "rgba(5,8,13,.6)",
@@ -668,14 +668,14 @@ export default function EsCandlesFullPanel() {
           Heatmap
         </button>
         {rows.length === 0 && (
-          <div style={{ position: "absolute", inset: 0, zIndex: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "#6f7d8c", fontSize: 11 }}>
+          <div style={{ position: "absolute", inset: 0, zIndex: 3, display: "flex", alignItems: "center", justifyContent: "center", color: "#6f7d8c", fontSize: 12 }}>
             {connected ? "Loading ES candles…" : "Connecting…"}
           </div>
         )}
         {last && (
           <div
             style={{
-              position: "absolute", left: 8, top: 6, zIndex: 3, fontSize: 11,
+              position: "absolute", left: 8, top: 6, zIndex: 3, fontSize: 12,
               fontFamily: "var(--font-mono)", color: HOME_THEME.text,
               background: "rgba(5,8,13,.6)", padding: "2px 7px", borderRadius: 6,
               pointerEvents: "none",

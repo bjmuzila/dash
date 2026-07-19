@@ -29,13 +29,13 @@ export default async function ChangelogPage() {
       }}
     >
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <div style={{ fontSize: 11, color: "#FFFFFF", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#FFFFFF", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 800, marginBottom: 8 }}>
           Live Notes
         </div>
         <h1 style={{ fontSize: 28, lineHeight: 1.1, margin: "0 0 10px", fontWeight: 800 }}>
           Changelog
         </h1>
-        <p style={{ margin: "0 0 20px", fontSize: 13, color: "#FFFFFF" }}>
+        <p style={{ margin: "0 0 20px", fontSize: 14, color: "#FFFFFF" }}>
           This page shows the current contents of <span style={{ color: "#7dd3fc" }}>CHANGELOG.md</span> directly.
           When that file changes, this page reflects it on the next load.
         </p>
@@ -66,7 +66,7 @@ export default async function ChangelogPage() {
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
               overflowX: "auto",
-              fontSize: 13,
+              fontSize: 14,
               lineHeight: 1.65,
               color: "#e8edf5",
               fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",

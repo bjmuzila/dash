@@ -102,7 +102,7 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
       <button
         onClick={() => setOpen((v) => !v)}
         style={{
-          alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 15, fontWeight: 800,
+          alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 800,
           cursor: "pointer", border: "1px solid rgba(255,255,255,0.15)", background: "transparent",
           color: HOME_THEME.text,
         }}
@@ -113,18 +113,18 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
       {open && (
         <ThemeCard variant="budget">
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.cyan }}>
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.cyan }}>
               Daily Results — {sym} · IB 60m (09:30–10:30 ET)
             </div>
-            <div style={{ fontSize: 15, color: HOME_THEME.text, marginTop: 3 }}>
+            <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 3 }}>
               Recorded automatically at 16:30 ET every trading day. ✓ rule hit · ✗ rule missed · — not in play. Hover a cell for the rule + trigger.
             </div>
           </div>
 
-          {err && <div style={{ color: HOME_THEME.red, fontSize: 15 }}>{err}</div>}
-          {!err && !data && <div style={{ color: HOME_THEME.text, fontSize: 15 }}>Loading…</div>}
+          {err && <div style={{ color: HOME_THEME.red, fontSize: 14 }}>{err}</div>}
+          {!err && !data && <div style={{ color: HOME_THEME.text, fontSize: 14 }}>Loading…</div>}
           {!err && data && data.length === 0 && (
-            <div style={{ color: HOME_THEME.text, fontSize: 15 }}>
+            <div style={{ color: HOME_THEME.text, fontSize: 14 }}>
               No results recorded yet — the first row lands at 16:30 ET on the next trading day.
             </div>
           )}
@@ -156,7 +156,7 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
                       <tr key={r.date}>
                         <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.date}</td>
                         <td style={td}>{f1(r.ib_width)}</td>
-                        <td style={{ ...td, textTransform: "uppercase", fontSize: 13 }}>{r.width_bucket ?? "—"}</td>
+                        <td style={{ ...td, textTransform: "uppercase", fontSize: 14 }}>{r.width_bucket ?? "—"}</td>
                         <td style={{ ...td, color: r.bias === "H" ? HOME_THEME.green : r.bias === "L" ? HOME_THEME.red : HOME_THEME.text, fontWeight: 800 }}>
                           {r.bias ?? "—"}
                         </td>
@@ -200,7 +200,7 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
 
               {/* rules legend — what each R# column is actually claiming */}
               <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.10)" }}>
-                <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.05em", color: LIGHT_BLUE, marginBottom: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.05em", color: LIGHT_BLUE, marginBottom: 8 }}>
                   THE RULES
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "4px 24px" }}>

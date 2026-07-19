@@ -141,7 +141,7 @@ export default function GexDock() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexShrink: 0, marginBottom: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 20, lineHeight: 1 }} aria-hidden>🧮</span>
-            <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>GEX Groups</span>
+            <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>GEX Groups</span>
           </div>
           <button
             onClick={onClose}
@@ -172,7 +172,7 @@ export default function GexDock() {
             <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: 24, textAlign: "center" }}>
               <span aria-hidden style={{ fontSize: 30 }}>🔒</span>
               <div style={{ color: HOME_THEME.text, fontSize: 14, fontWeight: 700 }}>{selected?.title} requires a subscription</div>
-              <div style={{ color: HOME_THEME.muted, fontSize: 12.5, maxWidth: 260, lineHeight: 1.5 }}>
+              <div style={{ color: HOME_THEME.muted, fontSize: 12, maxWidth: 260, lineHeight: 1.5 }}>
                 Delayed mode only covers Home and Multi Greek. Upgrade for the full live platform.
               </div>
               <Link
@@ -184,7 +184,7 @@ export default function GexDock() {
                   border: "none",
                   background: `linear-gradient(180deg, ${CYAN}, #00b8c4)`,
                   color: "#04121a",
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: 800,
                   textDecoration: "none",
                   boxShadow: "0 0 22px 4px rgba(255,255,255,0.45)",
@@ -201,7 +201,7 @@ export default function GexDock() {
               style={iframeStyle}
             />
           ) : (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.muted, fontSize: 13, padding: 24, textAlign: "center" }}>
+            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: HOME_THEME.muted, fontSize: 14, padding: 24, textAlign: "center" }}>
               {selected ? `${selected.title} — coming soon` : "Select a group above"}
             </div>
           )}

@@ -279,19 +279,19 @@ export default function LevelsPublish() {
           label={levels.lastRun ? (levelsAreStale(levels.lastRun) ? "Stale" : "Current") : "Never run"}
         />
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Last Published</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Last Published</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.lastRun)}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>EM Grabbed</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>EM Grabbed</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{fmtLastRun(levels.emGrabbed)}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Tickers</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Tickers</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.cyan, fontFamily: "var(--font-mono)" }}>{levels.count}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <span style={{ fontSize: 9, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
           <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "var(--font-mono)" }}>Sat ~09:00 ET</span>
         </div>
         <button
@@ -299,20 +299,20 @@ export default function LevelsPublish() {
           disabled={publishing || pubRun.running}
           title="Compute & publish weekly EM levels for the whole roster now (takes a few minutes for ~370 tickers). Overwrites the current weekly snapshot."
           style={{
-            ...homeButtonStyle, padding: "6px 16px", borderRadius: 8, fontSize: 11, marginLeft: "auto",
+            ...homeButtonStyle, padding: "6px 16px", borderRadius: 8, fontSize: 12, marginLeft: "auto",
             opacity: (publishing || pubRun.running) ? 0.6 : 1,
             cursor: (publishing || pubRun.running) ? "not-allowed" : "pointer",
           }}
         >
           {(publishing || pubRun.running) ? "Publishing…" : "Publish Now"}
         </button>
-        <a href="/database" style={{ ...homeSecondaryButtonStyle, padding: "6px 14px", borderRadius: 8, textDecoration: "none", fontSize: 11 }}>
+        <a href="/database" style={{ ...homeSecondaryButtonStyle, padding: "6px 14px", borderRadius: 8, textDecoration: "none", fontSize: 12 }}>
           View table →
         </a>
       </div>
 
       {(pubRun.running || pubRun.at) && (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 11, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12, padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}` }}>
           {pubRun.running ? (
             <span style={{ fontWeight: 800, color: HOME_THEME.cyan }}>● Running… computing levels (this can take a few minutes)</span>
           ) : (

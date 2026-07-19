@@ -113,7 +113,7 @@ function ConceptLeaderboardModal({ onClose }: { onClose: () => void }) {
         style={{ background: "#0b121c", border: "1px solid rgba(255,255,255,0.10)", borderTop: "3px solid #219EBC", borderRadius: 14, width: "min(880px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: "#219EBC", textTransform: "uppercase", letterSpacing: "0.1em" }}>Concept Leaderboard</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: "#219EBC", textTransform: "uppercase", letterSpacing: "0.1em" }}>Concept Leaderboard</span>
           <span style={{ fontSize: 12, color: "#c9d8e8" }}>ES futures · all-time · ranked by win rate (avg R = avg reward/risk on winners)</span>
           <button
             onClick={onClose}
@@ -123,20 +123,20 @@ function ConceptLeaderboardModal({ onClose }: { onClose: () => void }) {
 
         <div style={{ overflow: "auto", padding: "4px 0" }}>
           {err ? (
-            <div style={{ padding: "22px 24px", color: "#ff6b6b", fontSize: 13 }}>Couldn&apos;t load leaderboard: {err}</div>
+            <div style={{ padding: "22px 24px", color: "#ff6b6b", fontSize: 14 }}>Couldn&apos;t load leaderboard: {err}</div>
           ) : !loaded ? (
-            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 13 }}>Loading…</div>
+            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 14 }}>Loading…</div>
           ) : sorted.length === 0 ? (
-            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 13 }}>No graded setups yet (need ≥3 per concept).</div>
+            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 14 }}>No graded setups yet (need ≥3 per concept).</div>
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.10)", position: "sticky", top: 0, background: "#0b121c" }}>
-                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>#</th>
-                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Concept</th>
-                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Record</th>
-                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Win Rate</th>
-                  <th style={{ padding: "8px 16px", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "right" }}>Avg R</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>#</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Concept</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Record</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "left" }}>Win Rate</th>
+                  <th style={{ padding: "8px 16px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: "right" }}>Avg R</th>
                 </tr>
               </thead>
               <tbody>
@@ -145,9 +145,9 @@ function ConceptLeaderboardModal({ onClose }: { onClose: () => void }) {
                   const ac = wrColor(r.win_rate);
                   return (
                     <tr key={r.kind} style={{ borderTop: i ? "1px solid rgba(255,255,255,0.06)" : undefined }}>
-                      <td style={{ padding: "10px 16px", fontSize: 13, fontFamily: "var(--font-mono)", color: "#c9d8e8" }}>{i + 1}</td>
-                      <td style={{ padding: "10px 16px", fontSize: 13.5, fontWeight: 700, color: "#fff" }}>{lbKindLabel(r.kind)}</td>
-                      <td style={{ padding: "10px 16px", fontSize: 12.5, fontFamily: "var(--font-mono)" }}>
+                      <td style={{ padding: "10px 16px", fontSize: 14, fontFamily: "var(--font-mono)", color: "#c9d8e8" }}>{i + 1}</td>
+                      <td style={{ padding: "10px 16px", fontSize: 14, fontWeight: 700, color: "#fff" }}>{lbKindLabel(r.kind)}</td>
+                      <td style={{ padding: "10px 16px", fontSize: 12, fontFamily: "var(--font-mono)" }}>
                         <span style={{ color: "#22e08a" }}>{r.wins}W</span>
                         <span style={{ color: "#c9d8e8" }}> · </span>
                         <span style={{ color: "#ff6b6b" }}>{r.losses}L</span>
@@ -157,12 +157,12 @@ function ConceptLeaderboardModal({ onClose }: { onClose: () => void }) {
                           <div style={{ flex: 1, height: 6, borderRadius: 3, background: "#0b1320", overflow: "hidden" }}>
                             <div style={{ width: `${pct ?? 0}%`, height: "100%", background: ac }} />
                           </div>
-                          <span style={{ fontSize: 13, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", minWidth: 34, textAlign: "right" }}>
+                          <span style={{ fontSize: 14, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", minWidth: 34, textAlign: "right" }}>
                             {pct != null ? `${pct}%` : "—"}
                           </span>
                         </div>
                       </td>
-                      <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right", color: r.avg_r == null ? "#9fb3c8" : r.avg_r >= 1 ? "#22e08a" : "#ffb300" }}>
+                      <td style={{ padding: "10px 16px", fontSize: 14, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right", color: r.avg_r == null ? "#9fb3c8" : r.avg_r >= 1 ? "#22e08a" : "#ffb300" }}>
                         {r.avg_r != null ? `${r.avg_r > 0 ? "+" : ""}${r.avg_r.toFixed(1)}R` : "—"}
                       </td>
                     </tr>

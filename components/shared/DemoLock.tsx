@@ -56,8 +56,8 @@ export function LockedPanel({
           <path d="M8 10V7a4 4 0 0 1 8 0v3" />
         </svg>
       </div>
-      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 15, color: "rgba(255,255,255,0.65)", maxWidth: 460, lineHeight: 1.55, marginBottom: 18 }}>
+      <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 14, color: "rgba(255,255,255,0.65)", maxWidth: 460, lineHeight: 1.55, marginBottom: 18 }}>
         {detail}
       </div>
       <Link href={`/pricing?from=${from}&trial=1`} style={cta}>
@@ -82,7 +82,7 @@ const banner: React.CSSProperties = {
 };
 
 const pill: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   fontWeight: 800,
   letterSpacing: "0.12em",
   textTransform: "uppercase",
@@ -101,7 +101,7 @@ const cta: React.CSSProperties = {
   gap: 8,
   padding: "11px 20px",
   borderRadius: 9,
-  fontSize: 13,
+  fontSize: 14,
   fontWeight: 900,
   letterSpacing: "0.07em",
   color: "#fff",

@@ -91,6 +91,25 @@ function getCompletedWeekKey() {
   else if (day >= 1 && day <= 4) anchor.setDate(anchor.getDate() - (day + 2));
   return getWeekKey(anchor);
 }
+// ET calendar date (YYYY-MM-DD) for a ms timestamp. en-CA formats as ISO.
+function etDateStr(ms) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(ms));
+}
+// First day inside a week whose bar poked outside the band. `days` = [{ t, high, low }].
+// Returns { breach: 1|0|null, breach_day: 'YYYY-MM-DD'|null } — breach_day = the
+// EARLIEST breaching day. Null breach when no daily bars / no band to test against.
+function computeBreach(days, up, down) {
+  if (!Array.isArray(days) || !days.length || !Number.isFinite(up) || !Number.isFinite(down)) {
+    return { breach: null, breach_day: null };
+  }
+  const sorted = [...days].sort((a, b) => a.t - b.t);
+  for (const d of sorted) {
+    if (d.high > up || d.low < down) return { breach: 1, breach_day: etDateStr(d.t) };
+  }
+  return { breach: 0, breach_day: null };
+}
 
 // ── chain normalization (verbatim port) ─────────────────────────────────────
 // Broker underlying spot from the chain payload. Indices (SPX ~7500) differ from
@@ -487,6 +506,8 @@ function weeklyFromDaily(daily) {
         close: bars[bars.length - 1].close,
         high: Math.max(...bars.map((x) => x.high)),
         low: Math.min(...bars.map((x) => x.low)),
+        // Per-day bars kept so the evaluator can pin the FIRST breach day.
+        days: bars.map((x) => ({ t: x.time, high: x.high, low: x.low })),
       };
     })
     .sort((a, b) => a.time - b.time);
@@ -546,12 +567,22 @@ async function fetchWeeklyHistoryFutures(ticker, daysBack = 140) {
   return Array.from(byWeek.values())
     .map(({ wk, bars }) => {
       bars.sort((a, b) => a.time - b.time);
+      // Collapse the 5m bars into ET SESSION days (Sun-eve ETH → Monday via the
+      // same +6h shift) so the evaluator can name the first breaching session.
+      const byDay = new Map();
+      for (const x of bars) {
+        const dk = etDateStr(x.time + ETH_SHIFT_MS);
+        const d = byDay.get(dk);
+        if (!d) byDay.set(dk, { t: Date.parse(`${dk}T12:00:00.000Z`), high: x.high, low: x.low });
+        else { d.high = Math.max(d.high, x.high); d.low = Math.min(d.low, x.low); }
+      }
       return {
         time: Date.parse(`${wk}T04:00:00.000Z`), // Monday 00:00 ET — keys to `wk`
         open: bars[0].open,
         close: bars[bars.length - 1].close,
         high: Math.max(...bars.map((x) => x.high)),
         low: Math.min(...bars.map((x) => x.low)),
+        days: Array.from(byDay.values()),
       };
     })
     .sort((a, b) => a.time - b.time);
@@ -795,7 +826,7 @@ async function fetchWeeklyClose(engine, ticker, targetWeek) {
   const priorWeeks = bars.filter((i) => getWeekKey(new Date(i.time)) < targetWeek);
   const selected = canonical || priorWeeks[priorWeeks.length - 1] || null;
   if (!selected) throw new Error(`No finalized weekly candle for ${ticker} (week ${targetWeek})`);
-  return { close: selected.close, high: selected.high, low: selected.low, open: selected.open, week: getWeekKey(new Date(selected.time)) };
+  return { close: selected.close, high: selected.high, low: selected.low, open: selected.open, days: selected.days || [], week: getWeekKey(new Date(selected.time)) };
 }
 
 /**
@@ -834,7 +865,7 @@ async function evaluateCompletedWeek(base) {
     const settled = await Promise.allSettled(batch.map(async (row) => {
       // Map the stored API ticker back to a weekly-candle symbol.
       const candleTicker = row.ticker === 'ESU' ? 'ESM' : row.ticker === 'NQU' ? 'NQM' : row.ticker;
-      const { close, high, low, open } = await fetchWeeklyClose(engine, candleTicker, completedWeek);
+      const { close, high, low, open, days } = await fetchWeeklyClose(engine, candleTicker, completedWeek);
 
       const up = Number(row.up);
       const down = Number(row.down);
@@ -848,6 +879,12 @@ async function evaluateCompletedWeek(base) {
       const result = (close >= lo && close <= hi) ? 'hit' : 'miss';
       if (result === 'hit') hits += 1; else misses += 1;
 
+      // Intraweek breach + the FIRST day it broke, from the week's daily bars.
+      // Falls back to the weekly high/low when no per-day bars came through, so a
+      // breach still registers (just without a day) rather than showing "no".
+      let { breach, breach_day } = computeBreach(days, hi, lo);
+      if (breach == null) breach = (high > hi || low < lo) ? 1 : 0;
+
       await ifetch(`${base}/api/em-tracker`, {
         method: 'POST',
         headers: Object.assign(
@@ -859,10 +896,10 @@ async function evaluateCompletedWeek(base) {
           em, ref_close: Number.isFinite(ref) ? ref : null,
           up: Number.isFinite(up) ? up : null, down: Number.isFinite(down) ? down : null,
           o: open, h: high, l: low, c: close,
-          result, result_source: 'auto',
+          result, breach, breach_day, result_source: 'auto',
         }),
       });
-      console.log(`[em-eval] ${row.ticker} ${row.week_label}: close ${close} band [${lo}, ${hi}] -> ${result}`);
+      console.log(`[em-eval] ${row.ticker} ${row.week_label}: close ${close} band [${lo}, ${hi}] -> ${result}${breach ? ` (breach ${breach_day || 'day?'})` : ''}`);
     }));
     // Surface per-ticker failures instead of letting allSettled swallow them —
     // an empty weekly history or refused fetch now logs "TICKER skipped — reason".

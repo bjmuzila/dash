@@ -249,7 +249,7 @@ export default function WhaleOrdersPanel() {
               autoComplete="off"
               spellCheck={false}
               style={{
-                ...homeInputStyle, width: 92, fontSize: 11, padding: "3px 8px",
+                ...homeInputStyle, width: 92, fontSize: 12, padding: "3px 8px",
                 textTransform: "uppercase",
                 borderColor: activeFilter ? DOCK_THEME.activeBorder : C.border,
                 color: activeFilter ? C.cyan : C.text,
@@ -263,7 +263,7 @@ export default function WhaleOrdersPanel() {
                 onClick={() => setTickerFilter("")}
                 title="Clear ticker filter"
                 style={{
-                  padding: "3px 7px", fontSize: 11, fontWeight: 800, lineHeight: 1, cursor: "pointer",
+                  padding: "3px 7px", fontSize: 12, fontWeight: 800, lineHeight: 1, cursor: "pointer",
                   borderRadius: 4, border: `1px solid ${C.border}`, background: "rgba(0,0,0,0.4)", color: C.muted,
                 }}
               >
@@ -272,9 +272,9 @@ export default function WhaleOrdersPanel() {
             )}
           </div>
 
-          <span style={{ fontSize: 11, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
-          <span style={{ fontSize: 11, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
-          <span style={{ fontSize: 11, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
+          <span style={{ fontSize: 12, color: C.muted }}><strong style={{ color: C.text }}>{totals.count.toLocaleString()}</strong> orders</span>
+          <span style={{ fontSize: 12, color: C.muted }}>Calls <strong style={{ color: BULLISH }}>{fmtPremium(totals.callPrem)}</strong></span>
+          <span style={{ fontSize: 12, color: C.muted }}>Puts <strong style={{ color: BEARISH }}>{fmtPremium(totals.putPrem)}</strong></span>
         </div>
         <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", padding: "2px 8px", borderRadius: 4, background: status === "LIVE" ? "rgba(142,202,230,0.14)" : "rgba(239,68,68,0.12)", color: status === "LIVE" ? C.cyan : C.red }}>
           {status}
@@ -343,7 +343,7 @@ export default function WhaleOrdersPanel() {
             })
           )}
           {filtered.length > MAX_ROWS && (
-            <p style={{ fontSize: 11, padding: "8px 10px", color: C.muted, textAlign: "center" }}>
+            <p style={{ fontSize: 12, padding: "8px 10px", color: C.muted, textAlign: "center" }}>
               Showing newest {MAX_ROWS} of {filtered.length.toLocaleString()} whale prints.
             </p>
           )}

@@ -172,7 +172,7 @@ function GexScannerPanel() {
                 </span>
                 <span style={{ fontSize: 12, color: "rgba(255,255,255,0.6)" }}>{r.strike}</span>
               </div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtB(r.latest_chg)}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtB(r.latest_chg)}</div>
               <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
                 {r.expiry} · spot {r.spot > 0 ? r.spot.toFixed(2) : "—"}
               </div>
@@ -342,7 +342,7 @@ function WatchThisPanel() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
                 <span style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontWeight: 800, fontSize: 12, color: up ? HOME_THEME.green : HOME_THEME.red }}>{r.symbol}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red, opacity: 0.85 }}>${r.spot.toFixed(2)}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red, opacity: 0.85 }}>${r.spot.toFixed(2)}</span>
                 </span>
                 <span style={{ fontSize: 10, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.05em" }}>WATCH</span>
               </div>
@@ -351,16 +351,16 @@ function WatchThisPanel() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: up ? HOME_THEME.green : HOME_THEME.red }}>
                     <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600 }}>OI+V </span>
                     {fmtB(r.gex_value)}
                   </span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: (r.gex_value_vol ?? 0) >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: (r.gex_value_vol ?? 0) >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                     <span style={{ color: HOME_THEME.text, opacity: 0.6, fontWeight: 600 }}>V </span>
                     {r.gex_value_vol != null ? fmtB(r.gex_value_vol) : "—"}
                   </span>
                 </span>
-                <a href={chainHref} style={{ fontSize: 11, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
+                <a href={chainHref} style={{ fontSize: 12, color: LIGHT_BLUE, fontWeight: 700, textDecoration: "none" }}>
                   Chain →
                 </a>
               </div>
@@ -371,7 +371,7 @@ function WatchThisPanel() {
 
       <div style={{ paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
           <div style={{ display: "flex", gap: 4 }}>
             {(["all", "open", "touched", "expired"] as const).map((s) => (
               <button key={s} onClick={() => setOutcomeStatus(s)} style={seg(outcomeStatus === s)}>
@@ -384,7 +384,7 @@ function WatchThisPanel() {
         <div style={{ overflow: "auto", maxHeight: 280 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
-              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase", position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
+              <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 12, textTransform: "uppercase", position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
                 <th style={{ ...th, textAlign: "left" }}>Symbol</th>
                 <th style={th}>Strike</th>
                 <th style={{ ...th, textAlign: "left" }}>Expiry</th>
@@ -416,7 +416,7 @@ function WatchThisPanel() {
                   </td>
                   <td style={{ ...td, textAlign: "left" }}>
                     <span style={{
-                      fontSize: 11, fontWeight: 800, letterSpacing: "0.05em",
+                      fontSize: 12, fontWeight: 800, letterSpacing: "0.05em",
                       color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? HOME_THEME.text : HOME_THEME.green,
                     }}>
                       {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
@@ -460,7 +460,7 @@ function WatchThisPanel() {
                   {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
                 </div>
                 {detail && (
-                  <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
+                  <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
                     Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
                     <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
                       {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
@@ -484,7 +484,7 @@ function WatchThisPanel() {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
-                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 11, textTransform: "uppercase" }}>
+                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 12, textTransform: "uppercase" }}>
                       <th style={{ ...th, textAlign: "left" }}>Date</th>
                       <th style={th}>Spot</th>
                       <th style={th}>Spot Δ%</th>

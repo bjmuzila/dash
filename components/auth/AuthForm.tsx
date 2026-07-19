@@ -204,7 +204,7 @@ export default function AuthForm({
     border: `1px solid ${T.border}`,
     background: "rgba(255,255,255,0.04)",
     color: T.text,
-    fontSize: 16,
+    fontSize: 17,
     outline: "none",
   };
 
@@ -222,7 +222,7 @@ export default function AuthForm({
       <h1 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: "0 0 4px" }}>
         {isSignup ? "Create your account" : "Sign in"}
       </h1>
-      <p style={{ fontSize: 13, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
+      <p style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
         {isSignup ? "Join CB Edge" : "Welcome back to CB Edge"}
       </p>
 
@@ -251,7 +251,7 @@ export default function AuthForm({
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 14px" }}>
         <div style={{ flex: 1, height: 1, background: T.border }} />
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>or</span>
+        <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>or</span>
         <div style={{ flex: 1, height: 1, background: T.border }} />
       </div>
 

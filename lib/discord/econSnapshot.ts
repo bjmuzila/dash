@@ -417,8 +417,8 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .badge{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.12)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);padding:${16 - nudgePx(24)}px 26px ${16 + nudgePx(24)}px;font-size:24px;font-weight:800;border-radius:10px;text-transform:uppercase;text-align:center}
 .badge-inner{display:inline-block;letter-spacing:0.07em;margin-right:-0.07em}
 .date-group{display:flex;gap:10px;align-items:center}
-.date-pill{display:inline-block;line-height:1;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
-.today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size:16px;text-align:center}
+.date-pill{display:inline-block;line-height:1;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size: 17px;text-align:center}
+.today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size: 17px;text-align:center}
 .pill-inner-06{display:inline-block;letter-spacing:0.06em;margin-right:-0.06em}
 .quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
 /* Econ lane is widened (3.3fr -> 3.6fr) because the Event column was the
@@ -430,14 +430,14 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
    panel titles — see PageCard.tsx. */
 .panel{border-radius:18px;border:1px solid var(--border);background:radial-gradient(circle at 50% 0%,rgba(126,211,252,0.10) 0%,transparent 60%),var(--panelBg);box-shadow:0 18px 40px rgba(0,0,0,0.22);overflow:hidden;height:100%;display:flex;flex-direction:column}
 .panel-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0}
-.panel-title{font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
+.panel-title{font-size: 14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:var(--text);line-height:1}
 /* Count bubble — same nudged-padding rule as the topbar pills. It kept the old
    height+line-height form by oversight and sat top-heavy for it. */
-.panel-pct{display:inline-block;line-height:1;min-width:24px;text-align:center;font-size:13px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:${6 - nudgePx(13)}px 9px ${6 + nudgePx(13)}px}
+.panel-pct{display:inline-block;line-height:1;min-width:24px;text-align:center;font-size: 14px;font-weight:800;color:var(--lblue);background:rgba(126,211,252,0.10);border-radius:8px;padding:${6 - nudgePx(13)}px 9px ${6 + nudgePx(13)}px}
 .ern-body{display:flex;flex-direction:column;flex:1}
 .ern-group{padding:14px 16px;border-bottom:1px solid var(--border);flex:1}
 .ern-group:last-child{border-bottom:none}
-.ern-group-label{font-size:11px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px;line-height:1}
+.ern-group-label{font-size: 12px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px;line-height:1}
 .ern-chips{display:flex;flex-wrap:wrap;gap:12px}
 .ern-chip{width:48px;text-align:center;flex-shrink:0}
 .chip-logo{display:block;width:36px;height:36px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
@@ -447,7 +447,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 /* Same trap as .ec-event: overflow:hidden + a tight line-height made
    html2canvas shear the bottom off every ticker (NFLX rendered as "NFLY").
    No clipping, and leading to spare. Tickers are <=5 chars — they fit. */
-.chip-sym{display:block;font-size:11px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:15px;white-space:nowrap}
+.chip-sym{display:block;font-size: 12px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:15px;white-space:nowrap}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 .pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
 .pres-row:last-child{border-bottom:none}

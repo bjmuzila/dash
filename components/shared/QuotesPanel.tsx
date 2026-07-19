@@ -154,10 +154,10 @@ export default function QuotesPanel() {
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: "rgba(5,10,16,.5)" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", borderBottom: "1px solid #0d1825", flexShrink: 0 }}>
-        <span style={{ fontSize: 9, color: "#4a6a84", fontWeight: 700, letterSpacing: ".12em" }}>QUOTES</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 8, fontVariantNumeric: "tabular-nums" }}>
-          <span style={{ color: "#1a3a5a", fontSize: 7 }}>PRE</span>
-          <span style={{ color: "#29b6f6", fontSize: 7 }}>RTH</span>
+        <span style={{ fontSize: 10, color: "#4a6a84", fontWeight: 700, letterSpacing: ".12em" }}>QUOTES</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ color: "#1a3a5a", fontSize: 10 }}>PRE</span>
+          <span style={{ color: "#29b6f6", fontSize: 10 }}>RTH</span>
           <span style={{ color: countdown > 10 ? "#2a5a8a" : countdown > 5 ? "#FB8501" : "#ef4444", fontWeight: 700 }}>{countdown}s</span>
         </div>
       </div>
@@ -204,7 +204,7 @@ export default function QuotesPanel() {
 
       {/* Row height slider */}
       <div style={{ flexShrink: 0, padding: "4px 8px", borderTop: "1px solid #0a1220", display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontSize: 7, color: "#2a4a6a", letterSpacing: ".06em" }}>SIZE</span>
+        <span style={{ fontSize: 10, color: "#2a4a6a", letterSpacing: ".06em" }}>SIZE</span>
         <input
           type="range" min={20} max={60} step={1}
           value={rowHeight}

@@ -46,7 +46,7 @@ export default async function Confidence7dTracker() {
           <span style={{ fontSize: "clamp(18px,3vw,24px)", fontWeight: 800, color: T.text }}>
             Live 7-day CB accuracy
           </span>
-          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
             color: T.cyan, border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 9px" }}>
             Real results · last 7 sessions
           </span>
@@ -59,11 +59,11 @@ export default async function Confidence7dTracker() {
   }
 
   const th: React.CSSProperties = {
-    padding: "9px 12px", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em",
+    padding: "9px 12px", fontSize: 12, fontWeight: 800, letterSpacing: "0.06em",
     textTransform: "uppercase", color: MUTED, textAlign: "left", whiteSpace: "nowrap",
   };
   const td: React.CSSProperties = {
-    padding: "9px 12px", fontSize: 13.5, whiteSpace: "nowrap", fontFamily: "var(--font-mono)",
+    padding: "9px 12px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)",
   };
 
   return (
@@ -72,7 +72,7 @@ export default async function Confidence7dTracker() {
         <span style={{ fontSize: "clamp(18px,3vw,24px)", fontWeight: 800, color: T.text }}>
           Live 7-day CB accuracy
         </span>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
           color: T.cyan, border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 9px" }}>
           Real results · last 7 sessions
         </span>
@@ -94,7 +94,7 @@ export default async function Confidence7dTracker() {
             }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 17, fontWeight: 800, color: T.text }}>{s.label}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   {s.samples} days
                 </span>
               </div>
@@ -106,7 +106,7 @@ export default async function Confidence7dTracker() {
                   hit rate{s.samples > 0 ? ` · ${s.hits}/${s.samples}` : ""}
                 </span>
               </div>
-              <div style={{ fontSize: 13, color: MUTED, fontFamily: "var(--font-mono)" }}>
+              <div style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)" }}>
                 avg closest: <span style={{ color: distColor(s.avgClosest), fontWeight: 700 }}>
                   {s.avgClosest != null ? `${s.avgClosest.toFixed(1)} pt` : "—"}
                 </span>
@@ -119,7 +119,7 @@ export default async function Confidence7dTracker() {
                     <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)",
                       border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 4px" }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.05em" }}>≤{t}pt</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                         {rate != null ? `${Math.round(rate * 100)}%` : "—"}
                       </div>
                       <div style={{ fontSize: 10, color: MUTED, fontFamily: "var(--font-mono)" }}>
@@ -168,7 +168,7 @@ export default async function Confidence7dTracker() {
                     <Fragment key={c.key}>
                       <td style={{ ...td, textAlign: "right", color: T.text, borderLeft: `1px solid ${T.border}` }}>
                         {c.strike != null ? c.strike.toFixed(0) : "—"}
-                        {c.changed && <span title="CB changed at next checkpoint" style={{ marginLeft: 5, fontSize: 11, color: AMBER, fontWeight: 700 }}>↻</span>}
+                        {c.changed && <span title="CB changed at next checkpoint" style={{ marginLeft: 5, fontSize: 12, color: AMBER, fontWeight: 700 }}>↻</span>}
                       </td>
                       <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
                         {c.closest != null ? c.closest.toFixed(1) : "—"}
@@ -192,7 +192,7 @@ export default async function Confidence7dTracker() {
         </div>
       </div>
 
-      <p style={{ color: MUTED, fontSize: 11.5, margin: "12px 0 0", lineHeight: 1.4 }}>
+      <p style={{ color: MUTED, fontSize: 12, margin: "12px 0 0", lineHeight: 1.4 }}>
         Live results from the last 7 completed sessions · updated at end of day. Full live scoring is inside the dashboard for members.
       </p>
     </section>

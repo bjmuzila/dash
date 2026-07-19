@@ -54,18 +54,18 @@ const labelStyle: React.CSSProperties = {
   fontSize: 12, fontWeight: 700, color: HT.muted, textTransform: "uppercase",
   letterSpacing: ".08em", display: "block", marginBottom: 4,
 };
-const cellStyle: React.CSSProperties = { padding: "6px 6px", borderBottom: `1px solid ${HT.border}`, fontSize: 15 };
+const cellStyle: React.CSSProperties = { padding: "6px 6px", borderBottom: `1px solid ${HT.border}`, fontSize: 14 };
 
 /** Card/section titles: 16px, accent-colored (cyan) so panels read as titled. */
 const titleStyle: React.CSSProperties = {
-  fontSize: 16, fontWeight: 700, color: HT.cyan, marginBottom: 10,
+  fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 10,
 };
 /** Collapsible section titles — same look, plus the ▶/▼ affordance row. */
 const collapseTitleStyle: React.CSSProperties = {
   ...titleStyle, display: "flex", justifyContent: "space-between",
   alignItems: "center", cursor: "pointer",
 };
-const tableStyle: React.CSSProperties = { width: "100%", fontSize: 15, borderCollapse: "collapse" };
+const tableStyle: React.CSSProperties = { width: "100%", fontSize: 14, borderCollapse: "collapse" };
 
 const fmt$ = (v: number) => (v < 0 ? "-" : "") + "$" + Math.abs(v).toFixed(2);
 const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
@@ -98,7 +98,7 @@ interface Pt { label: string; value: number; sub?: string }
 const CH_W = 320, CH_H = 120, CH_PAD = 8;
 
 const emptyChart = (
-  <div style={{ height: CH_H, display: "grid", placeItems: "center", color: HT.muted, fontSize: 15 }}>No data yet</div>
+  <div style={{ height: CH_H, display: "grid", placeItems: "center", color: HT.muted, fontSize: 14 }}>No data yet</div>
 );
 
 /**
@@ -123,7 +123,7 @@ function ChartTip({ pt, xPct, fmt }: { pt: Pt; xPct: number; fmt: (v: number) =>
       }}
     >
       <div style={{ fontSize: 12, color: HT.muted }}>{pt.label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: pt.value >= 0 ? T.green : T.red }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: pt.value >= 0 ? T.green : T.red }}>
         {fmt(pt.value)}
       </div>
       {pt.sub && <div style={{ fontSize: 12, color: HT.muted, marginTop: 1 }}>{pt.sub}</div>}
@@ -492,7 +492,7 @@ export default function TradingPage() {
 
   const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode) => (
     <Card padding={16} style={{ display: "flex", flexDirection: "column", minHeight: 140 }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: HT.cyan, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: HT.text }}>{val}</div>
       <div style={{ fontSize: 12, color: HT.muted, marginTop: 2 }}>{sub}</div>
       {extra && <div style={{ marginTop: "auto", paddingTop: 8 }}>{extra}</div>}
@@ -503,10 +503,10 @@ export default function TradingPage() {
     <PageShell className="journal-root">
       {/* Header */}
       <Card padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: HT.cyan }}>Journaling Dashboard</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>Journaling Dashboard</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {err && <span style={{ fontSize: 15, color: T.red }}>{err}</span>}
-          <span style={{ fontSize: 15, color: HT.muted }}>
+          {err && <span style={{ fontSize: 14, color: T.red }}>{err}</span>}
+          <span style={{ fontSize: 14, color: HT.muted }}>
             {loading ? "Loading…" : `${journals.length} saved`}
           </span>
         </div>
@@ -534,7 +534,7 @@ export default function TradingPage() {
         </div>
 
         {importErr && (
-          <Card padding={12} style={{ fontSize: 15, color: T.red }}>{importErr}</Card>
+          <Card padding={12} style={{ fontSize: 14, color: T.red }}>{importErr}</Card>
         )}
 
         {/* KPI strip */}
@@ -549,7 +549,7 @@ export default function TradingPage() {
               {kpiCard("Avg Win / Loss",
                 k.avgLoss !== 0 ? Math.abs(k.avgWin / k.avgLoss).toFixed(2) : "—",
                 "Avg Absolute Trade",
-                <div style={{ fontSize: 15 }}>
+                <div style={{ fontSize: 14 }}>
                   <div style={{ color: T.green }}>W {k.avgWin ? fmt$(k.avgWin) : "—"}</div>
                   <div style={{ color: T.red }}>L {k.avgLoss ? fmt$(k.avgLoss) : "—"}</div>
                 </div>)}
@@ -557,14 +557,14 @@ export default function TradingPage() {
                 <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>,
                 "Total Net PnL")}
               {kpiCard("Max Streaks", k.bestW || "—", "Best win streak",
-                <div style={{ fontSize: 15, color: HT.muted }}>
+                <div style={{ fontSize: 14, color: HT.muted }}>
                   <div>Consecutive wins <span style={{ color: T.green }}>{k.bestW}</span></div>
                   <div>Consecutive losses <span style={{ color: T.red }}>{k.bestL}</span></div>
                 </div>)}
               {kpiCard("Per Trade",
                 k.pnlPerTrade != null ? fmt$(k.pnlPerTrade) : "—",
                 "Net PnL / trade",
-                <div style={{ fontSize: 15, color: HT.muted }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>)}
+                <div style={{ fontSize: 14, color: HT.muted }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>)}
             </div>
 
             {/* Charts strip */}
@@ -659,7 +659,7 @@ export default function TradingPage() {
                           </tr>
                         ))}
                         {!visible.length && (
-                          <tr><td colSpan={7} style={{ padding: 16, color: HT.muted, textAlign: "center", fontSize: 15 }}>
+                          <tr><td colSpan={7} style={{ padding: 16, color: HT.muted, textAlign: "center", fontSize: 14 }}>
                             {loading ? "Loading…" : "No journal entries yet — click + New Journal."}
                           </td></tr>
                         )}
@@ -674,7 +674,7 @@ export default function TradingPage() {
             <Card padding={16}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                 <div style={{ ...titleStyle, marginBottom: 0 }}>Session Calendar</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, color: HT.muted, fontSize: 15 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 16, color: HT.muted, fontSize: 14 }}>
                   <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: c.m === 0 ? 11 : c.m - 1 }))}>&lt;</span>
                   <strong style={{ color: HT.text }}>{monthLabel}</strong>
                   <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 11 ? c.y + 1 : c.y, m: c.m === 11 ? 0 : c.m + 1 }))}>&gt;</span>
@@ -692,7 +692,7 @@ export default function TradingPage() {
                       borderRadius: 4, padding: 6, cursor: "pointer",
                       background: c.pnl != null ? (c.pnl >= 0 ? `${T.green}14` : `${T.red}14`) : "transparent",
                     }}>
-                    <div style={{ fontSize: 13, color: HT.muted }}>{c.day}</div>
+                    <div style={{ fontSize: 14, color: HT.muted }}>{c.day}</div>
                     {c.pnl != null && (
                       <div style={{ fontSize: 12, fontWeight: 700, color: c.pnl >= 0 ? T.green : T.red }}>{fmt$(c.pnl)}</div>
                     )}
@@ -717,14 +717,14 @@ export default function TradingPage() {
                 <button onClick={() => setPreview(null)} style={{ background: "none", border: "none", fontSize: 20, color: HT.muted, cursor: "pointer" }}>×</button>
               </div>
 
-              <div style={{ fontSize: 15, color: HT.muted, marginBottom: 12 }}>
+              <div style={{ fontSize: 14, color: HT.muted, marginBottom: 12 }}>
                 {preview.counts.fills} fills → {preview.counts.trades} closed trades →{" "}
                 <span style={{ color: HT.text }}>{preview.counts.days} journal days</span>.
                 Stats are recomputed from the executions, not read from the broker&apos;s summary.
               </div>
 
               {preview.warnings.map((w, i) => (
-                <div key={i} style={{ fontSize: 15, color: HT.orange, marginBottom: 8 }}>⚠ {w}</div>
+                <div key={i} style={{ fontSize: 14, color: HT.orange, marginBottom: 8 }}>⚠ {w}</div>
               ))}
 
               <div style={{ maxHeight: 300, overflowY: "auto", marginTop: 8 }}>
@@ -812,7 +812,7 @@ export default function TradingPage() {
                 </div>
               </div>
 
-              {modalErr && <div style={{ fontSize: 15, color: T.red, marginTop: 8 }}>{modalErr}</div>}
+              {modalErr && <div style={{ fontSize: 14, color: T.red, marginTop: 8 }}>{modalErr}</div>}
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${HT.border}` }}>
                 <button style={btnStyle()} onClick={() => setShowModal(false)} disabled={saving}>Cancel</button>

@@ -136,7 +136,7 @@ function NavMenu() {
           <div style={{
             display: "flex", alignItems: "center", gap: 6,
             padding: "10px 10px 4px", color: C.muted,
-            fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2,
+            fontSize: 10, fontWeight: 700, letterSpacing: 1.2,
           }}>
             <Icon d={ICONS.star} size={12} />
             QUICK PAGES
@@ -151,7 +151,7 @@ function NavMenu() {
                 onClick={() => setQuick(list => list.filter(x => x !== q))}
                 style={{
                   background: "transparent", border: "none", color: C.muted,
-                  cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 4,
+                  cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 4,
                 }}
                 onMouseEnter={e => (e.currentTarget.style.color = C.text)}
                 onMouseLeave={e => (e.currentTarget.style.color = C.muted)}
@@ -188,7 +188,7 @@ function NavMenu() {
                 width: 30, height: 30, borderRadius: 8, display: "flex",
                 alignItems: "center", justifyContent: "center",
                 background: s.bg, border: "1px solid rgba(255,255,255,0.08)",
-                fontSize: 13, cursor: "pointer",
+                fontSize: 14, cursor: "pointer",
               }}>{s.glyph}</span>
             ))}
             <span style={{
@@ -205,7 +205,7 @@ function NavMenu() {
             padding: "10px 12px", borderRadius: 10,
             border: `1px solid ${C.border}`,
             background: "rgba(255,255,255,0.03)",
-            color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: 0.8,
+            color: C.muted, fontSize: 12, fontWeight: 700, letterSpacing: 0.8,
             cursor: "pointer", fontFamily: "inherit",
           }}>
             <Icon d={ICONS.doc} size={14} />
@@ -284,7 +284,7 @@ export default function ToolbarPreviewPage() {
         <h1 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 6px" }}>
           GEX Toolbar — Dock Preview
         </h1>
-        <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.5 }}>
+        <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.5 }}>
           The real production GexToolbar, mounted with dummy state. Whatever you
           see here is exactly what renders on the GEX chart.
         </p>
@@ -355,8 +355,8 @@ export default function ToolbarPreviewPage() {
         {/* Column 1 — Nav Menu */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
           <div style={{ textAlign: "center" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 6px" }}>Nav Menu</h2>
-            <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.5 }}>
+            <h2 style={{ fontSize: 17, fontWeight: 800, margin: "0 0 6px" }}>Nav Menu</h2>
+            <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.5 }}>
               The dropdown content, shown open as its own panel. Removable quick
               pages, expandable sections, social row, and legal footer.
             </p>
@@ -367,8 +367,8 @@ export default function ToolbarPreviewPage() {
         {/* Column 2 — Quotes */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
           <div style={{ textAlign: "center" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 6px" }}>Quotes</h2>
-            <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.5 }}>
+            <h2 style={{ fontSize: 17, fontWeight: 800, margin: "0 0 6px" }}>Quotes</h2>
+            <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.5 }}>
               The live-quotes flyout, restyled in the dock theme. Sortable header,
               extended-hours tags, and red/green change coloring.
             </p>
@@ -379,8 +379,8 @@ export default function ToolbarPreviewPage() {
         {/* Column 3 — Dropdown menus (DTE + Calendar) */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
           <div style={{ textAlign: "center" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 6px" }}>Dropdown Menus</h2>
-            <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.5 }}>
+            <h2 style={{ fontSize: 17, fontWeight: 800, margin: "0 0 6px" }}>Dropdown Menus</h2>
+            <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.5 }}>
               The expiry / DTE picker and a date-picker, restyled in the dock theme.
               Custom-rendered (not native selects) so they match everywhere.
             </p>
@@ -470,12 +470,12 @@ function QuotesPreview() {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "6px 8px 8px",
       }}>
-        <span style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2 }}>
+        <span style={{ color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.2 }}>
           QUOTES
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{
-            padding: "3px 7px", borderRadius: 6, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.6,
+            padding: "3px 7px", borderRadius: 6, fontSize: 10, fontWeight: 700, letterSpacing: 0.6,
             color: C.accent, background: rgba(C.cyan, 0.1),
             border: `1px solid ${rgba(C.cyan, 0.35)}`,
           }}>EXTENDED HRS</span>
@@ -524,7 +524,7 @@ function QuotesPreview() {
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <Spark data={r.spark} color={col} />
                 <span style={{
-                  padding: "2px 6px", borderRadius: 5, fontSize: 9, fontWeight: 800, letterSpacing: 0.6,
+                  padding: "2px 6px", borderRadius: 5, fontSize: 10, fontWeight: 800, letterSpacing: 0.6,
                   color: C.muted, background: "rgba(255,255,255,0.04)",
                   border: "1px solid rgba(255,255,255,0.08)",
                 }}>EXT</span>
@@ -587,7 +587,7 @@ function NavPanel() {
         <div style={{
           display: "flex", alignItems: "center", gap: 6,
           padding: "10px 10px 4px", color: C.muted,
-          fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2,
+          fontSize: 10, fontWeight: 700, letterSpacing: 1.2,
         }}>
           <Icon d={ICONS.star} size={12} />
           QUICK PAGES
@@ -599,7 +599,7 @@ function NavPanel() {
               style={{
                 marginLeft: "auto", background: "rgba(255,255,255,0.05)",
                 color: C.accent, border: `1px solid ${rgba(C.cyan,0.3)}`,
-                borderRadius: 6, fontSize: 11, fontWeight: 700, padding: "2px 4px",
+                borderRadius: 6, fontSize: 12, fontWeight: 700, padding: "2px 4px",
                 cursor: "pointer", fontFamily: "inherit",
               }}
             >
@@ -634,7 +634,7 @@ function NavPanel() {
                 onClick={e => { e.stopPropagation(); setQuick(list => list.filter(x => x !== q)); flash(`Unpinned ${q}`); }}
                 style={{
                   background: "transparent", border: "none", color: "inherit",
-                  opacity: 0.6, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 4,
+                  opacity: 0.6, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 4,
                 }}
                 onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
                 onMouseLeave={e => (e.currentTarget.style.opacity = "0.6")}
@@ -673,7 +673,7 @@ function NavPanel() {
                         onClick={() => { setActive(c); flash(`Navigated → ${s.label} / ${c}`); }}
                         style={{
                           ...rowBase, cursor: "pointer", width: "100%",
-                          padding: "8px 10px 8px 40px", fontSize: 13,
+                          padding: "8px 10px 8px 40px", fontSize: 14,
                           color: on ? C.accent : C.muted,
                           background: on ? "rgba(33,158,188,0.08)" : "transparent",
                           borderLeft: on ? `2px solid ${C.accent}` : "2px solid transparent",
@@ -707,7 +707,7 @@ function NavPanel() {
                 width: 30, height: 30, borderRadius: 8, display: "flex",
                 alignItems: "center", justifyContent: "center",
                 background: s.bg, border: "1px solid rgba(255,255,255,0.08)",
-                fontSize: 13, cursor: "pointer", color: C.text, fontFamily: "inherit",
+                fontSize: 14, cursor: "pointer", color: C.text, fontFamily: "inherit",
                 transition: "transform .12s",
               }}
               onMouseEnter={e => (e.currentTarget.style.transform = "translateY(-2px)")}
@@ -732,7 +732,7 @@ function NavPanel() {
             padding: "10px 12px", borderRadius: 10,
             border: `1px solid ${C.border}`,
             background: "rgba(255,255,255,0.03)",
-            color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: 0.8,
+            color: C.muted, fontSize: 12, fontWeight: 700, letterSpacing: 0.8,
             cursor: "pointer", fontFamily: "inherit", transition: "color .12s, background .12s",
           }}
           onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
@@ -816,7 +816,7 @@ function DteDropdown() {
 
   return (
     <div ref={ref} style={{ position: "relative", width: 210 }}>
-      <span style={{ display: "block", color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>
+      <span style={{ display: "block", color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>
         EXPIRY / DTE
       </span>
 
@@ -862,7 +862,7 @@ function DteDropdown() {
                 style={{
                   display: "flex", alignItems: "center", gap: 8, width: "100%",
                   padding: "8px 10px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
-                  textAlign: "left", fontSize: 13.5, fontWeight: 700,
+                  textAlign: "left", fontSize: 14, fontWeight: 700,
                   border: on ? `1px solid ${rgba(C.cyan,0.35)}` : "1px solid transparent",
                   background: on ? "linear-gradient(180deg,rgba(33,158,188,.14),rgba(33,158,188,.03))" : "transparent",
                   color: on ? C.accent : "#f0a83c",
@@ -919,7 +919,7 @@ function CalendarDropdown() {
 
   return (
     <div ref={ref} style={{ position: "relative", width: 280 }}>
-      <span style={{ display: "block", color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>
+      <span style={{ display: "block", color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>
         CALENDAR
       </span>
 
@@ -988,7 +988,7 @@ function CalendarDropdown() {
                   onClick={() => { setSel(d); setOpen(false); }}
                   style={{
                     height: 32, borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
-                    fontSize: 13, fontWeight: on ? 800 : 600,
+                    fontSize: 14, fontWeight: on ? 800 : 600,
                     color: on ? C.accent : C.text,
                     background: on ? "linear-gradient(180deg,rgba(33,158,188,.18),rgba(33,158,188,.04))" : "transparent",
                     border: on ? `1px solid ${rgba(C.cyan,0.4)}`
@@ -1241,9 +1241,9 @@ function NotesButton({ fs = 13 }: { fs?: number }) {
           padding: 12, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`,
           background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow,
         }}>
-          <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
+          <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
           {["Watch SPX 7500 flip", "ES gap fill by 10:30", "Trim NQ into VWAP"].map((n, i) => (
-            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 13, color: C.text }}>{n}</div>
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 14, color: C.text }}>{n}</div>
           ))}
         </div>
       </Dropdown>
@@ -1262,9 +1262,9 @@ function NotesIcon() {
       </button>
       <Dropdown open={open} onClose={() => setOpen(false)} align="right" width={260}>
         <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`, background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow }}>
-          <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
+          <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
           {["Watch SPX 7500 flip", "ES gap fill by 10:30", "Trim NQ into VWAP"].map((n, i) => (
-            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 13, color: C.text }}>{n}</div>
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 14, color: C.text }}>{n}</div>
           ))}
         </div>
       </Dropdown>
@@ -1279,13 +1279,13 @@ function NotesPillIcon() {
     <div style={{ position: "relative" }}>
       <button onClick={() => setOpen(v => !v)} title="Notes" aria-label="Notes" style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", width: 38, height: 38, borderRadius: "50%", cursor: "pointer", fontFamily: "inherit", background: rgba(C.cyan, 0.14), border: `1px solid ${open ? rgba(C.cyan, 0.6) : rgba(C.cyan, 0.35)}`, color: "#7fd4e6", boxShadow: open ? `0 0 14px ${rgba(C.cyan, 0.3)}` : "none" }}>
         <Icon d={PENCIL} size={18} />
-        <span style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: C.cyan, color: "#04222b", fontSize: 9, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>3</span>
+        <span style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: C.cyan, color: "#04222b", fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>3</span>
       </button>
       <Dropdown open={open} onClose={() => setOpen(false)} align="right" width={260}>
         <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${C.border}`, borderTop: `2px solid ${rgba(C.cyan, 0.5)}`, background: C.panelBgStrong, backdropFilter: "blur(16px)", boxShadow: dockShadow }}>
-          <div style={{ color: C.muted, fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
+          <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, letterSpacing: 1.2, marginBottom: 8 }}>NOTES</div>
           {["Watch SPX 7500 flip", "ES gap fill by 10:30", "Trim NQ into VWAP"].map((n, i) => (
-            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 13, color: C.text }}>{n}</div>
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, marginBottom: 6, fontSize: 14, color: C.text }}>{n}</div>
           ))}
         </div>
       </Dropdown>

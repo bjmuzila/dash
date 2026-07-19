@@ -316,7 +316,7 @@ export function DockSlider({
   return (
     <label
       title={title}
-      style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, color: "rgba(255,255,255,.55)", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}
+      style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: "rgba(255,255,255,.55)", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}
     >
       <style>{`
         input.dock-slider{-webkit-appearance:none;appearance:none;height:4px;border-radius:99px;background:rgba(255,255,255,.12);outline:none;cursor:pointer}
@@ -462,13 +462,13 @@ export function DockExpiryPicker({
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%",
                   padding: "7px 10px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
-                  fontSize: 12.5, fontWeight: 700,
+                  fontSize: 12, fontWeight: 700,
                   border: on ? `1px solid ${rgba(ACCENT, 0.35)}` : "1px solid transparent",
                   background: on ? `linear-gradient(180deg,${rgba(ACCENT, 0.16)},${rgba(ACCENT, 0.03)})` : "transparent",
                   color: on ? T.accent : T.text,
                 }}>
                 <span>{o.label}</span>
-                <span style={{ opacity: 0.5, fontWeight: 600, fontSize: 11 }}>{o.sub}</span>
+                <span style={{ opacity: 0.5, fontWeight: 600, fontSize: 12 }}>{o.sub}</span>
               </button>
             );
           })}
@@ -519,7 +519,7 @@ export function DockCalendar({
             <button style={navBtn} onClick={() => setView(new Date(year, month - 1, 1))}>
               <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
             </button>
-            <span style={{ fontSize: 13.5, fontWeight: 800, color: T.text }}>{MONTHS[month]} {year}</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.text }}>{MONTHS[month]} {year}</span>
             <button style={navBtn} onClick={() => setView(new Date(year, month + 1, 1))}>
               <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
             </button>
@@ -537,7 +537,7 @@ export function DockCalendar({
               return (
                 <button key={i} onClick={() => { onChange(toISO(d)); setOpen(false); }}
                   style={{
-                    height: 30, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: on ? 800 : 600,
+                    height: 30, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: on ? 800 : 600,
                     color: on ? T.accent : T.text,
                     background: on ? `linear-gradient(180deg,${rgba(ACCENT, 0.18)},${rgba(ACCENT, 0.04)})` : "transparent",
                     border: on ? `1px solid ${rgba(ACCENT, 0.4)}` : isToday ? `1px solid ${rgba(ACCENT, 0.2)}` : "1px solid transparent",

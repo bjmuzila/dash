@@ -21,6 +21,7 @@ interface TrackerRow {
   o: number | null; h: number | null; l: number | null; c: number | null;
   result: "hit" | "miss" | null;
   breach: number | null;
+  breach_day: string | null;
   result_source: string | null;
   note: string | null;
 }
@@ -687,8 +688,17 @@ export default function EmTrackerAdmin() {
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: edge == null ? HOME_THEME.muted : edge >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                               {edge == null ? "—" : (edge >= 0 ? "+" : "") + fmt(edge)}
                             </span>
-                            <span style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: r.breach == null ? HOME_THEME.muted : r.breach ? HOME_THEME.orange : HOME_THEME.green }}>
-                              {r.breach == null ? "—" : r.breach ? "YES" : "no"}
+                            <span
+                              title={r.breach && r.breach_day ? `First broke ${r.breach_day}` : undefined}
+                              style={{ textAlign: "center", fontSize: 10, fontWeight: 700, color: r.breach == null ? HOME_THEME.muted : r.breach ? HOME_THEME.orange : HOME_THEME.green }}
+                            >
+                              {r.breach == null
+                                ? "—"
+                                : r.breach
+                                  ? (r.breach_day
+                                      ? new Date(r.breach_day + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" })
+                                      : "YES")
+                                  : "no"}
                             </span>
                             <span style={{ textAlign: "center" }}>
                               {r.result ? (
@@ -708,7 +718,7 @@ export default function EmTrackerAdmin() {
                     </div>
                   )}
                   <div style={{ fontSize: 9, color: HOME_THEME.muted, marginTop: 10 }}>
-                    Win = weekly close inside the band [down, up]. Δ Edge = distance from the nearer band edge (green = cushion inside, red = how far it broke out).
+                    Win = weekly close inside the band [down, up]. Δ Edge = distance from the nearer band edge (green = cushion inside, red = how far it broke out). Breach = the weekday price first left the band that week (“no” = held all week, “—” = not yet scored).
                   </div>
                 </div>
               )}

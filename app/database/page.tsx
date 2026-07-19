@@ -180,11 +180,11 @@ function EodGexToday() {
                 </div>
                 {row ? (
                   <>
-                    <div style={{ fontSize: 18, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{fmtGex(row.total_gex)}</div>
+                    <div style={{ fontSize: 17, fontWeight: 500, fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{fmtGex(row.total_gex)}</div>
                     <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.9 }}>
                       spot {row.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
-                    {tStr && <div style={{ fontSize: 9, color: `${HOME_THEME.green}88` }}>{tStr}</div>}
+                    {tStr && <div style={{ fontSize: 10, color: `${HOME_THEME.green}88` }}>{tStr}</div>}
                   </>
                 ) : (
                   <div style={{ fontSize: 12, color: HOME_THEME.red, fontFamily: "var(--font-mono)" }}>not saved</div>
@@ -327,7 +327,7 @@ export default function DatabasePage() {
                 value={tableSearch}
                 onChange={(e) => setTableSearch(e.target.value)}
                 placeholder="filter…"
-                style={{ ...homeInputStyle, width: 140, fontSize: 11, padding: "5px 8px" }}
+                style={{ ...homeInputStyle, width: 140, fontSize: 12, padding: "5px 8px" }}
               />
               <span style={{ fontSize: 10, color: HOME_THEME.muted }}>
                 (total)<span style={{ color: HOME_THEME.red }}>(today)</span>
@@ -346,7 +346,7 @@ export default function DatabasePage() {
                       onClick={() => setTab(t.name)}
                       style={{
                         padding: "6px 12px",
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: 700,
                         letterSpacing: ".08em",
                         textTransform: "uppercase",
@@ -386,7 +386,7 @@ export default function DatabasePage() {
                 {dateFilter && <div style={{ fontSize: 10 }}>Try clearing the date filter (All)</div>}
               </div>
             ) : (
-              <table style={{ width: "100%", fontSize: 11, fontFamily: "var(--font-mono)", borderCollapse: "collapse" }}>
+              <table style={{ width: "100%", fontSize: 12, fontFamily: "var(--font-mono)", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "rgba(13,17,25,0.88)", position: "sticky", top: 0, zIndex: 1, backdropFilter: "blur(16px)" }}>
                     {cols.map((c) => (
@@ -401,7 +401,7 @@ export default function DatabasePage() {
                           whiteSpace: "nowrap",
                           textTransform: "uppercase",
                           letterSpacing: "0.08em",
-                          fontSize: 9,
+                          fontSize: 10,
                         }}
                       >
                         {c}

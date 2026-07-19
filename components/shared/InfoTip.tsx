@@ -120,7 +120,7 @@ export function ScoreInfo({ side = "top" }: { align?: "left" | "right" | "center
     <InfoTip title="Score — combined 0–100" width={320} side={side}>
       <div style={{
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 11,
+        fontSize: 12,
         color: HOME_THEME.orange,
         background: "rgba(0,0,0,0.35)",
         borderRadius: 6,

@@ -94,7 +94,7 @@ export function ThemedMonthPicker({
         style={{
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%",
           padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
-          fontSize: 13, fontWeight: 700, color: HOME_THEME.text, background: "rgba(0,0,0,0.30)",
+          fontSize: 14, fontWeight: 700, color: HOME_THEME.text, background: "rgba(0,0,0,0.30)",
           border: open ? `1px solid ${DOCK_THEME.activeBorder}` : `1px solid ${HOME_THEME.border}`,
           boxShadow: open ? DOCK_THEME.activeGlow : "none",
           transition: "border-color .14s, box-shadow .14s",
@@ -148,7 +148,7 @@ export function ThemedMonthPicker({
                   onClick={() => { onChange(`${viewYear}-${String(i + 1).padStart(2, "0")}`); setOpen(false); }}
                   style={{
                     padding: "9px 0", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
-                    fontSize: 13, fontWeight: on ? 800 : 600,
+                    fontSize: 14, fontWeight: on ? 800 : 600,
                     color: on ? HOME_THEME.cyan : HOME_THEME.text,
                     background: on ? DOCK_THEME.activeTile : "transparent",
                     border: on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent",

@@ -140,15 +140,15 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
       style={{ ...CARD, height: "100%", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, cursor: "pointer" }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, minHeight: 44 }}>
-        <span style={{ fontSize: 16, fontWeight: 800, color: C.label, letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>
-        <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>{r.total} logged</span>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.label, letterSpacing: "0.02em" }}>{kindLabel(r.kind)}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>{r.total} logged</span>
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 15, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
           {wr != null ? `${Math.round(wr * 100)}%` : "—"}
         </span>
-        <span style={{ fontSize: 15, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+        <span style={{ fontSize: 14, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
           win rate{r.graded > 0 ? ` · ${r.wins}/${r.graded}` : ""}
         </span>
       </div>
@@ -163,17 +163,17 @@ function StatCard({ r, onClick }: { r: SummaryRow; onClick: () => void }) {
           const ac = ictColor(rate);
           return (
             <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t}R</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                 {rate != null ? `${Math.round(rate * 100)}%` : "—"}
               </div>
-              <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>{r.resolved > 0 ? `${hits}/${r.resolved}` : ""}</div>
+              <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>{r.resolved > 0 ? `${hits}/${r.resolved}` : ""}</div>
             </div>
           );
         })}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 15 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 14 }}>
         <Metric label="Wins" value={String(r.wins)} color={GREEN} />
         <Metric label="Losses" value={String(r.losses)} color={RED} />
         <Metric label="Chop" value={String(r.chop)} color={MUTED} />
@@ -194,14 +194,14 @@ function ShareStat({ label, stats }: { label: string; stats: OverallStats | null
   const accent = ictColor(wr);
   return (
     <div style={{ flex: "1 1 140px", display: "flex", flexDirection: "column", gap: 6, alignItems: "center", textAlign: "center" }}>
-      <span style={{ fontSize: 15, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.16em" }}>{label}</span>
+      <span style={{ fontSize: 14, fontWeight: 800, color: C.label, textTransform: "uppercase", letterSpacing: "0.16em" }}>{label}</span>
       <span style={{ fontSize: 52, fontWeight: 900, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1, textShadow: `0 0 24px ${rgba(accent, 0.5)}` }}>
         {wr != null ? `${Math.round(wr * 100)}%` : "—"}
       </span>
-      <span style={{ fontSize: 16, fontWeight: 700, color: C.label, fontFamily: "var(--font-mono)" }}>
+      <span style={{ fontSize: 17, fontWeight: 700, color: C.label, fontFamily: "var(--font-mono)" }}>
         {stats ? `${stats.wins}W · ${stats.losses}L · ${stats.chop}C` : "—"}
       </span>
-      <span style={{ fontSize: 15, fontWeight: 700, color: C.cyan, fontFamily: "var(--font-mono)" }}>
+      <span style={{ fontSize: 14, fontWeight: 700, color: C.cyan, fontFamily: "var(--font-mono)" }}>
         {stats?.avg_r != null ? `${stats.avg_r > 0 ? "+" : ""}${stats.avg_r.toFixed(2)}R avg` : " "}
       </span>
       <span style={{ fontSize: 14, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -227,9 +227,9 @@ function ShareCard({
       >
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 22, fontWeight: 900, color: C.cyan, letterSpacing: "0.08em" }}>CB EDGE</span>
-          <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em" }}>ICT Setup Results</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.14em" }}>ICT Setup Results</span>
         </div>
-        <div style={{ fontSize: 15, color: C.label, margin: "4px 0 20px" }}>
+        <div style={{ fontSize: 14, color: C.label, margin: "4px 0 20px" }}>
           Auto-graded on 5-minute follow-through — every setup logged, no cherry-picking
         </div>
 
@@ -252,7 +252,7 @@ function ShareCard({
         disabled={snap === "busy"}
         title="Download this card as a PNG"
         style={{
-          position: "absolute", top: 14, right: 14, fontSize: 13, fontWeight: 800, padding: "6px 12px", borderRadius: 8,
+          position: "absolute", top: 14, right: 14, fontSize: 14, fontWeight: 800, padding: "6px 12px", borderRadius: 8,
           cursor: "pointer", border: `1px solid ${rgba(C.cyan, 0.4)}`, fontFamily: "inherit",
           background: snap === "ok" ? rgba(GREEN, 0.18) : snap === "err" ? rgba(RED, 0.18) : rgba(C.cyan, 0.12),
           color: snap === "ok" ? GREEN : snap === "err" ? RED : C.cyan,
@@ -369,7 +369,7 @@ export default function ResultsPage() {
   );
 
   const rangeBtn = (r: typeof RANGES[number]): React.CSSProperties => ({
-    fontSize: 15, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${range === r.key ? C.cyan : C.border}`,
     background: range === r.key ? rgba(C.cyan, 0.18) : "transparent",
     color: range === r.key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase",
@@ -377,7 +377,7 @@ export default function ResultsPage() {
   });
 
   const tabBtn = (key: TabKey, label: string): React.CSSProperties => ({
-    fontSize: 15, fontWeight: 800, padding: "7px 18px", borderRadius: 8, cursor: "pointer",
+    fontSize: 14, fontWeight: 800, padding: "7px 18px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${tab === key ? C.cyan : C.border}`,
     background: tab === key ? rgba(C.cyan, 0.18) : "transparent",
     color: tab === key ? C.cyan : C.label, letterSpacing: "0.08em", textTransform: "uppercase",
@@ -397,8 +397,8 @@ export default function ResultsPage() {
       <ShareCard overall={overall} cardRef={shareCardRef} onDownload={downloadShareCard} snap={snap} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>ICT Results</span>
-        <span style={{ fontSize: 15, color: C.label }}>Per-setup performance · auto-graded by follow-through</span>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>ICT Results</span>
+        <span style={{ fontSize: 14, color: C.label }}>Per-setup performance · auto-graded by follow-through</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {RANGES.map((r) => (
             <button key={r.key} onClick={() => setRange(r.key)} style={rangeBtn(r)}>{r.label}</button>
@@ -408,21 +408,21 @@ export default function ResultsPage() {
 
       {/* Overall roll-up */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 16, margin: "14px 0 20px", flexWrap: "wrap", fontFamily: "var(--font-mono)" }}>
-        <span style={{ fontSize: 15, color: C.label }}>Overall</span>
-        <span style={{ fontSize: 15, fontWeight: 800, color: wrColor(totals.wr) }}>
+        <span style={{ fontSize: 14, color: C.label }}>Overall</span>
+        <span style={{ fontSize: 14, fontWeight: 800, color: wrColor(totals.wr) }}>
           {totals.wr != null ? `${Math.round(totals.wr * 100)}%` : "—"}
         </span>
-        <span style={{ fontSize: 15, color: C.label }}>
+        <span style={{ fontSize: 14, color: C.label }}>
           {totals.wins}W · {totals.losses}L · {totals.graded} graded · {totals.pending} live · {totals.total} total
         </span>
       </div>
 
-      {err && <div style={{ color: RED, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load results: {err}</div>}
+      {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load results: {err}</div>}
 
       {!loaded ? (
-        <div style={{ color: C.label, fontSize: 15 }}>Loading results…</div>
+        <div style={{ color: C.label, fontSize: 14 }}>Loading results…</div>
       ) : sorted.length === 0 ? (
-        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 15 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14 }}>
           No setups recorded for this range yet. The ICT tracker logs and grades them every 5 min throughout
           the futures session (Sun 6pm → Fri 4pm ET) — results will populate here as setups fire and resolve.
         </div>
@@ -464,8 +464,8 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
-  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
+  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   const oc = (o: SetupRow["outcome"]) =>
     o === "win" ? GREEN : o === "loss" ? RED : o === "chop" ? MUTED : C.cyan;
@@ -481,17 +481,17 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
         style={{ background: HOME_THEME.panel, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}`, borderRadius: 14, width: "min(960px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: C.label }}>{kindLabel(kind)}</span>
-          <span style={{ fontSize: 15, color: C.label }}>{rows.length} logged {rows.length === 1 ? "play" : "plays"}</span>
+          <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{kindLabel(kind)}</span>
+          <span style={{ fontSize: 14, color: C.label }}>{rows.length} logged {rows.length === 1 ? "play" : "plays"}</span>
           <button
             onClick={onClose}
-            style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: C.label, fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.06em" }}
+            style={{ marginLeft: "auto", fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: C.label, fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.06em" }}
           >Close ✕</button>
         </div>
 
         <div style={{ overflow: "auto" }}>
           {rows.length === 0 ? (
-            <div style={{ padding: "22px 24px", color: C.label, fontSize: 15 }}>No individual plays in this range.</div>
+            <div style={{ padding: "22px 24px", color: C.label, fontSize: 14 }}>No individual plays in this range.</div>
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -520,7 +520,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
                       <td style={{ ...td, textAlign: "right", color: HOME_THEME.cyan }}>{e.mfe != null ? e.mfe.toFixed(1) : "—"}</td>
                       <td style={{ ...td, textAlign: "right", color: e.r_multiple == null ? C.label : e.r_multiple >= 1 ? GREEN : e.r_multiple < 0 ? RED : C.cyan }}>{e.r_multiple == null ? "—" : `${e.r_multiple > 0 ? "+" : ""}${e.r_multiple.toFixed(2)}R`}</td>
                       <td style={{ ...td, textAlign: "center" }}>
-                        <span style={{ fontSize: 15, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59`, textTransform: "uppercase" }}>{e.outcome}</span>
+                        <span style={{ fontSize: 14, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59`, textTransform: "uppercase" }}>{e.outcome}</span>
                       </td>
                       <td style={{ ...td, color: C.label, fontFamily: "inherit", whiteSpace: "normal", maxWidth: 260 }}>{e.note ?? ""}</td>
                     </tr>
@@ -568,17 +568,17 @@ function FailsView() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 16, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Fail Rate</span>
-        <span style={{ fontSize: 15, color: C.label }}>Per-level fail rate · last ~20 sessions (ESU)</span>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Fail Rate</span>
+        <span style={{ fontSize: 14, color: C.label }}>Per-level fail rate · last ~20 sessions (ESU)</span>
         {stats.length > 0 && (
-          <span style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", color: C.purple }}>
+          <span style={{ marginLeft: "auto", fontSize: 14, fontWeight: 800, fontFamily: "var(--font-mono)", color: C.purple }}>
             {tot.fails} fails / {tot.tests} tests · {tot.tests ? `${pct}%` : "—"}
           </span>
         )}
       </div>
 
       {stats.length === 0 ? (
-        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 15 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14 }}>
           {connected ? "Building history…" : "Loading candles…"}
         </div>
       ) : (
@@ -589,13 +589,13 @@ function FailsView() {
             return (
               <div key={st.kind} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: C.label }}>{st.label}</span>
-                  <span style={{ fontSize: 15, fontWeight: 800, fontFamily: "var(--font-mono)", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
+                  <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{st.label}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "var(--font-mono)", color: accent }}>{st.tests ? `${p}%` : "—"}</span>
                 </div>
                 <div style={{ height: 6, width: "100%", borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
                   <div style={{ width: `${p}%`, height: "100%", background: accent }} />
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>
                   <span>{st.fails} fails</span>
                   <span>{st.breaks} breaks</span>
                   <span>{st.tests} tests</span>
@@ -610,8 +610,8 @@ function FailsView() {
       {log.length > 0 && (
         <div style={{ marginTop: 26 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Recent Fail Log</span>
-            <span style={{ fontSize: 15, color: C.label }}>{log.length} fails</span>
+            <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Recent Fail Log</span>
+            <span style={{ fontSize: 14, color: C.label }}>{log.length} fails</span>
           </div>
           <FailLogTable rows={log.slice(0, 100)} />
         </div>
@@ -664,7 +664,7 @@ function CheckpointsView() {
   useEffect(() => { setLoaded(false); load(); const id = setInterval(load, 60_000); return () => clearInterval(id); }, [load]);
 
   const rangeBtn = (key: typeof range, label: string): React.CSSProperties => ({
-    fontSize: 15, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${range === key ? C.cyan : C.border}`,
     background: range === key ? rgba(C.cyan, 0.18) : "transparent",
     color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
@@ -677,14 +677,14 @@ function CheckpointsView() {
     return RED;
   };
 
-  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
-  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 15, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
+  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   return (
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 16, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Confidence</span>
-        <span style={{ fontSize: 15, color: C.label }}>CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Confidence</span>
+        <span style={{ fontSize: 14, color: C.label }}>CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button onClick={() => setRange("7d")} style={rangeBtn("7d", "7d")}>7d</button>
           <button onClick={() => setRange("20d")} style={rangeBtn("20d", "20d")}>20d</button>
@@ -699,18 +699,18 @@ function CheckpointsView() {
           return (
             <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 16, fontWeight: 800, color: C.label }}>{s.label}</span>
-                <span style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
+                <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{s.label}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 15, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
                   {s.hitRate != null ? `${Math.round(s.hitRate * 100)}%` : "—"}
                 </span>
-                <span style={{ fontSize: 15, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                <span style={{ fontSize: 14, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   hit rate{s.samples > 0 ? ` · ${s.hits}/${s.samples}` : ""}
                 </span>
               </div>
-              <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>
+              <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>
                 avg closest: <span style={{ color: distColor(s.avgClosest), fontWeight: 700 }}>{s.avgClosest != null ? `${s.avgClosest.toFixed(1)} pt` : "—"}</span>
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -720,11 +720,11 @@ function CheckpointsView() {
                   const ac = wrColor(rate);
                   return (
                     <div key={t} style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 4px" }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.06em" }}>≤{t}pt</div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: ac, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}>
                         {rate != null ? `${Math.round(rate * 100)}%` : "—"}
                       </div>
-                      <div style={{ fontSize: 15, color: C.label, fontFamily: "var(--font-mono)" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
+                      <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>{ts ? `${ts.hits}/${s.samples}` : ""}</div>
                     </div>
                   );
                 })}
@@ -734,12 +734,12 @@ function CheckpointsView() {
         })}
       </div>
 
-      {err && <div style={{ color: RED, fontSize: 15, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load checkpoints: {err}</div>}
+      {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load checkpoints: {err}</div>}
 
       {!loaded ? (
-        <div style={{ color: C.label, fontSize: 15 }}>Loading checkpoints…</div>
+        <div style={{ color: C.label, fontSize: 14 }}>Loading checkpoints…</div>
       ) : days.length === 0 ? (
-        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 15 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14 }}>
           No MVC snapshots in this range yet.
         </div>
       ) : (
@@ -775,7 +775,7 @@ function CheckpointsView() {
                         <td style={{ ...td, textAlign: "right", color: C.label, borderLeft: `1px solid ${C.border}` }}>
                           {c.strike != null ? c.strike.toFixed(0) : "—"}
                           {c.changed && (
-                            <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 15, color: AMBER, fontWeight: 700 }}>↻</span>
+                            <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 14, color: AMBER, fontWeight: 700 }}>↻</span>
                           )}
                         </td>
                         <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
@@ -817,8 +817,8 @@ function etDate(ts: number) {
 }
 
 function FailLogTable({ rows }: { rows: FailEvent[] }) {
-  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
-  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 15, whiteSpace: "nowrap" };
+  const th: React.CSSProperties = { padding: "8px 12px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const td: React.CSSProperties = { padding: "8px 12px", fontSize: 14, whiteSpace: "nowrap" };
   return (
     <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
@@ -850,7 +850,7 @@ function FailLogTable({ rows }: { rows: FailEvent[] }) {
                   <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: AMBER }}>{e.riskPts.toFixed(2)}</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "var(--font-mono)", color: maxR == null ? C.label : maxR >= 2 ? GREEN : maxR >= 1 ? AMBER : RED }}>{maxR == null ? "—" : `${maxR.toFixed(2)}R`}</td>
                   <td style={{ ...td, textAlign: "right" }}>
-                    <span style={{ fontSize: 15, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59` }}>
+                    <span style={{ fontSize: 14, fontWeight: 800, padding: "3px 8px", borderRadius: 4, color: rc, background: `${rc}22`, border: `1px solid ${rc}59` }}>
                       {win ? "WIN" : open ? "OPEN" : "LOSS"}
                     </span>
                   </td>

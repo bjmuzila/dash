@@ -205,13 +205,13 @@ function Chip({ s }: { s: Signal }) {
       </span>
       <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
         {(s.time || s.page) && (
-          <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "#8da8c2", whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "#8da8c2", whiteSpace: "nowrap" }}>
             {s.time}
             {s.time && s.page ? " · " : ""}
             {s.page && <span style={{ color: accent, fontWeight: 700 }}>{s.page.toUpperCase()}</span>}
           </span>
         )}
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf5", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#e6edf5", whiteSpace: "nowrap" }}>
           {s.text}
           {s.link && <span style={{ marginLeft: 5, color: accent, fontWeight: 400 }}>↗</span>}
         </span>
@@ -328,7 +328,7 @@ export default function SignalsFeed({
           alignItems: "center",
           gap: 6,
           flexShrink: 0,
-          fontSize: 11,
+          fontSize: 12,
           fontWeight: 800,
           letterSpacing: "0.1em",
           textTransform: "uppercase",
