@@ -75,6 +75,99 @@ function occurrencesInMonth(rule, month) {
   return out;
 }
 
+// Port of the /owner/budget Rent card's rentInfo: project cash flow to the 5th
+// (every other income + expense landing before rent) so we can answer whether
+// rent is covered when it's due. Keep in sync with app/owner/budget/page.tsx.
+function computeRent(register, recurring, allBanks, today) {
+  const RENT_DAY = 5;
+  const rentRule = recurring.find((r) => r.active && r.amount < 0 && /rent/i.test(r.label));
+  if (!rentRule) return null;
+  const rentAmount = Math.abs(rentRule.amount);
+  const now = new Date(`${today}T00:00:00`);
+  let due = new Date(now.getFullYear(), now.getMonth(), RENT_DAY);
+  if (due.getTime() < now.getTime()) due = new Date(now.getFullYear(), now.getMonth() + 1, RENT_DAY);
+  const daysUntil = Math.round((due.getTime() - now.getTime()) / 86400000);
+  const dueYm = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}`;
+  const dueIso = `${dueYm}-${String(RENT_DAY).padStart(2, '0')}`;
+  const paid = register.some((r) => !r.is_beginning && r.amount < 0 && /rent/i.test(r.label) && r.entry_date.slice(0, 7) === dueYm);
+  const inWindow = (d) => d >= today && d <= dueIso;
+  const materialized = new Set(
+    register.filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string' && r.recurring_tag.startsWith('__recur__:')).map((r) => r.recurring_tag)
+  );
+  const months = [];
+  for (let d = new Date(now.getFullYear(), now.getMonth(), 1), g = 0; g < 4; d = new Date(d.getFullYear(), d.getMonth() + 1, 1), g++) {
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    months.push(ym);
+    if (ym === dueYm) break;
+  }
+  const flows = [];
+  for (const r of register) {
+    if (r.is_beginning || !inWindow(r.entry_date)) continue;
+    flows.push({ label: r.label, amount: r.amount, date: r.entry_date });
+  }
+  for (const rule of recurring) {
+    if (!rule.active) continue;
+    for (const ym of months) {
+      for (const date of occurrencesInMonth(rule, ym)) {
+        if (!inWindow(date) || materialized.has(`__recur__:${rule.id}:${date}`)) continue;
+        flows.push({ label: rule.label, amount: rule.amount, date });
+      }
+    }
+  }
+  flows.sort((a, b) => (a.date < b.date ? -1 : 1));
+  const incoming = flows.filter((f) => f.amount > 0);
+  const outgoing = flows.filter((f) => f.amount < 0 && !/rent/i.test(f.label));
+  const incomingTotal = incoming.reduce((s, f) => s + f.amount, 0);
+  const outgoingTotal = outgoing.reduce((s, f) => s + Math.abs(f.amount), 0);
+  const projected = allBanks + incomingTotal - outgoingTotal;
+  const shortfall = Math.max(0, rentAmount - projected);
+  const perDay = daysUntil > 0 ? shortfall / daysUntil : shortfall;
+  return { rentAmount, daysUntil, dueIso, paid, available: allBanks, incoming, outgoing, incomingTotal, outgoingTotal, projected, shortfall, perDay };
+}
+
+// Render the rent projection as the email section that sits under STILL DUE.
+function rentSection(rent) {
+  if (!rent) return '';
+  const { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, projected, shortfall, perDay } = rent;
+  const list = (items, sign, color) => items.map((f) =>
+    `<div style="display:flex;justify-content:space-between;margin-top:2px">` +
+    `<span style="color:#8b94a7;font:500 12px system-ui">${f.label} · ${f.date.slice(5)}</span>` +
+    `<span style="color:${color};font:700 12px system-ui">${sign}${fmt(Math.abs(f.amount))}</span></div>`
+  ).join('');
+  let tone, headline, subline;
+  if (paid) {
+    tone = { bg: '#12241c', bd: '#2b5c45', fg: '#5ecb92' };
+    headline = "Rent is paid for this month.";
+    subline = '';
+  } else if (projected >= rentAmount) {
+    tone = { bg: '#12241c', bd: '#2b5c45', fg: '#5ecb92' };
+    headline = "Enough coming in — rent's covered.";
+    subline = `${fmt(projected - rentAmount)} to spare after rent on the 5th.`;
+  } else {
+    tone = { bg: '#2a1416', bd: '#5c2b30', fg: '#f4948e' };
+    headline = `Still short by ${fmt(shortfall)}`;
+    subline = daysUntil > 0 ? `${fmt(perDay)}/day extra needed before the 5th.` : `Rent is due.`;
+  }
+  const row = (k, v, color) =>
+    `<div style="display:flex;justify-content:space-between;margin-top:3px">` +
+    `<span style="color:#8b94a7;font:600 13px system-ui">${k}</span>` +
+    `<span style="color:${color};font:800 14px system-ui">${v}</span></div>`;
+  return (
+    `<div style="font:600 12px system-ui;color:#8b94a7;margin:16px 0 6px;letter-spacing:.08em">RENT · DUE ${dueIso.slice(5)}${paid ? '' : ` · ${daysUntil} day${daysUntil === 1 ? '' : 's'}`}</div>` +
+    `<div style="background:#111726;border-radius:10px;overflow:hidden;padding:12px 14px">` +
+      row('Rent', fmt(rentAmount), '#e8ecf4') +
+      row('On hand now', fmt(available), '#e8ecf4') +
+      (incoming.length ? `<div style="font:700 11px system-ui;color:#8b94a7;letter-spacing:.06em;margin-top:10px">COMING IN BEFORE THEN <span style="color:#5ecb92">+${fmt(incomingTotal)}</span></div>` + list(incoming, '+', '#5ecb92') : '') +
+      (outgoing.length ? `<div style="font:700 11px system-ui;color:#8b94a7;letter-spacing:.06em;margin-top:10px">GOING OUT BEFORE THEN <span style="color:#f4948e">-${fmt(outgoingTotal)}</span></div>` + list(outgoing, '-', '#f4948e') : '') +
+      `<div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #1c2333"><span style="color:#8b94a7;font:700 13px system-ui">Projected on the 5th</span><span style="color:#7dd3fc;font:800 16px system-ui">${fmt(projected)}</span></div>` +
+    `</div>` +
+    `<div style="background:${tone.bg};border:1px solid ${tone.bd};border-radius:10px;padding:10px 14px;margin-top:8px">` +
+      `<div style="font:800 14px system-ui;color:${tone.fg}">${headline}</div>` +
+      (subline ? `<div style="font:500 12px system-ui;color:#8b94a7;margin-top:2px">${subline}</div>` : '') +
+    `</div>`
+  );
+}
+
 // ── owner session for headless auth ─────────────────────────────────────────
 async function mintOwnerSession(base) {
   const r = await fetch(`${base}/api/auth/internal-session`, {
@@ -128,6 +221,9 @@ async function buildWriteup(base, cookie, month) {
   const pastDue = bills.filter((b) => b.pastDue);
   const after = allBanks - owed;
 
+  // Rent projection (mirrors the /owner/budget Rent card) — shown under STILL DUE.
+  const rentHtml = rentSection(computeRent(register, recurring, allBanks, today));
+
   // The headline: can we cover what's still due this month, and is it safe to spend?
   let tone, verdict, sub;
   if (after < 0) {
@@ -178,6 +274,7 @@ async function buildWriteup(base, cookie, month) {
     `<table style="width:100%;border-collapse:collapse;background:#111726;border-radius:10px;overflow:hidden">${cells}</table>` +
     (nextBills ? `<div style="font:600 12px system-ui;color:#8b94a7;margin:16px 0 6px;letter-spacing:.08em">STILL DUE</div>` +
       `<table style="width:100%;border-collapse:collapse;background:#111726;border-radius:10px;overflow:hidden">${nextBills}</table>` : '') +
+    rentHtml +
     `<img src="cid:overview" style="width:100%;border-radius:10px;border:1px solid #1c2333;margin-top:16px" />` +
     `</div>`;
   return { html, label, verdict };

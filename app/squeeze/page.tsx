@@ -41,9 +41,15 @@ type GexRow = {
   putGEX: number;
   netGEX: number;
   netVolGEX?: number;
+  netVolGexDir?: number;
+  flowGEX?: number;
   netDEX?: number;
+  netVanna?: number;
+  chex?: number;
   callVolume?: number;
   putVolume?: number;
+  callIV?: number;
+  putIV?: number;
   dte?: number;
 };
 type Snapshot = {
@@ -100,6 +106,10 @@ type Derived = {
   status: string;
   factors: Factor[];
   triggerLevel: number;
+  sigma: number;
+  emPct: number;
+  hedgePer1: number;
+  shortGamma: boolean;
 };
 
 function derive(s: Snapshot): Derived | null {
@@ -108,7 +118,9 @@ function derive(s: Snapshot): Derived | null {
   if (!rows.length || !(spot > 0)) return null;
 
   let callGex = 0, netGex = 0, callOI = 0, putOI = 0, callVol = 0, putVol = 0;
-  let callGammaOI = 0, putGammaOI = 0, posDex = 0, absDex = 0;
+  let posDex = 0, absDex = 0;
+  let flowGex = 0, volGexDir = 0, vanna = 0, charm = 0, absVanna = 0, absCharm = 0;
+  let atmIV = 0, atmDist = Infinity, atmDte = 1;
   for (const r of rows) {
     callGex += num(r.callGEX);
     netGex += num(r.netGEX);
@@ -116,11 +128,20 @@ function derive(s: Snapshot): Derived | null {
     putOI += num(r.putOI);
     callVol += num(r.callVolume);
     putVol += num(r.putVolume);
-    callGammaOI += num(r.callGamma) * num(r.callOI);
-    putGammaOI += num(r.putGamma) * num(r.putOI);
+    flowGex += num(r.flowGEX);
+    volGexDir += num(r.netVolGexDir);
+    vanna += num(r.netVanna); absVanna += Math.abs(num(r.netVanna));
+    charm += num(r.chex);    absCharm += Math.abs(num(r.chex));
     const dexR = num(r.netDEX);
     absDex += Math.abs(dexR);
     if (dexR > 0) posDex += dexR;
+    const dist = Math.abs(num(r.strike) - spot);
+    if (dist < atmDist) {
+      atmDist = dist;
+      const c = num(r.callIV), p = num(r.putIV);
+      atmIV = c > 0 && p > 0 ? (c + p) / 2 : c || p || 0;
+      atmDte = Math.max(num(r.dte), 1);
+    }
   }
   if (Number.isFinite(s.totalNetGex) && s.totalNetGex) netGex = num(s.totalNetGex);
   // Net = Call + Put ⟹ Put = Net − Call (sign-convention agnostic).
@@ -128,43 +149,71 @@ function derive(s: Snapshot): Derived | null {
   const totalGex = Math.abs(callGex) + Math.abs(putGex);
   const ratio = Math.abs(putGex) > 0 ? Math.abs(callGex) / Math.abs(putGex) : 0;
 
+  // Expected 1σ move from ATM IV, and the $ of delta dealers must hedge per 1%
+  // move (short gamma → they trade WITH the move, destabilizing).
+  const sigma = atmIV > 0 ? atmIV * spot * Math.sqrt(atmDte / 365) : 0;
+  const emPct = sigma > 0 ? (sigma / spot) * 100 : 0;
+  const hedgePer1 = Math.abs(netGex) * 0.01;
+
   const callWall = num(s.callWall);
   const putWall = num(s.putWall);
   const flip = num(s.gexFlip);
   const pct = (lvl: number) => (lvl > 0 ? ((lvl - spot) / spot) * 100 : NaN);
 
-  // ── squeeze scoring ────────────────────────────────────────────────────────
-  const shortGamma = netGex < 0; // dealers short gamma → moves amplified
+  // ── squeeze scoring (dealer-positioning model) ──────────────────────────────
   const proxPut = putWall > 0 ? clamp01(1 - Math.abs(spot - putWall) / (0.03 * spot)) : 0;
   const proxCall = callWall > 0 ? clamp01(1 - Math.abs(spot - callWall) / (0.03 * spot)) : 0;
   const bias: "BULLISH" | "BEARISH" = proxCall > proxPut ? "BULLISH" : "BEARISH";
-  const wallProx = bias === "BULLISH" ? proxCall : proxPut;
   const triggerLevel = bias === "BULLISH" ? callWall : putWall;
 
-  // Gamma Regime (25): short-gamma + magnitude vs total book.
-  const regime = (shortGamma ? 1 : 0.25) * 25 * clamp01(0.4 + Math.abs(netGex) / Math.max(totalGex, 1));
-  // Wall Proximity (25): distance from spot to the tested wall.
-  const proxScore = 25 * wallProx;
-  // Flow Alignment (20): does gamma$ tilt agree with the bias?
-  const pcTilt = callGammaOI > 0 ? putGammaOI / callGammaOI : 1;
-  const align = bias === "BEARISH" ? clamp01((pcTilt - 1) / 1.2) : clamp01((1 - pcTilt) / 0.6);
-  const flow = 20 * clamp01(0.3 + align);
-  // Volume Confirm (20): today's volume turnover vs OI on the tested side.
-  const oiSide = bias === "BEARISH" ? putOI : callOI;
-  const volSide = bias === "BEARISH" ? putVol : callVol;
-  const turnover = oiSide > 0 && volSide > 0 ? clamp01(volSide / oiSide) : 0.4; // no vol field → neutral
-  const volume = 20 * clamp01(0.3 + turnover);
-  // DEX Bias (10): the share of positive delta-exposure across the whole book
-  // (Σ positive netDEX ÷ Σ |netDEX|), oriented to the bias — a bullish squeeze
-  // wants the book +DEX heavy, a bearish one wants it −DEX heavy.
-  const posDexShare = absDex > 0 ? posDex / absDex : 0.5; // 0..1
+  // Dealer gamma sign — prefer the REAL signed inventory (flowGEX) over the OI
+  // long-calls/short-puts assumption; fall back to the OI+Vol net book when the
+  // snapshot carries no classified flow inventory.
+  const hasFlow = Math.abs(flowGex) > 0;
+  const dealerGamma = hasFlow ? flowGex : netGex; // < 0 → dealers short gamma
+  const shortGamma = dealerGamma < 0;
+
+  // 1 · Gamma Regime (25): short-gamma + magnitude vs the whole book.
+  const regime = (shortGamma ? 1 : 0.2) * 25 * clamp01(0.35 + Math.abs(dealerGamma) / Math.max(totalGex, 1));
+
+  // 2 · Flip Distance (20): depth into the short-gamma zone (spot below the flip),
+  // peaking near the flip where a break re-accelerates; long-gamma side damped.
+  const flipGap = flip > 0 ? (spot - flip) / spot : 0; // < 0 = below flip = short γ
+  const flipScore = 20 * clamp01(1 - Math.abs(flipGap) / 0.02) * (flipGap < 0 ? 1 : 0.4);
+
+  // 3 · Wall Proximity (20): distance to the trigger wall, gated by whether the
+  // wall is even reachable inside ~1.5σ of today's expected move.
+  const wallDist = triggerLevel > 0 ? Math.abs(spot - triggerLevel) / spot : 1;
+  let proxScore = 20 * clamp01(1 - wallDist / 0.03);
+  if (sigma > 0 && triggerLevel > 0) {
+    const movesAway = Math.abs(spot - triggerLevel) / sigma;
+    proxScore *= clamp01(1.5 / Math.max(movesAway, 0.6)); // beyond ~1.5σ → damped
+  }
+
+  // 4 · Vanna / Charm (15): coherent (non-cancelling) secondary hedging pressure —
+  // vanna (IV→delta) and charm (time→delta) both force dealer flows near expiry.
+  const vanShare = absVanna > 0 ? Math.abs(vanna) / absVanna : 0;
+  const charmShare = absCharm > 0 ? Math.abs(charm) / absCharm : 0;
+  const vcScore = 15 * clamp01(0.15 + 0.85 * (vanShare + charmShare) / 2);
+
+  // 5 · Flow Confirm (10): today's buy/sell-CLASSIFIED vol GEX (netVolGexDir)
+  // agreeing with the short-gamma read.
+  const hasDir = Math.abs(volGexDir) > 0;
+  const flowScore = 10 * (hasDir
+    ? ((volGexDir < 0) === shortGamma ? clamp01(0.5 + Math.abs(volGexDir) / Math.max(totalGex, 1)) : 0.2)
+    : 0.4);
+
+  // 6 · DEX Bias (10): share of positive delta-exposure (Σ +netDEX ÷ Σ|netDEX|),
+  // oriented to the bias.
+  const posDexShare = absDex > 0 ? posDex / absDex : 0.5;
   const dex = 10 * clamp01(bias === "BULLISH" ? posDexShare : 1 - posDexShare);
 
   const factors: Factor[] = [
     { label: "Gamma Regime", score: Math.round(regime), max: 25 },
-    { label: `${bias === "BULLISH" ? "Call" : "Put"} Wall Proximity`, score: Math.round(proxScore), max: 25 },
-    { label: "Flow Alignment", score: Math.round(flow), max: 20 },
-    { label: "Volume Confirm", score: Math.round(volume), max: 20 },
+    { label: "Flip Distance", score: Math.round(flipScore), max: 20 },
+    { label: `${bias === "BULLISH" ? "Call" : "Put"} Wall Proximity`, score: Math.round(proxScore), max: 20 },
+    { label: "Vanna / Charm", score: Math.round(vcScore), max: 15 },
+    { label: "Flow Confirm", score: Math.round(flowScore), max: 10 },
     { label: `DEX Bias · ${Math.round(posDexShare * 100)}% +`, score: Math.round(dex), max: 10 },
   ];
   const score = Math.max(0, Math.min(100, factors.reduce((a, f) => a + f.score, 0)));
@@ -176,6 +225,7 @@ function derive(s: Snapshot): Derived | null {
     callWall, putWall, flip,
     callWallPct: pct(callWall), putWallPct: pct(putWall), flipPct: pct(flip),
     bias, score, status, factors, triggerLevel,
+    sigma, emPct, hedgePer1, shortGamma,
   };
 }
 
@@ -400,6 +450,8 @@ export default function SqueezePage() {
                   { k: "Current Price", v: fmtPx(d.spot), c: HOME_THEME.text, s: "" },
                   { k: `${isBear ? "Put" : "Call"} Wall`, v: fmtWall(d.triggerLevel), c: HOME_THEME.text, s: fmtPct(isBear ? d.putWallPct : d.callWallPct) },
                   { k: "Trigger Level", v: fmtWall(d.triggerLevel), c: METER_AMBER, s: "" },
+                  { k: "Expected Move", v: d.sigma > 0 ? `±${fmtWall(d.sigma)}` : "—", c: HOME_THEME.cyan, s: d.sigma > 0 ? `±${d.emPct.toFixed(2)}%` : "" },
+                  { k: "Hedge / 1% Move", v: fmtB(d.hedgePer1), c: d.shortGamma ? PUT_RED : CALL_GREEN, s: d.shortGamma ? "short γ" : "long γ" },
                 ].map((row) => (
                   <div key={row.k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderTop: `1px solid ${HOME_THEME.border}` }}>
                     <span style={{ fontSize: 13, color: rgba(HOME_THEME.text, 0.7) }}>{row.k}</span>
