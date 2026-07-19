@@ -398,10 +398,10 @@ async function fetchSettleSpot(symbol, date) {
   return fetchStockEodTheta(symbol, date); // SPY / QQQ
 }
 
-// Recompute total net GEX for ONE symbol on a PAST date entirely from Theta
-// history: settled OPRA OI + EOD greeks + EOD volume + settle spot. Returns
-// { totalNetGex, spot } or throws if data is incomplete.
-async function computeHistoricalEodGex(symbol, date) {
+// Recompute per-strike GEX rows for ONE symbol on a PAST date entirely from
+// Theta history: settled OPRA OI + EOD greeks + EOD volume + settle spot.
+// Returns { gexRows, spot } or throws if data is incomplete.
+async function computeHistoricalGexRows(symbol, date) {
   // thetaRoot() strips the '$' and maps SPX→SPXW. It previously did NOT strip
   // the '$', so '$SPX' went to Theta verbatim and every history call came back
   // empty ("no historical rows"). Pass the bare root to be explicit.
@@ -481,7 +481,13 @@ async function computeHistoricalEodGex(symbol, date) {
   if (populated < MIN_POPULATED_STRIKES) {
     throw new Error(`${symbol}: only ${populated} populated strikes for ${date} — skip`);
   }
-  return { totalNetGex: totalNetGex(gexRows), spot: Number(spot) };
+  return { gexRows, spot: Number(spot) };
+}
+
+// Back-compat wrapper: EOD callers only need the total + spot.
+async function computeHistoricalEodGex(symbol, date) {
+  const { gexRows, spot } = await computeHistoricalGexRows(symbol, date);
+  return { totalNetGex: totalNetGex(gexRows), spot };
 }
 
 // Per-(date|symbol) bake-in state. Once baked, the symbol is skipped for that
@@ -664,6 +670,7 @@ module.exports = {
   collectEodGex,
   collectMorningEodGex,
   computeHistoricalEodGex,
+  computeHistoricalGexRows,
   catchUpMissing,
   missingDates,
 };

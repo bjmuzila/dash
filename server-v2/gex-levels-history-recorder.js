@@ -18,6 +18,9 @@
  * Read API: GET /proxy/gex-levels-history  (route in server-with-proxy.js).
  */
 
+const { findCallWall, findPutWall, findGexFlip, totalNetGex } = require('./computation/gex-calculator');
+const { computeHistoricalGexRows } = require('./eod-gex-recorder');
+
 const POLL_MINS = Number(process.env.GEX_LEVELS_HISTORY_POLL_MINS || 5);
 
 // RTH-ish window (ET minutes-since-midnight): 09:25–16:10.
@@ -91,6 +94,8 @@ async function ensureSchema() {
   // Additive for tables created before the curve snapshot existed — pre-curve
   // rows stay NULL and the client renders a dash for them.
   await p.query(`ALTER TABLE gex_levels_history ADD COLUMN IF NOT EXISTS curve JSONB`);
+  // 'live' = intraday snapshot; 'theta' = boot catch-up re-derived from settled OI.
+  await p.query(`ALTER TABLE gex_levels_history ADD COLUMN IF NOT EXISTS source TEXT`);
   _schemaReady = true;
   return true;
 }
@@ -172,6 +177,26 @@ function deriveFromSnapshot(v2) {
   };
 }
 
+// ── Upsert ───────────────────────────────────────────────────────────────────
+
+async function upsertLevels(date, symbol, d, source = 'live') {
+  const p = getPool();
+  if (!p) return false;
+  await p.query(
+    `INSERT INTO gex_levels_history
+       (date, symbol, spot, resistance, support, neutral, dollar_gamma, cpg_ratio, r2, s2, open_int, curve, source, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13, now())
+     ON CONFLICT (date, symbol) DO UPDATE SET
+       spot = EXCLUDED.spot, resistance = EXCLUDED.resistance, support = EXCLUDED.support,
+       neutral = EXCLUDED.neutral, dollar_gamma = EXCLUDED.dollar_gamma, cpg_ratio = EXCLUDED.cpg_ratio,
+       r2 = EXCLUDED.r2, s2 = EXCLUDED.s2, open_int = EXCLUDED.open_int,
+       curve = EXCLUDED.curve, source = EXCLUDED.source, updated_at = now()`,
+    [date, symbol, d.spot, d.resistance, d.support, d.neutral, d.dollarGamma, d.cpgRatio, d.r2, d.s2, d.openInt,
+     d.curve?.length ? JSON.stringify(d.curve) : null, source]
+  );
+  return true;
+}
+
 // ── Collect + upsert ─────────────────────────────────────────────────────────
 
 async function collectGexLevelsHistory(base, opts = {}) {
@@ -192,21 +217,106 @@ async function collectGexLevelsHistory(base, opts = {}) {
 
   const symbol = String(v2.symbol || '$SPX');
   const date = etDateStr();
-  const p = getPool();
-  if (!p) return null;
-  await p.query(
-    `INSERT INTO gex_levels_history
-       (date, symbol, spot, resistance, support, neutral, dollar_gamma, cpg_ratio, r2, s2, open_int, curve, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb, now())
-     ON CONFLICT (date, symbol) DO UPDATE SET
-       spot = EXCLUDED.spot, resistance = EXCLUDED.resistance, support = EXCLUDED.support,
-       neutral = EXCLUDED.neutral, dollar_gamma = EXCLUDED.dollar_gamma, cpg_ratio = EXCLUDED.cpg_ratio,
-       r2 = EXCLUDED.r2, s2 = EXCLUDED.s2, open_int = EXCLUDED.open_int,
-       curve = EXCLUDED.curve, updated_at = now()`,
-    [date, symbol, d.spot, d.resistance, d.support, d.neutral, d.dollarGamma, d.cpgRatio, d.r2, d.s2, d.openInt,
-     d.curve?.length ? JSON.stringify(d.curve) : null]
-  );
+  if (!getPool()) return null;
+  await upsertLevels(date, symbol, d, 'live');
   return { date, symbol, ...d };
+}
+
+// ── Boot catch-up ────────────────────────────────────────────────────────────
+//
+// The recorder only writes LIVE during 09:25–16:10 ET. Any day the process was
+// down for that whole window (redeploy, crash) — or the feed was dead — leaves
+// zero rows, and nothing ever fills them. On boot, look back CATCHUP_DAYS
+// trading days and backfill any hole by re-deriving walls/curve from Theta
+// settled OI (strikeRange 500, same as EOD), then running the SAME
+// deriveFromSnapshot the live path uses. Only fills gaps — never touches an
+// existing row. $SPX only (the recorder is single-symbol). Excludes today.
+
+const CATCHUP_DAYS = 5;
+const CATCHUP_DELAY_MS = 90_000; // let Theta finish connecting first
+const CATCHUP_SYMBOL = '$SPX';
+
+function isTradingDay(dateStr, weekday) {
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  return !MARKET_HOLIDAYS.has(dateStr);
+}
+
+function prevTradingDay(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  for (let i = 0; i < 10; i++) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    const iso = d.toISOString().slice(0, 10);
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(d);
+    if (isTradingDay(iso, wd)) return iso;
+  }
+  return null;
+}
+
+// Trading days in [from, to] with NO gex_levels_history row for `symbol`.
+async function missingDates(symbol, fromDate, toDate) {
+  const p = getPool();
+  if (!p) return [];
+  const { rows } = await p.query(
+    `SELECT date FROM gex_levels_history WHERE symbol = $1 AND date BETWEEN $2 AND $3`,
+    [symbol, fromDate, toDate]
+  );
+  const have = new Set(rows.map((r) => String(r.date).slice(0, 10)));
+  const out = [];
+  const d = new Date(`${fromDate}T12:00:00Z`);
+  const end = new Date(`${toDate}T12:00:00Z`);
+  while (d <= end) {
+    const iso = d.toISOString().slice(0, 10);
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(d);
+    if (isTradingDay(iso, wd) && !have.has(iso)) out.push(iso);
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+async function catchUpMissing(opts = {}) {
+  if (!(await ensureSchema())) return;
+  const lookback = Number(opts.days || CATCHUP_DAYS);
+  const symbol = opts.symbol || CATCHUP_SYMBOL;
+
+  // Window = [lookback trading days back, prior trading day]. Today is excluded:
+  // its row is the live poll's job and isn't "missing" until the close.
+  const to = prevTradingDay(etDateStr());
+  if (!to) return;
+  let from = to;
+  for (let i = 1; i < lookback; i++) {
+    const p = prevTradingDay(from);
+    if (!p) break;
+    from = p;
+  }
+
+  let gaps = [];
+  try { gaps = await missingDates(symbol, from, to); }
+  catch (e) { console.warn(`[gex-levels-hist/catchup] gap scan failed: ${e.message}`); return; }
+  if (!gaps.length) { console.log(`[gex-levels-hist/catchup] no gaps in last ${lookback} trading days`); return; }
+
+  console.log(`[gex-levels-hist/catchup] ${symbol} — ${gaps.length} missing: ${gaps.join(', ')}`);
+  const filled = [];
+  for (const date of gaps) {
+    try {
+      const { gexRows, spot } = await computeHistoricalGexRows(symbol, date);
+      const d = deriveFromSnapshot({
+        symbol, spot, gexRows,
+        callWall: findCallWall(gexRows, spot),
+        putWall:  findPutWall(gexRows, spot),
+        gexFlip:  findGexFlip(gexRows, spot),
+        totalNetGex: totalNetGex(gexRows),
+      });
+      if (!d) throw new Error('derive returned null');
+      await upsertLevels(date, symbol, d, 'theta');
+      filled.push(date);
+      console.log(`[gex-levels-hist/catchup] ${symbol} ${date} — theta  R=${d.resistance ?? '—'} S=${d.support ?? '—'} flip=${d.neutral ?? '—'} γ=${(d.dollarGamma / 1e9).toFixed(3)}B`);
+    } catch (e) {
+      console.warn(`[gex-levels-hist/catchup] ${symbol} ${date} — ${e.message}`);
+    }
+  }
+  if (filled.length) console.log(`[gex-levels-hist/catchup] filled ${filled.length}: ${filled.join(', ')}`);
+  else console.log(`[gex-levels-hist/catchup] no rows filled (Theta history unavailable for the gaps)`);
+  return { from, to, filled };
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -224,7 +334,12 @@ function startGexLevelsHistoryRecorder(port) {
   setTimeout(() => { void tick(); }, 30_000).unref?.();
   _timer = setInterval(() => { void tick(); }, POLL_MINS * 60_000);
   _timer.unref?.();
+  // Boot catch-up: backfills whole days the recorder was down for. Delayed so
+  // Theta has time to connect before we ask it for history.
+  setTimeout(() => {
+    catchUpMissing().catch((e) => console.warn('[gex-levels-hist/catchup] error:', e.message));
+  }, CATCHUP_DELAY_MS).unref?.();
   return () => { if (_timer) clearInterval(_timer); };
 }
 
-module.exports = { startGexLevelsHistoryRecorder, collectGexLevelsHistory, ensureSchema, getPool };
+module.exports = { startGexLevelsHistoryRecorder, collectGexLevelsHistory, catchUpMissing, missingDates, ensureSchema, getPool };
