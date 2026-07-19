@@ -234,7 +234,12 @@ async function collectGexLevelsHistory(base, opts = {}) {
 
 const CATCHUP_DAYS = 5;
 const CATCHUP_DELAY_MS = 90_000; // let Theta finish connecting first
-const CATCHUP_SYMBOL = '$SPX';
+// The live path stores whatever /proxy/gex returns as v2.symbol — that's 'SPX'
+// (no '$'). But eod-gex-recorder's Theta index history is keyed '$SPX' (the
+// sentinel fetchSettleSpot uses to pick fetchIndexEodTheta over the stock EOD
+// path). So we FETCH under '$SPX' and STORE under 'SPX' to line up with live.
+const STORE_SYMBOL = 'SPX';
+const THETA_SYMBOL = '$SPX';
 
 function isTradingDay(dateStr, weekday) {
   if (weekday === 'Sat' || weekday === 'Sun') return false;
@@ -276,7 +281,8 @@ async function missingDates(symbol, fromDate, toDate) {
 async function catchUpMissing(opts = {}) {
   if (!(await ensureSchema())) return;
   const lookback = Number(opts.days || CATCHUP_DAYS);
-  const symbol = opts.symbol || CATCHUP_SYMBOL;
+  const symbol = opts.symbol || STORE_SYMBOL;              // storage/dedupe key ('SPX')
+  const thetaSym = symbol === STORE_SYMBOL ? THETA_SYMBOL : symbol; // Theta index key ('$SPX')
 
   // Window = [lookback trading days back, prior trading day]. Today is excluded:
   // its row is the live poll's job and isn't "missing" until the close.
@@ -298,7 +304,7 @@ async function catchUpMissing(opts = {}) {
   const filled = [];
   for (const date of gaps) {
     try {
-      const { gexRows, spot } = await computeHistoricalGexRows(symbol, date);
+      const { gexRows, spot } = await computeHistoricalGexRows(thetaSym, date);
       const d = deriveFromSnapshot({
         symbol, spot, gexRows,
         callWall: findCallWall(gexRows, spot),
