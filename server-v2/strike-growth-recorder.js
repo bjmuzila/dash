@@ -185,6 +185,24 @@ async function ensureSchema() {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
                  ON strike_growth (date, symbol, expiry, strike, ts DESC);`);
 
+  // Day-over-day: one row per (date,symbol) = the biggest day-over-day net-GEX
+  // (OI+Vol) strike, kept at its intraday PEAK (running max) across the session.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS strike_dod_max (
+      date      DATE NOT NULL,
+      symbol    TEXT NOT NULL,
+      strike    DOUBLE PRECISION,
+      expiry    TEXT,
+      spot      DOUBLE PRECISION,
+      net_today DOUBLE PRECISION,
+      net_yest  DOUBLE PRECISION,
+      delta     DOUBLE PRECISION,
+      peak_abs  DOUBLE PRECISION NOT NULL DEFAULT 0,
+      ts        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (date, symbol)
+    );
+  `);
+
   // Seed watchlist once from the full EM roster (~380 names). All seed ACTIVE so
   // a fresh DB/redeploy records the entire EM list from the start — the roster is
   // bounded (SPECIAL_TICKERS + EQUITY_TICKERS, well under MAX_ACTIVE). Pacing
@@ -350,6 +368,44 @@ async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
   }
 }
 
+// Biggest day-over-day net-GEX (OI+Vol) strike per symbol, kept at its intraday
+// PEAK. "yesterday" = most recent prior date in strike_growth (holidays/weekends
+// need no calendar). Grain = symbol+strike (front expiry), so an expired front
+// doesn't break the compare on roll days. Pure SQL over rows the sweep already
+// wrote — no extra Theta load.
+async function rollupDayOverDay(p, date) {
+  await p.query(`
+    WITH prev AS (
+      SELECT DISTINCT ON (symbol, strike) symbol, strike, (gex_now + gex_open) AS net
+      FROM strike_growth WHERE date < $1
+      ORDER BY symbol, strike, date DESC, ts DESC
+    ),
+    cur AS (
+      SELECT DISTINCT ON (symbol, strike) symbol, strike, expiry, spot, (gex_now + gex_open) AS net
+      FROM strike_growth WHERE date = $1
+      ORDER BY symbol, strike, ts DESC
+    ),
+    d AS (
+      SELECT c.symbol, c.strike, c.expiry, c.spot,
+             c.net AS net_today, p.net AS net_yest, (c.net - p.net) AS delta
+      FROM cur c JOIN prev p USING (symbol, strike)
+    ),
+    top AS (
+      SELECT DISTINCT ON (symbol) symbol, strike, expiry, spot, net_today, net_yest, delta
+      FROM d ORDER BY symbol, abs(delta) DESC
+    )
+    INSERT INTO strike_dod_max
+      (date, symbol, strike, expiry, spot, net_today, net_yest, delta, peak_abs, ts)
+    SELECT $1, symbol, strike, expiry, spot, net_today, net_yest, delta, abs(delta), now()
+    FROM top
+    ON CONFLICT (date, symbol) DO UPDATE SET
+      strike=EXCLUDED.strike, expiry=EXCLUDED.expiry, spot=EXCLUDED.spot,
+      net_today=EXCLUDED.net_today, net_yest=EXCLUDED.net_yest,
+      delta=EXCLUDED.delta, peak_abs=EXCLUDED.peak_abs, ts=now()
+    WHERE EXCLUDED.peak_abs > strike_dod_max.peak_abs
+  `, [date]);
+}
+
 /**
  * One full sweep over the active watchlist. Sequential, paced. Returns a small
  * summary. `force` skips the RTH gate (for the manual /proxy route + dry runs).
@@ -382,6 +438,12 @@ async function runSweep(opts = {}) {
     await sleep(TICKER_DELAY_MS); // pace theta-terminal
   }
   console.log(`[strike-growth] sweep done — ${done.length} ok, ${failed.length} failed`);
+
+  // Day-over-day rollup: recompute the biggest overnight→now mover per symbol
+  // from the rows just written, keep the intraday peak. Cheap SQL, best-effort.
+  try { await rollupDayOverDay(p, date); }
+  catch (e) { console.warn('[strike-growth/dod]', e.message); }
+
   return { date, ts, ok: done.length, failed: failed.length, failures: failed.slice(0, 10) };
 }
 
@@ -441,4 +503,5 @@ module.exports = {
   ensureSchema,
   getPool,
   snapshotTicker,
+  rollupDayOverDay,
 };

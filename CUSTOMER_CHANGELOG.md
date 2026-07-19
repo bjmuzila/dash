@@ -3,6 +3,9 @@
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
 ## Sunday 7/19/2026
+* Cleaned up the Scanner's **Market Profile (TPO)** tab — all the faint gray text is now crisp white, and the section titles are color-coded so each card is easier to pick out at a glance.
+* The **Signals & Alerts** list on that tab now has a bold header with a live counter that turns green and shows how many alerts are triggering right now.
+* Moved the TPO profile chart to the top of the tab, above the signals, so you see the profile first.
 
 * Added a new **Squeeze** page — a single-screen Gamma Exposure board with the live spot, Net / Call / Put / Total GEX, the Call Wall, Put Wall and Zero Gamma (flip) level all across the top.
 * The Strike Profile chart shows gamma stacked by strike — green for call gamma, red for put gamma — with the spot marked and the Call Wall and Put Wall strikes outlined, plus an All / Near toggle to zoom to the strikes around price.

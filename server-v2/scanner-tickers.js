@@ -40,11 +40,25 @@ const SPREADS = [
   'UPS', 'UPST', 'V', 'XPEV', 'XYZ',
 ];
 
-// Full de-duped universe (order: MAIN → SHARES → SPREADS).
-const SCANNER_TICKERS = [...new Set([...MAIN, ...SHARES, ...SPREADS])]
+// Top option-volume names (30d avg) not already in MAIN/SHARES/SPREADS.
+// Snapshot from RH scan 2026-07-19; stable list, refresh manually if it drifts.
+const OPTVOL = [
+  // stocks (32)
+  'ORCL', 'SKHY', 'MSTR', 'WBD', 'WULF', 'NBIS', 'MRVL', 'PYPL', 'BE', 'IBM',
+  'HTZ', 'BAC', 'ONDS', 'GOOG', 'NOW', 'RKT', 'QXO', 'FHN', 'SLS', 'BMNR',
+  'BTDR', 'FRMI', 'WEN', 'CORZ', 'ADBE', 'PBR', 'LCID', 'CIFR', 'VFC', 'WMT',
+  'BB', 'IONQ',
+  // ETFs (26)
+  'TLT', 'HYG', 'FXI', 'DRAM', 'EWZ', 'EEM', 'XLF', 'GLD', 'LQD', 'EFA',
+  'USO', 'XLB', 'XLE', 'GDX', 'KWEB', 'KRE', 'XLI', 'EWY', 'ARKK', 'IGV',
+  'KORU', 'SOXX', 'XBI', 'XLU', 'DIA', 'XLP',
+];
+
+// Full de-duped universe (order: MAIN → SHARES → SPREADS → OPTVOL).
+const SCANNER_TICKERS = [...new Set([...MAIN, ...SHARES, ...SPREADS, ...OPTVOL])]
   .map((t) => String(t).trim().toUpperCase()).filter(Boolean);
 
 // The hot/fast-lane subset.
 const SCANNER_HOT = [...new Set(MAIN)].map((t) => String(t).trim().toUpperCase()).filter(Boolean);
 
-module.exports = { SCANNER_TICKERS, SCANNER_HOT, MAIN, SHARES, SPREADS };
+module.exports = { SCANNER_TICKERS, SCANNER_HOT, MAIN, SHARES, SPREADS, OPTVOL };

@@ -2414,7 +2414,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
           }
         }
 
-        g.fillStyle = "rgba(255,255,255,0.45)";
+        g.fillStyle = "rgba(255,255,255,0.9)";
         g.font = "10px ui-sans-serif, system-ui";
         g.textAlign = "left";
         g.fillText(d.date.slice(5), x, VIEW_H - 10);
@@ -2474,7 +2474,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       if (!vis(py)) continue;
       g.strokeStyle = "rgba(255,255,255,0.05)";
       g.beginPath(); g.moveTo(AXIS, py); g.lineTo(w - 4, py); g.stroke();
-      g.fillStyle = "rgba(255,255,255,0.38)";
+      g.fillStyle = "rgba(255,255,255,0.9)";
       g.fillText(p.toFixed(2), 4, py);
     }
   }, [sessions, spot, binSize, w, split, labels, zx, zy, ox, oy]);
@@ -2483,7 +2483,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
     padding: "3px 10px", borderRadius: 6, fontSize: 14, cursor: "pointer", fontWeight: 700,
     border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
     background: active ? "rgba(33,158,188,0.15)" : "transparent",
-    color: active ? HOME_THEME.text : "rgba(255,255,255,0.6)",
+    color: active ? HOME_THEME.text : HOME_THEME.text,
   });
 
   return (
@@ -2499,7 +2499,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
         <button onClick={() => setZx((z) => Math.min(6, z * 1.25))} style={btn(false)}>Width +</button>
         <button onClick={() => setZx((z) => Math.max(0.4, z / 1.25))} style={btn(false)}>Width −</button>
         <button onClick={reset} style={btn(false)}>Reset</button>
-        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)", marginLeft: 4 }}>
+        <span style={{ fontSize: 14, color: HOME_THEME.text, marginLeft: 4 }}>
           drag to pan · wheel = price zoom · shift+wheel = width zoom · hover a structure for detail
         </span>
       </div>
@@ -2551,11 +2551,11 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
           <div style={{ color: hover.hit.color, fontWeight: 700, fontSize: 12 }}>
             {KIND_TITLE[hover.hit.s.kind]}
           </div>
-          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginTop: 3, lineHeight: 1.35 }}>
+          <div style={{ color: HOME_THEME.text, fontSize: 12, marginTop: 3, lineHeight: 1.35 }}>
             {KIND_NOTE[hover.hit.s.kind]}
           </div>
           <div style={{
-            color: "rgba(255,255,255,0.45)", fontSize: 12, marginTop: 5,
+            color: HOME_THEME.text, fontSize: 12, marginTop: 5,
             fontVariantNumeric: "tabular-nums",
           }}>
             {hover.hit.s.date} ·{" "}
@@ -2613,24 +2613,24 @@ function StructureRow({ s, spot, base }: {
       }}>{KIND_TITLE[s.kind]}</span>
 
       <span style={{ color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{band}</span>
-      <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.ageSessions}d</span>
+      <span style={{ color: HOME_THEME.text }}>{s.ageSessions}d</span>
       <span style={{
-        color: dist == null ? "rgba(255,255,255,0.4)" : dist >= 0 ? HOME_THEME.green : HOME_THEME.red,
+        color: dist == null ? HOME_THEME.text : dist >= 0 ? HOME_THEME.green : HOME_THEME.red,
         fontVariantNumeric: "tabular-nums",
       }}>
         {dist == null ? "—" : `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}`}
       </span>
 
       <span title={baseTip} style={{ cursor: "help", display: "flex", alignItems: "baseline", gap: 5 }}>
-        <span style={{ color: base.rate == null ? "rgba(255,255,255,0.35)" : HOME_THEME.text }}>
+        <span style={{ color: base.rate == null ? HOME_THEME.text : HOME_THEME.text }}>
           {s.kind === "hole" ? "—" : pctOrDash(base.rate)}
         </span>
         {s.kind !== "hole" && base.rate != null && (
-          <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)" }}>n={base.n}</span>
+          <span style={{ fontSize: 14, color: HOME_THEME.text }}>n={base.n}</span>
         )}
       </span>
 
-      <span style={{ color: s.testedAt ? HOME_THEME.orange : "rgba(255,255,255,0.35)" }}>
+      <span style={{ color: s.testedAt ? HOME_THEME.orange : HOME_THEME.text }}>
         {s.testedAt ? `${s.touches}×` : "untested"}
       </span>
     </div>
@@ -2650,10 +2650,10 @@ const LEVEL_RANK: Record<SignalLevel, number> = { action: 0, watch: 1, info: 2 }
 const LEVEL_COLOR: Record<SignalLevel, string> = {
   action: HOME_THEME.orange,
   watch: LIGHT_BLUE,
-  info: NEUTRAL,
+  info: HOME_THEME.text,
 };
 const dirGlyph = (d: AmtSignal["dir"]) =>
-  d === "up" ? { g: "▲", c: HOME_THEME.green } : d === "down" ? { g: "▼", c: HOME_THEME.red } : { g: "◆", c: NEUTRAL };
+  d === "up" ? { g: "▲", c: HOME_THEME.green } : d === "down" ? { g: "▼", c: HOME_THEME.red } : { g: "◆", c: HOME_THEME.text };
 
 function AmtSignalRow({ s, spot, livePad }: { s: AmtSignal; spot: number | null; livePad: number }) {
   const live = s.trigger != null && spot != null && Math.abs(spot - s.trigger) <= livePad;
@@ -2685,18 +2685,18 @@ function AmtSignalRow({ s, spot, livePad }: { s: AmtSignal; spot: number | null;
         <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ color: dg.c }}>{dg.g}</span>{s.title}
         </span>
-        <span style={{ fontSize: 14, color: "rgba(255,255,255,0.62)", lineHeight: 1.45 }}>{s.detail}</span>
+        <span style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.45 }}>{s.detail}</span>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 2, textAlign: "right", fontSize: 14 }}>
         <span style={{ color: HOME_THEME.text, fontWeight: 700 }}>
           {s.trigger != null ? s.trigger.toFixed(2) : "—"}
         </span>
-        <span style={{ color: "rgba(255,255,255,0.4)" }}>
+        <span style={{ color: HOME_THEME.text }}>
           {s.target != null ? `→ ${s.target.toFixed(2)}` : "trail"}
         </span>
         {dist != null && (
-          <span style={{ color: "rgba(255,255,255,0.35)" }}>
+          <span style={{ color: HOME_THEME.text }}>
             {dist >= 0 ? "+" : ""}{dist.toFixed(2)}
           </span>
         )}
@@ -2734,8 +2734,8 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
 
   if (!amt.ok) {
     return (
-      <Card variant="budget" title={<span style={{ fontSize: 17 }}>AMT — auction read &amp; live signals</span>}>
-        <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+      <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.cyan }}>AMT — auction read &amp; live signals</span>}>
+        <div style={{ padding: 20, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
           {amt.reason}
         </div>
       </Card>
@@ -2748,15 +2748,15 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
       border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)",
       display: "flex", flexDirection: "column", gap: 3, minWidth: 0,
     }}>
-      <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)" }}>{label}</span>
+      <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: HOME_THEME.text }}>{label}</span>
       <span style={{ fontSize: 17, fontWeight: 800, color: color ?? HOME_THEME.text }}>{value}</span>
-      {note && <span style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", lineHeight: 1.4 }}>{note}</span>}
+      {note && <span style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.4 }}>{note}</span>}
     </div>
   );
 
   return (
     <Card variant="budget"
-      title={<span style={{ fontSize: 17 }}>AMT — auction read &amp; live signals</span>}
+      title={<span style={{ fontSize: 17, color: HOME_THEME.cyan }}>AMT — auction read &amp; live signals</span>}
       subtitle={`Day-timeframe read vs prior value${liveCount ? ` · ${liveCount} live` : ""}${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
       {/* headline read */}
@@ -2774,17 +2774,37 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
         fontSize: 14, fontWeight: 600, color: HOME_THEME.text, lineHeight: 1.5,
       }}>
         {amt.bias}
-        <div style={{ fontSize: 14, fontWeight: 400, color: "rgba(255,255,255,0.5)", marginTop: 4 }}>{amt.location}</div>
+        <div style={{ fontSize: 14, fontWeight: 400, color: HOME_THEME.text, marginTop: 4 }}>{amt.location}</div>
       </div>
 
       {/* signal rail */}
-      <div style={{ fontSize: 14, textTransform: "uppercase", letterSpacing: "0.05em", color: "rgba(255,255,255,0.4)", marginBottom: 8 }}>
-        Signals &amp; alerts <span style={{ textTransform: "none", letterSpacing: 0 }}>— a row lights green when spot reaches its trigger</span>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, marginBottom: 10,
+        padding: "8px 12px", borderRadius: 10,
+        border: `1px solid ${(liveCount ? HOME_THEME.green : HOME_THEME.orange)}40`,
+        background: `${liveCount ? HOME_THEME.green : HOME_THEME.orange}0F`,
+        borderLeft: `3px solid ${liveCount ? HOME_THEME.green : HOME_THEME.orange}`,
+      }}>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text }}>
+          Signals &amp; Alerts
+        </span>
+        <span style={{
+          fontSize: 12, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase",
+          padding: "2px 8px", borderRadius: 999,
+          color: liveCount ? HOME_THEME.green : HOME_THEME.text,
+          border: `1px solid ${liveCount ? HOME_THEME.green : "rgba(255,255,255,0.25)"}`,
+          background: liveCount ? `${HOME_THEME.green}1A` : "rgba(255,255,255,0.04)",
+        }}>
+          {liveCount ? `● ${liveCount} live` : `${signals.length} armed`}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 13, color: HOME_THEME.text }}>
+          a row lights green when spot reaches its trigger
+        </span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {signals.map((s) => <AmtSignalRow key={s.id} s={s} spot={spot} livePad={livePad} />)}
         {!signals.length && (
-          <div style={{ padding: 16, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+          <div style={{ padding: 16, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
             No actionable auction signals yet — waiting on IB and structure to form.
           </div>
         )}
@@ -2793,12 +2813,12 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
       {/* playbook */}
       <details style={{ marginTop: 14 }}>
         <summary style={{ cursor: "pointer", fontSize: 14, color: LIGHT_BLUE, fontWeight: 700 }}>Playbook / process</summary>
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8, fontSize: 14, color: "rgba(255,255,255,0.7)", lineHeight: 1.5 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
           {amt.playbook.map((p, i) => <span key={i}>{i + 1}. {p}</span>)}
         </div>
       </details>
 
-      <div style={{ marginTop: 12, fontSize: 14, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
+      <div style={{ marginTop: 12, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
         Auction read is derived from 5-min RTH profiles — opening type is approximate (no tick tape). Responsive = fade back to value; initiative = follow. Not financial advice.
       </div>
     </Card>
@@ -2875,12 +2895,9 @@ function TpoStructuresScanner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-      {/* ── AMT auction read + live signals ──────────────────────────────── */}
-      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
-
       {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
       <Card variant="budget"
-        title={<span style={{ fontSize: 17 }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
+        title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
         subtitle={`${instr} · ${binSize}-pt bins (4 ticks) · 30-min periods · RTH only · shared price axis`}>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
@@ -2891,45 +2908,48 @@ function TpoStructuresScanner() {
             <button key={n} onClick={() => setNSessions(n)} style={seg(nSessions === n)}>{n}D</button>
           ))}
           {nSessions === 30 && shown.length < 30 && (
-            <span style={{ fontSize: 14, color: "rgba(255,255,255,0.35)" }}>
+            <span style={{ fontSize: 14, color: HOME_THEME.text }}>
               {shown.length} loaded — SQLite history only goes back so far
             </span>
           )}
         </div>
 
         {!shown.length && (
-          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+          <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
             Waiting on RTH candles.
           </div>
         )}
         {!!shown.length && <TpoLetterProfile sessions={shown} spot={spot} binSize={binSize} />}
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 14 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
             <span style={{ width: 12, height: 12, borderRadius: 2, background: HOME_THEME.red, display: "inline-block" }} />
             A–B · initial balance (09:30–10:30)
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
             <span style={{ width: 12, height: 12, borderRadius: 2, background: "#5B9BD5", display: "inline-block" }} />
             C+ · later periods
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
             <span style={{ width: 12, height: 12, borderRadius: 2, background: "#F2A93B", display: "inline-block" }} /> POC row
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
             <span style={{ width: 12, height: 12, borderRadius: 2, background: "rgba(255,255,255,0.1)", display: "inline-block" }} /> value area (70%)
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: "rgba(255,255,255,0.55)" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
             <span style={{ width: 4, height: 12, background: HOME_THEME.orange, display: "inline-block" }} />
             left bracket = structure (excess / tail / poor / hole)
           </span>
         </div>
       </Card>
 
+      {/* ── AMT auction read + live signals ──────────────────────────────── */}
+      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
+
     <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
 
       {/* ── Open Business rail ───────────────────────────────────────────── */}
-      <Card variant="budget" title={<span style={{ fontSize: 17 }}>Open business</span>}
+      <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.orange }}>Open business</span>}
         subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
@@ -2939,7 +2959,7 @@ function TpoStructuresScanner() {
         </div>
 
         {!enoughHistory && (
-          <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+          <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
             Needs at least two completed RTH sessions to have any structure to forward-fill.
           </div>
         )}
@@ -2951,7 +2971,7 @@ function TpoStructuresScanner() {
               gridTemplateColumns: GRID,
               gap: 8, padding: "6px 12px",
               borderBottom: "1px solid rgba(255,255,255,0.12)",
-              fontSize: 14, color: "rgba(255,255,255,0.45)",
+              fontSize: 14, color: HOME_THEME.text,
               textTransform: "uppercase", letterSpacing: "0.05em",
             }}>
               <span>kind</span><span>level</span><span>age</span><span>dist</span>
@@ -2966,7 +2986,7 @@ function TpoStructuresScanner() {
             ))}
 
             {!open.length && (
-              <div style={{ padding: 20, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+              <div style={{ padding: 20, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
                 No open business — every structure in the loaded history has been repaired.
               </div>
             )}
@@ -2977,9 +2997,9 @@ function TpoStructuresScanner() {
       {/* ── Today's session + stats rollup ──────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-        <Card variant="budget" title={<span style={{ fontSize: 17 }}>Today&apos;s profile</span>}
+        <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.green }}>Today&apos;s profile</span>}
           subtitle={today ? `${today.date} · ${today.periods} periods · ${today.singles.length} single prints` : "—"}>
-          {!today && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 14 }}>No RTH session yet.</div>}
+          {!today && <div style={{ color: HOME_THEME.text, fontSize: 14 }}>No RTH session yet.</div>}
           {today && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 14 }}>
               <div>VAH <b style={{ color: HOME_THEME.cyan }}>{today.vah.toFixed(2)}</b></div>
@@ -3002,7 +3022,7 @@ function TpoStructuresScanner() {
                     </span>
                   ))}
                 {today.structures.filter((s) => s.kind !== "naked_poc").length === 0 && (
-                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+                  <span style={{ color: HOME_THEME.text, fontSize: 14 }}>
                     No extremes or holes formed today.
                   </span>
                 )}
@@ -3011,13 +3031,13 @@ function TpoStructuresScanner() {
           )}
         </Card>
 
-        <Card variant="budget" title={<span style={{ fontSize: 17 }}>Structure stats</span>}
+        <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.cyan }}>Structure stats</span>}
           subtitle={`${res.sessions.length} sessions loaded · graded once ≥1 later session exists`}>
           <div style={{
             display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
             gap: 6, padding: "4px 0 6px",
             borderBottom: "1px solid rgba(255,255,255,0.12)",
-            fontSize: 14, color: "rgba(255,255,255,0.45)",
+            fontSize: 14, color: HOME_THEME.text,
             textTransform: "uppercase", letterSpacing: "0.05em",
           }}>
             <span>kind</span><span>n</span><span>test %</span><span>repair %</span><span>med d</span>
@@ -3031,20 +3051,20 @@ function TpoStructuresScanner() {
                   gap: 6, fontSize: 14,
                 }}>
                   <span style={{ color: KIND_COLOR[s.kind], fontWeight: 700 }}>{KIND_LABEL[s.kind]}</span>
-                  <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.n}</span>
+                  <span style={{ color: HOME_THEME.text }}>{s.n}</span>
                   <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.testRate)}</span>
                   <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.repairRate)}</span>
-                  <span style={{ color: "rgba(255,255,255,0.55)" }}>{s.medSessionsToTest ?? "—"}</span>
+                  <span style={{ color: HOME_THEME.text }}>{s.medSessionsToTest ?? "—"}</span>
                 </div>
                 {/* age buckets — a 2-day-old excess is a different bet than a 3-week-old one */}
                 <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
                   {bks.map((b) => (
-                    <span key={b.bucket} style={{ fontSize: 14, color: "rgba(255,255,255,0.4)" }}>
+                    <span key={b.bucket} style={{ fontSize: 14, color: HOME_THEME.text }}>
                       {b.bucket}{" "}
-                      <b style={{ color: b.n >= 5 ? HOME_THEME.text : "rgba(255,255,255,0.4)" }}>
+                      <b style={{ color: b.n >= 5 ? HOME_THEME.text : HOME_THEME.text }}>
                         {pctOrDash(b.testRate)}
                       </b>{" "}
-                      <span style={{ color: "rgba(255,255,255,0.3)" }}>n={b.n}</span>
+                      <span style={{ color: HOME_THEME.text }}>n={b.n}</span>
                     </span>
                   ))}
                 </div>
@@ -3052,7 +3072,7 @@ function TpoStructuresScanner() {
             );
           })}
           {!res.stats.some((s) => s.n > 0) && (
-            <div style={{ padding: 16, color: "rgba(255,255,255,0.4)", fontSize: 14 }}>
+            <div style={{ padding: 16, color: HOME_THEME.text, fontSize: 14 }}>
               Not enough history loaded to grade anything yet.
             </div>
           )}
@@ -3061,7 +3081,7 @@ function TpoStructuresScanner() {
         <div style={{
           padding: "10px 14px", borderRadius: 10,
           border: `1px solid ${LIGHT_BLUE}30`, background: `${LIGHT_BLUE}0A`,
-          fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+          fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5,
         }}>
           <b style={{ color: LIGHT_BLUE }}>Base % is a prior on the TYPE, not this level. </b>
           It answers &ldquo;how often does a structure of this kind, at this age, eventually get
@@ -3074,7 +3094,7 @@ function TpoStructuresScanner() {
         <div style={{
           padding: "10px 14px", borderRadius: 10,
           border: `1px solid ${HOME_THEME.orange}30`, background: `${HOME_THEME.orange}0A`,
-          fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5,
+          fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5,
         }}>
           <b style={{ color: HOME_THEME.orange }}>Small sample: </b>
           these rates are computed from whatever candle history is currently loaded
@@ -3084,7 +3104,7 @@ function TpoStructuresScanner() {
           until then treat every number here as directional, not tradeable.
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 14, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
           <span>TPO = one touch per 30-min period per {binSize}-pt bin — TIME, not volume. RTH only.</span>
           <span>Excess = singles at an extreme whose period closed back INSIDE (rejection → level holds). Tail = same singles but the period closed away (trend continuation → do not fade).</span>
           <span>Poor high/low = flat stack at the extreme, no tail → unfinished, expect it taken out. Hole = mid-profile singles → price accelerates through, never target inside.</span>
@@ -3101,6 +3121,14 @@ function TpoStructuresScanner() {
 
 export default function ScannerPage() {
   const [tab, setTab] = useState<MainTab>("gex");
+
+  // Deep-link support: /scanner?tab=ibstats opens that tab (used by the ES
+  // Candles IB hover-preview iframe). Runs after mount to avoid SSR mismatch.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    const valid: MainTab[] = ["overview", "gex", "strike", "watch", "marketquality", "tpo", "ibstats", "statprompter", "semis"];
+    if (t && (valid as string[]).includes(t)) setTab(t as MainTab);
+  }, []);
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding: "8px 20px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,

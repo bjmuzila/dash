@@ -487,6 +487,25 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     return () => document.removeEventListener("mousedown", onDoc);
   }, [dteOpen]);
 
+  // ── IB switcher tab ────────────────────────────────────────────────────────
+  // Toggles the Initial Balance lines; hovering the tab previews the IB page.
+  const IB_ROUTE = "/scanner?tab=ibstats"; // IB Stats lives on the scanner page's IB tab
+  const [showIb, setShowIb] = useState(false);
+  const [ibPop, setIbPop] = useState(false);
+  const [ibPopRect, setIbPopRect] = useState<{ left: number; top: number } | null>(null);
+  const ibBoxRef = useRef<HTMLDivElement>(null);
+  const ibCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openIbPop = useCallback(() => {
+    if (ibCloseTimer.current) { clearTimeout(ibCloseTimer.current); ibCloseTimer.current = null; }
+    const r = ibBoxRef.current?.getBoundingClientRect();
+    if (r) setIbPopRect({ left: r.left, top: r.bottom + 6 });
+    setIbPop(true);
+  }, []);
+  const closeIbPop = useCallback(() => {
+    if (ibCloseTimer.current) clearTimeout(ibCloseTimer.current);
+    ibCloseTimer.current = setTimeout(() => setIbPop(false), 120);
+  }, []);
+
   // Overlays dropdown. The six overlay toggles used to sit inline in the dock
   // and overflowed it (FitScale shrank everything to unreadable); they live in
   // a checklist menu now.
@@ -788,6 +807,24 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       onh: Number.isFinite(onh) ? onh : null,
       onl: Number.isFinite(onl) ? onl : null,
     };
+  }, [rows, clockTick]);
+
+  // Initial Balance = today's RTH first 60 min (09:30–10:30 ET). ES prices, like
+  // sessionLevels above (no basis). Returns IBH / IBL + 50% midpoint.
+  const ibLevels = useMemo(() => {
+    if (!rows.length) return null;
+    void clockTick;
+    const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+    const today = dayKey(Date.now());
+    let h = -Infinity, l = Infinity;
+    for (const r of rows) {
+      const d = r.date || dayKey(r.timestamp);
+      if (d !== today) continue;
+      const m = etMinutes(r.timestamp);
+      if (m >= 570 && m < 630) { if (r.high > h) h = r.high; if (r.low < l) l = r.low; } // 09:30–10:30
+    }
+    if (!Number.isFinite(h) || !Number.isFinite(l)) return null;
+    return { ibh: h, ibl: l, ibm: (h + l) / 2 };
   }, [rows, clockTick]);
 
   // Session volume profile from today's candles (ES price). 1-pt bins.
@@ -1677,6 +1714,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       );
     }
 
+    // Initial Balance (IBH / IBL / 50%) — toggled by the IB tab. ES prices.
+    if (showIb && ibLevels) {
+      defs.push(
+        { price: ibLevels.ibh, color: "#f59e0b", title: "IBH",   style: LineStyle.Solid,  width: 1 },
+        { price: ibLevels.ibl, color: "#f59e0b", title: "IBL",   style: LineStyle.Solid,  width: 1 },
+        { price: ibLevels.ibm, color: "#f59e0b", title: "IB 50%", style: LineStyle.Dashed, width: 1 },
+      );
+    }
+
     const lines = priceLinesRef.current;
     const wanted = new Set(defs.filter((d) => d.price != null && d.price > 0).map((d) => d.title));
 
@@ -1703,7 +1749,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         title: d.title,
       }));
     }
-  }, [lineLevels, showLevels, showSessions, sessionLevels]);
+  }, [lineLevels, showLevels, showSessions, sessionLevels, showIb, ibLevels]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
@@ -2501,6 +2547,38 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   </button>
                 );
               })}
+            </div>,
+            document.body
+          )}
+
+          <DockGap />
+
+          {/* IB switcher tab — toggles Initial Balance lines; hover previews the IB page */}
+          <div
+            ref={ibBoxRef}
+            style={{ flexShrink: 0 }}
+            onMouseEnter={openIbPop}
+            onMouseLeave={closeIbPop}
+          >
+            <DockButton
+              onClick={() => setShowIb((v) => !v)}
+              title="Initial Balance (09:30–10:30 ET) — hover for IB page"
+              style={showIb ? { border: `1px solid ${DOCK_THEME.activeBorder}`, background: DOCK_THEME.activeTile, color: HOME_THEME.cyan } : undefined}
+            >
+              <span>IB</span>
+            </DockButton>
+          </div>
+          {ibPop && ibPopRect && createPortal(
+            <div
+              onMouseEnter={openIbPop}
+              onMouseLeave={closeIbPop}
+              style={{ position: "fixed", left: ibPopRect.left, top: ibPopRect.top, width: 760, height: 460, borderRadius: 14, overflow: "hidden", border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000 }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, borderBottom: `1px solid ${HOME_THEME.border}` }}>
+                <span>Initial Balance</span>
+                <a href={IB_ROUTE} target="_blank" rel="noreferrer" style={{ color: HOME_THEME.cyan, textDecoration: "none" }}>Open ↗</a>
+              </div>
+              <iframe src={IB_ROUTE} title="IB page preview" style={{ width: "100%", height: "calc(100% - 31px)", border: 0, background: "transparent" }} />
             </div>,
             document.body
           )}

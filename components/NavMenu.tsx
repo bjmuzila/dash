@@ -71,11 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
     devOnly: true,
     items: [
       { label: "Multi Greek", href: "/mult-greek" },
-      { label: "Greeks", href: "/greeks" },
       { label: "Confidence", href: "/confidence-score" },
-      { label: "Fails", href: "/fails" },
-      { label: "Premarket", href: "/premarket" },
-      { label: "Economic Calendar", href: "/economic-calendar" },
       { label: "Database", href: "/database" },
       { label: "Dev", href: "/dev" },
       { label: "Estimated Moves BE", href: "/estimated-move" },

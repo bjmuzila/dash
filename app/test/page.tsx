@@ -8,6 +8,7 @@ import { ObookView } from "@/components/shared/ObookView";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
+import { SqueezeBoard } from "@/app/squeeze/page";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
@@ -1961,6 +1962,18 @@ type OverviewCardDef = {
 
 const OVERVIEW_CARDS: OverviewCardDef[] = [
   {
+    key: "squeeze",
+    label: "Squeeze",
+    accent: LIGHT_BLUE,
+    blurb: "Gamma Exposure board + a dealer-positioning squeeze screener for the live 0DTE symbol.",
+    points: [
+      "Spot, Net / Call / Put / Total GEX, Call Wall, Put Wall and Zero Gamma across the top",
+      "Per-strike gamma profile on the OI+Vol net basis, with the walls outlined and an All / Near zoom",
+      "Squeeze score out of 100 — gamma regime, flip distance, wall proximity, vanna/charm, flow and DEX",
+      "Key levels with expected move and the dealer $ hedged per 1% move",
+    ],
+  },
+  {
     key: "gexlevels",
     label: "GEX Levels",
     accent: LIGHT_BLUE,
@@ -2081,11 +2094,12 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "gexlevels" | "obook";
+type TestTab = "overview" | "flow" | "gexlevels" | "obook" | "squeeze";
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
     { key: "overview", label: "Overview" },
+    { key: "squeeze", label: "Squeeze" },
     { key: "gexlevels", label: "GEX Levels" },
     { key: "flow", label: "Flow Inventory" },
     { key: "obook", label: "Order Book" },
@@ -2183,6 +2197,8 @@ export default function TestPage() {
       <TestTabBar active={tab} onChange={setTab} />
       {tab === "overview" ? (
         <OverviewTab onOpen={setTab} />
+      ) : tab === "squeeze" ? (
+        <SqueezeBoard />
       ) : tab === "gexlevels" ? (
         <GexLevelsTab />
       ) : tab === "obook" ? (

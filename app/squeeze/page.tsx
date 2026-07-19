@@ -330,7 +330,7 @@ const cardBase: CSSProperties = {
 };
 
 // ── page ─────────────────────────────────────────────────────────────────────
-export default function SqueezePage() {
+export function SqueezeBoard() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [near, setNear] = useState(true);
@@ -367,7 +367,7 @@ export default function SqueezePage() {
   });
 
   return (
-    <PageShell>
+    <>
       {/* header */}
       <div style={{ ...cardBase, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -466,6 +466,14 @@ export default function SqueezePage() {
           </div>
         </>
       )}
+    </>
+  );
+}
+
+export default function SqueezePage() {
+  return (
+    <PageShell>
+      <SqueezeBoard />
     </PageShell>
   );
 }
