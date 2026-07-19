@@ -171,6 +171,24 @@ const side = (d: SlimDay) => (d.fcb ? d.fcb.side : null);
 const closeSide = (d: SlimDay) => (d.closeZone === "top25" ? "H" : d.closeZone === "bot25" ? "L" : null);
 const worked = (d: SlimDay) => side(d) != null && closeSide(d) === side(d);
 
+/** The slim export (ib-*.json from ib-backtest-esu6.html) ships atr + avgIB but
+ *  leaves widthBucket null — the bucket rule lives in lib/ibStats.ts and the HTML
+ *  exporter never replicated it, so every width prompt came up empty. Derive it
+ *  here on load from the fields that ARE present. Same thresholds as ibStats. */
+function backfillWidthBuckets(ds: IbDataset | null): IbDataset | null {
+  if (!ds?.days) return ds;
+  for (const d of ds.days) {
+    if (d.widthBucket || d.atr == null || d.avgIB == null || !d.width) continue;
+    d.widthBucket =
+      d.width < 0.5 * d.atr || d.width < 0.75 * d.avgIB
+        ? "narrow"
+        : d.width > 1.5 * d.atr || d.width > 1.25 * d.avgIB
+          ? "wide"
+          : "normal";
+  }
+  return ds;
+}
+
 /* ── THE PROMPT LIBRARY ───────────────────────────────────────────────────── */
 
 const PROMPTS: Prompt[] = [
@@ -466,7 +484,7 @@ const PROMPTS: Prompt[] = [
         headline: `ES breaks bucketed by IB width. "hit" = reached 1.0× the IB width. Extension is in IB widths, so it's already size-normalized.`,
         cols: ["failed", "hit 2×", "med ext"],
         rows,
-        caveat: b.length === 0 ? "widthBucket is null in the export — the tab derives it client-side; if this is empty, re-export with atr/avgIB." : undefined,
+        caveat: b.length === 0 ? "No width buckets — needs atr + avgIB on the slim days (the tab derives the bucket from them on load). If this is empty, atr/avgIB are missing from the export." : undefined,
       };
     },
   },
@@ -955,7 +973,7 @@ const PROMPTS: Prompt[] = [
         stack,
         verdict: "Narrow should skew toward a single directional break; wide should skew toward 'neither' (contained) or 'both' (rotation). Read the single-break rate against the width — that's the coil-vs-spent read.",
         caveat:
-          "Width buckets are RELATIVE and re-derived each day — not fixed point cutoffs. NARROW = width < 0.5×ATR14(RTH range) OR < 0.75× the 20-day avg IB. WIDE = width > 1.5×ATR14 OR > 1.25× the 20-day avg IB. NORMAL is everything between. The 'width (pts)' column shows the observed point span that landed in each bucket over the sample. If a bucket is empty, re-export with atr/avgIB populated.",
+          "Width buckets are RELATIVE and re-derived each day — not fixed point cutoffs. NARROW = width < 0.5×ATR14(RTH range) OR < 0.75× the 20-day avg IB. WIDE = width > 1.5×ATR14 OR > 1.25× the 20-day avg IB. NORMAL is everything between. The 'width (pts)' column shows the observed point span that landed in each bucket over the sample. Buckets are derived on load from each day's atr + avgIB; if every bucket is empty, those two fields are missing from the export.",
       };
     },
   },
@@ -1542,8 +1560,8 @@ export default function StatPrompterTab() {
     ])
       .then(([a, b]: [IbDataset, IbDataset]) => {
         if (!alive) return;
-        setEs(a);
-        setNq(b);
+        setEs(backfillWidthBuckets(a));
+        setNq(backfillWidthBuckets(b));
       })
       .catch((e) => alive && setErr(String(e.message || e)));
     return () => {

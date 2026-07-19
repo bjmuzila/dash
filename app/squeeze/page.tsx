@@ -40,8 +40,10 @@ type GexRow = {
   callGEX: number;
   putGEX: number;
   netGEX: number;
-  callVol?: number;
-  putVol?: number;
+  netVolGEX?: number;
+  netDEX?: number;
+  callVolume?: number;
+  putVolume?: number;
   dte?: number;
 };
 type Snapshot = {
@@ -106,16 +108,19 @@ function derive(s: Snapshot): Derived | null {
   if (!rows.length || !(spot > 0)) return null;
 
   let callGex = 0, netGex = 0, callOI = 0, putOI = 0, callVol = 0, putVol = 0;
-  let callGammaOI = 0, putGammaOI = 0;
+  let callGammaOI = 0, putGammaOI = 0, posDex = 0, absDex = 0;
   for (const r of rows) {
     callGex += num(r.callGEX);
     netGex += num(r.netGEX);
     callOI += num(r.callOI);
     putOI += num(r.putOI);
-    callVol += num(r.callVol);
-    putVol += num(r.putVol);
+    callVol += num(r.callVolume);
+    putVol += num(r.putVolume);
     callGammaOI += num(r.callGamma) * num(r.callOI);
     putGammaOI += num(r.putGamma) * num(r.putOI);
+    const dexR = num(r.netDEX);
+    absDex += Math.abs(dexR);
+    if (dexR > 0) posDex += dexR;
   }
   if (Number.isFinite(s.totalNetGex) && s.totalNetGex) netGex = num(s.totalNetGex);
   // Net = Call + Put ⟹ Put = Net − Call (sign-convention agnostic).
@@ -149,16 +154,18 @@ function derive(s: Snapshot): Derived | null {
   const volSide = bias === "BEARISH" ? putVol : callVol;
   const turnover = oiSide > 0 && volSide > 0 ? clamp01(volSide / oiSide) : 0.4; // no vol field → neutral
   const volume = 20 * clamp01(0.3 + turnover);
-  // DEX Bias (10): call/put OI skew in the bias direction.
-  const oiSkew = callOI + putOI > 0 ? (callOI - putOI) / (callOI + putOI) : 0;
-  const dex = 10 * clamp01(bias === "BULLISH" ? 0.5 + oiSkew : 0.5 - oiSkew);
+  // DEX Bias (10): the share of positive delta-exposure across the whole book
+  // (Σ positive netDEX ÷ Σ |netDEX|), oriented to the bias — a bullish squeeze
+  // wants the book +DEX heavy, a bearish one wants it −DEX heavy.
+  const posDexShare = absDex > 0 ? posDex / absDex : 0.5; // 0..1
+  const dex = 10 * clamp01(bias === "BULLISH" ? posDexShare : 1 - posDexShare);
 
   const factors: Factor[] = [
     { label: "Gamma Regime", score: Math.round(regime), max: 25 },
     { label: `${bias === "BULLISH" ? "Call" : "Put"} Wall Proximity`, score: Math.round(proxScore), max: 25 },
     { label: "Flow Alignment", score: Math.round(flow), max: 20 },
     { label: "Volume Confirm", score: Math.round(volume), max: 20 },
-    { label: "DEX Bias", score: Math.round(dex), max: 10 },
+    { label: `DEX Bias · ${Math.round(posDexShare * 100)}% +`, score: Math.round(dex), max: 10 },
   ];
   const score = Math.max(0, Math.min(100, factors.reduce((a, f) => a + f.score, 0)));
   const status = score >= 70 ? "IMMINENT" : score >= 50 ? "LIKELY" : score >= 30 ? "POSSIBLE" : "UNLIKELY";
@@ -189,12 +196,15 @@ function Stat({ label, value, sub, subColor, valueColor }: { label: string; valu
 // ── per-strike gamma profile (SVG) ───────────────────────────────────────────
 function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
   const W = 900, H = 460, padL = 46, padR = 14, padT = 20, padB = 28;
+  // Plot the SAME OI+Vol net the desk uses to pick the walls (netGEX + netVolGEX),
+  // so the outlined wall bar is always the visual extreme.
+  const oiVolNet = (r: GexRow) => num(r.netGEX) + num(r.netVolGEX);
   const all = d.rows;
   const rows = near ? all.filter((r) => Math.abs(r.strike - d.spot) / d.spot <= 0.05) : all;
-  const data = (rows.length ? rows : all).filter((r) => Number.isFinite(r.netGEX));
+  const data = (rows.length ? rows : all).filter((r) => Number.isFinite(r.strike));
   if (!data.length) return <Empty note="no chain rows" />;
 
-  const maxV = Math.max(...data.map((r) => Math.abs(num(r.netGEX))), 1);
+  const maxV = Math.max(...data.map((r) => Math.abs(oiVolNet(r))), 1);
   const xlo = data[0].strike, xhi = data[data.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
   const mid = padT + (H - padT - padB) / 2;
@@ -219,7 +229,7 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
         </g>
       ))}
       {data.map((r) => {
-        const v = num(r.netGEX);
+        const v = oiVolNet(r);
         const isCall = v >= 0;
         const cx = x(r.strike);
         const h = barH(v);

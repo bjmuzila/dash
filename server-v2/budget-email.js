@@ -202,9 +202,12 @@ async function captureShot(base, cookie) {
     const host = new URL(base).host.split(':')[0];
     await page.setCookie({ name: cookie.name, value: cookie.value, domain: host, path: '/', httpOnly: true });
 
-    await page.goto(`${base}/owner/budget`, { waitUntil: 'networkidle2', timeout: 45_000 });
+    // The budget page holds long-lived connections (toolbar WS / polling), so
+    // 'networkidle2' never settles and the nav timed out (the 8am failure). Wait
+    // for the DOM only, then the fixed delay below lets client data + charts render.
+    await page.goto(`${base}/owner/budget`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     // Let the client-side data + charts settle.
-    await new Promise((r) => setTimeout(r, 6000));
+    await new Promise((r) => setTimeout(r, 9000));
 
     await page.evaluate(() => {
       const main = document.querySelector('main');
@@ -293,11 +296,24 @@ function startBudgetEmail(port) {
   console.log('[budget-email] enabled — daily 08:00 ET briefing');
   setInterval(() => {
     const { hour, ymd } = etParts();
-    if (hour === 8 && lastRunDay !== ymd) {
+    // Catch-up window: fire once per day any time from 08:00 ET onward (until
+    // 22:00), so a container that was down or mid-redeploy during the 8am minute
+    // still sends today's briefing when it comes back instead of skipping the day.
+    if (hour >= 8 && hour < 22 && lastRunDay !== ymd) {
+      // Set the guard BEFORE running so a restart mid-send can't re-send (the
+      // guard is on the mounted ./state volume and survives restarts). On failure
+      // we CLEAR it so the next 60s tick retries — a single bad run (chromium,
+      // auth, Resend) no longer burns the whole day.
       lastRunDay = ymd;
       writeLastRunDay(ymd);
       console.log(`[budget-email] firing ${ymd}`);
-      runOnce(base).catch((e) => console.error('[budget-email] failed:', e.message));
+      runOnce(base)
+        .then(() => console.log(`[budget-email] done ${ymd}`))
+        .catch((e) => {
+          console.error('[budget-email] failed (will retry):', e.message);
+          lastRunDay = null;
+          writeLastRunDay('');
+        });
     }
   }, 60_000);
   return () => {};

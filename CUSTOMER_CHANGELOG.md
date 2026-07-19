@@ -2,6 +2,16 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 7/19/2026
+
+* Added a new **Squeeze** page — a single-screen Gamma Exposure board with the live spot, Net / Call / Put / Total GEX, the Call Wall, Put Wall and Zero Gamma (flip) level all across the top.
+* The Strike Profile chart shows gamma stacked by strike — green for call gamma, red for put gamma — with the spot marked and the Call Wall and Put Wall strikes outlined, plus an All / Near toggle to zoom to the strikes around price.
+* Added a **Gamma Squeeze Screener** that scores how primed the tape is for a squeeze out of 100, calls the bias bullish or bearish, and breaks the score down by gamma regime, wall proximity, flow, volume and dealer positioning — with the key levels and trigger price listed underneath. Everything updates live off the same feed as the rest of the desk.
+
+## Saturday 7/18/2026
+
+* **The 3.0 dashboard is live.** A rebuilt, faster version of the dashboard — the same tools you already use, now on a lighter, quicker-loading foundation that makes moving between pages feel near-instant.
+
 ## Friday 7/17/2026
 
 * The Options Chain cells now show the dollar gamma (GEX premium) again instead of a percentage.

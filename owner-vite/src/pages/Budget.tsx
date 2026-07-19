@@ -2614,6 +2614,81 @@ function BzilaPanel({
         })}
       </div>
 
+      {/* Monthly All ledger — all three streams */}
+      <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+          <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" }}>Monthly All</span>
+          <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted }}>{year} · all streams</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+          <span>Month</span>
+          <span style={{ textAlign: "right" }}>In</span>
+          <span style={{ textAlign: "right" }}>Out</span>
+          <span style={{ textAlign: "right" }}>Net</span>
+          <span />
+        </div>
+
+        {data.months.length === 0 && (
+          <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>Nothing logged for {year} yet.</div>
+        )}
+
+        {data.months.map((m) => {
+          const isOpen = open === m.ym;
+          return (
+            <div key={m.ym} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
+              <button
+                onClick={() => setOpen(isOpen ? null : m.ym)}
+                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 14 }}
+              >
+                <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
+                <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
+                <span style={{ textAlign: "right", color: m.outAmt > 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(m.outAmt, currency)}</span>
+                <span style={{ textAlign: "right", fontWeight: 900, color: m.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(m.net, currency)}</span>
+                <span style={{ textAlign: "right", color: HOME_THEME.muted, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s ease" }}>›</span>
+              </button>
+
+              {isOpen && (
+                <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+                    <span>Date</span><span>Stream</span><span>Item</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
+                  </div>
+                  {m.rows.map((r) => {
+                    const isIn = r.inAmt > 0;
+                    const c = STREAM_COLOR[r.stream];
+                    return (
+                      <div key={r.key} style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
+                        <span style={{ fontWeight: 700 }}>{r.stream === "cbedge" ? new Date(r.date + "T00:00:00").toLocaleDateString("en-US", { month: "long" }) : <>{shortDate(r.date)} <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>{weekday(r.date)}</span></>}</span>
+                        <span>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 999, color: c, background: bRgba(c, 0.10), border: `1px solid ${bRgba(c, 0.3)}` }}>
+                            {STREAM_LABEL[r.stream]}
+                          </span>
+                        </span>
+                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                        <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{r.accounts || "—"}</span>
+                        <span style={{ textAlign: "right", fontWeight: 800, color: isIn ? HOME_THEME.green : SOFT_RED }}>{isIn ? "+" : "−"}{fmtMoney(isIn ? r.inAmt : r.outAmt, currency)}</span>
+                        <span style={{ textAlign: "right" }}>
+                          {r.id != null ? <DeleteButton onClick={() => onDelete(r.id!)} /> : <span title="Edit on the Payments tab" style={{ color: HOME_THEME.muted, opacity: 0.4, fontSize: 12 }}>↗</span>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {data.months.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 14, fontWeight: 900 }}>
+            <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
+            <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalIn, currency)}</span>
+            <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(data.totalOut, currency)}</span>
+            <span style={{ textAlign: "right", color: data.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(data.net, currency)}</span>
+            <span />
+          </div>
+        )}
+      </div>
+
       {/* CB Edge — rolling month-by-month sales vs expenses (no day drill-down) */}
       {(() => {
         const cbedgeMonths = data.months
@@ -2660,77 +2735,6 @@ function BzilaPanel({
           </div>
         );
       })()}
-
-      {/* Monthly ledger */}
-      <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
-          <span>Month</span>
-          <span style={{ textAlign: "right" }}>In</span>
-          <span style={{ textAlign: "right" }}>Out</span>
-          <span style={{ textAlign: "right" }}>Net</span>
-          <span />
-        </div>
-
-        {data.months.length === 0 && (
-          <div style={{ padding: "26px 16px", textAlign: "center", color: HOME_THEME.muted }}>Nothing logged for {year} yet.</div>
-        )}
-
-        {data.months.map((m) => {
-          const isOpen = open === m.ym;
-          return (
-            <div key={m.ym} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-              <button
-                onClick={() => setOpen(isOpen ? null : m.ym)}
-                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 14 }}
-              >
-                <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
-                <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
-                <span style={{ textAlign: "right", color: m.outAmt > 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(m.outAmt, currency)}</span>
-                <span style={{ textAlign: "right", fontWeight: 900, color: m.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(m.net, currency)}</span>
-                <span style={{ textAlign: "right", color: HOME_THEME.muted, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s ease" }}>›</span>
-              </button>
-
-              {isOpen && (
-                <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
-                    <span>Date</span><span>Stream</span><span>Item</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
-                  </div>
-                  {m.rows.map((r) => {
-                    const isIn = r.inAmt > 0;
-                    const c = STREAM_COLOR[r.stream];
-                    return (
-                      <div key={r.key} style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
-                        <span style={{ fontWeight: 700 }}>{shortDate(r.date)} <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>{weekday(r.date)}</span></span>
-                        <span>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 999, color: c, background: bRgba(c, 0.10), border: `1px solid ${bRgba(c, 0.3)}` }}>
-                            {STREAM_LABEL[r.stream]}
-                          </span>
-                        </span>
-                        <span style={{ color: HOME_THEME.muted, letterSpacing: "0.04em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
-                        <span style={{ textAlign: "center", color: HOME_THEME.muted }}>{r.accounts || "—"}</span>
-                        <span style={{ textAlign: "right", fontWeight: 800, color: isIn ? HOME_THEME.green : SOFT_RED }}>{isIn ? "+" : "−"}{fmtMoney(isIn ? r.inAmt : r.outAmt, currency)}</span>
-                        <span style={{ textAlign: "right" }}>
-                          {r.id != null ? <DeleteButton onClick={() => onDelete(r.id!)} /> : <span title="Edit on the Payments tab" style={{ color: HOME_THEME.muted, opacity: 0.4, fontSize: 12 }}>↗</span>}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {data.months.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 14, fontWeight: 900 }}>
-            <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
-            <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalIn, currency)}</span>
-            <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(data.totalOut, currency)}</span>
-            <span style={{ textAlign: "right", color: data.net < 0 ? SOFT_RED : HOME_THEME.green }}>{fmtMoney(data.net, currency)}</span>
-            <span />
-          </div>
-        )}
-      </div>
     </div>
   );
 }
