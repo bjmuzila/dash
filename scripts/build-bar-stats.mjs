@@ -197,6 +197,8 @@ const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const dowOf = (date) => DOW[new Date(date + "T12:00:00Z").getUTCDay()];
 /** log return in basis points */
 const bp = (a, b) => Math.log(b / a) * 1e4;
+const hhmmM = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.round(m % 60)).padStart(2, "0")}`;
+const r0 = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x));
 
 /**
  * Resample one session's 1m bars to `tf` minutes.
@@ -469,6 +471,70 @@ for (const tf of [1, 5, 15, 30]) {
   };
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 4. REFERENCE-CANDLE BREAK BOOK
+ *
+ * Take a fixed clock hour as a reference bar (its high/low), then ask what the
+ * REST of the session does with it: break above only, below only, both, or
+ * neither — and, for the two-sided days, WHEN the second side is taken.
+ *
+ * Outcomes are a true 4-way partition (they sum to n). Break = a later bar's
+ * HIGH exceeds the candle high (up) or LOW undercuts the candle low (down),
+ * strict, wick-based, first occurrence. The post window is capped at 16:00 ET
+ * so "by what time" always reads inside the trading day.
+ *
+ * NOTE: the 08:00 hour is PRE-market — it only exists when the source CSV was
+ * built with --all-hours. On an RTH-only export am8.n is 0 and the prompt says
+ * so instead of lying.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+function refCandle(cfg) {
+  const { start, end, postEnd } = cfg;
+  let n = 0, upOnly = 0, dnOnly = 0, both = 0, neither = 0;
+  const firstBreakMins = [];    // minute the FIRST side is taken (any break)
+  const bothCompleteMins = [];  // minute the SECOND side is taken (two-sided days)
+  for (const s of sessions) {
+    const cb = s.bars.filter((b) => b.min >= start && b.min < end);
+    const pb = s.bars.filter((b) => b.min >= end && b.min < postEnd);
+    if (cb.length < 5 || pb.length < 5) continue;   // real candle + room to resolve
+    const hi = Math.max(...cb.map((b) => b.h));
+    const lo = Math.min(...cb.map((b) => b.l));
+    let fUp = null, fDn = null;
+    for (const b of pb) {
+      if (fUp == null && b.h > hi) fUp = b.min;
+      if (fDn == null && b.l < lo) fDn = b.min;
+      if (fUp != null && fDn != null) break;
+    }
+    n++;
+    const up = fUp != null, dn = fDn != null;
+    if (up && dn) { both++; bothCompleteMins.push(Math.max(fUp, fDn)); firstBreakMins.push(Math.min(fUp, fDn)); }
+    else if (up) { upOnly++; firstBreakMins.push(fUp); }
+    else if (dn) { dnOnly++; firstBreakMins.push(fDn); }
+    else neither++;
+  }
+  const bothByHalf = [];
+  for (let m = end; m < postEnd; m += 30) {
+    bothByHalf.push({ min: m, n: bothCompleteMins.filter((x) => x >= m && x < m + 30).length });
+  }
+  return {
+    label: cfg.label,
+    window: `${hhmmM(start)}–${hhmmM(end)} ET`,
+    postEnd,
+    needsAllHours: !!cfg.needsAllHours,
+    n, upOnly, dnOnly, both, neither,
+    bothByHalf,
+    medBothComplete: r0(pctile(bothCompleteMins, 50)),
+    p75BothComplete: r0(pctile(bothCompleteMins, 75)),
+    medFirstBreak: r0(pctile(firstBreakMins, 50)),
+  };
+}
+
+const refCandles = {
+  am8: refCandle({ label: "08:00 hour candle", start: 480, end: 540, postEnd: RTH_CLOSE, needsAllHours: true }),
+  pm2: refCandle({ label: "14:00 hour candle", start: 840, end: 900, postEnd: RTH_CLOSE }),
+};
+console.log(`  ref candles: 08:00 both=${refCandles.am8.both}/${refCandles.am8.n}  ·  14:00 both=${refCandles.pm2.both}/${refCandles.pm2.n}`);
+
 /* ── write ────────────────────────────────────────────────────────────────── */
 
 const out = {
@@ -483,6 +549,7 @@ const out = {
   tod,
   vol,
   auto,
+  refCandles,
 };
 
 /* SANITY CHECK — the bucket grid must produce EXACTLY the number of cells the

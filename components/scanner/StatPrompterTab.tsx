@@ -103,6 +103,26 @@ export type BarStats = {
       };
     }
   >;
+  /** fixed clock-hour reference candles → break-both/one/neither book + timing.
+   *  Optional: only present on bars-*.json rebuilt after 2026-07. */
+  refCandles?: Record<
+    string,
+    {
+      label: string;
+      window: string;
+      postEnd: number;
+      needsAllHours: boolean;
+      n: number;
+      upOnly: number;
+      dnOnly: number;
+      both: number;
+      neither: number;
+      bothByHalf: { min: number; n: number }[];
+      medBothComplete: number | null;
+      p75BothComplete: number | null;
+      medFirstBreak: number | null;
+    }
+  >;
 };
 
 type Ctx = {
@@ -890,6 +910,56 @@ const PROMPTS: Prompt[] = [
 
   /* ─────────────── Session shape ─────────────── */
   {
+    id: "width-break-odds",
+    cat: "Session shape",
+    title: "IB width → does it break one side, both, or neither?",
+    ask: "The first read of the day. A narrow IB is coiled and should resolve directionally; a wide IB has already spent range and should stay contained. This is the base rate for the three ways a session can treat its IB — split by how wide the IB opened. One-side / both-sides / neither is a true partition: every RTH session lands in exactly one.",
+    run: ({ es, nq }) => {
+      const rows: Row[] = [];
+      const stack: Stack[] = [];
+      for (const [sym, days] of [["ES", es], ["NQ", nq]] as const) {
+        const withBucket = days.filter((d) => d.widthBucket);
+        for (const w of ["narrow", "normal", "wide"] as const) {
+          const xs = withBucket.filter((d) => d.widthBucket === w);
+          const one = xs.filter((d) => d.singleBreak).length;
+          const both = xs.filter((d) => d.bothBroke).length;
+          const none = xs.filter((d) => d.neitherBroke).length;
+          const wpts = xs.map((d) => d.width).sort((a, b) => a - b);
+          const range = wpts.length ? `${wpts[0].toFixed(1)}–${wpts[wpts.length - 1].toFixed(1)}` : "—";
+          rows.push({
+            label: `${sym} ${w} IB`,
+            n: xs.length,
+            k: one, // headline = ONE side only, the clean directional break
+            extra: {
+              "both sides": pctS(both, xs.length),
+              neither: pctS(none, xs.length),
+              "width (pts)": range,
+              "med width": med(wpts) != null ? med(wpts)!.toFixed(1) : "—",
+            },
+            emphasis: w === "narrow",
+          });
+          stack.push({
+            label: `${sym} ${w}`,
+            segs: [
+              { name: "One side", pct: xs.length ? (100 * one) / xs.length : 0, color: HOME_THEME.green },
+              { name: "Both sides", pct: xs.length ? (100 * both) / xs.length : 0, color: HOME_THEME.orange },
+              { name: "Neither", pct: xs.length ? (100 * none) / xs.length : 0, color: "rgba(255,255,255,0.28)" },
+            ],
+          });
+        }
+      }
+      return {
+        headline: "One side / both sides / neither is a true partition — every session is exactly one. The 'k' column is the ONE-SIDE (single directional break) rate; both-sides and neither are the extra columns.",
+        cols: ["both sides", "neither", "width (pts)", "med width"],
+        rows,
+        stack,
+        verdict: "Narrow should skew toward a single directional break; wide should skew toward 'neither' (contained) or 'both' (rotation). Read the single-break rate against the width — that's the coil-vs-spent read.",
+        caveat:
+          "Width buckets are RELATIVE and re-derived each day — not fixed point cutoffs. NARROW = width < 0.5×ATR14(RTH range) OR < 0.75× the 20-day avg IB. WIDE = width > 1.5×ATR14 OR > 1.25× the 20-day avg IB. NORMAL is everything between. The 'width (pts)' column shows the observed point span that landed in each bucket over the sample. If a bucket is empty, re-export with atr/avgIB populated.",
+      };
+    },
+  },
+  {
     id: "both-broke",
     cat: "Session shape",
     title: "Both sides of the IB broke — the rotation day",
@@ -1217,6 +1287,99 @@ const PROMPTS: Prompt[] = [
           tf === "1"
             ? "At 1 minute the lag-1 ACF is usually negative because of bid-ask bounce — that's microstructure, not a mean-reversion edge. You cannot trade it through the spread. Look at 5m and 15m instead."
             : undefined,
+      };
+    },
+  },
+  {
+    id: "cand-8am-both",
+    cat: "Bar stats",
+    title: "8am hour candle — does the day break BOTH sides, and by when?",
+    ask: "Take the 08:00–09:00 ET hour as a reference bar. After it closes, how often does price take out BOTH its high and its low (a two-sided day) vs one side vs neither — and for the two-sided days, what time the second side is taken.",
+    controls: [SYM_OPT],
+    run: ({ bars }, s) => {
+      const sym = (s.sym || "ES") as "ES" | "NQ";
+      const B = bars[sym];
+      if (!B) return MISSING(sym);
+      const rc = B.refCandles?.am8;
+      if (!rc || rc.n === 0)
+        return {
+          headline: `No 08:00 candle data for ${sym}.`,
+          rows: [],
+          caveat: `The 08:00–09:00 ET hour is PRE-market — it isn't in an RTH-only export, so this reads 0. Rebuild with globex included:  node scripts/build-bar-stats.mjs --sym ${sym} --in "<path-to-${sym}-1min.csv>" --all-hours`,
+        };
+      const stack: Stack[] = [
+        {
+          label: `${sym} — the ${rc.window} hour, resolved by ${hhmm(rc.postEnd)}`,
+          segs: [
+            { name: "Both sides", pct: rc.n ? (100 * rc.both) / rc.n : 0, color: HOME_THEME.orange },
+            { name: "Up only", pct: rc.n ? (100 * rc.upOnly) / rc.n : 0, color: HOME_THEME.green },
+            { name: "Down only", pct: rc.n ? (100 * rc.dnOnly) / rc.n : 0, color: HOME_THEME.red },
+            { name: "Neither", pct: rc.n ? (100 * rc.neither) / rc.n : 0, color: "rgba(255,255,255,0.28)" },
+          ],
+        },
+      ];
+      let cum = 0;
+      const rows: Row[] = rc.bothByHalf.map((b) => {
+        cum += b.n;
+        return {
+          label: `both sides taken by ${hhmm(b.min + 30)}`,
+          n: rc.both,
+          k: cum, // CUMULATIVE share of the two-sided days completed by this clock time
+          extra: { "in this 30m": pctS(b.n, rc.both) },
+        };
+      });
+      return {
+        headline: `${sym}, ${rc.n} sessions. Reference = the ${rc.window} hour. "Both sides" = price later traded ABOVE that hour's high AND BELOW its low before ${hhmm(rc.postEnd)}. The rate column is CUMULATIVE — share of the two-sided days that had completed both breaks by that time.`,
+        cols: ["in this 30m"],
+        rows,
+        stack,
+        verdict: `Both sides broke on ${pctS(rc.both, rc.n)} of days; median completion ${rc.medBothComplete != null ? hhmm(rc.medBothComplete) : "—"} (75th pct ${rc.p75BothComplete != null ? hhmm(rc.p75BothComplete) : "—"}). First side is typically taken by ${rc.medFirstBreak != null ? hhmm(rc.medFirstBreak) : "—"}. A high both-sides rate makes the 08:00 range a fade box, not a breakout fence.`,
+        caveat: "Break is wick-based (a later bar's high/low pierces the reference hour's high/low), first occurrence, post window capped at the 16:00 RTH close. Outcomes are a true 4-way partition — they sum to 100%.",
+      };
+    },
+  },
+  {
+    id: "cand-2pm-sides",
+    cat: "Bar stats",
+    title: "2–3pm hour candle — breaks either side, neither, or both?",
+    ask: "The 14:00–15:00 ET hour as a reference bar, with the 15:00–16:00 hour to resolve it. Into the close, does price break above it only, below it only, both, or hold inside?",
+    controls: [SYM_OPT],
+    run: ({ bars }, s) => {
+      const sym = (s.sym || "ES") as "ES" | "NQ";
+      const B = bars[sym];
+      if (!B) return MISSING(sym);
+      const rc = B.refCandles?.pm2;
+      if (!rc || rc.n === 0)
+        return {
+          headline: `No 14:00 candle data for ${sym}.`,
+          rows: [],
+          caveat: `Rebuild bars-${sym}.json — this window is inside RTH, so a normal export covers it:  node scripts/build-bar-stats.mjs --sym ${sym} --in "<path-to-${sym}-1min.csv>"`,
+        };
+      const oneSide = rc.upOnly + rc.dnOnly;
+      const stack: Stack[] = [
+        {
+          label: `${sym} — the ${rc.window} hour, resolved by the ${hhmm(rc.postEnd)} close`,
+          segs: [
+            { name: "Up only", pct: rc.n ? (100 * rc.upOnly) / rc.n : 0, color: HOME_THEME.green },
+            { name: "Down only", pct: rc.n ? (100 * rc.dnOnly) / rc.n : 0, color: HOME_THEME.red },
+            { name: "Both sides", pct: rc.n ? (100 * rc.both) / rc.n : 0, color: HOME_THEME.orange },
+            { name: "Neither", pct: rc.n ? (100 * rc.neither) / rc.n : 0, color: "rgba(255,255,255,0.28)" },
+          ],
+        },
+      ];
+      return {
+        headline: `${sym}, ${rc.n} sessions. Reference = the ${rc.window} hour; resolved over 15:00–${hhmm(rc.postEnd)}. Four mutually exclusive outcomes — a true partition, so they sum to 100%.`,
+        cols: ["share"],
+        rows: [
+          { label: "Broke ONE side only (directional into the close)", n: rc.n, k: oneSide, emphasis: true, extra: { share: pctS(oneSide, rc.n) } },
+          { label: "— up side only", n: rc.n, k: rc.upOnly, extra: { share: pctS(rc.upOnly, rc.n) } },
+          { label: "— down side only", n: rc.n, k: rc.dnOnly, extra: { share: pctS(rc.dnOnly, rc.n) } },
+          { label: "Broke BOTH sides (rotation / chop into the close)", n: rc.n, k: rc.both, extra: { share: pctS(rc.both, rc.n) } },
+          { label: "Broke NEITHER (held inside the 2pm range)", n: rc.n, k: rc.neither, extra: { share: pctS(rc.neither, rc.n) } },
+        ],
+        stack,
+        verdict: "Only one hour is left to resolve, so 'neither' runs high — that's the base rate for a 2pm range that contains the close. A rising one-side share is the late-day trend tell; a high both-sides share is the afternoon-chop tell.",
+        caveat: "Break is wick-based, first occurrence, over 15:00–16:00 only. The up-only + down-only rows are sub-rows of the ONE-side line, not extra outcomes.",
       };
     },
   },
