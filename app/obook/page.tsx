@@ -87,13 +87,22 @@ export default function ObookPage() {
   const [input, setInput] = useState(initial);
   const [data, setData] = useState<ObookData>(SAMPLE);
   const [status, setStatus] = useState<"sample" | "loading" | "live" | "error">("sample");
+  const [avail, setAvail] = useState<string[]>([]);
 
   useEffect(() => {
     let cancel = false;
     setStatus("loading");
     fetch(`/api/obook?ticker=${encodeURIComponent(ticker)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then((d: ObookData) => { if (!cancel) { setData(d); setStatus("live"); } })
+      .then(async (r) => {
+        if (r.ok) return { ok: true as const, d: (await r.json()) as ObookData };
+        const body = await r.json().catch(() => ({}));
+        return { ok: false as const, avail: (body?.available as string[]) || [] };
+      })
+      .then((res) => {
+        if (cancel) return;
+        if (res.ok) { setData(res.d); setAvail([]); setStatus("live"); }
+        else { setData({ ...SAMPLE, ticker }); setAvail(res.avail); setStatus(ticker === "QQQ" ? "sample" : "error"); }
+      })
       .catch(() => { if (!cancel) { setData({ ...SAMPLE, ticker }); setStatus(ticker === "QQQ" ? "sample" : "error"); } });
     return () => { cancel = true; };
   }, [ticker]);
@@ -137,6 +146,16 @@ export default function ObookPage() {
             </span>
           </div>
         </div>
+
+        {status === "error" && (
+          <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 10 }}>
+            No classified tape for <b style={{ color: BEAR }}>{ticker}</b> — showing QQQ sample.
+            {avail.length > 0 && <> Recorded recently: {avail.map((s) => (
+              <button key={s} onClick={() => { setInput(s); setTicker(s); }}
+                style={{ ...homeButtonStyle, padding: "2px 7px", marginLeft: 6 }}>{s}</button>
+            ))}</>}
+          </div>
+        )}
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 28px", marginTop: 16, fontSize: 12, color: HOME_THEME.muted }}>
           <span>SESSION <b style={{ color: HOME_THEME.text }}>{d.session}</b></span>

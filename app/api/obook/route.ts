@@ -108,21 +108,41 @@ const etLong = (iso: string) =>
 export async function GET(req: NextRequest) {
   const sp = new URL(req.url).searchParams;
   const ticker = (sp.get("ticker") || "").trim().toUpperCase();
-  const date = (sp.get("date") || new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" })).trim();
+  const wantDate = (sp.get("date") || new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" })).trim();
+  const symMatch = "(UPPER(COALESCE(underlying,'')) = ? OR UPPER(symbol) = ? OR UPPER(symbol) LIKE ?)";
+  const symArgs = [ticker, ticker, `${ticker}%`];
   if (!ticker) return NextResponse.json({ error: "ticker required" }, { status: 400 });
 
   let rows: FlowCallRecord[] = [];
+  let date = wantDate;
   try {
+    // Resolve the effective date: exact request, else the latest session that
+    // actually has tape for this symbol (so off-hours/weekends show last session).
+    const latest = await queryAll<{ d: string }>(
+      `SELECT date AS d FROM flow_calls WHERE ${symMatch} AND date <= ? ORDER BY date DESC LIMIT 1`,
+      [...symArgs, wantDate]
+    );
+    date = latest[0]?.d || wantDate;
     rows = await queryAll<FlowCallRecord>(
-      `SELECT * FROM flow_calls
-       WHERE date = ? AND (UPPER(COALESCE(underlying,'')) = ? OR UPPER(symbol) = ? OR UPPER(symbol) LIKE ?)
-       ORDER BY ts ASC LIMIT 50000`,
-      [date, ticker, ticker, `${ticker}%`]
+      `SELECT * FROM flow_calls WHERE date = ? AND ${symMatch} ORDER BY ts ASC LIMIT 50000`,
+      [date, ...symArgs]
     );
   } catch (e) {
     return NextResponse.json({ error: `db: ${String(e)}` }, { status: 500 });
   }
-  if (!rows.length) return NextResponse.json({ error: "no tape", ticker, date }, { status: 404 });
+  if (!rows.length) {
+    // Nothing for this symbol at all — hand back what IS recorded, recently.
+    let available: string[] = [];
+    try {
+      const av = await queryAll<{ u: string }>(
+        `SELECT DISTINCT UPPER(COALESCE(NULLIF(underlying,''), symbol)) AS u
+         FROM flow_calls WHERE date >= ? ORDER BY u LIMIT 60`,
+        [new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)]
+      );
+      available = av.map((r) => r.u).filter(Boolean);
+    } catch { /* ignore */ }
+    return NextResponse.json({ error: "no tape", ticker, date: wantDate, available }, { status: 404 });
+  }
 
   // ── tenor split: front = earliest expiration present, intermediate = the rest.
   const exps = Array.from(new Set(rows.map((r) => r.expiration || "").filter(Boolean))).sort();

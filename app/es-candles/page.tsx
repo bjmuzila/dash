@@ -602,6 +602,36 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   useEffect(() => {
     if (replayIdx > replayFrames.length - 1) setReplayIdx(Math.max(0, replayFrames.length - 1));
   }, [replayFrames.length, replayIdx]);
+  // ── Replay: reconstruct the GEX-by-strike column at the cursor ─────────────
+  // The heatmap already retains full per-slot per-strike history in columnsRef,
+  // so during replay we read the stored column at/nearest-below the cursor and
+  // derive the rail bars + Call/Put Wall + Flip from it (walls = max +/− net on
+  // the active metric; flip = zero-cross, same basis as live). CB stays live.
+  // Recomputed each render (cheap) so a scrub tick (replayTs change) repaints.
+  const replayGex = (() => {
+    if (!replayOn || replayTs == null) return null;
+    let col: GexColumn | null = null;
+    for (const c of columnsRef.current.values()) {
+      if (c.slotTs <= replayTs && (!col || c.slotTs > col.slotTs)) col = c;
+    }
+    if (!col || !col.cells.length) return null;
+    const metric = gexMetricRef.current;
+    const railRows: RailRow[] = col.cells.map((c) => ({
+      strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol,
+    }));
+    let callWall: number | null = null, putWall: number | null = null, maxPos = 0, maxNeg = 0;
+    for (const r of railRows) {
+      if (r.net > maxPos) { maxPos = r.net; callWall = r.strike; }
+      if (r.net < maxNeg) { maxNeg = r.net; putWall = r.strike; }
+    }
+    const gexFlip = findGEXFlip(
+      col.cells.map((c) => ({ strike: c.strike, netGEX: c.netOiVol })) as ChainRow[],
+      col.spot,
+    );
+    return { railRows, callWall, putWall, gexFlip };
+  })();
+  const replayGexRef = useRef(replayGex);
+  replayGexRef.current = replayGex;
   // Play loop: advance one bar per tick, stop at the last frame.
   useEffect(() => {
     if (!replayOn || !replayPlaying || replayFrames.length === 0) return;
@@ -1553,6 +1583,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   useEffect(() => {
     const publish = () => {
+      if (replayOnRef.current) return; // replay owns the lines while scrubbing
       const l = levelsRef.current;
       const b = effectiveBasis();
       const es = (spxLevel: number | null) => (spxLevel != null ? toTick(spxLevel + b) : null);
@@ -1567,7 +1598,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     publish();
     const id = setInterval(publish, 60_000);
     return () => clearInterval(id);
-  }, [effectiveBasis, hasLevels]);
+  }, [effectiveBasis, hasLevels, replayOn]);
 
   // ── Steady basis for the CANVAS overlay ───────────────────────────────────
   // Same defect the price lines above already fixed, in the other half of the
@@ -1598,6 +1629,22 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const id = setInterval(publish, 60_000);
     return () => clearInterval(id);
   }, [effectiveBasis, hasLevels]);
+
+  // Replay: drive the Call/Put Wall + Flip price lines off the reconstructed
+  // cursor column (ES-tick snapped). Fires on scrub (replayTs) and on toggle;
+  // exiting replay re-runs the live publisher above (replayOn is in its deps).
+  useEffect(() => {
+    if (!replayOn) return;
+    const g = replayGexRef.current;
+    const b = steadyBasisRef.current || effectiveBasis();
+    const es = (v: number | null | undefined) => (v != null ? toTick(v + b) : null);
+    const next = { callWall: es(g?.callWall), putWall: es(g?.putWall), gexFlip: es(g?.gexFlip) };
+    setLineLevels((prev) =>
+      prev.callWall === next.callWall && prev.putWall === next.putWall && prev.gexFlip === next.gexFlip
+        ? prev
+        : next
+    );
+  }, [replayOn, replayTs, effectiveBasis]);
 
   // Draw GEX level lines (Call Wall / Put Wall / Flip) on the candle series.
   // Update in place; only create/remove when a level appears or disappears.
@@ -2760,10 +2807,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         {showRail && railFits ? (
           <div style={{ width: 230, flexShrink: 0, minHeight: 320 }}>
             <EsGexRail
-              rows={railRows}
-              callWall={levels.callWall}
-              putWall={levels.putWall}
-              gexFlip={levels.gexFlip}
+              rows={replayGex ? replayGex.railRows : railRows}
+              callWall={replayGex ? replayGex.callWall : levels.callWall}
+              putWall={replayGex ? replayGex.putWall : levels.putWall}
+              gexFlip={replayGex ? replayGex.gexFlip : levels.gexFlip}
               spot={levels.spx}
               // Steady basis, not effectiveBasis(): this prop is evaluated on
               // EVERY render, and `levels` gets a new identity on every /ws/gex
