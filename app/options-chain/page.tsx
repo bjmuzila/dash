@@ -1747,12 +1747,10 @@ export default function OptionsChainPage({
           <div style={{ height: "100%", width: `${loadProgress}%`, background: HT.cyan, transition: "width 0.3s ease" }} />
         </div>
       )}
-      {/* ONE scroll container holds BOTH the toolbar and the grid: the toolbar
-          lives in the scroll flow so it scrolls away with the data, while the
-          grid's expiry-date header row stays stuck to the top (position:sticky
-          inside this same scroll context). */}
-      <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, position: "relative" }}>
-      <div style={{ display: "flex", padding: "6px 10px 2px", position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
+      {/* Toolbar pinned at the top — ALWAYS visible (never scrolls away). The
+          grid scrolls below it in its own container, keeping its expiry-date
+          header row stuck to the top of that scroll area. */}
+      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
@@ -1876,7 +1874,7 @@ export default function OptionsChainPage({
       </div>
 
       {!visibleStrikes.length ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88", padding: "100px 0" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
               {chainError ? "No Live Chain Data" : "Select ticker, expiry & % strikes"}
@@ -1889,7 +1887,7 @@ export default function OptionsChainPage({
       ) : (
         /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
            inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
-        <div style={{ padding: "8px 10px 10px" }}>
+        <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
           <ChainMatrix
             columns={columns}
             gridCols={gridCols}
@@ -1918,7 +1916,6 @@ export default function OptionsChainPage({
           />
         </div>
       )}
-      </div>
 
       {contractPopup && (
         <ContractFlowPopup
