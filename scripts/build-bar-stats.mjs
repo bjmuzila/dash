@@ -552,23 +552,39 @@ const out = {
   refCandles,
 };
 
-/* SANITY CHECK — the bucket grid must produce EXACTLY the number of cells the
- * session length implies. Both directions are bugs and both have already bitten:
- *   TOO MANY  → resample() is fragmenting on ragged opens (a missing 09:30 print
- *               shifts every bucket into its own new cell).
- *   TOO FEW   → a cell is being dropped, e.g. skipping the session's first bar
+/* SANITY CHECK — the bucket grid must not FRAGMENT and must not silently DROP
+ * cells. Both have bitten before:
+ *   TOO MANY / OFF-GRID → resample() is fragmenting on ragged opens (a missing
+ *               09:30 print shifts every bucket into its own new cell).
+ *   TOO FEW  → a cell is being dropped, e.g. skipping the session's first bar
  *               because it has no prior close deletes the 09:30 bucket outright.
- * Either way the time-of-day table is garbage, so refuse to write it. */
+ *
+ * EXCEPTION (all-hours only): index futures have a daily 17:00–18:00 ET
+ * maintenance halt, so a 24h grid legitimately comes up ~1 hour short. In
+ * ALL_HOURS mode a shortfall is a WARNING (the halt), not a fatal — but MORE
+ * cells than the grid, or any off-grid minute, is still fatal fragmentation. */
+const base = ALL_HOURS ? 0 : RTH_OPEN;
 const span = ALL_HOURS ? 1440 : RTH_CLOSE - RTH_OPEN;
 for (const [name, tf, cells] of [["hour", 60, tod.hour], ["min30", 30, tod.min30], ["min5", 5, tod.min5], ["min1", 1, tod.min1]]) {
   const expect = Math.ceil(span / tf);
-  if (cells.length !== expect) {
+  const offGrid = cells.some((c) => (c.min - base) % tf !== 0);
+  if (cells.length > expect || offGrid) {
     console.error(
-      `\nFATAL: ${name} produced ${cells.length} cells, expected ${expect}.` +
-      `\n  ${cells.length > expect ? "Bucket grid is FRAGMENTING (ragged session opens)." : "Cells are being DROPPED (check the first-bar-of-session path)."}` +
-      `\n  Time-of-day stats would be wrong. Refusing to write ${OUT}.`
+      `\nFATAL: ${name} produced ${cells.length} cells (expected ${expect})${offGrid ? " with OFF-GRID minutes" : ""}.` +
+      `\n  Bucket grid is FRAGMENTING (ragged session opens). Refusing to write ${OUT}.`
     );
     process.exit(1);
+  }
+  if (cells.length < expect) {
+    if (ALL_HOURS) {
+      console.warn(`  note: ${name} ${cells.length}/${expect} cells — ${expect - cells.length} missing, expected for futures (daily 17:00–18:00 ET maintenance halt).`);
+    } else {
+      console.error(
+        `\nFATAL: ${name} produced ${cells.length} cells, expected ${expect}.` +
+        `\n  Cells are being DROPPED (check the first-bar-of-session path). Refusing to write ${OUT}.`
+      );
+      process.exit(1);
+    }
   }
 }
 console.log(`  sanity: bucket grids intact (${tod.hour.length}h / ${tod.min30.length}×30m / ${tod.min5.length}×5m / ${tod.min1.length}×1m cells)`);

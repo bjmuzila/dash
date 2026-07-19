@@ -979,10 +979,14 @@ export default function Budget() {
         )}
         {tab === "bzila" && (
           <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 120px 120px 1fr 100px 120px 100px", gap: 10, alignItems: "center" }}>
-            <input type="date" value={ppDate} onChange={(e) => setPpDate(e.target.value)} style={field()} />
+            {ppSource === "cbedge" ? (
+              <input type="month" value={ppDate.slice(0, 7)} onChange={(e) => setPpDate(e.target.value ? `${e.target.value}-01` : "")} title="CB Edge is tracked by month" style={field()} />
+            ) : (
+              <input type="date" value={ppDate} onChange={(e) => setPpDate(e.target.value)} style={field()} />
+            )}
             <ThemedSelect
               value={ppSource}
-              onChange={(v) => { setPpSource(v as PropSource); setPpFirm(PROP_SOURCE_UI[v as PropSource].defaultFirm); }}
+              onChange={(v) => { setPpSource(v as PropSource); setPpFirm(PROP_SOURCE_UI[v as PropSource].defaultFirm); if (v === "cbedge") setPpDate((d) => `${d.slice(0, 7)}-01`); }}
               options={(Object.keys(PROP_SOURCE_UI) as PropSource[]).map((s) => ({ value: s, label: PROP_SOURCE_UI[s].label }))}
             />
             <ThemedSelect
