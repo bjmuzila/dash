@@ -576,12 +576,23 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [replayIdx, setReplayIdx] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(2); // bars per second
-  // Frames = this session's bar timestamps (latest ET day in `rows`), oldest→newest.
+  // Which ET day to replay. null = latest available day (live default). Lets the
+  // user step back to the previous session (e.g. replay Friday over the weekend).
+  const [replayDay, setReplayDay] = useState<string | null>(null);
+  // Distinct ET days present in the rolling window, oldest→newest.
+  const replayDays = useMemo(
+    () => [...new Set(rows.map((r) => r.date).filter(Boolean))].sort() as string[],
+    [rows],
+  );
+  // Resolve the active day: explicit pick, else the newest day with bars.
+  const activeReplayDay = (replayDay && replayDays.includes(replayDay))
+    ? replayDay
+    : (replayDays.length ? replayDays[replayDays.length - 1] : "");
+  // Frames = the active ET day's bar timestamps, oldest→newest.
   const replayFrames = useMemo(() => {
-    if (!rows.length) return [] as number[];
-    const lastDay = rows[rows.length - 1].date;
-    return rows.filter((r) => r.date === lastDay).map((r) => r.timestamp);
-  }, [rows]);
+    if (!activeReplayDay) return [] as number[];
+    return rows.filter((r) => r.date === activeReplayDay).map((r) => r.timestamp);
+  }, [rows, activeReplayDay]);
   const replayTs = replayOn && replayFrames.length
     ? replayFrames[Math.min(replayIdx, replayFrames.length - 1)]
     : null;
@@ -2557,7 +2568,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={setIntensity} title="Heatmap brightness" />
 
           <DockButton
-            onClick={() => { const nv = !replayOn; setReplayOn(nv); setReplayPlaying(false); if (nv) setReplayIdx(0); }}
+            onClick={() => { const nv = !replayOn; setReplayOn(nv); setReplayPlaying(false); if (nv) { setReplayIdx(0); setReplayDay(null); } }}
             title="Replay this session — reveal candles + gamma from the open forward"
             style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
           >
@@ -2582,8 +2593,26 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}
         >
           <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.cyan }}>Replay</span>
+          {/* Day picker: step across the ET days in the rolling window so the
+              previous session (e.g. Friday over the weekend) can be replayed. */}
+          {(() => {
+            const di = replayDays.indexOf(activeReplayDay);
+            const fmtDay = (d: string) => {
+              if (!d) return "—";
+              const [y, m, day] = d.split("-").map(Number);
+              return new Date(y, m - 1, day, 12).toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+            };
+            const go = (d: string) => { setReplayDay(d); setReplayPlaying(false); setReplayIdx(0); };
+            return (
+              <div className="flex items-center gap-1">
+                <DockButton onClick={() => { if (di > 0) go(replayDays[di - 1]); }} title="Previous day"><span>◀</span></DockButton>
+                <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, minWidth: 78, textAlign: "center", whiteSpace: "nowrap" }}>{fmtDay(activeReplayDay)}</span>
+                <DockButton onClick={() => { if (di >= 0 && di < replayDays.length - 1) go(replayDays[di + 1]); }} title="Next day"><span>▶</span></DockButton>
+              </div>
+            );
+          })()}
           {replayFrames.length === 0 ? (
-            <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No session bars yet — replay needs today&apos;s candles.</span>
+            <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No bars for this day — step ◀ / ▶ to another session.</span>
           ) : (
             <>
               <div className="flex items-center gap-1">
@@ -2616,7 +2645,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   onChange={(v) => setReplaySpeed(Number(v))}
                 />
               </div>
-              <DockButton onClick={() => { setReplayPlaying(false); setReplayOn(false); }} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
+              <DockButton onClick={() => { setReplayPlaying(false); setReplayOn(false); setReplayDay(null); }} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
             </>
           )}
         </div>
