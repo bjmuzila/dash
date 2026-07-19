@@ -314,7 +314,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
         <>
           <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
           <Link
-            href="/owner"
+            href="https://owner.cbedge.net"
             prefetch={false}
             onClick={closeMenu}
             className={`nav-row${isActive("/owner") ? " nav-active" : ""}`}

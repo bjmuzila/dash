@@ -207,7 +207,7 @@ function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 
 // Left-side nav strip contents. `href` doubles as the stable id used for the
 // saved drag order. `ownerOnly` items only render for the owner.
-type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean; comingSoon?: boolean };
+type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean; comingSoon?: boolean; extHref?: string };
 const NAV_ITEMS: NavItem[] = [
   { href: "/home",              label: "Home",          emoji: "🏠" },
   { href: "/mult-greek",        label: "Multi Greek",   emoji: "🧮" },
@@ -220,7 +220,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/scanner",           label: "Scanner",       emoji: "🔍" },
   { href: "/ict",               label: "ICT",           emoji: "🎯" },
   { href: "/test",              label: "Test Lab",      emoji: "⚗️" },
-  { href: "/owner",             label: "Owner",         emoji: "🛡️", ownerOnly: true },
+  { href: "/owner",             label: "Owner",         emoji: "🛡️", ownerOnly: true, extHref: "https://owner.cbedge.net" },
   { href: "/whats-new",         label: "What's New",    emoji: "✨" },
   // Journal is LIVE. The route is /trading (app/trading/page.tsx) — there is no
   // /journal page; that href was a placeholder while the tile was coming-soon.
@@ -336,7 +336,7 @@ function GexGroupNav({ isOwner }: { isOwner: boolean }) {
       {items.map((it) => (
         <QuickCircle
           key={it.href}
-          href={it.comingSoon ? undefined : it.href}
+          href={it.comingSoon ? undefined : (it.extHref ?? it.href)}
           label={it.label}
           emoji={it.emoji}
           comingSoon={it.comingSoon}
