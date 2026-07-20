@@ -1958,7 +1958,7 @@ export default function OptionsChainPage({
       {/* Toolbar pinned at the top — ALWAYS visible (never scrolls away). The
           grid scrolls below it in its own container, keeping its expiry-date
           header row stuck to the top of that scroll area. */}
-      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0, position: "relative", zIndex: 50, minWidth: 0, background: HT.bg }}>
+      <div style={{ display: "flex", padding: "6px 10px 6px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: "#05060A", borderBottom: `1px solid ${HT.border}` }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
@@ -1966,33 +1966,7 @@ export default function OptionsChainPage({
 
         {externalTicker == null && (
           <>
-            <input
-              list="options-chain-tickers"
-              value={tickerInput}
-              onChange={(event) => setTickerInput(event.target.value.toUpperCase())}
-              onBlur={() => setActiveTicker((tickerInput || "SPX").toUpperCase())}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") setActiveTicker((tickerInput || "SPX").toUpperCase());
-              }}
-              autoComplete="off"
-              spellCheck={false}
-              style={{
-                fontSize: 12,
-                fontWeight: 700,
-                padding: "5px 10px",
-                border: `1px solid rgba(33,158,188,.25)`,
-                borderRadius: 6,
-                background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))",
-                color: HT.cyan,
-                outline: "none",
-                width: 80,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-              }}
-            />
-            <datalist id="options-chain-tickers">
-              {SCANNER_TICKERS.map((ticker) => <option key={ticker} value={ticker} />)}
-            </datalist>
+            <span style={{ fontSize: 13, fontWeight: 800, color: HT.cyan, letterSpacing: "0.06em", fontFamily: "var(--font-mono)" }}>{activeTicker}</span>
             <TickerListDropdown activeTicker={activeTicker} onSelect={selectTicker} />
           </>
         )}

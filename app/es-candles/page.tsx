@@ -578,14 +578,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [showGexBubbles, setShowGexBubbles] = useState(true);
   // 0.3 was the old sweet spot; slider now runs 0.1–1.0 for far bigger orbs.
   const [bubbleScale, setBubbleScale] = useState(0.3); // manual radius multiplier (sizing is taste)
-  // Contrast/variance exponent on the size ramp: r ∝ ratio^var.
-  //   0.5 = sqrt  → area ∝ |GEX|, but it LIFTS the low end (a strike at 1% of the
-  //                 session max still renders at 10% of the range), so everything
-  //                 clusters mid-size and the trail reads as flat tubes.
+  // Contrast/variance exponent on the size ramp: r ∝ ratio^var, where `ratio` is
+  // now normalized to the session P97 (not the max), so the low-end lift that
+  // used to force a high exponent is gone.
+  //   0.5 = sqrt  → area ∝ |GEX| (the honest default — Idea 1).
   //   1.0 = linear
-  //   >1  = the small strikes collapse toward the floor and only real gamma
-  //         renders big — more visible spread between levels.
-  const [bubbleVar, setBubbleVar] = useState(2.2);
+  //   >1  = small strikes collapse toward the floor; only real gamma renders big.
+  const [bubbleVar, setBubbleVar] = useState(0.5);
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
   // 5m spaces them one per candle, which is why it's the default.
@@ -2163,31 +2162,29 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           if (mins.length) {
             const metric = gexMetricRef.current;
             const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
-            // Session-wide max magnitude → shared radius scale, computed from the
-            // minutes BEFORE 15:30 ET only. Into the close, gamma concentrates on 2–3
-            // strikes and their |GEX| dwarfs the rest of the day; including them made
-            // those few bubbles gigantic and normalized every earlier minute down to
-            // nothing. Excluding them means the scale is set by the 15:25-and-earlier
-            // session, and the closing strikes just clamp (ratio caps at 1) — so the
-            // biggest late bubble is exactly as big as the biggest 3:25 one, never more.
-            let sessMax = 0;
+            // Session |GEX| distribution (pre-15:30 ET). The radius scale is a high
+            // PERCENTILE of this, NOT the raw max: into the close gamma concentrates
+            // on 2–3 strikes whose |GEX| dwarfs the whole rest of the day, and using
+            // the max as the denominator shrank every earlier minute to dust. With
+            // P97 as the scale, the top ~3% of strikes clamp to the max radius and
+            // everything else sizes RELATIVE to that percentile — so the day's
+            // structure stays legible in any regime (Idea 4). The 15:30 cutoff still
+            // keeps the closing pin from redefining the scale.
+            const sessAbs: number[] = [];
             for (const m of mins) {
               if (etMinutesOfDay(m.slotTs) >= BUBBLE_SCALE_CUTOFF_MIN) continue;
-              for (const c of m.cells) {
-                const a = Math.abs(valOf(c));
-                if (a > sessMax) sessMax = a;
-              }
+              for (const c of m.cells) { const a = Math.abs(valOf(c)); if (a > 0) sessAbs.push(a); }
             }
-            // Fallback: if the buffer holds ONLY post-15:30 minutes (e.g. the page was
-            // opened at 3:45), there's no earlier session to scale against — use those
-            // minutes rather than draw nothing.
-            if (sessMax === 0) {
-              for (const m of mins) for (const c of m.cells) {
-                const a = Math.abs(valOf(c));
-                if (a > sessMax) sessMax = a;
-              }
+            // Fallback: buffer holds ONLY post-15:30 minutes (e.g. page opened at
+            // 3:45) — scale off those rather than draw nothing.
+            if (!sessAbs.length) {
+              for (const m of mins) for (const c of m.cells) { const a = Math.abs(valOf(c)); if (a > 0) sessAbs.push(a); }
             }
-            if (sessMax > 0) {
+            if (sessAbs.length) {
+              sessAbs.sort((a, b) => a - b);
+              // P97 of the session; on a tiny buffer this just resolves to the
+              // largest value present, so the scale never collapses to 0.
+              const sessScale = sessAbs[Math.max(0, Math.floor(0.97 * (sessAbs.length - 1)))] || sessAbs[sessAbs.length - 1];
               const k = bubbleScaleRef.current;
               const rMax = 11 * k;  // px radius at the session max
               const rMin = 0.8 * k; // floor so tiny strikes stay dots
@@ -2224,7 +2221,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   if (!v) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
-                  const ratio = Math.min(Math.abs(v) / sessMax, 1);
+                  const ratio = Math.min(Math.abs(v) / sessScale, 1);
                   const rk = rank.get(cell.strike);
                   // sqrt → bubble AREA (not radius) tracks |GEX|, which is how
                   // the eye actually reads size. Top-3 get a size boost on top so
@@ -2678,7 +2675,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   <DockSlider
                     label="variance" value={bubbleVar} min={0.3} max={6} step={0.1}
                     format={(v) => v.toFixed(1)} onChange={setBubbleVar}
-                    title="Size contrast — low = all bubbles similar, high = only real gamma renders big"
+                    title="Size contrast — 0.5 = true area (area ∝ |GEX|), higher = only real gamma renders big"
                   />
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble time</div>
                   <SegGroup
