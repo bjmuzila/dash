@@ -2,6 +2,8 @@
 
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ColorType, CrosshairMode, LineSeries, createChart } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, LineData, UTCTimestamp } from "lightweight-charts";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
@@ -342,11 +344,12 @@ const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
-const DATA_MODES = ["oi-vol", "vol-only"] as const;
+const DATA_MODES = ["oi-vol", "vol-only", "flow"] as const;
 type DataMode = typeof DATA_MODES[number];
 const DATA_MODE_LABEL: Record<DataMode, string> = {
   "oi-vol": "OI + Vol",
   "vol-only": "Vol Only",
+  "flow": "Flow GEX",
 };
 
 // Change-mode: "live" = normal greek values; 15/30/60 = Δ in front-expiry
@@ -645,7 +648,8 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
 // Parse one expiration's chain payload into strike→greek cells.
 // GEX/DEX/CHEX/VEX use the same formulas the single-expiry view used:
 //   contracts = OI + volume (per side); GEX = (γc·cc − γp·pc)·S²·0.01·100, etc.
-function parseExpiration(items: unknown[], expDate: string, spot: number, dataMode: DataMode = "oi-vol"): Map<number, GreekCell> {
+// When dataMode is "flow", the gex cell uses flowGEX from flowGexMap instead.
+function parseExpiration(items: unknown[], expDate: string, spot: number, dataMode: DataMode = "oi-vol", flowGexMap: Map<number, number> = new Map()): Map<number, GreekCell> {
   const cells = new Map<number, GreekCell>();
   const target = (items as { "expiration-date"?: string; strikes?: unknown[] }[]).filter(
     i => String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10),
@@ -697,7 +701,12 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
       const callPremValue = markOf(c) * cVol * 100;
       const putPremValue = markOf(p) * pVol * 100;
 
-      const gexValue = live ? (num(c, "gamma") * cc - num(p, "gamma") * pc) * S * S * 0.01 * 100 : 0;
+      let gexValue = 0;
+      if (dataMode === "flow") {
+        gexValue = flowGexMap.get(strike) ?? 0;
+      } else {
+        gexValue = live ? (num(c, "gamma") * cc - num(p, "gamma") * pc) * S * S * 0.01 * 100 : 0;
+      }
 
       cells.set(strike, {
         gex:  gexValue,
@@ -715,6 +724,145 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
   return cells;
 }
 
+// ── contract flow sparkline popup ──────────────────────────────────────────
+// Clicking a 0DTE SPX cell opens this: the same per-strike Flow GEX time
+// series as the Flow GEX History tab/page (components/dashboard/
+// FlowGexHistoryPanel.tsx), filtered to just the clicked strike. The
+// /proxy/flow-gex-history endpoint returns a combined call+put flowGex per
+// strike (gamma isn't tracked per print, only from ~60s snapshots — same
+// approximation noted on that panel), so this shows "this 0DTE strike's flow
+// GEX today," not a single call-only or put-only leg.
+interface FlowGexPoint { ts: number; timeEt: string; callNet: number; putNet: number; flowGex: number | null }
+interface FlowGexHistoryResponse { date: string; expiration: string; spot: number; strikes: number[]; seriesByStrike: Record<string, FlowGexPoint[]> }
+
+function fmtFlowMoney(v: number): string {
+  const sign = v >= 0 ? "+" : "-";
+  const abs = Math.abs(v);
+  return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+}
+
+function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; expiration: string; onClose: () => void }) {
+  const [data, setData] = useState<FlowGexHistoryResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  // 15s client-side timeout — this query reconstructs per-minute history from
+  // raw tape (Postgres window-function CTE over flow_prints), which can be
+  // slow under load; better to surface "still loading, try again" than hang
+  // on "Loading…" forever with no feedback.
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setError(null);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    // strike= narrows the server query to just this one strike (fast path —
+    // see flow-gex-history.js) instead of reconstructing all ~41 strikes in
+    // the default spot-centered window, which was timing out.
+    fetch(`/proxy/flow-gex-history?expiration=${encodeURIComponent(expiration)}&strike=${encodeURIComponent(strike)}`, { cache: "no-store", signal: controller.signal })
+      .then((r) => r.json())
+      .then((json: FlowGexHistoryResponse) => {
+        if (cancelled) return;
+        if (!json || !Array.isArray(json.strikes)) { setError("No response from /proxy/flow-gex-history"); return; }
+        if (!json.strikes.includes(strike)) {
+          setError(`No tape recorded for strike ${strike} today.`);
+          return;
+        }
+        setData(json);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e?.name === "AbortError" ? "Request timed out after 15s — the flow-history query may be slow right now." : (e instanceof Error ? e.message : "Fetch failed"));
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => { cancelled = true; controller.abort(); clearTimeout(timeout); };
+  }, [expiration, strike, retryTick]);
+
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+    const chart = createChart(container, {
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "rgba(255,255,255,.70)", fontFamily: "Inter, system-ui, sans-serif" },
+      grid: { vertLines: { color: "rgba(255,255,255,.06)" }, horzLines: { color: "rgba(255,255,255,.06)" } },
+      rightPriceScale: { visible: true, borderColor: "rgba(255,255,255,.10)" },
+      leftPriceScale: { visible: false },
+      timeScale: {
+        borderColor: "rgba(255,255,255,.10)", timeVisible: true, secondsVisible: false,
+        tickMarkFormatter: (t: unknown) => (typeof t !== "number" ? "" : new Date(t * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })),
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      localization: {
+        priceFormatter: (price: number) => fmtFlowMoney(price),
+        timeFormatter: (time: unknown) => (typeof time !== "number" ? "" : new Date(time * 1000).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })),
+      },
+    });
+    chartRef.current = chart;
+    seriesRef.current = chart.addSeries(LineSeries, { color: HT.cyan, lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+
+    const ro = new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth, height: container.clientHeight }));
+    ro.observe(container);
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !data) return;
+    const points = (data.seriesByStrike[String(strike)] ?? [])
+      .filter((p) => p.flowGex != null)
+      .map((p): LineData => ({ time: p.ts as UTCTimestamp, value: p.flowGex as number }));
+    series.setData(points);
+    chartRef.current?.timeScale().fitContent();
+  }, [data, strike]);
+
+  const latest = data ? [...(data.seriesByStrike[String(strike)] ?? [])].reverse().find((p) => p.flowGex != null) ?? null : null;
+
+  return createPortal(
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center" }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 520, maxWidth: "92vw", background: HT.panelBgStrong, border: `1px solid ${HT.border}`, borderRadius: 14, padding: 16 }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: HT.text }}>
+            SPX {strike} · {expiration} · Flow GEX
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: HT.text, opacity: 0.7, fontSize: 14 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 14, color: HT.muted, marginBottom: 10 }}>
+          {data ? `spot ${data.spot ? data.spot.toFixed(2) : "--"}` : error ? "" : "Loading…"}
+          {latest != null && (
+            <span style={{ marginLeft: 10, fontFamily: "var(--font-mono)", fontWeight: 800, color: (latest.flowGex ?? 0) >= 0 ? HT.green : HT.red }}>
+              {fmtFlowMoney(latest.flowGex ?? 0)}
+            </span>
+          )}
+        </div>
+        {error && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 14, color: HT.red }}>{error}</div>
+            <button
+              onClick={() => setRetryTick((t) => t + 1)}
+              style={{ fontSize: 14, color: HT.cyan, background: "none", border: `1px solid ${rgba(HT.cyan, 0.4)}`, borderRadius: 6, padding: "3px 10px", cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        <div ref={chartContainerRef} style={{ width: "100%", height: 260, position: "relative", display: data ? "block" : "none" }} />
+        <div style={{ fontSize: 12, color: HT.muted, opacity: 0.6, marginTop: 8 }}>
+          Combined call+put flow GEX for this strike (approximation: latest known gamma, not gamma-at-that-instant).
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ── Hover card ──────────────────────────────────────────────────────────────
 // Floating card (same look as the GEX-chart StrikeDetailPopup) shown while the
 // pointer is over a chain cell: per-side volume, OI, and net premium for that
@@ -730,14 +878,17 @@ function fmtHoverUsd(n: number): string {
 function fmtHoverInt(n: number): string {
   return Math.round(n || 0).toLocaleString();
 }
-function StrikeHoverCard({ ticker, strike, expiration, cell, x, y }: {
-  ticker: string; strike: number; expiration: string; cell: GreekCell; x: number; y: number;
+function StrikeHoverCard({ ticker, strike, expiration, cell, dod, x, y }: {
+  ticker: string; strike: number; expiration: string; cell: GreekCell;
+  dod: { netYest: number; netNow: number | null; delta: number } | null;
+  x: number; y: number;
 }) {
   const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
   const left = Math.min(Math.max(8, x + 16), vw - 262);
-  const top = Math.min(Math.max(8, y + 16), vh - 196);
+  const top = Math.min(Math.max(8, y + 16), vh - 232);
   const netPrem = cell.callPrem - cell.putPrem;
+  const sgn = (v: number) => (v >= 0 ? "+" : "") + fmtHoverUsd(v);
 
   const SideBlock = ({ label, color, vol, oi, prem }: { label: string; color: string; vol: number; oi: number; prem: number }) => (
     <div style={{ background: rgba(color, 0.06), border: `1px solid ${rgba(color, 0.28)}`, borderRadius: 8, padding: "7px 9px" }}>
@@ -766,6 +917,28 @@ function StrikeHoverCard({ ticker, strike, expiration, cell, x, y }: {
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 9, paddingTop: 7, borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 12 }}>
         <span style={{ color: HT.muted }}>Net Prem (C−P)</span>
         <span style={{ fontWeight: 800, color: netPrem >= 0 ? "#29b6f6" : "#ff4757" }}>{fmtHoverUsd(netPrem)}</span>
+      </div>
+      {/* Day-over-Day net-GEX change (from the scanner's DoD Movers source). */}
+      <div style={{ marginTop: 8, paddingTop: 7, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+        {dod ? (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+              <span style={{ color: HT.muted }}>Δ GEX vs Yest</span>
+              <span style={{ fontWeight: 800, color: dod.delta >= 0 ? "#29b6f6" : "#ff4757" }}>{sgn(dod.delta)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginTop: 3 }}>
+              <span style={{ color: HT.muted }}>Yest → Now</span>
+              <span style={{ color: "#cfe", fontWeight: 600 }}>
+                {sgn(dod.netYest)} → {dod.netNow == null ? "—" : sgn(dod.netNow)}
+              </span>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5 }}>
+            <span style={{ color: HT.muted }}>Δ GEX vs Yest</span>
+            <span style={{ color: HT.muted, opacity: 0.7 }}>— (top-mover strike only)</span>
+          </div>
+        )}
       </div>
     </div>,
     document.body,
@@ -805,6 +978,7 @@ interface ChainMatrixProps {
   emLevels: { close: number; em: number } | null;
   activeTicker: string;
   atmRowRef: React.RefObject<HTMLDivElement | null>;
+  onCellClick: (v: { strike: number; expiration: string }) => void;
   onCellHover: (v: { strike: number; colIdx: number; x: number; y: number } | null) => void;
 }
 
@@ -816,8 +990,22 @@ const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
   changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
-  emLevels, activeTicker, atmRowRef, onCellHover,
+  emLevels, activeTicker, atmRowRef, onCellClick, onCellHover,
 }: ChainMatrixProps) {
+  // Hover-intent delay: the stats card only pops after the pointer rests on a
+  // cell for ~1.2s (cleared if the pointer leaves first), so passing over cells
+  // doesn't flash cards.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const HOVER_DELAY_MS = 1200;
+  const armHover = (v: { strike: number; colIdx: number; x: number; y: number }) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => onCellHover(v), HOVER_DELAY_MS);
+  };
+  const cancelHover = () => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+    onCellHover(null);
+  };
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
@@ -983,12 +1171,18 @@ const ChainMatrix = memo(function ChainMatrix({
                     ...(isFirst ? ["inset 2px 0 0 #ffffff"] : []),
                   ].join(", ")
                 : undefined;
+              // Contract flow sparkline only makes sense for SPX 0DTE (that's
+              // what /proxy/flow-gex-history tracks — the live 0DTE tape).
+              const isZeroDteCol = !isChangeCol && col != null && col.expiration === etDateKey(etToday());
+              const isClickable = isZeroDteCol && activeTicker.toUpperCase() === "SPX" && value != null;
               return (
                 <div
                   key={`${strike}-${colIdx}`}
                   className={isMvc ? "mvc-peak-cell" : undefined}
-                  onMouseEnter={col ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
-                  onMouseLeave={col ? () => onCellHover(null) : undefined}
+                  onClick={isClickable ? () => onCellClick({ strike, expiration: col!.expiration }) : undefined}
+                  onMouseEnter={col ? (e) => armHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
+                  onMouseLeave={col ? cancelHover : undefined}
+                  title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
                   style={{
                     padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : "rgba(255,255,255,0.62)",
@@ -997,6 +1191,7 @@ const ChainMatrix = memo(function ChainMatrix({
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 5,
+                    cursor: isClickable ? "pointer" : undefined,
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
                 >
@@ -1078,10 +1273,32 @@ export default function OptionsChainPage({
   const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>(fallbackExpiries);
   const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
+  // Clicking a 0DTE SPX cell opens the ContractFlowPopup (that strike's Flow
+  // GEX history sparkline) — see the component above for details.
+  const [contractPopup, setContractPopup] = useState<{ strike: number; expiration: string } | null>(null);
   // Cell hovered in the matrix → floating stats card (per-side vol/OI/net prem).
   // Stable callback so hovering never busts ChainMatrix's memo.
   const [hoverCell, setHoverCell] = useState<{ strike: number; colIdx: number; x: number; y: number } | null>(null);
   const onCellHover = useCallback((v: { strike: number; colIdx: number; x: number; y: number } | null) => setHoverCell(v), []);
+  // Day-over-Day GEX movers for the active ticker (same source as the scanner's
+  // DoD Movers tab: /proxy/strike-dod). One row per ticker at the strike that
+  // moved most vs yesterday — so the hover card shows the vs-yesterday change on
+  // that ticker's top-mover strike (other strikes have no stored DoD baseline).
+  const [dodRows, setDodRows] = useState<Array<{ symbol: string; strike: number; expiry: string | null; net_yest: number; net_today: number; net_now: number | null; delta: number; now_delta: number | null }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const t = (activeTicker || "SPX").toUpperCase();
+    (async () => {
+      try {
+        const r = await fetch(`/proxy/strike-dod?limit=2000`, { cache: "no-store" });
+        const j = await r.json().catch(() => null);
+        if (cancelled) return;
+        const rows = Array.isArray(j?.rows) ? j.rows : [];
+        setDodRows(rows.filter((d: { symbol?: string }) => String(d.symbol ?? "").toUpperCase() === t));
+      } catch { if (!cancelled) setDodRows([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTicker, refreshSeed]);
   const [recentTickers, setRecentTickers] = useState<string[]>([]);
   // Hydrate recents from browser cache after mount (avoids SSR mismatch).
   useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
@@ -1155,6 +1372,7 @@ export default function OptionsChainPage({
 
   // Load the 7 closest expirations starting at `startExp`, building a strike→
   // greek map per expiration. Each expiration is one /api/chains call.
+  // When dataMode is "flow", also fetch flowGEX from /proxy/gex and merge.
   const loadChain = async (ticker: string, startExp: string, bustCache = false, force = false) => {
     // Drop overlapping calls, and rate-limit non-forced (auto/poll) loads. User
     // refresh/GO pass force=true to bypass the min-interval but still serialize.
@@ -1184,6 +1402,28 @@ export default function OptionsChainPage({
       setChainError(null);
       setLoadProgress(8);
 
+      // Flow GEX is only tracked for SPX (the live FlowGexAccumulator has no
+      // dealer inventory for other tickers) — fetch it only when the active
+      // ticker is SPX, so other tickers' columns read 0 instead of SPX's
+      // strikes/values under a different chain. Response shape is
+      // { gexRows: [...] } (each row carries flowGEX), not { ok, rows } —
+      // the previous check against those never matched, so this toggle never
+      // actually populated any values before this fix.
+      let flowGexMap: Map<number, number> = new Map();
+      if (dataModeRef.current === "flow" && ticker.toUpperCase() === "SPX") {
+        try {
+          const gexRes = await fetch(`/proxy/gex?basis=flow${bust ? "&noCache=1" : ""}`);
+          const gexJson = await gexRes.json().catch(() => null);
+          if (Array.isArray(gexJson?.gexRows)) {
+            flowGexMap = new Map(
+              gexJson.gexRows.map((r: any) => [Number(r.strike), Number(r.flowGEX ?? 0)])
+            );
+          }
+        } catch {
+          // Continue without flow data
+        }
+      }
+
       // Fetch every expiry column in parallel, then paint the whole grid in a
       // SINGLE commit once all /api/chains calls resolve — every cell appears at
       // once, with no column-by-column "domino" fill. (Previously each column
@@ -1203,7 +1443,7 @@ export default function OptionsChainPage({
             expiration: t.value,
             label: t.label,
             underlying,
-            cells: parseExpiration(items, t.value, underlying, dataModeRef.current),
+            cells: parseExpiration(items, t.value, underlying, dataModeRef.current, flowGexMap),
           } as ExpColumn;
         }),
       );
@@ -1876,9 +2116,18 @@ export default function OptionsChainPage({
             emLevels={emLevels}
             activeTicker={activeTicker}
             atmRowRef={atmRowRef}
+            onCellClick={setContractPopup}
             onCellHover={onCellHover}
           />
         </div>
+      )}
+
+      {contractPopup && (
+        <ContractFlowPopup
+          strike={contractPopup.strike}
+          expiration={contractPopup.expiration}
+          onClose={() => setContractPopup(null)}
+        />
       )}
 
       {(() => {
@@ -1886,12 +2135,19 @@ export default function OptionsChainPage({
         const col = columns[hoverCell.colIdx];
         const cell = col?.cells.get(hoverCell.strike);
         if (!col || !cell) return null;
+        const dodMatch = dodRows.find(
+          (d) => d.strike === hoverCell.strike && (!d.expiry || d.expiry === col.expiration),
+        );
+        const dod = dodMatch
+          ? { netYest: dodMatch.net_yest, netNow: dodMatch.net_now, delta: dodMatch.now_delta ?? dodMatch.delta }
+          : null;
         return (
           <StrikeHoverCard
             ticker={activeTicker}
             strike={hoverCell.strike}
             expiration={col.expiration}
             cell={cell}
+            dod={dod}
             x={hoverCell.x}
             y={hoverCell.y}
           />

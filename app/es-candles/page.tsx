@@ -2890,7 +2890,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             Auto-hidden when the chart area is too narrow (railFits) so the
             candle chart doesn't get starved down to nothing. */}
         {showRail && railFits ? (
-          <div style={{ width: 230, flexShrink: 0, minHeight: 320 }}>
+          <div style={{ width: 115, flexShrink: 0, minHeight: 320 }}>
             <EsGexRail
               rows={replayGex ? replayGex.railRows : railRows}
               callWall={replayGex ? replayGex.callWall : levels.callWall}

@@ -21,6 +21,7 @@ import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import SemisTab from "@/components/scanner/SemisTab";
+import DodMoversTab from "@/components/scanner/DodMoversTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -3158,6 +3159,7 @@ export default function ScannerPage() {
         <option value="ibstats">IB Stats</option>
         <option value="statprompter">Stat Prompter</option>
         <option value="semis">Semi Strength</option>
+        <option value="dodmovers">DoD Movers</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3191,6 +3193,11 @@ export default function ScannerPage() {
           background: tab === "statprompter" ? `${LIGHT_BLUE}22` : "transparent",
         }}>Stat Prompter</button>
         <button onClick={() => setTab("semis")} style={tabStyle(tab === "semis")}>Semi Strength</button>
+        <button onClick={() => setTab("dodmovers")} style={{
+          ...tabStyle(tab === "dodmovers"),
+          border: `1px solid ${tab === "dodmovers" ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
+          background: tab === "dodmovers" ? `${HOME_THEME.cyan}22` : "transparent",
+        }}>DoD Movers</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -3202,6 +3209,7 @@ export default function ScannerPage() {
       {tab === "ibstats" && <IbStatsTab />}
       {tab === "statprompter" && <StatPrompterTab />}
       {tab === "semis" && <SemisTab />}
+      {tab === "dodmovers" && <DodMoversTab />}
     </PageShell>
   );
 }
