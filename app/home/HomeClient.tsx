@@ -22,6 +22,7 @@ import GexToolbar from "@/components/dashboard/GexToolbar";
 import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
+import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import { useDualTickerGex, type GexBasis, type OffsetGexMap } from "@/hooks/useDualTickerGex";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
@@ -199,6 +200,9 @@ function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>)
             vega: Number(option.vega ?? 0) || undefined,
             oi: Number(option["open-interest"] ?? option.openInterest ?? 0) || 0,
             vol: Number(option.volume ?? option.dayVolume ?? 0) || 0,
+            // Captured for the hover card's Net Prem (mark × vol × 100).
+            bid: Number(option.bid ?? option["bid-price"] ?? 0) || undefined,
+            ask: Number(option.ask ?? option["ask-price"] ?? 0) || undefined,
           };
         }
       }
@@ -479,6 +483,21 @@ export function HomeClient({
   // preview (card | drawer | modal — toggled in the toolbar so all 3 can be tested).
   const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
   const popupStyle: PopupStyle = "card";
+
+  // Cursor-anchored hover card (same as the options-chain matrix + multi-greek):
+  // per-side Volume / OI / Net Prem for the hovered strike, popped after a short
+  // hover-intent delay so sweeping the pointer over rows doesn't flash cards.
+  const [hoverStrike, setHoverStrike] = useState<{ strike: number; x: number; y: number } | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armStrikeHover = useCallback((v: { strike: number; x: number; y: number }) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHoverStrike(v), 700);
+  }, []);
+  const cancelStrikeHover = useCallback(() => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+    setHoverStrike(null);
+  }, []);
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
   const gexContainerRef = useRef<HTMLDivElement>(null);
   const gexChartRef = useRef<HTMLDivElement>(null);
   // Host node for the econ-calendar filter dropdown + refresh button, portaled
@@ -1073,6 +1092,29 @@ export function HomeClient({
     () => new Map(chartRows.map((r) => [r.strike, r])),
     [chartRows]
   );
+
+  // Strike → StrikeRow (call/put symbols) so the hover card can read per-side
+  // book stats (Volume / OI / mark) from live data.
+  const strikeRowByStrike = useMemo(
+    () => new Map(strikeRows.map((r) => [r.strike, r])),
+    [strikeRows]
+  );
+
+  // Per-side Volume / OI / Net Prem for the hovered strike (Net Prem = mark ×
+  // volume × 100, mark = mid of bid/ask) — feeds the shared StrikeHoverCard.
+  const hoverSides = useMemo(() => {
+    if (!hoverStrike) return null;
+    const sr = strikeRowByStrike.get(hoverStrike.strike);
+    if (!sr) return null;
+    const side = (sym: string | null) => {
+      const d = (sym && liveDataRef.current[sym]) || {};
+      const vol = d.vol ?? 0;
+      const oi = d.oi ?? 0;
+      const mark = (d.bid != null && d.ask != null && (d.bid > 0 || d.ask > 0)) ? (d.bid + d.ask) / 2 : 0;
+      return { vol, oi, prem: mark * vol * 100 };
+    };
+    return { calls: side(sr.callSym), puts: side(sr.putSym) };
+  }, [hoverStrike, strikeRowByStrike]);
 
   // % of total |net GEX| that is positive, across every strike on the selected
   // (0DTE) expiry. 100% = pure long-gamma chain, 0% = pure short-gamma.
@@ -1713,6 +1755,8 @@ export function HomeClient({
                               const full = chartRowByStrike.get(Number(row.strike));
                               if (full) setSelectedStrike({ row: full, pos: { x: e.clientX, y: e.clientY } });
                             }}
+                            onMouseEnter={(e) => armStrikeHover({ strike: Number(row.strike), x: e.clientX, y: e.clientY })}
+                            onMouseLeave={cancelStrikeHover}
                           >
                             <td style={{ padding: "0 16px", textAlign: "left", fontWeight: 700, color: isAtm ? C.cyan : "#fff", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder, borderLeft: atmBorder } : {}) }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1781,6 +1825,19 @@ export function HomeClient({
           popupStyle={popupStyle}
           anchor={selectedStrike.pos}
           onClose={() => setSelectedStrike(null)}
+        />
+      )}
+
+      {/* Cursor-anchored hover card — per-side book stats for the hovered strike. */}
+      {hoverStrike && hoverSides && (
+        <StrikeHoverCard
+          ticker="SPX"
+          strike={hoverStrike.strike}
+          expiration={selectedExpiry}
+          calls={hoverSides.calls}
+          puts={hoverSides.puts}
+          x={hoverStrike.x}
+          y={hoverStrike.y}
         />
       )}
 

@@ -7,6 +7,7 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
+import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -202,6 +203,9 @@ function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>)
             vega:  parseFloat(String(o.vega))  || undefined,
             oi:    parseInt(String(o["open-interest"] || o.openInterest || 0), 10) || 0,
             vol:   parseInt(String(o.volume || 0), 10) || 0,
+            // Captured for the hover card's Net Prem (mark × vol × 100).
+            bid:   parseFloat(String(o.bid ?? o["bid-price"] ?? 0)) || undefined,
+            ask:   parseFloat(String(o.ask ?? o["ask-price"] ?? 0)) || undefined,
           };
         }
       }
@@ -292,7 +296,7 @@ function computeTotals(
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
-  ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
+  ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow, expiry,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -302,12 +306,30 @@ function TickerPanel({
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
+  /** Active expiry (for the hover card header). */
+  expiry: string | null;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
+
+  // Cursor-anchored hover card (same as the options-chain matrix): pops after a
+  // short hover-intent delay so passing over rows doesn't flash cards. Suppressed
+  // during screenshot capture.
+  const [hoverCell, setHoverCell] = useState<{ strike: number; x: number; y: number } | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const HOVER_DELAY_MS = 700;
+  const armHover = useCallback((v: { strike: number; x: number; y: number }) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHoverCell(v), HOVER_DELAY_MS);
+  }, []);
+  const cancelHover = useCallback(() => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+    setHoverCell(null);
+  }, []);
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
 
   const computedFull = strikes.length
     ? computeRows(strikes, liveData, spot, contractMode)
@@ -378,6 +400,23 @@ function TickerPanel({
   // full column height — otherwise the capture is a small table sitting atop
   // a tall blank void. See the isCapturing note in MultGreekClient above.
   const isCapturing = captureWindow != null;
+
+  // Per-side book stats (Volume / OI / Net Prem) for the hovered strike, keyed
+  // off the same live symbols the greeks are computed from. Net Prem = mark ×
+  // volume × 100, mark = mid of bid/ask (mirrors the options-chain hover card).
+  const hoverData = (() => {
+    if (!hoverCell) return null;
+    const sr = strikes.find(s => s.strike === hoverCell.strike);
+    if (!sr) return null;
+    const side = (sym: string | null) => {
+      const d = (sym && liveData[sym]) || {};
+      const vol = d.vol ?? 0;
+      const oi = d.oi ?? 0;
+      const mark = (d.bid != null && d.ask != null && (d.bid > 0 || d.ask > 0)) ? (d.bid + d.ask) / 2 : 0;
+      return { vol, oi, prem: mark * vol * 100 };
+    };
+    return { calls: side(sr.callSym), puts: side(sr.putSym) };
+  })();
 
   return (
     // "budget" variant = classicCardAccentStyle, the exact radial-glow-over-
@@ -464,6 +503,8 @@ function TickerPanel({
             <div
               key={r.strike}
               data-strike={r.strike}
+              onMouseEnter={isCapturing ? undefined : (e) => armHover({ strike: r.strike, x: e.clientX, y: e.clientY })}
+              onMouseLeave={isCapturing ? undefined : cancelHover}
               style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
             >
               {(is1x || is2x) && (
@@ -534,6 +575,18 @@ function TickerPanel({
           );
         })}
       </div>
+
+      {hoverCell && hoverData && !isCapturing && (
+        <StrikeHoverCard
+          ticker={ticker}
+          strike={hoverCell.strike}
+          expiration={expiry}
+          calls={hoverData.calls}
+          puts={hoverData.puts}
+          x={hoverCell.x}
+          y={hoverCell.y}
+        />
+      )}
     </Card>
   );
 }
@@ -1034,6 +1087,7 @@ export function MultGreekClient({
             emLevels={emByTicker[ticker] ?? null}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
+            expiry={activeExpiry}
           />
         ))}
       </div>

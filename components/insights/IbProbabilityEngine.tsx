@@ -53,11 +53,10 @@ const C = {
   track: "rgba(255,255,255,0.07)",
 };
 
-// Hist. Edge bar gradient — green when the edge is positive (>= 50%), red below.
-function edgeGradient(edge: number): string {
-  return edge >= 50
-    ? `linear-gradient(90deg, ${POS}59, ${POS})`
-    : `linear-gradient(90deg, ${NEG}59, ${NEG})`;
+// Hist. Edge bar gradient — colored by the rule's direction (bull green, bear red,
+// rotation orange), so a bearish rule reads red even at a high hit rate.
+function edgeGradient(color: string): string {
+  return `linear-gradient(90deg, ${color}59, ${color})`;
 }
 
 const EDGECOL: Record<Status, string> = { bull: C.bull, bear: C.bear, rot: C.rot, off: C.grey };
@@ -123,11 +122,11 @@ function Gauge({ pct, color, label }: { pct: number; color: string; label: strin
   );
 }
 
-function EdgeBar({ edge }: { edge: number | null }) {
+function EdgeBar({ edge, color }: { edge: number | null; color: string }) {
   return (
     <div style={{ height: 8, borderRadius: 4, background: "rgba(255,255,255,.06)", overflow: "hidden" }}>
       {edge != null && (
-        <div style={{ width: `${edge}%`, height: "100%", background: edgeGradient(edge), transition: "width .6s" }} />
+        <div style={{ width: `${edge}%`, height: "100%", background: edgeGradient(color), transition: "width .6s" }} />
       )}
     </div>
   );
@@ -138,7 +137,7 @@ function RuleRow({ r }: { r: Row }) {
   const dim = r.status === "off";
   return (
     <div style={{ display: "grid", gridTemplateColumns: "210px 1fr 200px", gap: 18, alignItems: "center",
-      background: C.rowBg, border: `1px solid ${C.border}`, borderLeft: `4px solid ${col}`, borderRadius: 12,
+      background: C.rowBg, border: `1px solid ${C.border}`, borderRadius: 12,
       padding: "14px 16px", opacity: dim ? 0.62 : 1 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
@@ -156,15 +155,15 @@ function RuleRow({ r }: { r: Row }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.muted }}>Hist. Edge</span>
-          <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.edge == null ? C.muted : r.edge >= 50 ? POS : NEG }}>{r.edge == null ? "—" : `${r.edge}%`}</span>
+          <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.edge == null ? C.muted : col }}>{r.edge == null ? "—" : `${r.edge}%`}</span>
         </div>
-        <EdgeBar edge={r.edge} />
+        <EdgeBar edge={r.edge} color={col} />
       </div>
     </div>
   );
 }
 
-export function IbProbabilityEngine({ rules, env }: { rules: EngineRule[]; env: EngineEnv }) {
+export function IbProbabilityEngine({ rules, env, sym }: { rules: EngineRule[]; env: EngineEnv; sym?: string }) {
   const byId = new Map(rules.map((r) => [r.id, toRow(r)]));
   const allRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[]);
   const p = calculateComplexProbabilities(allRows, env);
@@ -185,8 +184,12 @@ export function IbProbabilityEngine({ rules, env }: { rules: EngineRule[]; env: 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 16 }}>📊</span>
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".16em", textTransform: "uppercase", color: C.cyan }}>Probability Engine</span>
+          {sym && (
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: C.cyan,
+              border: `1px solid ${C.cyan}66`, background: `${C.cyan}14`, borderRadius: 5, padding: "2px 8px" }}>{sym}</span>
+          )}
         </div>
-        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>Live mathematical projection of final intraday session behavior based on active indicators.</p>
+        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>Live mathematical projection of final intraday session behavior based on active indicators{sym ? ` — ${sym} futures` : ""}.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: 22 }}>
           <Gauge pct={p.bull} color={C.bull} label="Bullish<br/>Edge" />
           <Gauge pct={p.bear} color={C.bear} label="Bearish<br/>Edge" />

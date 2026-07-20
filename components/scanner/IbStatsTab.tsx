@@ -419,8 +419,8 @@ function LiveToday({ sym, win, ds, days, hist }: {
 
   return (
     <>
-      {/* IB Probability Engine + 4-stage rule board (live) */}
-      <IbProbabilityEngine rules={engineRules} env={engineEnv} />
+      {/* IB Probability Engine + 4-stage rule board (live, per-symbol) */}
+      <IbProbabilityEngine rules={engineRules} env={engineEnv} sym={sym} />
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
         <LiveGauges live={live} days={days} dowName={dowName} win={win} />

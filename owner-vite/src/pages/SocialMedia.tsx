@@ -1734,7 +1734,7 @@ const DAY_SLOTS: { v: DaySlot; label: string }[] = [
 
 type DayVisual = "gex" | "flow" | "chain" | "greeks" | "candles";
 const DAY_VISUALS: { v: DayVisual; label: string; embed?: string }[] = [
-  { v: "gex", label: "GEX Chart" },
+  { v: "gex", label: "GEX Chart", embed: "/gex?embed=1&chartonly=1" },
   { v: "flow", label: "Option Flow (SPX 0DTE OTM)", embed: "/flow?embed=1&chartonly=1&ticker=SPX&dteMax=0" },
   { v: "chain", label: "Option Chain", embed: "/options-chain?embed=1" },
   { v: "greeks", label: "Multi Greeks", embed: "/mult-greek?embed=1" },
@@ -1801,12 +1801,9 @@ function DayPosts({ form }: { form: FormState }) {
   const [capUrl, setCapUrl] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
 
-  // GEX chart source (same /api/gex feed PostGenerator uses).
-  const [gexChain, setGexChain] = useState<unknown[]>([]);
-  const [gexLoading, setGexLoading] = useState(false);
-  const chartHostRef = useRef<HTMLDivElement>(null);
-
-  // Iframe source (flow / chain / greeks) — measured + scaled like GexDock.
+  // GEX now renders via the same-origin /gex-embed iframe (see DAY_VISUALS), so
+  // every visual — GEX included — captures through the shared iframe path below.
+  // Iframe source (gex / flow / chain / greeks) — measured + scaled like GexDock.
   const [iframeOn, setIframeOn] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const embedBoxRef = useRef<HTMLDivElement>(null);
@@ -1829,51 +1826,27 @@ function DayPosts({ form }: { form: FormState }) {
 
   const retrieve = useCallback(async () => {
     setError("");
-    if (visual === "gex") {
-      setGexLoading(true);
-      try {
-        const res = await fetch("/api/gex", { cache: "no-store" });
-        if (!res.ok) throw new Error(`gex ${res.status}`);
-        const data = await res.json();
-        const chain = Array.isArray(data.chain) ? data.chain : [];
-        if (!chain.length) throw new Error("empty chain");
-        setGexChain(chain);
-      } catch (e) {
-        console.error("[day-posts gex]", e);
-        setError("No live GEX data — needs the live dashboard feed.");
-      } finally {
-        setGexLoading(false);
-      }
-    } else {
-      setIframeOn(true);
-    }
-  }, [visual]);
+    setIframeOn(true);
+  }, []);
 
   // Freeze the current live view into rawRef.
   const capture = useCallback(async () => {
     setCapturing(true);
     setError("");
     try {
-      if (visual === "gex") {
-        // Live GexChart canvas capture is stubbed in this standalone build.
-        // The other (iframe) visuals capture fully; GEX chart imaging lives in
-        // the main dashboard.
-        throw new Error("Live GEX chart capture is available in the main dashboard — pick another visual to attach an image.");
-      } else {
-        const doc = iframeRef.current?.contentDocument;
-        if (!doc?.body) throw new Error("view not loaded — hit Retrieve and wait for it to render");
-        const html2canvas = await getHtml2Canvas();
-        // Chart-only pages tag the exact node to grab (#flow-chart-capture);
-        // otherwise fall back to the whole embed body.
-        const target = doc.querySelector<HTMLElement>("#flow-chart-capture");
-        const canvas = target
-          ? await html2canvas(target, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false })
-          : await html2canvas(doc.body, {
-              backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
-              width: DP_EMB_W, height: DP_EMB_H, windowWidth: DP_EMB_W, windowHeight: DP_EMB_H,
-            });
-        rawRef.current = canvas;
-      }
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc?.body) throw new Error("view not loaded — hit Retrieve and wait for it to render");
+      const html2canvas = await getHtml2Canvas();
+      // Chart-only pages tag the exact node to grab (#flow-chart-capture);
+      // otherwise fall back to the whole embed body.
+      const target = doc.querySelector<HTMLElement>("#flow-chart-capture");
+      const canvas = target
+        ? await html2canvas(target, { backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false })
+        : await html2canvas(doc.body, {
+            backgroundColor: "#05060a", scale: 2, useCORS: true, logging: false,
+            width: DP_EMB_W, height: DP_EMB_H, windowWidth: DP_EMB_W, windowHeight: DP_EMB_H,
+          });
+      rawRef.current = canvas;
       setCapUrl(rawRef.current ? rawRef.current.toDataURL("image/png") : null);
       setCapturedAt(Date.now());
     } catch (e) {
@@ -1991,20 +1964,13 @@ function DayPosts({ form }: { form: FormState }) {
             <button key={v.v} type="button" className={`dp-btn${visual === v.v ? " on" : ""}`} onClick={() => setVisual(v.v)}>{v.label}</button>
           ))}
           <span style={{ flex: 1 }} />
-          <button type="button" className="dp-btn" onClick={retrieve} disabled={gexLoading}>
-            {gexLoading ? "Loading…" : "⤓ Retrieve"}
-          </button>
-          <button type="button" className="dp-btn on" onClick={capture} disabled={capturing || (visual === "gex" ? !gexChain.length : !iframeOn)}>
+          <button type="button" className="dp-btn" onClick={retrieve}>⤓ Retrieve</button>
+          <button type="button" className="dp-btn on" onClick={capture} disabled={capturing || !iframeOn}>
             {capturing ? "Capturing…" : "📸 Capture"}
           </button>
         </div>
 
-        {visual === "gex" && gexChain.length > 0 && (
-          <div ref={chartHostRef} className="dp-chart-host">
-            <LiveChartPlaceholder label="Live GEX chart preview — available in the main dashboard. Use another visual (Option Flow / Chain / Greeks / ES Candles) to attach a captured image." height={360} />
-          </div>
-        )}
-        {visual !== "gex" && iframeOn && (
+        {iframeOn && (
           <div ref={embedBoxRef} className="dp-embed" style={{ height: DP_EMB_H * embScale }}>
             <iframe
               ref={iframeRef}
@@ -2017,7 +1983,7 @@ function DayPosts({ form }: { form: FormState }) {
             />
           </div>
         )}
-        {visual !== "gex" && !iframeOn && (
+        {!iframeOn && (
           <div className="dp-hint">Hit <b>Retrieve</b> to load the live {visualDef.label} view, let it render, then <b>Capture</b> freezes it to the post image.</div>
         )}
 

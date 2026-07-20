@@ -15,7 +15,7 @@
  * exception the /owner/budget and /gex2 pages make (LIGHT_BLUE / SOFT_RED).
  */
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -69,6 +69,7 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? n : 0;
 };
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const clampi = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const fmtPx = (n: number) => (Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—");
 const fmtWall = (n: number) => (Number.isFinite(n) && n > 0 ? `$${Math.round(n).toLocaleString()}` : "—");
 const fmtInt = (n: number) => (Number.isFinite(n) ? Math.round(n).toLocaleString() : "—");
@@ -243,23 +244,87 @@ function Stat({ label, value, sub, subColor, valueColor }: { label: string; valu
   );
 }
 
-// ── per-strike gamma profile (SVG) ───────────────────────────────────────────
-function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
+// ── per-strike gamma profile (SVG, drag=pan · scroll=zoom · dbl=recenter) ─────
+function StrikeProfile({ d, near, barColor }: { d: Derived; near: boolean; barColor: string }) {
   const W = 900, H = 460, padL = 46, padR = 14, padT = 20, padB = 28;
+  const plotW = W - padL - padR;
   // Plot the SAME OI+Vol net the desk uses to pick the walls (netGEX + netVolGEX),
   // so the outlined wall bar is always the visual extreme.
   const oiVolNet = (r: GexRow) => num(r.netGEX) + num(r.netVolGEX);
-  const all = d.rows;
-  const rows = near ? all.filter((r) => Math.abs(r.strike - d.spot) / d.spot <= 0.05) : all;
-  const data = (rows.length ? rows : all).filter((r) => Number.isFinite(r.strike));
+
+  const data = useMemo(
+    () => d.rows.filter((r) => Number.isFinite(r.strike)).slice().sort((a, b) => a.strike - b.strike),
+    [d.rows],
+  );
+  const spotIdx = useMemo(() => (
+    data.length ? data.reduce((b, r, i) => (Math.abs(r.strike - d.spot) < Math.abs(data[b].strike - d.spot) ? i : b), 0) : 0
+  ), [data, d.spot]);
+  const nearCount = useMemo(
+    () => Math.max(6, data.filter((r) => Math.abs(r.strike - d.spot) / d.spot <= 0.05).length),
+    [data, d.spot],
+  );
+
+  const [vp, setVp] = useState({ start: 0, count: 0 });
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startX: number; startStart: number; pxPerStrike: number } | null>(null);
+  const [grabbing, setGrabbing] = useState(false);
+
+  // (re)center whenever the near/all toggle flips or the chain resizes
+  useEffect(() => {
+    const n = data.length || 1;
+    const count = clampi(near ? nearCount : n, 6, n);
+    const start = clampi(spotIdx - Math.floor(count / 2), 0, Math.max(0, n - count));
+    setVp({ start, count });
+  }, [near, nearCount, data.length, spotIdx]);
+
+  // ── scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
+  const onWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const n = data.length || 1;
+    setVp((v) => {
+      const factor = e.deltaY > 0 ? 1.16 : 0.86;
+      const next = clampi(Math.round(v.count * factor), 6, n);
+      if (next === v.count) return v;
+      const rect = wrapRef.current?.getBoundingClientRect();
+      const frac = rect ? clamp01((e.clientX - rect.left) / Math.max(rect.width, 1)) : 0.5;
+      const anchor = v.start + frac * v.count;
+      return { count: next, start: clampi(Math.round(anchor - frac * next), 0, Math.max(0, n - next)) };
+    });
+  }, [data.length]);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onWheel]);
+
+  const visible = data.slice(vp.start, vp.start + vp.count);
+  const view = visible.length ? visible : data;
   if (!data.length) return <Empty note="no chain rows" />;
 
-  const maxV = Math.max(...data.map((r) => Math.abs(oiVolNet(r))), 1);
-  const xlo = data[0].strike, xhi = data[data.length - 1].strike;
-  const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
+  const pxPerStrike = plotW / Math.max(1, view.length);
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    dragRef.current = { startX: e.clientX, startStart: vp.start, pxPerStrike };
+    setGrabbing(true);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const dr = dragRef.current;
+    if (!dr) return;
+    const sh = Math.round(-(e.clientX - dr.startX) / dr.pxPerStrike);
+    setVp((v) => ({ ...v, start: clampi(dr.startStart + sh, 0, Math.max(0, data.length - v.count)) }));
+  };
+  const onPointerUp = () => { dragRef.current = null; setGrabbing(false); };
+  const onDouble = () => setVp((v) => ({ ...v, start: clampi(spotIdx - Math.floor(v.count / 2), 0, Math.max(0, data.length - v.count)) }));
+
+  const maxV = Math.max(...view.map((r) => Math.abs(oiVolNet(r))), 1);
+  const xlo = view[0].strike, xhi = view[view.length - 1].strike;
+  const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * plotW;
   const mid = padT + (H - padT - padB) / 2;
   const barH = (v: number) => (Math.abs(v) / maxV) * ((H - padT - padB) / 2);
-  const barW = Math.max(2, ((W - padL - padR) / data.length) * 0.62);
+  const barW = Math.max(2, (plotW / view.length) * 0.62);
 
   const gridVals = [maxV, maxV / 2, 0, -maxV / 2, -maxV];
   const yOf = (v: number) => mid - (v / maxV) * ((H - padT - padB) / 2);
@@ -267,37 +332,52 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
   const ticks: number[] = [];
   const step = Math.max(5, Math.round((xhi - xlo) / 8 / 5) * 5);
   for (let k = Math.ceil(xlo / step) * step; k <= xhi; k += step) ticks.push(k);
+  const spotIn = d.spot >= xlo && d.spot <= xhi;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
-      {gridVals.map((v, i) => (
-        <g key={i}>
-          <line x1={padL} x2={W - padR} y1={yOf(v)} y2={yOf(v)} stroke={HOME_THEME.border} strokeWidth={1} strokeDasharray={v === 0 ? "0" : "3 4"} opacity={v === 0 ? 0.6 : 0.4} />
-          <text x={padL - 8} y={yOf(v) + 3} fill={rgba(HOME_THEME.text, 0.5)} fontSize={10} textAnchor="end">
-            {v === 0 ? "0.0M" : `${(v / 1e6).toFixed(0)}M`}
-          </text>
-        </g>
-      ))}
-      {data.map((r) => {
-        const v = oiVolNet(r);
-        const isCall = v >= 0;
-        const cx = x(r.strike);
-        const h = barH(v);
-        const y = isCall ? mid - h : mid;
-        const isWall = r.strike === d.callWall || r.strike === d.putWall;
-        return (
-          <rect key={r.strike} x={cx - barW / 2} y={y} width={barW} height={Math.max(0.5, h)}
-            fill={isCall ? rgba(CALL_GREEN, 0.9) : rgba(PUT_RED, 0.85)}
-            stroke={isWall ? HOME_THEME.text : "none"} strokeWidth={isWall ? 1.5 : 0} rx={1} />
-        );
-      })}
-      {/* spot line */}
-      <line x1={x(d.spot)} x2={x(d.spot)} y1={padT - 6} y2={H - padB} stroke={HOME_THEME.cyan} strokeWidth={1.5} strokeDasharray="3 3" opacity={0.9} />
-      <text x={x(d.spot)} y={padT - 8} fill={HOME_THEME.cyan} fontSize={11} fontWeight={700} textAnchor="middle">Spot</text>
-      {ticks.map((k) => (
-        <text key={k} x={x(k)} y={H - padB + 18} fill={rgba(HOME_THEME.text, 0.5)} fontSize={11} textAnchor="middle">{Math.round(k)}</text>
-      ))}
-    </svg>
+    <div
+      ref={wrapRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+      onDoubleClick={onDouble}
+      style={{ cursor: grabbing ? "grabbing" : "grab", touchAction: "none", userSelect: "none" }}
+    >
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
+        {gridVals.map((v, i) => (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={yOf(v)} y2={yOf(v)} stroke={HOME_THEME.border} strokeWidth={1} strokeDasharray={v === 0 ? "0" : "3 4"} opacity={v === 0 ? 0.6 : 0.4} />
+            <text x={padL - 8} y={yOf(v) + 3} fill={rgba(HOME_THEME.text, 0.5)} fontSize={10} textAnchor="end">
+              {v === 0 ? "0.0M" : `${(v / 1e6).toFixed(0)}M`}
+            </text>
+          </g>
+        ))}
+        {view.map((r) => {
+          const v = oiVolNet(r);
+          const isPos = v >= 0;
+          const cx = x(r.strike);
+          const h = barH(v);
+          const y = isPos ? mid - h : mid;
+          const isWall = r.strike === d.callWall || r.strike === d.putWall;
+          return (
+            <rect key={r.strike} x={cx - barW / 2} y={y} width={barW} height={Math.max(0.5, h)}
+              fill={rgba(barColor, isPos ? 0.9 : 0.72)}
+              stroke={isWall ? HOME_THEME.text : "none"} strokeWidth={isWall ? 1.5 : 0} rx={1} />
+          );
+        })}
+        {spotIn && (
+          <>
+            <line x1={x(d.spot)} x2={x(d.spot)} y1={padT - 6} y2={H - padB} stroke={HOME_THEME.cyan} strokeWidth={1.5} strokeDasharray="3 3" opacity={0.9} />
+            <text x={x(d.spot)} y={padT - 8} fill={HOME_THEME.cyan} fontSize={11} fontWeight={700} textAnchor="middle">Spot</text>
+          </>
+        )}
+        {ticks.map((k) => (
+          <text key={k} x={x(k)} y={H - padB + 18} fill={rgba(HOME_THEME.text, 0.5)} fontSize={11} textAnchor="middle">{Math.round(k)}</text>
+        ))}
+        <text x={W - padR} y={padT + 4} fill={rgba(HOME_THEME.text, 0.35)} fontSize={10} textAnchor="end">scroll=zoom · drag=pan · dbl=recenter</text>
+      </svg>
+    </div>
   );
 }
 
@@ -407,10 +487,9 @@ export function SqueezeBoard() {
                   <button style={toggleBtn(near)} onClick={() => setNear(true)}>⌖ Near</button>
                 </div>
               </div>
-              <StrikeProfile d={d} near={near} />
+              <StrikeProfile d={d} near={near} barColor={biasColor} />
               <div style={{ display: "flex", gap: 22, justifyContent: "center", marginTop: 10, fontSize: 12, color: rgba(HOME_THEME.text, 0.7) }}>
-                <span><span style={{ display: "inline-block", width: 11, height: 11, background: CALL_GREEN, borderRadius: 2, marginRight: 6 }} />Call Gamma</span>
-                <span><span style={{ display: "inline-block", width: 11, height: 11, background: PUT_RED, borderRadius: 2, marginRight: 6 }} />Put Gamma</span>
+                <span><span style={{ display: "inline-block", width: 11, height: 11, background: biasColor, borderRadius: 2, marginRight: 6 }} />{isBear ? "Bearish" : "Bullish"} Gamma</span>
               </div>
             </div>
 
