@@ -1063,12 +1063,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const minutes = replayOn ? 7200 : heatmapDays * 1440;
     // Front mode passes anyExpiry=1, so the server IGNORES `expiry`; the rolling
     // feedExpiry churning each publish must NOT re-fire this ~700KB/5s query.
-    // Key on the request window only (an explicit DTE pick keys on expiry too),
-    // and bail if unchanged BEFORE clearing columns so no-op fires don't wipe.
+    // Key on the request window only (an explicit DTE pick keys on expiry too).
+    // A same-key re-fire returns WITHOUT touching the in-flight request — we do
+    // NOT cancel it (cancelling raced the ~5s fetch against WS churn and wiped
+    // the whole trail). Staleness is instead guarded by re-checking the key at
+    // resolution below, so only a genuine key change discards a stale response.
     const fetchKey = `${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}`;
     if (fetchKey === lastHeatmapKeyRef.current) return;
     lastHeatmapKeyRef.current = fetchKey;
-    let cancelled = false;
     // When the picker or range changes, wipe the existing columns so we don't
     // mix expiries or leave stale far-back columns after switching to 1D.
     columnsRef.current.clear();
@@ -1091,7 +1093,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // for legacy rows written before the column existed.
         type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }>; spot?: number };
         const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
-        if (cancelled || !raw.length) return;
+        // Only a genuine key change (DTE pick / range switch) invalidates this
+        // response; a same-key WS re-render must NOT discard it.
+        if (lastHeatmapKeyRef.current !== fetchKey || !raw.length) return;
         const map = columnsRef.current;
         // DB rows are 1-min granular; snap to the 5-min candle grid. Sort
         // descending so the newest snapshot within each bucket wins (first seen).
@@ -1123,7 +1127,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         drawOverlayRef.current();
       } catch { /* live feed still populates the front expiry going forward */ }
     })();
-    return () => { cancelled = true; };
+    // No cleanup cancel: a same-key re-render must not abort a valid in-flight
+    // backfill; the resolution-time key check handles real invalidation.
   }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
