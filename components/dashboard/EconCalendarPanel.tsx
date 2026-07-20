@@ -103,7 +103,7 @@ function fullDayLabel(dateStr: string, today: string): string {
   return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
 }
 
-type FilterKey = "all-usd" | "high-usd" | "high" | "medium-usd" | "medium" | "low-usd" | "low" | "trump" | "all";
+type FilterKey = "all-usd" | "high-usd" | "high" | "medium-usd" | "medium" | "low-usd" | "low" | "trump" | "earnings" | "all";
 
 const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
   { value: "all-usd",    label: "All·USD",    color: "#219EBC" },
@@ -114,6 +114,7 @@ const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
   { value: "low-usd",    label: "Low·USD",    color: "#3a5570" },
   { value: "low",        label: "Low",        color: "#3a5570" },
   { value: "trump",      label: "TRUMP",      color: "#a855f7" },
+  { value: "earnings",   label: "Earnings",   color: "#219EBC" },
   { value: "all",        label: "All",        color: "#fff"    },
 ];
 
@@ -136,19 +137,36 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
   const [error,         setError]         = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all-usd", "trump"]));
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all-usd", "trump", "earnings"]));
   const [dropOpen,      setDropOpen]      = useState(false);
+  const [menuPos,       setMenuPos]       = useState<{ top: number; right: number } | null>(null);
   const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
   const dropRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function h(e: MouseEvent) {
-      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropOpen(false);
+      const t = e.target as Node;
+      if (dropRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
+      setDropOpen(false);
     }
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
+
+  function openDrop() {
+    setDropOpen(o => {
+      const nx = !o;
+      if (nx && btnRef.current) {
+        const r = btnRef.current.getBoundingClientRect();
+        setMenuPos({ top: r.bottom + 3, right: window.innerWidth - r.right });
+      }
+      return nx;
+    });
+  }
 
   const doLoad = useCallback(async () => {
     setError(null);
@@ -218,6 +236,11 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
   }
 
   const activeDays = todayOnly ? [today] : weekDays;
+
+  // Earnings rows are shown when "All" or "Earnings" is active. Selecting only
+  // "Earnings" isolates them (no econ events pass the filter).
+  const showEarnings = activeFilters.has("all") || activeFilters.has("earnings");
+  const anyEarnings  = showEarnings && activeDays.some(d => earnByDate.has(d));
 
   const weekEvents = events
     .filter(e => activeDays.includes(e.date) && passes(e, activeFilters))
@@ -311,9 +334,16 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
       if (!byDate.has(ev.date)) byDate.set(ev.date, []);
       byDate.get(ev.date)!.push(ev);
     });
+    // Seed days that have earnings but no passing econ events, so an
+    // earnings-only view (or a quiet day) still renders its earnings.
+    if (!faded && showEarnings) {
+      for (const d of activeDays) {
+        if (earnByDate.has(d) && !byDate.has(d)) byDate.set(d, []);
+      }
+    }
 
     let i = 0;
-    for (const [date, evs] of byDate) {
+    for (const [date, evs] of [...byDate].sort((a, b) => a[0].localeCompare(b[0]))) {
       const isToday = date === today;
       result.push(
         <div
@@ -336,7 +366,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         </div>
       );
 
-      const bucket = faded ? null : earnByDate.get(date);
+      const bucket = (faded || !showEarnings) ? null : earnByDate.get(date);
       if (bucket?.pre.length) {
         result.push(<EarnRowBlock key={`pre-${date}`} kind="pre" rows={bucket.pre} />);
       }
@@ -362,7 +392,8 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
     <>
       <div ref={dropRef} style={{ position: "relative", marginLeft: controlsPortalEl ? 0 : "auto" }}>
         <button
-          onClick={() => setDropOpen(o => !o)}
+          ref={btnRef}
+          onClick={openDrop}
           style={{
             ...homeButtonStyle,
             display: "flex", alignItems: "center", gap: 4,
@@ -370,9 +401,9 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         >
           {filterLabel} <span style={{ fontSize: 10 }}>▾</span>
         </button>
-        {dropOpen && (
-          <div style={{
-            position: "absolute", right: 0, top: "calc(100% + 3px)", zIndex: 200,
+        {dropOpen && menuPos && createPortal(
+          <div ref={menuRef} style={{
+            position: "fixed", right: menuPos.right, top: menuPos.top, zIndex: 1000,
             background: HT.panelBgStrong, backdropFilter: "blur(16px)", border: `1px solid ${HT.border}`, borderRadius: 4,
             padding: "3px 0", minWidth: 140, boxShadow: "0 8px 24px rgba(0,0,0,0.7)",
           }}>
@@ -401,7 +432,8 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
                 </div>
               );
             })}
-          </div>
+          </div>,
+          document.body
         )}
       </div>
 
@@ -459,7 +491,7 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
           <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>Loading…</div>
         ) : error ? (
           <div style={{ color: "#ef4444", fontSize: 10, padding: "6px 10px", wordBreak: "break-all" }}>⚠ {error}</div>
-        ) : weekEvents.length === 0 ? (
+        ) : weekEvents.length === 0 && !anyEarnings ? (
           <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>No events this week.</div>
         ) : (
           <>

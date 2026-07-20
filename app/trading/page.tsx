@@ -16,8 +16,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME as HT, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
-import { PageShell, Card } from "@/components/shared/PageCard";
+import { HOME_THEME as HT, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { PageShell, Card as ThemeCard } from "@/components/shared/PageCard";
+import type { ComponentProps } from "react";
 
 /** Wire shape from /api/journal (snake_case, straight off the row). */
 interface JournalRow {
@@ -39,6 +40,19 @@ const LS_MIGRATED = "trading_journals_migrated";
 
 // Data-viz encodings (win/loss cells + chart series), sourced from the theme.
 const T = { green: HT.green, red: HT.red };
+
+// Softer secondary text — a real muted gray, not the theme's flat white, so
+// labels/captions read one step back from primary values.
+const SOFT = "rgba(255,255,255,0.55)";
+
+/**
+ * Page-local flat card. The shared Card carries a faint radial highlight + drop
+ * shadow (the "glow"); on this dense dashboard we want a flat frosted surface,
+ * so route every card through here: classic variant (no radial) + shadow off.
+ */
+function Card(props: ComponentProps<typeof ThemeCard>) {
+  return <ThemeCard variant="classic" {...props} style={{ boxShadow: "none", ...props.style }} />;
+}
 
 const btnStyle = (active = false): React.CSSProperties => ({
   ...(active ? homeButtonStyle : homeSecondaryButtonStyle),
@@ -490,17 +504,17 @@ export default function TradingPage() {
     URL.revokeObjectURL(a.href);
   };
 
-  const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode) => (
+  const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode, accent: string = HT.cyan) => (
     <Card padding={16} style={{ display: "flex", flexDirection: "column", minHeight: 140 }}>
-      <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: accent, marginBottom: 6, letterSpacing: ".04em", textTransform: "uppercase" }}>{title}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: HT.text }}>{val}</div>
-      <div style={{ fontSize: 12, color: HT.muted, marginTop: 2 }}>{sub}</div>
+      <div style={{ fontSize: 12, color: SOFT, marginTop: 2 }}>{sub}</div>
       {extra && <div style={{ marginTop: "auto", paddingTop: 8 }}>{extra}</div>}
     </Card>
   );
 
   return (
-    <PageShell className="journal-root">
+    <PageShell className="journal-root no-card-lift">
       {/* Header */}
       <Card padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>Journaling Dashboard</div>
@@ -545,50 +559,50 @@ export default function TradingPage() {
                 <div style={{ height: 6, background: HT.border, borderRadius: 3, overflow: "hidden", display: "flex" }}>
                   <div style={{ width: `${k.winPct ?? 0}%`, background: T.green }} />
                   <div style={{ width: `${k.winPct != null ? 100 - k.winPct : 0}%`, background: T.red }} />
-                </div>)}
+                </div>, HT.green)}
               {kpiCard("Avg Win / Loss",
                 k.avgLoss !== 0 ? Math.abs(k.avgWin / k.avgLoss).toFixed(2) : "—",
                 "Avg Absolute Trade",
                 <div style={{ fontSize: 14 }}>
                   <div style={{ color: T.green }}>W {k.avgWin ? fmt$(k.avgWin) : "—"}</div>
                   <div style={{ color: T.red }}>L {k.avgLoss ? fmt$(k.avgLoss) : "—"}</div>
-                </div>)}
+                </div>, HT.orange)}
               {kpiCard("Net PnL",
                 <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>,
-                "Total Net PnL")}
+                "Total Net PnL", undefined, LIGHT_BLUE)}
               {kpiCard("Max Streaks", k.bestW || "—", "Best win streak",
-                <div style={{ fontSize: 14, color: HT.muted }}>
+                <div style={{ fontSize: 14, color: SOFT }}>
                   <div>Consecutive wins <span style={{ color: T.green }}>{k.bestW}</span></div>
                   <div>Consecutive losses <span style={{ color: T.red }}>{k.bestL}</span></div>
-                </div>)}
+                </div>, HT.purple)}
               {kpiCard("Per Trade",
                 k.pnlPerTrade != null ? fmt$(k.pnlPerTrade) : "—",
                 "Net PnL / trade",
-                <div style={{ fontSize: 14, color: HT.muted }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>)}
+                <div style={{ fontSize: 14, color: SOFT }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>, HT.cyan)}
             </div>
 
             {/* Charts strip */}
             <div className="journal-charts" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
               <Card padding={16}>
-                <div style={titleStyle}>
+                <div style={{ ...titleStyle, color: HT.cyan }}>
                   Profit Factor <span style={{ color: HT.text }}>{k.profitFactor != null ? k.profitFactor.toFixed(2) : "—"}</span>
                 </div>
                 <MiniLine points={k.pfSeries} color={HT.cyan} fmt={(v) => (v ? v.toFixed(2) : "—")} />
               </Card>
               <Card padding={16}>
-                <div style={titleStyle}>
+                <div style={{ ...titleStyle, color: T.green }}>
                   Cumulative PnL <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>
                 </div>
                 <MiniLine points={k.cumSeries} color={T.green} />
               </Card>
               <Card padding={16}>
-                <div style={titleStyle}>
+                <div style={{ ...titleStyle, color: T.red }}>
                   Drawdown (Max) <span style={{ color: T.red }}>{visible.length ? fmt$(k.maxDD) : "—"}</span>
                 </div>
                 <MiniLine points={k.ddSeries} color={T.red} />
               </Card>
               <Card padding={16}>
-                <div style={titleStyle}>PnL Per Day</div>
+                <div style={{ ...titleStyle, color: HT.orange }}>PnL Per Day</div>
                 <MiniBars points={k.pnlSeries} />
               </Card>
             </div>
@@ -598,7 +612,7 @@ export default function TradingPage() {
               <Card padding={16}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, targets: !c.targets }))}
-                  style={collapseTitleStyle}
+                  style={{ ...collapseTitleStyle, color: HT.orange }}
                 >
                   <span>Session vs Targets</span><span>{collapsed.targets ? "▶" : "▼"}</span>
                 </div>
@@ -625,7 +639,7 @@ export default function TradingPage() {
               <Card padding={16}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, log: !c.log }))}
-                  style={collapseTitleStyle}
+                  style={{ ...collapseTitleStyle, color: HT.purple }}
                 >
                   <span>Journal Log ({visible.length} entries)</span><span>{collapsed.log ? "▶" : "▼"}</span>
                 </div>
@@ -673,7 +687,7 @@ export default function TradingPage() {
             {/* Calendar */}
             <Card padding={16}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div style={{ ...titleStyle, marginBottom: 0 }}>Session Calendar</div>
+                <div style={{ ...titleStyle, marginBottom: 0, color: T.green }}>Session Calendar</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, color: HT.muted, fontSize: 14 }}>
                   <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: c.m === 0 ? 11 : c.m - 1 }))}>&lt;</span>
                   <strong style={{ color: HT.text }}>{monthLabel}</strong>
