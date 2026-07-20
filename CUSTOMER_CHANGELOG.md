@@ -8,6 +8,9 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Reworked the **streaks** stat to answer it directly — at 2 bars in a row, your odds of a 3rd; at 3, your odds of a 4th; and so on — plus the odds a fresh move ever runs that long.
 * Fixed the **IB-width stats** that were coming up empty; narrow / normal / wide now fill in.
 * The **IB preview** that pops up when you hover the IB button on the ES-candles chart now shows just today's live IB read — no page toolbar or history tables cluttering it.
+* ES Candles now loads faster and no longer loses the historical gamma bubbles and heatmap when the page opens.
+* Redesigned the GEX bubble controls: choose how many strike levels show, highlight the strongest walls, set the min/max bubble size, and use a brightness slider to make the biggest walls stand out.
+* End-of-day GEX now also records the combined gamma across all expirations excluding 0DTE.
 
 ## Sunday 7/19/2026
 * Cleaned up the Scanner's **Market Profile (TPO)** tab — all the faint gray text is now crisp white, and the section titles are color-coded so each card is easier to pick out at a glance.

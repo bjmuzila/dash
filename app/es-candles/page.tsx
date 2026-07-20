@@ -312,7 +312,7 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 //   brightness  — 0..100 opacity gradient steepness for smaller strikes
 const BUBBLE_CFG_KEY = "es-candles-bubble-cfg-v1";
 type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; brightness: number };
-const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 12, highlight: 2, minSize: 2, maxSize: 14, brightness: 60 };
+const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 7, brightness: 84 };
 
 /**
  * `leading` renders as the first item in the dock, before the "ES 5m Candles"
@@ -2201,7 +2201,25 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               // small strikes ~0.1 so the big walls dominate by contrast.
               const brightness01 = Math.max(0, Math.min(1, cfg.brightness / 100));
               const minOpacity = Math.max(0.1, 1 - brightness01);
-              const HIGHLIGHT_BOOST = 1.3; // highlighted walls' radius multiplier
+              const HIGHLIGHT_BOOST = 1.35; // highlighted walls' radius multiplier
+
+              // GLOBAL strike selection — the key to the continuous-tube look. Rank
+              // strikes by their PEAK |GEX| across the whole session (not per column),
+              // so the dominant walls (Call/Put Wall) are the SAME rows in every
+              // column and render as unbroken bright tubes, while everything else
+              // stays faint. Show Top Strikes = how many rows draw; Highlight = how
+              // many of those are the "walls" (big, white-hot, glowing).
+              const peak = new Map<number, number>();
+              for (const m of mins) {
+                for (const c of m.cells) {
+                  const a = Math.abs(valOf(c));
+                  if (a > 0 && a > (peak.get(c.strike) ?? 0)) peak.set(c.strike, a);
+                }
+              }
+              const rankedStrikes = [...peak.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
+              const shownStrikes = new Set(rankedStrikes.slice(0, Math.max(0, cfg.topStrikes)));
+              const wallStrikes = new Set(rankedStrikes.slice(0, Math.max(0, cfg.highlight)));
+
               ctx.save();
               for (const m of mins) {
                 // xAt, not timeToCoordinate: 1-min buckets on a 5-min grid. Snap x
@@ -2210,37 +2228,31 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 const x = xAt(Math.floor(m.slotTs / bucketMs) * bucketMs);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
-                // Sort THIS column's strikes by |net GEX| (absGamma). SHOW only the
-                // top-N (Show Top Strikes); the top-X of those are the Highlighted
-                // Walls — drawn larger, brighter, and with a glow.
-                const ranked = [...m.cells]
-                  .filter((c) => valOf(c))
-                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)));
-                const shown = ranked.slice(0, Math.max(0, cfg.topStrikes));
-                const highlight = new Set(shown.slice(0, Math.max(0, cfg.highlight)).map((c) => c.strike));
-                for (const cell of shown) {
+                for (const cell of m.cells) {
+                  if (!shownStrikes.has(cell.strike)) continue; // global row filter
                   const v = valOf(cell);
                   if (!v) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
                   const ratio = Math.min(Math.abs(v) / domainMax, 1);
-                  const isHi = highlight.has(cell.strike);
+                  const isHi = wallStrikes.has(cell.strike);
+                  // Size tracks THIS bubble's own |GEX| (√-scaled), so each tube
+                  // tapers as gamma builds/bleeds; walls sit near maxSize + a boost.
                   let r = cfg.minSize + Math.sqrt(ratio) * sizeSpan;
                   if (isHi) r *= HIGHLIGHT_BOOST;
                   if (r < 0.5) continue;
-                  // Opacity: linear map, smallest → minOpacity, largest → 1.0.
-                  // Highlighted walls always render at full opacity so they pop.
+                  // Opacity: smallest → minOpacity, largest → 1.0. Walls always full.
                   const opacity = isHi ? 1 : minOpacity + ratio * (1 - minOpacity);
-                  // Sign sets hue (blue = +GEX, red = −GEX); highlighted walls shift
-                  // toward white so they read as the dominant levels.
+                  // Sign sets hue (blue = +GEX, red = −GEX). Walls shift toward white
+                  // and get a glow so they read as the dominant levels at a glance.
                   const base = v >= 0 ? [41, 182, 246] : [255, 71, 87];
                   const hot  = v >= 0 ? [200, 245, 255] : [255, 205, 210];
                   const col = isHi ? hot : base;
                   ctx.beginPath();
                   ctx.arc(x, y, r, 0, Math.PI * 2);
                   if (isHi) {
-                    ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.9)`;
-                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
+                    ctx.shadowBlur = 16;
                   } else {
                     ctx.shadowBlur = 0;
                   }

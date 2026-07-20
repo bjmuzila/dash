@@ -138,6 +138,18 @@ type TypeFilter = "all" | "C" | "P";
 
 const PREMIUM_MAX = 1_000_000;
 
+// Default tape/whale premium floor. Kept low because the server coalesces fills
+// in a short window, so real SPX 0DTE flow is mostly many sub-$50K orders — a
+// high default hides ~all of it (see Net Drift chart note below).
+const DEFAULT_MIN_PREMIUM = 15_000;
+
+// Net Drift chart floor, DECOUPLED from the tape's MIN PREMIUM slider. The chart
+// tracks full directional positioning (the whole ~$-hundreds-M/day of OTM flow),
+// so it aggregates everything above a tiny noise floor regardless of how high the
+// whale slider is set. Cranking MIN PREMIUM for the tape no longer flatlines the
+// chart. Excludes only sub-$1K noise prints.
+const CHART_MIN_PREMIUM = 1_000;
+
 // Net-drift chart bucket size (seconds). Fixed bins across the whole RTH session
 // give a proportional, hardcoded 9:30–4:00 x-axis and a smooth line.
 const BIN_SEC = 60;
@@ -256,7 +268,7 @@ export default function FlowPage() {
   // ── Other filters ──
   const [side, setSide] = useState<SideFilter>("all");
   const [optType, setOptType] = useState<TypeFilter>("all");
-  const [minPremium, setMinPremium] = useState<number>(50_000);
+  const [minPremium, setMinPremium] = useState<number>(DEFAULT_MIN_PREMIUM);
   const [minSize, setMinSize] = useState<number>(0);
   const [expiry, setExpiry] = useState<string>("all");
   const [dteMin, setDteMin] = useState<number>(0);
@@ -343,8 +355,11 @@ export default function FlowPage() {
     const qp = new URLSearchParams({ underlying: active, bin: String(BIN_SEC), date });
     if (side !== "all") qp.set("side", side);
     if (optType !== "all") qp.set("type", optType);
-    if (minPremium > 0) qp.set("minPremium", String(minPremium));
-    if (minSize > 0) qp.set("minSize", String(minSize));
+    // DECOUPLED from the tape: the chart uses a fixed low floor, NOT the whale
+    // MIN PREMIUM / MIN SIZE sliders, so raising them for the tape can't starve
+    // the Net Drift line. It still tracks every other filter (side/type/expiry/
+    // dte/otm).
+    qp.set("minPremium", String(CHART_MIN_PREMIUM));
     if (expiry !== "all") qp.set("expiry", expiry);
     if (dteMin > 0) qp.set("dteMin", String(dteMin));
     if (dteMax != null) qp.set("dteMax", String(dteMax));
@@ -394,7 +409,9 @@ export default function FlowPage() {
     // Past sessions are static — only poll the live edge for today.
     const id = isToday ? setInterval(load, 5000) : null;
     return () => { cancelled = true; if (id) clearInterval(id); };
-  }, [active, date, isToday, side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly, view]);
+    // minPremium / minSize intentionally excluded — the chart floor is fixed
+    // (CHART_MIN_PREMIUM), decoupled from the whale sliders.
+  }, [active, date, isToday, side, optType, expiry, dteMin, dteMax, otmOnly, view]);
 
   // ── Combined view backfill: the whole day's tape (ALL tickers), fetched once
   // when the Combined tab is opened. Live prints still arrive via the WS `orders`
@@ -857,7 +874,7 @@ export default function FlowPage() {
   }, [tapeRows, view, combinedSplit]);
 
   function resetFilters() {
-    setSide("all"); setOptType("all"); setMinPremium(50_000); setMinSize(0);
+    setSide("all"); setOptType("all"); setMinPremium(DEFAULT_MIN_PREMIUM); setMinSize(0);
     setExpiry("all"); setDteMin(0); setDteMax(null); setOtmOnly(true);
   }
 
