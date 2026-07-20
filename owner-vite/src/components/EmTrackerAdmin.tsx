@@ -263,6 +263,36 @@ export default function EmTrackerAdmin() {
     return { hits, evald, pct: evald > 0 ? (hits / evald) * 100 : null };
   }, [merged]);
 
+  // ── Weekly rollup: win/loss across EVERY scored ticker, grouped by week ──────
+  // Aggregates every going-forward row (all stocks that have a row) by week, so
+  // each week shows how many names closed inside their band (win) vs broke out
+  // (loss). Most-recent week first; the newest scored week is surfaced as "This
+  // week". Pending (not-yet-scored) rows are counted separately, never as losses.
+  const weeklyStats = useMemo(() => {
+    const by = new Map<string, { key: string; label: string; wins: number; losses: number; pending: number }>();
+    for (const r of rows) {
+      const key = r.week_start || r.week_label;
+      if (!key) continue;
+      let w = by.get(key);
+      if (!w) {
+        w = { key, label: r.week_start ? weekLabelFromDate(r.week_start) : r.week_label, wins: 0, losses: 0, pending: 0 };
+        by.set(key, w);
+      }
+      if (r.result === "hit") w.wins++;
+      else if (r.result === "miss") w.losses++;
+      else w.pending++;
+    }
+    return Array.from(by.values())
+      .map((w) => { const scored = w.wins + w.losses; return { ...w, scored, pct: scored > 0 ? (w.wins / scored) * 100 : null }; })
+      .sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+  }, [rows]);
+  // "This week" = newest week that already has a scored result (falls back to the
+  // newest week overall if nothing is scored yet).
+  const thisWeek = useMemo(
+    () => weeklyStats.find((w) => w.scored > 0) ?? weeklyStats[0] ?? null,
+    [weeklyStats]
+  );
+
   async function addWeek() {
     if (!fEm) { setMsg("Enter an EM value"); return; }
     setBusy(true); setMsg(null);
@@ -522,6 +552,61 @@ export default function EmTrackerAdmin() {
 
       {msg && (
         <div style={{ ...homePanelStyle, padding: "8px 14px", fontSize: 11, color: HOME_THEME.cyan, animation: "emfade .3s" }}>{msg}</div>
+      )}
+
+      {/* Weekly stats — win/loss across EVERY scored stock, grouped by week */}
+      {!loading && weeklyStats.length > 0 && (
+        <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ ...lbl }}>Weekly Stats</span>
+            <span style={{ fontSize: 10, color: HOME_THEME.muted }}>Win / loss across every scored stock, by week</span>
+          </div>
+
+          {thisWeek && (
+            <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", padding: "12px 16px", borderRadius: 10, border: `1px solid ${pctColor(thisWeek.pct)}44`, background: `${pctColor(thisWeek.pct)}0d` }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.12em" }}>This Week · {thisWeek.label}</span>
+                <span style={{ fontSize: 26, fontWeight: 800, color: pctColor(thisWeek.pct), lineHeight: 1 }}>
+                  {thisWeek.pct != null ? thisWeek.pct.toFixed(1) + "%" : "—"}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 18, fontSize: 15, alignItems: "baseline" }}>
+                <span style={{ color: HOME_THEME.green, fontWeight: 800 }}>{thisWeek.wins}<span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, marginLeft: 4, letterSpacing: "0.1em" }}>WIN</span></span>
+                <span style={{ color: HOME_THEME.red, fontWeight: 800 }}>{thisWeek.losses}<span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, marginLeft: 4, letterSpacing: "0.1em" }}>LOSS</span></span>
+                <span style={{ color: "#fff", fontWeight: 800 }}>{thisWeek.scored}<span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, marginLeft: 4, letterSpacing: "0.1em" }}>SCORED</span></span>
+                {thisWeek.pending > 0 && (
+                  <span style={{ color: HOME_THEME.orange, fontWeight: 800 }}>{thisWeek.pending}<span style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.muted, marginLeft: 4, letterSpacing: "0.1em" }}>PENDING</span></span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* every week, newest first */}
+          <div style={{ display: "flex", flexDirection: "column", maxHeight: 280, overflowY: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 60px 60px 90px", gap: 8, padding: "6px 4px", ...lbl }}>
+              <span>Week</span><span>Win Rate</span>
+              <span style={{ textAlign: "right" }}>Win</span><span style={{ textAlign: "right" }}>Loss</span>
+              <span style={{ textAlign: "right" }}>Win/Scored</span>
+            </div>
+            {weeklyStats.map((w) => (
+              <div key={w.key} style={{ display: "grid", gridTemplateColumns: "90px 1fr 60px 60px 90px", gap: 8, padding: "7px 4px", borderTop: `1px solid rgba(255,255,255,0.04)`, alignItems: "center", fontSize: 12 }}>
+                <span style={{ fontWeight: 700, color: "#fff" }}>
+                  {w.label}
+                  {w.pending > 0 && <span title={`${w.pending} not yet scored`} style={{ fontSize: 9, fontWeight: 800, color: HOME_THEME.orange, marginLeft: 6 }}>· {w.pending}p</span>}
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, maxWidth: 200, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${w.pct ?? 0}%`, background: pctColor(w.pct), borderRadius: 3 }} />
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: pctColor(w.pct), minWidth: 44 }}>{w.pct != null ? w.pct.toFixed(1) + "%" : "—"}</span>
+                </div>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.green }}>{w.wins}</span>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.red }}>{w.losses}</span>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: "#fff" }}>{w.wins}/{w.scored}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Discord OCR review panel */}

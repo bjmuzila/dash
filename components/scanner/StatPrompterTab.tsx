@@ -58,6 +58,7 @@ type Stack = { label: string; segs: { name: string; pct: number; color: string }
 type Result = {
   headline: string;
   cols?: string[];          // names of the `extra` columns, in order
+  hideRate?: boolean;       // drop the built-in RATE % column (count-only views)
   rows: Row[];
   stack?: Stack[];          // rendered above the table
   verdict?: string;
@@ -1259,25 +1260,33 @@ const PROMPTS: Prompt[] = [
         // it goes to N+1"). "reach from fresh" is the cumulative survival — the
         // product of every extension up to here — i.e. odds a brand-new 1-bar
         // move ever gets this long.
+        // raw per-length counts straight from the data: nAt.get(k) = how many
+        // times a run ACTUALLY reached length k (longer runs are counted too,
+        // since a 6-run passed through 5). "actually went to N+1" = the count
+        // stored at run+1, so it's a real tally, never derived from a %.
+        const nAt = new Map(A.streaks.byRun.map((x) => [x.run, x.n]));
         let surv = 1;
         return {
-          headline: `${head} RATE = at a run of N, the odds the NEXT bar extends it to N+1. "reach from fresh" = odds a brand-new move ever gets this long (cumulative). 50% extension = a coin flip.`,
-          cols: ["edge vs 50%", "reach from fresh"],
+          headline: `${head} "N in a row" = how many times in the data a run actually reached N (a longer run counts too). "actually went to N+1" = how many of those printed one more bar. "reach from fresh" = the same thing as a cumulative %.`,
+          hideRate: true,
+          cols: ["N in a row", "actually went to N+1", "reach from fresh"],
           rows: A.streaks.byRun.map((r) => {
             surv *= r.cont;
+            const went = nAt.get(r.run + 1) ?? Math.round(r.cont * r.n);
             return {
               label: `${r.run} in a row → ${r.run + 1} in a row`,
               n: r.n,
               k: Math.round(r.cont * r.n),
-              emphasis: Math.abs(r.cont - 0.5) > 0.02,
+              emphasis: r.run === 5,
               extra: {
-                "edge vs 50%": `${r.cont >= 0.5 ? "+" : ""}${(100 * (r.cont - 0.5)).toFixed(1)} pts`,
+                "N in a row": r.n.toLocaleString(),
+                "actually went to N+1": went.toLocaleString(),
                 "reach from fresh": `${(100 * surv).toFixed(1)}%`,
               },
             };
           }),
           verdict:
-            "The RATE column answers it directly: at 2 in a row, that's your odds of a 3rd; at 3, your odds of a 4th; and so on. On index futures each step sits within a point or two of 50%, so the streak itself carries almost no directional edge — but 'reach from fresh' still falls off fast because you're multiplying near-coin-flips (≈50% → 25% → 12%…). If a single step is meaningfully off 50, check the bar count before trusting it.",
+            "These are raw historical counts, not probabilities. On the '5 in a row → 6' row: 'N in a row' is the number of times ES actually printed 5 straight same-direction 5-min bars over the 2382 sessions, and 'actually went to N+1' is how many of those went on to a 6th. The 6-in-a-row total is that same 'actually went' number — and it's also the 'N in a row' figure on the row below it. 'Reach from fresh' just expresses each count as a share of all fresh 1-bar moves.",
         };
       }
 
@@ -1485,7 +1494,7 @@ function ResultTable({ res }: { res: Result }) {
           <thead>
             <tr>
               <th style={th}>Condition</th>
-              <th style={{ ...th, textAlign: "right" }}>rate</th>
+              {!res.hideRate && <th style={{ ...th, textAlign: "right" }}>rate</th>}
               {cols.map((c) => (
                 <th key={c} style={{ ...th, textAlign: "right" }}>{c}</th>
               ))}
@@ -1514,9 +1523,11 @@ function ResultTable({ res }: { res: Result }) {
                       </span>
                     )}
                   </td>
-                  <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 17, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
-                    {r.k != null ? pctS(r.k, r.n) : "—"}
-                  </td>
+                  {!res.hideRate && (
+                    <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 17, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
+                      {r.k != null ? pctS(r.k, r.n) : "—"}
+                    </td>
+                  )}
                   {cols.map((c) => (
                     <td key={c} style={{ ...td, textAlign: "right", color: HOME_THEME.text }}>{r.extra?.[c] ?? "—"}</td>
                   ))}

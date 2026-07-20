@@ -213,6 +213,24 @@ function MiniBars({ points, fmt = fmt$ }: { points: Pt[]; fmt?: (v: number) => s
           );
         })}
       </svg>
+      {/* Value labels above each bar. Rendered as HTML (not SVG <text>) because
+          the chart uses preserveAspectRatio="none", which would stretch text. */}
+      {vals.map((v, n) => {
+        const bh = (Math.abs(v) / maxAbs) * (CH_H / 2 - CH_PAD);
+        const xPct = ((CH_PAD + n * slot + bw / 2) / CH_W) * 100;
+        const tipPct = ((v >= 0 ? zero - bh : zero + bh) / CH_H) * 100;
+        return (
+          <div key={n}
+            style={{
+              position: "absolute", left: `${xPct}%`, top: `${tipPct}%`,
+              transform: v >= 0 ? "translate(-50%,-115%)" : "translate(-50%,15%)",
+              fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", pointerEvents: "none",
+              color: v >= 0 ? T.green : T.red, opacity: i == null || i === n ? 1 : 0.4,
+            }}>
+            {(v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v))}
+          </div>
+        );
+      })}
       {i != null && <ChartTip pt={points[i]} xPct={hoverX} fmt={fmt} />}
     </div>
   );
@@ -306,17 +324,24 @@ export default function TradingPage() {
     // averages (weighted by that day's win/loss counts). Day-level net_pnl can't
     // surface avg loss or profit factor when every journal DAY is green while
     // individual trades still lost — exactly the single-import all-win-day case.
+    // Trade-level streaks are reconstructed from each day's win/loss COUNTS in
+    // date order (wins-first within a day — the journal stores day aggregates,
+    // not per-fill order, so intra-day sequence is assumed).
     let grossWin = 0, grossLoss = 0, winCt = 0, lossCt = 0;
+    let bestTW = 0, bestTL = 0, curTW = 0, curTL = 0;
     for (const j of visible) {
       const lc = Math.round(j.trades * (1 - j.win_rate / 100));
       const wc = j.trades - lc;
       winCt += wc; lossCt += lc;
       grossWin += (j.avg_win || 0) * wc;
       grossLoss += Math.abs(j.avg_loss || 0) * lc;
+      for (let n = 0; n < wc; n++) { curTW++; curTL = 0; bestTW = Math.max(bestTW, curTW); }
+      for (let n = 0; n < lc; n++) { curTL++; curTW = 0; bestTL = Math.max(bestTL, curTL); }
     }
     const avgWin = winCt ? grossWin / winCt : 0;
     const avgLoss = lossCt ? -grossLoss / lossCt : 0;
-    // Streaks
+    const tradeWinPct = winCt + lossCt > 0 ? (winCt / (winCt + lossCt)) * 100 : null;
+    // Day streaks
     let bestW = 0, bestL = 0, curW = 0, curL = 0;
     for (const j of visible) {
       if (j.net_pnl > 0) { curW++; curL = 0; } else if (j.net_pnl < 0) { curL++; curW = 0; } else { curW = 0; curL = 0; }
@@ -336,7 +361,7 @@ export default function TradingPage() {
     const winPct = wins.length + losses.length > 0 ? (wins.length / (wins.length + losses.length)) * 100 : null;
     return {
       wins: wins.length, losses: losses.length, winPct, totalPnl, totalTrades,
-      avgWin, avgLoss, bestW, bestL, cum, dd, maxDD,
+      avgWin, avgLoss, bestW, bestL, bestTW, bestTL, winCt, lossCt, tradeWinPct, cum, dd, maxDD,
       pnlPerTrade: totalTrades > 0 ? totalPnl / totalTrades : null,
       // Profit factor across the whole filtered set: gross wins / gross losses.
       // This replaced the old "capture efficiency" score, which was defined
@@ -555,7 +580,13 @@ export default function TradingPage() {
             <div className="journal-kpis" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
               {kpiCard("Day Win %",
                 k.winPct != null ? `${k.winPct.toFixed(0)}%` : "—",
-                `${k.wins}W - ${k.losses}L`,
+                <>
+                  {`${k.wins}W - ${k.losses}L`}
+                  <div style={{ marginTop: 2 }}>
+                    Trade win <span style={{ color: HT.cyan, fontWeight: 700 }}>{k.tradeWinPct != null ? `${k.tradeWinPct.toFixed(0)}%` : "—"}</span>
+                    {" "}<span style={{ color: SOFT }}>({k.winCt}/{k.winCt + k.lossCt})</span>
+                  </div>
+                </>,
                 <div style={{ height: 6, background: HT.border, borderRadius: 3, overflow: "hidden", display: "flex" }}>
                   <div style={{ width: `${k.winPct ?? 0}%`, background: T.green }} />
                   <div style={{ width: `${k.winPct != null ? 100 - k.winPct : 0}%`, background: T.red }} />
@@ -570,10 +601,10 @@ export default function TradingPage() {
               {kpiCard("Net PnL",
                 <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>,
                 "Total Net PnL", undefined, LIGHT_BLUE)}
-              {kpiCard("Max Streaks", k.bestW || "—", "Best win streak",
-                <div style={{ fontSize: 14, color: SOFT }}>
-                  <div>Consecutive wins <span style={{ color: T.green }}>{k.bestW}</span></div>
-                  <div>Consecutive losses <span style={{ color: T.red }}>{k.bestL}</span></div>
+              {kpiCard("Max Streaks", k.bestW || "—", "Best win streak (days)",
+                <div style={{ fontSize: 13, color: SOFT, lineHeight: 1.5 }}>
+                  <div>Days <span style={{ color: T.green }}>{k.bestW}W</span> · <span style={{ color: T.red }}>{k.bestL}L</span></div>
+                  <div>Trades <span style={{ color: T.green }}>{k.bestTW}W</span> · <span style={{ color: T.red }}>{k.bestTL}L</span></div>
                 </div>, HT.purple)}
               {kpiCard("Per Trade",
                 k.pnlPerTrade != null ? fmt$(k.pnlPerTrade) : "—",
