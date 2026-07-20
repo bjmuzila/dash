@@ -35,6 +35,13 @@ const QUOTE_SYMBOLS = Array.from(new Set([
   ...SYMBOLS, ...Object.values(API_SYMBOL), '/ESU26', '/NQU26', 'VIX',
 ]));
 
+// Headline ETFs that MUST price every run — the customer /em page and the
+// multi-greek / home EM bands read these. They sit contiguously in the roster,
+// so one dropped bulk-sweep chunk zeroes all of them at once. Unlike an illiquid
+// single name, a NaN here is always a sweep glitch (the quote IS available), so
+// fetchAllQuotes re-fetches any unpriced one individually as a backstop.
+const CRITICAL_QUOTE_SYMBOLS = ['SPY', 'QQQ', 'IWM', 'DIA', 'SMH'];
+
 // ── formatting (mirrors the client) ────────────────────────────────────────
 function roundQuarter(n) { return Math.round(n * 4) / 4; }
 function fmtPrice(ticker, num) {
@@ -237,9 +244,16 @@ async function fetchAllQuotes(engine) {
   const map = {};
   for (let i = 0; i < QUOTE_SYMBOLS.length; i += CHUNK) {
     const part = QUOTE_SYMBOLS.slice(i, i + CHUNK);
-    const json = await getJson(`${engine.base}/api/quotes-batch?symbols=${encodeURIComponent(part.join(','))}`);
-    const items = (json && json.data && json.data.items) || [];
-    items.forEach((q) => { map[q.symbol] = q; });
+    try {
+      const json = await getJson(`${engine.base}/api/quotes-batch?symbols=${encodeURIComponent(part.join(','))}`);
+      const items = (json && json.data && json.data.items) || [];
+      items.forEach((q) => { map[q.symbol] = q; });
+    } catch (e) {
+      // A single flaky chunk must not abort the whole sweep — that would fail the
+      // entire publish. Skip it and continue; the critical-symbol backstop below
+      // re-fetches any headline ETF a dropped chunk left unpriced.
+      console.log(`[levels-engine] quotes chunk ${i}-${i + part.length} failed — ${e.message}`);
+    }
   }
   // A quote row is only usable if it carries a real price. Yahoo intermittently
   // returns an all-null row for index symbols ($NDX), which must NOT clobber a
@@ -263,6 +277,26 @@ async function fetchAllQuotes(engine) {
     const anyAlias = list.find((a) => map[a]);
     if (anyAlias) map[key] = map[anyAlias];
   });
+
+  // Backstop for the headline ETFs: a bulk-sweep chunk can return an empty/partial
+  // 200 (not a thrown non-200) that silently zeroes a whole 40-symbol window — and
+  // SPY/QQQ/IWM/DIA/SMH sit together in one such window, so they all publish as
+  // "Invalid price: NaN" at once even though the quote is available. Re-fetch each
+  // unpriced critical symbol on its own (bounded retries) so pricing never depends
+  // on that one chunk landing.
+  for (const sym of CRITICAL_QUOTE_SYMBOLS) {
+    if (hasPrice(map[sym])) continue;
+    for (let attempt = 0; attempt < 3 && !hasPrice(map[sym]); attempt++) {
+      try {
+        const json = await getJson(`${engine.base}/api/quotes-batch?symbols=${encodeURIComponent(sym)}`);
+        const items = (json && json.data && json.data.items) || [];
+        const row = items.find((q) => q.symbol === sym) || items[0];
+        if (hasPrice(row)) { map[sym] = row; break; }
+      } catch { /* transient — retry */ }
+    }
+    if (!hasPrice(map[sym])) console.log(`[levels-engine] critical symbol ${sym} still unpriced after individual retry`);
+  }
+
   engine.quoteCache = map;
   engine.quoteCacheTime = Date.now();
   return map;

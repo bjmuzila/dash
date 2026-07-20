@@ -10,6 +10,13 @@ import {
   insertOptionStrikeGexRows,
 } from "@/lib/db";
 
+// Heatmap columns are rebuilt from an append-only table the recorder writes to
+// ~once/min, so a short TTL cache serves every load after the first cold build
+// instantly and absorbs any concurrent duplicate fires. Keyed by request shape.
+type HeatmapEntry = { at: number; payload: unknown };
+const HEATMAP_TTL_MS = 30_000;
+const heatmapCache = new Map<string, HeatmapEntry>();
+
 function todayET(): string {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -83,6 +90,12 @@ export async function GET(req: NextRequest) {
       // window alone — one distinct expiry per calendar date in practice, so
       // this is safe. Explicit (non-front) expiry picks keep the exact match.
       const anyExpiry = searchParams.get("anyExpiry") === "1";
+      // Serve a recent identical build without touching the DB (the ~5s cost).
+      const cacheKey = `${winMin}|${anyExpiry ? "any" : expiry}|${anyExpiry ? "" : date}`;
+      const cached = heatmapCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) {
+        return NextResponse.json(cached.payload);
+      }
       const slots = winMin > 0
         ? anyExpiry
           ? await getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000)
@@ -114,7 +127,9 @@ export async function GET(req: NextRequest) {
           const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
           return { slotTs, cells, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
         });
-      return NextResponse.json({ mode: "heatmap", columns });
+      const payload = { mode: "heatmap", columns };
+      heatmapCache.set(cacheKey, { at: Date.now(), payload });
+      return NextResponse.json(payload);
     }
 
     // mode=point → per-strike net GEX baselines at the open + each requested age

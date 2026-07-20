@@ -402,6 +402,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Same 1-min resolution as columnsRef, but TODAY only — the bubble trail is a
   // session view and never backfills past days.
   const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
+  // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
+  // server-side, so the rolling feedExpiry must not re-fire the ~700KB/5s call.
+  const lastHeatmapKeyRef = useRef<string>("");
   const bubbleScaleRef = useRef(1);
   const bubbleVarRef = useRef(1);
   const bubbleMinsRef = useRef(5);
@@ -1054,6 +1057,17 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // Ignored server-side under anyExpiry=1; just needs to be non-empty so the
     // route's `expiry is required` guard passes.
     const queryExpiry = heatmapExpiry || "front";
+    // When replaying a PAST day the 1D/5D window (counted back from now) may not
+    // reach that day, so widen to the full 5-day cap so the replayed session's
+    // GEX (heatmap columns + bubble trail) is included.
+    const minutes = replayOn ? 7200 : heatmapDays * 1440;
+    // Front mode passes anyExpiry=1, so the server IGNORES `expiry`; the rolling
+    // feedExpiry churning each publish must NOT re-fire this ~700KB/5s query.
+    // Key on the request window only (an explicit DTE pick keys on expiry too),
+    // and bail if unchanged BEFORE clearing columns so no-op fires don't wipe.
+    const fetchKey = `${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}`;
+    if (fetchKey === lastHeatmapKeyRef.current) return;
+    lastHeatmapKeyRef.current = fetchKey;
     let cancelled = false;
     // When the picker or range changes, wipe the existing columns so we don't
     // mix expiries or leave stale far-back columns after switching to 1D.
@@ -1066,10 +1080,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // trading day, so ask the server to ignore the expiry filter and pull
         // by time window alone (anyExpiry=1) — otherwise backfill only ever
         // matches today. An explicit DTE pick keeps the exact expiry match.
-        // When replaying a PAST day the 1D/5D window (counted back from now) may
-        // not reach that day, so widen to the full 5-day cap so the replayed
-        // session's GEX (heatmap columns + bubble trail) is included.
-        const minutes = replayOn ? 7200 : heatmapDays * 1440;
         const res = await fetch(
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
           { cache: "no-store" }
