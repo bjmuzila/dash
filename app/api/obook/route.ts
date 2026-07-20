@@ -1,23 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queryAll, type FlowCallRecord } from "@/lib/db";
+import { forwardGet } from "@/lib/proxyForward";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 /**
- * GET /api/obook?ticker=QQQ[&date=YYYY-MM-DD]
+ * GET /api/obook?ticker=SPX|SPY|QQQ
  *
- * Builds the Order-Book "Tenor Split" interpretation for ANY ticker from the
- * classified time-&-sales tape in flow_calls (bought/sold aggressor prints),
- * split front-month vs intermediate-term. Spot/range come from a Yahoo chart
- * lookup. Returns the ObookData shape /obook renders; 404 when the tape is
- * empty for that symbol/date so the page falls back to its sample.
+ * Order-Book "Tenor Split" read, built from the SAME live tape the /test Flow
+ * Inventory tab uses: server-v2 /proxy/flow-history?underlying=X, which returns
+ * { tape: FlowOrder[] } — aggressor-classified prints (buy/sell) with per-print
+ * spot, tagged by underlying. Split front-month vs intermediate-term.
  *
- * NOTE: delta-weighted flow is an ESTIMATE — flow_calls has no per-print delta,
- * so we approximate |Δ| by moneyness (OTM 0.35 / ITM 0.55). Premium/ratios are
- * exact from the tape.
+ * Only the recorded roots (SPX / SPY / QQQ) have a tape; anything else 404s and
+ * the page falls back to its QQQ sample. Delta-weighted flow is an ESTIMATE —
+ * the tape has no per-print greeks, so |Δ| is approximated by moneyness.
  */
+
+const RECORDED = ["SPX", "SPY", "QQQ"];
+
+type FlowOrder = {
+  ts: number; expiration?: string; strike: number;
+  type: "C" | "P"; side: "buy" | "sell";
+  premium: number; size: number; isOtm: boolean; spot?: number;
+};
 
 type Tone = "bull" | "bear" | "neutral" | "cyan" | "orange";
 type Tenor = { tag: string; label: string; meta: string; head: string; side: "bull" | "bear"; rows: [string, string][]; note: string };
@@ -38,111 +45,46 @@ const fmtM = (n: number) => `$${(Math.abs(n) / 1e6).toFixed(1)}M`;
 const sgnM = (n: number) => `${n >= 0 ? "+" : "−"}${fmtM(n)}`;
 const fmtK = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(Math.round(n / 1000)).toLocaleString()}K`;
 const ratio = (a: number, b: number) => (b <= 0 ? "—" : `${(a / b).toFixed(2)}×`);
-const isCall = (r: FlowCallRecord) => (r.option_type || "").toLowerCase().startsWith("c");
-function isBought(r: FlowCallRecord): boolean {
-  const a = (r.action || "").toLowerCase(), s = (r.side || "").toLowerCase();
-  if (/(bought|buy)/.test(a)) return true;
-  if (/(sold|sell)/.test(a)) return false;
-  if (s.startsWith("a")) return true;   // ask = lifted = bought
-  if (s.startsWith("b")) return false;  // bid = hit = sold
-  return true;
-}
+const isCall = (o: FlowOrder) => o.type === "C";
+const isBought = (o: FlowOrder) => o.side === "buy";
 // Bullish = long calls or short puts; Bearish = short calls or long puts.
-const isBullish = (r: FlowCallRecord) => (isCall(r) ? isBought(r) : !isBought(r));
-const deltaMag = (r: FlowCallRecord) => (r.is_otm ? 0.35 : 0.55);
+const isBullish = (o: FlowOrder) => (isCall(o) ? isBought(o) : !isBought(o));
+const deltaMag = (o: FlowOrder) => (o.isOtm ? 0.35 : 0.55);
 const fmtExp = (iso: string) => {
   const m = /(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
   return m ? `${m[3]} ${MONTHS[+m[2] - 1]}` : (iso || "").toUpperCase();
 };
+const etTime = (ts: number) =>
+  new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
 
-// One aggregate over a subset of prints.
-function agg(rows: FlowCallRecord[]) {
+function agg(rows: FlowOrder[]) {
   let callPrem = 0, putPrem = 0, bullPrem = 0, bearPrem = 0, delta = 0;
   let otmCall = 0, otmPut = 0, callFlow = 0, putFlow = 0;
-  for (const r of rows) {
-    const prem = r.premium || 0;
-    const bought = isBought(r);
-    const dir = bought ? 1 : -1;
-    if (isCall(r)) { callPrem += prem; callFlow += dir * prem; if (r.is_otm) otmCall += dir * prem; }
-    else { putPrem += prem; putFlow += dir * prem; if (r.is_otm) otmPut += dir * prem; }
-    if (isBullish(r)) bullPrem += prem; else bearPrem += prem;
-    delta += (isBullish(r) ? 1 : -1) * (r.size || 0) * 100 * deltaMag(r);
+  for (const o of rows) {
+    const prem = o.premium || 0;
+    const dir = isBought(o) ? 1 : -1;
+    if (isCall(o)) { callPrem += prem; callFlow += dir * prem; if (o.isOtm) otmCall += dir * prem; }
+    else { putPrem += prem; putFlow += dir * prem; if (o.isOtm) otmPut += dir * prem; }
+    if (isBullish(o)) bullPrem += prem; else bearPrem += prem;
+    delta += (isBullish(o) ? 1 : -1) * (o.size || 0) * 100 * deltaMag(o);
   }
   return { callPrem, putPrem, bullPrem, bearPrem, delta, otmCall, otmPut, callFlow, putFlow, prem: callPrem + putPrem, n: rows.length };
 }
 
-function toYahoo(sym: string): string {
-  const s = sym.trim().toUpperCase();
-  if (s === "SPX" || s === "$SPX") return "^GSPC";
-  if (s === "NDX") return "^NDX";
-  if (s === "RUT") return "^RUT";
-  if (s === "VIX") return "^VIX";
-  if (s === "DJX" || s === "DJI") return "^DJI";
-  if (s.startsWith("/ES")) return "ES=F";
-  if (s.startsWith("/NQ")) return "NQ=F";
-  if (s.startsWith("/")) return s.slice(1) + "=F";
-  return s;
-}
-async function spotInfo(ticker: string): Promise<{ last: number; prev: number; high: number; low: number } | null> {
-  try {
-    const y = toYahoo(ticker);
-    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(y)}?range=1d&interval=1d`,
-      { cache: "no-store", headers: { "User-Agent": "Mozilla/5.0" } });
-    if (!r.ok) return null;
-    const m = (await r.json())?.chart?.result?.[0]?.meta;
-    if (!m || typeof m.regularMarketPrice !== "number") return null;
-    return {
-      last: m.regularMarketPrice,
-      prev: m.chartPreviousClose ?? m.previousClose ?? m.regularMarketPrice,
-      high: m.regularMarketDayHigh ?? m.regularMarketPrice,
-      low: m.regularMarketDayLow ?? m.regularMarketPrice,
-    };
-  } catch { return null; }
-}
-
-const etTime = (ts: number) =>
-  new Date(ts).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
-const etLong = (iso: string) =>
-  new Date(iso + "T12:00:00Z").toLocaleDateString("en-US", { timeZone: "America/New_York", month: "long", day: "numeric", year: "numeric" });
-
 export async function GET(req: NextRequest) {
-  const sp = new URL(req.url).searchParams;
-  const ticker = (sp.get("ticker") || "").trim().toUpperCase();
-  const wantDate = (sp.get("date") || new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" })).trim();
-  const symMatch = "(UPPER(COALESCE(underlying,'')) = ? OR UPPER(symbol) = ? OR UPPER(symbol) LIKE ?)";
-  const symArgs = [ticker, ticker, `${ticker}%`];
+  const ticker = (new URL(req.url).searchParams.get("ticker") || "").trim().toUpperCase();
   if (!ticker) return NextResponse.json({ error: "ticker required" }, { status: 400 });
 
-  let rows: FlowCallRecord[] = [];
-  let date = wantDate;
+  let rows: FlowOrder[] = [];
   try {
-    // Resolve the effective date: exact request, else the latest session that
-    // actually has tape for this symbol (so off-hours/weekends show last session).
-    const latest = await queryAll<{ d: string }>(
-      `SELECT date AS d FROM flow_calls WHERE ${symMatch} AND date <= ? ORDER BY date DESC LIMIT 1`,
-      [...symArgs, wantDate]
-    );
-    date = latest[0]?.d || wantDate;
-    rows = await queryAll<FlowCallRecord>(
-      `SELECT * FROM flow_calls WHERE date = ? AND ${symMatch} ORDER BY ts ASC LIMIT 50000`,
-      [date, ...symArgs]
-    );
+    const resp = await forwardGet(`/proxy/flow-history?underlying=${encodeURIComponent(ticker)}&limit=20000`);
+    const json = await resp.json().catch(() => ({}));
+    rows = Array.isArray(json?.tape) ? (json.tape as FlowOrder[]) : [];
   } catch (e) {
-    return NextResponse.json({ error: `db: ${String(e)}` }, { status: 500 });
+    return NextResponse.json({ error: `tape: ${String(e)}` }, { status: 502 });
   }
-  if (!rows.length) {
-    // Nothing for this symbol at all — hand back what IS recorded, recently.
-    let available: string[] = [];
-    try {
-      const av = await queryAll<{ u: string }>(
-        `SELECT DISTINCT UPPER(COALESCE(NULLIF(underlying,''), symbol)) AS u
-         FROM flow_calls WHERE date >= ? ORDER BY u LIMIT 60`,
-        [new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)]
-      );
-      available = av.map((r) => r.u).filter(Boolean);
-    } catch { /* ignore */ }
-    return NextResponse.json({ error: "no tape", ticker, date: wantDate, available }, { status: 404 });
-  }
+  rows = rows.filter((o) => o && o.premium && o.expiration).sort((a, b) => a.ts - b.ts);
+  if (!rows.length) return NextResponse.json({ error: "no tape", ticker, available: RECORDED }, { status: 404 });
 
   // ── tenor split: front = earliest expiration present, intermediate = the rest.
   const exps = Array.from(new Set(rows.map((r) => r.expiration || "").filter(Boolean))).sort();
@@ -151,12 +93,14 @@ export async function GET(req: NextRequest) {
   const inter = rows.filter((r) => r.expiration && r.expiration !== frontExp);
   const A = agg(rows), F = agg(front), I = agg(inter);
 
-  // ── spot / range
-  const s = await spotInfo(ticker);
-  const spotMovePct = s && s.prev ? ((s.last - s.prev) / s.prev) * 100 : null;
-  const spotStr = s ? `${s.prev.toFixed(1)} → ${s.last.toFixed(1)}` : "—";
-  const spotChgStr = s ? `(${s.last - s.prev >= 0 ? "+" : "−"}${Math.abs(s.last - s.prev).toFixed(1)})` : "";
-  const rangeStr = s ? `${s.low.toFixed(1)} – ${s.high.toFixed(1)}` : "—";
+  // ── spot / range from per-print spot (session open = first print, last = last).
+  const spots = rows.map((r) => r.spot).filter((v): v is number => typeof v === "number" && v > 0);
+  const open = spots[0], last = spots[spots.length - 1];
+  const hasSpot = spots.length > 0 && open != null && last != null;
+  const spotMovePct = hasSpot && open ? ((last - open) / open) * 100 : null;
+  const spotStr = hasSpot ? `${open.toFixed(1)} → ${last.toFixed(1)}` : "—";
+  const spotChgStr = hasSpot ? `(${last - open >= 0 ? "+" : "−"}${Math.abs(last - open).toFixed(1)})` : "";
+  const rangeStr = hasSpot ? `${Math.min(...spots).toFixed(1)} – ${Math.max(...spots).toFixed(1)}` : "—";
 
   // ── bounce floor: biggest SOLD puts in the front tenor.
   const soldPuts = new Map<number, number>();
@@ -172,9 +116,9 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => a.e.localeCompare(b.e)).slice(0, 8)
     .map((c) => ({ date: fmtExp(c.e), tag: c.e === frontExp ? "FM" : "IT", val: sgnM(c.net), pct: Math.round((Math.abs(c.net) / maxAbs) * 100), dir: c.net >= 0 ? 1 : -1 }));
 
-  const cpTone: Tone = A.callPrem >= A.putPrem ? "bull" : "orange";
   const frontBull = F.bullPrem >= F.bearPrem, interBull = I.bullPrem >= I.bearPrem;
   const combLean = A.delta >= 0 ? "net long" : "net short";
+  const cpTone: Tone = A.callPrem >= A.putPrem ? "bull" : "orange";
 
   const tenor = (g: ReturnType<typeof agg>, metaExp: string, tag: string, label: string, isFront: boolean): Tenor => {
     const bull = g.bullPrem >= g.bearPrem;
@@ -195,9 +139,11 @@ export async function GET(req: NextRequest) {
     };
   };
 
+  const nowDate = new Date(rows[rows.length - 1].ts).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "long", day: "numeric", year: "numeric" });
+
   const data: ObookData = {
-    ticker, date: etLong(date),
-    subtitle: `Front month (${fmtExp(frontExp)}) vs intermediate term · time & sales`,
+    ticker, date: nowDate,
+    subtitle: `Front month (${fmtExp(frontExp)}) vs intermediate term · live tape`,
     session: `${etTime(rows[0].ts)} → ${etTime(rows[rows.length - 1].ts)} ET`,
     spot: spotStr, spotChg: spotChgStr, range: rangeStr,
     prints: A.n.toLocaleString(), premium: fmtM(A.prem),

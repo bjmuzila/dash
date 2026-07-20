@@ -1133,22 +1133,11 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
     return { ...r, n: g.length, hits, p: g.length ? (100 * hits) / g.length : null };
   });
 
+  // Only surface what's actually live: PENDING (forming / if-it-fires) and
+  // IN PLAY. NOT-IN-PLAY rules are intentionally dropped — a trigger that's
+  // absent today is noise on a live board.
   const inPlay = scored.filter((r) => r.state === "in-play");
   const pending = scored.filter((r) => r.state === "pending");
-  const off = scored.filter((r) => r.state === "not-in-play");
-
-  const stateChip = (s: RuleState) => {
-    const [txt, col] =
-      s === "in-play" ? ["IN PLAY", HOME_THEME.green]
-        : s === "pending" ? ["PENDING", HOME_THEME.orange]
-          : ["NOT IN PLAY", HOME_THEME.red];
-    return (
-      <span style={{
-        fontSize: 14, fontWeight: 800, color: col, border: `1px solid ${col}`,
-        borderRadius: 6, padding: "1px 8px", whiteSpace: "nowrap",
-      }}>{txt}</span>
-    );
-  };
 
   const sideChip = (s: "H" | "L" | null) => {
     if (!s) return <span style={{ color: HOME_THEME.text }}>—</span>;
@@ -1164,7 +1153,7 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
   return (
     <Card
       accent="green"
-      title={`In Play Right Now — all 14 rules against today's ${L} (${winRange(win)} ET)`}
+      title={`In Play Right Now — live & forming rules against today's ${L} (${winRange(win)} ET)`}
       subtitle={provisional
         ? `${L} STILL FORMING — every read below is CONDITIONAL: this is what the rules would say if the range closed where it stands right now. They can still flip before ${clock(REND)} ET.`
         : `${L} FORMED — each rule scored against every past session that matched today's condition`}
@@ -1222,24 +1211,14 @@ function RuleBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; d
               </td>
             </tr>
           ))}
-
-          {secRow(`NOT IN PLAY · ${off.length}`)}
-          {off.map((r) => (
-            <tr key={r.id}>
-              <td style={{ ...tdL, fontWeight: 800, opacity: 0.75 }}>{r.id} · {r.name}</td>
-              <td style={{ ...tdL, opacity: 0.75 }}>{r.read}</td>
-              <td style={td}>{stateChip(r.state)}</td>
-              <td style={td}>—</td>
-            </tr>
-          ))}
         </tbody>
       </table>
 
       <div style={note}>
         Every % is a conditional base rate, not a prediction — &ldquo;on the past sessions that looked like this one, how often did it
         happen?&rdquo; PENDING rules haven&rsquo;t triggered yet (they need a break to print or the 14:00 bell) — their % is the
-        <b> if it fires</b> rate, conditioned on today&rsquo;s IB and the side it leans toward. NOT IN PLAY means the trigger is
-        genuinely absent today, so there is nothing to score.
+        <b> if it fires</b> rate, conditioned on today&rsquo;s IB and the side it leans toward. Rules whose trigger is absent today
+        are hidden — this board only shows what&rsquo;s forming or live.
       </div>
     </Card>
   );

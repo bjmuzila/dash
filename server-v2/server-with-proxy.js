@@ -1274,16 +1274,105 @@ async function main() {
             const p = getPool();
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const limit = Math.min(2000, Number(u.searchParams.get('limit') || 1000));
-            const { rows } = await p.query(
-              `SELECT to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry, spot,
-                      net_today, net_yest, vol_today, delta, peak_abs,
-                      EXTRACT(EPOCH FROM ts) * 1000 AS t
-               FROM strike_dod_max
-               WHERE date = (SELECT max(date) FROM strike_dod_max)
-               ORDER BY peak_abs DESC LIMIT $1`,
-              [limit]
-            );
+            const dateParam = (u.searchParams.get('date') || '').trim();
+            const isDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam);
+            let rows;
+            if (isDate) {
+              // Historical snapshot for a specific session: frozen peak columns
+              // only. Now/30m/60m/4h are session-relative (now()), so they don't
+              // apply to a past date — return null and let the UI hide them.
+              ({ rows } = await p.query(
+                `SELECT to_char(date,'YYYY-MM-DD') AS date, symbol, strike, expiry, spot,
+                        net_today, net_yest, vol_today, delta, peak_abs,
+                        NULL::double precision AS net_now,
+                        EXTRACT(EPOCH FROM ts) * 1000 AS t,
+                        NULL::double precision AS chg_30m,
+                        NULL::double precision AS chg_60m,
+                        NULL::double precision AS chg_4h
+                 FROM strike_dod_max WHERE date = $1
+                 ORDER BY peak_abs DESC LIMIT $2`,
+                [dateParam, limit]
+              ));
+            } else {
+              // Live (latest session): frozen peak + LIVE Now/30m/60m/4h computed
+              // off strike_growth at the SAME (symbol,expiry,strike).
+              ({ rows } = await p.query(
+                `WITH base AS (
+                   SELECT * FROM strike_dod_max
+                   WHERE date = (SELECT max(date) FROM strike_dod_max)
+                 )
+                 SELECT to_char(b.date,'YYYY-MM-DD') AS date, b.symbol, b.strike, b.expiry, b.spot,
+                        b.net_today, b.net_yest, b.vol_today, b.delta, b.peak_abs,
+                        nn.net_now AS net_now,
+                        EXTRACT(EPOCH FROM b.ts) * 1000 AS t,
+                        (nn.net_now - l30.net)  AS chg_30m,
+                        (nn.net_now - l60.net)  AS chg_60m,
+                        (nn.net_now - l240.net) AS chg_4h
+                 FROM base b
+                 LEFT JOIN LATERAL (
+                   SELECT (sg.gex_now + sg.gex_open) AS net_now FROM strike_growth sg
+                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
+                   ORDER BY sg.ts DESC LIMIT 1) nn ON true
+                 LEFT JOIN LATERAL (
+                   SELECT (sg.gex_now + sg.gex_open) AS net FROM strike_growth sg
+                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
+                     AND sg.ts <= now() - interval '30 minutes'
+                   ORDER BY sg.ts DESC LIMIT 1) l30 ON true
+                 LEFT JOIN LATERAL (
+                   SELECT (sg.gex_now + sg.gex_open) AS net FROM strike_growth sg
+                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
+                     AND sg.ts <= now() - interval '60 minutes'
+                   ORDER BY sg.ts DESC LIMIT 1) l60 ON true
+                 LEFT JOIN LATERAL (
+                   SELECT (sg.gex_now + sg.gex_open) AS net FROM strike_growth sg
+                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
+                     AND sg.ts <= now() - interval '240 minutes'
+                   ORDER BY sg.ts DESC LIMIT 1) l240 ON true
+                 ORDER BY b.peak_abs DESC LIMIT $1`,
+                [limit]
+              ));
+            }
             sendJson(res, 200, { ok: true, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Available sessions for the DoD date picker (newest first, with row count).
+      //   GET /proxy/strike-dod-dates
+      if (pathname === '/proxy/strike-dod-dates' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const { rows } = await p.query(
+              `SELECT to_char(date,'YYYY-MM-DD') AS date, count(*)::int AS n
+               FROM strike_dod_max GROUP BY date ORDER BY date DESC LIMIT 400`
+            );
+            sendJson(res, 200, { ok: true, dates: rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Per-ticker multi-day history: each day's frozen peak mover for one symbol.
+      //   GET /proxy/strike-dod-history?symbol=NVDA&limit=120
+      if (pathname === '/proxy/strike-dod-history' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const limit = Math.min(365, Number(u.searchParams.get('limit') || 120));
+            const { rows } = await p.query(
+              `SELECT to_char(date, 'YYYY-MM-DD') AS date, strike, expiry, spot,
+                      net_today, net_yest, vol_today, delta, peak_abs
+               FROM strike_dod_max WHERE symbol = $1 ORDER BY date DESC LIMIT $2`,
+              [symbol, limit]
+            );
+            sendJson(res, 200, { ok: true, symbol, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

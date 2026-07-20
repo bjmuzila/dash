@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE, homeInputStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, homeInputStyle, homeButtonStyle, classicCardStyle, statTileStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 
 // Order-Book "Tenor Split" view. Rendered by /obook (wrapped in PageShell) and by
@@ -180,10 +180,10 @@ export function ObookView() {
       </Card>
 
       {/* Metric tiles */}
-      <Card accent={LIGHT_BLUE} padding={0} style={{ overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+      <Card accent={LIGHT_BLUE}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
           {d.metrics.map((m, i) => (
-            <div key={m.label + i} style={{ padding: 20, borderLeft: i === 0 ? "none" : `1px solid ${HOME_THEME.border}` }}>
+            <div key={m.label + i} style={{ ...statTileStyle, padding: 16 }}>
               <div style={{ fontSize: 11, letterSpacing: "0.1em", color: HOME_THEME.muted, textTransform: "uppercase" }}>{m.label}</div>
               <div style={{ fontSize: 26, fontWeight: 800, color: toneColor(m.tone), marginTop: 8 }}>{m.value}</div>
               <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 4 }}>{m.sub}</div>
@@ -198,7 +198,7 @@ export function ObookView() {
           {d.tenors.map((c) => {
             const side = c.side === "bull" ? BULL : BEAR;
             return (
-              <div key={c.tag} style={{ border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${side}`, borderRadius: 12, padding: 20 }}>
+              <div key={c.tag} style={{ ...classicCardStyle, padding: 20 }}>
                 <div style={{ fontSize: 12, letterSpacing: "0.1em", color: HOME_THEME.muted }}>
                   <b style={{ color: HOME_THEME.text }}>{c.tag}</b> · {c.meta}
                 </div>
