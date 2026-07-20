@@ -314,11 +314,15 @@ const BUBBLE_SCALE_KEY = "es-candles-bubble-scale-v1";
 // small strikes to the floor (more contrast); lower lifts the whole field bigger.
 const BUBBLE_PRESET_KEY = "es-candles-bubble-preset-v1";
 const BUBBLE_PRESETS = {
-  subtle:   { scale: 0.22, var: 0.75 },
-  balanced: { scale: 0.32, var: 0.5 },
-  bold:     { scale: 0.5,  var: 0.4 },
+  subtle:   { scale: 0.30, var: 1.1 },  // sparsest — only the clearest walls, small
+  balanced: { scale: 0.42, var: 0.8 },  // clean hierarchy, medium
+  bold:     { scale: 0.58, var: 0.6 },  // survivors bigger and brighter
 } as const;
 type BubblePreset = keyof typeof BUBBLE_PRESETS;
+// Only draw bubbles for the N nearest strikes ABOVE and N below spot, per column.
+// Far strikes carry little tradeable gamma and just add horizontal noise; this
+// windows the trail to the strikes actually in play around price.
+const BUBBLE_STRIKE_WINDOW = 5;
 
 /**
  * `leading` renders as the first item in the dock, before the "ES 5m Candles"
@@ -2213,9 +2217,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             }
             if (sessAbs.length) {
               sessAbs.sort((a, b) => a - b);
-              // P97 of the session; on a tiny buffer this just resolves to the
-              // largest value present, so the scale never collapses to 0.
-              const sessScale = sessAbs[Math.max(0, Math.floor(0.97 * (sessAbs.length - 1)))] || sessAbs[sessAbs.length - 1];
+              const pctl = (p: number) => sessAbs[Math.min(sessAbs.length - 1, Math.max(0, Math.floor(p * (sessAbs.length - 1))))];
+              // Two anchors, not one. Sizing maps [pLo .. pHi] → [0 .. 1] instead
+              // of [0 .. max]: everything BELOW pLo (the bottom ~55% of strikes by
+              // |GEX|) collapses to ratio 0 and is culled, so the weak strikes stop
+              // drawing and the rails break apart — you see gaps, not one mass. The
+              // survivors (top ~45%) then spread across the FULL size range, so a
+              // real wall is unmistakably bigger than a marginal one. pHi = P95 is
+              // the "full size" point; the handful above it just clamp.
+              const pLo = pctl(0.55);
+              const pHiRaw = pctl(0.95);
+              const pHi = pHiRaw > pLo ? pHiRaw : pLo + 1; // guard flat distributions
+              const pSpan = pHi - pLo;
               const k = bubbleScaleRef.current;
               const rMax = 11 * k;  // px radius at the session max
               const rMin = 0.8 * k; // floor so tiny strikes stay dots
@@ -2235,24 +2248,42 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 const x = xAt(Math.floor(m.slotTs / bucketMs) * bucketMs);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
-                // Rank THIS minute's strikes by |net GEX|. The top 3 are what the
+                // Window to the N nearest strikes each side of spot. Spot = this
+                // column's historical SPX (m.spot), falling back to the live feed
+                // spot for legacy rows that never stored one. If neither is known,
+                // draw everything rather than nothing.
+                const spotSpx = (m as { spot?: number }).spot && (m as { spot?: number }).spot! > 0
+                  ? (m as { spot?: number }).spot!
+                  : spotRef.current;
+                let allowed: Set<number> | null = null;
+                if (spotSpx > 0) {
+                  const strikes = m.cells.filter((c) => valOf(c)).map((c) => c.strike);
+                  const above = strikes.filter((s) => s >= spotSpx).sort((a, b) => a - b).slice(0, BUBBLE_STRIKE_WINDOW);
+                  const below = strikes.filter((s) => s < spotSpx).sort((a, b) => b - a).slice(0, BUBBLE_STRIKE_WINDOW);
+                  allowed = new Set([...above, ...below]);
+                }
+                // Rank strikes by |net GEX| WITHIN the window. The top 3 are what the
                 // eye needs to find instantly — where the gamma actually is — and
                 // a pure magnitude ramp buries them: on a quiet minute nothing is
                 // near the session max, so every bubble renders small and dim and
-                // the levels are indistinguishable. Ranking is per-column and
-                // relative, so the leaders always read, in any regime.
+                // the levels are indistinguishable. Ranking within the window means
+                // the near-spot leaders always read even if a far strike is bigger.
                 const rank = new Map<number, number>(); // strike → 0|1|2
                 [...m.cells]
-                  .filter((c) => valOf(c))
+                  .filter((c) => valOf(c) && (!allowed || allowed.has(c.strike)))
                   .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)))
                   .slice(0, 3)
                   .forEach((c, i) => rank.set(c.strike, i));
                 for (const cell of m.cells) {
                   const v = valOf(cell);
                   if (!v) continue;
+                  if (allowed && !allowed.has(cell.strike)) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
-                  const ratio = Math.min(Math.abs(v) / sessScale, 1);
+                  // Subtractive percentile map: below pLo → 0 (culled), pLo..pHi
+                  // ramps 0..1, above pHi clamps. This is what separates strong
+                  // from weak — a strike at the median draws nothing, a wall draws full.
+                  const ratio = Math.min(Math.max((Math.abs(v) - pLo) / pSpan, 0), 1);
                   const rk = rank.get(cell.strike);
                   // sqrt → bubble AREA (not radius) tracks |GEX|, which is how
                   // the eye actually reads size. Top-3 get a size boost on top so
