@@ -89,7 +89,7 @@ export default function OpengraphImage() {
           padding: 56,
           backgroundColor: "#05060A",
           backgroundImage:
-            "radial-gradient(circle at 76% 40%, rgba(41,182,246,0.15), transparent 55%)",
+            "radial-gradient(circle at 76% 40%, rgba(41,182,246,0.08), transparent 55%)",
           fontFamily: "sans-serif",
         }}
       >
@@ -106,7 +106,7 @@ export default function OpengraphImage() {
           <div style={{ display: "flex", flexDirection: "column", width: 500 }}>
             <div style={{ display: "flex", alignItems: "center" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={cbLogoDataUri} width={420} height={229} alt="CB Edge" style={{ marginLeft: -64, marginTop: -52, marginBottom: -48 }} />
+              <img src={cbLogoDataUri} width={392} height={214} alt="CB Edge" style={{ marginLeft: -60, marginTop: -54, marginBottom: -50 }} />
             </div>
 
             <div
@@ -115,34 +115,72 @@ export default function OpengraphImage() {
                 flexDirection: "column",
                 marginTop: 0,
                 color: "#FFFFFF",
-                fontSize: 52,
+                fontSize: 50,
                 fontWeight: 800,
                 lineHeight: 1.1,
                 letterSpacing: -1,
               }}
             >
-              <span>REAL-TIME</span>
-              <span>SPX GEX &amp;</span>
-              <span>ORDERFLOW</span>
+              <span>REAL-TIME SPX GEX</span>
+              <span>&amp; ORDERFLOW</span>
             </div>
 
             <div
               style={{
                 display: "flex",
-                flexDirection: "column",
-                marginTop: 24,
+                marginTop: 12,
                 color: "#8b94a7",
-                fontSize: 23,
-                lineHeight: 1.4,
+                fontSize: 21,
+                lineHeight: 1.35,
               }}
             >
-              <span>Track gamma exposure, options</span>
-              <span style={{ display: "flex" }}>
-                flow, and key levels&nbsp;
-                <span style={{ color: "#c7ccd1", fontWeight: 700 }}>
-                  live.
-                </span>
-              </span>
+              <span>Everything you need to trade the tape&nbsp;</span>
+              <span style={{ color: "#c7ccd1", fontWeight: 700 }}>live.</span>
+            </div>
+
+            {/* feature chips — what CB Edge offers */}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                width: 470,
+                marginTop: 22,
+                gap: 10,
+              }}
+            >
+              {[
+                { t: "Real-Time SPX GEX", c: "#4FC3F7" },
+                { t: "Options Orderflow", c: "#22e3a0" },
+                { t: "TPO · Squeeze Scanner", c: "#E0A82E" },
+                { t: "ICT Alerts", c: "#c084fc" },
+              ].map((f) => (
+                <div
+                  key={f.t}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    width: 218,
+                    padding: "9px 14px",
+                    borderRadius: 10,
+                    background: "rgba(41,182,246,0.10)",
+                    border: "1px solid rgba(41,182,246,0.28)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      width: 9,
+                      height: 9,
+                      borderRadius: 5,
+                      marginRight: 10,
+                      background: f.c,
+                    }}
+                  />
+                  <span style={{ color: "#dbe9f2", fontSize: 16, fontWeight: 700 }}>
+                    {f.t}
+                  </span>
+                </div>
+              ))}
             </div>
 
             {/* CTA pill */}
@@ -151,7 +189,7 @@ export default function OpengraphImage() {
                 display: "flex",
                 alignItems: "center",
                 alignSelf: "flex-start",
-                marginTop: 26,
+                marginTop: 22,
                 padding: "14px 28px",
                 borderRadius: 12,
                 background: "#219EBC",
@@ -165,7 +203,8 @@ export default function OpengraphImage() {
             </div>
           </div>
 
-          {/* RIGHT: dashboard mock + real-text stat bar */}
+          {/* RIGHT: real dashboard Card (homeTheme surface: frosted fill, hairline
+              edge, faint light-blue top glow, soft shadow) */}
           <div
             style={{
               display: "flex",
@@ -173,44 +212,59 @@ export default function OpengraphImage() {
               flexDirection: "column",
               alignItems: "flex-end",
               justifyContent: "center",
-              position: "relative",
             }}
           >
-            {/* glow behind the panel — bright, wide bloom to pull the eye */}
-            <div
-              style={{
-                position: "absolute",
-                top: -90,
-                right: -80,
-                bottom: -90,
-                left: -20,
-                background:
-                  "radial-gradient(circle at 55% 50%, rgba(41,182,246,0.70), rgba(41,182,246,0.30) 38%, rgba(41,182,246,0.08) 62%, transparent 78%)",
-              }}
-            />
-
-            {/* chart panel: titlebar dots + real-DOM toolbar pills + chart img */}
             <div
               style={{
                 display: "flex",
                 flexDirection: "column",
-                width: 516,
-                background: "#0d1119",
-                borderRadius: "16px 16px 0 0",
-                border: "2px solid rgba(41,182,246,0.45)",
-                borderBottom: "none",
-                overflow: "hidden",
+                width: 452,
+                padding: 16,
+                borderRadius: 18,
+                border: "1px solid rgba(255,255,255,0.10)",
+                background:
+                  "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.72)",
+                boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
               }}
             >
-              {/* titlebar */}
-              <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", gap: 8 }}>
-                <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#ff5b6e" }} />
-                <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#f0a83c" }} />
-                <div style={{ display: "flex", width: 11, height: 11, borderRadius: 6, background: "#22e3a0" }} />
+              {/* card header — dashboard title + LIVE badge */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingBottom: 12,
+                  marginBottom: 12,
+                  borderBottom: "1px solid rgba(255,255,255,0.10)",
+                }}
+              >
+                <span
+                  style={{
+                    color: "#FFFFFF",
+                    fontSize: 14,
+                    fontWeight: 800,
+                    letterSpacing: 1.6,
+                  }}
+                >
+                  SPX · 0DTE GEX
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "5px 11px",
+                    borderRadius: 999,
+                    background: "rgba(31,217,138,0.10)",
+                    border: "1px solid rgba(31,217,138,0.35)",
+                  }}
+                >
+                  <div style={{ display: "flex", width: 7, height: 7, borderRadius: 4, marginRight: 7, background: "#1FD98A" }} />
+                  <span style={{ color: "#1FD98A", fontSize: 12, fontWeight: 800, letterSpacing: 1 }}>LIVE</span>
+                </div>
               </div>
 
-              {/* toolbar pill row — clean, legible subset */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 16px 14px" }}>
+              {/* toolbar pill row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
                 {[
                   { t: "Net GEX", on: true },
                   { t: "Call−Put", on: false },
@@ -221,15 +275,15 @@ export default function OpengraphImage() {
                     key={i}
                     style={{
                       display: "flex",
-                      padding: "7px 16px",
+                      padding: "6px 13px",
                       borderRadius: 8,
-                      fontSize: 15,
+                      fontSize: 13,
                       fontWeight: 700,
-                      background: p.on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.03)",
+                      background: p.on ? "rgba(33,158,188,0.14)" : "rgba(255,255,255,0.03)",
                       border: p.on
-                        ? "1px solid rgba(41,182,246,0.55)"
+                        ? "1px solid rgba(33,158,188,0.45)"
                         : "1px solid rgba(255,255,255,0.08)",
-                      color: p.on ? "#4FC3F7" : "#aeb4be",
+                      color: p.on ? "#7dd3fc" : "#aeb4be",
                     }}
                   >
                     {p.t}
@@ -239,29 +293,30 @@ export default function OpengraphImage() {
                 <div
                   style={{
                     display: "flex",
-                    padding: "7px 14px",
+                    padding: "6px 11px",
                     borderRadius: 8,
-                    fontSize: 15,
+                    fontSize: 13,
                     fontWeight: 700,
-                    background: "rgba(41,182,246,0.16)",
-                    border: "1px solid rgba(41,182,246,0.55)",
-                    color: "#4FC3F7",
+                    background: "rgba(33,158,188,0.14)",
+                    border: "1px solid rgba(33,158,188,0.45)",
+                    color: "#7dd3fc",
                   }}
                 >
                   ↻ Now
                 </div>
               </div>
 
-              <div style={{ display: "flex", position: "relative" }}>
+              {/* chart */}
+              <div style={{ display: "flex", position: "relative", borderRadius: 10, overflow: "hidden" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={chartDataUri} width={512} height={300} alt="" />
-                {/* MVC tag — real DOM so the text renders */}
+                <img src={chartDataUri} width={420} height={246} alt="" />
+                {/* MVC tag */}
                 <div
                   style={{
                     display: "flex",
                     position: "absolute",
-                    left: 92,
-                    bottom: 30,
+                    left: 76,
+                    bottom: 25,
                     padding: "3px 7px",
                     borderRadius: 4,
                     fontSize: 11,
@@ -274,39 +329,36 @@ export default function OpengraphImage() {
                   MVC 7,300
                 </div>
               </div>
-            </div>
 
-            {/* stat bar — real DOM text so the built-in font renders it */}
-            <div
-              style={{
-                display: "flex",
-                width: 516,
-                marginTop: -2,
-                padding: "12px 18px",
-                background: "#0d1119",
-                borderRadius: "0 0 16px 16px",
-                border: "2px solid rgba(41,182,246,0.45)",
-                borderTop: "none",
-              }}
-            >
-              {[
-                { k: "NET GEX", v: "-$8.40B", c: "#ff5b6e" },
-                { k: "CALL WALL", v: "7,400", c: "#4FC3F7" },
-                { k: "PUT WALL", v: "7,300", c: "#E0A82E" },
-                { k: "FLIP", v: "7,359.90", c: "#f0a83c" },
-              ].map((s) => (
-                <div
-                  key={s.k}
-                  style={{ display: "flex", flexDirection: "column", flex: 1 }}
-                >
-                  <span style={{ color: "#8b94a7", fontSize: 11, fontWeight: 700 }}>
-                    {s.k}
-                  </span>
-                  <span style={{ color: s.c, fontSize: 18, fontWeight: 800, marginTop: 3 }}>
-                    {s.v}
-                  </span>
-                </div>
-              ))}
+              {/* stat tiles */}
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                {[
+                  { k: "NET GEX", v: "-$8.40B", c: "#f4948e" },
+                  { k: "CALL WALL", v: "7,400", c: "#7dd3fc" },
+                  { k: "PUT WALL", v: "7,300", c: "#E0A82E" },
+                  { k: "FLIP", v: "7,359.90", c: "#f0a83c" },
+                ].map((s) => (
+                  <div
+                    key={s.k}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      flex: 1,
+                      padding: "9px 11px",
+                      borderRadius: 12,
+                      background:
+                        "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.35)",
+                    }}
+                  >
+                    <span style={{ color: "#8b94a7", fontSize: 10, fontWeight: 700, letterSpacing: 0.6 }}>
+                      {s.k}
+                    </span>
+                    <span style={{ color: s.c, fontSize: 16, fontWeight: 800, marginTop: 3 }}>
+                      {s.v}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>

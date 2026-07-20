@@ -126,7 +126,7 @@ class FlowProcessor {
    * @param {object|null} [args.quote] prevailing quote {bid,ask} for side inference
    * @param {number} [args.spot] underlying spot at print time (for isOtm/bucket)
    */
-  addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0 }) {
+  addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0, iv, oi, volume }) {
     const parsed = parseOptionSymbol(streamerSymbol);
     if (!parsed || !(price > 0) || !(size > 0)) return;
     // SPX-only lock: drop any non-SPX print at the source so the tape, prints[],
@@ -184,6 +184,11 @@ class FlowProcessor {
       last.premium += premium;
       last.fills = (last.fills || 1) + 1; // how many prints rolled into this order
       if (spot > 0) last.spot = spot; // keep the freshest underlying spot as fills accumulate
+      // Contract-level Greeks/Summary arrive on their own events; keep the
+      // freshest non-null value as fills accumulate so a late Greeks tick fills in.
+      if (Number.isFinite(iv) && iv > 0) last.iv = iv;
+      if (Number.isFinite(oi) && oi > 0) last.oi = oi;
+      if (Number.isFinite(volume)) last.volume = volume;
       // ts tracks the order's start; anchorTs stays the first fill so the rolling
       // window measures from order open (a steady stream won't extend forever).
     } else {
@@ -207,6 +212,9 @@ class FlowProcessor {
         premium,
         isOtm,
         spot: spot > 0 ? spot : undefined, // underlying spot at print time, for the tape's Spot column
+        iv: Number.isFinite(iv) && iv > 0 ? iv : undefined,          // decimal (0.15 = 15%)
+        oi: Number.isFinite(oi) && oi > 0 ? oi : undefined,          // open interest (contract-level)
+        volume: Number.isFinite(volume) ? volume : undefined,        // dayVolume (contract-level)
       });
       // Evict by counting only above-floor blocks, so a burst of sub-floor
       // 500ms slots can't push real ≥floor blocks out of the cap before the

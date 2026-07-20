@@ -58,7 +58,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Traders Dashboard", href: "/traders-dashboard" },
       { label: "Options Chain", href: "/options-chain" },
       { label: "Estimated Moves", href: "/em" },
-      { label: "Analytics", href: "/analytics" },
+      { label: "Analysis", href: "/analytics" },
       { label: "ES Candles", href: "/es-candles" },
       { label: "ICT", href: "/ict" },
       { label: "Journal", href: "/trading" },

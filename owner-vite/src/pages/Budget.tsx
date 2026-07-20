@@ -1260,7 +1260,7 @@ function CalendarGrid({
             onClick={() => g && onSelect(iso(d))}
             disabled={!g}
             style={{
-              textAlign: "left", minHeight: 56, padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
+              textAlign: "left", height: 74, boxSizing: "border-box", padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
               background: tint,
               border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
               boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",

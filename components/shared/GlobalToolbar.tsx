@@ -214,7 +214,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/traders-dashboard", label: "Traders Dash",  emoji: "📊" },
   { href: "/options-chain",     label: "Options Chain", emoji: "⛓️" },
   { href: "/em",                label: "Est. Moves",    emoji: "↔️" },
-  { href: "/analytics",         label: "Analytics",     emoji: "📈" },
+  { href: "/analytics",         label: "Analysis",      emoji: "📈" },
   { href: "/flow",              label: "Flow",          emoji: "🌊" },
   { href: "/es-candles",        label: "ES Candles",    emoji: "🕯️" },
   { href: "/scanner",           label: "Scanner",       emoji: "🔍" },

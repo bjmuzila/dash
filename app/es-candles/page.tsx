@@ -582,7 +582,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   //   1.0 = linear
   //   >1  = the small strikes collapse toward the floor and only real gamma
   //         renders big — more visible spread between levels.
-  const [bubbleVar, setBubbleVar] = useState(1.3);
+  const [bubbleVar, setBubbleVar] = useState(2.2);
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
   // 5m spaces them one per candle, which is why it's the default.
@@ -2219,8 +2219,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   // the radius range — every level landed mid-size and the trail read
                   // as uniform tubes. The exponent is now the "variance" knob: higher
                   // pushes small strikes to the floor and leaves the real gamma big.
-                  const r = (rMin + Math.pow(ratio, bubbleVarRef.current) * (rMax - rMin)) * rankBoost;
-                  if (r < 0.35) continue;
+                  // Only the top-3 leaders get a size FLOOR so they always read.
+                  // Non-leaders use floor 0 → radius ∝ pow(ratio, var) with no
+                  // minimum, so strikes with little/no net GEX collapse toward
+                  // nothing and get culled below (was: every line drew as an
+                  // rMin dot, so the whole trail read as uniform dust).
+                  const floor = rk != null ? rMin : 0;
+                  const r = (floor + Math.pow(ratio, bubbleVarRef.current) * (rMax - floor)) * rankBoost;
+                  if (r < 0.9) continue;
                   // SOLID fill, no stroke. Magnitude is carried by the COLOR (a
                   // dim→hot ramp) and the radius — not by opacity. Filling at low
                   // alpha and stroking brighter on top made every bubble read as a
@@ -2653,7 +2659,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble size</div>
                   <DockSlider label="bubble" value={bubbleScale} min={0.1} max={1.0} step={0.02} onChange={changeBubbleScale} title="Bubble size (saved in this browser)" />
                   <DockSlider
-                    label="variance" value={bubbleVar} min={0.3} max={4} step={0.1}
+                    label="variance" value={bubbleVar} min={0.3} max={6} step={0.1}
                     format={(v) => v.toFixed(1)} onChange={setBubbleVar}
                     title="Size contrast — low = all bubbles similar, high = only real gamma renders big"
                   />

@@ -83,7 +83,10 @@ function fmtTime(ev: CalEvent): string {
 }
 
 function includeTemplateEvent(ev: CalEvent): boolean {
-  return ev.impact === "President" || (ev.impact === "Medium" && ev.country === "USD") || (ev.impact === "High" && ev.country === "USD");
+  // Match the home panel's default all-USD scope — quiet days (only Low-impact
+  // USD prints, e.g. CB Leading Index) were rendering empty even though the
+  // panel showed the events.
+  return ev.impact === "President" || (ev.country === "USD" && ev.impact !== "Holiday");
 }
 
 const HEADLINE_PRIORITY_RULES: Array<{ rank: number; rules: RegExp[] }> = [
@@ -506,7 +509,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
           <div>Time</div><div>Event</div><div>Impact</div><div style="text-align:right">Actual</div><div style="text-align:right">Fcst</div><div style="text-align:right">Prev</div>
         </div>
         ${econRowsHTML}
-      </div>` : `<div class="empty-panel">No high-impact events today</div>`}
+      </div>` : `<div class="empty-panel">No economic events today</div>`}
     </div>
     <div class="panel ern">
       <div class="panel-head">

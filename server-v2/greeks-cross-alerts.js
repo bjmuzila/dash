@@ -143,13 +143,10 @@ function noteGreeks(obs) {
     if (!decisive && now - st.lastFiredAt < COOLDOWN_MS) continue;
     st.lastFiredAt = now;
 
-    const dir = side === 'pos' ? 'positive' : 'negative';
     const arrow = side === 'pos' ? '↑' : '↓';
-    const meaning = side === 'pos' ? cfg.up : cfg.down;
-    const val = `${value >= 0 ? '+' : ''}${value.toFixed(2)}B`;
 
     lines.push(
-      `${etDisplayTime()}  [Greeks] ${cfg.label} crossed 0 ${arrow} ${dir} (${val}) — ${meaning} {/greeks}`
+      `${etDisplayTime()}  [Greeks] ${cfg.label} crossed 0 ${arrow} {/greeks}`
     );
   }
 

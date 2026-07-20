@@ -51,6 +51,17 @@ function fmtSpot(spot: number | undefined): string {
   return spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function fmtInt(val: number | undefined): string {
+  if (val == null || !Number.isFinite(val)) return "—";
+  return Math.round(val).toLocaleString();
+}
+
+// IV arrives as a decimal (0.15 = 15%).
+function fmtIv(iv: number | undefined): string {
+  if (iv == null || !Number.isFinite(iv) || iv <= 0) return "—";
+  return `${(iv * 100).toFixed(1)}%`;
+}
+
 // Cost to buy ONE contract (option price × 100 shares), vs. Premium which is the
 // full order's total (price × size × 100).
 function fmtContractCost(price: number): string {
@@ -158,7 +169,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
       <div
         className="grid text-xs px-3 py-1 border-b flex-shrink-0"
         style={{
-          gridTemplateColumns: "55px 48px 1fr 58px 58px 60px 65px 65px",
+          gridTemplateColumns: "55px 48px 1fr 58px 58px 55px 55px 55px 50px 65px 65px",
           borderColor: "var(--border)",
           color: "var(--muted)",
         }}
@@ -169,6 +180,9 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
         <span className="text-right">Strike</span>
         <span className="text-right">Spot</span>
         <span className="text-right">Size</span>
+        <span className="text-right" title="Contract day volume (dxLink Trade dayVolume)">Vol</span>
+        <span className="text-right" title="Open interest (dxLink Summary)">OI</span>
+        <span className="text-right" title="Implied volatility (dxLink Greeks)">IV</span>
         <span className="text-right" title="Cost of one contract (price × 100)">Cost/Ctr</span>
         <span className="text-right">Premium</span>
       </div>
@@ -184,7 +198,7 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
               key={i}
               className="grid text-xs px-3 py-1 font-mono border-b hover:bg-[var(--border)] transition-colors"
               style={{
-                gridTemplateColumns: "55px 48px 1fr 58px 58px 60px 65px 65px",
+                gridTemplateColumns: "55px 48px 1fr 58px 58px 55px 55px 55px 50px 65px 65px",
                 borderColor: "var(--border)",
               }}
             >
@@ -199,6 +213,9 @@ export default function FlowTape({ orders, connected }: FlowTapeProps) {
               <span className="text-right" style={{ color: "var(--text)" }}>{o.strike.toLocaleString()}</span>
               <span className="text-right" style={{ color: "var(--muted)" }}>{fmtSpot(o.spot)}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{o.size.toLocaleString()}</span>
+              <span className="text-right" style={{ color: "var(--muted)" }}>{fmtInt(o.volume)}</span>
+              <span className="text-right" style={{ color: "var(--muted)" }}>{fmtInt(o.oi)}</span>
+              <span className="text-right" style={{ color: "var(--muted)" }}>{fmtIv(o.iv)}</span>
               <span className="text-right" style={{ color: "var(--text)" }}>{fmtContractCost(o.price)}</span>
               <span className="text-right" style={{ color: ACTION_COLORS[o.action] ?? "var(--text)" }}>
                 {fmtPremium(o.premium)}

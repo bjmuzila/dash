@@ -3216,6 +3216,12 @@ class TastytradeProxy {
       if (useTheta()) return;
       const quote = this.quotes.get(sym) || null;
       const sz = Number(ev.size);
+      // Contract-level IV / OI / volume arrive on their own Greeks + Summary +
+      // Trade(dayVolume) events and are cached per streamer symbol; stamp the
+      // latest onto this flow order so the tape can show them.
+      const gk = this.greeks.get(sym);
+      const sm = this.summaries.get(sym);
+      const dvol = this.volumes.get(sym);
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
@@ -3225,6 +3231,9 @@ class TastytradeProxy {
         // back to the authoritative market-state spot (set on every quote + GEX
         // recompute) so isOtm is classified correctly from the very first print.
         spot: this.spot || marketState.getSpot(),
+        iv: gk?.iv,
+        oi: sm?.oi,
+        volume: dvol,
       });
       return;
     }

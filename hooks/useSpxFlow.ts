@@ -28,6 +28,9 @@ export interface FlowOrder {
   isOtm: boolean;
   fills?: number; // # of raw prints rolled into this aggregated order (sweep size)
   spot?: number; // underlying spot price at print time
+  iv?: number; // contract implied volatility (decimal, 0.15 = 15%) from the Greeks event
+  oi?: number; // contract open interest from the Summary event
+  volume?: number; // contract day volume from the Trade dayVolume field
 }
 
 interface FlowAggregateEntry {
