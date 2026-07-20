@@ -1021,6 +1021,7 @@ const ChainMatrix = memo(function ChainMatrix({
   const HDR_BG = "#0D1119";
   // ⅀ Total column — per-strike sum across every rendered expiration, with its
   // own heat scale (over the visible strikes) so the biggest net totals pop.
+  const todayKey = etDateKey(etToday());
   const rowTotals = new Map<number, number>();
   visibleStrikes.forEach((strike) => {
     if (strike == null) return;
@@ -1028,6 +1029,8 @@ const ChainMatrix = memo(function ChainMatrix({
     renderIdx.forEach((colIdx) => {
       const col = columns[colIdx];
       if (!col) return;
+      // Total EXCLUDES the 0DTE (today's expiration) column.
+      if (col.expiration === todayKey) return;
       const isCh = !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
       const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike);
       if (v != null) sum += v;
@@ -1074,6 +1077,7 @@ const ChainMatrix = memo(function ChainMatrix({
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
       <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
+        <div style={{ fontSize: 8, fontWeight: 700, color: HT.muted, letterSpacing: "0.06em", marginTop: -1 }}>EX 0DTE</div>
         <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
           {fmtMoney(grandVisibleTotal)}
         </div>

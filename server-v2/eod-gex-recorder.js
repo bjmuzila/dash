@@ -260,101 +260,6 @@ async function fetchChainGex(_base, chainTicker) {
   return { totalNetGex: tng, totalFlowGex: 0, spot }; // SPY/QQQ: no dealer inventory, flow GEX = 0
 }
 
-// ── All-expirations (ex-0DTE) live GEX ─────────────────────────────────────────
-//
-// The PM value above is a SINGLE expiry ($SPX = the live header; SPY/QQQ = the
-// front chain). This computes the combined net GEX across EVERY listed expiration
-// EXCEPT 0DTE (the expiry whose date == the session date), straight off the live
-// TT chain — which, unlike the Theta *history* fetchers, is fully populated under
-// DATA_SOURCE=tt. Works for all three symbols; $SPX resolves to the SPX chain.
-
-// Symbol → the underlying root the chain fetchers expect ($SPX → SPX).
-function chainUnderlying(symbol) { return symbol === '$SPX' ? 'SPX' : symbol; }
-
-// Tiny concurrency limiter so a ~50-expiration chain doesn't fan out 50 upstream
-// by-type fetches at once (proxy-tastytrade coalesces the OI+greeks+vol trio per
-// expiry, so this is one upstream call per expiry).
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
-      const idx = i++;
-      out[idx] = await fn(items[idx], idx);
-    }
-  });
-  await Promise.all(workers);
-  return out;
-}
-
-const EXP_CONCURRENCY = 4;
-
-// Compute combined net GEX across all expirations except 0DTE for a symbol, from
-// the live chain. `spot` is passed in from the front pass so both totals share
-// the same underlying price. Returns a number, or null if it can't be trusted.
-async function computeLiveGexEx0dte(symbol, sessionDate, spot) {
-  if (!(Number(spot) > 0)) return null;
-  const underlying = chainUnderlying(symbol);
-  const { contracts, expirations } = await fetchChainTheta(underlying);
-  if (!expirations?.length) throw new Error(`no expirations for ${underlying}`);
-
-  // Every listed expiration that is NOT the 0DTE (session-date) expiry. Past
-  // expirations never appear in a live chain, so this is "0DTE-and-out, minus 0DTE".
-  const exps = expirations.filter((e) => e && e !== sessionDate);
-  if (!exps.length) return null; // only a 0DTE listed → nothing to combine
-
-  // Greeks + OI + volume per expiration (trio coalesced upstream), flattened.
-  const perExp = await mapLimit(exps, EXP_CONCURRENCY, async (exp) => {
-    const [greekMap, oiMap, volMap] = await Promise.all([
-      fetchGreeksTheta(underlying, exp).catch(() => new Map()),
-      fetchOpenInterestTheta(underlying, exp).catch(() => new Map()),
-      fetchVolumeTheta(underlying, exp).catch(() => new Map()),
-    ]);
-    const rows = [];
-    for (const c of contracts) {
-      if (c.expiration !== exp) continue;
-      const k = keyOf(c.expiration, c.strike, c.type);
-      const g = greekMap.get(k) || {};
-      const oi = Number(oiMap.get(k)?.oi ?? 0);
-      const vol = Number(volMap.get(k) ?? 0);
-      const gamma = Math.abs(Number(g.gamma ?? 0));
-      const delta = Math.abs(Number(g.delta ?? 0));
-      if (!(gamma > 0) && !(oi > 0)) continue;
-      rows.push({ strike: c.strike, side: c.type === 'C' ? 'call' : 'put', oi, volume: vol, gamma, delta });
-    }
-    return rows;
-  });
-
-  const flatRows = perExp.flat();
-  if (!flatRows.length) throw new Error(`${symbol}: no ex-0DTE option rows`);
-
-  const gexRows = computeGexRows(flatRows, Number(spot));
-  const populated = gexRows.filter(
-    (r) => (r.callGamma > 0 || r.putGamma > 0) && (r.callOI > 0 || r.putOI > 0)
-  ).length;
-  if (populated < MIN_POPULATED_STRIKES) {
-    throw new Error(`${symbol}: only ${populated} ex-0DTE populated strikes — skip`);
-  }
-  return totalNetGex(gexRows);
-}
-
-// One PM computation of the ex-0DTE total per (date, symbol): the full-chain
-// sweep is heavy, and the value barely moves across the 10-minute window, so we
-// compute it on the first tick that succeeds and reuse it for later ticks (which
-// still refresh the front total_gex so the 4:00 print wins).
-const _exDteCache = new Map(); // `date|symbol` -> number
-async function pmGexEx0dte(symbol, date, spot) {
-  const key = `${date}|${symbol}`;
-  if (_exDteCache.has(key)) return _exDteCache.get(key);
-  try {
-    const v = await computeLiveGexEx0dte(symbol, date, spot);
-    if (Number.isFinite(v)) { _exDteCache.set(key, v); return v; }
-  } catch (e) {
-    console.warn(`[eod-gex] ${symbol} ex-0DTE — ${e.message}`);
-  }
-  return null;
-}
-
 // ── Upsert ────────────────────────────────────────────────────────────────────
 
 // `source` marks how the row was produced, so a derived row is never mistaken
@@ -375,35 +280,26 @@ async function ensureColumns(p) {
   try {
     await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_flow_gex DOUBLE PRECISION DEFAULT 0`);
     await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS source TEXT`);
-    // Combined net GEX across ALL listed expirations EXCEPT 0DTE (the expiry that
-    // matches the session date). Nullable — a row written before it could be
-    // computed (e.g. the chain fetch failed) leaves it NULL, never a bogus 0.
-    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_gex_ex0dte DOUBLE PRECISION`);
   } catch (e) {
     _colsChecked = false; // let a later write retry
     console.warn('[eod-gex] could not ensure columns:', e.message);
   }
 }
 
-// total_gex_ex0dte is the LAST positional arg (defaults to null) so every
-// existing call site stays valid; only callers that have the value pass it.
-// COALESCE on update: a later provisional write that couldn't compute ex0dte
-// (null) must not wipe a good value already stored for the row.
-async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live', total_gex_ex0dte = null) {
+async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live') {
   const p = getPool();
   if (!p) { console.warn('[eod-gex] no DB — skipping write'); return; }
   await ensureColumns(p);
   await p.query(
-    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (date, symbol) DO UPDATE SET
-       total_gex        = EXCLUDED.total_gex,
-       total_flow_gex   = EXCLUDED.total_flow_gex,
-       spot             = EXCLUDED.spot,
-       computed_at      = EXCLUDED.computed_at,
-       source           = EXCLUDED.source,
-       total_gex_ex0dte = COALESCE(EXCLUDED.total_gex_ex0dte, eod_gex.total_gex_ex0dte)`,
-    [date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte]
+       total_gex      = EXCLUDED.total_gex,
+       total_flow_gex = EXCLUDED.total_flow_gex,
+       spot           = EXCLUDED.spot,
+       computed_at    = EXCLUDED.computed_at,
+       source         = EXCLUDED.source`,
+    [date, symbol, total_gex, total_flow_gex, spot, computed_at, source]
   );
 }
 
@@ -482,23 +378,14 @@ async function collectEodGex(base, opts = {}) {
         continue;
       }
 
-      // Combined net GEX across all expirations except 0DTE (live chain, once
-      // per date|symbol). Best-effort: null on failure leaves the column via the
-      // COALESCE in upsert without disturbing the front total_gex.
-      const ex0dte = await pmGexEx0dte(symbol, date, spot);
-
-      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, 'live', ex0dte);
+      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, 'live');
       saved.push(symbol);
       console.log(
-        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  exFrontGEX ${ex0dte == null ? 'n/a' : `${ex0dte >= 0 ? '+' : ''}${(ex0dte / 1e9).toFixed(3)}B`}  spot=${spot.toFixed(2)}`
+        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`
       );
     } catch (e) {
       console.warn(`[eod-gex] ${symbol} — ${e.message}`);
     }
-  }
-  // Drop ex-0DTE cache entries from prior dates so the Map can't grow unbounded.
-  for (const k of _exDteCache.keys()) {
-    if (k.split('|')[0] < date) _exDteCache.delete(k);
   }
   return { date, saved };
 }
@@ -581,7 +468,6 @@ async function computeHistoricalGexRows(symbol, date) {
       volume: Number(eod.volume ?? 0),
       gamma,
       delta,
-      expiration, // kept so callers can split out 0DTE (expiration === date)
     });
   }
   if (bsFilled > 0) console.log(`[eod-gex/am] ${symbol} ${date} — BS-filled gamma for ${bsFilled} strikes`);
@@ -595,25 +481,13 @@ async function computeHistoricalGexRows(symbol, date) {
   if (populated < MIN_POPULATED_STRIKES) {
     throw new Error(`${symbol}: only ${populated} populated strikes for ${date} — skip`);
   }
-  return { gexRows, spot: Number(spot), flatRows };
+  return { gexRows, spot: Number(spot) };
 }
 
-// Combined net GEX across all expirations EXCEPT 0DTE (expiration === the session
-// date), from historical flatRows. Returns null if nothing remains after the cull.
-function ex0dteTotalFromFlatRows(flatRows, spot, date) {
-  const ex = flatRows.filter((r) => r.expiration !== date);
-  if (!ex.length) return null;
-  return totalNetGex(computeGexRows(ex, Number(spot)));
-}
-
-// Back-compat wrapper: EOD callers only need the total(s) + spot.
+// Back-compat wrapper: EOD callers only need the total + spot.
 async function computeHistoricalEodGex(symbol, date) {
-  const { gexRows, spot, flatRows } = await computeHistoricalGexRows(symbol, date);
-  return {
-    totalNetGex: totalNetGex(gexRows),
-    totalNetGexEx0dte: ex0dteTotalFromFlatRows(flatRows, spot, date),
-    spot,
-  };
+  const { gexRows, spot } = await computeHistoricalGexRows(symbol, date);
+  return { totalNetGex: totalNetGex(gexRows), spot };
 }
 
 // Per-(date|symbol) bake-in state. Once baked, the symbol is skipped for that
@@ -642,7 +516,7 @@ async function collectMorningEodGex(opts = {}) {
     if (st.baked) { done.push(`${symbol}(baked)`); continue; }
 
     try {
-      const { totalNetGex: tng, totalNetGexEx0dte: ex0dte, spot } = await computeHistoricalEodGex(symbol, date);
+      const { totalNetGex: tng, spot } = await computeHistoricalEodGex(symbol, date);
       if (!Number.isFinite(tng) || !(spot > 0)) {
         console.warn(`[eod-gex/am] ${symbol} ${date}: invalid tng=${tng} spot=${spot} — skip`);
         continue;
@@ -651,8 +525,8 @@ async function collectMorningEodGex(opts = {}) {
       // NOTE: this used to be upsertEodGex(date, symbol, tng, spot, computedAt) —
       // 5 args into a 6-arg signature, so `spot` landed in total_flow_gex and
       // computedAt in spot. The settled pass has no flow GEX (history has no
-      // dealer inventory), so pass 0 explicitly. ex0dte = settled all-exp-ex-0DTE.
-      await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta', ex0dte);
+      // dealer inventory), so pass 0 explicitly.
+      await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta');
 
       // Bake-in: at/after 09:30, if unchanged from the previous poll, freeze it.
       const unchanged = st.last != null && Math.abs(st.last - tng) < 1; // ~$1 of GEX
@@ -717,9 +591,9 @@ async function catchUpMissing(opts = {}) {
 
       // 1) Theta history (settled OI) — the real fix.
       try {
-        const { totalNetGex: tng, totalNetGexEx0dte: ex0dte, spot } = await computeHistoricalEodGex(symbol, date);
+        const { totalNetGex: tng, spot } = await computeHistoricalEodGex(symbol, date);
         if (Number.isFinite(tng) && spot > 0) {
-          await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta', ex0dte);
+          await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta');
           filled.push(`${symbol}:${date}(theta)`);
           console.log(`[eod-gex/catchup] ${symbol} ${date} — theta  GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`);
           continue;
