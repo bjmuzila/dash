@@ -489,7 +489,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   // ── IB switcher tab ────────────────────────────────────────────────────────
   // Toggles the Initial Balance lines; hovering the tab previews the IB page.
-  const IB_ROUTE = "/scanner?tab=ibstats"; // IB Stats lives on the scanner page's IB tab
+  const IB_ROUTE = "/scanner?tab=ibstats"; // full IB Stats board — the "Open ↗" target
+  const IB_EMBED_ROUTE = "/scanner/ib-embed?embed=1"; // today section only, no chrome — the hover preview
   const [showIb, setShowIb] = useState(false);
   const [ibPop, setIbPop] = useState(false);
   const [ibPopRect, setIbPopRect] = useState<{ left: number; top: number } | null>(null);
@@ -2578,7 +2579,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 <span>Initial Balance</span>
                 <a href={IB_ROUTE} target="_blank" rel="noreferrer" style={{ color: HOME_THEME.cyan, textDecoration: "none" }}>Open ↗</a>
               </div>
-              <iframe src={IB_ROUTE} title="IB page preview" style={{ width: "100%", height: "calc(100% - 31px)", border: 0, background: "transparent" }} />
+              <iframe src={IB_EMBED_ROUTE} title="IB page preview" style={{ width: "100%", height: "calc(100% - 31px)", border: 0, background: "transparent" }} />
             </div>,
             document.body
           )}

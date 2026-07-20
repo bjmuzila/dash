@@ -225,7 +225,7 @@ function TickerListDropdown({ activeTicker, onSelect }: { activeTicker: string; 
   const q = query.trim().toUpperCase();
   const matches = SCANNER_TICKERS.filter((t) => !q || t.includes(q));
   const favList = matches.filter((t) => favSet.has(t)).sort();
-  const rest = matches.filter((t) => !favSet.has(t));
+  const rest = matches.filter((t) => !favSet.has(t)).sort();
   const rows: Array<{ t: string; fav: boolean; divider?: boolean }> = [
     ...favList.map((t) => ({ t, fav: true })),
     ...(favList.length && rest.length ? [{ t: "__divider__", fav: false, divider: true }] : []),
@@ -886,10 +886,28 @@ const ChainMatrix = memo(function ChainMatrix({
   const STRIKE_COL = 76;
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
+  // ⅀ Total column — per-strike sum across every rendered expiration, with its
+  // own heat scale (over the visible strikes) so the biggest net totals pop.
+  const rowTotals = new Map<number, number>();
+  visibleStrikes.forEach((strike) => {
+    if (strike == null) return;
+    let sum = 0;
+    renderIdx.forEach((colIdx) => {
+      const col = columns[colIdx];
+      if (!col) return;
+      const isCh = !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
+      const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike);
+      if (v != null) sum += v;
+    });
+    rowTotals.set(strike, sum);
+  });
+  const totalAbs = [...rowTotals.values()].map((v) => Math.abs(v)).filter((v) => v > 0).sort((a, b) => b - a);
+  const totalScale = { max: totalAbs[0] ?? 1, top3: totalAbs.slice(0, 3) };
+  const grandVisibleTotal = [...rowTotals.values()].reduce((a, b) => a + b, 0);
   return (
     <div style={{
       display: "grid",
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr))`,
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr)) minmax(88px, 1.15fr)`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -920,6 +938,13 @@ const ChainMatrix = memo(function ChainMatrix({
           </div>
         );
       })}
+      {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
+      <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
+        <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
+          {fmtMoney(grandVisibleTotal)}
+        </div>
+      </div>
 
       {/* ── One row per shared strike ── */}
       {visibleStrikes.map((strike, rowIdx) => {
@@ -932,6 +957,7 @@ const ChainMatrix = memo(function ChainMatrix({
               {renderIdx.map((i) => (
                 <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
               ))}
+              <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />
             </div>
           );
         }
@@ -1002,15 +1028,14 @@ const ChainMatrix = memo(function ChainMatrix({
               const pin = pinByCol[colIdx];
               const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
               const isFirst = posInRow === 0;
-              const isLast = posInRow === renderIdx.length - 1;
               // ATM box: use box-shadow so it overlays without shifting layout.
-              // Top+bottom on every cell; left edge on first col; right edge on last col.
+              // Top+bottom on every cell; left edge on first col. The right edge
+              // is drawn on the ⅀ Total cell (now the rightmost column).
               const atmShadow = isATM
                 ? [
                     "inset 0 2px 0 #ffffff",
                     "inset 0 -2px 0 #ffffff",
                     ...(isFirst ? ["inset 2px 0 0 #ffffff"] : []),
-                    ...(isLast ? ["inset -2px 0 0 #ffffff"] : []),
                   ].join(", ")
                 : undefined;
               // Contract flow sparkline only makes sense for SPX 0DTE (that's
@@ -1049,6 +1074,27 @@ const ChainMatrix = memo(function ChainMatrix({
                 </div>
               );
             })}
+            {/* ── ⅀ Total cell: this strike's sum across every expiration ── */}
+            {(() => {
+              const tot = rowTotals.get(strike) ?? 0;
+              const atmTotShadow = isATM
+                ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff, inset -2px 0 0 #ffffff"
+                : undefined;
+              return (
+                <div style={{
+                  padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
+                  color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
+                  background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
+                  borderLeft: `2px solid ${rgba(HT.cyan, 0.35)}`,
+                  borderTop: rowEmBorder,
+                  boxShadow: atmTotShadow,
+                  whiteSpace: "nowrap", overflow: "hidden",
+                  display: "flex", alignItems: "baseline", justifyContent: "flex-end",
+                }}>
+                  {tot === 0 ? "·" : fmtMoney(tot)}
+                </div>
+              );
+            })()}
           </div>
         );
       })}
