@@ -388,7 +388,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Heatmap backfill window. 5-day backfill pulls/renders far more 1-min
   // history columns than 1-day and visibly slows the chart, so default to
   // the fast 1-day window and let the user opt into 5-day when they want it.
-  const [heatmapDays, setHeatmapDays] = useState<1 | 5>(1);
+  const [heatmapDays, setHeatmapDays] = useState<1 | 2>(1);
   const [intensity, setIntensity] = useState(0.65); // page-local default; tuned with gexColor so light zones read clearly
   // Heatmap metric: "voloi" = gamma×(OI+vol), "vol" = gamma×vol only. Mirrored
   // in a ref so the WS-driven overlay draw reads it without re-subscribing.
@@ -1060,7 +1060,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // When replaying a PAST day the 1D/5D window (counted back from now) may not
     // reach that day, so widen to the full 5-day cap so the replayed session's
     // GEX (heatmap columns + bubble trail) is included.
-    const minutes = replayOn ? 7200 : heatmapDays * 1440;
+    // Retention is 2 days for heatmap/bubbles (option_strike_gex_history is
+    // pruned to 48h server-side), so both live and replay windows cap at 2880min.
+    const minutes = Math.min(2880, replayOn ? 2880 : heatmapDays * 1440);
     // Front mode passes anyExpiry=1, so the server IGNORES `expiry`; the rolling
     // feedExpiry churning each publish must NOT re-fire this ~700KB/5s query.
     // Key on the request window only (an explicit DTE pick keys on expiry too).
@@ -2663,9 +2665,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }} title="Heatmap backfill range">
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Heatmap range</div>
                   <SegGroup
-                    options={[{ label: "1D", value: "1" }, { label: "5D", value: "5" }]}
+                    options={[{ label: "1D", value: "1" }, { label: "2D", value: "2" }]}
                     active={String(heatmapDays)}
-                    onChange={(v) => setHeatmapDays(Number(v) === 5 ? 5 : 1)}
+                    onChange={(v) => setHeatmapDays(Number(v) === 2 ? 2 : 1)}
                   />
                 </div>
               )}

@@ -3882,6 +3882,13 @@ export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord
        Number.isFinite(row.net_vol_gex as number) ? row.net_vol_gex : null]
     );
   }
+  // Retention: keep only the last 2 days. The heatmap + bubble backfill never
+  // reads older, and the unbounded window scan over this table is what made the
+  // ~700KB/5s query slow. Runs once per batch (~1/min), so the table stays small.
+  await pool.query(
+    `DELETE FROM option_strike_gex_history WHERE timestamp < $1`,
+    [Date.now() - 2 * 24 * 60 * 60 * 1000]
+  );
 }
 
 export async function getOptionStrikeRollingNetGex(

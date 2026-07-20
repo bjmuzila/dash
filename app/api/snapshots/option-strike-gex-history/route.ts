@@ -78,11 +78,11 @@ export async function GET(req: NextRequest) {
     // the ES Candles heatmap backfill so history shows immediately on load.
     if (mode === "heatmap") {
       // Rolling window (minutes) overrides the single-ET-day read so the heatmap
-      // spans across midnight. Defaults to 24h; capped at 5 trading days
-      // (7200min) so ES Candles backfill can go as far back as the candles do.
-      // Pass minutes=0 to fall back to the legacy today-only behavior.
+      // spans across midnight. Defaults to 24h; capped at 2 days (2880min) to
+      // match the 48h retention prune on option_strike_gex_history — asking for
+      // more just scans rows that no longer exist. minutes=0 = legacy today-only.
       const winParam = searchParams.get("minutes");
-      const winMin = winParam == null ? 1440 : Math.max(0, Math.min(7200, Number(winParam)));
+      const winMin = winParam == null ? 1440 : Math.max(0, Math.min(2880, Number(winParam)));
       // anyExpiry=1 → front/live (0DTE) mode. Each trading day is written under
       // that day's own front expiry (a different string every day), so a
       // literal expiry match only ever returns today's rows and multi-day
