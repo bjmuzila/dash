@@ -56,8 +56,6 @@ DELETE FROM mult_greek_static_snapshots WHERE created_at < NOW() - INTERVAL '5 d
 -- Moderate --------------------------------------------------------------
 DELETE FROM ticker_wall_snapshots      WHERE date::date < CURRENT_DATE - INTERVAL '10 days';
 DELETE FROM scanner_snapshots          WHERE date::date < CURRENT_DATE - INTERVAL '10 days';
-DELETE FROM vol_pin_snapshots          WHERE date::date < CURRENT_DATE - INTERVAL '14 days';
-DELETE FROM vol_pin_events             WHERE date::date < CURRENT_DATE - INTERVAL '14 days';
 DELETE FROM watch_snapshots            WHERE created_at < NOW() - INTERVAL '60 days';
 DELETE FROM preview_snapshots          WHERE created_at < NOW() - INTERVAL '30 days';
 
@@ -80,5 +78,5 @@ DROP TABLE IF EXISTS oi_change_snapshots;
 
 VACUUM (VERBOSE, ANALYZE) strike_growth, option_strike_gex_history, flow_prints,
   greek_snapshots, home_static_snapshots, mult_greek_static_snapshots,
-  ticker_wall_snapshots, scanner_snapshots, vol_pin_snapshots, watch_snapshots,
+  ticker_wall_snapshots, scanner_snapshots, watch_snapshots,
   preview_snapshots, page_visits, ticker_events;

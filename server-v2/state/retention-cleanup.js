@@ -41,8 +41,6 @@ const RETENTION = {
   greek_snapshots:            Number(process.env.RETENTION_GREEK_SNAPSHOTS_DAYS || 10),
   ticker_wall_snapshots:      Number(process.env.RETENTION_TICKER_WALL_DAYS || 10),
   scanner_snapshots:          Number(process.env.RETENTION_SCANNER_SNAPSHOTS_DAYS || 10),
-  vol_pin_snapshots:          Number(process.env.RETENTION_VOL_PIN_DAYS || 14),
-  vol_pin_events:             Number(process.env.RETENTION_VOL_PIN_EVENTS_DAYS || 14),
   watch_snapshots_days:       Number(process.env.RETENTION_WATCH_SNAPSHOTS_DAYS || 60),   // created_at-based
   preview_snapshots_days:     Number(process.env.RETENTION_PREVIEW_SNAPSHOTS_DAYS || 30),  // created_at-based
   home_static_snapshots_days: Number(process.env.RETENTION_HOME_STATIC_DAYS || 5),         // created_at-based
@@ -168,12 +166,6 @@ async function runDeletes(p) {
   await run('scanner_snapshots',
     `DELETE FROM scanner_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.scanner_snapshots} days'`);
 
-  await run('vol_pin_snapshots',
-    `DELETE FROM vol_pin_snapshots WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.vol_pin_snapshots} days'`);
-
-  await run('vol_pin_events',
-    `DELETE FROM vol_pin_events WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.vol_pin_events} days'`);
-
   await run('watch_snapshots',
     `DELETE FROM watch_snapshots WHERE created_at < NOW() - INTERVAL '${RETENTION.watch_snapshots_days} days'`);
 
@@ -197,7 +189,7 @@ async function runDeletes(p) {
 
 const VACUUM_TABLES = [
   'strike_growth', 'option_strike_gex_history', 'flow_prints',
-  'greek_snapshots', 'ticker_wall_snapshots', 'scanner_snapshots', 'vol_pin_snapshots',
+  'greek_snapshots', 'ticker_wall_snapshots', 'scanner_snapshots',
   'watch_snapshots', 'preview_snapshots', 'home_static_snapshots',
   'mult_greek_static_snapshots', 'page_visits', 'ticker_events',
 ];

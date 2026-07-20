@@ -24,6 +24,9 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 const CALL_GREEN = "#22C55E"; // call / bullish gamma
 const PUT_RED = "#F4544E";     // put / bearish gamma
 const METER_AMBER = "#F5B301"; // partial-factor meter
+// profile bars match the home GexChart net palette (positive blue / negative amber)
+const POS_BLUE = "#29B6F6";
+const NEG_AMBER = "#FFB300";
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -245,7 +248,7 @@ function Stat({ label, value, sub, subColor, valueColor }: { label: string; valu
 }
 
 // ── per-strike gamma profile (SVG, drag=pan · scroll=zoom · dbl=recenter) ─────
-function StrikeProfile({ d, near, barColor }: { d: Derived; near: boolean; barColor: string }) {
+function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
   const W = 900, H = 460, padL = 46, padR = 14, padT = 20, padB = 28;
   const plotW = W - padL - padR;
   // Plot the SAME OI+Vol net the desk uses to pick the walls (netGEX + netVolGEX),
@@ -362,7 +365,7 @@ function StrikeProfile({ d, near, barColor }: { d: Derived; near: boolean; barCo
           const isWall = r.strike === d.callWall || r.strike === d.putWall;
           return (
             <rect key={r.strike} x={cx - barW / 2} y={y} width={barW} height={Math.max(0.5, h)}
-              fill={rgba(barColor, isPos ? 0.9 : 0.72)}
+              fill={rgba(isPos ? POS_BLUE : NEG_AMBER, 0.9)}
               stroke={isWall ? HOME_THEME.text : "none"} strokeWidth={isWall ? 1.5 : 0} rx={1} />
           );
         })}
@@ -382,9 +385,8 @@ function StrikeProfile({ d, near, barColor }: { d: Derived; near: boolean; barCo
 }
 
 // ── factor meter row ─────────────────────────────────────────────────────────
-function FactorRow({ f }: { f: Factor }) {
+function FactorRow({ f, color }: { f: Factor; color: string }) {
   const pct = clamp01(f.score / f.max);
-  const color = pct >= 0.75 ? CALL_GREEN : pct >= 0.4 ? METER_AMBER : rgba(HOME_THEME.text, 0.35);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "10px 0" }}>
       <div style={{ flex: "0 0 150px", fontSize: 13, color: HOME_THEME.text }}>{f.label}</div>
@@ -487,9 +489,10 @@ export function SqueezeBoard() {
                   <button style={toggleBtn(near)} onClick={() => setNear(true)}>⌖ Near</button>
                 </div>
               </div>
-              <StrikeProfile d={d} near={near} barColor={biasColor} />
+              <StrikeProfile d={d} near={near} />
               <div style={{ display: "flex", gap: 22, justifyContent: "center", marginTop: 10, fontSize: 12, color: rgba(HOME_THEME.text, 0.7) }}>
-                <span><span style={{ display: "inline-block", width: 11, height: 11, background: biasColor, borderRadius: 2, marginRight: 6 }} />{isBear ? "Bearish" : "Bullish"} Gamma</span>
+                <span><span style={{ display: "inline-block", width: 11, height: 11, background: POS_BLUE, borderRadius: 2, marginRight: 6 }} />Positive GEX</span>
+                <span><span style={{ display: "inline-block", width: 11, height: 11, background: NEG_AMBER, borderRadius: 2, marginRight: 6 }} />Negative GEX</span>
               </div>
             </div>
 
@@ -508,10 +511,10 @@ export function SqueezeBoard() {
               <div style={{ marginTop: 22 }}>
                 <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
                   <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: rgba(HOME_THEME.text, 0.55) }}>Probability Score</div>
-                  <div style={{ fontSize: 34, fontWeight: 800, color: CALL_GREEN }}>{d.score}<span style={{ fontSize: 15, color: rgba(HOME_THEME.text, 0.5) }}>/100</span></div>
+                  <div style={{ fontSize: 34, fontWeight: 800, color: biasColor }}>{d.score}<span style={{ fontSize: 15, color: rgba(HOME_THEME.text, 0.5) }}>/100</span></div>
                 </div>
                 <div style={{ height: 8, borderRadius: 6, background: rgba(HOME_THEME.text, 0.08), overflow: "hidden", marginTop: 8 }}>
-                  <div style={{ width: `${d.score}%`, height: "100%", borderRadius: 6, background: CALL_GREEN }} />
+                  <div style={{ width: `${d.score}%`, height: "100%", borderRadius: 6, background: biasColor }} />
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 10, color: rgba(HOME_THEME.text, 0.45) }}>
                   <span>Unlikely</span><span>Possible</span><span>Likely</span><span>Imminent</span>
@@ -520,7 +523,7 @@ export function SqueezeBoard() {
 
               <div style={{ marginTop: 22 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: rgba(HOME_THEME.text, 0.55), marginBottom: 4 }}>Factor Breakdown</div>
-                {d.factors.map((f) => <FactorRow key={f.label} f={f} />)}
+                {d.factors.map((f) => <FactorRow key={f.label} f={f} color={biasColor} />)}
               </div>
 
               <div style={{ marginTop: 20, padding: 16, borderRadius: 12, border: `1px solid ${HOME_THEME.border}`, background: rgba(HOME_THEME.text, 0.02) }}>

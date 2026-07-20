@@ -43,7 +43,6 @@ const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
-const { startVolPinRecorder, runSweep: runVolPinSweep, ensureSchema: volPinEnsureSchema, getPool: volPinGetPool } = require('./vol-pin-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const {
@@ -1863,112 +1862,6 @@ async function main() {
         return;
       }
 
-      // ── Volatility Pinning Scanner ────────────────────────────────────────
-      // GET /proxy/vol-pin-scanner?limit=25&minSnapshots=3
-      //
-      // Returns ranked pin candidates with:
-      //   spread_trend   — is IV-RV spread contracting? (negative = shrinking)
-      //   range_trend    — is price range contracting? (negative = tightening)
-      //   pin_dist_pct   — |spot - pin_strike| / spot
-      //   pin_score      — composite: higher = more likely to pin
-      if (pathname === '/proxy/vol-pin-scanner' && req.method === 'GET') {
-        (async () => {
-          try {
-            if (!(await volPinEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
-            const p = volPinGetPool();
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const limit       = Math.min(100, Number(u.searchParams.get('limit') || 25));
-            const minSnaps    = Math.max(2,   Number(u.searchParams.get('minSnapshots') || 3));
-            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
-
-            // For each symbol: latest snapshot + trend of last 4 snapshots.
-            const sql = `
-              WITH latest AS (
-                SELECT DISTINCT ON (symbol)
-                  symbol, expiry, ts, spot, atm_strike, atm_iv, atm_call_iv, atm_put_iv,
-                  pin_strike, pin_strike_oi, day_hi, day_lo, range_pct, rv_ann, iv_rv_spread
-                FROM vol_pin_snapshots
-                WHERE date = $1 AND atm_iv > 0
-                ORDER BY symbol, ts DESC
-              ),
-              trend AS (
-                SELECT symbol,
-                  COUNT(*) AS n_snaps,
-                  -- spread trend: slope approx = last_spread - first_spread over last 4 snaps
-                  (ARRAY_AGG(iv_rv_spread ORDER BY ts DESC))[1]
-                    - (ARRAY_AGG(iv_rv_spread ORDER BY ts ASC))[1] AS spread_delta,
-                  (ARRAY_AGG(range_pct ORDER BY ts DESC))[1]
-                    - (ARRAY_AGG(range_pct ORDER BY ts ASC))[1] AS range_delta
-                FROM (
-                  SELECT symbol, ts, iv_rv_spread, range_pct
-                  FROM vol_pin_snapshots
-                  WHERE date = $1 AND iv_rv_spread IS NOT NULL
-                  ORDER BY symbol, ts DESC
-                ) sub
-                GROUP BY symbol
-              )
-              SELECT l.*,
-                t.n_snaps, t.spread_delta, t.range_delta,
-                CASE WHEN l.pin_strike > 0 AND l.spot > 0
-                     THEN ABS(l.spot - l.pin_strike) / l.spot ELSE NULL END AS pin_dist_pct,
-                -- Pin score: higher = more attractive pin candidate.
-                -- Components: spread contraction (negative spread_delta good),
-                --             range contraction (negative range_delta good),
-                --             proximity to pin strike.
-                CASE WHEN l.pin_strike > 0 AND l.spot > 0 AND l.atm_iv > 0 AND t.n_snaps >= $2 THEN
-                  (CASE WHEN t.spread_delta < 0 THEN -t.spread_delta * 3 ELSE 0 END)
-                  + (CASE WHEN t.range_delta < 0 THEN -t.range_delta * 100 ELSE 0 END)
-                  + GREATEST(0, 0.05 - ABS(l.spot - l.pin_strike)/l.spot) * 40
-                ELSE 0 END AS pin_score
-              FROM latest l
-              LEFT JOIN trend t ON t.symbol = l.symbol
-              WHERE t.n_snaps >= $2
-              ORDER BY pin_score DESC NULLS LAST
-              LIMIT $3`;
-
-            const { rows } = await p.query(sql, [today, minSnaps, limit]);
-            sendJson(res, 200, { ok: true, rows, asOf: new Date().toISOString() });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Manual sweep fire: POST /proxy/vol-pin-run
-      if (pathname === '/proxy/vol-pin-run' && req.method === 'POST') {
-        runVolPinSweep({ force: true })
-          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
-          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
-        return;
-      }
-
-      // ── Vol Pin Event Log ────────────────────────────────────────────────
-      // GET /proxy/vol-pin-events?days=14&limit=200
-      // Persisted history of first-time PINNING/SQUEEZING occurrences per
-      // symbol/day (written by vol-pin-recorder's logPinEvents on each sweep).
-      if (pathname === '/proxy/vol-pin-events' && req.method === 'GET') {
-        (async () => {
-          try {
-            if (!(await volPinEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
-            const p = volPinGetPool();
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const days  = Math.min(90, Math.max(1, Number(u.searchParams.get('days') || 14)));
-            const limit = Math.min(500, Math.max(1, Number(u.searchParams.get('limit') || 200)));
-            const cutoff = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' })
-              .format(new Date(Date.now() - days * 24 * 60 * 60 * 1000));
-            const { rows } = await p.query(
-              `SELECT date, symbol, status, ts, spot, pin_strike, pin_dist_pct,
-                      iv_rv_spread, spread_delta, range_pct, range_delta
-               FROM vol_pin_events
-               WHERE date >= $1
-               ORDER BY ts DESC
-               LIMIT $2`,
-              [cutoff, limit],
-            );
-            sendJson(res, 200, { ok: true, rows });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-
       // Manual fire: POST /proxy/retention-cleanup-run  (bypasses the 00:05-00:40
       // ET window + the once-per-day gate; for testing the nightly prune on demand)
       if (pathname === '/proxy/retention-cleanup-run' && req.method === 'POST') {
@@ -2647,8 +2540,6 @@ async function main() {
     // Per-strike Greek snapshots: records gamma/delta/vanna/charm per strike
     // every 5m for the Greek Sensitivity Scanner (/scanner Greeks tab).
     startGreekScannerRecorder(PORT);
-    // Vol-pin snapshots: ATM IV, RV, pin strike, range per equity ticker every 5m.
-    startVolPinRecorder();
     // Far CB Watch: flags EM-watchlist tickers whose single highest OI+Vol GEX
     // strike (within 30d expirations) sits unusually far OTM vs spot.
     startFarCbRecorder();
