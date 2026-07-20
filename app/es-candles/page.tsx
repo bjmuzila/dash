@@ -307,6 +307,18 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 // pure taste, so it's the one overlay setting that shouldn't reset every visit.
 // Versioned suffix so a future range change can invalidate old values.
 const BUBBLE_SCALE_KEY = "es-candles-bubble-scale-v1";
+// Bubble character presets. Two continuous knobs (size × variance) gave too many
+// almost-right spots to ever settle on, so the primary control is now a 3-way
+// preset that sets BOTH at once; the size slider only nudges scale from there.
+// `var` is the ratio^var contrast exponent (0.5 = true area). Higher var pushes
+// small strikes to the floor (more contrast); lower lifts the whole field bigger.
+const BUBBLE_PRESET_KEY = "es-candles-bubble-preset-v1";
+const BUBBLE_PRESETS = {
+  subtle:   { scale: 0.22, var: 0.75 },
+  balanced: { scale: 0.32, var: 0.5 },
+  bold:     { scale: 0.5,  var: 0.4 },
+} as const;
+type BubblePreset = keyof typeof BUBBLE_PRESETS;
 
 /**
  * `leading` renders as the first item in the dock, before the "ES 5m Candles"
@@ -584,7 +596,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   //   0.5 = sqrt  → area ∝ |GEX| (the honest default — Idea 1).
   //   1.0 = linear
   //   >1  = small strikes collapse toward the floor; only real gamma renders big.
-  const [bubbleVar, setBubbleVar] = useState(0.5);
+  const [bubbleVar, setBubbleVar] = useState(BUBBLE_PRESETS.balanced.var);
+  // Which character preset is active (drives bubbleVar + a base scale).
+  const [bubblePreset, setBubblePreset] = useState<BubblePreset>("balanced");
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
   // 5m spaces them one per candle, which is why it's the default.
@@ -673,10 +687,27 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // hand-edited key must never push the knob somewhere the slider can't undo.
   useEffect(() => {
     try {
+      // Character preset drives bubbleVar (and is the base for scale). Restore it
+      // first, then let a saved scale nudge override the preset's base scale.
+      const p = window.localStorage.getItem(BUBBLE_PRESET_KEY) as BubblePreset | null;
+      if (p && p in BUBBLE_PRESETS) { setBubblePreset(p); setBubbleVar(BUBBLE_PRESETS[p].var); }
       const raw = window.localStorage.getItem(BUBBLE_SCALE_KEY);
       const n = raw === null ? NaN : Number(raw);
       if (Number.isFinite(n) && n >= 0.1 && n <= 1.0) setBubbleScale(n);
     } catch { /* private mode / storage disabled — keep the default */ }
+  }, []);
+  // Apply a preset: sets the contrast exponent AND resets scale to the preset's
+  // base (persisting both), so one click gives a complete look with nothing left
+  // to hunt for. The size slider still nudges scale afterward.
+  const applyBubblePreset = useCallback((name: BubblePreset) => {
+    const p = BUBBLE_PRESETS[name];
+    setBubblePreset(name);
+    setBubbleVar(p.var);
+    setBubbleScale(p.scale);
+    try {
+      window.localStorage.setItem(BUBBLE_PRESET_KEY, name);
+      window.localStorage.setItem(BUBBLE_SCALE_KEY, String(p.scale));
+    } catch { /* ignore */ }
   }, []);
   // Persist on change. Wrapping the setter (rather than an effect on the value)
   // keeps the initial default out of storage: nothing is written until the user
@@ -2670,13 +2701,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               )}
               {showGexBubbles && (
                 <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble size</div>
-                  <DockSlider label="bubble" value={bubbleScale} min={0.1} max={1.0} step={0.02} onChange={changeBubbleScale} title="Bubble size (saved in this browser)" />
-                  <DockSlider
-                    label="variance" value={bubbleVar} min={0.3} max={6} step={0.1}
-                    format={(v) => v.toFixed(1)} onChange={setBubbleVar}
-                    title="Size contrast — 0.5 = true area (area ∝ |GEX|), higher = only real gamma renders big"
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble look</div>
+                  <SegGroup
+                    options={[{ label: "Subtle", value: "subtle" }, { label: "Balanced", value: "balanced" }, { label: "Bold", value: "bold" }]}
+                    active={bubblePreset}
+                    onChange={(v) => applyBubblePreset(v as BubblePreset)}
                   />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Size</div>
+                  <DockSlider label="size" value={bubbleScale} min={0.1} max={1.0} step={0.02} onChange={changeBubbleScale} title="Overall bubble size — nudges the preset (saved in this browser)" />
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble time</div>
                   <SegGroup
                     options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
