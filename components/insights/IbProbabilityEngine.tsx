@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * IB Probability Engine — live projection board.
+ * IB Probability Engine — live projection board (dashboard theme).
  *
  * Three gauges (Bullish / Bearish / Rotation) + the 4-stage rule board (R1–R14),
  * driven by the app's real buildRules() engine. Each rule's Historical Edge is
@@ -14,6 +14,8 @@
  * Rule ids map 1:1 to buildRules(). Pending / not-in-play rules render as
  * INACTIVE (their "if it fires" edge is still shown but doesn't move the gauges).
  */
+
+import { HOME_THEME } from "@/components/shared/homeTheme";
 
 type Status = "bull" | "bear" | "rot" | "off";
 
@@ -32,20 +34,33 @@ export type EngineEnv = {
   time: "late" | "regular";
 };
 
+// Positive/negative semantic colors — real green, true red (not pink).
+const POS = "#1FD98A";
+const NEG = "#FF3B3B";
+
+// Dashboard theme tokens — flat surfaces, no glow.
 const C = {
-  bg: "rgba(8,12,20,0.55)",
-  panel: "rgba(14,22,38,0.55)",
-  border: "rgba(255,255,255,0.10)",
-  text: "#e8eef7",
-  muted: "#8a97ab",
-  cyan: "#2fb4d6",
-  green: "#22c55e",
-  red: "#f0506e",
-  orange: "#fb8500",
-  grey: "#5b6676",
+  text: HOME_THEME.text,
+  muted: "rgba(255,255,255,0.55)",
+  cyan: HOME_THEME.cyan,
+  bull: POS,                  // any positive breakout chance → green
+  bear: NEG,                  // true red
+  rot: HOME_THEME.orange,
+  grey: "#6B7686",
+  border: HOME_THEME.border,
+  cardBg: HOME_THEME.panelBg,
+  rowBg: "rgba(255,255,255,0.03)",
+  track: "rgba(255,255,255,0.07)",
 };
 
-const EDGECOL: Record<Status, string> = { bull: C.green, bear: C.red, rot: C.orange, off: C.grey };
+// Hist. Edge bar gradient — green when the edge is positive (>= 50%), red below.
+function edgeGradient(edge: number): string {
+  return edge >= 50
+    ? `linear-gradient(90deg, ${POS}59, ${POS})`
+    : `linear-gradient(90deg, ${NEG}59, ${NEG})`;
+}
+
+const EDGECOL: Record<Status, string> = { bull: C.bull, bear: C.bear, rot: C.rot, off: C.grey };
 const TAG: Record<Status, string> = { bull: "Bullish Edge", bear: "Bearish Edge", rot: "Rotational Risk", off: "Inactive" };
 
 // R-id → stage bucket (mirrors the mockup); ids not listed are ignored.
@@ -95,7 +110,7 @@ function Gauge({ pct, color, label }: { pct: number; color: string; label: strin
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
       <div style={{ position: "relative", width: 118, height: 118 }}>
         <svg width="118" height="118" viewBox="0 0 118 118" style={{ transform: "rotate(-90deg)" }}>
-          <circle cx="59" cy="59" r={R} fill="none" stroke="rgba(255,255,255,.07)" strokeWidth="9" />
+          <circle cx="59" cy="59" r={R} fill="none" stroke={C.track} strokeWidth="9" />
           <circle cx="59" cy="59" r={R} fill="none" stroke={color} strokeWidth="9" strokeLinecap="round"
             strokeDasharray={CIRC.toFixed(1)} strokeDashoffset={off.toFixed(1)} style={{ transition: "stroke-dashoffset .6s" }} />
         </svg>
@@ -108,14 +123,12 @@ function Gauge({ pct, color, label }: { pct: number; color: string; label: strin
   );
 }
 
-function SegBar({ pct, status }: { pct: number; status: Status }) {
-  const on = Math.round(pct / 10), col = EDGECOL[status];
+function EdgeBar({ edge }: { edge: number | null }) {
   return (
-    <div style={{ display: "flex", gap: 3 }}>
-      {Array.from({ length: 10 }).map((_, i) => (
-        <div key={i} style={{ flex: 1, height: 8, borderRadius: 2,
-          background: i < on ? col : "rgba(255,255,255,.06)", opacity: i < on && status === "off" ? 0.5 : 1 }} />
-      ))}
+    <div style={{ height: 8, borderRadius: 4, background: "rgba(255,255,255,.06)", overflow: "hidden" }}>
+      {edge != null && (
+        <div style={{ width: `${edge}%`, height: "100%", background: edgeGradient(edge), transition: "width .6s" }} />
+      )}
     </div>
   );
 }
@@ -125,27 +138,27 @@ function RuleRow({ r }: { r: Row }) {
   const dim = r.status === "off";
   return (
     <div style={{ display: "grid", gridTemplateColumns: "210px 1fr 200px", gap: 18, alignItems: "center",
-      background: C.panel, border: `1px solid ${C.border}`, borderLeft: `4px solid ${col}`, borderRadius: 12,
+      background: C.rowBg, border: `1px solid ${C.border}`, borderLeft: `4px solid ${col}`, borderRadius: 12,
       padding: "14px 16px", opacity: dim ? 0.62 : 1 }}>
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
-          <span style={{ fontSize: 10, fontWeight: 800, fontFamily: "ui-monospace,Menlo,Consolas,monospace", color: C.muted,
+          <span style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: C.muted,
             background: "rgba(255,255,255,.05)", border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 6px" }}>{r.id}</span>
           <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: col,
             border: `1px solid ${col}66`, background: `${col}14`, borderRadius: 5, padding: "2px 7px" }}>{TAG[r.status]}</span>
         </div>
         <div style={{ fontSize: 14, fontWeight: 800, color: C.text, lineHeight: 1.25 }}>{r.name}</div>
       </div>
-      <div style={{ fontSize: 13, color: dim ? C.muted : "#cdd6e4", lineHeight: 1.5, display: "flex", gap: 9, alignItems: "flex-start" }}>
+      <div style={{ fontSize: 13, color: dim ? C.muted : "rgba(255,255,255,0.82)", lineHeight: 1.5, display: "flex", gap: 9, alignItems: "flex-start" }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", marginTop: 5, flex: "none", background: col }} />
         <span>{r.desc}</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.muted }}>Hist. Edge</span>
-          <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: dim || r.edge == null ? C.muted : col }}>{r.edge == null ? "—" : `${r.edge}%`}</span>
+          <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.edge == null ? C.muted : r.edge >= 50 ? POS : NEG }}>{r.edge == null ? "—" : `${r.edge}%`}</span>
         </div>
-        <SegBar pct={r.edge ?? 0} status={r.status} />
+        <EdgeBar edge={r.edge} />
       </div>
     </div>
   );
@@ -155,21 +168,29 @@ export function IbProbabilityEngine({ rules, env }: { rules: EngineRule[]; env: 
   const byId = new Map(rules.map((r) => [r.id, toRow(r)]));
   const allRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[]);
   const p = calculateComplexProbabilities(allRows, env);
-  const card: React.CSSProperties = { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 18, padding: "22px 22px 24px" };
+  // Flat dashboard surface — no radial glow, no drop shadow.
+  const card: React.CSSProperties = {
+    background: C.cardBg,
+    border: `1px solid ${C.border}`,
+    borderRadius: 16,
+    padding: "20px 20px 22px",
+    backdropFilter: "blur(16px)",
+    WebkitBackdropFilter: "blur(16px)",
+  };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Probability Engine */}
       <section style={card}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 16 }}>📊</span>
           <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".16em", textTransform: "uppercase", color: C.cyan }}>Probability Engine</span>
         </div>
-        <p style={{ fontSize: 12.5, color: "#9a7fd0", margin: "4px 0 0" }}>Live mathematical projection of final intraday session behavior based on active indicators.</p>
+        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>Live mathematical projection of final intraday session behavior based on active indicators.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: 22 }}>
-          <Gauge pct={p.bull} color={C.green} label="Bullish<br/>Edge" />
-          <Gauge pct={p.bear} color={C.red} label="Bearish<br/>Edge" />
-          <Gauge pct={p.rot} color={C.orange} label="Rotation<br/>Risk" />
+          <Gauge pct={p.bull} color={C.bull} label="Bullish<br/>Edge" />
+          <Gauge pct={p.bear} color={C.bear} label="Bearish<br/>Edge" />
+          <Gauge pct={p.rot} color={C.rot} label="Rotation<br/>Risk" />
         </div>
       </section>
 

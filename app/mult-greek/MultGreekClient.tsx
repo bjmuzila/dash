@@ -43,8 +43,7 @@ const COL_LABELS: Record<NetCol, string> = {
   gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", vex: "NET VEX",
 };
 
-// Leading 34px track = the all-expirations net-GEX bar sitting left of STRIKE.
-const GRID_COLS = "34px 64px 1fr 1fr 1fr 1fr";
+const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -290,115 +289,10 @@ function computeTotals(
   return totals;
 }
 
-// ── ALL-expirations aggregate ───────────────────────────────────────────────
-// Same greek math as computeRows, but summed across EVERY expiration at each
-// strike. A strike appears once per expiration in the chain (different call/put
-// symbols each time), so we keep a list of symbol legs per strike and sum each
-// leg's contribution. Feeds the "ALL EXP" toggle.
-
-interface StrikeAgg {
-  strike: number;
-  legs: { callSym: string | null; putSym: string | null }[];
-}
-
-// Group every expiration's strikes by strike price, keeping one leg per
-// expiration, and populate liveData for every symbol seen (same as buildStrikes).
-function buildStrikesAll(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeAgg[] {
-  const map = new Map<number, StrikeAgg>();
-  (expGroups as { strikes?: unknown[] }[]).forEach(expGroup => {
-    (expGroup.strikes || []).forEach((item: unknown) => {
-      const it = item as Record<string, unknown>;
-      const strike = parseFloat(String(it["strike-price"] || 0));
-      if (!strike) return;
-      let agg = map.get(strike);
-      if (!agg) { agg = { strike, legs: [] }; map.set(strike, agg); }
-      let callSym: string | null = null, putSym: string | null = null;
-      for (const side of ["call", "put"] as const) {
-        const o = it[side] as Record<string, unknown> | undefined;
-        if (!o) continue;
-        const sym = String(o["streamer-symbol"] || o.symbol || "");
-        if (side === "call") callSym = sym; else putSym = sym;
-        if (sym && !(liveData[sym]?._ws)) {
-          liveData[sym] = {
-            iv:    parseFloat(String(o["implied-volatility"])) || undefined,
-            delta: parseFloat(String(o.delta)) || undefined,
-            gamma: parseFloat(String(o.gamma)) || undefined,
-            theta: parseFloat(String(o.theta)) || undefined,
-            vega:  parseFloat(String(o.vega))  || undefined,
-            oi:    parseInt(String(o["open-interest"] || o.openInterest || 0), 10) || 0,
-            vol:   parseInt(String(o.volume || 0), 10) || 0,
-          };
-        }
-      }
-      agg.legs.push({ callSym, putSym });
-    });
-  });
-  return [...map.values()].sort((a, b) => a.strike - b.strike);
-}
-
-// Aggregate net greeks across all expirations per strike → same ComputedResult
-// shape computeRows returns, so TickerPanel renders it identically.
-function computeRowsAll(
-  aggs: StrikeAgg[],
-  liveData: Record<string, LiveEntry>,
-  spot: number,
-  contractMode: "oivol" | "vol",
-): ComputedResult {
-  const rows = aggs.slice().sort((a, b) => b.strike - a.strike);
-  let atmStrike = 0;
-  if (spot > 0 && rows.length) {
-    let atmIdx = 0, minDist = Infinity;
-    rows.forEach((r, i) => {
-      const d = Math.abs(r.strike - spot);
-      if (d < minDist) { minDist = d; atmIdx = i; }
-    });
-    atmStrike = rows[atmIdx].strike;
-  }
-  const volOnly = contractMode === "vol";
-
-  const out: ComputedRow[] = rows.map(r => {
-    let gex = 0, dex = 0, chex = 0, vex = 0;
-    r.legs.forEach(leg => {
-      const cd = liveData[leg.callSym ?? ""] || {};
-      const pd = liveData[leg.putSym  ?? ""] || {};
-      const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
-      const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
-      gex  += (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
-      dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
-      chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
-      vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;
-    });
-    return { strike: r.strike, isATM: r.strike === atmStrike, gex, dex, chex, vex };
-  });
-
-  const maxAbs = { gex: 1, dex: 1, chex: 1, vex: 1 } as Record<NetCol, number>;
-  out.forEach(r => {
-    NET_COLS.forEach(c => { if (Math.abs(r[c]) > maxAbs[c]) maxAbs[c] = Math.abs(r[c]); });
-  });
-
-  const top3 = {} as Record<NetCol, Record<number, number>>;
-  NET_COLS.forEach(c => {
-    top3[c] = {};
-    [...out].sort((a, b) => Math.abs(b[c]) - Math.abs(a[c]))
-      .slice(0, 3)
-      .forEach((row, idx) => { top3[c][row.strike] = idx + 1; });
-  });
-
-  let mvcStrike: number | null = null;
-  let mvcAbs = 0;
-  out.forEach(r => {
-    const a = Math.abs(r.gex);
-    if (a > mvcAbs) { mvcAbs = a; mvcStrike = r.strike; }
-  });
-
-  return { rows: out, maxAbs, top3, atmStrike, mvcStrike };
-}
-
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
   ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  allGex = null,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
@@ -408,9 +302,6 @@ function TickerPanel({
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
-  /** All-expirations net GEX per strike (+ scale max) for the left-side bar.
-   *  Null until the aggregate has loaded. */
-  allGex?: { map: Map<number, number>; max: number } | null;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
@@ -514,7 +405,6 @@ function TickerPanel({
 
       {/* Column headers */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div title="Net GEX summed across ALL expirations" style={{ padding: "5px 2px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden" }}>ΣEXP</div>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
         {NET_COLS.map(c => (
           <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: HT.cyan, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
@@ -525,7 +415,6 @@ function TickerPanel({
 
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ borderRight: "1px solid rgba(255,255,255,.06)" }} />
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
           const v = totals?.[c] ?? 0;
@@ -581,34 +470,9 @@ function TickerPanel({
                 <img
                   src={emBadgeDataUri(is1x ? "EM" : "2× EM")}
                   alt={is1x ? "EM" : "2× EM"}
-                  style={{ position: "absolute", top: 2, left: 37, zIndex: 3, display: "block", pointerEvents: "none" }}
+                  style={{ position: "absolute", top: 2, left: 3, zIndex: 3, display: "block", pointerEvents: "none" }}
                 />
               )}
-              {/* All-expirations net-GEX bar — grows from the strike edge (right)
-                  leftward, cyan for positive net GEX, red for negative. */}
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "flex-end",
-                padding: "0 2px", borderRight: "1px solid rgba(255,255,255,.06)", overflow: "hidden",
-              }}>
-                {(() => {
-                  const g = allGex?.map.get(r.strike);
-                  if (g == null || !allGex || !isFinite(g) || g === 0) return null;
-                  const ratio = Math.min(Math.abs(g) / allGex.max, 1);
-                  const pos = g >= 0;
-                  const f = fmtMoney(g);
-                  return (
-                    <div
-                      title={`All-exp net GEX: ${f.sign}${f.value}`}
-                      style={{
-                        height: 11,
-                        width: `${Math.max(ratio * 100, 4).toFixed(1)}%`,
-                        background: pos ? "rgba(41,182,246,0.85)" : "rgba(255,71,87,0.85)",
-                        borderRadius: 2,
-                      }}
-                    />
-                  );
-                })()}
-              </div>
               <div style={{
                 padding: "4px 4px", fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
@@ -733,9 +597,6 @@ export function MultGreekClient({
   // Per-ticker state (keyed by ticker symbol — the 4th slot is dynamic).
   const [strikes, setStrikes]   = useState<Record<string, StrikeRow[]>>({});
   const [spots, setSpots]       = useState<Record<string, number>>({});
-  // All-expirations aggregate per strike (loaded alongside the single-expiry
-  // chain in loadAll) — feeds the left-side all-exp GEX bar.
-  const [allStrikes, setAllStrikes] = useState<Record<string, StrikeAgg[]>>({});
   // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
   const [emByTicker, setEmByTicker] = useState<Record<string, { close: number; em: number } | null>>({});
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
@@ -823,8 +684,7 @@ export function MultGreekClient({
 
     const bust = bustCache ? `&noCache=1` : "";
     // No `expiration` param: pull the full chain (every expiration) in one shot
-    // per ticker. We filter to `expDate` for the live columns AND aggregate the
-    // whole thing for the all-expirations GEX bar (buildStrikesAll below).
+    // per ticker, then filter to `expDate` for the displayed columns.
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
         fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&range=all${bust}`)
@@ -838,7 +698,6 @@ export function MultGreekClient({
     if (token !== loadTokenRef.current) return;
 
     const newStrikes: Record<string, StrikeRow[]> = {};
-    const newAll: Record<string, StrikeAgg[]> = {};
     const newSpots: Record<string, number> = {};
     const allSymbols = new Set<string>();
     let successCount = 0;
@@ -863,10 +722,6 @@ export function MultGreekClient({
         if (row.putSym) allSymbols.add(row.putSym);
       });
       if (parsed.length) { newStrikes[ticker] = parsed; successCount++; }
-      // All-expirations aggregate (for the left-side GEX bar). Same feed, so no
-      // extra request — parse the untargeted items across every expiration.
-      const parsedAll = buildStrikesAll(items, liveDataRef.current);
-      if (parsedAll.length) newAll[ticker] = parsedAll;
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
@@ -875,7 +730,6 @@ export function MultGreekClient({
     setActiveExpiry(expDate);
     if (successCount > 0) {
       setStrikes(prev => ({ ...prev, ...newStrikes }));
-      setAllStrikes(prev => ({ ...prev, ...newAll }));
       setSpots(prev => {
         const merged = { ...prev };
         Object.keys(newSpots).forEach(tk => {
@@ -1030,19 +884,6 @@ export function MultGreekClient({
   // height only during capture.
   const isCapturing = captureWindow != null;
 
-  // All-expirations net GEX per strike, recomputed each render so the contract-
-  // basis toggle applies live. Feeds the left-side bar next to each strike.
-  const allGexByTicker = {} as Record<string, { map: Map<number, number>; max: number } | null>;
-  TICKERS.forEach(tk => {
-    const sa = allStrikes[tk];
-    if (!sa || !sa.length || !(spots[tk] > 0)) return;
-    const res = computeRowsAll(sa, liveDataRef.current, spots[tk], contractMode);
-    const map = new Map<number, number>();
-    let max = 0;
-    res.rows.forEach(r => { map.set(r.strike, r.gex); if (Math.abs(r.gex) > max) max = Math.abs(r.gex); });
-    allGexByTicker[tk] = { map, max: max || 1 };
-  });
-
   return (
     // display:block (not flex) during capture: a flex column's auto height
     // should equal its children's content height too, but block stacking is
@@ -1193,7 +1034,6 @@ export function MultGreekClient({
             emLevels={emByTicker[ticker] ?? null}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
-            allGex={allGexByTicker[ticker] ?? null}
           />
         ))}
       </div>
