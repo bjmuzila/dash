@@ -140,8 +140,20 @@ export default function IbLevelCanvas() {
   const up = levels.filter((l) => l.side === "up").sort((a, b) => b.mult - a.mult);
   const dn = levels.filter((l) => l.side === "down").sort((a, b) => a.mult - b.mult);
 
-  const inBox = ib.last <= ib.high && ib.last >= ib.low;
-  const broke = ib.last > ib.high ? "up" : ib.last < ib.low ? "down" : null;
+  // A break is ANY post-IB (>= 10:30 ET) bar that CLOSED beyond the level. Once a
+  // close prints outside, the break is real for the rest of the session even if
+  // price slips back inside — so scan every post-IB bar, not just the current
+  // close (the old logic only read the last bar and forgot completed breaks).
+  const postIbBars = candles
+    .filter((c) => etMinutes(c.timestamp) >= IB_END)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  let brokeUp = false, brokeDown = false, firstBreak: "up" | "down" | null = null;
+  for (const c of postIbBars) {
+    if (!brokeUp && c.close > ib.high) { brokeUp = true; firstBreak ??= "up"; }
+    if (!brokeDown && c.close < ib.low) { brokeDown = true; firstBreak ??= "down"; }
+  }
+  const broke = firstBreak;
+  const backInside = broke != null && ib.last <= ib.high && ib.last >= ib.low;
 
   return (
     <Card
@@ -161,9 +173,9 @@ export default function IbLevelCanvas() {
         return (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
             {broke ? (
-              <span style={pill(`${brokeColor}1F`, `${brokeColor}66`, brokeColor, { animation: "ibBrokenPulse 1.1s ease-in-out infinite" })}>
-                <span style={{ fontSize: 12 }}>▲</span>
-                IB {broke === "up" ? "HIGH" : "LOW"} BROKEN
+              <span style={pill(`${brokeColor}1F`, `${brokeColor}66`, brokeColor, backInside ? undefined : { animation: "ibBrokenPulse 1.1s ease-in-out infinite" })}>
+                <span style={{ fontSize: 12 }}>{broke === "up" ? "▲" : "▼"}</span>
+                IB {broke === "up" ? "HIGH" : "LOW"} BROKEN{backInside ? " · BACK INSIDE" : ""}
               </span>
             ) : (
               <span style={pill(`${LIGHT_BLUE}17`, `${LIGHT_BLUE}44`, LIGHT_BLUE)}>IB UNBROKEN</span>

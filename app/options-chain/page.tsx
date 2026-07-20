@@ -1285,20 +1285,6 @@ export default function OptionsChainPage({
   // moved most vs yesterday — so the hover card shows the vs-yesterday change on
   // that ticker's top-mover strike (other strikes have no stored DoD baseline).
   const [dodRows, setDodRows] = useState<Array<{ symbol: string; strike: number; expiry: string | null; net_yest: number; net_today: number; net_now: number | null; delta: number; now_delta: number | null }>>([]);
-  useEffect(() => {
-    let cancelled = false;
-    const t = (activeTicker || "SPX").toUpperCase();
-    (async () => {
-      try {
-        const r = await fetch(`/proxy/strike-dod?limit=2000`, { cache: "no-store" });
-        const j = await r.json().catch(() => null);
-        if (cancelled) return;
-        const rows = Array.isArray(j?.rows) ? j.rows : [];
-        setDodRows(rows.filter((d: { symbol?: string }) => String(d.symbol ?? "").toUpperCase() === t));
-      } catch { if (!cancelled) setDodRows([]); }
-    })();
-    return () => { cancelled = true; };
-  }, [activeTicker, refreshSeed]);
   const [recentTickers, setRecentTickers] = useState<string[]>([]);
   // Hydrate recents from browser cache after mount (avoids SSR mismatch).
   useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
@@ -1320,6 +1306,24 @@ export default function OptionsChainPage({
     setDisplayPercent(activeTicker.toUpperCase() === "SPX" ? 10 : 30);
   }, [activeTicker]);
   const [refreshSeed, setRefreshSeed] = useState(0);
+  // Day-over-Day GEX movers for the active ticker (same source as the scanner's
+  // DoD Movers tab: /proxy/strike-dod). Declared AFTER refreshSeed since the
+  // effect depends on it — referencing refreshSeed above its declaration is a
+  // temporal-dead-zone crash at render.
+  useEffect(() => {
+    let cancelled = false;
+    const t = (activeTicker || "SPX").toUpperCase();
+    (async () => {
+      try {
+        const r = await fetch(`/proxy/strike-dod?limit=2000`, { cache: "no-store" });
+        const j = await r.json().catch(() => null);
+        if (cancelled) return;
+        const rows = Array.isArray(j?.rows) ? j.rows : [];
+        setDodRows(rows.filter((d: { symbol?: string }) => String(d.symbol ?? "").toUpperCase() === t));
+      } catch { if (!cancelled) setDodRows([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTicker, refreshSeed]);
   const [intensity, setIntensity] = useState(1.75);
   // Grid colors read this deferred copy so dragging the Intensity slider stays
   // responsive — React commits the slider urgently and repaints the ~560-cell
