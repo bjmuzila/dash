@@ -405,11 +405,23 @@ function LiveToday({ sym, win, ds, days, hist }: {
     );
   }
 
+  // ── IB Probability Engine feed — real buildRules() scored against history ──
+  const engineRules = scoreWithHistory(buildRules(live, dowName, win), days)
+    .map((r) => ({ id: r.id, name: r.name, state: r.state, side: r.side, read: r.read, p: r.p }));
+  const engineEnv = {
+    ibWidth: live.bucket === "WIDE" ? "wide" : live.bucket === "NARROW" ? "narrow" : "normal",
+    volume: live.volSurge === true ? "active" : "normal",
+    time: live.nowMin >= 840 ? "late" : "regular",
+  } as const;
+
   const distH = live.ibh - live.price;
   const distL = live.price - live.ibl;
 
   return (
     <>
+      {/* IB Probability Engine + 4-stage rule board (live) */}
+      <IbProbabilityEngine rules={engineRules} env={engineEnv} />
+
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
         <LiveGauges live={live} days={days} dowName={dowName} win={win} />
         <IbLevelCanvas />
@@ -1573,9 +1585,6 @@ export default function IbStatsTab() {
     <div>
       {symTabs}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-        {/* IB Probability Engine + 4-stage rule board */}
-        <IbProbabilityEngine />
 
         <LiveToday
           sym={sym}

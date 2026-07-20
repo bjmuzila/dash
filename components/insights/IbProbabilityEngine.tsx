@@ -3,26 +3,39 @@
 /**
  * IB Probability Engine — live projection board.
  *
- * Recreates the 3-gauge Probability Engine (Bullish / Bearish / Rotation) plus
- * the 4-stage rule board (R1–R14) from the design mockup. The three gauges are
- * computed from the active rules via calculateComplexProbabilities:
- *   1) each ACTIVE rule adds (edge/100)*1.5 into its bucket
+ * Three gauges (Bullish / Bearish / Rotation) + the 4-stage rule board (R1–R14),
+ * driven by the app's real buildRules() engine. Each rule's Historical Edge is
+ * its live conditional hit-rate; the gauges are computed by
+ * calculateComplexProbabilities:
+ *   1) each ACTIVE (in-play) rule adds (edge/100)*1.5 into its bucket (by side)
  *   2) environmental multipliers — IB width / volume / time of day
  *   3) normalize to 100, rotation = 100 - bull - bear
  *
- * Rule states are static placeholders that mirror the mockup so the layout can
- * be read on the live page. The R-ids map 1:1 to the app's buildRules() engine,
- * so this can later be wired to today's real IB state.
+ * Rule ids map 1:1 to buildRules(). Pending / not-in-play rules render as
+ * INACTIVE (their "if it fires" edge is still shown but doesn't move the gauges).
  */
 
-import { HOME_THEME } from "@/components/shared/homeTheme";
-
 type Status = "bull" | "bear" | "rot" | "off";
+
+export type EngineRule = {
+  id: string;                                   // "1" … "14" (from buildRules)
+  name: string;
+  state: "in-play" | "pending" | "not-in-play";
+  side: "H" | "L" | null;
+  read: string;                                 // live description
+  p: number | null;                             // historical edge %
+};
+
+export type EngineEnv = {
+  ibWidth: "wide" | "narrow" | "normal";
+  volume: "active" | "normal";
+  time: "late" | "regular";
+};
 
 const C = {
   bg: "rgba(8,12,20,0.55)",
   panel: "rgba(14,22,38,0.55)",
-  border: HOME_THEME.border,
+  border: "rgba(255,255,255,0.10)",
   text: "#e8eef7",
   muted: "#8a97ab",
   cyan: "#2fb4d6",
@@ -35,50 +48,41 @@ const C = {
 const EDGECOL: Record<Status, string> = { bull: C.green, bear: C.red, rot: C.orange, off: C.grey };
 const TAG: Record<Status, string> = { bull: "Bullish Edge", bear: "Bearish Edge", rot: "Rotational Risk", off: "Inactive" };
 
-type Rule = { id: string; name: string; status: Status; edge: number; desc: string };
-type Stage = { icon: string; title: string; rules: Rule[] };
-
-const STAGES: Stage[] = [
-  { icon: "🔒", title: "Stage 1: Opening Baseline Setup", rules: [
-    { id: "R4",  name: "IB Width → Day Type",       status: "rot",  edge: 88, desc: "Wide range relative to average: Reversion & rotation favored." },
-    { id: "R11", name: "Open Type + IB Width",       status: "rot",  edge: 90, desc: "Neutral-moderate width structure: Regular rotational limits expected." },
-    { id: "R7",  name: "15m FVG inside IB",          status: "bull", edge: 68, desc: "Unfilled Bullish FVG inside range: Acts as magnetic target to the upside." },
-    { id: "R2",  name: "Formation Order + Midpoint", status: "bull", edge: 74, desc: "Low formed first + trading above midpoint: Strong bullish advantage." },
-  ]},
-  { icon: "🔓", title: "Stage 2: Interior Range Dynamics", rules: [
-    { id: "R1",  name: "Midpoint Close Bias",        status: "bull", edge: 65, desc: "Trading above Midpoint: Statistical edge favors testing High first." },
-    { id: "R10", name: "Close Location (strong)",    status: "bull", edge: 76, desc: "Top 25% Squeeze: Closing near high bounds signals high probability breakout." },
-    { id: "R12", name: "Inner ORB + Alignment",      status: "bull", edge: 75, desc: "Inside-Out Alignment: Localized 30m breakout aligns with macro trend bias." },
-  ]},
-  { icon: "🔓", title: "Stage 3: Breakout Validation & Traps", rules: [
-    { id: "R5",  name: "Breakout Entry + Volume",    status: "off", edge: 78, desc: "Pending breakout force." },
-    { id: "R6",  name: "Failed Breakout Fade",       status: "off", edge: 83, desc: "No failed boundary trap observed." },
-    { id: "R13", name: "Time Filter",                status: "off", edge: 78, desc: "No breakout sequence timed." },
-  ]},
-  { icon: "🏁", title: "Stage 4: Continuation Targets & End-of-Day", rules: [
-    { id: "R3",  name: "Single Break Continuation",  status: "off", edge: 76, desc: "Awaiting first clean break to track continuation." },
-    { id: "R8",  name: "Retest Continuation",        status: "off", edge: 71, desc: "No breakout retest in progress." },
-    { id: "R9",  name: "Extension Targets",          status: "off", edge: 69, desc: "No active extension leg to measure." },
-    { id: "R14", name: "Contained Day",              status: "off", edge: 80, desc: "Not yet 2:00 PM ET — containment unconfirmed." },
-  ]},
+// R-id → stage bucket (mirrors the mockup); ids not listed are ignored.
+const STAGE_DEFS: { icon: string; title: string; ids: string[] }[] = [
+  { icon: "🔒", title: "Stage 1: Opening Baseline Setup",        ids: ["4", "11", "7", "2"] },
+  { icon: "🔓", title: "Stage 2: Interior Range Dynamics",        ids: ["1", "10", "12"] },
+  { icon: "🔓", title: "Stage 3: Breakout Validation & Traps",    ids: ["5", "6", "13"] },
+  { icon: "🏁", title: "Stage 4: Continuation Targets & End-of-Day", ids: ["3", "8", "9", "14"] },
 ];
 
-// live environment inputs (drive the multipliers)
-const ENV = { ibWidth: "wide" as "wide" | "narrow" | "normal", volume: "normal" as "active" | "normal", time: "regular" as "late" | "regular" };
+type Row = { id: string; name: string; status: Status; edge: number | null; desc: string };
 
-function calculateComplexProbabilities() {
-  let bull = 0, bear = 0, rot = 0;
-  STAGES.flatMap((s) => s.rules).forEach((r) => {
-    if (r.status === "off") return;
+function toRow(r: EngineRule): Row {
+  const status: Status =
+    r.state !== "in-play" ? "off"
+    : r.side === "H" ? "bull"
+    : r.side === "L" ? "bear"
+    : "rot";
+  return { id: "R" + r.id, name: r.name, status, edge: r.p == null ? null : Math.round(r.p), desc: r.read };
+}
+
+/* ── Step 1–3 : calculateComplexProbabilities ─────────────────────────────── */
+function calculateComplexProbabilities(rows: Row[], env: EngineEnv) {
+  let bull = 0, bear = 0, rot = 0, active = 0;
+  rows.forEach((r) => {
+    if (r.status === "off" || r.edge == null) return;
+    active++;
     const pts = (r.edge / 100) * 1.5;
     if (r.status === "bull") bull += pts;
     else if (r.status === "bear") bear += pts;
-    else if (r.status === "rot") rot += pts;
+    else rot += pts;
   });
-  if (ENV.ibWidth === "wide") rot += 2.0;
-  if (ENV.ibWidth === "narrow") { bull += 0.8; bear += 0.8; }
-  if (ENV.volume === "active") { bull *= 1.3; bear *= 1.3; } else { rot *= 1.2; }
-  if (ENV.time === "late") rot *= 1.5;
+  if (!active) return { bull: 0, bear: 0, rot: 0 };
+  if (env.ibWidth === "wide") rot += 2.0;
+  if (env.ibWidth === "narrow") { bull += 0.8; bear += 0.8; }
+  if (env.volume === "active") { bull *= 1.3; bear *= 1.3; } else { rot *= 1.2; }
+  if (env.time === "late") rot *= 1.5;
   const total = bull + bear + rot || 1;
   const bullPct = Math.round((bull / total) * 100);
   const bearPct = Math.round((bear / total) * 100);
@@ -93,7 +97,7 @@ function Gauge({ pct, color, label }: { pct: number; color: string; label: strin
         <svg width="118" height="118" viewBox="0 0 118 118" style={{ transform: "rotate(-90deg)" }}>
           <circle cx="59" cy="59" r={R} fill="none" stroke="rgba(255,255,255,.07)" strokeWidth="9" />
           <circle cx="59" cy="59" r={R} fill="none" stroke={color} strokeWidth="9" strokeLinecap="round"
-            strokeDasharray={CIRC.toFixed(1)} strokeDashoffset={off.toFixed(1)} />
+            strokeDasharray={CIRC.toFixed(1)} strokeDashoffset={off.toFixed(1)} style={{ transition: "stroke-dashoffset .6s" }} />
         </svg>
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
           fontSize: 22, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: pct > 0 ? color : C.muted }}>{pct}%</div>
@@ -116,7 +120,7 @@ function SegBar({ pct, status }: { pct: number; status: Status }) {
   );
 }
 
-function RuleRow({ r }: { r: Rule }) {
+function RuleRow({ r }: { r: Row }) {
   const col = EDGECOL[r.status];
   const dim = r.status === "off";
   return (
@@ -139,17 +143,20 @@ function RuleRow({ r }: { r: Rule }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.muted }}>Hist. Edge</span>
-          <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: dim ? C.muted : col }}>{r.edge}%</span>
+          <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: dim || r.edge == null ? C.muted : col }}>{r.edge == null ? "—" : `${r.edge}%`}</span>
         </div>
-        <SegBar pct={r.edge} status={r.status} />
+        <SegBar pct={r.edge ?? 0} status={r.status} />
       </div>
     </div>
   );
 }
 
-export function IbProbabilityEngine() {
-  const p = calculateComplexProbabilities();
+export function IbProbabilityEngine({ rules, env }: { rules: EngineRule[]; env: EngineEnv }) {
+  const byId = new Map(rules.map((r) => [r.id, toRow(r)]));
+  const allRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[]);
+  const p = calculateComplexProbabilities(allRows, env);
   const card: React.CSSProperties = { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 18, padding: "22px 22px 24px" };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Probability Engine */}
@@ -167,17 +174,21 @@ export function IbProbabilityEngine() {
       </section>
 
       {/* Stages */}
-      {STAGES.map((s) => (
-        <section key={s.title} style={card}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <span style={{ fontSize: 14 }}>{s.icon}</span>
-            <span style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: C.cyan }}>{s.title}</span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 14 }}>
-            {s.rules.map((r) => <RuleRow key={r.id} r={r} />)}
-          </div>
-        </section>
-      ))}
+      {STAGE_DEFS.map((s) => {
+        const rows = s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[];
+        if (!rows.length) return null;
+        return (
+          <section key={s.title} style={card}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span style={{ fontSize: 14 }}>{s.icon}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: C.cyan }}>{s.title}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 14 }}>
+              {rows.map((r) => <RuleRow key={r.id} r={r} />)}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

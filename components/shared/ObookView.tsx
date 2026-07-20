@@ -11,6 +11,9 @@ import { Card } from "@/components/shared/PageCard";
 const BULL = HOME_THEME.green;
 const BEAR = HOME_THEME.red;
 
+// Quick-switch tickers for the order-book header.
+const QUICK_TICKERS = ["SPX", "SPY", "QQQ"];
+
 type Tenor = {
   tag: string; label: string; meta: string; head: string; side: "bull" | "bear";
   rows: [string, string][]; note: string;
@@ -108,16 +111,19 @@ export function ObookView() {
     return () => { cancel = true; };
   }, [ticker]);
 
-  const load = () => {
-    const t = input.trim().toUpperCase();
+  const pick = (raw: string) => {
+    const t = raw.trim().toUpperCase();
     if (!t) return;
     setTicker(t);
+    setInput(t);
     if (typeof window !== "undefined") {
       const u = new URL(window.location.href);
       u.searchParams.set("t", t);
       window.history.replaceState({}, "", u.toString());
     }
   };
+
+  const load = () => pick(input);
 
   const d = data;
 
@@ -133,7 +139,33 @@ export function ObookView() {
             <div style={{ fontSize: 30, fontWeight: 800, color: HOME_THEME.text }}>{d.ticker} Order Book — Tenor Split</div>
             <div style={{ fontSize: 14, color: HOME_THEME.green }}>{d.subtitle} · {d.date}</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              {QUICK_TICKERS.map((t) => {
+                const on = ticker === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => pick(t)}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      border: `1px solid ${on ? HOME_THEME.cyan : HOME_THEME.border}`,
+                      background: on
+                        ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
+                        : "rgba(255,255,255,0.04)",
+                      color: on ? HOME_THEME.cyan : HOME_THEME.text,
+                      fontSize: 13,
+                      fontWeight: 800,
+                      letterSpacing: "0.06em",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
