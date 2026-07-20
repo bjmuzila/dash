@@ -25,6 +25,7 @@ import { useNqCandles } from "@/hooks/useNqCandles";
 import { avg, med, clock, type IbDataset, type SlimDay } from "@/lib/ibStats";
 import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 import IbDailyResults from "@/components/scanner/IbDailyResults";
+import { IbProbabilityEngine } from "@/components/insights/IbProbabilityEngine";
 
 const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
@@ -1393,19 +1394,14 @@ function deriveWidthBuckets(src: SlimDay[]): SlimDay[] {
   });
 }
 
-export default function IbStatsTab({ embedToday = false }: { embedToday?: boolean } = {}) {
+export default function IbStatsTab() {
   const { userId, isOwnerClaim } = useAuth();
   // Cosmetic owner gate — the historical stat tables are owner-only. Same
   // pattern as /traders-dashboard: prefer the session's owner claim, fall back
   // to the public owner id for the pre-claim path.
-  //
-  // embedToday (the /scanner/ib-embed route the ES-candles IB hover iframes) shows
-  // ONLY the live "today" section. Every historical/daily card below is gated on
-  // isOwner, so forcing it off in embed mode collapses the page to symTabs +
-  // LiveToday — no toolbar, no backtest tables, no daily scoreboard.
-  const isOwner = !embedToday && (isOwnerClaim || (
+  const isOwner = isOwnerClaim || (
     process.env.NEXT_PUBLIC_OWNER_USER_ID ? userId === process.env.NEXT_PUBLIC_OWNER_USER_ID : false
-  ));
+  );
 
   const [sym, setSym] = useState<Sym>("ES");
   const [win, setWin] = useState<Win>(60);
@@ -1577,6 +1573,9 @@ export default function IbStatsTab({ embedToday = false }: { embedToday?: boolea
     <div>
       {symTabs}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+        {/* IB Probability Engine + 4-stage rule board */}
+        <IbProbabilityEngine />
 
         <LiveToday
           sym={sym}
