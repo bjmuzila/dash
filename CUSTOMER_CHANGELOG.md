@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Monday 7/20/2026
+* Added a new IB stat that shows how a **narrow, normal, or wide opening range** tends to play out — whether it breaks one side, both sides, or neither — with the actual point ranges for each.
+* Added two new "reference candle" stats: the **8am hour** (how often the day later takes out both its high and its low, and by what time) and the **2–3pm hour** (breaks one side, both, or neither into the close).
+* Reworked the **streaks** stat to answer it directly — at 2 bars in a row, your odds of a 3rd; at 3, your odds of a 4th; and so on — plus the odds a fresh move ever runs that long.
+* Fixed the **IB-width stats** that were coming up empty; narrow / normal / wide now fill in.
+* The **IB preview** that pops up when you hover the IB button on the ES-candles chart now shows just today's live IB read — no page toolbar or history tables cluttering it.
+
 ## Sunday 7/19/2026
 * Cleaned up the Scanner's **Market Profile (TPO)** tab — all the faint gray text is now crisp white, and the section titles are color-coded so each card is easier to pick out at a glance.
 * The **Signals & Alerts** list on that tab now has a bold header with a live counter that turns green and shows how many alerts are triggering right now.

@@ -415,6 +415,14 @@ type GreekCell = {
   vex: number;
   /** Pure volume-only GEX (volume-weighted gamma), independent of dataMode. */
   volGex: number;
+  /** Raw per-side book stats for the hover card. */
+  callOI: number;
+  putOI: number;
+  callVol: number;
+  putVol: number;
+  /** Net premium traded per side = mark × volume × 100. */
+  callPrem: number;
+  putPrem: number;
 };
 
 // One expiration's column: its date + a strike→greek map.
@@ -676,6 +684,23 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
         ? (num(c, "gamma") * cVol - num(p, "gamma") * pVol) * S * S * 0.01 * 100
         : 0;
 
+      // Raw per-side book stats for the hover card. OI is always the settled
+      // open interest (independent of the Vol-only toggle, which only affects
+      // the GEX basis). Mark falls back through bid/ask mid → last → close.
+      const cOI = c ? (parseInt(String(c["open-interest"] ?? c.openInterest ?? 0), 10) || 0) : 0;
+      const pOI = p ? (parseInt(String(p["open-interest"] ?? p.openInterest ?? 0), 10) || 0) : 0;
+      const markOf = (o: Record<string, unknown> | undefined) => {
+        if (!o) return 0;
+        const m = num(o, "mark") || num(o, "mark-price");
+        if (m > 0) return m;
+        const b = num(o, "bid") || num(o, "bid-price");
+        const a = num(o, "ask") || num(o, "ask-price");
+        if (b > 0 || a > 0) return (b + a) / 2;
+        return num(o, "last") || num(o, "last-price") || num(o, "close") || num(o, "price") || num(o, "mid");
+      };
+      const callPremValue = markOf(c) * cVol * 100;
+      const putPremValue = markOf(p) * pVol * 100;
+
       let gexValue = 0;
       if (dataMode === "flow") {
         gexValue = flowGexMap.get(strike) ?? 0;
@@ -689,6 +714,9 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
         chex: live ? (-num(c, "theta") * cc + num(p, "theta") * pc) * S * 100 : 0,
         vex:  live ? (num(c, "vega") * cc - num(p, "vega") * pc) * S * 100 : 0,
         volGex: volGexValue,
+        callOI: cOI, putOI: pOI,
+        callVol: cVol, putVol: pVol,
+        callPrem: callPremValue, putPrem: putPremValue,
       });
     });
   });
@@ -835,6 +863,71 @@ function ContractFlowPopup({ strike, expiration, onClose }: { strike: number; ex
   );
 }
 
+// ── Hover card ──────────────────────────────────────────────────────────────
+// Floating card (same look as the GEX-chart StrikeDetailPopup) shown while the
+// pointer is over a chain cell: per-side volume, OI, and net premium for that
+// strike + expiration.
+function fmtHoverUsd(n: number): string {
+  const a = Math.abs(n);
+  const s = n < 0 ? "-" : "";
+  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(1)}K`;
+  return `${s}$${a.toFixed(0)}`;
+}
+function fmtHoverInt(n: number): string {
+  return Math.round(n || 0).toLocaleString();
+}
+function StrikeHoverCard({ ticker, strike, expiration, cell, x, y }: {
+  ticker: string; strike: number; expiration: string; cell: GreekCell; x: number; y: number;
+}) {
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  const left = Math.min(Math.max(8, x + 16), vw - 262);
+  const top = Math.min(Math.max(8, y + 16), vh - 196);
+  const netPrem = cell.callPrem - cell.putPrem;
+
+  const SideBlock = ({ label, color, vol, oi, prem }: { label: string; color: string; vol: number; oi: number; prem: number }) => (
+    <div style={{ background: rgba(color, 0.06), border: `1px solid ${rgba(color, 0.28)}`, borderRadius: 8, padding: "7px 9px" }}>
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color, marginBottom: 5 }}>{label}</div>
+      <Row k="Volume" v={fmtHoverInt(vol)} />
+      <Row k="OI" v={fmtHoverInt(oi)} />
+      <Row k="Net Prem" v={fmtHoverUsd(prem)} strong />
+    </div>
+  );
+
+  return createPortal(
+    <div style={{
+      position: "fixed", left, top, zIndex: 1000, width: 246, pointerEvents: "none",
+      background: "rgba(13,17,25,0.96)", border: "1px solid rgba(33,158,188,0.30)", borderRadius: 12,
+      padding: 13, boxShadow: "0 12px 40px rgba(0,0,0,0.6)", backdropFilter: "blur(12px)",
+      WebkitBackdropFilter: "blur(12px)", fontFamily: "var(--font-mono)", color: "#fff",
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 9 }}>
+        <span style={{ fontSize: 15, fontWeight: 800 }}>{ticker} {strike.toLocaleString()}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: HT.muted }}>{fmtExpHeader(expiration)}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <SideBlock label="CALLS" color="#29b6f6" vol={cell.callVol} oi={cell.callOI} prem={cell.callPrem} />
+        <SideBlock label="PUTS" color="#ff4757" vol={cell.putVol} oi={cell.putOI} prem={cell.putPrem} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 9, paddingTop: 7, borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 12 }}>
+        <span style={{ color: HT.muted }}>Net Prem (C−P)</span>
+        <span style={{ fontWeight: 800, color: netPrem >= 0 ? "#29b6f6" : "#ff4757" }}>{fmtHoverUsd(netPrem)}</span>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+function Row({ k, v, strong }: { k: string; v: string; strong?: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, lineHeight: 1.6 }}>
+      <span style={{ color: "#8B94A7" }}>{k}</span>
+      <span style={{ color: strong ? "#fff" : "#cfe", fontWeight: strong ? 800 : 600 }}>{v}</span>
+    </div>
+  );
+}
+
 // ── Memoized chain matrix ───────────────────────────────────────────────────
 interface ChainMatrixProps {
   columns: ExpColumn[];
@@ -861,6 +954,7 @@ interface ChainMatrixProps {
   activeTicker: string;
   atmRowRef: React.RefObject<HTMLDivElement | null>;
   onCellClick: (v: { strike: number; expiration: string }) => void;
+  onCellHover: (v: { strike: number; colIdx: number; x: number; y: number } | null) => void;
 }
 
 // Split out + memoized so transient parent state (the load-progress bar, the
@@ -871,7 +965,7 @@ const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
   changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
-  emLevels, activeTicker, atmRowRef, onCellClick,
+  emLevels, activeTicker, atmRowRef, onCellClick, onCellHover,
 }: ChainMatrixProps) {
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
@@ -1047,6 +1141,8 @@ const ChainMatrix = memo(function ChainMatrix({
                   key={`${strike}-${colIdx}`}
                   className={isMvc ? "mvc-peak-cell" : undefined}
                   onClick={isClickable ? () => onCellClick({ strike, expiration: col!.expiration }) : undefined}
+                  onMouseEnter={col ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
+                  onMouseLeave={col ? () => onCellHover(null) : undefined}
                   title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
                   style={{
                     padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
@@ -1141,6 +1237,10 @@ export default function OptionsChainPage({
   // Clicking a 0DTE SPX cell opens the ContractFlowPopup (that strike's Flow
   // GEX history sparkline) — see the component above for details.
   const [contractPopup, setContractPopup] = useState<{ strike: number; expiration: string } | null>(null);
+  // Cell hovered in the matrix → floating stats card (per-side vol/OI/net prem).
+  // Stable callback so hovering never busts ChainMatrix's memo.
+  const [hoverCell, setHoverCell] = useState<{ strike: number; colIdx: number; x: number; y: number } | null>(null);
+  const onCellHover = useCallback((v: { strike: number; colIdx: number; x: number; y: number } | null) => setHoverCell(v), []);
   const [recentTickers, setRecentTickers] = useState<string[]>([]);
   // Hydrate recents from browser cache after mount (avoids SSR mismatch).
   useEffect(() => { setRecentTickers(loadRecentTickers()); }, []);
@@ -1959,6 +2059,7 @@ export default function OptionsChainPage({
             activeTicker={activeTicker}
             atmRowRef={atmRowRef}
             onCellClick={setContractPopup}
+            onCellHover={onCellHover}
           />
         </div>
       )}
@@ -1970,6 +2071,23 @@ export default function OptionsChainPage({
           onClose={() => setContractPopup(null)}
         />
       )}
+
+      {(() => {
+        if (!hoverCell) return null;
+        const col = columns[hoverCell.colIdx];
+        const cell = col?.cells.get(hoverCell.strike);
+        if (!col || !cell) return null;
+        return (
+          <StrikeHoverCard
+            ticker={activeTicker}
+            strike={hoverCell.strike}
+            expiration={col.expiration}
+            cell={cell}
+            x={hoverCell.x}
+            y={hoverCell.y}
+          />
+        );
+      })()}
     </div>
   );
 }

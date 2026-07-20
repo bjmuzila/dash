@@ -33,17 +33,40 @@ function levelsAreStale(iso: string | null): boolean {
 }
 
 /**
- * A ticker's EM is STALE if the last publish touched its row (updated_at) but did
- * NOT refresh the em value (em_updated_at lags it, or is null). Tolerance: 10 min.
+ * Most-recent Saturday 09:00 ET boundary — the exact instant the weekly em is
+ * frozen server-side (mirrors app/api/levels/route.ts lastSaturday9amET, which
+ * gates whether a POST may (re)write em). Used so the client's "stale" test lines
+ * up with the DB's freeze window instead of guessing from wall-clock gaps.
  */
-function emIsStale(updatedAt: string | null, emUpdatedAt: string | null): boolean {
+function lastSaturday9amET(now = new Date()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value;
+  const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = dowMap[get("weekday") || "Sun"];
+  const hour = Number(get("hour"));
+  const minute = Number(get("minute"));
+  const minsSinceSat9 = ((dow - 6) * 24 * 60) + hour * 60 + minute - 9 * 60;
+  const offsetMin = minsSinceSat9 >= 0 ? minsSinceSat9 : minsSinceSat9 + 7 * 24 * 60;
+  return now.getTime() - offsetMin * 60 * 1000;
+}
+
+/**
+ * A ticker's EM is STALE only if it was NOT (re)published during the current
+ * frozen week — i.e. em_updated_at predates this week's Saturday-9am ET freeze
+ * (or is missing). em is write-once per week by design, so its timestamp
+ * legitimately stays put all week while `updated_at` moves on every zone/label
+ * refresh; comparing the two (the old 10-min rule) falsely flagged a valid frozen
+ * em the moment any later POST touched the row. `updatedAt` is intentionally
+ * ignored now.
+ */
+function emIsStale(_updatedAt: string | null, emUpdatedAt: string | null): boolean {
   if (!emUpdatedAt) return true;
   const em = new Date(emUpdatedAt).getTime();
   if (isNaN(em)) return true;
-  if (Date.now() - em > 8 * 24 * 60 * 60 * 1000) return true;
-  const up = updatedAt ? new Date(updatedAt).getTime() : NaN;
-  if (!isNaN(up) && up - em > 10 * 60 * 1000) return true;
-  return false;
+  return em < lastSaturday9amET();
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
