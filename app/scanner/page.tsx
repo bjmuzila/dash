@@ -19,6 +19,7 @@ import { amtRead, type AmtRead, type AmtSignal, type SignalLevel } from "@/lib/a
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
+import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import SemisTab from "@/components/scanner/SemisTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -2895,6 +2896,9 @@ function TpoStructuresScanner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
+      {/* ── Live TPO forecast: predicted (from IB) vs realized-so-far ─────── */}
+      <TpoForecastCard instr={instr} />
+
       {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
       <Card variant="budget"
         title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
@@ -3121,14 +3125,6 @@ function TpoStructuresScanner() {
 
 export default function ScannerPage() {
   const [tab, setTab] = useState<MainTab>("gex");
-
-  // Deep-link support: /scanner?tab=ibstats opens that tab (used by the ES
-  // Candles IB hover-preview iframe). Runs after mount to avoid SSR mismatch.
-  useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("tab");
-    const valid: MainTab[] = ["overview", "gex", "strike", "watch", "marketquality", "tpo", "ibstats", "statprompter", "semis"];
-    if (t && (valid as string[]).includes(t)) setTab(t as MainTab);
-  }, []);
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     padding: "8px 20px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
