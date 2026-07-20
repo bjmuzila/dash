@@ -26,7 +26,10 @@ import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 import { failOutcome, type FailOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
+import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
+import { useNqCandles } from "@/hooks/useNqCandles";
 
 /* ── stat helpers ─────────────────────────────────────────────────────────── */
 
@@ -48,6 +51,8 @@ type Row = {
   /** free-form extra columns */
   extra?: Record<string, string>;
   emphasis?: boolean;
+  /** true when this row's condition matches today's live IB session */
+  today?: boolean;
 };
 /** A stacked composition bar. ONLY valid when the segments are mutually
  *  exclusive and sum to 100 — a stacked bar is a claim about a partition, and
@@ -57,7 +62,6 @@ type Stack = { label: string; segs: { name: string; pct: number; color: string }
 type Result = {
   headline: string;
   cols?: string[];          // names of the `extra` columns, in order
-  hideRate?: boolean;       // drop the built-in RATE % column (count-only views)
   rows: Row[];
   stack?: Stack[];          // rendered above the table
   verdict?: string;
@@ -125,11 +129,33 @@ export type BarStats = {
   >;
 };
 
+/** Today's live IB, classified on every in-session-knowable dimension the tables
+ *  slice by, so the row matching today's session can be badged TODAY. EOD-only
+ *  fields (fail outcome, hit multiples, retest, containment) are intentionally
+ *  absent — they aren't final until the close, so those tables don't badge. */
+type TodayFull = {
+  bucket: "narrow" | "normal" | "wide" | null;
+  first: "H" | "L" | null;
+  bias: "H" | "L" | null;
+  closeZone: "top25" | "bot25" | "mid50" | null;
+  openType: "OAR-H" | "OAR-L" | "HIR" | "LIR" | null;
+  orbDir: "H" | "L" | null;
+  fvg: "bull" | "bear" | null;
+  breakSide: "H" | "L" | null;
+  breakMin: number | null;
+  volSurge: boolean | null;
+  singleBreak: boolean;
+  bothBroke: boolean;
+  neitherBroke: boolean;
+  pokeFrac: number | null;
+};
+
 type Ctx = {
   es: SlimDay[];
   nq: SlimDay[];
   paired: { d: string; e: SlimDay; n: SlimDay }[];
   bars: Record<"ES" | "NQ", BarStats | null>;
+  today?: { ES: TodayFull | null; NQ: TodayFull | null };
 };
 
 /** A dropdown attached to a prompt. Lets several near-identical questions
@@ -187,6 +213,88 @@ function backfillWidthBuckets(ds: IbDataset | null): IbDataset | null {
           : "normal";
   }
   return ds;
+}
+
+/* ── today's live IB, classified like the historical book ────────────────────
+ * 5m tape (ES or NQ, ~2 sessions) → IB (09:30–10:30 ET) → width bucket, formation
+ * order, midpoint bias, close zone, open type, inner ORB, 15m FVG, first close-
+ * break side/time, break-bar volume surge, one/both/neither, and poke past level. */
+const ET_IB_START = 570, ET_IB_END = 630;   // 09:30 / 10:30 ET, minutes-of-day
+function etMinOf(ts: number): number {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(ts));
+  const m: Record<string, string> = {};
+  p.forEach((x) => (m[x.type] = x.value));
+  return (+m.hour % 24) * 60 + +m.minute;
+}
+function etDayKey(ts: number): string {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ts));
+  const m: Record<string, string> = {};
+  p.forEach((x) => (m[x.type] = x.value));
+  return `${m.year}-${m.month}-${m.day}`;
+}
+function etWeekdayShort(): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(new Date());
+}
+function computeToday(candles: EsCandle[], dsDays: SlimDay[]): TodayFull | null {
+  if (!candles.length) return null;
+  const vol = (c: EsCandle) => (c as { volume?: number }).volume ?? 0;
+  const all = candles
+    .map((c) => ({ day: etDayKey(c.timestamp), m: etMinOf(c.timestamp), o: c.open, h: c.high, l: c.low, c: c.close, v: vol(c) }))
+    .filter((b) => b.m >= 570 && b.m <= 960)
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.m - b.m));
+  if (!all.length) return null;
+  const today = all[all.length - 1].day;
+  const bars = all.filter((b) => b.day === today);
+  const prior = all.filter((b) => b.day < today);
+  const pdh = prior.length ? Math.max(...prior.map((b) => b.h)) : null;
+  const pdl = prior.length ? Math.min(...prior.map((b) => b.l)) : null;
+  const ib = bars.filter((b) => b.m >= ET_IB_START && b.m < ET_IB_END);
+  if (ib.length < 2) return null;
+  const ibh = Math.max(...ib.map((b) => b.h)), ibl = Math.min(...ib.map((b) => b.l)), width = ibh - ibl;
+  if (!(width > 0)) return null;
+  const mid = (ibh + ibl) / 2, ibClose = ib[ib.length - 1].c;
+  let hiIdx = Infinity, loIdx = Infinity;
+  ib.forEach((b, i) => { if (b.h === ibh) hiIdx = Math.min(hiIdx, i); if (b.l === ibl) loIdx = Math.min(loIdx, i); });
+  const first: "H" | "L" = hiIdx < loIdx ? "H" : "L";
+  const bias: "H" | "L" | null = ibClose > mid ? "H" : ibClose < mid ? "L" : null;
+  const loc = (ibClose - ibl) / width;
+  const closeZone: TodayFull["closeZone"] = loc >= 0.75 ? "top25" : loc <= 0.25 ? "bot25" : "mid50";
+  const post = bars.filter((b) => b.m >= ET_IB_END);
+  const brokeH = post.some((b) => b.c > ibh), brokeL = post.some((b) => b.c < ibl);
+  let breakSide: "H" | "L" | null = null, breakMin: number | null = null;
+  for (const b of post) { if (b.c > ibh) { breakSide = "H"; breakMin = b.m; break; } if (b.c < ibl) { breakSide = "L"; breakMin = b.m; break; } }
+  const singleBreak = brokeH !== brokeL, bothBroke = brokeH && brokeL, neitherBroke = !brokeH && !brokeL;
+  const recent = dsDays.slice(-20), atrDays = dsDays.slice(-14);
+  const avgIB = recent.length ? recent.reduce((s, d) => s + d.width, 0) / recent.length : 0;
+  const atr = atrDays.length ? atrDays.reduce((s, d) => s + (d.atr ?? d.dayRange), 0) / atrDays.length : 0;
+  const bucket: TodayFull["bucket"] =
+    atr && avgIB ? width < 0.5 * atr || width < 0.75 * avgIB ? "narrow" : width > 1.5 * atr || width > 1.25 * avgIB ? "wide" : "normal" : null;
+  const dayOpen = bars[0].o;
+  const openType: TodayFull["openType"] =
+    pdh == null || pdl == null ? null : dayOpen > pdh ? "OAR-H" : dayOpen < pdl ? "OAR-L" : dayOpen > (pdh + pdl) / 2 ? "HIR" : "LIR";
+  const orb = ib.filter((b) => b.m < 585);
+  let orbDir: "H" | "L" | null = null;
+  if (orb.length) {
+    const oh = Math.max(...orb.map((b) => b.h)), ol = Math.min(...orb.map((b) => b.l));
+    for (const b of ib.filter((x) => x.m >= 585)) { if (b.c > oh) { orbDir = "H"; break; } if (b.c < ol) { orbDir = "L"; break; } }
+  }
+  const b15: { h: number; l: number }[] = [];
+  for (let sMin = 570; sMin < ET_IB_END; sMin += 15) {
+    const g = ib.filter((b) => b.m >= sMin && b.m < sMin + 15);
+    if (g.length) b15.push({ h: Math.max(...g.map((x) => x.h)), l: Math.min(...g.map((x) => x.l)) });
+  }
+  let fvg: TodayFull["fvg"] = null;
+  for (let i = 2; i < b15.length; i++) { if (b15[i].l > b15[i - 2].h) fvg = "bull"; else if (b15[i].h < b15[i - 2].l) fvg = "bear"; }
+  const ibVolAvg = ib.length ? ib.reduce((s, b) => s + b.v, 0) / ib.length : 0;
+  const brkBar = breakMin != null ? post.find((b) => b.m === breakMin) : null;
+  const volSurge = brkBar && ibVolAvg > 0 ? brkBar.v > ibVolAvg : null;
+  let pokeFrac: number | null = null;
+  if (breakSide && breakMin != null) {
+    const after = post.filter((b) => b.m >= breakMin!);
+    const peak = breakSide === "H" ? Math.max(...after.map((b) => b.h)) - ibh : ibl - Math.min(...after.map((b) => b.l));
+    pokeFrac = peak / width;
+  }
+  return { bucket, first, bias, closeZone, openType, orbDir, fvg, breakSide, breakMin, volSurge, singleBreak, bothBroke, neitherBroke, pokeFrac };
 }
 
 /* ── THE PROMPT LIBRARY ───────────────────────────────────────────────────── */
@@ -464,12 +572,14 @@ const PROMPTS: Prompt[] = [
     cat: "Break quality",
     title: "Narrow vs wide IB — which break carries?",
     ask: "Compression should pay on the break; a wide IB has already spent the day's range. Does the data agree?",
-    run: ({ es }) => {
+    run: ({ es, today }) => {
+      const t = today?.ES ?? null;
       const b = es.filter((d) => d.fcb && d.widthBucket);
       const rows = (["narrow", "normal", "wide"] as const).map((w) => {
         const xs = b.filter((d) => d.widthBucket === w);
         return {
           label: `IB ${w}`,
+          today: t?.bucket === w,
           n: xs.length,
           k: xs.filter((d) => d.fcb!.hit["1"]).length,
           extra: {
@@ -493,13 +603,15 @@ const PROMPTS: Prompt[] = [
     cat: "Break quality",
     title: "Did volume confirm the break?",
     ask: "The oldest tell in the book: a break on a volume surge vs a break on air.",
-    run: ({ es, nq }) => {
+    run: ({ es, nq, today }) => {
       const rows: Row[] = [];
       for (const [label, days] of [["ES", es], ["NQ", nq]] as const) {
+        const td = label === "ES" ? today?.ES : today?.NQ;
         const b = days.filter((d) => d.fcb);
         for (const [k, xs] of [["vol surge", b.filter((d) => d.fcb!.volSurge)], ["no surge", b.filter((d) => !d.fcb!.volSurge)]] as const) {
           rows.push({
             label: `${label} — ${k}`,
+            today: k === "vol surge" ? td?.volSurge === true : td?.volSurge === false,
             n: xs.length,
             k: xs.filter((d) => d.fcb!.hit["1"]).length,
             extra: {
@@ -617,15 +729,16 @@ const PROMPTS: Prompt[] = [
     cat: "Break quality",
     title: "Which failed breaks actually rotate?",
     ask: "If the fade only pays on full rotation, the question is what a rotation looks like at the moment it fails. Slice the failed book by IB width, volume at the break, and how far it got before it rolled over.",
-    run: ({ es }) => {
+    run: ({ es, today }) => {
       const failed = es
         .filter((d) => d.fcb && d.fcb.failed)
         .map((d) => ({ d, o: failOutcome(d.fcb!, d.width)! }));
-      const line = (label: string, xs: typeof failed, emphasis = false): Row => ({
+      const line = (label: string, xs: typeof failed, emphasis = false, isToday = false): Row => ({
         label,
         n: xs.length,
         k: xs.filter((x) => x.o === "full_rotation").length,
         emphasis,
+        today: isToday,
         extra: {
           recovered: pctS(xs.filter((x) => x.o === "recovered").length, xs.length),
           "to mid": pctS(xs.filter((x) => x.o === "to_mid").length, xs.length),
@@ -633,21 +746,23 @@ const PROMPTS: Prompt[] = [
         },
       });
       const peak = (x: (typeof failed)[number]) => x.d.fcb!.peakBeforeFail / x.d.width;
+      const t = today?.ES ?? null;
+      const pf = t?.pokeFrac ?? null;
       return {
         headline: `ES failed breaks only. The rate column = FULL ROTATION (reached the opposite IB extreme) — the only outcome the fade actually gets paid on.`,
         cols: ["recovered", "to mid", "chop"],
         rows: [
           line("ALL failed breaks", failed, true),
-          line("IB narrow", failed.filter((x) => x.d.widthBucket === "narrow")),
-          line("IB normal", failed.filter((x) => x.d.widthBucket === "normal")),
-          line("IB wide", failed.filter((x) => x.d.widthBucket === "wide")),
-          line("Volume surge on the break bar", failed.filter((x) => x.d.fcb!.volSurge)),
-          line("No volume surge", failed.filter((x) => !x.d.fcb!.volSurge)),
-          line("Poked <0.25 IB past the level before failing", failed.filter((x) => peak(x) < 0.25)),
-          line("Poked 0.25–0.5 IB past", failed.filter((x) => peak(x) >= 0.25 && peak(x) < 0.5)),
-          line("Poked >0.5 IB past before failing", failed.filter((x) => peak(x) >= 0.5)),
-          line("Broke before 11:00", failed.filter((x) => x.d.fcb!.breakMin < 660)),
-          line("Broke after 12:00", failed.filter((x) => x.d.fcb!.breakMin >= 720)),
+          line("IB narrow", failed.filter((x) => x.d.widthBucket === "narrow"), false, t?.bucket === "narrow"),
+          line("IB normal", failed.filter((x) => x.d.widthBucket === "normal"), false, t?.bucket === "normal"),
+          line("IB wide", failed.filter((x) => x.d.widthBucket === "wide"), false, t?.bucket === "wide"),
+          line("Volume surge on the break bar", failed.filter((x) => x.d.fcb!.volSurge), false, t?.volSurge === true),
+          line("No volume surge", failed.filter((x) => !x.d.fcb!.volSurge), false, t?.volSurge === false),
+          line("Poked <0.25 IB past the level before failing", failed.filter((x) => peak(x) < 0.25), false, pf != null && pf < 0.25),
+          line("Poked 0.25–0.5 IB past", failed.filter((x) => peak(x) >= 0.25 && peak(x) < 0.5), false, pf != null && pf >= 0.25 && pf < 0.5),
+          line("Poked >0.5 IB past before failing", failed.filter((x) => peak(x) >= 0.5), false, pf != null && pf >= 0.5),
+          line("Broke before 11:00", failed.filter((x) => x.d.fcb!.breakMin < 660), false, t?.breakMin != null && t.breakMin < 660),
+          line("Broke after 12:00", failed.filter((x) => x.d.fcb!.breakMin >= 720), false, t?.breakMin != null && t.breakMin >= 720),
         ],
         verdict: "Find the slice where FULL ROTATION runs meaningfully above the all-failed baseline. If none of them do, the failed break isn't a fade setup — it's just noise.",
       };
@@ -660,12 +775,14 @@ const PROMPTS: Prompt[] = [
     cat: "Context",
     title: "Open type — does a gap open change the break?",
     ask: "Open above yesterday's range (OAR) vs inside it (IR). Gaps are supposed to trend or fill; which is it?",
-    run: ({ es }) => {
+    run: ({ es, today }) => {
+      const tot = today?.ES ?? null;
       const b = es.filter((d) => d.fcb && d.openType);
       const rows = (["OAR-H", "OAR-L", "HIR", "LIR"] as const).map((t) => {
         const xs = b.filter((d) => d.openType === t);
         return {
           label: t,
+          today: tot?.openType === t,
           n: xs.length,
           k: xs.filter((d) => worked(d)).length,
           extra: {
@@ -683,14 +800,17 @@ const PROMPTS: Prompt[] = [
     cat: "Context",
     title: "Does the 9:30–9:45 ORB predict the IB break side?",
     ask: "The first 15 minutes vs the first hour. If the opening drive already told you, the IB break is late information.",
-    run: ({ es }) => {
+    run: ({ es, today }) => {
       const b = es.filter((d) => d.fcb && d.orbDir);
       const agree = b.filter((d) => d.orbDir === side(d));
+      const to = today?.ES ?? null;
+      const orbKnown = to?.orbDir != null && to?.breakSide != null;
+      const orbAgree = !!orbKnown && to!.orbDir === to!.breakSide;
       const rows: Row[] = [
-        { label: "IB break matched the ORB direction", n: b.length, k: agree.length, emphasis: true },
+        { label: "IB break matched the ORB direction", n: b.length, k: agree.length, emphasis: true, today: orbAgree },
         { label: "…and that break then hit 1×", n: agree.length, k: agree.filter((d) => d.fcb!.hit["1"]).length },
         { label: "…and that break FAILED", n: agree.length, k: agree.filter((d) => d.fcb!.failed).length },
-        { label: "IB break went AGAINST the ORB", n: b.length, k: b.length - agree.length },
+        { label: "IB break went AGAINST the ORB", n: b.length, k: b.length - agree.length, today: !!orbKnown && !orbAgree },
         { label: "…and that break FAILED", n: b.length - agree.length, k: b.filter((d) => d.orbDir !== side(d) && d.fcb!.failed).length },
       ];
       return { headline: "ES. ORB = first close outside the 09:30–09:45 range, measured inside the IB.", rows };
@@ -701,14 +821,16 @@ const PROMPTS: Prompt[] = [
     cat: "Context",
     title: "IB fair-value gap — does the imbalance point the break?",
     ask: "A 15m FVG printed inside the IB. Does the break honor it, and does the day fill back to the mid?",
-    run: ({ es }) => {
+    run: ({ es, today }) => {
       const b = es.filter((d) => d.fcb && d.fvg);
       const want = (d: SlimDay) => (d.fvg === "bull" ? "H" : "L");
       const agree = b.filter((d) => side(d) === want(d));
+      const tf = today?.ES ?? null;
+      const fvgAgree = tf?.fvg != null && tf?.breakSide != null && tf.breakSide === (tf.fvg === "bull" ? "H" : "L");
       return {
         headline: "ES. FVG = 3-bar 15m imbalance built from the IB's 5m bars.",
         rows: [
-          { label: "Break agreed with the FVG direction", n: b.length, k: agree.length, emphasis: true },
+          { label: "Break agreed with the FVG direction", n: b.length, k: agree.length, emphasis: true, today: fvgAgree },
           { label: "…and hit 1×", n: agree.length, k: agree.filter((d) => d.fcb!.hit["1"]).length },
           { label: "…and FAILED", n: agree.length, k: agree.filter((d) => d.fcb!.failed).length },
           { label: "Break went against the FVG, and failed", n: b.length - agree.length, k: b.filter((d) => side(d) !== want(d) && d.fcb!.failed).length },
@@ -722,6 +844,7 @@ const PROMPTS: Prompt[] = [
     title: "Day of week — is any day the chop day?",
     ask: "Cheap slice, easy to fool yourself with. Included so you can see how thin the cells get.",
     run: ({ es, paired }) => {
+      const tdow = etWeekdayShort();
       const rows = ["Mon", "Tue", "Wed", "Thu", "Fri"].map((w) => {
         const xs = es.filter((d) => dow(d.date) === w);
         const b = xs.filter((d) => d.fcb);
@@ -729,6 +852,7 @@ const PROMPTS: Prompt[] = [
         const div = pr.filter(({ e, n }) => brk(e) && brk(n) && side(e) !== side(n));
         return {
           label: w,
+          today: w === tdow,
           n: b.length,
           k: b.filter((d) => d.fcb!.failed).length,
           extra: {
@@ -753,7 +877,8 @@ const PROMPTS: Prompt[] = [
     cat: "Timing",
     title: "When does the break come, and does the clock matter?",
     ask: "An 10:35 break and a 14:50 break are not the same trade. Bucket by time of first break.",
-    run: ({ es }) => {
+    run: ({ es, today }) => {
+      const tt = today?.ES ?? null;
       const b = es.filter((d) => d.fcb);
       const buckets: [string, (m: number) => boolean][] = [
         ["10:30–11:00", (m) => m < 660],
@@ -765,6 +890,7 @@ const PROMPTS: Prompt[] = [
         const xs = b.filter((d) => f(d.fcb!.breakMin));
         return {
           label,
+          today: tt?.breakMin != null && f(tt.breakMin),
           n: xs.length,
           k: xs.filter((d) => d.fcb!.hit["1"]).length,
           extra: {
@@ -932,10 +1058,11 @@ const PROMPTS: Prompt[] = [
     cat: "Session shape",
     title: "IB width → does it break one side, both, or neither?",
     ask: "The first read of the day. A narrow IB is coiled and should resolve directionally; a wide IB has already spent range and should stay contained. This is the base rate for the three ways a session can treat its IB — split by how wide the IB opened. One-side / both-sides / neither is a true partition: every RTH session lands in exactly one.",
-    run: ({ es, nq }) => {
+    run: ({ es, nq, today }) => {
       const rows: Row[] = [];
       const stack: Stack[] = [];
       for (const [sym, days] of [["ES", es], ["NQ", nq]] as const) {
+        const td = sym === "ES" ? today?.ES : today?.NQ;
         const withBucket = days.filter((d) => d.widthBucket);
         for (const w of ["narrow", "normal", "wide"] as const) {
           const xs = withBucket.filter((d) => d.widthBucket === w);
@@ -946,6 +1073,7 @@ const PROMPTS: Prompt[] = [
           const range = wpts.length ? `${wpts[0].toFixed(1)}–${wpts[wpts.length - 1].toFixed(1)}` : "—";
           rows.push({
             label: `${sym} ${w} IB`,
+            today: td?.bucket === w,
             n: xs.length,
             k: one, // headline = ONE side only, the clean directional break
             extra: {
@@ -982,12 +1110,14 @@ const PROMPTS: Prompt[] = [
     cat: "Session shape",
     title: "Both sides of the IB broke — the rotation day",
     ask: "When one index takes out both its own extremes, the day is rotational by definition. How often, and where does it close?",
-    run: ({ es, nq }) => {
+    run: ({ es, nq, today }) => {
       const rows: Row[] = [];
       for (const [label, days] of [["ES", es], ["NQ", nq]] as const) {
+        const td = label === "ES" ? today?.ES : today?.NQ;
         const bb = days.filter((d) => d.bothBroke);
         rows.push({
           label: `${label} — both extremes taken`,
+          today: td?.bothBroke === true,
           n: days.length,
           k: bb.length,
           extra: {
@@ -998,6 +1128,7 @@ const PROMPTS: Prompt[] = [
         });
         rows.push({
           label: `${label} — single break only`,
+          today: td?.singleBreak === true,
           n: days.length,
           k: days.filter((d) => d.singleBreak).length,
           extra: {
@@ -1259,33 +1390,25 @@ const PROMPTS: Prompt[] = [
         // it goes to N+1"). "reach from fresh" is the cumulative survival — the
         // product of every extension up to here — i.e. odds a brand-new 1-bar
         // move ever gets this long.
-        // raw per-length counts straight from the data: nAt.get(k) = how many
-        // times a run ACTUALLY reached length k (longer runs are counted too,
-        // since a 6-run passed through 5). "actually went to N+1" = the count
-        // stored at run+1, so it's a real tally, never derived from a %.
-        const nAt = new Map(A.streaks.byRun.map((x) => [x.run, x.n]));
         let surv = 1;
         return {
-          headline: `${head} "N in a row" = how many times in the data a run actually reached N (a longer run counts too). "actually went to N+1" = how many of those printed one more bar. "reach from fresh" = the same thing as a cumulative %.`,
-          hideRate: true,
-          cols: ["N in a row", "actually went to N+1", "reach from fresh"],
+          headline: `${head} RATE = at a run of N, the odds the NEXT bar extends it to N+1. "reach from fresh" = odds a brand-new move ever gets this long (cumulative). 50% extension = a coin flip.`,
+          cols: ["edge vs 50%", "reach from fresh"],
           rows: A.streaks.byRun.map((r) => {
             surv *= r.cont;
-            const went = nAt.get(r.run + 1) ?? Math.round(r.cont * r.n);
             return {
               label: `${r.run} in a row → ${r.run + 1} in a row`,
               n: r.n,
               k: Math.round(r.cont * r.n),
-              emphasis: r.run === 5,
+              emphasis: Math.abs(r.cont - 0.5) > 0.02,
               extra: {
-                "N in a row": r.n.toLocaleString(),
-                "actually went to N+1": went.toLocaleString(),
+                "edge vs 50%": `${r.cont >= 0.5 ? "+" : ""}${(100 * (r.cont - 0.5)).toFixed(1)} pts`,
                 "reach from fresh": `${(100 * surv).toFixed(1)}%`,
               },
             };
           }),
           verdict:
-            "These are raw historical counts, not probabilities. On the '5 in a row → 6' row: 'N in a row' is the number of times ES actually printed 5 straight same-direction 5-min bars over the 2382 sessions, and 'actually went to N+1' is how many of those went on to a 6th. The 6-in-a-row total is that same 'actually went' number — and it's also the 'N in a row' figure on the row below it. 'Reach from fresh' just expresses each count as a share of all fresh 1-bar moves.",
+            "The RATE column answers it directly: at 2 in a row, that's your odds of a 3rd; at 3, your odds of a 4th; and so on. On index futures each step sits within a point or two of 50%, so the streak itself carries almost no directional edge — but 'reach from fresh' still falls off fast because you're multiplying near-coin-flips (≈50% → 25% → 12%…). If a single step is meaningfully off 50, check the bar count before trusting it.",
         };
       }
 
@@ -1493,7 +1616,7 @@ function ResultTable({ res }: { res: Result }) {
           <thead>
             <tr>
               <th style={th}>Condition</th>
-              {!res.hideRate && <th style={{ ...th, textAlign: "right" }}>rate</th>}
+              <th style={{ ...th, textAlign: "right" }}>rate</th>
               {cols.map((c) => (
                 <th key={c} style={{ ...th, textAlign: "right" }}>{c}</th>
               ))}
@@ -1508,9 +1631,14 @@ function ResultTable({ res }: { res: Result }) {
               const thin = r.n > 0 && r.n < 30;
               const suspicious = r.k != null && r.n >= 30 && (100 * r.k) / r.n > 85;
               return (
-                <tr key={i} style={{ background: r.emphasis ? `${LIGHT_BLUE}0F` : "transparent" }}>
-                  <td style={{ ...td, color: HOME_THEME.text, fontWeight: r.emphasis ? 700 : 500 }}>
+                <tr key={i} style={{ background: r.today ? `${LIGHT_BLUE}1C` : r.emphasis ? `${LIGHT_BLUE}0F` : "transparent" }}>
+                  <td style={{ ...td, color: HOME_THEME.text, fontWeight: r.today || r.emphasis ? 700 : 500 }}>
                     {r.label}
+                    {r.today && (
+                      <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: LIGHT_BLUE, border: `1px solid ${LIGHT_BLUE}66`, background: `${LIGHT_BLUE}1F`, borderRadius: 4, padding: "1px 6px", letterSpacing: ".04em" }}>
+                        TODAY
+                      </span>
+                    )}
                     {thin && (
                       <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: HOME_THEME.orange, border: `1px solid ${HOME_THEME.orange}55`, borderRadius: 4, padding: "1px 5px" }}>
                         THIN
@@ -1522,11 +1650,9 @@ function ResultTable({ res }: { res: Result }) {
                       </span>
                     )}
                   </td>
-                  {!res.hideRate && (
-                    <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 17, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
-                      {r.k != null ? pctS(r.k, r.n) : "—"}
-                    </td>
-                  )}
+                  <td style={{ ...td, textAlign: "right", fontWeight: 800, fontSize: 17, color: r.k != null ? LIGHT_BLUE : "rgba(255,255,255,0.4)" }}>
+                    {r.k != null ? pctS(r.k, r.n) : "—"}
+                  </td>
                   {cols.map((c) => (
                     <td key={c} style={{ ...td, textAlign: "right", color: HOME_THEME.text }}>{r.extra?.[c] ?? "—"}</td>
                   ))}
@@ -1561,6 +1687,9 @@ export default function StatPrompterTab() {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   /** per-prompt dropdown selections, keyed `${promptId}.${controlId}` */
   const [sel, setSel] = useState<Record<string, string>>({});
+  // live ES + NQ tape → today's IB, classified so matching rows badge TODAY
+  const { candles: esLive } = useEsCandles(true, 2);
+  const { candles: nqLive } = useNqCandles(true, 2);
 
   useEffect(() => {
     let alive = true;
@@ -1596,6 +1725,9 @@ export default function StatPrompterTab() {
     };
   }, []);
 
+  const todayES = useMemo(() => (es ? computeToday(esLive, es.days) : null), [esLive, es]);
+  const todayNQ = useMemo(() => (nq ? computeToday(nqLive, nq.days) : null), [nqLive, nq]);
+
   const ctx: Ctx | null = useMemo(() => {
     if (!es || !nq) return null;
     const cut = since === "all" ? "" : `${since}-01-01`;
@@ -1606,8 +1738,8 @@ export default function StatPrompterTab() {
     // NOTE: the `since` filter does NOT apply to the bar stats — those are
     // precomputed over the whole CSV. Re-run the script with a trimmed file if
     // you need a narrower window. Said plainly in the footer so it can't mislead.
-    return { es: E, nq: N, paired, bars: { ES: barEs, NQ: barNq } };
-  }, [es, nq, since, barEs, barNq]);
+    return { es: E, nq: N, paired, bars: { ES: barEs, NQ: barNq }, today: { ES: todayES, NQ: todayNQ } };
+  }, [es, nq, since, barEs, barNq, todayES, todayNQ]);
 
   const list = useMemo(
     () =>
@@ -1638,6 +1770,10 @@ export default function StatPrompterTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Today's IB, priced, with the historical reach rate on every level.
+          Sits above the library because it's the thing you look at first. */}
+      <IbLevelCanvas />
+
       <Card title="Stat Prompter" subtitle="Canned questions over the ES + NQ Initial Balance book. Click one, it runs on the real history.">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {CATS.map((c) => (
