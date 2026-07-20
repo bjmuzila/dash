@@ -533,7 +533,7 @@ function outcomeChip(o: MvcSegment["outcome"] | null): { text: string; color: st
   if (o == null) return { text: "—", color: T.muted };
   if (o === "miss") return { text: "MISS", color: T.red };
   if (o === "hit") return { text: "HIT", color: POS_GREEN };
-  if (o === "pivot") return { text: "HIT · PIVOT", color: POS_GREEN };
+  if (o === "pivot") return { text: "HIT", color: POS_GREEN };
   return { text: "HIT · CHOP", color: T.orange }; // chop
 }
 

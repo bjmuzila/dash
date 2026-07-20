@@ -303,26 +303,16 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 // there, not on the chart page. See app/test/page.tsx OptionsPositioningTab.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Bubble-size knob, persisted per browser (see changeBubbleScale). Sizing is
-// pure taste, so it's the one overlay setting that shouldn't reset every visit.
-// Versioned suffix so a future range change can invalidate old values.
-const BUBBLE_SCALE_KEY = "es-candles-bubble-scale-v1";
-// Bubble character presets. Two continuous knobs (size × variance) gave too many
-// almost-right spots to ever settle on, so the primary control is now a 3-way
-// preset that sets BOTH at once; the size slider only nudges scale from there.
-// `var` is the ratio^var contrast exponent (0.5 = true area). Higher var pushes
-// small strikes to the floor (more contrast); lower lifts the whole field bigger.
-const BUBBLE_PRESET_KEY = "es-candles-bubble-preset-v1";
-const BUBBLE_PRESETS = {
-  subtle:   { scale: 0.30, var: 1.1 },  // sparsest — only the clearest walls, small
-  balanced: { scale: 0.42, var: 0.8 },  // clean hierarchy, medium
-  bold:     { scale: 0.58, var: 0.6 },  // survivors bigger and brighter
-} as const;
-type BubblePreset = keyof typeof BUBBLE_PRESETS;
-// Only draw bubbles for the N nearest strikes ABOVE and N below spot, per column.
-// Far strikes carry little tradeable gamma and just add horizontal noise; this
-// windows the trail to the strikes actually in play around price.
-const BUBBLE_STRIKE_WINDOW = 5;
+// Bubble control config, persisted per browser as one JSON blob (see
+// updateBubbleCfg). Sizing/filtering is pure taste, so it shouldn't reset every
+// visit. Versioned suffix so a future shape change can invalidate old values.
+//   topStrikes  — Show Top Strikes: draw only the N strongest strikes per column
+//   highlight   — Highlight Top N Walls: top X of the shown set render dominant (X ≤ N)
+//   minSize/maxSize — d3.scaleSqrt radius range in px (area ∝ |GEX|)
+//   brightness  — 0..100 opacity gradient steepness for smaller strikes
+const BUBBLE_CFG_KEY = "es-candles-bubble-cfg-v1";
+type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; brightness: number };
+const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 12, highlight: 2, minSize: 2, maxSize: 14, brightness: 60 };
 
 /**
  * `leading` renders as the first item in the dock, before the "ES 5m Candles"
@@ -421,14 +411,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
   // server-side, so the rolling feedExpiry must not re-fire the ~700KB/5s call.
   const lastHeatmapKeyRef = useRef<string>("");
-  const bubbleScaleRef = useRef(1);
-  const bubbleVarRef = useRef(1);
+  const bubbleCfgRef = useRef<BubbleCfg>(BUBBLE_CFG_DEFAULT);
   const bubbleMinsRef = useRef(5);
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
   const replayOnRef = useRef(false);
   const replayTsRef = useRef<number | null>(null);
-  // NOTE: the effect that syncs this ref lives next to the bubbleScale useState
-  // below — NOT here. A `[bubbleScale]` dep array is evaluated during render, and
+  // NOTE: the effect that syncs this ref lives next to the bubbleCfg useState
+  // below — NOT here. A `[bubbleCfg]` dep array is evaluated during render, and
   // the state is declared further down, so putting it here threw a TDZ
   // ReferenceError ("Cannot access before initialization") and 500'd the page.
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
@@ -592,17 +581,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
   const [showGexBubbles, setShowGexBubbles] = useState(true);
-  // 0.3 was the old sweet spot; slider now runs 0.1–1.0 for far bigger orbs.
-  const [bubbleScale, setBubbleScale] = useState(0.3); // manual radius multiplier (sizing is taste)
-  // Contrast/variance exponent on the size ramp: r ∝ ratio^var, where `ratio` is
-  // now normalized to the session P97 (not the max), so the low-end lift that
-  // used to force a high exponent is gone.
-  //   0.5 = sqrt  → area ∝ |GEX| (the honest default — Idea 1).
-  //   1.0 = linear
-  //   >1  = small strikes collapse toward the floor; only real gamma renders big.
-  const [bubbleVar, setBubbleVar] = useState(BUBBLE_PRESETS.balanced.var);
-  // Which character preset is active (drives bubbleVar + a base scale).
-  const [bubblePreset, setBubblePreset] = useState<BubblePreset>("balanced");
+  // Bubble controls: Show Top Strikes (N) + Highlight Top N Walls (X≤N) filter
+  // WHICH strikes draw; Min/Max Bubble Size (scaleSqrt range) + Brightness
+  // (opacity gradient) control HOW they draw. Persisted as one blob.
+  const [bubbleCfg, setBubbleCfg] = useState<BubbleCfg>(BUBBLE_CFG_DEFAULT);
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit ~barSpacing/5 px apart and overlap into solid rails —
   // 5m spaces them one per candle, which is why it's the default.
@@ -684,47 +666,34 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     }, ms);
     return () => clearInterval(id);
   }, [replayOn, replayPlaying, replaySpeed, replayFrames.length]);
-  // Restore the last bubble-size the user landed on. Read in an effect rather
-  // than a lazy useState initializer so SSR and the first client render agree
-  // (a localStorage read during render hydrates a different tree than the server
-  // sent). Validated against the slider's own 0.1–1.0 range — a stale or
-  // hand-edited key must never push the knob somewhere the slider can't undo.
+  // Restore the saved bubble config. Read in an effect (not a lazy useState
+  // initializer) so SSR and the first client render agree. Merged over defaults
+  // so a partial/older blob still yields a complete, valid config.
   useEffect(() => {
     try {
-      // Character preset drives bubbleVar (and is the base for scale). Restore it
-      // first, then let a saved scale nudge override the preset's base scale.
-      const p = window.localStorage.getItem(BUBBLE_PRESET_KEY) as BubblePreset | null;
-      if (p && p in BUBBLE_PRESETS) { setBubblePreset(p); setBubbleVar(BUBBLE_PRESETS[p].var); }
-      const raw = window.localStorage.getItem(BUBBLE_SCALE_KEY);
-      const n = raw === null ? NaN : Number(raw);
-      if (Number.isFinite(n) && n >= 0.1 && n <= 1.0) setBubbleScale(n);
-    } catch { /* private mode / storage disabled — keep the default */ }
+      const raw = window.localStorage.getItem(BUBBLE_CFG_KEY);
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (p && typeof p === "object") setBubbleCfg((c) => ({ ...c, ...p }));
+    } catch { /* private mode / bad blob — keep the defaults */ }
   }, []);
-  // Apply a preset: sets the contrast exponent AND resets scale to the preset's
-  // base (persisting both), so one click gives a complete look with nothing left
-  // to hunt for. The size slider still nudges scale afterward.
-  const applyBubblePreset = useCallback((name: BubblePreset) => {
-    const p = BUBBLE_PRESETS[name];
-    setBubblePreset(name);
-    setBubbleVar(p.var);
-    setBubbleScale(p.scale);
-    try {
-      window.localStorage.setItem(BUBBLE_PRESET_KEY, name);
-      window.localStorage.setItem(BUBBLE_SCALE_KEY, String(p.scale));
-    } catch { /* ignore */ }
-  }, []);
-  // Persist on change. Wrapping the setter (rather than an effect on the value)
-  // keeps the initial default out of storage: nothing is written until the user
-  // actually drags the slider, so changing BUBBLE_DEFAULT later still reaches
-  // everyone who never touched it.
-  const changeBubbleScale = useCallback((v: number) => {
-    setBubbleScale(v);
-    try { window.localStorage.setItem(BUBBLE_SCALE_KEY, String(v)); } catch { /* ignore */ }
+  // Patch the config with slider constraints enforced, then persist:
+  //   • Highlight can't exceed Show Top Strikes (lowering N pulls X down).
+  //   • Min size can't exceed Max size (and vice versa).
+  const updateBubbleCfg = useCallback((patch: Partial<BubbleCfg>) => {
+    setBubbleCfg((prev) => {
+      const next: BubbleCfg = { ...prev, ...patch };
+      if (next.maxSize < next.minSize) {
+        if ("minSize" in patch) next.maxSize = next.minSize; else next.minSize = next.maxSize;
+      }
+      next.highlight = Math.max(0, Math.min(next.highlight, next.topStrikes));
+      try { window.localStorage.setItem(BUBBLE_CFG_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
   }, []);
   // Mirrored into refs so the imperative overlay draw reads them without
-  // re-subscribing. Must stay BELOW the useState above (see bubbleScaleRef).
-  useEffect(() => { bubbleScaleRef.current = bubbleScale; }, [bubbleScale]);
-  useEffect(() => { bubbleVarRef.current = bubbleVar; }, [bubbleVar]);
+  // re-subscribing. Must stay BELOW the useState above (see bubbleCfgRef).
+  useEffect(() => { bubbleCfgRef.current = bubbleCfg; }, [bubbleCfg]);
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
   // Auto-collapse the fixed-width rail when the chart area gets too narrow (e.g.
   // in the 2/5 drawer / iframe), otherwise the 230px rail starves the candle
@@ -2179,10 +2148,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       // red = −GEX (puts). Thicker = larger gamma at that strike.
       {
         // ── 1b) 1-minute per-strike GEX bubbles. One bubble per strike per
-        // minute; radius ∝ |net GEX| at that strike, normalized to the max |GEX|
+        // minute; radius ∝ √|net GEX| at that strike, normalized to the max |GEX|
         // seen across ALL minutes in the buffer (a session-wide scale) so the
-        // trail reads as gamma building/bleeding over time rather than being
-        // re-normalized every column. bubbleScale is the manual size knob.
+        // trail reads as gamma building/bleeding over time. The Strikes/Size/
+        // Brightness sliders (bubbleCfg) control which strikes draw and how.
         if (showGexBubbles) {
           // Aggregate the 1-min store into the selected bucket. At 5m we keep the
           // LAST minute in each bucket (the freshest read of that strike's gamma),
@@ -2197,147 +2166,85 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           if (mins.length) {
             const metric = gexMetricRef.current;
             const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
-            // Session |GEX| distribution (pre-15:30 ET). The radius scale is a high
-            // PERCENTILE of this, NOT the raw max: into the close gamma concentrates
-            // on 2–3 strikes whose |GEX| dwarfs the whole rest of the day, and using
-            // the max as the denominator shrank every earlier minute to dust. With
-            // P97 as the scale, the top ~3% of strikes clamp to the max radius and
-            // everything else sizes RELATIVE to that percentile — so the day's
-            // structure stays legible in any regime (Idea 4). The 15:30 cutoff still
-            // keeps the closing pin from redefining the scale.
-            const sessAbs: number[] = [];
+            // Session-wide max magnitude → shared radius scale, computed from the
+            // minutes BEFORE 15:30 ET only. Into the close, gamma concentrates on 2–3
+            // strikes and their |GEX| dwarfs the rest of the day; including them made
+            // those few bubbles gigantic and normalized every earlier minute down to
+            // nothing. Excluding them means the scale is set by the 15:25-and-earlier
+            // session, and the closing strikes just clamp (ratio caps at 1) — so the
+            // biggest late bubble is exactly as big as the biggest 3:25 one, never more.
+            let sessMax = 0;
             for (const m of mins) {
               if (etMinutesOfDay(m.slotTs) >= BUBBLE_SCALE_CUTOFF_MIN) continue;
-              for (const c of m.cells) { const a = Math.abs(valOf(c)); if (a > 0) sessAbs.push(a); }
+              for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > sessMax) sessMax = a;
+              }
             }
-            // Fallback: buffer holds ONLY post-15:30 minutes (e.g. page opened at
-            // 3:45) — scale off those rather than draw nothing.
-            if (!sessAbs.length) {
-              for (const m of mins) for (const c of m.cells) { const a = Math.abs(valOf(c)); if (a > 0) sessAbs.push(a); }
+            // Fallback: if the buffer holds ONLY post-15:30 minutes (e.g. the page was
+            // opened at 3:45), there's no earlier session to scale against — use those
+            // minutes rather than draw nothing.
+            if (sessMax === 0) {
+              for (const m of mins) for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > sessMax) sessMax = a;
+              }
             }
-            if (sessAbs.length) {
-              sessAbs.sort((a, b) => a - b);
-              const pctl = (p: number) => sessAbs[Math.min(sessAbs.length - 1, Math.max(0, Math.floor(p * (sessAbs.length - 1))))];
-              // Two anchors, not one. Sizing maps [pLo .. pHi] → [0 .. 1] instead
-              // of [0 .. max]: everything BELOW pLo (the bottom ~55% of strikes by
-              // |GEX|) collapses to ratio 0 and is culled, so the weak strikes stop
-              // drawing and the rails break apart — you see gaps, not one mass. The
-              // survivors (top ~45%) then spread across the FULL size range, so a
-              // real wall is unmistakably bigger than a marginal one. pHi = P95 is
-              // the "full size" point; the handful above it just clamp.
-              const pLo = pctl(0.55);
-              const pHiRaw = pctl(0.95);
-              const pHi = pHiRaw > pLo ? pHiRaw : pLo + 1; // guard flat distributions
-              const pSpan = pHi - pLo;
-              const k = bubbleScaleRef.current;
-              const rMax = 11 * k;  // px radius at the session max
-              const rMin = 0.8 * k; // floor so tiny strikes stay dots
+            if (sessMax > 0) {
+              const cfg = bubbleCfgRef.current;
+              // scaleSqrt DOMAIN: [0, max |GEX| in the dataset]. RANGE: [minSize,
+              // maxSize] px. sqrt so bubble AREA (not radius) tracks |GEX|.
+              const domainMax = sessMax;
+              const sizeSpan = cfg.maxSize - cfg.minSize;
+              // Brightness gradient: intensity 0..1 → the SMALLEST strike's opacity
+              // = max(0.1, 1 - intensity). 0% ⇒ min 1.0 (flat, no gradient); 90% ⇒
+              // small strikes ~0.1 so the big walls dominate by contrast.
+              const brightness01 = Math.max(0, Math.min(1, cfg.brightness / 100));
+              const minOpacity = Math.max(0.1, 1 - brightness01);
+              const HIGHLIGHT_BOOST = 1.3; // highlighted walls' radius multiplier
               ctx.save();
               for (const m of mins) {
-                // xAt, not timeToCoordinate: these are 1-min buckets and the
-                // chart grid is 5-min, so a raw lookup returned null for 4 of
-                // every 5 minutes and the trail only drew on candle boundaries.
-                // Anchor the column on its CANDLE, not the trailing minute of the
-                // bucket. At 5m the representative `m` is the bucket's LAST minute
-                // (~+4m in), so xAt(m.slotTs) drifted every column ~0.8 bars right
-                // of its candle — invisible mid-chart, but the NEWEST bucket drifted
-                // off the last candle into the right-axis gap and the live columns
-                // piled up there ("newest bubbles render strange"). Snap x to the
-                // bucket grid: = the candle at 5m; still sub-bar offset at 1m since
-                // the key IS the minute.
+                // xAt, not timeToCoordinate: 1-min buckets on a 5-min grid. Snap x
+                // to the bucket grid so the newest column lands on its candle, not
+                // in the right-axis gap ("newest bubbles render strange").
                 const x = xAt(Math.floor(m.slotTs / bucketMs) * bucketMs);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
-                // Window to the N nearest strikes each side of spot. Spot = this
-                // column's historical SPX (m.spot), falling back to the live feed
-                // spot for legacy rows that never stored one. If neither is known,
-                // draw everything rather than nothing.
-                const spotSpx = (m as { spot?: number }).spot && (m as { spot?: number }).spot! > 0
-                  ? (m as { spot?: number }).spot!
-                  : spotRef.current;
-                let allowed: Set<number> | null = null;
-                if (spotSpx > 0) {
-                  const strikes = m.cells.filter((c) => valOf(c)).map((c) => c.strike);
-                  const above = strikes.filter((s) => s >= spotSpx).sort((a, b) => a - b).slice(0, BUBBLE_STRIKE_WINDOW);
-                  const below = strikes.filter((s) => s < spotSpx).sort((a, b) => b - a).slice(0, BUBBLE_STRIKE_WINDOW);
-                  allowed = new Set([...above, ...below]);
-                }
-                // Rank strikes by |net GEX| WITHIN the window. The top 3 are what the
-                // eye needs to find instantly — where the gamma actually is — and
-                // a pure magnitude ramp buries them: on a quiet minute nothing is
-                // near the session max, so every bubble renders small and dim and
-                // the levels are indistinguishable. Ranking within the window means
-                // the near-spot leaders always read even if a far strike is bigger.
-                const rank = new Map<number, number>(); // strike → 0|1|2
-                [...m.cells]
-                  .filter((c) => valOf(c) && (!allowed || allowed.has(c.strike)))
-                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)))
-                  .slice(0, 3)
-                  .forEach((c, i) => rank.set(c.strike, i));
-                for (const cell of m.cells) {
+                // Sort THIS column's strikes by |net GEX| (absGamma). SHOW only the
+                // top-N (Show Top Strikes); the top-X of those are the Highlighted
+                // Walls — drawn larger, brighter, and with a glow.
+                const ranked = [...m.cells]
+                  .filter((c) => valOf(c))
+                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)));
+                const shown = ranked.slice(0, Math.max(0, cfg.topStrikes));
+                const highlight = new Set(shown.slice(0, Math.max(0, cfg.highlight)).map((c) => c.strike));
+                for (const cell of shown) {
                   const v = valOf(cell);
                   if (!v) continue;
-                  if (allowed && !allowed.has(cell.strike)) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
-                  // Subtractive percentile map: below pLo → 0 (culled), pLo..pHi
-                  // ramps 0..1, above pHi clamps. This is what separates strong
-                  // from weak — a strike at the median draws nothing, a wall draws full.
-                  const ratio = Math.min(Math.max((Math.abs(v) - pLo) / pSpan, 0), 1);
-                  const rk = rank.get(cell.strike);
-                  // sqrt → bubble AREA (not radius) tracks |GEX|, which is how
-                  // the eye actually reads size. Top-3 get a size boost on top so
-                  // they separate from the field even when the whole column is
-                  // small relative to the session max.
-                  const rankBoost = rk === 0 ? 1.55 : rk === 1 ? 1.32 : rk === 2 ? 1.16 : 1;
-                  // Was hardcoded Math.sqrt(ratio) (= exponent 0.5). sqrt lifts the
-                  // low end so hard that a 1%-of-session strike still drew at 10% of
-                  // the radius range — every level landed mid-size and the trail read
-                  // as uniform tubes. The exponent is now the "variance" knob: higher
-                  // pushes small strikes to the floor and leaves the real gamma big.
-                  // Only the top-3 leaders get a size FLOOR so they always read.
-                  // Non-leaders use floor 0 → radius ∝ pow(ratio, var) with no
-                  // minimum, so strikes with little/no net GEX collapse toward
-                  // nothing and get culled below (was: every line drew as an
-                  // rMin dot, so the whole trail read as uniform dust).
-                  const floor = rk != null ? rMin : 0;
-                  const r = (floor + Math.pow(ratio, bubbleVarRef.current) * (rMax - floor)) * rankBoost;
-                  if (r < 0.9) continue;
-                  // SOLID fill, no stroke. Magnitude is carried by the COLOR (a
-                  // dim→hot ramp) and the radius — not by opacity. Filling at low
-                  // alpha and stroking brighter on top made every bubble read as a
-                  // ring with a different-colored middle.
-                  //
-                  // Ramp: deep/desaturated at small |GEX| → full cyan/red at mid →
-                  // washed toward white at the top. `t` is gamma-curved (^0.45) to
-                  // stretch the LOW end, where most strikes live — a linear ramp
-                  // squashed them all into the same dim blue and made adjacent
-                  // levels impossible to tell apart.
-                  //
-                  // The top 3 then get a COLOR FLOOR (they never render below the
-                  // full-saturation mid) plus a glow, so "where is the gamma" is
-                  // answerable at a glance instead of by comparing dot sizes.
-                  const t = Math.pow(ratio, 0.45);
-                  const tEff = rk != null ? Math.max(t, rk === 0 ? 0.92 : rk === 1 ? 0.75 : 0.6) : t;
-                  const lo = v >= 0 ? [14, 70, 120] : [92, 22, 34];       // dim
-                  const mid = v >= 0 ? [41, 182, 246] : [255, 71, 87];    // full
-                  const hi = v >= 0 ? [200, 245, 255] : [255, 205, 210];  // hot
-                  const mix = (a: number[], b: number[], f: number) =>
-                    a.map((x, i) => Math.round(x + (b[i] - x) * f));
-                  const c = tEff <= 0.5
-                    ? mix(lo, mid, tEff / 0.5)
-                    : mix(mid, hi, (tEff - 0.5) / 0.5);
+                  const ratio = Math.min(Math.abs(v) / domainMax, 1);
+                  const isHi = highlight.has(cell.strike);
+                  let r = cfg.minSize + Math.sqrt(ratio) * sizeSpan;
+                  if (isHi) r *= HIGHLIGHT_BOOST;
+                  if (r < 0.5) continue;
+                  // Opacity: linear map, smallest → minOpacity, largest → 1.0.
+                  // Highlighted walls always render at full opacity so they pop.
+                  const opacity = isHi ? 1 : minOpacity + ratio * (1 - minOpacity);
+                  // Sign sets hue (blue = +GEX, red = −GEX); highlighted walls shift
+                  // toward white so they read as the dominant levels.
+                  const base = v >= 0 ? [41, 182, 246] : [255, 71, 87];
+                  const hot  = v >= 0 ? [200, 245, 255] : [255, 205, 210];
+                  const col = isHi ? hot : base;
                   ctx.beginPath();
                   ctx.arc(x, y, r, 0, Math.PI * 2);
-                  if (rk != null) {
-                    // Glow scaled by rank — #1 unmistakable, #3 clearly in the set.
-                    ctx.shadowColor = `rgba(${mid[0]},${mid[1]},${mid[2]},0.9)`;
-                    ctx.shadowBlur = (rk === 0 ? 12 : rk === 1 ? 8 : 5) * k;
+                  if (isHi) {
+                    ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.9)`;
+                    ctx.shadowBlur = 10;
                   } else {
                     ctx.shadowBlur = 0;
                   }
-                  // Non-leaders sit back a little so the leaders come forward.
-                  ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${rk != null ? 1 : 0.8})`;
+                  ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${opacity})`;
                   ctx.fill();
                   ctx.shadowBlur = 0;
                 }
@@ -2535,7 +2442,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexBubbles, bubbleScale, bubbleVar, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
+  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -2732,14 +2639,34 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               )}
               {showGexBubbles && (
                 <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Bubble look</div>
-                  <SegGroup
-                    options={[{ label: "Subtle", value: "subtle" }, { label: "Balanced", value: "balanced" }, { label: "Bold", value: "bold" }]}
-                    active={bubblePreset}
-                    onChange={(v) => applyBubblePreset(v as BubblePreset)}
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Strikes shown</div>
+                  <DockSlider
+                    label="top" value={bubbleCfg.topStrikes} min={1} max={30} step={1}
+                    format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ topStrikes: Math.round(v) })}
+                    title="Show Top Strikes — draw only the N strongest strikes (by |GEX|) per column"
                   />
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Size</div>
-                  <DockSlider label="size" value={bubbleScale} min={0.1} max={1.0} step={0.02} onChange={changeBubbleScale} title="Overall bubble size — nudges the preset (saved in this browser)" />
+                  <DockSlider
+                    label="highlight" value={bubbleCfg.highlight} min={0} max={bubbleCfg.topStrikes} step={1}
+                    format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ highlight: Math.round(v) })}
+                    title="Highlight Top N Walls — the strongest X of the shown strikes render larger, brighter, glowing (can't exceed Top)"
+                  />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble size</div>
+                  <DockSlider
+                    label="min" value={bubbleCfg.minSize} min={0.5} max={20} step={0.5}
+                    format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ minSize: v })}
+                    title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max)"
+                  />
+                  <DockSlider
+                    label="max" value={bubbleCfg.maxSize} min={1} max={40} step={0.5}
+                    format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
+                    title="Max bubble radius (px) — the size of the largest wall (√-scaled so area ∝ |GEX|)"
+                  />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Brightness</div>
+                  <DockSlider
+                    label="bright" value={bubbleCfg.brightness} min={0} max={100} step={1}
+                    format={(v) => `${v.toFixed(0)}%`} onChange={(v) => updateBubbleCfg({ brightness: Math.round(v) })}
+                    title="Brightness gradient — 0% = every strike full opacity; higher fades smaller strikes so walls dominate"
+                  />
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble time</div>
                   <SegGroup
                     options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}

@@ -1016,7 +1016,7 @@ const ChainMatrix = memo(function ChainMatrix({
     });
   // Shared strike axis: ONE strike column on the left, then one
   // value-only column per expiration. Row N = same strike everywhere.
-  const STRIKE_COL = 76;
+  const STRIKE_COL = 56;
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
   // ⅀ Total column — per-strike sum across every rendered expiration, with its
@@ -1051,7 +1051,7 @@ const ChainMatrix = memo(function ChainMatrix({
       background: HT.panelBg,
     }}>
       {/* ── Header row: empty strike corner + one expiry header per column ── */}
-      <div style={{ position: "sticky", left: 0, top: 0, zIndex: 4, padding: "7px 8px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
+      <div style={{ position: "sticky", left: 0, top: 0, zIndex: 6, padding: "7px 5px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.03em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
         Strike
       </div>
       {renderIdx.map((i) => {
@@ -1125,20 +1125,20 @@ const ChainMatrix = memo(function ChainMatrix({
             {/* Shared strike label (sticky left) */}
             <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
               position: "sticky", left: 0, zIndex: 2,
-              padding: "2px 8px", fontSize: 12, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
+              padding: "2px 5px", fontSize: 11, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
               color: isATM ? "#0a0e14" : "#e4e4e7",
               background: isATM ? "#ffb300" : HDR_BG,
               borderRight: `1px solid ${HT.border}`,
               borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
               borderBottom: isATM ? "2px solid #ffffff" : undefined,
-              display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4,
+              display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
               cursor: emTag ? "help" : undefined,
               whiteSpace: "nowrap", overflow: "hidden",
             }}>
               {emTag && (
                 <span style={{
-                  fontSize: 10, fontWeight: 800, letterSpacing: "0.04em",
-                  padding: "1px 4px", borderRadius: 4, marginRight: "auto",
+                  fontSize: 8, fontWeight: 800, letterSpacing: "0.02em",
+                  padding: "1px 3px", borderRadius: 3, marginRight: "auto",
                   background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
                   color: isATM ? "#0a0e14" : "#ffffff",
                 }}>{emTag}</span>

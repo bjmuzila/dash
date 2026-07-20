@@ -4516,6 +4516,9 @@ export interface EodGexRecord {
   total_gex: number;
   spot: number;
   computed_at: string;
+  // Combined net GEX across all expirations EXCEPT 0DTE. Nullable — older rows
+  // and any where the chain couldn't be read have no value.
+  total_gex_ex0dte?: number | null;
 }
 
 /** Upsert one EOD GEX row. Overwrites an existing (date, symbol) row. */
