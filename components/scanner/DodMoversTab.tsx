@@ -34,8 +34,12 @@ const dodChg = (v: number | null): string =>
 const dodNum = (v: number): string =>
   (Number(v) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dodExp = (e: string | null): string => (e && e.length >= 10 ? `${e.slice(5, 7)}/${e.slice(8, 10)}` : (e || "—"));
-const dodTime = (t: number): string =>
-  t ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(t)) : "—";
+const dodTime = (t: number): string => {
+  if (!t) return "—";
+  const d = new Date(t);
+  if (isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
+};
 
 type DodHistRow = {
   date: string; strike: number; expiry: string | null; spot: number;

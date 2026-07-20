@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -11,8 +11,10 @@ import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiry
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TICKERS = ["SPX", "SPY", "QQQ"] as const;
-type Ticker = typeof TICKERS[number];
+// Fixed base tickers + one user-configurable 4th slot (persisted per browser).
+const BASE_TICKERS = ["SPX", "SPY", "QQQ"] as const;
+type Ticker = string;
+const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 
 // EM/2xEM row badge, rasterized as an inline SVG data URI rather than live DOM
 // text. html2canvas is unreliable rasterizing text this small (7px) — it was
@@ -43,23 +45,6 @@ const COL_LABELS: Record<NetCol, string> = {
 
 // Leading 34px track = the all-expirations net-GEX bar sitting left of STRIKE.
 const GRID_COLS = "34px 64px 1fr 1fr 1fr 1fr";
-
-// Stable empty map for SPY/QQQ (no dealer-flow tracking) so passing it as a
-// prop doesn't create a new reference every render.
-const EMPTY_FLOW_MAP = new Map<number, number>();
-
-// Change-mode: "live" = normal GEX values; 15/30/60 = ΔGEX over N minutes,
-// sourced from the strike_growth table (same /proxy/strike-growth/by-expiry
-// endpoint the options-chain page uses). That table only tracks GEX, so the
-// switcher only ever swaps the NET GEX column — DEX/CHEX/VEX stay live.
-const CHANGE_MODES = ["live", "15", "30", "60"] as const;
-type ChangeMode = typeof CHANGE_MODES[number];
-const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
-  live: "Live",
-  "15": "15m Δ",
-  "30": "30m Δ",
-  "60": "60m Δ",
-};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -230,8 +215,7 @@ function computeRows(
   strikes: StrikeRow[],
   liveData: Record<string, LiveEntry>,
   spot: number,
-  contractMode: "oivol" | "vol" | "flow",
-  flowGexMap: Map<number, number> | null = null,
+  contractMode: "oivol" | "vol",
 ): ComputedResult {
   let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
   let atmStrike = 0;
@@ -247,20 +231,13 @@ function computeRows(
   const out: ComputedRow[] = rows.map(r => {
     const cd = liveData[r.callSym ?? ""] || {};
     const pd = liveData[r.putSym  ?? ""] || {};
-    // Flow mode only swaps the OI/vol basis for GEX itself — DEX/CHEX/VEX stay
-    // on the OI+Vol basis (mirrors the home page heatmap's Flow GEX toggle).
     const volOnly = contractMode === "vol";
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
     const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
     return {
       strike: r.strike,
       isATM: r.strike === atmStrike,
-      // Flow GEX = gamma × dealer inventory × spot², keyed off real dealer
-      // inventory (SPX only — SPY/QQQ have no dealer-flow tracking, so the
-      // map is empty for them and this falls back to 0).
-      gex: contractMode === "flow"
-        ? (flowGexMap?.get(r.strike) ?? 0)
-        : (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
+      gex:  (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
       dex:  (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
       chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
       vex:  ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
@@ -295,8 +272,7 @@ function computeTotals(
   strikes: StrikeRow[],
   liveData: Record<string, LiveEntry>,
   spot: number,
-  contractMode: "oivol" | "vol" | "flow",
-  flowGexMap: Map<number, number> | null = null,
+  contractMode: "oivol" | "vol",
 ): Record<NetCol, number> {
   const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
   const volOnly = contractMode === "vol";
@@ -306,9 +282,7 @@ function computeTotals(
     const pd = liveData[r.putSym  ?? ""] || {};
     const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
     const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
-    totals.gex  += contractMode === "flow"
-      ? (flowGexMap?.get(r.strike) ?? 0)
-      : (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
+    totals.gex  += (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
     totals.dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
     totals.chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
     totals.vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;
@@ -368,8 +342,7 @@ function computeRowsAll(
   aggs: StrikeAgg[],
   liveData: Record<string, LiveEntry>,
   spot: number,
-  contractMode: "oivol" | "vol" | "flow",
-  flowGexMap: Map<number, number> | null = null,
+  contractMode: "oivol" | "vol",
 ): ComputedResult {
   const rows = aggs.slice().sort((a, b) => b.strike - a.strike);
   let atmStrike = 0;
@@ -395,9 +368,6 @@ function computeRowsAll(
       chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
       vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;
     });
-    // Flow GEX is a per-strike dealer-inventory figure (already all-expiration),
-    // so it replaces the summed GEX rather than accumulating per leg.
-    if (contractMode === "flow") gex = flowGexMap?.get(r.strike) ?? 0;
     return { strike: r.strike, isATM: r.strike === atmStrike, gex, dex, chex, vex };
   });
 
@@ -428,13 +398,13 @@ function computeRowsAll(
 
 function TickerPanel({
   ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  changeMode, changeMap, flowGexMap, allGex = null,
+  allGex = null,
 }: {
   ticker: Ticker;
   strikes: StrikeRow[];
   liveData: Record<string, LiveEntry>;
   spot: number;
-  contractMode: "oivol" | "vol" | "flow";
+  contractMode: "oivol" | "vol";
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
@@ -444,18 +414,12 @@ function TickerPanel({
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
-  /** Live/15m/30m/60m Δ switcher — only ever affects the NET GEX column. */
-  changeMode: ChangeMode;
-  changeMap: Map<number, number> | null;
-  /** Real dealer-inventory Flow GEX per strike (SPX only; null/empty for
-   *  SPY/QQQ, which have no dealer-flow tracking). */
-  flowGexMap: Map<number, number> | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
   const computedFull = strikes.length
-    ? computeRows(strikes, liveData, spot, contractMode, flowGexMap)
+    ? computeRows(strikes, liveData, spot, contractMode)
     : null;
 
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
@@ -485,27 +449,8 @@ function TickerPanel({
     : null;
 
   const totals = strikes.length && spot > 0
-    ? computeTotals(strikes, liveData, spot, contractMode, flowGexMap)
+    ? computeTotals(strikes, liveData, spot, contractMode)
     : null;
-
-  // When a Δ mode is active, the NET GEX column swaps to strike_growth's
-  // ΔGEX values. Scale/ranking (for heat coloring + the ★ top-3 badge) is
-  // computed separately over the full strike set, mirroring how `computed`'s
-  // own top3/maxAbs are computed pre-capture-trim.
-  const isChangeActive = changeMode !== "live" && !!changeMap && changeMap.size > 0;
-  const gexChange = (() => {
-    if (!isChangeActive || !changeMap) return null;
-    const entries: { strike: number; v: number }[] = [];
-    strikes.forEach(r => {
-      const v = changeMap.get(r.strike);
-      if (v != null) entries.push({ strike: r.strike, v });
-    });
-    const sorted = [...entries].sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
-    const top3: Record<number, number> = {};
-    sorted.slice(0, 3).forEach((e, idx) => { top3[e.strike] = idx + 1; });
-    const total = entries.reduce((s, e) => s + e.v, 0);
-    return { max: Math.abs(sorted[0]?.v ?? 0) || 1, top3, total };
-  })();
 
   // Highest |GEX| strike on each side of spot → 📍 pin (possible pin/explosive level).
   let pinAbove: number | null = null, pinBelow: number | null = null;
@@ -571,15 +516,11 @@ function TickerPanel({
       <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div title="Net GEX summed across ALL expirations" style={{ padding: "5px 2px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden" }}>ΣEXP</div>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
-        {NET_COLS.map(c => {
-          const isChangeCol = c === "gex" && isChangeActive;
-          const isFlowCol = c === "gex" && !isChangeActive && contractMode === "flow";
-          return (
-            <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: isChangeCol ? HT.orange : isFlowCol ? HT.green : HT.cyan, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              {COL_LABELS[c]}{isChangeCol ? ` ·Δ${changeMode}` : isFlowCol ? " ·FLOW" : ""}
-            </div>
-          );
-        })}
+        {NET_COLS.map(c => (
+          <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: HT.cyan, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            {COL_LABELS[c]}
+          </div>
+        ))}
       </div>
 
       {/* Totals row */}
@@ -587,9 +528,8 @@ function TickerPanel({
         <div style={{ borderRight: "1px solid rgba(255,255,255,.06)" }} />
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {NET_COLS.map(c => {
-          const isChangeCol = c === "gex" && isChangeActive;
-          const v = isChangeCol ? (gexChange?.total ?? 0) : (totals?.[c] ?? 0);
-          const fmt = (isChangeCol ? gexChange != null : totals != null) ? fmtMoney(v) : { sign: "", value: "--" };
+          const v = totals?.[c] ?? 0;
+          const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c} style={{
               padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
@@ -677,17 +617,16 @@ function TickerPanel({
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>
               {NET_COLS.map(c => {
-                const isChangeCol = c === "gex" && isChangeActive;
-                const val: number | null = isChangeCol ? (changeMap!.get(r.strike) ?? null) : r[c];
-                const topRank = isChangeCol ? ((gexChange?.top3[r.strike]) || 0) : ((computed.top3[c]?.[r.strike]) || 0);
-                const scaleMax = isChangeCol ? (gexChange?.max ?? 1) : computed.maxAbs[c];
+                const val: number | null = r[c];
+                const topRank = (computed.top3[c]?.[r.strike]) || 0;
+                const scaleMax = computed.maxAbs[c];
                 const weight = topRank === 1 ? 900 : topRank ? 800 : 700;
                 const border = topRank === 1
                   ? `outline:1px solid ${(val ?? 0) >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"};outline-offset:-1px`
                   : "";
                 const formatted = val == null ? { sign: "", value: "--" } : fmtMoney(val);
                 const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
-                const isGexPeak = c === "gex" && !isChangeCol && r.strike === computed.mvcStrike;
+                const isGexPeak = c === "gex" && r.strike === computed.mvcStrike;
                 return (
                   <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
                     padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
@@ -753,19 +692,36 @@ export function MultGreekClient({
   const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
-  const [contractMode, setContractMode] = useState<"oivol" | "vol" | "flow">("oivol");
+  const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
   const [intensity, setIntensity] = useState(1.75);
-  // Live/15m/30m/60m Δ switcher — swaps NET GEX to strike_growth's ΔGEX.
-  const [changeMode, setChangeMode] = useState<ChangeMode>("live");
-  const [changeMaps, setChangeMaps] = useState<Record<Ticker, Map<number, number>>>({ SPX: new Map(), SPY: new Map(), QQQ: new Map() });
-  const [changeTick, setChangeTick] = useState(0);
-  // Real dealer-inventory Flow GEX per strike — SPX only (/proxy/gex carries
-  // flowGEX on every gexRow from the live FlowGexAccumulator). SPY/QQQ have no
-  // dealer-flow tracking so their maps stay empty and the column reads 0.
-  const [flowGexMap, setFlowGexMap] = useState<Map<number, number>>(new Map());
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
+
+  // User-configurable 4th ticker, persisted per browser (localStorage). Live
+  // mode only — the delayed snapshot recorder only carries SPX/SPY/QQQ.
+  const [customTicker, setCustomTicker] = useState<string>("IWM");
+  const [tickerInput, setTickerInput] = useState<string>("IWM");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(CUSTOM_TICKER_KEY);
+      if (saved != null) { setCustomTicker(saved); setTickerInput(saved); }
+    } catch { /* ignore */ }
+  }, []);
+  const TICKERS = useMemo(() => {
+    const base = [...BASE_TICKERS] as string[];
+    const t = customTicker.trim().toUpperCase();
+    if (!isStatic && t && !base.includes(t)) base.push(t);
+    return base;
+  }, [customTicker, isStatic]);
+  const commitTicker = useCallback(() => {
+    const t = tickerInput.trim().toUpperCase();
+    setTickerInput(t);
+    if (t === customTicker) return;
+    setCustomTicker(t);
+    try { window.localStorage.setItem(CUSTOM_TICKER_KEY, t); } catch { /* ignore */ }
+  }, [tickerInput, customTicker]);
   // Embedded in the GEX drawer (?embed=1): keep the SPX/SPY/QQQ panels side by
   // side even though the iframe viewport is below the mobile stack breakpoint.
   const [embed, setEmbed] = useState(false);
@@ -774,23 +730,23 @@ export function MultGreekClient({
     setEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
   }, []);
 
-  // Per-ticker state
-  const [strikes, setStrikes]   = useState<Record<Ticker, StrikeRow[]>>({ SPX: [], SPY: [], QQQ: [] });
-  const [spots, setSpots]       = useState<Record<Ticker, number>>({ SPX: 0, SPY: 0, QQQ: 0 });
+  // Per-ticker state (keyed by ticker symbol — the 4th slot is dynamic).
+  const [strikes, setStrikes]   = useState<Record<string, StrikeRow[]>>({});
+  const [spots, setSpots]       = useState<Record<string, number>>({});
   // All-expirations aggregate per strike (loaded alongside the single-expiry
   // chain in loadAll) — feeds the left-side all-exp GEX bar.
-  const [allStrikes, setAllStrikes] = useState<Record<Ticker, StrikeAgg[]>>({ SPX: [], SPY: [], QQQ: [] });
+  const [allStrikes, setAllStrikes] = useState<Record<string, StrikeAgg[]>>({});
   // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
-  const [emByTicker, setEmByTicker] = useState<Record<Ticker, { close: number; em: number } | null>>({ SPX: null, SPY: null, QQQ: null });
+  const [emByTicker, setEmByTicker] = useState<Record<string, { close: number; em: number } | null>>({});
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
 
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
 
-  // Fetch weekly EM for all three tickers. Refreshes when the active expiry
-  // changes so the bands stay in sync with each (cache-busted) chain reload.
-  // Not gated on isStatic — this is the weekly EM band (DB-backed, not the
-  // live GEX feed), fine to keep fresh either way.
+  // Fetch weekly EM for each ticker. Refreshes when the active expiry or the
+  // ticker set changes so the bands stay in sync with each (cache-busted)
+  // chain reload. Not gated on isStatic — this is the weekly EM band
+  // (DB-backed, not the live GEX feed), fine to keep fresh either way.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -811,70 +767,7 @@ export function MultGreekClient({
       });
     })();
     return () => { cancelled = true; };
-  }, [activeExpiry]);
-
-  // Fetch real per-strike Flow GEX (SPX only) whenever the FLOW GEX toggle is
-  // active. /proxy/gex's gexRows always carry flowGEX (computed live from the
-  // FlowGexAccumulator dealer inventory), so this is a plain read, not a mode
-  // switch on the server. Re-polled every 15s alongside the other auto-refresh
-  // loops so the column doesn't go stale while FLOW GEX stays selected.
-  useEffect(() => {
-    if (isStatic || contractMode !== "flow") { setFlowGexMap(new Map()); return; }
-    let cancelled = false;
-    const fetchFlow = async () => {
-      try {
-        const res = await fetch(`/proxy/gex?basis=flow`, { cache: "no-store" });
-        const json = await res.json().catch(() => null);
-        if (cancelled || !Array.isArray(json?.gexRows)) return;
-        const m = new Map<number, number>();
-        for (const r of json.gexRows) {
-          const strike = Number(r.strike);
-          if (Number.isFinite(strike)) m.set(strike, Number(r.flowGEX ?? 0));
-        }
-        setFlowGexMap(m);
-      } catch { /* keep last-known map */ }
-    };
-    fetchFlow();
-    const id = setInterval(fetchFlow, 15000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [isStatic, contractMode]);
-
-  // Load the strike→ΔGEX map for each ticker when a change mode is on. Reuses
-  // /proxy/strike-growth/by-expiry (same endpoint the options-chain page's
-  // Live/15m/30m/60m switcher uses), filtered to the currently active expiry.
-  // That table only tracks GEX, so this only ever feeds the NET GEX column.
-  useEffect(() => {
-    if (changeMode === "live" || !activeExpiry) {
-      setChangeMaps({ SPX: new Map(), SPY: new Map(), QQQ: new Map() });
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      const key = changeMode === "15" ? "chg15" : changeMode === "30" ? "chg30" : "chg60";
-      const entries = await Promise.all(TICKERS.map(async (tk) => {
-        try {
-          const res = await fetch(`/proxy/strike-growth/by-expiry?symbol=${encodeURIComponent(tk)}`, { cache: "no-store" });
-          const j = await res.json().catch(() => null);
-          const m = new Map<number, number>();
-          if (j?.ok && Array.isArray(j.rows)) {
-            for (const row of j.rows) {
-              if (String(row.expiry ?? "") !== activeExpiry) continue;
-              const v = row[key];
-              if (v != null) m.set(Number(row.strike), Number(v));
-            }
-          }
-          return [tk, m] as const;
-        } catch {
-          return [tk, new Map<number, number>()] as const;
-        }
-      }));
-      if (cancelled) return;
-      const next = {} as Record<Ticker, Map<number, number>>;
-      entries.forEach(([tk, m]) => { next[tk] = m; });
-      setChangeMaps(next);
-    })();
-    return () => { cancelled = true; };
-  }, [changeMode, activeExpiry, changeTick]);
+  }, [activeExpiry, TICKERS]);
 
   // Fetch expirations (from cache or API). Skipped entirely in static mode —
   // the snapshot already carries its one expiry, no live search needed.
@@ -944,9 +837,9 @@ export function MultGreekClient({
 
     if (token !== loadTokenRef.current) return;
 
-    const newStrikes: Partial<Record<Ticker, StrikeRow[]>> = {};
-    const newAll: Partial<Record<Ticker, StrikeAgg[]>> = {};
-    const newSpots: Partial<Record<Ticker, number>> = {};
+    const newStrikes: Record<string, StrikeRow[]> = {};
+    const newAll: Record<string, StrikeAgg[]> = {};
+    const newSpots: Record<string, number> = {};
     const allSymbols = new Set<string>();
     let successCount = 0;
     const errStatuses: number[] = [];
@@ -985,9 +878,9 @@ export function MultGreekClient({
       setAllStrikes(prev => ({ ...prev, ...newAll }));
       setSpots(prev => {
         const merged = { ...prev };
-        (Object.keys(newSpots) as Ticker[]).forEach(tk => {
-          const v = newSpots[tk as Ticker];
-          if (v && v > 0) merged[tk as Ticker] = v;
+        Object.keys(newSpots).forEach(tk => {
+          const v = newSpots[tk];
+          if (v && v > 0) merged[tk] = v;
         });
         return merged;
       });
@@ -1001,7 +894,7 @@ export function MultGreekClient({
     } else {
       setStatus({ state: isMarketOpen() ? "live" : "idle", msg: isMarketOpen() ? "LIVE" : "CLOSED" });
     }
-  }, [isStatic]);
+  }, [isStatic, TICKERS]);
 
   const doGo = useCallback(() => {
     if (isStatic || !selectedExpiry) return;
@@ -1011,11 +904,19 @@ export function MultGreekClient({
   // Auto-load when expirations are ready
   useEffect(() => {
     if (isStatic) return;
-    if (selectedExpiry && strikes.SPX.length === 0 && strikes.SPY.length === 0 && strikes.QQQ.length === 0) {
+    if (selectedExpiry && BASE_TICKERS.every(t => (strikes[t]?.length ?? 0) === 0)) {
       loadAll(selectedExpiry);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStatic, selectedExpiry]);
+
+  // Reload when the user changes the custom 4th ticker so its chain fills in.
+  useEffect(() => {
+    if (isStatic) return;
+    const exp = activeExpiryRef.current;
+    if (exp) loadAll(exp, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customTicker]);
 
   // Safety net: if expirations never resolved (cold proxy / market closed),
   // still auto-load the prewarmed 0DTE SPX/SPY/QQQ chains by deriving the
@@ -1039,7 +940,6 @@ export function MultGreekClient({
     const exp = activeExpiryRef.current;
     if (!exp) throw new Error("No expiry selected");
     await loadAll(exp, true);
-    setChangeTick(t => t + 1); // also refetch the Δ map, if a change mode is active
   }, [isStatic, loadAll]);
 
   // Auto-refresh: TT REST per-strike volume accumulates through the session and
@@ -1063,8 +963,8 @@ export function MultGreekClient({
 
     const applySnapshot = (snap: MultGreekSnapshot | null | undefined) => {
       if (!snap || !snap.expiry) return;
-      const newStrikes: Partial<Record<Ticker, StrikeRow[]>> = {};
-      const newSpots: Partial<Record<Ticker, number>> = {};
+      const newStrikes: Record<string, StrikeRow[]> = {};
+      const newSpots: Record<string, number> = {};
       TICKERS.forEach((ticker) => {
         const t = snap.tickers?.[ticker];
         if (!t || !Array.isArray(t.items) || !t.items.length) return;
@@ -1132,11 +1032,11 @@ export function MultGreekClient({
 
   // All-expirations net GEX per strike, recomputed each render so the contract-
   // basis toggle applies live. Feeds the left-side bar next to each strike.
-  const allGexByTicker = { SPX: null, SPY: null, QQQ: null } as Record<Ticker, { map: Map<number, number>; max: number } | null>;
+  const allGexByTicker = {} as Record<string, { map: Map<number, number>; max: number } | null>;
   TICKERS.forEach(tk => {
     const sa = allStrikes[tk];
     if (!sa || !sa.length || !(spots[tk] > 0)) return;
-    const res = computeRowsAll(sa, liveDataRef.current, spots[tk], contractMode, tk === "SPX" ? flowGexMap : EMPTY_FLOW_MAP);
+    const res = computeRowsAll(sa, liveDataRef.current, spots[tk], contractMode);
     const map = new Map<number, number>();
     let max = 0;
     res.rows.forEach(r => { map.set(r.strike, r.gex); if (Math.abs(r.gex) > max) max = Math.abs(r.gex); });
@@ -1224,26 +1124,33 @@ export function MultGreekClient({
 
         {/* Contract basis toggle */}
         <SegGroup
-          options={[{ label: "OI+VOL", value: "oivol" }, { label: "VOL", value: "vol" }, { label: "FLOW GEX", value: "flow" }]}
+          options={[{ label: "OI+VOL", value: "oivol" }, { label: "VOL", value: "vol" }]}
           active={contractMode}
           onChange={(v) => setContractMode(v as typeof contractMode)}
         />
 
-        <DockGap />
-
-        {/* GEX Δ switcher — Live/15m/30m/60m, sourced from strike_growth */}
-        <SegGroup
-          options={CHANGE_MODES.map(m => ({ label: CHANGE_MODE_LABEL[m], value: m }))}
-          active={changeMode}
-          onChange={(v) => setChangeMode(v as ChangeMode)}
-        />
-        {changeMode !== "live" && (
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
-            color: TICKERS.some(tk => (changeMaps[tk]?.size ?? 0) > 0) ? HT.orange : HT.muted }}>
-            {TICKERS.some(tk => (changeMaps[tk]?.size ?? 0) > 0)
-              ? `Δ ${TICKERS.filter(tk => (changeMaps[tk]?.size ?? 0) > 0).join("/")}`
-              : "no history (not on watchlist)"}
-          </span>
+        {/* 4th ticker input — persisted per browser (localStorage). Live only. */}
+        {!isStatic && (
+          <>
+            <DockGap />
+            <span style={{ fontSize: 10, fontWeight: 800, color: HT.muted, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>4TH</span>
+            <input
+              value={tickerInput}
+              onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitTicker(); (e.target as HTMLInputElement).blur(); } }}
+              onBlur={commitTicker}
+              placeholder="TICKER"
+              maxLength={6}
+              spellCheck={false}
+              autoCapitalize="characters"
+              style={{
+                width: 66, padding: "4px 6px", fontSize: 11, fontWeight: 800,
+                letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
+                background: HT.panelBgStrong, color: HT.cyan,
+                border: `1px solid ${HT.border}`, borderRadius: 6, outline: "none",
+              }}
+            />
+          </>
         )}
 
         <DockGap />
@@ -1278,18 +1185,15 @@ export function MultGreekClient({
           <TickerPanel
             key={ticker}
             ticker={ticker}
-            strikes={strikes[ticker]}
+            strikes={strikes[ticker] ?? []}
             liveData={liveDataRef.current}
-            spot={spots[ticker]}
+            spot={spots[ticker] ?? 0}
             contractMode={contractMode}
             intensity={intensity}
-            emLevels={emByTicker[ticker]}
+            emLevels={emByTicker[ticker] ?? null}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
-            changeMode={changeMode}
-            changeMap={changeMaps[ticker]}
-            flowGexMap={ticker === "SPX" ? flowGexMap : EMPTY_FLOW_MAP}
-            allGex={allGexByTicker[ticker]}
+            allGex={allGexByTicker[ticker] ?? null}
           />
         ))}
       </div>
