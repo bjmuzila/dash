@@ -25,6 +25,7 @@ const { appendAutoLines } = require('./signals-file');
 
 const POLL_MS = 20 * 1000;               // check cadence
 const IMPACTS = new Set(['High', 'Medium']); // which events get auto-alerts
+const COUNTRIES = new Set(['USD']);          // US-only: feed carries every country (CAD/EUR/GBP...)
 const MAX_AUTO_LINES = 40;                // cap the AUTO block so the file never grows unbounded
 
 // Server-to-server calls to protected /api/* routes need the shared internal
@@ -107,6 +108,7 @@ async function pollOnce(base) {
   const slots = new Map(); // ev.time -> { untilMin, titles[] }
   for (const ev of events) {
     if (ev.date !== today) continue;
+    if (!COUNTRIES.has(ev.country)) continue;
     if (!IMPACTS.has(ev.impact)) continue;
     if (!ev.time || !/^\d{1,2}:\d{2}$/.test(ev.time)) continue;
 

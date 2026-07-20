@@ -31,14 +31,6 @@ interface EsGexRailProps {
 const POS = "41,182,246";  // positive GEX = cyan
 const NEG = "255,71,87";   // negative GEX = red
 
-function fmtGex(v: number): string {
-  const a = Math.abs(v), s = v >= 0 ? "+" : "-";
-  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(1)}M`;
-  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(0)}K`;
-  return `${s}$${a.toFixed(0)}`;
-}
-
 /**
  * Vertical GEX rail pinned to the candle chart's price axis. Each strike's bar
  * is placed at priceToY(strike + basis) so strike lines up with strike as the
@@ -58,7 +50,7 @@ export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basi
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
-    const { rows, callWall, putWall, gexFlip, spot, basis, priceToY } = propsRef.current;
+    const { rows, spot, basis, priceToY } = propsRef.current;
 
     const dpr = window.devicePixelRatio || 1;
     const W = wrap.clientWidth;
@@ -76,16 +68,9 @@ export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basi
     ctx.clearRect(0, 0, W, H);
 
     const PAD_R = 12;
-    const LABEL_W = 88;             // left gutter for level labels
-    const plotL = LABEL_W;
+    const plotL = 6;               // small left pad — bars only, no label gutter
     const plotR = W - PAD_R;
     const plotW = Math.max(20, plotR - plotL);
-
-    // Title.
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.font = "bold 11px Inter, system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("GEX BY STRIKE", 8, 15);
 
     if (!rows.length) {
       ctx.fillStyle = "rgba(255,255,255,0.4)";
@@ -124,11 +109,6 @@ export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basi
 
     const maxAbs = Math.max(...placed.map((p) => Math.abs(p.net)), 1);
 
-    // Baseline.
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(plotL, 22); ctx.lineTo(plotL, H - 6); ctx.stroke();
-
     // Bars.
     for (const p of placed) {
       const t = Math.min(Math.abs(p.net) / maxAbs, 1);
@@ -141,75 +121,17 @@ export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basi
       ctx.fillRect(plotL, p.y - rowH / 2, barLen, rowH);
     }
 
-    // ── Level labels ──
-    // Fixed-name priority levels first, then top-magnitude strikes as GEX n.
-    const esOf = (spxLevel: number | null) => (spxLevel != null ? spxLevel + basis : null);
-    type Lbl = { es: number; strike: number; text: string; color: string; prio: number };
-    const cand: Lbl[] = [];
-    const used = new Set<number>();
-    const add = (spxLevel: number | null, text: string, color: string, prio: number) => {
-      if (spxLevel == null) return;
-      const key = Math.round(spxLevel);
-      if (used.has(key)) return;
-      used.add(key);
-      cand.push({ es: spxLevel + basis, strike: spxLevel, text, color, prio });
-    };
-    add(callWall, "CALL WALL", `rgb(${POS})`, 0);
-    add(putWall, "PUT WALL", `rgb(${NEG})`, 0);
-    add(gexFlip, "GAMMA FLIP", "#f5c518", 0);
-    const ranked = [...placed].sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
-    if (ranked.length) add(ranked[0].strike, "MAGNET", "rgba(255,255,255,0.92)", 1);
-    let gexN = 1;
-    for (const r of ranked) {
-      if (cand.length >= 10) break;
-      add(r.strike, `GEX ${gexN}`, r.net >= 0 ? `rgb(${POS})` : `rgb(${NEG})`, 2 + gexN);
-      gexN++;
-    }
-
-    // Resolve Y for each, drop off-screen, then de-overlap: keep higher priority,
-    // skip any label whose Y is within MIN_SP of an already-placed one.
-    const withY = cand
-      .map((l) => ({ ...l, y: priceToY(l.es) }))
-      .filter((l): l is Lbl & { y: number } => l.y != null && l.y > 14 && l.y < H - 6)
-      .sort((a, b) => a.prio - b.prio);
-    const MIN_SP = 20;
-    const shown: Array<Lbl & { y: number }> = [];
-    for (const l of withY) {
-      if (shown.some((s) => Math.abs(s.y - l.y) < MIN_SP)) continue;
-      shown.push(l);
-    }
-
-    ctx.textAlign = "left";
-    for (const l of shown) {
-      ctx.strokeStyle = l.color;
-      ctx.globalAlpha = 0.5;
-      ctx.beginPath(); ctx.moveTo(plotL - 5, l.y); ctx.lineTo(plotL, l.y); ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = l.color;
-      ctx.font = "700 9px Inter, system-ui, sans-serif";
-      ctx.fillText(l.text, 6, l.y - 2.5);
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.font = "600 8px var(--font-mono), monospace";
-      ctx.fillText(Math.round(l.es).toLocaleString(), 6, l.y + 7);
-    }
-
-    // Spot marker line.
-    const esSpot = esOf(spot);
+    // Spot marker line (positional reference — not a label).
+    const esSpot = spot != null ? spot + basis : null;
     if (esSpot != null) {
       const y = priceToY(esSpot);
-      if (y != null && y > 14 && y < H - 6) {
+      if (y != null && y > 4 && y < H - 4) {
         ctx.strokeStyle = "rgba(220,220,220,0.5)";
         ctx.setLineDash([4, 4]);
         ctx.beginPath(); ctx.moveTo(plotL, y); ctx.lineTo(plotR, y); ctx.stroke();
         ctx.setLineDash([]);
       }
     }
-
-    // Peak magnitude readout (bottom-right).
-    ctx.fillStyle = "rgba(255,255,255,0.35)";
-    ctx.font = "600 8px Inter, system-ui, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(`max ${fmtGex(maxAbs)}`, plotR, H - 4);
   }, []);
 
   // Expose draw to the parent for scroll/zoom-driven repaints.
