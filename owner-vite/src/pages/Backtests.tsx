@@ -2,7 +2,7 @@
 // app/owner/backtests/page.tsx. Each card hits GET /api/backtests?test=…
 // (owner-gated, read-only) and renders the returned tables.
 
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { HOME_THEME, homeButtonStyle, homeInputStyle } from "../lib/theme";
 import { PageShell, Card } from "../components/PageCard";
 import { ThemedSelect } from "../components/ThemedSelect";
@@ -40,7 +40,7 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
   );
 }
 
-function Panel({ title, subtitle, test, fields }: { title: string; subtitle: string; test: string; fields: Field[] }) {
+function Panel({ title, subtitle, test, fields, help }: { title: string; subtitle: string; test: string; fields: Field[]; help?: ReactNode }) {
   const [params, setParams] = useState<Record<string, string | number | boolean>>(
     Object.fromEntries(fields.map((f) => [f.key, f.def])),
   );
@@ -113,6 +113,12 @@ function Panel({ title, subtitle, test, fields }: { title: string; subtitle: str
           )}
         </div>
       )}
+
+      {help && (
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.65 }}>
+          {help}
+        </div>
+      )}
     </Card>
   );
 }
@@ -180,16 +186,26 @@ export default function Backtests() {
           { key: "days", label: "lookback (d)", type: "number", def: 30 },
           { key: "gap", label: "debounce (m)", type: "number", def: 5 },
         ]}
-      />
-
-      <Panel
-        title="Strike GEX since touch" test="strike-touch"
-        subtitle="How much net GEX at a strike grew or bled since price last tagged it. Touch = first snapshot within ±band."
-        fields={[
-          { key: "strike", label: "strike", type: "number", def: 7500 },
-          { key: "band", label: "touch band (pt)", type: "number", def: 0.75 },
-          { key: "days", label: "lookback (d)", type: "number", def: 1 },
-        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>How to read this</div>
+            <p style={{ margin: "0 0 8px" }}>
+              Every time SPX crosses a flip level, a stopwatch starts and the tool measures what price does next. The inputs set the rules:
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Horizon (m)</strong> — how long the stopwatch runs after each cross (30 = watch the next 30 minutes).</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Hit ≥ (pt)</strong> — how big a favorable move counts as a win (5 = price must move ≥5 SPX pts your way inside the horizon).</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Flip band (pt)</strong> — trust filter: the flip must be within this many points of price, else that snapshot is thrown out as bad data. Rarely needs changing.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Lookback (d)</strong> — how many days of history to pull.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>Debounce (m)</strong> — ignores repeat crosses within this many minutes so one jittery moment isn't counted many times.</p>
+            <p style={{ margin: "0 0 6px" }}>
+              <strong style={{ color: LIGHT_BLUE }}>cont</strong> = trade the cross (breaks up → go long). <strong style={{ color: LIGHT_BLUE }}>fade</strong> = bet against it (breaks up → go short).
+              {" "}<strong>MFE</strong> = avg best-case move in your favor; <strong>MAE</strong> = avg worst-case move against you (SPX pts). <strong>Hit %</strong> = share of crosses that reached the “Hit ≥” move.
+            </p>
+            <p style={{ margin: "6px 0 0", color: HOME_THEME.text }}>
+              Rule of thumb: high <strong>fade hit %</strong> with fade MFE &gt; fade MAE ⇒ the level tends to reject (fade it). cont hit % near 40% with MFE ≈ MAE ⇒ chop, no edge.
+            </p>
+          </>
+        }
       />
     </PageShell>
   );

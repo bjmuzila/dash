@@ -163,10 +163,17 @@ function RuleRow({ r }: { r: Row }) {
   );
 }
 
-export function IbProbabilityEngine({ rules, env, sym, stamp, subtitle }: { rules: EngineRule[]; env: EngineEnv; sym?: string; stamp?: string; subtitle?: string }) {
+export function IbProbabilityEngine({ rules, env, sym, closeRules, closeEnv }: { rules: EngineRule[]; env: EngineEnv; sym?: string; closeRules?: EngineRule[]; closeEnv?: EngineEnv }) {
   const byId = new Map(rules.map((r) => [r.id, toRow(r)]));
   const allRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[]);
   const p = calculateComplexProbabilities(allRows, env);
+  // Optional frozen-at-10:30 snapshot — same math, rendered as a second gauge row.
+  let pClose: ReturnType<typeof calculateComplexProbabilities> | null = null;
+  if (closeRules && closeEnv) {
+    const cById = new Map(closeRules.map((r) => [r.id, toRow(r)]));
+    const cRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => cById.get(id)).filter(Boolean) as Row[]);
+    pClose = calculateComplexProbabilities(cRows, closeEnv);
+  }
   // Flat dashboard surface — no radial glow, no drop shadow.
   const card: React.CSSProperties = {
     background: C.cardBg,
@@ -188,15 +195,32 @@ export function IbProbabilityEngine({ rules, env, sym, stamp, subtitle }: { rule
             <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: C.cyan,
               border: `1px solid ${C.cyan}66`, background: `${C.cyan}14`, borderRadius: 5, padding: "2px 8px" }}>{sym}</span>
           )}
-          {stamp && (
-            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase",
-              color: stamp === "LIVE" ? POS : HOME_THEME.orange,
-              border: `1px solid ${(stamp === "LIVE" ? POS : HOME_THEME.orange)}66`,
-              background: `${(stamp === "LIVE" ? POS : HOME_THEME.orange)}14`, borderRadius: 5, padding: "2px 8px" }}>{stamp}</span>
-          )}
         </div>
-        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>{subtitle ?? `Live mathematical projection of final intraday session behavior based on active indicators${sym ? ` — ${sym} futures` : ""}.`}</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: 22 }}>
+        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>Live mathematical projection of final intraday session behavior based on active indicators{sym ? ` — ${sym} futures` : ""}.</p>
+
+        {pClose && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "20px 0 8px" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: HOME_THEME.orange,
+              border: `1px solid ${HOME_THEME.orange}66`, background: `${HOME_THEME.orange}14`, borderRadius: 5, padding: "2px 8px" }}>10:30 Close</span>
+            <span style={{ fontSize: 11, color: C.muted }}>frozen at the IB close</span>
+          </div>
+        )}
+        {pClose && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+            <Gauge pct={pClose.bull} color={C.bull} label="Bullish<br/>Edge" />
+            <Gauge pct={pClose.bear} color={C.bear} label="Bearish<br/>Edge" />
+            <Gauge pct={pClose.rot} color={C.rot} label="Rotation<br/>Risk" />
+          </div>
+        )}
+
+        {pClose && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "22px 0 8px" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: POS,
+              border: `1px solid ${POS}66`, background: `${POS}14`, borderRadius: 5, padding: "2px 8px" }}>Live</span>
+            <span style={{ fontSize: 11, color: C.muted }}>updating now</span>
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: pClose ? 0 : 22 }}>
           <Gauge pct={p.bull} color={C.bull} label="Bullish<br/>Edge" />
           <Gauge pct={p.bear} color={C.bear} label="Bearish<br/>Edge" />
           <Gauge pct={p.rot} color={C.rot} label="Rotation<br/>Risk" />

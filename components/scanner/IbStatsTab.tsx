@@ -430,17 +430,15 @@ function LiveToday({ sym, win, ds, days, hist }: {
 
   return (
     <>
-      {/* IB Probability Engine — frozen at 10:30 close + live, per-symbol */}
-      {closeSnap && (
-        <IbProbabilityEngine
-          rules={closeSnap.rules}
-          env={closeSnap.env}
-          sym={sym}
-          stamp="10:30 CLOSE"
-          subtitle={`Projection frozen at the 10:30 ET IB close — held at the % it read the moment the ${WLBL} completed.`}
-        />
-      )}
-      <IbProbabilityEngine rules={engineRules} env={engineEnv} sym={sym} stamp="LIVE" />
+      {/* IB Probability Engine + 4-stage rule board (live, per-symbol).
+          Gauges doubled inside the one card: 10:30 close (frozen) + live. */}
+      <IbProbabilityEngine
+        rules={engineRules}
+        env={engineEnv}
+        sym={sym}
+        closeRules={closeSnap?.rules}
+        closeEnv={closeSnap?.env}
+      />
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
         <LiveGauges live={live} days={days} dowName={dowName} win={win} />

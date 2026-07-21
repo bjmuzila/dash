@@ -420,50 +420,6 @@ async function gexDexCross(horizonMin: number, hit: number, band: number, days: 
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 7. Strike GEX since touch   (option_strike_gex_history)
-// How much has net GEX at a given strike grown / bled since price last tagged it.
-// Touch = first snapshot in the window where |spot − strike| ≤ band. Compares that
-// snapshot's summed net_gex to the latest, plus peak/trough since the touch.
-// net_gex is raw $ (≈1e9 = $1B); summed across all expiries at the strike.
-// ══════════════════════════════════════════════════════════════════════════════
-async function strikeTouch(strike: number, band: number, days: number) {
-  const cut = Date.now() - days * 86_400_000;
-  const et = (ms: number) => new Date(ms).toLocaleString("en-US", { timeZone: "America/New_York", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
-  const B = (v: number) => round(v / 1e9, 3);
-  const rows = await queryAll<{ t: string; spot: number; gex: number }>(
-    `SELECT timestamp AS t, MAX(spot) spot, SUM(net_gex) gex
-       FROM option_strike_gex_history
-      WHERE strike = ? AND timestamp > ? AND spot IS NOT NULL
-      GROUP BY timestamp ORDER BY timestamp`, [strike, cut]);
-  if (rows.length < 2) throw new Error(`no data for strike ${strike} in last ${days}d`);
-  const S = rows.map((r) => ({ t: Number(r.t), spot: num(r.spot), gex: num(r.gex) }));
-  const touchIdx = S.findIndex((r) => Math.abs(r.spot - strike) <= band);
-  if (touchIdx < 0) throw new Error(`spot never within ±${band}pt of ${strike} in last ${days}d`);
-  const touch = S[touchIdx], now = S[S.length - 1], since = S.slice(touchIdx);
-  const peak = since.reduce((a, b) => (b.gex > a.gex ? b : a));
-  const trough = since.reduce((a, b) => (b.gex < a.gex ? b : a));
-  const d = now.gex - touch.gex;
-  const p = touch.gex ? round((100 * d) / Math.abs(touch.gex), 1) : 0;
-  let touches = 0, wasOut = true;
-  for (const r of S) { const inb = Math.abs(r.spot - strike) <= band; if (inb && wasOut) touches++; wasOut = !inb; }
-  const sg = (v: number) => `${v >= 0 ? "+" : ""}${v}`;
-  const step = Math.max(1, Math.ceil(since.length / 60));
-  const detail = since.filter((_, i) => i % step === 0 || i === since.length - 1)
-    .map((r) => ({ time: et(r.t), spot: round(r.spot, 2), "GEX $B": B(r.gex) }));
-  return {
-    summary: [
-      { metric: "Touched (first tag)", when: et(touch.t), spot: round(touch.spot, 2), "GEX $B": B(touch.gex) },
-      { metric: "Now", when: et(now.t), spot: round(now.spot, 2), "GEX $B": B(now.gex) },
-      { metric: "Δ since touch", when: `${sg(B(d))} $B`, spot: "", "GEX $B": `${sg(p)}%` },
-      { metric: "Peak since touch", when: et(peak.t), spot: "", "GEX $B": B(peak.gex) },
-      { metric: "Trough since touch", when: et(trough.t), spot: "", "GEX $B": B(trough.gex) },
-    ],
-    detail,
-    note: `Strike ${strike} · ${touches} touch(es) within ±${band}pt in last ${days}d · touch = first tag. GEX ${d >= 0 ? "grew" : "lost"} ${B(Math.abs(d))} $B (${sg(p)}%) since first tag. net_gex summed across all expiries.`,
-  };
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 export async function GET(req: NextRequest) {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -481,7 +437,6 @@ export async function GET(req: NextRequest) {
     else if (test === "gamma-wall") body = await gammaWall(n("tol", 5), n("near", 150), n("minRange", 5));
     else if (test === "normalized-gex") body = await normalizedGex((q.get("ticker") || "SPX").trim().toUpperCase(), (q.get("expiration") || "").trim());
     else if (test === "gex-dex-cross") body = await gexDexCross(n("horizon", 30), n("hit", 5), n("band", 60), n("days", 30), n("gap", 5));
-    else if (test === "strike-touch") body = await strikeTouch(n("strike", 7500), n("band", 0.75), n("days", 1));
     else return NextResponse.json({ error: "unknown test" }, { status: 400 });
     return NextResponse.json({ ok: true, test, ...(body as object) });
   } catch (e) {
