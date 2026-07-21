@@ -19,6 +19,13 @@ let pool = null;
 let pgUnavailable = false;
 let lastWriteAt = 0;
 let columnEnsured = false;
+// Skip diagnostics: the write used to `return` silently when the feed handed it
+// no rows / spot<=0 / no expiry, so an afternoon feed decay (0DTE TT chain
+// thinning out, spot going stale) flatlined the bubble/heatmap trail with NOTHING
+// in the logs. Warn on the reason — throttled + on-change — so it's visible next
+// time instead of a DB autopsy.
+let lastSkipWarnAt = 0;
+let lastSkipReason = '';
 
 /**
  * Ensure net_vol_gex exists. server-v2 connects to Postgres directly and does
@@ -95,7 +102,21 @@ function todayYmdET() {
  */
 async function writeGexSnapshot(gexRows, spot, expiry) {
   const p = getPool();
-  if (!p || !Array.isArray(gexRows) || !gexRows.length || !(spot > 0) || !expiry) return;
+  if (!p || !Array.isArray(gexRows) || !gexRows.length || !(spot > 0) || !expiry) {
+    if (!p) return; // no DB configured — not a feed problem, stay quiet
+    const reason = !Array.isArray(gexRows) || !gexRows.length ? 'no gexRows'
+      : !(spot > 0) ? `spot<=0 (got ${spot})`
+      : 'no expiry';
+    const t = Date.now();
+    if (reason !== lastSkipReason || t - lastSkipWarnAt > 60_000) {
+      console.warn(`[gex-history] SKIP write — ${reason}; feed not delivering, heatmap/bubbles will stall until it recovers`);
+      lastSkipWarnAt = t;
+      lastSkipReason = reason;
+    }
+    return;
+  }
+  // A good write clears the skip state so the next stall re-warns immediately.
+  if (lastSkipReason) { console.warn('[gex-history] feed recovered — resuming writes'); lastSkipReason = ''; }
 
   const now = Date.now();
   if (now - lastWriteAt < PG_WRITE_INTERVAL_MS) return;
