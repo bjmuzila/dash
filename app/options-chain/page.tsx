@@ -8,6 +8,7 @@ import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Dock, SegGroup } from "@/components/shared/DockToolbar";
+import { ChainReplay } from "@/components/shared/ChainReplay";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -878,15 +879,26 @@ function fmtHoverUsd(n: number): string {
 function fmtHoverInt(n: number): string {
   return Math.round(n || 0).toLocaleString();
 }
-function StrikeHoverCard({ ticker, strike, expiration, cell, dod, x, y }: {
+function StrikeHoverCard({ ticker, strike, expiration, cell, dod, x, y, onClose }: {
   ticker: string; strike: number; expiration: string; cell: GreekCell;
   dod: { netYest: number; netNow: number | null; delta: number } | null;
-  x: number; y: number;
+  x: number; y: number; onClose: () => void;
 }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Close on outside-click or Esc (click-to-open card).
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (!cardRef.current?.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    // Defer so the opening click doesn't immediately close it.
+    const id = setTimeout(() => document.addEventListener("mousedown", onDown), 0);
+    document.addEventListener("keydown", onKey);
+    return () => { clearTimeout(id); document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [onClose]);
+
   const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
   const left = Math.min(Math.max(8, x + 16), vw - 262);
-  const top = Math.min(Math.max(8, y + 16), vh - 232);
+  const top = Math.min(Math.max(8, y + 16), vh - 240);
   const netPrem = cell.callPrem - cell.putPrem;
   const sgn = (v: number) => (v >= 0 ? "+" : "") + fmtHoverUsd(v);
 
@@ -900,15 +912,16 @@ function StrikeHoverCard({ ticker, strike, expiration, cell, dod, x, y }: {
   );
 
   return createPortal(
-    <div style={{
-      position: "fixed", left, top, zIndex: 1000, width: 246, pointerEvents: "none",
-      background: "rgba(13,17,25,0.96)", border: "1px solid rgba(33,158,188,0.30)", borderRadius: 12,
+    <div ref={cardRef} style={{
+      position: "fixed", left, top, zIndex: 1000, width: 246,
+      background: "rgba(13,17,25,0.98)", border: "1px solid rgba(33,158,188,0.30)", borderRadius: 12,
       padding: 13, boxShadow: "0 12px 40px rgba(0,0,0,0.6)", backdropFilter: "blur(12px)",
       WebkitBackdropFilter: "blur(12px)", fontFamily: "var(--font-mono)", color: "#fff",
     }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 9 }}>
         <span style={{ fontSize: 15, fontWeight: 800 }}>{ticker} {strike.toLocaleString()}</span>
         <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: HT.muted }}>{fmtExpHeader(expiration)}</span>
+        <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", color: HT.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>✕</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <SideBlock label="CALLS" color="#29b6f6" vol={cell.callVol} oi={cell.callOI} prem={cell.callPrem} />
@@ -992,20 +1005,6 @@ const ChainMatrix = memo(function ChainMatrix({
   changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, onCellClick, onCellHover,
 }: ChainMatrixProps) {
-  // Hover-intent delay: the stats card only pops after the pointer rests on a
-  // cell for ~1.2s (cleared if the pointer leaves first), so passing over cells
-  // doesn't flash cards.
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const HOVER_DELAY_MS = 1200;
-  const armHover = (v: { strike: number; colIdx: number; x: number; y: number }) => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => onCellHover(v), HOVER_DELAY_MS);
-  };
-  const cancelHover = () => {
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
-    onCellHover(null);
-  };
-  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
@@ -1171,18 +1170,14 @@ const ChainMatrix = memo(function ChainMatrix({
                     ...(isFirst ? ["inset 2px 0 0 #ffffff"] : []),
                   ].join(", ")
                 : undefined;
-              // Contract flow sparkline only makes sense for SPX 0DTE (that's
-              // what /proxy/flow-gex-history tracks — the live 0DTE tape).
-              const isZeroDteCol = !isChangeCol && col != null && col.expiration === etDateKey(etToday());
-              const isClickable = isZeroDteCol && activeTicker.toUpperCase() === "SPX" && value != null;
+              // Click any populated cell to open its stats card.
+              const isClickable = col != null;
               return (
                 <div
                   key={`${strike}-${colIdx}`}
                   className={isMvc ? "mvc-peak-cell" : undefined}
-                  onClick={isClickable ? () => onCellClick({ strike, expiration: col!.expiration }) : undefined}
-                  onMouseEnter={col ? (e) => armHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
-                  onMouseLeave={col ? cancelHover : undefined}
-                  title={isClickable ? "Click for this strike's Flow GEX history" : undefined}
+                  onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
+                  title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
                     padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : "rgba(255,255,255,0.62)",
@@ -1336,6 +1331,8 @@ export default function OptionsChainPage({
   // Change-mode (Live / 15 / 30 / 60). When not "live", the front-expiry column
   // shows Δ-vs-N-min-ago from strike_growth instead of the live greek.
   const [changeMode, setChangeMode] = useState<ChangeMode>("live");
+  // Replay overlay — recorded per-strike net-GEX playback for the active ticker.
+  const [replayOpen, setReplayOpen] = useState(false);
   // "expiry|strike" → chg$ map across ALL recorded expiries (from
   // /proxy/strike-growth/by-expiry). Lets every chain column show 15/30/60 Δ.
   const [changeMap, setChangeMap] = useState<Map<string, number>>(new Map());
@@ -2039,6 +2036,14 @@ export default function OptionsChainPage({
           <span style={{ fontSize: 10, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
         </div>
 
+        <button
+          onClick={() => setReplayOpen(true)}
+          style={segBtnStyle(false)}
+          title="Replay the recorded per-strike net-GEX profile through the session"
+        >
+          ▶ Replay
+        </button>
+
         <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
         <BoxSnapBtn targetRef={pageRef} />
         <BoxDiscordBtn
@@ -2134,9 +2139,14 @@ export default function OptionsChainPage({
             dod={dod}
             x={hoverCell.x}
             y={hoverCell.y}
+            onClose={() => setHoverCell(null)}
           />
         );
       })()}
+
+      {replayOpen && (
+        <ChainReplay symbol={activeTicker} onClose={() => setReplayOpen(false)} />
+      )}
     </div>
   );
 }

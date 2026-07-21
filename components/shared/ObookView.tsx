@@ -282,22 +282,34 @@ export function ObookView() {
         <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 16, lineHeight: 1.55, opacity: 0.75 }}>{d.disclaimer}</div>
       </Card>
 
-      {/* Footer — tenor stat lines */}
-      <Card accent={LIGHT_BLUE}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {d.tenors.map((c) => {
-            const side = c.side === "bull" ? BULL : BEAR;
-            const label = c.tag === "FRONT MONTH" ? "front month" : "intermediate term";
-            return (
-              <div key={c.tag} style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 16px", fontSize: 13 }}>
-                <span style={{ fontWeight: 800, color: side, letterSpacing: "0.05em", minWidth: 150 }}>{label}</span>
-                <span style={{ color: HOME_THEME.muted }}>{c.meta}</span>
-                {c.rows.map(([k, v]) => (
-                  <span key={k} style={{ color: HOME_THEME.muted }}>{k} <b style={{ color: side }}>{v}</b></span>
+      {/* Footer — tenor stat table (one dated row per tenor, append-over-time shape) */}
+      <Card accent={LIGHT_BLUE} title="Tenor Snapshot" subtitle="front month vs intermediate term · daily row format">
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 760 }}>
+            <thead>
+              <tr>
+                {["Date", "Tenor", "Expiry", "Prints", "Premium", "Bull/Bear", "Δ Flow", "OTM Flow", "Opp Flow"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", color: HOME_THEME.muted, fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
-              </div>
-            );
-          })}
+              </tr>
+            </thead>
+            <tbody>
+              {d.tenors.map((c) => {
+                const side = c.side === "bull" ? BULL : BEAR;
+                const label = c.tag === "FRONT MONTH" ? "front month" : "intermediate term";
+                const [expiry = "", printsRaw = "", premium = ""] = c.meta.split(" · ");
+                const prints = printsRaw.replace(" prints", "");
+                const cells = [d.date, label, expiry, prints, premium, c.rows[0]?.[1], c.rows[1]?.[1], c.rows[2]?.[1], c.rows[3]?.[1]];
+                return (
+                  <tr key={c.tag}>
+                    {cells.map((v, i) => (
+                      <td key={i} style={{ padding: "10px 12px", borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap", color: i === 1 ? side : i >= 5 ? side : HOME_THEME.text, fontWeight: i === 1 ? 800 : i >= 5 ? 600 : 400, letterSpacing: i === 1 ? "0.04em" : undefined }}>{v}</td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </Card>
     </>

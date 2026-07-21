@@ -1505,6 +1505,74 @@ async function main() {
         })();
         return;
       }
+      // ── Replay: metadata (which symbols/dates are replay-able) ───────────
+      //   GET /proxy/strike-growth/replay-meta[?symbol=MSFT]
+      // symbols = distinct recorded roots within the strike_growth retention
+      // window; dates = distinct session dates for ?symbol (newest first).
+      if (pathname === '/proxy/strike-growth/replay-meta' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            const symsQ = await p.query(
+              `SELECT DISTINCT symbol FROM strike_growth
+               WHERE date::date >= CURRENT_DATE - INTERVAL '7 days'
+               ORDER BY symbol ASC`
+            );
+            let dates = [];
+            if (symbol) {
+              const dQ = await p.query(
+                `SELECT DISTINCT date FROM strike_growth
+                 WHERE symbol = $1 AND date::date >= CURRENT_DATE - INTERVAL '7 days'
+                 ORDER BY date DESC`,
+                [symbol]
+              );
+              dates = dQ.rows.map((r) => r.date);
+            }
+            sendJson(res, 200, { ok: true, symbols: symsQ.rows.map((r) => r.symbol), dates });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // ── Replay: per-strike net-GEX frames for one symbol+date ────────────
+      //   GET /proxy/strike-growth/frames?symbol=MSFT[&date=YYYY-MM-DD]
+      // One frame per snapshot ts: { ts, spot, strikes:[{strike, net}] } where
+      // net = total net GEX (gex_now + gex_open), summed across expiries at the
+      // strike. Drives the /replay time-scrubber. Defaults to today (ET).
+      if (pathname === '/proxy/strike-growth/frames' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            const date = (u.searchParams.get('date') || today).trim();
+            const { rows } = await p.query(
+              `SELECT ts, strike, MAX(spot) AS spot, SUM(gex_now + gex_open) AS net
+               FROM strike_growth
+               WHERE date = $1 AND symbol = $2
+               GROUP BY ts, strike
+               ORDER BY ts ASC, strike ASC`,
+              [date, symbol]
+            );
+            const byTs = new Map();
+            for (const r of rows) {
+              const k = new Date(r.ts).toISOString();
+              let f = byTs.get(k);
+              if (!f) { f = { ts: k, spot: Number(r.spot) || 0, strikes: [] }; byTs.set(k, f); }
+              f.strikes.push({ strike: Number(r.strike), net: Number(r.net) || 0 });
+            }
+            sendJson(res, 200, { ok: true, symbol, date, frames: Array.from(byTs.values()) });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // All-expiry change map for the options-chain change-mode overlay.
       //   GET /proxy/strike-growth/by-expiry?symbol=NVDA
       // Returns latest snapshot per (expiry,strike) with chg15/30/60 (volume-GEX
