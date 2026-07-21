@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { HOME_THEME, homeInputStyle, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { TickerListDropdown } from "@/components/shared/TickerListDropdown";
 
 type Strike = { strike: number; net: number };
 type Frame = { ts: string; spot: number; strikes: Strike[] };
@@ -60,6 +61,7 @@ export function ChainReplay({
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [scaleMode, setScaleMode] = useState<"frame" | "day">("frame");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>("");
   const [mounted, setMounted] = useState(false);
@@ -146,6 +148,19 @@ export function ChainReplay({
     return m;
   }, [frame]);
 
+  // Largest |net| in the CURRENT frame — used when scaling per-frame so the
+  // biggest bar of every snapshot fills the row, even early in the day when the
+  // session-wide peak (usually EOD) would otherwise squash it to a sliver.
+  const frameMax = useMemo(() => {
+    let m = 0;
+    if (frame) for (const s of frame.strikes) m = Math.max(m, Math.abs(s.net));
+    return m;
+  }, [frame]);
+
+  // "day" = fixed session-wide scale (magnitudes comparable across time).
+  // "frame" = rescale each snapshot to its own max (bars always readable).
+  const denom = (scaleMode === "day" ? maxAbs : frameMax) || 1;
+
   const spot = frame?.spot || 0;
   const selStyle: React.CSSProperties = { ...homeInputStyle, padding: "6px 10px", cursor: "pointer" };
 
@@ -153,9 +168,10 @@ export function ChainReplay({
     <>
       {/* Controls */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 14 }}>
-        <select value={symbol} style={selStyle} onChange={(e) => setSymbol(e.target.value)}>
-          {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.06em", fontFamily: "var(--font-mono)", minWidth: 46 }}>
+          {symbol || "—"}
+        </span>
+        <TickerListDropdown activeTicker={symbol} onSelect={setSymbol} universe={symbols} />
         <select value={date} style={selStyle} onChange={(e) => setDate(e.target.value)}>
           {dates.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
@@ -183,6 +199,24 @@ export function ChainReplay({
               }}
             >
               {sp}×
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: SUB }}>Scale</span>
+          {(["frame", "day"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setScaleMode(m)}
+              title={m === "frame" ? "Rescale each snapshot to its own peak — bars always readable" : "Fixed session-wide scale — magnitudes comparable across time"}
+              style={{
+                ...homeInputStyle, padding: "4px 8px", cursor: "pointer", fontSize: 12,
+                textTransform: "capitalize",
+                borderColor: scaleMode === m ? LIGHT_BLUE : HOME_THEME.border,
+                color: scaleMode === m ? LIGHT_BLUE : SUB,
+              }}
+            >
+              {m}
             </button>
           ))}
         </div>
@@ -217,7 +251,7 @@ export function ChainReplay({
         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           {allStrikes.map((k, i) => {
             const net = netByStrike.get(k) ?? 0;
-            const pct = Math.min(100, (Math.abs(net) / maxAbs) * 100);
+            const pct = Math.min(100, (Math.abs(net) / denom) * 100);
             const positive = net >= 0;
             const prev = allStrikes[i - 1];
             const showSpot = spot > 0 && ((prev === undefined && spot > k) || (prev !== undefined && spot < prev && spot >= k));
@@ -226,8 +260,8 @@ export function ChainReplay({
                 {showSpot && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "2px 0" }}>
                     <div style={{ width: 56 }} />
-                    <div style={{ flex: 1, height: 0, borderTop: `1px dashed ${LIGHT_BLUE}`, position: "relative" }}>
-                      <span style={{ position: "absolute", right: 0, top: -8, fontSize: 10, color: LIGHT_BLUE, background: HOME_THEME.panel, padding: "0 4px" }}>
+                    <div style={{ flex: 1, height: 0, borderTop: `1px dashed ${HOME_THEME.text}`, position: "relative" }}>
+                      <span style={{ position: "absolute", right: 0, top: -8, fontSize: 10, color: HOME_THEME.text, background: HOME_THEME.panel, padding: "0 4px" }}>
                         spot {spot.toFixed(2)}
                       </span>
                     </div>
@@ -254,8 +288,10 @@ export function ChainReplay({
 
       <div style={{ marginTop: 16, fontSize: 11, color: SUB, lineHeight: 1.5 }}>
         Net GEX = OI + volume (gex_now + gex_open), front active expiry, ±14 strikes.
-        Green = positive, red = negative. Bars share one scale across the whole
-        session. History window ≈ 5 trading days.
+        Green = positive, red = negative. Scale <strong>Frame</strong> = each
+        snapshot scaled to its own peak (bars stay readable all day);{" "}
+        <strong>Day</strong> = fixed session-wide scale (magnitudes comparable
+        across time). History window ≈ 5 trading days.
       </div>
     </>
   );
@@ -279,7 +315,7 @@ export function ChainReplay({
         style={{
           width: "min(760px, 100%)", background: HOME_THEME.panel,
           border: `1px solid ${HOME_THEME.border}`, borderRadius: 14,
-          borderTop: `2px solid ${LIGHT_BLUE}`, padding: "18px 20px 20px",
+          padding: "18px 20px 20px",
           boxShadow: "0 24px 60px rgba(0,0,0,0.55)",
         }}
       >
@@ -288,19 +324,26 @@ export function ChainReplay({
             <div style={{ fontSize: 16, fontWeight: 800, color: HOME_THEME.text, letterSpacing: "0.02em" }}>Option Chain Replay</div>
             <div style={{ fontSize: 12, color: SUB }}>Play back the recorded per-strike net-GEX profile through the session.</div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              ...homeInputStyle, width: 34, height: 34, padding: 0, cursor: "pointer",
-              fontSize: 18, lineHeight: 1, color: HOME_THEME.text, display: "flex",
-              alignItems: "center", justifyContent: "center",
-            }}
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto", display: "block" }} />
+            <button
+              onClick={onClose}
+              style={{
+                ...homeInputStyle, width: 34, height: 34, padding: 0, cursor: "pointer",
+                fontSize: 18, lineHeight: 1, color: HOME_THEME.text, display: "flex",
+                alignItems: "center", justifyContent: "center",
+              }}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
         </div>
         {body}
+        <div style={{ textAlign: "right", marginTop: 6, fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: SUB }}>
+          cbedge.net
+        </div>
       </div>
     </div>,
     document.body,

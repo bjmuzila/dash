@@ -66,7 +66,19 @@ function fmtUsdShort(n: number): string {
 // ── WAVE: cumulative net directional premium series from the flow tape ────────
 // Signed premium per print: bullish (buy call / sell put) adds, bearish
 // (buy put / sell call) subtracts — so a falling WAVE = puts dominating.
-type WavePoint = { ts: number; cum: number; price: number | null };
+type WavePoint = { ts: number; cum: number };
+// Per-symbol intraday price samples. The flow tape's `spot` is stamped with the
+// SPX index price on every underlying, so it can't drive the SPY/QQQ price line;
+// instead we sample the correct per-symbol spot (chain underlyingPrice) each poll
+// and persist it per symbol+day so the line fills across the session.
+type PricePoint = { ts: number; price: number };
+function priceKey(sym: string): string { return `regime-price:${sym}:${todayEtYmd()}`; }
+function loadPriceSeries(sym: string): PricePoint[] {
+  try { const raw = localStorage.getItem(priceKey(sym)); const p = raw ? JSON.parse(raw) : null; return Array.isArray(p) ? p : []; } catch { return []; }
+}
+function savePriceSeries(sym: string, s: PricePoint[]): void {
+  try { localStorage.setItem(priceKey(sym), JSON.stringify(s.slice(-800))); } catch { /* no storage */ }
+}
 type WaveModel = {
   points: WavePoint[];
   final: number; // last cumulative net premium ($)
@@ -81,7 +93,7 @@ type WaveModel = {
 function buildWave(tape: FlowOrder[]): WaveModel | null {
   if (!tape.length) return null;
   const sorted = tape.slice().sort((a, b) => a.ts - b.ts);
-  let cum = 0, gross = 0, extreme = 0, lastPrice: number | null = null;
+  let cum = 0, gross = 0, extreme = 0;
   const points: WavePoint[] = [];
   for (const o of sorted) {
     const prem = o.premium || 0;
@@ -91,8 +103,7 @@ function buildWave(tape: FlowOrder[]): WaveModel | null {
     cum += bullish ? prem : -prem;
     gross += prem;
     if (Math.abs(cum) > Math.abs(extreme)) extreme = cum;
-    if (typeof o.spot === "number" && o.spot > 0) lastPrice = o.spot;
-    points.push({ ts: o.ts, cum, price: lastPrice });
+    points.push({ ts: o.ts, cum });
   }
   // Downsample to ~140 points so the SVG path stays light.
   const MAX = 140;
@@ -243,11 +254,16 @@ function synthesize(wave: WaveModel | null, gex: GexModel | null, symbol: string
 }
 
 // ── WAVE chart (SVG): net-premium area (green≥0 / red<0) + price line ─────────
-function WaveChart({ wave }: { wave: WaveModel }) {
+function WaveChart({ wave, price }: { wave: WaveModel; price: PricePoint[] }) {
   const W = 360, H = 240, padL = 6, padR = 60, padT = 14, padB = 22;
   const pts = wave.points;
   const n = pts.length;
-  const xs = (i: number) => padL + (i / Math.max(1, n - 1)) * (W - padL - padR);
+  // Shared TIME x-axis across the WAVE session; the price series aligns by ts
+  // (both are epoch-ms), so the per-symbol price line lands on the right spot.
+  const t0 = pts[0]?.ts ?? 0;
+  const t1 = pts[n - 1]?.ts ?? t0 + 1;
+  const span = Math.max(1, t1 - t0);
+  const xs = (ts: number) => padL + ((ts - t0) / span) * (W - padL - padR);
 
   const cums = pts.map((p) => p.cum);
   const cumMax = Math.max(1, ...cums, 0);
@@ -255,8 +271,9 @@ function WaveChart({ wave }: { wave: WaveModel }) {
   const yCum = (v: number) => padT + (1 - (v - cumMin) / (cumMax - cumMin)) * (H - padT - padB);
   const y0 = yCum(0);
 
-  const prices = pts.map((p) => p.price).filter((v): v is number => v != null);
-  const hasPrice = prices.length > 1;
+  const pr = price.filter((p) => p.price > 0 && p.ts >= t0 && p.ts <= t1);
+  const hasPrice = pr.length > 1;
+  const prices = pr.map((p) => p.price);
   const pMax = hasPrice ? Math.max(...prices) : 0;
   const pMin = hasPrice ? Math.min(...prices) : 0;
   const yPrice = (v: number) => padT + (1 - (v - pMin) / Math.max(1e-6, pMax - pMin)) * (H - padT - padB);
@@ -280,14 +297,14 @@ function WaveChart({ wave }: { wave: WaveModel }) {
     return { sign: c.sign, d: line, area };
   };
   for (let i = 0; i < n; i++) {
-    const v = cums[i], x = xs(i), y = yCum(v);
+    const v = cums[i], x = xs(pts[i].ts), y = yCum(v);
     const s: 1 | -1 = v >= 0 ? 1 : -1;
     if (i > 0) {
-      const pv = cums[i - 1];
+      const pv = cums[i - 1], px = xs(pts[i - 1].ts);
       if ((pv < 0 && v >= 0) || (pv > 0 && v <= 0)) {
         // interpolate the zero crossing so there's no color seam
         const frac = Math.abs(pv) / Math.max(1e-9, Math.abs(pv) + Math.abs(v));
-        const cx = xs(i - 1) + (x - xs(i - 1)) * frac;
+        const cx = px + (x - px) * frac;
         push((pv < 0 ? -1 : 1) as 1 | -1, cx, y0);
         push(s, cx, y0);
       }
@@ -297,7 +314,7 @@ function WaveChart({ wave }: { wave: WaveModel }) {
   if (cur) segs.push(seal(cur));
 
   const pricePath = hasPrice
-    ? pts.map((p, i) => (p.price == null ? null : `${i ? "L" : "M"}${xs(i).toFixed(1)} ${yPrice(p.price).toFixed(1)}`)).filter(Boolean).join(" ").replace(/^L/, "M")
+    ? pr.map((p, i) => `${i ? "L" : "M"}${xs(p.ts).toFixed(1)} ${yPrice(p.price).toFixed(1)}`).join(" ")
     : "";
 
   const finalColor = wave.dir === "bull" ? GREEN : RED;
@@ -405,8 +422,12 @@ function Stars({ n }: { n: number }) {
 function useRegimeData(symbol: string) {
   const [wave, setWave] = useState<WaveModel | null>(null);
   const [gex, setGex] = useState<GexModel | null>(null);
+  const [price, setPrice] = useState<PricePoint[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
+
+  // Seed today's persisted per-symbol price series on mount / symbol change.
+  useEffect(() => { setPrice(loadPriceSeries(symbol)); }, [symbol]);
 
   const load = useCallback(async () => {
     try {
@@ -424,6 +445,18 @@ function useRegimeData(symbol: string) {
         const spot = parseFloat(String(data.underlyingPrice ?? data["underlying-price"] ?? 0)) || 0;
         const items: ChainGroup[] = Array.isArray(data.items) ? data.items : [];
         setGex(buildGex(items, spot));
+        // Append the CORRECT per-symbol spot to the persisted price line (skip
+        // near-duplicate samples so 30s polls don't bloat the series).
+        if (spot > 0) {
+          setPrice((prev) => {
+            const last = prev[prev.length - 1];
+            const now = Date.now();
+            if (last && now - last.ts < 20_000 && Math.abs(last.price - spot) < 1e-6) return prev;
+            const next = [...prev, { ts: now, price: spot }];
+            savePriceSeries(symbol, next);
+            return next;
+          });
+        }
       }
       setErr(null);
       setLoadedAt(Date.now());
@@ -438,12 +471,12 @@ function useRegimeData(symbol: string) {
     return () => clearInterval(id);
   }, [load]);
 
-  return { wave, gex, err, loadedAt };
+  return { wave, gex, price, err, loadedAt };
 }
 
 // ── Card ──────────────────────────────────────────────────────────────────────
 export function GexRegimeCard({ symbol, subtitle }: { symbol: string; subtitle?: string }) {
-  const { wave, gex, err, loadedAt } = useRegimeData(symbol);
+  const { wave, gex, price, err, loadedAt } = useRegimeData(symbol);
   const cond = useMemo(() => synthesize(wave, gex, symbol), [wave, gex, symbol]);
 
   return (
@@ -492,7 +525,7 @@ export function GexRegimeCard({ symbol, subtitle }: { symbol: string; subtitle?:
         <div style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text }}>WAVE</div>
           <div style={{ fontSize: 11, color: SUB, marginBottom: 8 }}>Cumulative net call vs put premium (all expirations).</div>
-          {wave ? <WaveChart wave={wave} /> : <div style={{ fontSize: 12, color: SUB, padding: 24, textAlign: "center" }}>No flow yet.</div>}
+          {wave ? <WaveChart wave={wave} price={price} /> : <div style={{ fontSize: 12, color: SUB, padding: 24, textAlign: "center" }}>No flow yet.</div>}
         </div>
 
         {/* GEX Structure */}

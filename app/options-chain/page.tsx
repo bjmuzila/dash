@@ -8,7 +8,6 @@ import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Dock, SegGroup } from "@/components/shared/DockToolbar";
-import { ChainReplay } from "@/components/shared/ChainReplay";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -1331,8 +1330,6 @@ export default function OptionsChainPage({
   // Change-mode (Live / 15 / 30 / 60). When not "live", the front-expiry column
   // shows Δ-vs-N-min-ago from strike_growth instead of the live greek.
   const [changeMode, setChangeMode] = useState<ChangeMode>("live");
-  // Replay overlay — recorded per-strike net-GEX playback for the active ticker.
-  const [replayOpen, setReplayOpen] = useState(false);
   // "expiry|strike" → chg$ map across ALL recorded expiries (from
   // /proxy/strike-growth/by-expiry). Lets every chain column show 15/30/60 Δ.
   const [changeMap, setChangeMap] = useState<Map<string, number>>(new Map());
@@ -2036,14 +2033,6 @@ export default function OptionsChainPage({
           <span style={{ fontSize: 10, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
         </div>
 
-        <button
-          onClick={() => setReplayOpen(true)}
-          style={segBtnStyle(false)}
-          title="Replay the recorded per-strike net-GEX profile through the session"
-        >
-          ▶ Replay
-        </button>
-
         <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
         <BoxSnapBtn targetRef={pageRef} />
         <BoxDiscordBtn
@@ -2080,7 +2069,7 @@ export default function OptionsChainPage({
       ) : (
         /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
            inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
-        <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
+        <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "0 10px 10px" }}>
           <ChainMatrix
             columns={columns}
             gridCols={gridCols}
@@ -2143,10 +2132,6 @@ export default function OptionsChainPage({
           />
         );
       })()}
-
-      {replayOpen && (
-        <ChainReplay symbol={activeTicker} onClose={() => setReplayOpen(false)} />
-      )}
     </div>
   );
 }
