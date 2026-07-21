@@ -183,4 +183,84 @@ async function writeFlowTape(tape) {
   }
 }
 
-module.exports = { writeFlowTape };
+/**
+ * Backfill historical flow rows (e.g. a morning session lost to a mid-session
+ * container restart) into flow_prints. Differs from writeFlowTape in two ways:
+ *   1. takes an EXPLICIT ET session date, stamped on every row (writeFlowTape
+ *      always uses "today"), and
+ *   2. has NO lastFlushedTs tail-cutoff — it writes every row handed to it.
+ * Idempotent via the (ts, symbol, side) PK UPSERT, so re-running over the same
+ * window can't duplicate. Chunked to stay under Postgres' 65535-param cap.
+ * @param {Array<object>} rows    FlowOrder-shaped entries (any order)
+ * @param {string} dateYmd        ET session date 'YYYY-MM-DD' stamped on all rows
+ * @returns {Promise<number>}      rows written (post batch-dedupe)
+ */
+async function backfillFlowRows(rows, dateYmd) {
+  const p = getPool();
+  if (!p || !Array.isArray(rows) || !rows.length) return 0;
+  await ensureTable(p);
+  const date = String(dateYmd || todayYmdET());
+  const cols = 16;
+  const CHUNK = 500; // 500 * 16 = 8000 params, well under the 65535 cap
+
+  // Dedupe within the batch by the PK — Postgres rejects one ON CONFLICT
+  // touching the same row twice. Last occurrence wins.
+  const byKey = new Map();
+  for (const o of rows) {
+    const ts = Number(o.ts);
+    if (!Number.isFinite(ts)) continue;
+    byKey.set(`${ts}|${o.symbol}|${o.side}`, o);
+  }
+  const fresh = [...byKey.values()];
+
+  let sent = 0;
+  for (let start = 0; start < fresh.length; start += CHUNK) {
+    const slice = fresh.slice(start, start + CHUNK);
+    const values = [];
+    const params = [];
+    let i = 0;
+    for (const o of slice) {
+      const ph = [];
+      for (let c = 0; c < cols; c++) ph.push(`$${++i}`);
+      values.push(`(${ph.join(',')})`);
+      params.push(
+        Number(o.ts),
+        date,
+        String(o.symbol ?? ''),
+        o.underlying ?? null,
+        o.expiration ?? null,
+        Number.isFinite(Number(o.strike)) ? Number(o.strike) : null,
+        o.type ?? null,
+        String(o.side ?? ''),
+        o.action ?? null,
+        o.bucket ?? null,
+        Number.isFinite(Number(o.price)) ? Number(o.price) : null,
+        Number.isFinite(Number(o.size)) ? Math.round(Number(o.size)) : null,
+        Number.isFinite(Number(o.premium)) ? Number(o.premium) : null,
+        typeof o.isOtm === 'boolean' ? o.isOtm : null,
+        o.underlying != null ? String(o.underlying).toUpperCase() : null,
+        Number.isFinite(Number(o.spot)) && Number(o.spot) > 0 ? Number(o.spot) : null,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await p.query(
+      `INSERT INTO flow_prints
+         (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm, underlying_norm, spot)
+       VALUES ${values.join(', ')}
+       ON CONFLICT (ts, symbol, side) DO UPDATE SET
+         size = EXCLUDED.size,
+         price = EXCLUDED.price,
+         premium = EXCLUDED.premium,
+         action = EXCLUDED.action,
+         bucket = EXCLUDED.bucket,
+         is_otm = EXCLUDED.is_otm,
+         underlying_norm = EXCLUDED.underlying_norm,
+         spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
+      params,
+    );
+    sent += slice.length;
+  }
+  return sent;
+}
+
+module.exports = { writeFlowTape, backfillFlowRows };
