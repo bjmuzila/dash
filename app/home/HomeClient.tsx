@@ -1444,7 +1444,6 @@ export function HomeClient({
                   { id: "whale", label: "Whale", icon: <WhaleIcon /> },
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
                   { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
-                  { id: "ib", label: "IB", icon: <IbIcon /> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}

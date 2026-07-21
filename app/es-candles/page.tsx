@@ -2555,37 +2555,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
           <DockGap />
 
-          {/* IB switcher tab — toggles Initial Balance lines; hover previews the IB page */}
-          <div
-            ref={ibBoxRef}
-            style={{ flexShrink: 0 }}
-            onMouseEnter={openIbPop}
-            onMouseLeave={closeIbPop}
-          >
-            <DockButton
-              onClick={() => setShowIb((v) => !v)}
-              title="Initial Balance (09:30–10:30 ET) — hover for IB page"
-              style={showIb ? { border: `1px solid ${DOCK_THEME.activeBorder}`, background: DOCK_THEME.activeTile, color: HOME_THEME.cyan } : undefined}
-            >
-              <span>IB</span>
-            </DockButton>
-          </div>
-          {ibPop && ibPopRect && createPortal(
-            <div
-              onMouseEnter={openIbPop}
-              onMouseLeave={closeIbPop}
-              style={{ position: "fixed", left: ibPopRect.left, top: ibPopRect.top, width: 760, height: 460, borderRadius: 14, overflow: "hidden", border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000 }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-                <span>Initial Balance</span>
-                <a href={IB_ROUTE} target="_blank" rel="noreferrer" style={{ color: HOME_THEME.cyan, textDecoration: "none" }}>Open ↗</a>
-              </div>
-              <iframe src={IB_EMBED_ROUTE} title="IB page preview" style={{ width: "100%", height: "calc(100% - 31px)", border: 0, background: "transparent" }} />
-            </div>,
-            document.body
-          )}
-
-          <DockGap />
 
           {/* Overlays checklist dropdown (was 6 inline tiles — overflowed the dock) */}
           <div ref={ovlBoxRef} style={{ flexShrink: 0 }}>
