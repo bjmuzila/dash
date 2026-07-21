@@ -38,8 +38,18 @@ const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = requir
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
 const { fetchOptionDailyHistoryTheta, fetchOptionIntradayTheta } = require('./proxy-thetadata');
-const { fetchIntradayCandles } = require('./candle-history');
-const { startEtfCandleRecorder } = require('./state/etf-candle-recorder');
+// Optional feature modules — loaded defensively so a missing or broken file can
+// NEVER take down the whole origin on boot. A hard `require` that throws here
+// crash-loops the container → Cloudflare 502 for the entire site. (This bit us
+// once: state/etf-candle-recorder.js was gitignored by the `state/` rule and
+// never shipped, so its hard require killed boot. Recorder now lives in
+// server-v2/ root and loads under try/catch regardless.)
+let fetchIntradayCandles = async () => { throw new Error('candle-history module unavailable'); };
+try { ({ fetchIntradayCandles } = require('./candle-history')); }
+catch (e) { console.warn('[candles] candle-history not loaded:', e.message); }
+let startEtfCandleRecorder = () => {};
+try { ({ startEtfCandleRecorder } = require('./etf-candle-recorder')); }
+catch (e) { console.warn('[etf-candle] recorder not loaded:', e.message); }
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
