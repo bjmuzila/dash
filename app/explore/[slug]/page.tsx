@@ -5,14 +5,18 @@ import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/ex
 import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
 import PublicNav from "@/components/landing/PublicNav";
 import NetDriftExample from "@/components/explore/NetDriftExample";
+import Confidence7dTracker from "@/components/explore/Confidence7dTracker";
+import DelayedLiveView from "@/components/explore/DelayedLiveView";
 
 // Public marketing page for one feature. Linked from the landing-page cards.
-// Sells the feature with copy + a frozen static teaser, then drives to
-// /pricing?from=<slug> (the single conversion hub). Signed-out friendly.
+// Sells the feature with copy + a frozen static teaser + a delayed-LIVE real
+// data view, then drives to /pricing?from=<slug> (the single conversion hub).
+// Signed-out friendly.
 
-// ISR: the confidence-score page carries a real last-7-session tracker whose
-// data layer is cached per ET day, so it settles to fresh numbers once at EOD.
-export const revalidate = 21600;
+// ISR: refresh every 15 min so the delayed-live blocks (DelayedLiveView, GEX
+// snapshot) stay reasonably fresh. The confidence-score tracker's own data
+// layer is still cached per ET day, so this doesn't over-hit it.
+export const revalidate = 900;
 
 export function generateStaticParams() {
   return EXPLORE_SLUGS.map((slug) => ({ slug }));
@@ -127,31 +131,42 @@ export default async function ExplorePage({
           </section>
         </div>
 
+        {/* Delayed-LIVE real-data view (gex, estimated-moves, initial-balance, tpo).
+            flow + confidence-score render their own richer live blocks below. */}
+        <DelayedLiveView slug={slug} />
+
         {/* Worked Net Drift chart (flow only) */}
         {slug === "flow" && <NetDriftExample />}
+
+        {/* Real last-7-session CB accuracy tracker (confidence-score only) */}
+        {slug === "confidence-score" && <Confidence7dTracker />}
 
         {/* Auto-charted & auto-graded concept list (ict only) */}
         {slug === "ict" && <IctGlossary />}
 
-        {/* Join Now CTA → single pricing hub */}
+        {/* Join Now CTA → single pricing hub. Call to arms: stakes, one action,
+            risk reversal — no second competing button. */}
         <div style={ctaBlock}>
-          <h2 style={{ fontSize: "clamp(22px,4vw,30px)", fontWeight: 800, margin: "0 0 8px" }}>
-            Get full access
+          <div style={ctaKicker}>2-DAY FREE TRIAL · NO CHARGE UP FRONT</div>
+          <h2 style={{ fontSize: "clamp(24px,4.5vw,34px)", fontWeight: 900, margin: "0 0 10px", lineHeight: 1.1 }}>
+            Stop trading blind. See it live for two days.
           </h2>
-          <p style={{ color: T.muted, fontSize: 14, margin: "0 0 22px", maxWidth: 520 }}>
-            Join CB Edge for live {entry.title.toLowerCase()} plus the full dashboard — GEX, flow, estimated moves and more.
+          <p style={{ color: T.muted, fontSize: 15, margin: "0 0 22px", maxWidth: 560, lineHeight: 1.6 }}>
+            The preview above is real — just delayed. Your trial unlocks the live, tick-by-tick {entry.title.toLowerCase()}
+            {" "}<strong style={{ color: T.text }}>plus the entire dashboard</strong>: GEX, flow, ICT, estimated moves, IB stats and TPO. Full access, nothing held back.
           </p>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <Link href={`/pricing?from=${entry.slug}&trial=1`} style={joinBtn}>
               Start my 2-day free trial ›
             </Link>
+            <span style={{ color: T.muted, fontSize: 13, opacity: 0.8 }}>Cancel anytime · no charge up front</span>
           </div>
         </div>
 
-        {/* Other features */}
+        {/* Other features — framed as "all of this is in your trial", not a passive menu */}
         <div style={{ marginTop: 56, borderTop: `1px solid ${T.border}`, paddingTop: 28 }}>
-          <div style={{ fontSize: 14, color: T.muted, marginBottom: 14, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-            Explore more
+          <div style={{ fontSize: 14, color: T.text, marginBottom: 14, fontWeight: 800, letterSpacing: "0.04em" }}>
+            Your trial unlocks all of these — live
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {EXPLORE_SLUGS.filter((s) => s !== entry.slug).map((s) => (
@@ -289,6 +304,16 @@ const ctaBlock: React.CSSProperties = {
   border: "1px solid rgba(33,158,188,0.14)",
   borderRadius: 20,
   padding: "clamp(24px,4vw,40px)",
+};
+
+const ctaKicker: React.CSSProperties = {
+  display: "inline-block",
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.12em",
+  color: T.cyan,
+  marginBottom: 14,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
 };
 
 const joinBtn: React.CSSProperties = {

@@ -134,6 +134,54 @@ export const EXPLORE: Record<string, ExploreEntry> = {
       { label: "Hit Rate (2yr)", value: "73%", tone: "purple" },
     ],
   },
+  "initial-balance": {
+    slug: "initial-balance",
+    title: "Initial Balance & Stats",
+    tagline: "The first hour sets the day — trade it with the base rates, not a hunch.",
+    body: [
+      "The Initial Balance — the first two 30-minute periods, 9:30 to 10:30 ET — frames the entire session. Where it breaks, whether the break holds, and how far price extends are not random: they repeat. We grade the IB on every ES and NQ session and keep the receipts, so you walk into the open knowing the actual odds instead of trading on feel.",
+      "Each session is auto-scored: IB high/low/mid and width bucket, which side broke first and when, whether the break failed and retested, and how many IB multiples price ran (0.5×, 1.0×, 1.5×, 2.0×). The live RuleBoard reads the forming IB against 90+ trailing sessions and tells you what usually happens next from here.",
+    ],
+    highlights: [
+      "IB high / low / mid + width bucket, graded live",
+      "Break side & timing — single break, both sides, or contained",
+      "Failure & retest detection with continuation odds",
+      "Extension targets: 0.5× / 1.0× / 1.5× / 2.0× IB hit rates",
+      "Open type, ORB direction & close-zone stats",
+      "Every session recorded — ES & NQ, 90+ days deep",
+    ],
+    teaserLabel: "Sample session read",
+    teaserStats: [
+      { label: "IB Width", value: "Wide", tone: "purple" },
+      { label: "First Break", value: "Upside 10:12", tone: "green" },
+      { label: "Single-break rate", value: "58%", tone: "cyan" },
+      { label: "1.0× ext hit", value: "41%", tone: "cyan" },
+    ],
+  },
+  tpo: {
+    slug: "tpo",
+    title: "TPO & Market Structure",
+    tagline: "Market Profile, built live — plus a full-day profile forecast from the open.",
+    body: [
+      "Market Profile shows you where the market actually spent its time, not just where it closed. Point of Control, the value area (VAH/VAL) and single prints are built continuously from the live ES session, so you watch acceptance, rejection and unfinished business form in real time — the structure the desk trades around.",
+      "The edge is the forecast. Once the Initial Balance completes, a k-NN model matches today's shape against years of recorded sessions and projects the full-day profile — predicted POC and value area versus what's realized so far, with a confidence read on how tight the analog set is. You get the day's map at 10:30, not at the close.",
+    ],
+    highlights: [
+      "Live POC, VAH / VAL & value area as the session prints",
+      "Single prints & poor highs/lows — unfinished business flagged",
+      "Full-day profile forecast from the Initial Balance (k-NN)",
+      "Predicted vs realized POC & value area on one axis",
+      "Model confidence from analog tightness",
+      "Balance / imbalance structure read on ES",
+    ],
+    teaserLabel: "Sample forecast",
+    teaserStats: [
+      { label: "POC", value: "5,972", tone: "cyan" },
+      { label: "Value Area", value: "5,948–5,996", tone: "green" },
+      { label: "Predicted POC", value: "5,978", tone: "purple" },
+      { label: "Forecast conf.", value: "71%", tone: "green" },
+    ],
+  },
 };
 
 export const EXPLORE_SLUGS = Object.keys(EXPLORE);

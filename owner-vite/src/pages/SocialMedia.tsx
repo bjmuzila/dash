@@ -1,44 +1,13 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shareToDiscord } from "../lib/discord";
 import { SegGroup } from "../components/DockToolbar";
+import GexChart from "../gex/GexChart";
+import Heatmap from "../gex/Heatmap";
+import { type ChainRow } from "../gex/calc";
 
-/* ────────────────────────────────────────────────────────────────────────────
- * Placeholder for the heavy live-chart / streaming preview pieces (GexChart,
- * GexHeatmap, ES-candle hydration) that this admin page used only as a
- * convenience preview. Those depend on the WebSocket streaming stack
- * (useEsCandles) and the dashboard chart components, which are not part of this
- * standalone Vite app. The core deliverables — the editable Daily Input form,
- * the shareable card, Copy/Download-to-PNG, and the Day Posts workflow — are
- * ported faithfully; the live chart previews render this labeled box instead.
- * ──────────────────────────────────────────────────────────────────────────── */
-function LiveChartPlaceholder({
-  label = "Live GEX chart preview — available in the main dashboard",
-  height,
-}: { label?: string; height?: number | string }) {
-  return (
-    <div
-      style={{
-        width: "100%",
-        height: height ?? "100%",
-        minHeight: 120,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        textAlign: "center",
-        padding: 20,
-        boxSizing: "border-box",
-        color: "#9aa4b2",
-        fontSize: 12,
-        fontStyle: "italic",
-        border: "1px dashed rgba(255,255,255,0.18)",
-        borderRadius: 8,
-        background: "rgba(255,255,255,0.02)",
-      }}
-    >
-      {label}
-    </div>
-  );
-}
+/* NOTE: the former LiveChartPlaceholder stub has been removed — live GEX now
+ * renders via the ported ../gex/GexChart + ../gex/Heatmap components. */
+
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Social Media (admin) — turns the daily pre-market GEX read into a shareable
@@ -662,6 +631,24 @@ function GexCard({
   // "drop" = user-dropped screenshot (gets the toolbar-crop hack); "live" = our
   // own captured profile/heatmap (plain contain-fit, nothing to crop).
   const [imgKind, setImgKind] = useState<"drop" | "live" | null>(null);
+  // Button-triggered live render: pull /api/gex and mount the ported dashboard
+  // GexChart (kind="chart") / Heatmap (kind="heat") straight into the card's
+  // image slot, so html2canvas bakes the live visual into the exported PNG.
+  const [live, setLive] = useState<{ chain: ChainRow[]; spot: number; flip: number | null } | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const loadLive = useCallback(async () => {
+    setLiveLoading(true);
+    try {
+      const res = await fetch("/api/gex", { cache: "no-store" });
+      if (!res.ok) throw new Error(`gex ${res.status}`);
+      const d = await res.json();
+      const chain = (Array.isArray(d.chain) ? d.chain : []) as ChainRow[];
+      setLive({ chain, spot: Number(d.spotPrice ?? 0), flip: d.gexFlip ?? null });
+      setImg(null); setImgKind("live");
+    } catch (e) {
+      console.error("[gex-card live]", e);
+    } finally { setLiveLoading(false); }
+  }, []);
   const [fields, setFields] = useState<CardFields>(() => fieldsFromForm(kind, form));
   // Re-seed from form until the user has dropped an image / edited a field.
   const touchedRef = useRef(false);
@@ -775,10 +762,11 @@ function GexCard({
         <button
           type="button"
           className="gx-btn load"
-          disabled
-          title="Live GEX capture is available in the main dashboard. Drop or paste a screenshot into the card instead."
+          onClick={loadLive}
+          disabled={liveLoading}
+          title="Render the live SPX GEX profile / heatmap from /api/gex into the card."
         >
-          Live capture — in dashboard
+          {liveLoading ? "Loading…" : live ? "↻ Refresh live" : kind === "chart" ? "⤓ Live GEX profile" : "⤓ Live heatmap"}
         </button>
       </div>
       <div ref={cardRef} className={`gx-card ${regimeNeg ? "neg" : "pos"}${kind === "heat" ? " vertical" : ""}`}>
@@ -797,10 +785,14 @@ function GexCard({
         <span className={`gx-regime ${regimeNeg ? "neg" : "pos"}`}><i />{regimeNeg ? "NEGATIVE GAMMA" : "POSITIVE GAMMA"}</span>
 
         {/* image slot */}
-        <div className={`gx-imgwrap${imgKind === "live" ? " live" : ""}`} onClick={img ? undefined : onPick}
+        <div className={`gx-imgwrap${imgKind === "live" ? " live" : ""}`} onClick={img || live ? undefined : onPick}
           onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.[0]) loadFile(e.dataTransfer.files[0]); }}>
-          {img && <img src={img} alt="capture" crossOrigin="anonymous" />}
+          onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.[0]) { setLive(null); loadFile(e.dataTransfer.files[0]); } }}>
+          {live
+            ? (kind === "chart"
+                ? <GexChart chain={live.chain} spotPrice={live.spot} flipPoint={live.flip} transparentBg />
+                : <Heatmap chain={live.chain} spot={live.spot} intensity={1} />)
+            : img && <img src={img} alt="capture" crossOrigin="anonymous" />}
         </div>
 
         {/* levels strip — main value is editable; the small sub-label is a
@@ -820,8 +812,9 @@ function GexCard({
         </div>
       </div>
 
-      {/* Capture host removed — the live GexChart / GexHeatmap mount that fed the
-          card image is stubbed in this standalone app (see LiveChartPlaceholder). */}
+      {/* Live GexChart / Heatmap now render directly in the image slot above
+          (button-triggered via "Live GEX profile" / "Live heatmap"); html2canvas
+          bakes them into the exported card PNG. */}
 
       <div className="gx-actions">
         <button type="button" className="gx-btn copy" onClick={onCopy} disabled={busy}>
@@ -1412,6 +1405,10 @@ function PostGenerator({ form }: { form: FormState }) {
   // dashboard SnapButton uses) and rendered into an off-card GexChart canvas so
   // each post can attach the actual profile image.
   const [gexChain, setGexChain] = useState<unknown[]>([]);
+  // Spot + flip captured with the chain so the ported GexChart can draw the
+  // spot line and gamma-flip marker (mirrors the dashboard render).
+  const [gexSpot, setGexSpot] = useState(0);
+  const [gexFlip, setGexFlip] = useState<number | null>(null);
   const [gexLoading, setGexLoading] = useState(false);
   const [snapState, setSnapState] = useState<"" | "saved" | "copied" | "err">("");
   const chartCaptureRef = useRef<HTMLDivElement>(null);
@@ -1427,6 +1424,8 @@ function PostGenerator({ form }: { form: FormState }) {
       if (!res.ok) throw new Error(`gex ${res.status}`);
       const data = await res.json();
       setGexChain(Array.isArray(data.chain) ? data.chain : []);
+      setGexSpot(Number(data.spotPrice ?? 0));
+      setGexFlip(data.gexFlip ?? null);
     } catch (e) {
       console.error("[post-gen gex]", e);
     } finally {
@@ -1626,7 +1625,7 @@ function PostGenerator({ form }: { form: FormState }) {
                 </label>
               </div>
               <div ref={chartCaptureRef} style={{ width: "100%", height: 360, background: "var(--bg0)", borderRadius: 8, overflow: "hidden", marginTop: 10 }}>
-                <LiveChartPlaceholder label="Live GEX profile preview — available in the main dashboard. Image capture/branding is disabled in this standalone build." height={360} />
+                <GexChart chain={gexChain as ChainRow[]} spotPrice={gexSpot} flipPoint={gexFlip} transparentBg />
               </div>
               <div style={{ marginTop: 14 }}>
                 <TweetMockup
@@ -1800,6 +1799,11 @@ function DayPosts({ form }: { form: FormState }) {
   const [capturedAt, setCapturedAt] = useState(0);
   const [capUrl, setCapUrl] = useState<string | null>(null);
   const [capturing, setCapturing] = useState(false);
+  // GEX visual renders inline via the ported dashboard GexChart (the /gex
+  // iframe embed does not exist in this standalone owner build). Captured by
+  // grabbing the chart canvas directly in capture().
+  const [gexLive, setGexLive] = useState<{ chain: ChainRow[]; spot: number; flip: number | null } | null>(null);
+  const gexInlineRef = useRef<HTMLDivElement>(null);
 
   // GEX now renders via the same-origin /gex-embed iframe (see DAY_VISUALS), so
   // every visual — GEX included — captures through the shared iframe path below.
@@ -1816,24 +1820,45 @@ function DayPosts({ form }: { form: FormState }) {
     ro.observe(el);
     measure();
     return () => ro.disconnect();
-  }, [iframeOn, visual]);
+  }, [iframeOn, visual, gexLive]);
   const embScale = embedW > 0 ? Math.min(1, embedW / DP_EMB_W) : 1;
 
   const visualDef = DAY_VISUALS.find((v) => v.v === visual)!;
 
   // Switching source resets the live view (keeps any frozen capture).
-  useEffect(() => { setIframeOn(false); }, [visual]);
+  useEffect(() => { setIframeOn(false); setGexLive(null); }, [visual]);
 
   const retrieve = useCallback(async () => {
     setError("");
+    if (visual === "gex") {
+      try {
+        const res = await fetch("/api/gex", { cache: "no-store" });
+        if (!res.ok) throw new Error(`gex ${res.status}`);
+        const d = await res.json();
+        setGexLive({ chain: (Array.isArray(d.chain) ? d.chain : []) as ChainRow[], spot: Number(d.spotPrice ?? 0), flip: d.gexFlip ?? null });
+        setIframeOn(false);
+      } catch (e) { console.error("[day-posts gex]", e); setError("Couldn't load live GEX — try again."); }
+      return;
+    }
     setIframeOn(true);
-  }, []);
+  }, [visual]);
 
   // Freeze the current live view into rawRef.
   const capture = useCallback(async () => {
     setCapturing(true);
     setError("");
     try {
+      if (visual === "gex") {
+        const cvs = gexInlineRef.current?.querySelector<HTMLCanvasElement>("canvas");
+        if (!cvs) throw new Error("hit Retrieve and let the GEX chart render first");
+        const out = document.createElement("canvas");
+        out.width = cvs.width; out.height = cvs.height;
+        out.getContext("2d")!.drawImage(cvs, 0, 0);
+        rawRef.current = out;
+        setCapUrl(out.toDataURL("image/png"));
+        setCapturedAt(Date.now());
+        return;
+      }
       const doc = iframeRef.current?.contentDocument;
       if (!doc?.body) throw new Error("view not loaded — hit Retrieve and wait for it to render");
       const html2canvas = await getHtml2Canvas();
@@ -1965,12 +1990,19 @@ function DayPosts({ form }: { form: FormState }) {
           ))}
           <span style={{ flex: 1 }} />
           <button type="button" className="dp-btn" onClick={retrieve}>⤓ Retrieve</button>
-          <button type="button" className="dp-btn on" onClick={capture} disabled={capturing || !iframeOn}>
+          <button type="button" className="dp-btn on" onClick={capture} disabled={capturing || (!iframeOn && !(visual === "gex" && gexLive))}>
             {capturing ? "Capturing…" : "📸 Capture"}
           </button>
         </div>
 
-        {iframeOn && (
+        {visual === "gex" && gexLive && (
+          <div ref={embedBoxRef} className="dp-embed" style={{ height: DP_EMB_H * embScale, background: "#05060a" }}>
+            <div ref={gexInlineRef} style={{ width: DP_EMB_W, height: DP_EMB_H, transform: `scale(${embScale})`, transformOrigin: "top left" }}>
+              <GexChart chain={gexLive.chain} spotPrice={gexLive.spot} flipPoint={gexLive.flip} />
+            </div>
+          </div>
+        )}
+        {iframeOn && visual !== "gex" && (
           <div ref={embedBoxRef} className="dp-embed" style={{ height: DP_EMB_H * embScale }}>
             <iframe
               ref={iframeRef}
@@ -1983,7 +2015,7 @@ function DayPosts({ form }: { form: FormState }) {
             />
           </div>
         )}
-        {!iframeOn && (
+        {!iframeOn && !(visual === "gex" && gexLive) && (
           <div className="dp-hint">Hit <b>Retrieve</b> to load the live {visualDef.label} view, let it render, then <b>Capture</b> freezes it to the post image.</div>
         )}
 
@@ -2056,7 +2088,7 @@ function DayPosts({ form }: { form: FormState }) {
         {error && <div className="dp-err">{error}</div>}
         {!capturedAt && (
           <div className="dp-hint" style={{ color: "var(--amber)" }}>
-            ⚠ No visual attached yet — in section 2 pick a source, hit <b>Retrieve</b> (GEX chart attaches automatically; the others need <b>📸 Capture</b> once rendered).
+            ⚠ No visual attached yet — in section 2 pick a source, hit <b>Retrieve</b>, let it render, then <b>📸 Capture</b> to freeze it onto the post image.
           </div>
         )}
         <TweetMockup

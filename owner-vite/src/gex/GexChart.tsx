@@ -1,0 +1,847 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { type ChainRow, type CalcMode, callGEXOf, putGEXOf, netGEXOf } from "./calc";
+// Ported into owner-vite standalone: baselines type inlined (ghost layers unused here).
+type GexBaselines = Record<number, Record<string, number>>;
+
+export type GexMode   = "net" | "call-put";
+export type DataMode  = "oi-vol" | "vol-only" | "flow";
+export type ChartMode = "line" | "bars";
+
+interface GexChartProps {
+  chain:          ChainRow[];
+  spotPrice:      number;
+  flipPoint?:     number | null;
+  gexProfile?:    { levels: number[]; values: number[]; flipPoint: number | null } | null;
+  mode?:          GexMode;
+  dataMode?:      DataMode;
+  chartMode?:     ChartMode;
+  showOI?:        boolean;
+  showDex?:       boolean;
+  showFlipCurve?: boolean;
+  expiry?:        string;
+  /** Per-strike net GEX baselines keyed by age ("open"|"5"|"15"|"30"). */
+  baselines?:     GexBaselines;
+  /** Show the prior-state ghost layer for each age. */
+  showGhost5?:    boolean;
+  showGhost15?:   boolean;
+  showGhost30?:   boolean;
+  /** Fired when a bar/strike is clicked. Carries the row + click position. */
+  onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
+  /** When true, skip the opaque chart background so the panel shows through. */
+  transparentBg?: boolean;
+}
+
+// Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
+// live bar's color, drawn behind the current bar.
+const GHOST_TINTS: Record<string, { pos: string; neg: string }> = {
+  "5":  { pos: "rgba(41,182,246,0.60)", neg: "rgba(255,179,0,0.60)" },
+  "15": { pos: "rgba(41,182,246,0.45)", neg: "rgba(255,179,0,0.45)" },
+  "30": { pos: "rgba(41,182,246,0.32)", neg: "rgba(255,179,0,0.32)" },
+};
+
+// ─── Padding — matches vanilla exactly ────────────────────────────────────────
+const PAD_T = 20;
+const PAD_B = 6;
+const PAD_L = 16;  // gap between bars and the left panel border
+const PAD_R = 16;  // gap between bars and the right panel border
+const MIN_COUNT = 30;
+// DEFAULT_COUNT is now computed dynamically as Math.round(600 / detectedStep) + 1
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
+
+function fmtGex(v: number): string {
+  const a = Math.abs(v), s = v >= 0 ? "+" : "-";
+  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(2)}K`;
+  return `${s}$${a.toFixed(2)}`;
+}
+
+function getNiceStep(range: number): number {
+  const rough = Math.max(range / 5, 1);
+  const mag   = Math.pow(10, Math.floor(Math.log10(rough)));
+  for (const s of [1, 2, 5, 10]) if (s * mag >= rough) return s * mag;
+  return mag * 10;
+}
+
+// Detected step is returned alongside rows so callers can compute a sensible DEFAULT_COUNT.
+interface DensifyResult { rows: ChainRow[]; step: number; }
+
+// Densify: fill gaps using the detected step size from the data.
+// SPX 0DTE uses 5-pt spacing near ATM, sometimes 1-pt far OTM.
+// Detects the minimum gap between real strikes and uses that as the fill step.
+function densify(chain: ChainRow[], spot: number): DensifyResult {
+  if (!chain.length) return { rows: [], step: 5 };
+  const sorted = [...chain].sort((a, b) => a.strike - b.strike);
+  const byS    = new Map(sorted.map(r => [r.strike, r]));
+
+  // Detect step from the middle 60% of the chain (avoids far-OTM outlier spacing)
+  let step = 5;
+  if (sorted.length >= 4) {
+    const lo = Math.floor(sorted.length * 0.2);
+    const hi = Math.ceil(sorted.length * 0.8);
+    const gaps: number[] = [];
+    for (let i = lo; i < hi - 1; i++) {
+      const g = Math.round((sorted[i + 1].strike - sorted[i].strike) * 100) / 100;
+      if (g > 0 && g <= 25) gaps.push(g);
+    }
+    if (gaps.length) {
+      // Use the most common gap (mode) — more robust than min for mixed-step chains
+      const freq = new Map<number, number>();
+      gaps.forEach(g => freq.set(g, (freq.get(g) ?? 0) + 1));
+      let best = gaps[0], bestCount = 0;
+      freq.forEach((count, g) => { if (count > bestCount) { bestCount = count; best = g; } });
+      step = best;
+    }
+  }
+  // Snap to nearest sensible increment: 1, 2.5, 5, 10, 25
+  const STEPS = [1, 2.5, 5, 10, 25];
+  step = STEPS.reduce((b, s) => Math.abs(s - step) < Math.abs(b - step) ? s : b, 5);
+
+  const rows: ChainRow[] = [];
+  const precision = step % 1 !== 0 ? 1 : 0;
+  for (let s = sorted[0].strike; s <= sorted[sorted.length - 1].strike + step * 0.5; s += step) {
+    const key = parseFloat(s.toFixed(precision));
+    // Try exact match, then integer round (handles float drift)
+    rows.push(byS.get(key) ?? byS.get(Math.round(key)) ?? {
+      strike: key, spotPrice: spot,
+      callOI: 0, putOI: 0, callVolume: 0, putVolume: 0,
+      callGamma: 0, putGamma: 0, callDelta: 0, putDelta: 0,
+      callGEX: 0, putGEX: 0, netGEX: 0, netVolGEX: 0, netDEX: 0, volNetDEX: 0,
+    });
+  }
+  return { rows, step };
+}
+
+// Center on ATM — port of ovEnsureViewport
+function atmStart(rows: ChainRow[], spot: number, count: number): number {
+  if (!rows.length || count >= rows.length) return 0;
+  const atm = rows.reduce((b, r, i) =>
+    Math.abs(r.strike - spot) < Math.abs(rows[b].strike - spot) ? i : b, 0);
+  return clamp(atm - Math.floor(count / 2), 0, rows.length - count);
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+export default function GexChart({
+  chain,
+  spotPrice,
+  flipPoint,
+  gexProfile,
+  expiry,
+  mode       = "net",
+  dataMode   = "oi-vol",
+  showOI     = false,
+  showDex    = false,
+  showFlipCurve = false,
+  baselines,
+  showGhost5  = false,
+  showGhost15 = false,
+  showGhost30 = false,
+  onStrikeClick,
+  transparentBg = false,
+}: GexChartProps) {
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Viewport — matches vanilla ovViewport: { count, start }
+  // count is set on first draw based on detected strike step (target ~$300 range)
+  const vpRef      = useRef({ start: null as number | null, count: 121 });
+  // Y scale — matches vanilla ovYScale (1 = auto, >1 = zoomed in, <1 = zoomed out)
+  const yScaleRef  = useRef(1);
+  // Drag
+  const dragRef    = useRef<{
+    mode: "pan" | "yscale";
+    startX: number; startY: number;
+    startStart: number; startYScale: number;
+    pxPerStrike: number;
+  } | null>(null);
+  // Tooltip
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; row: ChainRow } | null>(null);
+  // Track pointer-down position so a drag (pan) isn't treated as a click.
+  const downPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // ── draw ───────────────────────────────────────────────────────────────────
+  const draw = useCallback(() => {
+    const canvas    = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+    const W = container.clientWidth;
+    const H = container.clientHeight;
+    if (W < 10 || H < 10) return;
+    // Back the canvas at devicePixelRatio so it's crisp AND so html2canvas (which
+    // captures at scale=DPR) sees a bitmap that fills the whole output. A CSS-px
+    // backing store rendered only the top 1/DPR of the screenshot (blank bottom).
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width  = `${W}px`;
+    canvas.style.height = `${H}px`;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    // All draw math below is in CSS px; scale the context so it maps to the
+    // DPR-backed bitmap.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // ── Background fill — skipped in transparent mode so the panel shows through ──
+    if (!transparentBg) {
+      ctx.fillStyle = "#05080d";
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      ctx.clearRect(0, 0, W, H);
+    }
+
+    const { rows: allRows, step: detectedStep } = densify(chain, spotPrice);
+    if (!allRows.length) {
+      ctx.fillStyle = "#2a4060";
+      ctx.font = "bold 13px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Fetching SPX chain…", W / 2, H / 2);
+      return;
+    }
+
+    // ── Viewport ──
+    // Target ~$200 visible range ($100 either side of ATM) regardless of spacing
+    const targetRange = 200;
+    const dynCount    = Math.max(MIN_COUNT, Math.round(targetRange / detectedStep) + 1);
+    const vp = vpRef.current;
+    // On first draw (start===null), set count to match detected step
+    if (vp.start === null) vp.count = dynCount;
+    vp.count = clamp(vp.count, MIN_COUNT, allRows.length);
+    if (vp.start === null) vp.start = atmStart(allRows, spotPrice, vp.count);
+    vp.start = clamp(vp.start, 0, Math.max(0, allRows.length - vp.count));
+
+    const data = allRows.slice(vp.start, vp.start + vp.count);
+    if (!data.length) return;
+
+    const isVol     = dataMode === "vol-only";
+    const isFlow    = dataMode === "flow";
+    const isCallPut = mode === "call-put";
+    // Resolve the contract basis once; compute GEX from the chain rows via the
+    // shared library so all bases (OI+Vol / OI / Vol) are consistent everywhere
+    // and don't depend on how a given page precomputed netGEX/callGEX/putGEX.
+    const calcMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
+    // Single source of truth: shared GEX helpers, with the chart's known spotPrice
+    // passed explicitly (chart chain rows often lack spotPrice). calls +, puts −, abs γ.
+    const getCall = (r: ChainRow) => callGEXOf(r, calcMode, spotPrice);
+    const getPut  = (r: ChainRow) => putGEXOf(r, calcMode, spotPrice);
+    const getNet  = (r: ChainRow) => isFlow ? (r.flowGEX ?? 0) : netGEXOf(r, calcMode, spotPrice);
+
+    // ── Chart area (no axis border space) ──
+    const cW    = W - PAD_L - PAD_R;
+    const cH    = H - PAD_T - PAD_B;
+    const yZero = PAD_T + cH / 2;
+    const gap   = cW / data.length;
+    const barW  = Math.max(2, gap * 0.82);
+    const xAt   = (i: number) => PAD_L + (i + 0.5) * gap;
+    // Shared strike→X on the SAME index/bar axis (so curve, spot, and flip line
+    // all align with the bars). Interpolates a strike value into the bar grid.
+    const xForStrike = (strike: number): number => {
+      if (!data.length) return PAD_L;
+      if (strike <= data[0].strike) return xAt(0);
+      if (strike >= data[data.length - 1].strike) return xAt(data.length - 1);
+      const i = data.findIndex(r => r.strike >= strike);
+      if (i <= 0) return xAt(0);
+      const prev = data[i - 1], curr = data[i];
+      const span = curr.strike - prev.strike;
+      const t = span > 0 ? (strike - prev.strike) / span : 0;
+      return xAt(i - 1) + t * gap;
+    };
+
+    // ── Y scale: robustMax * 1.25 / yScaleRef ──
+    // 1.25 headroom keeps the tallest bar at ~80% of the half-height so it never
+    // touches the top/bottom border (and the MVC label clears the frame edge).
+    const vals = isCallPut
+      ? data.flatMap(r => [Math.abs(getCall(r)), Math.abs(getPut(r))])
+      : data.map(r => Math.abs(getNet(r)));
+    const netMax = Math.max(...vals.filter(v => v > 0), 1);
+    const maxG   = (netMax * 1.25) / yScaleRef.current;
+    // yFor maps a GEX value to canvas Y — 0 maps to yZero, +maxG maps to PAD_T
+    const yFor   = (v: number) => yZero - (v / maxG) * (cH / 2);
+
+    // ── Zero line ──
+    ctx.strokeStyle = "rgba(40, 70, 100, 0.6)";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(PAD_L, yZero);
+    ctx.lineTo(PAD_L + cW, yZero);
+    ctx.stroke();
+
+    // ── Grid lines (horizontal only, no border) ──
+    const step = getNiceStep(maxG);
+    ctx.lineWidth = 0.5;
+    for (let g = step; g <= maxG * 1.01; g += step) {
+      const yP = yFor(g),  yN = yFor(-g);
+      // positive line
+      if (yP >= PAD_T - 1 && yP <= PAD_T + cH + 1) {
+        ctx.strokeStyle = "rgba(30,48,80,0.45)";
+        ctx.beginPath(); ctx.moveTo(PAD_L, yP); ctx.lineTo(PAD_L + cW, yP); ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.font = "bold 11px Arial"; ctx.textAlign = "right";
+        ctx.fillText(fmtGex(g),  PAD_L + cW - 3, yP - 2);
+      }
+      // negative line
+      if (yN >= PAD_T - 1 && yN <= PAD_T + cH + 1) {
+        ctx.strokeStyle = "rgba(30,48,80,0.45)";
+        ctx.beginPath(); ctx.moveTo(PAD_L, yN); ctx.lineTo(PAD_L + cW, yN); ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.font = "bold 11px Arial"; ctx.textAlign = "right";
+        ctx.fillText(fmtGex(-g), PAD_L + cW - 3, yN - 2);
+      }
+    }
+
+    // zero line removed
+
+    // ── Clip to chart area ──
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, cW, cH); ctx.clip();
+
+    // ── Bars ──
+    const hoverStrike = tooltip?.row.strike;
+    const drawBar = (x: number, v: number, highlighted = false) => {
+      if (!v) return;
+      const yTop = v >= 0 ? clamp(yFor(v), PAD_T, yZero) : yZero;
+      const yBot = v >= 0 ? yZero : clamp(yFor(v), yZero, PAD_T + cH);
+      const h    = Math.abs(yBot - yTop);
+      if (h < 0.5) return;
+      const grad = ctx.createLinearGradient(0, yTop, 0, yTop + h);
+      if (highlighted) {
+        grad.addColorStop(0, "rgba(255,255,255,0.98)");
+        grad.addColorStop(1, v >= 0 ? "rgba(180,245,255,0.72)" : "rgba(255,238,180,0.72)");
+        ctx.shadowColor = v >= 0 ? "rgba(33,158,188,0.70)" : "rgba(255,179,0,0.70)";
+        ctx.shadowBlur = 12;
+      } else if (v >= 0) {
+        // Lighten higher-GEX bars very slightly (blend toward white by magnitude).
+        const t = Math.min(Math.abs(v) / netMax, 1);   // 0..1 relative magnitude
+        const lift = 0.28 * t;                          // max ~28% toward white
+        const mix = (c: number) => Math.round(c + (255 - c) * lift);
+        const r = mix(41), gC = mix(182), b = mix(246);
+        grad.addColorStop(0, `rgba(${r},${gC},${b},0.9)`);
+        grad.addColorStop(1, "rgba(41,182,246,0.2)");
+      } else {
+        const t = Math.min(Math.abs(v) / netMax, 1);
+        const lift = 0.28 * t;
+        const mix = (c: number) => Math.round(c + (255 - c) * lift);
+        const r = mix(255), gC = mix(179), b = mix(0);
+        grad.addColorStop(0, "rgba(255,179,0,0.2)");
+        grad.addColorStop(1, `rgba(${r},${gC},${b},0.9)`);
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(x - barW / 2, yTop, barW, h);
+      if (highlighted) {
+        ctx.shadowBlur = 0;
+      }
+    };
+
+    // ── Prior-state ghost layers (5/15/30 min) ──────────────────────────────
+    // Baselines are now the OI+Vol composite (matching `getNet` in "net" mode),
+    // so the overlay is a true live-vs-live comparison. Still gated to
+    // Net-GEX / OI+Vol mode (skipped for Call-Put and Vol-only).
+    // Per-strike logic:
+    //   • GEX fell  (|prior| > |live|): draw the taller, lighter PRIOR bar
+    //     BEHIND the live bar so the decline shows as a faded halo.
+    //   • GEX rose  (|prior| < |live|): the live bar already covers the prior
+    //     level, so shade only the RISE portion (live↔prior) in the light tint
+    //     as a cap, leaving the solid part below.
+    // A flip in sign is treated as a full ghost (prior drawn behind in its own
+    // color/sign).
+    const ghostAges: string[] = [];
+    if (showGhost30) ghostAges.push("30");
+    if (showGhost15) ghostAges.push("15");
+    if (showGhost5)  ghostAges.push("5");
+    let ghostDrawn = 0;
+    const ghostActive = ghostAges.length > 0;
+    if (ghostActive && baselines && !isCallPut && !isVol) {
+      // Older → newer so the most recent (5m) sits on top of the older halos.
+      for (const age of ghostAges) {
+        const tint = GHOST_TINTS[age];
+        // Find ONLY the two biggest movers for this timeframe:
+        //   • largest positive change (live − prior)
+        //   • largest negative change (live − prior)
+        // and highlight just those two strikes.
+        let posIdx = -1, posDelta = 0;
+        let negIdx = -1, negDelta = 0;
+        data.forEach((r, i) => {
+          const prior = baselines[r.strike]?.[age];
+          if (prior == null || !Number.isFinite(prior)) return;
+          const delta = getNet(r) - prior;
+          if (delta > posDelta) { posDelta = delta; posIdx = i; }
+          if (delta < negDelta) { negDelta = delta; negIdx = i; }
+        });
+        const winners = new Set<number>();
+        if (posIdx >= 0) winners.add(posIdx);
+        if (negIdx >= 0) winners.add(negIdx);
+
+        data.forEach((r, i) => {
+          if (!winners.has(i)) return;
+          const prior = baselines[r.strike]?.[age];
+          if (prior == null || !Number.isFinite(prior)) return;
+          const live = getNet(r);
+          if (Math.abs(prior - live) < 1e-6) return;
+          ghostDrawn++;
+          const x  = xAt(i);
+          const sameSign = (prior >= 0) === (live >= 0);
+          const col = prior >= 0 ? tint.pos : tint.neg;
+          // Direction of the move (magnitude of net GEX) over the timeframe:
+          //   went DOWN → yellow outline (#ffb300), went UP → blue outline (#29b6f6).
+          const wentDown   = Math.abs(prior) > Math.abs(live);
+          const lineColor  = wentDown ? "#ffb300" : "#29b6f6";
+
+          if (!sameSign || wentDown) {
+            // Decline (or sign flip): faded prior bar behind the live bar.
+            const yTop = prior >= 0 ? clamp(yFor(prior), PAD_T, yZero) : yZero;
+            const yBot = prior >= 0 ? yZero : clamp(yFor(prior), yZero, PAD_T + cH);
+            const h    = Math.abs(yBot - yTop);
+            if (h < 0.5) return;
+            ctx.fillStyle = col;
+            ctx.fillRect(x - barW / 2, yTop, barW, h);
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x - barW / 2 + 0.5, yTop + 0.5, barW - 1, h - 1);
+          } else {
+            // Rise: shade only the gap between prior level and live level (cap).
+            const yLive  = clamp(yFor(live),  PAD_T, PAD_T + cH);
+            const yPrior = clamp(yFor(prior), PAD_T, PAD_T + cH);
+            const yTop = Math.min(yLive, yPrior);
+            const h    = Math.abs(yPrior - yLive);
+            if (h < 0.5) return;
+            ctx.fillStyle = col;
+            ctx.fillRect(x - barW / 2, yTop, barW, h);
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x - barW / 2 + 0.5, yTop + 0.5, barW - 1, h - 1);
+          }
+        });
+      }
+    }
+    // Ghost requested but unsupported in this mode, or no history yet.
+    if (ghostActive && (isCallPut || isVol)) {
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+      ctx.fillText("Prior GEX shows in Net GEX · OI+Vol mode", W / 2, PAD_T + 24);
+    } else if (ghostActive && ghostDrawn === 0) {
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+      ctx.fillText("No prior GEX history yet for this expiry", W / 2, PAD_T + 24);
+    }
+
+    data.forEach((r, i) => {
+      const x = xAt(i);
+      const highlighted = hoverStrike === r.strike;
+      if (isCallPut) {
+        drawBar(x,  Math.abs(getCall(r)), highlighted);
+        drawBar(x, -Math.abs(getPut(r)), highlighted);
+      } else {
+        drawBar(x, getNet(r), highlighted);
+      }
+    });
+
+    // ── OI overlay — gradient fills only, no outline stroke ──
+    if (showOI) {
+      const maxOI = Math.max(...data.map(r => Math.max(r.callOI ?? 0, r.putOI ?? 0)), 1);
+      const yOI   = (v: number) => PAD_T + cH * (1 - v / maxOI);
+      const drawOIArea = (vals: number[], c0: string, c1: string) => {
+        const pts = vals.map((v, i) => ({ x: xAt(i), y: yOI(v) }));
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, PAD_T + cH);
+        ctx.lineTo(pts[0].x, pts[0].y);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const mx = (pts[i].x + pts[i+1].x) / 2, my = (pts[i].y + pts[i+1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+        }
+        ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+        ctx.lineTo(pts[pts.length-1].x, PAD_T + cH);
+        ctx.closePath();
+        const g = ctx.createLinearGradient(0, PAD_T, 0, PAD_T + cH);
+        g.addColorStop(0, c0); g.addColorStop(1, c1);
+        ctx.fillStyle = g; ctx.fill();
+      };
+      // Shaded gradient only: green = call OI, red = put OI. No outline line.
+      drawOIArea(data.map(r => r.callOI ?? 0), "rgba(16,185,129,0.40)", "rgba(16,185,129,0.05)");
+      drawOIArea(data.map(r => r.putOI  ?? 0), "rgba(239,68,68,0.40)",  "rgba(239,68,68,0.05)");
+    }
+
+    // ── DEX line — white, 60% height scale centered on yZero ──
+    // Match the heatmap's DEX column convention:
+    //   OI + Vol mode → netDEX + volNetDEX   (OI-based plus volume-based)
+    //   Vol Only mode → volNetDEX            (volume-based alone)
+    if (showDex) {
+      const dexVals = data.map(r => isVol
+        ? (r.volNetDEX ?? 0)
+        : (r.netDEX ?? 0) + (r.volNetDEX ?? 0));
+      const maxDex  = Math.max(...dexVals.map(Math.abs).filter(v => v > 0), 1);
+      const yDex    = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6;
+      ctx.strokeStyle = "rgba(18,103,131,0.95)";
+      ctx.lineWidth   = 2;
+      ctx.shadowColor = "rgba(18,103,131,0.35)";
+      ctx.shadowBlur = 10;
+      const pts = dexVals.map((v, i) => ({ x: xAt(i), y: yDex(v) }));
+      if (pts.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const midX = (pts[i].x + pts[i + 1].x) / 2;
+          const midY = (pts[i].y + pts[i + 1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+        }
+        ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+        ctx.stroke();
+      }
+      // DEX zero-crossing label
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(18,103,131,0.85)"; ctx.font = "bold 8px Arial"; ctx.textAlign = "left";
+      ctx.fillText("+NET DEX", PAD_L + 3, yDex(0) - 3);
+    }
+
+    // ── GEX Flip: BS profile curve + gamma-zero vertical line ──
+    if (showFlipCurve) {
+      // ── Profile curve (smooth quadratic bezier) ──
+      const drawSmoothCurve = (pts: { x: number; y: number }[]) => {
+        if (pts.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const mx = (pts[i].x + pts[i + 1].x) / 2;
+          const my = (pts[i].y + pts[i + 1].y) / 2;
+          ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+        }
+        ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+        ctx.stroke();
+      };
+
+      ctx.strokeStyle = "#FB8501";
+      ctx.lineWidth   = 1.8;
+      ctx.shadowColor = "rgba(249,115,22,0.35)";
+      ctx.shadowBlur = 10;
+      ctx.setLineDash([]);
+
+      if (gexProfile && gexProfile.levels.length > 1) {
+        const profMin = data[0].strike, profMax = data[data.length - 1].strike;
+        // Collect the profile points within the visible strike window first so we
+        // can scale the curve to ITS OWN magnitude. The cumulative spot-sweep
+        // profile is far larger than per-strike net GEX, so plotting it on the
+        // bar's yFor() axis saturates it into a flat-railed step. Instead give it
+        // an independent symmetric Y scale centered on the zero line.
+        const visible: { x: number; v: number }[] = [];
+        for (let i = 0; i < gexProfile.levels.length; i++) {
+          const lvl = gexProfile.levels[i];
+          if (lvl < profMin || lvl > profMax) continue;
+          visible.push({ x: xForStrike(lvl), v: gexProfile.values[i] });
+        }
+        if (visible.length > 1) {
+          // Symmetric scale around 0 so the zero-crossing (flip) stays on yZero.
+          const profAbsMax = Math.max(...visible.map(p => Math.abs(p.v)), 1e-9);
+          // Use ~92% of the half-height so the curve breathes inside the frame.
+          const yProf = (v: number) => yZero - (v / profAbsMax) * (cH / 2) * 0.92;
+          const pts = visible.map(p => ({ x: p.x, y: clamp(yProf(p.v), PAD_T, PAD_T + cH) }));
+          drawSmoothCurve(pts);
+        }
+      } else {
+        // Fallback: per-strike smooth curve
+        const pts = data.map((r, i) => ({ x: xAt(i), y: clamp(yFor(getNet(r)), PAD_T, PAD_T + cH) }));
+        drawSmoothCurve(pts);
+      }
+
+      // ── Gamma-zero flip marker ──
+      // Use ONLY the gamma-zero (γ=0) flip point — the spot-sweep BS profile
+      // flip, else the per-strike net-GEX zero crossing. No bar-zero-crossing
+      // fallback (that produced a spurious line on non-0DTE expiries).
+      // Only draw the flip line for the 0DTE expiry.
+      const todayIso = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const is0DTE = !expiry || expiry === todayIso;
+      const usingProfile = !!(gexProfile && gexProfile.levels.length > 1);
+      const flip = (usingProfile ? gexProfile!.flipPoint : null) ?? flipPoint ?? null;
+      if (showFlipCurve && is0DTE && flip != null && Number.isFinite(flip) && flip > 0) {
+        // Same strike→X mapping as the curve, spot line, and bars.
+        const flipX: number | null = xForStrike(flip);
+
+        if (flipX !== null) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(PAD_L, PAD_T, cW, cH);
+          ctx.clip();
+          ctx.setLineDash([6, 5]);
+          ctx.strokeStyle = "rgba(249,115,22,0.85)";
+          ctx.lineWidth = 1.3;
+          ctx.beginPath();
+          ctx.moveTo(flipX, PAD_T);
+          ctx.lineTo(flipX, PAD_T + cH);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+
+          ctx.fillStyle = "#FB8501";
+          ctx.font = "bold 9px Arial";
+          ctx.textAlign = "center";
+          const lbl = `+GEX FLIP ${Math.round(flip).toLocaleString()}`;
+          ctx.fillText(lbl, clamp(flipX, PAD_L + 48, PAD_L + cW - 48), PAD_T + 11);
+        }
+      }
+    }
+
+    ctx.restore(); // end clip
+
+    // ── Peak strike label box ──
+    // MVC = source of truth: largest |netGEX| over the FULL raw chain, matching
+    // SnapButton.getHighestRow / TopBar so the chart label always agrees with the
+    // top-bar / snapshot value. Hidden when the peak strike is outside the window.
+    // MVC peak must use the SAME basis as the bars (getNet: OI+Vol or vol-only),
+    // not the precomputed r.netGEX (which is OI-only on server rows and made the
+    // chart's MVC disagree with the heatmap's OI+Vol MVC).
+    const peak = chain.reduce<ChainRow | null>((b, r) => {
+      const rv = Math.abs(getNet(r));
+      const bv = b ? Math.abs(getNet(b)) : -1;
+      return rv > bv ? r : b;
+    }, null);
+    const peakIdx = peak ? data.findIndex(r => r.strike === peak.strike) : -1;
+    if (peak && peakIdx >= 0) {
+      const pi  = peakIdx;
+      const pv  = getNet(peak);
+      const py  = clamp(yFor(pv), PAD_T + 2, PAD_T + cH - 2);
+      const col = pv >= 0 ? "#29b6f6" : "#ffb300";
+      ctx.save();
+      ctx.font = "bold 10px Arial";
+      const lbl = `${isVol ? "CB·Vol" : "CB"} ${peak.strike.toLocaleString()}`;
+      const tw  = ctx.measureText(lbl).width;
+      const bw  = tw + 10, bh = 15;
+      const bx  = clamp(xAt(pi) - bw / 2, 2, W - bw - 2);
+      const by  = Math.max(2, py - 20);
+      ctx.fillStyle = "rgba(0,0,0,0.9)";
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.fillStyle = col; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(lbl, bx + bw / 2, by + bh / 2 + 0.5);
+      ctx.textBaseline = "alphabetic";
+      ctx.restore();
+    }
+
+    // ── Spot price line (interpolated) ──
+    if (spotPrice > 0) {
+      const fi = data.findIndex(r => r.strike >= spotPrice);
+      let sx: number | null = null;
+      if (fi === 0) {
+        sx = xAt(0);
+      } else if (fi > 0) {
+        const prev = data[fi - 1], curr = data[fi];
+        const span = curr.strike - prev.strike;
+        sx = xAt(fi - 1) + (span > 0 ? (spotPrice - prev.strike) / span : 0) * gap;
+      } else if (data.length && spotPrice >= data[data.length - 1].strike) {
+        sx = xAt(data.length - 1);
+      }
+      if (sx !== null) {
+        ctx.save();
+        ctx.beginPath(); ctx.rect(PAD_L, PAD_T, cW, cH); ctx.clip();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = "rgba(220,220,220,0.55)";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(sx, PAD_T); ctx.lineTo(sx, PAD_T + cH); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+        ctx.fillStyle = "rgba(220,220,220,0.85)";
+        ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
+        ctx.fillText(`SPX ${spotPrice.toFixed(2)}`, clamp(sx, PAD_L + 28, PAD_L + cW - 28), PAD_T + 10);
+      }
+    }
+
+    // ── X labels: multiples of 50 only — drawn inside chart near bottom ──
+    ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.font = "bold 11px Arial"; ctx.textAlign = "center";
+    data.forEach((r, i) => {
+      if (r.strike % 50 !== 0) return;
+      ctx.fillText(r.strike.toLocaleString(), xAt(i), PAD_T + cH - 18);
+    });
+
+    // ── Legend (top-left) — removed per design ──
+
+    // ── Viewport hint (bottom-right, very dim) ──
+    ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
+    ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
+
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg]);
+
+  // Draw on changes + resize
+  useEffect(() => { draw(); }, [draw]);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [draw]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      // Clear refs
+      vpRef.current = { start: null, count: 121 };
+      yScaleRef.current = 1;
+      dragRef.current = null;
+    };
+  }, []);
+
+  // Reset viewport only when expiry changes (not on every live WS chain update)
+  useEffect(() => {
+    if (!chain.length) return;
+    const { rows, step } = densify(chain, spotPrice);
+    const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
+    vpRef.current    = { start: atmStart(rows, spotPrice, initCount), count: initCount };
+    yScaleRef.current = 1;
+    draw();
+  }, [expiry]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
+  // NOTE: attached as a native non-passive listener (see effect below) so
+  // preventDefault() works. React's onWheel JSX prop is passive in React 18.
+  const onWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const el = containerRef.current;
+    if (!el) return;
+    const { rows } = densify(chain, spotPrice);
+    if (!rows.length) return;
+    const vp     = vpRef.current;
+    const factor = e.deltaY > 0 ? 1.16 : 0.86;
+    const next   = clamp(Math.round(vp.count * factor), MIN_COUNT, rows.length);
+    if (next === vp.count) return;
+    const rect   = el.getBoundingClientRect();
+    const frac   = clamp((e.clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+    const anchor = (vp.start ?? 0) + frac * vp.count;
+    vp.count = next;
+    vp.start = clamp(Math.round(anchor - frac * next), 0, Math.max(0, rows.length - next));
+    draw();
+  }, [chain, spotPrice, draw]);
+
+  // Bind wheel natively with { passive: false } so preventDefault() is honored.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onWheel]);
+
+  // ── Pointer down ──
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    downPosRef.current = { x: e.clientX, y: e.clientY };
+    const vp = vpRef.current;
+    const W  = containerRef.current?.clientWidth ?? 1;
+    dragRef.current = {
+      mode:        e.nativeEvent.offsetX < PAD_L + 18 ? "yscale" : "pan",
+      startX:      e.clientX,
+      startY:      e.clientY,
+      startStart:  vp.start ?? 0,
+      startYScale: yScaleRef.current,
+      pxPerStrike: Math.max(1, W / Math.max(1, vp.count)),
+    };
+    containerRef.current?.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  // ── Pointer move: pan, y-scale, or tooltip ──
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    const { rows } = densify(chain, spotPrice);
+    const vp   = vpRef.current;
+
+    if (dragRef.current) {
+      setTooltip(null);
+      if (dragRef.current.mode === "yscale") {
+        const dy   = dragRef.current.startY - e.clientY;
+        const ns   = clamp(dragRef.current.startYScale * Math.pow(1.003, dy), 0.1, 12);
+        yScaleRef.current = ns;
+      } else {
+        const dx  = e.clientX - dragRef.current.startX;
+        const sh  = Math.round(-dx / dragRef.current.pxPerStrike);
+        const max = Math.max(0, rows.length - vp.count);
+        vp.start  = clamp(dragRef.current.startStart + sh, 0, max);
+      }
+      draw();
+      return;
+    }
+
+    // Tooltip
+    const canvas = canvasRef.current;
+    if (!canvas || !rows.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    const my   = e.clientY - rect.top;
+    if (my < PAD_T || my > rect.height - 6) { setTooltip(null); return; }
+    const visible = rows.slice(vp.start ?? 0, (vp.start ?? 0) + vp.count);
+    const g2  = (rect.width - PAD_L - PAD_R) / visible.length;
+    const idx = clamp(Math.floor((mx - PAD_L) / g2), 0, visible.length - 1);
+    if (visible[idx]) setTooltip({ x: mx, y: my, row: visible[idx] });
+  }, [chain, spotPrice, draw]);
+
+  const onPointerUp = useCallback(() => {
+    dragRef.current = null;
+    setTooltip(null);
+  }, []);
+
+  // ── Click: open strike detail (only on a genuine click, not a pan-drag) ──
+  const onClick = useCallback((e: React.MouseEvent) => {
+    if (!onStrikeClick) return;
+    const down = downPosRef.current;
+    if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const { rows } = densify(chain, spotPrice);
+    if (!rows.length) return;
+    const vp   = vpRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    if (mx < PAD_L || mx > rect.width - PAD_R) return;
+    const visible = rows.slice(vp.start ?? 0, (vp.start ?? 0) + vp.count);
+    const g2  = (rect.width - PAD_L - PAD_R) / visible.length;
+    const idx = clamp(Math.floor((mx - PAD_L) / g2), 0, visible.length - 1);
+    const picked = visible[idx];
+    if (picked) onStrikeClick(picked, { x: e.clientX, y: e.clientY });
+  }, [onStrikeClick, chain, spotPrice]);
+
+  // ── Double-click: re-center on ATM + reset y-scale ──
+  const onDblClick = useCallback(() => {
+    const { rows, step } = densify(chain, spotPrice);
+    const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
+    vpRef.current     = { start: atmStart(rows, spotPrice, initCount), count: initCount };
+    yScaleRef.current = 1;
+    draw();
+  }, [chain, spotPrice, draw]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", cursor: "crosshair", background: transparentBg ? "transparent" : "var(--overview-bg, #05080d)", touchAction: "none" }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+      onClick={onClick}
+      onDoubleClick={onDblClick}
+    >
+      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+
+      {/* Tooltip */}
+      {tooltip && (() => {
+        const r    = tooltip.row;
+        // Shared helper (uses the chart's spotPrice, not the row's) — mirrors the bars.
+        const tMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
+        const tooltipGex = netGEXOf(r, tMode, spotPrice);
+        return (
+          <div style={{
+            position: "absolute", zIndex: 100, pointerEvents: "none",
+            top: 8, left: "50%", transform: "translateX(-50%)",
+            background: "rgba(13,17,25,0.92)", border: "1px solid rgba(33,158,188,0.25)",
+            borderRadius: 6, padding: "6px 12px",
+            fontSize: 11, fontFamily: "var(--font-mono)",
+            color: "#fff", display: "flex", gap: 12, backdropFilter: "blur(8px)",
+          }}>
+            <span style={{ color: "#8B94A7" }}>Strike</span>
+            <span style={{ fontWeight: 700 }}>{r.strike.toLocaleString()}</span>
+            <span style={{ color: "#8B94A7" }}>GEX</span>
+            <span style={{ fontWeight: 700, color: tooltipGex >= 0 ? "#219EBC" : "#EAB308" }}>{fmtGex(tooltipGex)}</span>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}

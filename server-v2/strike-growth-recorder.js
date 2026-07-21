@@ -185,12 +185,14 @@ async function ensureSchema() {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
                  ON strike_growth (date, symbol, expiry, strike, ts DESC);`);
 
-  // Day-over-day: one row per (date,symbol) = the biggest day-over-day net-GEX
-  // (OI+Vol) strike, kept at its intraday PEAK (running max) across the session.
+  // Day-over-day: TWO rows per (date,symbol) — bucket '0DTE' (expiry = its own
+  // session date) and 'SWING' (all later expiries, summed per strike) — each the
+  // biggest day-over-day net-GEX (OI+Vol) strike, kept at its intraday PEAK.
   await p.query(`
     CREATE TABLE IF NOT EXISTS strike_dod_max (
       date      DATE NOT NULL,
       symbol    TEXT NOT NULL,
+      bucket    TEXT NOT NULL DEFAULT 'ALL',
       strike    DOUBLE PRECISION,
       expiry    TEXT,
       spot      DOUBLE PRECISION,
@@ -200,11 +202,26 @@ async function ensureSchema() {
       delta     DOUBLE PRECISION,
       peak_abs  DOUBLE PRECISION NOT NULL DEFAULT 0,
       ts        TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (date, symbol)
+      PRIMARY KEY (date, symbol, bucket)
     );
   `);
   // vol_today added after first ship — self-heal older tables.
   await p.query(`ALTER TABLE strike_dod_max ADD COLUMN IF NOT EXISTS vol_today DOUBLE PRECISION`);
+  // MIGRATION: bucket column + PK (date,symbol) -> (date,symbol,bucket).
+  await p.query(`ALTER TABLE strike_dod_max ADD COLUMN IF NOT EXISTS bucket TEXT NOT NULL DEFAULT 'ALL'`);
+  await p.query(`
+    DO $$ DECLARE pk text;
+    BEGIN
+      SELECT string_agg(a.attname,',' ORDER BY array_position(c.conkey,a.attnum)) INTO pk
+      FROM pg_constraint c JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey)
+      WHERE c.conrelid='strike_dod_max'::regclass AND c.contype='p';
+      IF pk = 'date,symbol' THEN
+        ALTER TABLE strike_dod_max DROP CONSTRAINT strike_dod_max_pkey;
+        ALTER TABLE strike_dod_max ADD CONSTRAINT strike_dod_max_pkey PRIMARY KEY (date,symbol,bucket);
+        RAISE NOTICE 'strike_dod_max PK migrated to include bucket';
+      END IF;
+    END $$;
+  `);
 
   // Seed watchlist once from the full EM roster (~380 names). All seed ACTIVE so
   // a fresh DB/redeploy records the entire EM list from the start — the roster is
@@ -377,37 +394,50 @@ async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
 // doesn't break the compare on roll days. Pure SQL over rows the sweep already
 // wrote — no extra Theta load.
 async function rollupDayOverDay(p, date) {
-  await p.query(`
-    WITH prev AS (
-      SELECT DISTINCT ON (symbol, strike) symbol, strike, (gex_now + gex_open) AS net
-      FROM strike_growth WHERE date < $1
-      ORDER BY symbol, strike, date DESC, ts DESC
-    ),
-    cur AS (
-      SELECT DISTINCT ON (symbol, strike) symbol, strike, expiry, spot,
-             (gex_now + gex_open) AS net, gex_now AS vol
-      FROM strike_growth WHERE date = $1
-      ORDER BY symbol, strike, ts DESC
-    ),
-    d AS (
-      SELECT c.symbol, c.strike, c.expiry, c.spot,
-             c.net AS net_today, p.net AS net_yest, c.vol AS vol_today, (c.net - p.net) AS delta
-      FROM cur c JOIN prev p USING (symbol, strike)
-    ),
-    top AS (
-      SELECT DISTINCT ON (symbol) symbol, strike, expiry, spot, net_today, net_yest, vol_today, delta
-      FROM d ORDER BY symbol, abs(delta) DESC
-    )
-    INSERT INTO strike_dod_max
-      (date, symbol, strike, expiry, spot, net_today, net_yest, vol_today, delta, peak_abs, ts)
-    SELECT $1, symbol, strike, expiry, spot, net_today, net_yest, vol_today, delta, abs(delta), now()
-    FROM top
-    ON CONFLICT (date, symbol) DO UPDATE SET
-      strike=EXCLUDED.strike, expiry=EXCLUDED.expiry, spot=EXCLUDED.spot,
-      net_today=EXCLUDED.net_today, net_yest=EXCLUDED.net_yest,
-      vol_today=EXCLUDED.vol_today, delta=EXCLUDED.delta, peak_abs=EXCLUDED.peak_abs, ts=now()
-    WHERE EXCLUDED.peak_abs > strike_dod_max.peak_abs
-  `, [date]);
+  // 0DTE (expiry = its own session date) and SWING (all later expiries, summed
+  // per strike) as SEPARATE day-over-day movers per symbol. The predicate self-
+  // classifies each row vs ITS date, so cur(today) and prev(last session) share it.
+  for (const [bucket, pred] of [
+    ['0DTE',  `expiry =  to_char(date,'YYYY-MM-DD')`],
+    ['SWING', `expiry <> to_char(date,'YYYY-MM-DD')`],
+  ]) {
+    await p.query(`
+      WITH cur_e AS (
+        SELECT DISTINCT ON (symbol, expiry, strike) symbol, expiry, strike, spot,
+               (gex_now + gex_open) AS net, gex_now AS vol
+        FROM strike_growth WHERE date = $1 AND ${pred}
+        ORDER BY symbol, expiry, strike, ts DESC
+      ),
+      prev_e AS (
+        SELECT DISTINCT ON (symbol, expiry, strike) symbol, expiry, strike,
+               (gex_now + gex_open) AS net
+        FROM strike_growth WHERE date < $1 AND ${pred}
+        ORDER BY symbol, expiry, strike, date DESC, ts DESC
+      ),
+      cur AS (
+        SELECT symbol, strike, max(spot) AS spot, sum(net) AS net, sum(vol) AS vol,
+               min(expiry) AS expiry
+        FROM cur_e GROUP BY symbol, strike
+      ),
+      prev AS ( SELECT symbol, strike, sum(net) AS net FROM prev_e GROUP BY symbol, strike ),
+      d AS (
+        SELECT c.symbol, c.strike, c.expiry, c.spot,
+               c.net AS net_today, pv.net AS net_yest, c.vol AS vol_today,
+               (c.net - pv.net) AS delta
+        FROM cur c JOIN prev pv USING (symbol, strike)
+      ),
+      top AS ( SELECT DISTINCT ON (symbol) * FROM d ORDER BY symbol, abs(delta) DESC )
+      INSERT INTO strike_dod_max
+        (date, symbol, bucket, strike, expiry, spot, net_today, net_yest, vol_today, delta, peak_abs, ts)
+      SELECT $1, symbol, $2, strike, expiry, spot, net_today, net_yest, vol_today, delta, abs(delta), now()
+      FROM top
+      ON CONFLICT (date, symbol, bucket) DO UPDATE SET
+        strike=EXCLUDED.strike, expiry=EXCLUDED.expiry, spot=EXCLUDED.spot,
+        net_today=EXCLUDED.net_today, net_yest=EXCLUDED.net_yest,
+        vol_today=EXCLUDED.vol_today, delta=EXCLUDED.delta, peak_abs=EXCLUDED.peak_abs, ts=now()
+      WHERE EXCLUDED.peak_abs > strike_dod_max.peak_abs
+    `, [date, bucket]);
+  }
 }
 
 /**

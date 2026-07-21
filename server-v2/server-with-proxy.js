@@ -1310,60 +1310,63 @@ async function main() {
             const limit = Math.min(2000, Number(u.searchParams.get('limit') || 1000));
             const dateParam = (u.searchParams.get('date') || '').trim();
             const isDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam);
+            // Bucket filter: '' = both 0DTE + SWING; '0DTE'/'SWING' = one.
+            const bkt = (u.searchParams.get('bucket') || '').toUpperCase();
+            const bktF = (bkt === '0DTE' || bkt === 'SWING') ? bkt : '';
             let rows;
             if (isDate) {
               // Historical snapshot for a specific session: frozen peak columns
               // only. Now/30m/60m/4h are session-relative (now()), so they don't
               // apply to a past date — return null and let the UI hide them.
               ({ rows } = await p.query(
-                `SELECT to_char(date,'YYYY-MM-DD') AS date, symbol, strike, expiry, spot,
+                `SELECT to_char(date,'YYYY-MM-DD') AS date, symbol, bucket, strike, expiry, spot,
                         net_today, net_yest, vol_today, delta, peak_abs,
                         NULL::double precision AS net_now,
                         EXTRACT(EPOCH FROM ts) * 1000 AS t,
                         NULL::double precision AS chg_30m,
                         NULL::double precision AS chg_60m,
                         NULL::double precision AS chg_4h
-                 FROM strike_dod_max WHERE date = $1
+                 FROM strike_dod_max
+                 WHERE date = $1 AND bucket IN ('0DTE','SWING') AND ($3 = '' OR bucket = $3)
                  ORDER BY peak_abs DESC LIMIT $2`,
-                [dateParam, limit]
+                [dateParam, limit, bktF]
               ));
             } else {
-              // Live (latest session): frozen peak + LIVE Now/30m/60m/4h computed
-              // off strike_growth at the SAME (symbol,expiry,strike).
+              // Live (latest session): frozen peak + LIVE Now/30m/60m/4h. For SWING
+              // the stored strike spans multiple expiries, so live net is SUMMED
+              // across the bucket's expiries (latest snap per expiry), matching how
+              // net_today was rolled up. 0DTE sums its single same-day expiry.
+              const net = (extra) => `
+                SELECT COALESCE(sum(x.net),0) AS n FROM (
+                  SELECT DISTINCT ON (sg.expiry) (sg.gex_now + sg.gex_open) AS net
+                  FROM strike_growth sg
+                  WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.strike=b.strike
+                    AND (CASE WHEN b.bucket='SWING'
+                              THEN sg.expiry <> to_char(sg.date,'YYYY-MM-DD')
+                              ELSE sg.expiry =  to_char(sg.date,'YYYY-MM-DD') END)
+                    ${extra}
+                  ORDER BY sg.expiry, sg.ts DESC
+                ) x`;
               ({ rows } = await p.query(
                 `WITH base AS (
                    SELECT * FROM strike_dod_max
                    WHERE date = (SELECT max(date) FROM strike_dod_max)
+                     AND bucket IN ('0DTE','SWING') AND ($2 = '' OR bucket = $2)
                  )
-                 SELECT to_char(b.date,'YYYY-MM-DD') AS date, b.symbol, b.strike, b.expiry, b.spot,
+                 SELECT to_char(b.date,'YYYY-MM-DD') AS date, b.symbol, b.bucket, b.strike, b.expiry, b.spot,
                         b.net_today, b.net_yest, b.vol_today, b.delta, b.peak_abs,
-                        nn.net_now AS net_now,
+                        nn.n AS net_now,
                         EXTRACT(EPOCH FROM b.ts) * 1000 AS t,
-                        (nn.net_now - l30.net)  AS chg_30m,
-                        (nn.net_now - l60.net)  AS chg_60m,
-                        (nn.net_now - l240.net) AS chg_4h
+                        (nn.n - l30.n)  AS chg_30m,
+                        (nn.n - l60.n)  AS chg_60m,
+                        (nn.n - l240.n) AS chg_4h
                  FROM base b
-                 LEFT JOIN LATERAL (
-                   SELECT (sg.gex_now + sg.gex_open) AS net_now FROM strike_growth sg
-                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
-                   ORDER BY sg.ts DESC LIMIT 1) nn ON true
-                 LEFT JOIN LATERAL (
-                   SELECT (sg.gex_now + sg.gex_open) AS net FROM strike_growth sg
-                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
-                     AND sg.ts <= now() - interval '30 minutes'
-                   ORDER BY sg.ts DESC LIMIT 1) l30 ON true
-                 LEFT JOIN LATERAL (
-                   SELECT (sg.gex_now + sg.gex_open) AS net FROM strike_growth sg
-                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
-                     AND sg.ts <= now() - interval '60 minutes'
-                   ORDER BY sg.ts DESC LIMIT 1) l60 ON true
-                 LEFT JOIN LATERAL (
-                   SELECT (sg.gex_now + sg.gex_open) AS net FROM strike_growth sg
-                   WHERE sg.date=b.date AND sg.symbol=b.symbol AND sg.expiry=b.expiry AND sg.strike=b.strike
-                     AND sg.ts <= now() - interval '240 minutes'
-                   ORDER BY sg.ts DESC LIMIT 1) l240 ON true
+                 LEFT JOIN LATERAL (${net(``)}) nn ON true
+                 LEFT JOIN LATERAL (${net(`AND sg.ts <= now() - interval '30 minutes'`)})  l30  ON true
+                 LEFT JOIN LATERAL (${net(`AND sg.ts <= now() - interval '60 minutes'`)})  l60  ON true
+                 LEFT JOIN LATERAL (${net(`AND sg.ts <= now() - interval '240 minutes'`)}) l240 ON true
                  ORDER BY b.peak_abs DESC LIMIT $1`,
-                [limit]
+                [limit, bktF]
               ));
             }
             sendJson(res, 200, { ok: true, rows });
@@ -1400,11 +1403,14 @@ async function main() {
             const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
             const limit = Math.min(365, Number(u.searchParams.get('limit') || 120));
+            const hb = (u.searchParams.get('bucket') || '').toUpperCase();
+            const hbF = (hb === '0DTE' || hb === 'SWING') ? hb : '0DTE';
             const { rows } = await p.query(
-              `SELECT to_char(date, 'YYYY-MM-DD') AS date, strike, expiry, spot,
+              `SELECT to_char(date, 'YYYY-MM-DD') AS date, bucket, strike, expiry, spot,
                       net_today, net_yest, vol_today, delta, peak_abs
-               FROM strike_dod_max WHERE symbol = $1 ORDER BY date DESC LIMIT $2`,
-              [symbol, limit]
+               FROM strike_dod_max WHERE symbol = $1 AND bucket = $3
+               ORDER BY date DESC LIMIT $2`,
+              [symbol, limit, hbF]
             );
             sendJson(res, 200, { ok: true, symbol, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }

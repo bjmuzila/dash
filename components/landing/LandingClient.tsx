@@ -14,6 +14,8 @@ const FEATURES = [
   { slug: "flow", t: "Option & Premium Flow", d: "Every print side-classified, with cumulative net premium drift across the session." },
   { slug: "ict", t: "ICT — Inner Circle Trader", d: "Live FVGs, order blocks, liquidity and market structure on ES and NQ — called as they form." },
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
+  { slug: "initial-balance", t: "Initial Balance & Stats", d: "The first hour, graded. Break direction, extension targets and failure rates on every ES & NQ session." },
+  { slug: "tpo", t: "TPO & Market Structure", d: "Market Profile live — POC, value area, single prints — plus a full-day profile forecast from the open." },
 ];
 
 export default function LandingClient() {
