@@ -38,6 +38,8 @@ const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = requir
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
 const { fetchOptionDailyHistoryTheta, fetchOptionIntradayTheta } = require('./proxy-thetadata');
+const { fetchIntradayCandles } = require('./candle-history');
+const { startEtfCandleRecorder } = require('./state/etf-candle-recorder');
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
@@ -358,6 +360,29 @@ async function handleProxyRest(req, res) {
     handleFlowPremSplit(req, res).catch((e) => {
       sendJson(res, 500, { error: 'flow-premsplit failed', detail: String(e?.message || e) });
     });
+    return true;
+  }
+
+  // /proxy/candles-intraday?symbol=SPY&interval=1m&daysBack=1
+  // Intraday OHLC for any dxLink symbol (SPY/QQQ price lines), collected via a
+  // short-lived isolated dxLink candle subscription (see candle-history.js).
+  // Returns { symbol, interval, candles: [{ time, open, high, low, close, volume }] }.
+  if (pathname === '/proxy/candles-intraday') {
+    const u = new URL(req.url || '/', 'http://localhost');
+    const symbol = (u.searchParams.get('symbol') || '').trim().toUpperCase();
+    const interval = (u.searchParams.get('interval') || '1m').trim();
+    const daysBack = Math.max(1, Math.min(5, Number(u.searchParams.get('daysBack') || 1) || 1));
+    if (!symbol) { sendJson(res, 400, { error: 'symbol required' }); return true; }
+    // Prefer an explicit fromMs (client pins it to today's ET session start);
+    // fall back to daysBack. Never look back more than 7d (dxFeed's 1m limit).
+    const fromMsRaw = Number(u.searchParams.get('fromMs'));
+    const floor = Date.now() - 7 * 86_400_000;
+    const fromTime = Number.isFinite(fromMsRaw) && fromMsRaw > floor
+      ? fromMsRaw
+      : Date.now() - daysBack * 86_400_000;
+    fetchIntradayCandles(symbol, interval, fromTime)
+      .then((candles) => sendJson(res, 200, { symbol, interval, candles }))
+      .catch((e) => sendJson(res, 502, { error: 'candles-intraday failed', detail: String(e?.message || e), symbol }));
     return true;
   }
 
@@ -2592,6 +2617,10 @@ async function main() {
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.
     startEodGexRecorder(PORT);
+    // SPY/QQQ 1-min candle recorder: persists today's session bars into
+    // etf_candles every 60s during RTH (feeds the /test Condition price line's
+    // history going forward). Isolated dxLink fetch — see state/etf-candle-recorder.
+    startEtfCandleRecorder();
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);

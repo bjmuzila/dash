@@ -27,7 +27,7 @@
 // That's why the structure panel derives gamma from the per-symbol chain instead.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
@@ -42,6 +42,17 @@ const SUB = "rgba(255,255,255,0.55)";
 function todayEtYmd(): string {
   // en-CA gives YYYY-MM-DD.
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+}
+// Epoch ms of today's ET midnight, derived from the current ET wall clock so
+// it's correct under both EST and EDT without hardcoding an offset.
+function etDayStartMs(): number {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hourCycle: "h23", hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date());
+  const h = Number(p.find((x) => x.type === "hour")?.value ?? 0);
+  const m = Number(p.find((x) => x.type === "minute")?.value ?? 0);
+  const minsSinceEtMidnight = h * 60 + m;
+  return Date.now() - minsSinceEtMidnight * 60_000;
 }
 function etDaysTo(ymd: string): number {
   const today = todayEtYmd();
@@ -425,9 +436,33 @@ function useRegimeData(symbol: string) {
   const [price, setPrice] = useState<PricePoint[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  // True once the dxLink 1-min candle feed has populated the price line — while
+  // true, the chain-spot fallback stops appending so it doesn't fight the feed.
+  const candlesLoaded = useRef(false);
 
-  // Seed today's persisted per-symbol price series on mount / symbol change.
-  useEffect(() => { setPrice(loadPriceSeries(symbol)); }, [symbol]);
+  // PRIMARY price line: real per-symbol 1-min OHLC from the dxLink candle
+  // history (SPY{=1m}/QQQ{=1m}, ~1 day back) — a full-session line from the
+  // open, not the SPX-tainted flow `spot`. Refresh every 60s to extend the
+  // forming bar. Seeds from the persisted fallback series until candles arrive.
+  useEffect(() => {
+    let alive = true;
+    setPrice(loadPriceSeries(symbol));
+    candlesLoaded.current = false;
+    const loadCandles = async () => {
+      try {
+        const fromMs = etDayStartMs(); // today's ET midnight — session-only, no overnight
+        const j = await fetch(`/proxy/candles-intraday?symbol=${encodeURIComponent(symbol)}&interval=1m&fromMs=${fromMs}`).then((r) => r.json());
+        const rows: unknown[] = Array.isArray(j?.candles) ? j.candles : [];
+        const pts: PricePoint[] = rows
+          .map((c) => { const r = c as { time?: unknown; close?: unknown }; return { ts: Number(r.time), price: Number(r.close) }; })
+          .filter((p) => p.ts > 0 && p.price > 0);
+        if (alive && pts.length) { candlesLoaded.current = true; setPrice(pts); }
+      } catch { /* fall back to chain-spot accumulation below */ }
+    };
+    loadCandles();
+    const id = setInterval(loadCandles, 60_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [symbol]);
 
   const load = useCallback(async () => {
     try {
@@ -445,9 +480,9 @@ function useRegimeData(symbol: string) {
         const spot = parseFloat(String(data.underlyingPrice ?? data["underlying-price"] ?? 0)) || 0;
         const items: ChainGroup[] = Array.isArray(data.items) ? data.items : [];
         setGex(buildGex(items, spot));
-        // Append the CORRECT per-symbol spot to the persisted price line (skip
-        // near-duplicate samples so 30s polls don't bloat the series).
-        if (spot > 0) {
+        // Fallback price line (only when the dxLink candle feed is unavailable):
+        // append the CORRECT per-symbol spot, skipping near-duplicate samples.
+        if (spot > 0 && !candlesLoaded.current) {
           setPrice((prev) => {
             const last = prev[prev.length - 1];
             const now = Date.now();
