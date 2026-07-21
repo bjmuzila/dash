@@ -267,16 +267,23 @@ function synthesize(wave: WaveModel | null, gex: GexModel | null, symbol: string
 // ── WAVE chart (SVG): net-premium area (green≥0 / red<0) + price line ─────────
 function WaveChart({ wave, price }: { wave: WaveModel; price: PricePoint[] }) {
   const W = 360, H = 240, padL = 6, padR = 60, padT = 14, padB = 22;
-  const pts = wave.points;
-  const n = pts.length;
-  // Shared TIME x-axis = UNION of the WAVE (SPX-locked flow tape) and the
-  // per-symbol price series. The flow tape drives WAVE but its window is SPX's
-  // (restart-truncated / 20k-capped), so pinning x to it alone clipped every
-  // SPY/QQQ candle past the flow's last ts — the line looked wrong and froze
-  // mid-session. Widening the domain to cover the candles fixes both.
+  const base = wave.points;
+  // Shared TIME x-axis = UNION of the WAVE flow tape and the per-symbol price
+  // (candle) series, so identical clock-times land at the same x on both lines.
   const prTs = price.filter((p) => p.price > 0).map((p) => p.ts);
-  const t0 = Math.min(pts[0]?.ts ?? Infinity, ...prTs);
-  const t1 = Math.max(pts[n - 1]?.ts ?? -Infinity, ...prTs);
+  const t0 = Math.min(base[0]?.ts ?? Infinity, ...prTs);
+  const t1 = Math.max(base[base.length - 1]?.ts ?? -Infinity, ...prTs);
+  // Anchor the WAVE to the SAME domain edges as price: cum is genuinely 0 before
+  // the first print and unchanged after the last, so extend flat to t0/t1. Flow
+  // often starts mid-session (recorder came up late) while candles run from the
+  // open — without this the WAVE began partway across and the two never lined up.
+  const pts = (() => {
+    const d = base.slice();
+    if (d.length && d[0].ts > t0) d.unshift({ ts: t0, cum: 0 });
+    if (d.length && d[d.length - 1].ts < t1) d.push({ ts: t1, cum: wave.final });
+    return d;
+  })();
+  const n = pts.length;
   const span = Math.max(1, t1 - t0);
   const xs = (ts: number) => padL + ((ts - t0) / span) * (W - padL - padR);
 
