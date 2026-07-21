@@ -65,7 +65,7 @@ function fmtEtTime(ms: number): string {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(ms));
 }
-function fmtUsdShort(n: number): string {
+export function fmtUsdShort(n: number): string {
   const s = n < 0 ? "-" : n > 0 ? "+" : "";
   const a = Math.abs(n);
   if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
@@ -90,7 +90,7 @@ function loadPriceSeries(sym: string): PricePoint[] {
 function savePriceSeries(sym: string, s: PricePoint[]): void {
   try { localStorage.setItem(priceKey(sym), JSON.stringify(s.slice(-800))); } catch { /* no storage */ }
 }
-type WaveModel = {
+export type WaveModel = {
   points: WavePoint[];
   final: number; // last cumulative net premium ($)
   extreme: number; // signed cum value furthest from zero
@@ -131,8 +131,8 @@ function buildWave(tape: FlowOrder[]): WaveModel | null {
 }
 
 // ── GEX structure: per-strike net gamma from the 0-DTE chain group ────────────
-type GexLevel = { strike: number; gex: number };
-type GexModel = {
+export type GexLevel = { strike: number; gex: number };
+export type GexModel = {
   spot: number;
   expiry: string;
   levels: GexLevel[]; // window around spot, sorted DESC by strike (high on top)
@@ -142,7 +142,52 @@ type GexModel = {
   cleanAbove: boolean; // no negative/…; mirror — no positive GEX resistance above
   nearestSupportBelow: number | null;
   nearestResistAbove: number | null;
+  // Strongest dealer gamma pull across the WHOLE 0-DTE chain (not just the
+  // ±window around spot) — "the strike the map is drawing price toward".
+  apex: GexLevel | null;
+  // Aggregate net GEX across every strike + the nearest gamma-flip (zero-cross)
+  // to spot — the classic "check the bias" read (see Logic & Order page).
+  totalGex: number;
+  flip: number | null;
+  callWall: GexLevel | null; // most positive net GEX strike → top resistance
+  putWall: GexLevel | null;  // most negative net GEX strike → key support
+  biasLabel: string;
+  biasTone: string;
 };
+
+// Nearest-to-spot zero-crossing of the (strike, netGEX) curve — same linear-
+// interpolation method as lib/calculations/calculations.ts findGEXFlip, just
+// applied to the combined per-strike value this card already has on hand.
+function computeFlip(all: GexLevel[], spot: number): number | null {
+  const sorted = [...all].sort((a, b) => a.strike - b.strike);
+  const crossings: number[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i].gex, b = sorted[i + 1].gex;
+    if (a === 0) { crossings.push(sorted[i].strike); continue; }
+    if (b === 0) { crossings.push(sorted[i + 1].strike); continue; }
+    if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+      const sA = sorted[i].strike, sB = sorted[i + 1].strike;
+      const zero = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+      if (Number.isFinite(zero)) crossings.push(Math.round(zero * 10) / 10);
+    }
+  }
+  if (!crossings.length) return null;
+  return crossings.reduce((best, c) => (Math.abs(c - spot) < Math.abs(best - spot) ? c : best));
+}
+
+// "Check the bias": positive net GEX + spot above flip → bullish/stable
+// (dealers dampen moves). Negative net GEX + spot below flip → bearish/
+// volatile (moves accelerate). Near the flip, or sign/position disagree →
+// neutral/mixed — don't force a directional read.
+function classifyBias(totalGex: number, spot: number, flip: number | null): { label: string; tone: string } {
+  if (flip == null || Math.abs(spot - flip) < Math.max(1, spot * 0.0015)) {
+    return { label: "Neutral / Balanced", tone: SUB };
+  }
+  const aboveFlip = spot > flip;
+  if (totalGex > 0 && aboveFlip) return { label: "Bullish-leaning (Stable)", tone: GREEN };
+  if (totalGex < 0 && !aboveFlip) return { label: "Bearish-leaning (Volatile)", tone: RED };
+  return { label: "Mixed / Transitional", tone: HOME_THEME.orange };
+}
 
 type ChainOpt = { gamma?: unknown; "open-interest"?: unknown; openInterest?: unknown };
 type ChainStrike = { "strike-price"?: unknown; call?: ChainOpt; put?: ChainOpt };
@@ -194,6 +239,21 @@ function buildGex(items: ChainGroup[], spot: number): GexModel | null {
   const band = spot * BAND_FRAC;
   const supBelow = all.filter((l) => l.strike < spot && l.strike >= spot - band && l.gex > 0).sort((a, b) => b.strike - a.strike);
   const resAbove = all.filter((l) => l.strike > spot && l.strike <= spot + band && l.gex > 0).sort((a, b) => a.strike - b.strike);
+  const apex = all.reduce<GexLevel | null>(
+    (m, l) => (m == null || Math.abs(l.gex) > Math.abs(m.gex) ? l : m),
+    null
+  );
+  const callWall = all.reduce<GexLevel | null>(
+    (m, l) => (m == null || l.gex > m.gex ? l : m),
+    null
+  );
+  const putWall = all.reduce<GexLevel | null>(
+    (m, l) => (m == null || l.gex < m.gex ? l : m),
+    null
+  );
+  const totalGex = all.reduce((s, l) => s + l.gex, 0);
+  const flip = computeFlip(all, spot);
+  const { label: biasLabel, tone: biasTone } = classifyBias(totalGex, spot, flip);
 
   return {
     spot,
@@ -205,18 +265,25 @@ function buildGex(items: ChainGroup[], spot: number): GexModel | null {
     cleanAbove: resAbove.length === 0,
     nearestSupportBelow: supBelow[0]?.strike ?? null,
     nearestResistAbove: resAbove[0]?.strike ?? null,
+    apex,
+    totalGex,
+    flip,
+    callWall,
+    putWall,
+    biasLabel,
+    biasTone,
   };
 }
 
 // ── Condition synthesis (label + stars + bullets) ─────────────────────────────
-type Condition = {
+export type Condition = {
   label: string;
   tone: string;
   stars: number;
   bullets: string[];
 };
 
-function synthesize(wave: WaveModel | null, gex: GexModel | null, symbol: string): Condition {
+export function synthesize(wave: WaveModel | null, gex: GexModel | null, symbol: string): Condition {
   if (!wave) {
     return { label: "Awaiting Flow", tone: SUB, stars: 0, bullets: ["No flow tape yet for today's session."] };
   }
@@ -441,7 +508,7 @@ function Stars({ n }: { n: number }) {
 }
 
 // ── Data hook ─────────────────────────────────────────────────────────────────
-function useRegimeData(symbol: string) {
+export function useRegimeData(symbol: string) {
   const [wave, setWave] = useState<WaveModel | null>(null);
   const [gex, setGex] = useState<GexModel | null>(null);
   const [price, setPrice] = useState<PricePoint[]>([]);
