@@ -292,6 +292,134 @@ async function normalizedGex(ticker: string, expiration: string) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 6. GEX / DEX flip cross → forward MFE/MAE   (option_strike_gex_history + greek_snapshots)
+// Reconstructs the intraday zero-gamma (GEX) and zero-net-delta (DEX, 0DTE) flip
+// per snapshot as the cumulative-exposure zero-cross nearest spot, detects when
+// SPX crosses it, and measures forward favorable/adverse excursion. Reports both
+// continuation (trade the cross) and fade (reverse) since MFE/MAE simply swap.
+// Guards: chain must bracket spot & flip within ±band; price must move (kills
+// frozen-quote phantoms); DEX spot re-sourced from the clean option-table path.
+// ══════════════════════════════════════════════════════════════════════════════
+type XSnap = { t: number; spot: number; flip: number };
+type XPx = { t: number; spot: number };
+type XCross = { d: string; time: string; dir: number; spot0: number; flip: number; mfe: number; mae: number };
+
+async function gexDexCross(horizonMin: number, hit: number, band: number, days: number, gapMin: number) {
+  const cut = Date.now() - days * 86_400_000;
+  const Hm = horizonMin * 60_000, GAP = gapMin * 60_000, TOL = 180_000;
+  const etd = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const et = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" });
+
+  // clean SPX price path (spot in option_strike_gex_history is the SPX index)
+  const pxRows = await queryAll<{ t: string; spot: number }>(
+    `SELECT timestamp AS t, MAX(spot) spot FROM option_strike_gex_history
+     WHERE spot IS NOT NULL AND timestamp > ? GROUP BY timestamp ORDER BY timestamp`, [cut]);
+  const P: XPx[] = pxRows.map((r) => ({ t: Number(r.t), spot: num(r.spot) }));
+  if (P.length < 2) throw new Error("no SPX price path in window");
+
+  const flipFrom = (rows: { strike: number; v: number }[], spot: number): number | null => {
+    if (rows.length < 40) return null;
+    if (!(rows[0].strike < spot && rows[rows.length - 1].strike > spot)) return null;
+    let cum = 0, best: number | null = null, bd = 1e9, pS: number | null = null, pC = 0;
+    for (const r of rows) {
+      const nc = cum + r.v;
+      if (pS != null && ((pC <= 0 && nc > 0) || (pC >= 0 && nc < 0)) && nc - pC !== 0) {
+        const k = pS + (r.strike - pS) * (0 - pC) / (nc - pC);
+        const d = Math.abs(k - spot);
+        if (d < bd && d <= band) { bd = d; best = k; }
+      }
+      pS = r.strike; pC = nc; cum = nc;
+    }
+    return best;
+  };
+  const nearestSpot = (t: number): number | null => {
+    let lo = 0, hi = P.length - 1;
+    if (t < P[0].t - TOL || t > P[hi].t + TOL) return null;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (P[m].t < t) lo = m + 1; else hi = m; }
+    let best = P[lo];
+    for (const j of [lo - 1, lo]) if (j >= 0 && j < P.length && Math.abs(P[j].t - t) < Math.abs(best.t - t)) best = P[j];
+    return Math.abs(best.t - t) <= TOL ? best.spot : null;
+  };
+  const exc = (t0: number, spot0: number, dir: number) => {
+    const st = P.findIndex((p) => p.t > t0);
+    if (st < 0) return null;
+    let mu = 0, md = 0, cnt = 0;
+    for (let i = st; i < P.length; i++) { const p = P[i]; if (p.t > t0 + Hm) break; const dd = p.spot - spot0; if (dd > mu) mu = dd; if (dd < md) md = dd; cnt++; }
+    if (!cnt) return null;
+    return { mfe: dir > 0 ? mu : -md, mae: dir > 0 ? -md : mu };
+  };
+  const crossesOf = (series: XSnap[]): XCross[] => {
+    const byD = new Map<string, XSnap[]>();
+    for (const r of series) { const d = etd(r.t); if (!byD.has(d)) byD.set(d, []); byD.get(d)!.push(r); }
+    const out: XCross[] = [];
+    for (const rows of byD.values()) {
+      rows.sort((a, b) => a.t - b.t);
+      let lt = -1e15, ld = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const a = rows[i - 1], b = rows[i];
+        if (a.spot === b.spot) continue;
+        const pa = a.spot - a.flip, pb = b.spot - b.flip;
+        if (!pa || !pb) continue;
+        if ((pa < 0 && pb > 0) || (pa > 0 && pb < 0)) {
+          const dir = pb > 0 ? 1 : -1;
+          if (dir === ld && b.t - lt < GAP) continue;
+          lt = b.t; ld = dir;
+          const e = exc(b.t, b.spot, dir);
+          if (!e) continue;
+          out.push({ d: etd(b.t), time: et(b.t), dir, spot0: round(b.spot, 2), flip: round(b.flip, 2), mfe: round(e.mfe, 1), mae: round(e.mae, 1) });
+        }
+      }
+    }
+    return out;
+  };
+  const buildSeries = async (sql: string, reSourceSpot: boolean): Promise<XSnap[]> => {
+    const rows = await queryAll<{ t: string; strike: number; v: number; spot: number }>(sql, [cut]);
+    const map = new Map<number, { spot: number; rows: { strike: number; v: number }[] }>();
+    for (const r of rows) { const k = Math.round(Number(r.t)); if (!map.has(k)) map.set(k, { spot: num(r.spot), rows: [] }); map.get(k)!.rows.push({ strike: num(r.strike), v: num(r.v) }); }
+    const ser: XSnap[] = [];
+    for (const [k, o] of map) {
+      const f = flipFrom(o.rows, o.spot);
+      if (f == null) continue;
+      const sp = reSourceSpot ? nearestSpot(k) : o.spot;
+      if (sp == null) continue;
+      ser.push({ t: k, spot: sp, flip: f });
+    }
+    return ser.sort((a, b) => a.t - b.t);
+  };
+
+  const gexCr = crossesOf(await buildSeries(
+    `SELECT timestamp AS t, strike, SUM(net_gex) v, MAX(spot) spot FROM option_strike_gex_history
+     WHERE timestamp > ? GROUP BY timestamp, strike ORDER BY timestamp, strike`, false));
+  const dexCr = crossesOf(await buildSeries(
+    `SELECT EXTRACT(EPOCH FROM ts) * 1000 AS t, strike, SUM(delta_net) v, MAX(spot) spot FROM greek_snapshots
+     WHERE symbol='SPX' AND expiry = date AND delta_net IS NOT NULL AND EXTRACT(EPOCH FROM ts) * 1000 > ?
+     GROUP BY ts, strike ORDER BY ts, strike`, true));
+
+  const stat = (label: string, cr: XCross[]) => {
+    const up = cr.filter((x) => x.dir > 0), dn = cr.filter((x) => x.dir < 0);
+    const hc = (g: XCross[]) => (g.length ? pct(g.filter((x) => x.mfe >= hit).length, g.length) : 0);
+    const hf = (g: XCross[]) => (g.length ? pct(g.filter((x) => x.mae >= hit).length, g.length) : 0);
+    return {
+      signal: label, n: cr.length,
+      "cont hit %": hc(cr), "cont MFE": round(mean(cr.map((x) => x.mfe)), 2), "cont MAE": round(mean(cr.map((x) => x.mae)), 2),
+      "fade hit %": hf(cr), "fade MFE": round(mean(cr.map((x) => x.mae)), 2), "fade MAE": round(mean(cr.map((x) => x.mfe)), 2),
+      "up hit %": hc(up), "dn hit %": hc(dn),
+    };
+  };
+
+  const detail = [...gexCr.map((x) => ({ signal: "GEX", ...x })), ...dexCr.map((x) => ({ signal: "DEX", ...x }))]
+    .sort((a, b) => (a.d === b.d ? (a.time < b.time ? -1 : 1) : a.d < b.d ? -1 : 1))
+    .map((x) => ({ signal: x.signal, date: x.d, time: x.time, dir: x.dir > 0 ? "UP" : "DN", spot: x.spot0, flip: x.flip, MFE: x.mfe, MAE: x.mae }));
+
+  const from = etd(P[0].t), to = etd(P[P.length - 1].t);
+  return {
+    summary: [stat("GEX flip (0γ)", gexCr), stat("DEX flip (0Δ)", dexCr)],
+    detail,
+    note: `${from}→${to} · GEX ${gexCr.length} crosses, DEX ${dexCr.length} · horizon ${horizonMin}m · "hit" = favorable ≥ ${hit}pt · flip band ±${band}pt. "cont" = trade the cross (continuation), "fade" = reverse (MFE/MAE swap). Small sample — directional only.`,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 export async function GET(req: NextRequest) {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -308,6 +436,7 @@ export async function GET(req: NextRequest) {
       body = await dexPreflip((q.get("greek") === "gex" ? "gex" : "dex"), n("hitAbs", 50), n("lookMin", 20), n("minPRange", 5), q.get("edges") === "1");
     else if (test === "gamma-wall") body = await gammaWall(n("tol", 5), n("near", 150), n("minRange", 5));
     else if (test === "normalized-gex") body = await normalizedGex((q.get("ticker") || "SPX").trim().toUpperCase(), (q.get("expiration") || "").trim());
+    else if (test === "gex-dex-cross") body = await gexDexCross(n("horizon", 30), n("hit", 5), n("band", 60), n("days", 30), n("gap", 5));
     else return NextResponse.json({ error: "unknown test" }, { status: 400 });
     return NextResponse.json({ ok: true, test, ...(body as object) });
   } catch (e) {

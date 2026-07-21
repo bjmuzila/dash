@@ -16,7 +16,7 @@
  * dataset: re-run the HTML on new CSVs, drop the new JSON in, bump LAST_UPDATED.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { Card as ThemeCard } from "@/components/shared/PageCard";
@@ -25,7 +25,7 @@ import { useNqCandles } from "@/hooks/useNqCandles";
 import { avg, med, clock, type IbDataset, type SlimDay } from "@/lib/ibStats";
 import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 import IbDailyResults from "@/components/scanner/IbDailyResults";
-import { IbProbabilityEngine } from "@/components/insights/IbProbabilityEngine";
+import { IbProbabilityEngine, type EngineRule, type EngineEnv } from "@/components/insights/IbProbabilityEngine";
 
 const LAST_UPDATED = "7/11/2026";
 const SYMBOLS = ["ES", "NQ"] as const;
@@ -207,6 +207,9 @@ function LiveToday({ sym, win, ds, days, hist }: {
   // The hook already loads ~2 prior sessions from the local DB — read that here.
   const historical = sym === "ES" ? es.historical : nq.historical;
 
+  // Engine snapshot frozen at the 10:30 ET IB close, one per (symbol · session).
+  const engineSnapRef = useRef<Record<string, { rules: EngineRule[]; env: EngineEnv }>>({});
+
   const live = useMemo(() => {
     if (!candles?.length) return null;
     // Bars arrive for ~2 sessions. Group by TRUE ET session date — filtering on
@@ -374,7 +377,7 @@ function LiveToday({ sym, win, ds, days, hist }: {
     const extHit1 = targets.find((t) => t.t === 1)?.hit ?? false;
 
     return {
-      pending: false as const, nowMin, price, ibh, ibl, mid, width, ibComplete,
+      pending: false as const, today, nowMin, price, ibh, ibl, mid, width, ibComplete,
       first, bias, closeZone, zone, orbDir, status, bucket, breakSide, breakMin, targets, dayHigh, dayLow,
       brokeH, brokeL, touchH, touchL, openType, fvg, volSurge, failed, retest, retestCont,
       containedAt2, extHit1, pdh, pdl, dayOpen,
@@ -414,13 +417,30 @@ function LiveToday({ sym, win, ds, days, hist }: {
     time: live.nowMin >= 840 ? "late" : "regular",
   } as const;
 
+  // Freeze at the 10:30 ET close: capture the first evaluation where the IB is
+  // complete for this session and hold it for the rest of the day. Live panel keeps updating.
+  const snapKey = `${sym}-${live.today}`;
+  if (live.ibComplete && !engineSnapRef.current[snapKey]) {
+    engineSnapRef.current[snapKey] = { rules: engineRules, env: engineEnv };
+  }
+  const closeSnap = engineSnapRef.current[snapKey];
+
   const distH = live.ibh - live.price;
   const distL = live.price - live.ibl;
 
   return (
     <>
-      {/* IB Probability Engine + 4-stage rule board (live, per-symbol) */}
-      <IbProbabilityEngine rules={engineRules} env={engineEnv} sym={sym} />
+      {/* IB Probability Engine — frozen at 10:30 close + live, per-symbol */}
+      {closeSnap && (
+        <IbProbabilityEngine
+          rules={closeSnap.rules}
+          env={closeSnap.env}
+          sym={sym}
+          stamp="10:30 CLOSE"
+          subtitle={`Projection frozen at the 10:30 ET IB close — held at the % it read the moment the ${WLBL} completed.`}
+        />
+      )}
+      <IbProbabilityEngine rules={engineRules} env={engineEnv} sym={sym} stamp="LIVE" />
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, alignItems: "start" }}>
         <LiveGauges live={live} days={days} dowName={dowName} win={win} />

@@ -781,8 +781,9 @@ const FLOW_HISTORY_TTL_MS = 4000;
 async function handleFlowHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const date = searchParams.get('date') || todayYmdET();
-  // SPX-only lock: ignore any ?underlying/?symbol and always filter to SPX roots.
-  const underlying = 'SPX';
+  // Honor an explicit ?underlying/?symbol (e.g. SPY/QQQ for the Condition card);
+  // default to SPX when absent so bare callers keep the old SPX seed behavior.
+  const underlying = (searchParams.get('underlying') || searchParams.get('symbol') || 'SPX').trim().toUpperCase();
   let limit = Number(searchParams.get('limit') || 5000);
   if (!Number.isFinite(limit) || limit <= 0) limit = 5000;
   limit = Math.min(limit, 20000);

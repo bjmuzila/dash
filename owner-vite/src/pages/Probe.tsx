@@ -99,6 +99,8 @@ const OP_CSS = `
   .op-badge { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
   .op-badge.c { color: var(--sm-green); background: rgba(142,202,230,0.12); border: 1px solid rgba(142,202,230,0.4); }
   .op-badge.p { color: var(--amber); background: rgba(251,133,1,0.12); border: 1px solid rgba(251,133,1,0.4); }
+  .op-badge.exp { color: var(--sm-red); background: rgba(239,71,111,0.12); border: 1px solid rgba(239,71,111,0.4); text-transform: uppercase; letter-spacing: 0.06em; }
+  .op-tcard.expired { opacity: 0.62; }
   .op-rowsub { font-size: 12px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
   .op-px { font-family: var(--sm-mono); font-size: 14px; color: var(--text1); }
   .op-px .arrow { color: var(--sm-muted); margin: 0 6px; }
@@ -474,6 +476,9 @@ export default function Probe() {
   }, []);
 
   const px = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "—" : Number(v).toFixed(2));
+  const isExpired = (iso: string) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(iso) &&
+    iso < new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const fmtExp = (iso: string) => {
     const d = new Date(iso + "T00:00:00");
     return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" });
@@ -580,10 +585,11 @@ export default function Probe() {
                   ? [...hist, { ts: liveTs, mark }]
                   : hist;
                 const isOpen = expandedId === r.id;
+                const expired = isExpired(r.expiration);
                 return (
                   <div
                     key={r.id}
-                    className={`op-tcard${isOpen ? " open" : ""}`}
+                    className={`op-tcard${isOpen ? " open" : ""}${expired ? " expired" : ""}`}
                     onClick={() => toggleCard(r.id)}
                     style={isOpen ? { gridColumn: "1 / -1" } : undefined}
                   >
@@ -591,6 +597,7 @@ export default function Probe() {
                       <div>
                         <span className="op-tick">{r.ticker}</span>
                         <span className={`op-badge ${r.side === "C" ? "c" : "p"}`}>{r.strike % 1 ? r.strike : Math.round(r.strike)}{r.side}</span>
+                        {expired && <span className="op-badge exp">Expired</span>}
                         <span className="op-chev">{isOpen ? "▾" : "▸"}</span>
                       </div>
                       <button type="button" className="op-x" title="Remove" onClick={(e) => { e.stopPropagation(); remove(r.id); }}>×</button>

@@ -269,10 +269,14 @@ function WaveChart({ wave, price }: { wave: WaveModel; price: PricePoint[] }) {
   const W = 360, H = 240, padL = 6, padR = 60, padT = 14, padB = 22;
   const pts = wave.points;
   const n = pts.length;
-  // Shared TIME x-axis across the WAVE session; the price series aligns by ts
-  // (both are epoch-ms), so the per-symbol price line lands on the right spot.
-  const t0 = pts[0]?.ts ?? 0;
-  const t1 = pts[n - 1]?.ts ?? t0 + 1;
+  // Shared TIME x-axis = UNION of the WAVE (SPX-locked flow tape) and the
+  // per-symbol price series. The flow tape drives WAVE but its window is SPX's
+  // (restart-truncated / 20k-capped), so pinning x to it alone clipped every
+  // SPY/QQQ candle past the flow's last ts — the line looked wrong and froze
+  // mid-session. Widening the domain to cover the candles fixes both.
+  const prTs = price.filter((p) => p.price > 0).map((p) => p.ts);
+  const t0 = Math.min(pts[0]?.ts ?? Infinity, ...prTs);
+  const t1 = Math.max(pts[n - 1]?.ts ?? -Infinity, ...prTs);
   const span = Math.max(1, t1 - t0);
   const xs = (ts: number) => padL + ((ts - t0) / span) * (W - padL - padR);
 

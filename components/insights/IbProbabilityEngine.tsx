@@ -163,7 +163,7 @@ function RuleRow({ r }: { r: Row }) {
   );
 }
 
-export function IbProbabilityEngine({ rules, env, sym }: { rules: EngineRule[]; env: EngineEnv; sym?: string }) {
+export function IbProbabilityEngine({ rules, env, sym, stamp, subtitle }: { rules: EngineRule[]; env: EngineEnv; sym?: string; stamp?: string; subtitle?: string }) {
   const byId = new Map(rules.map((r) => [r.id, toRow(r)]));
   const allRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[]);
   const p = calculateComplexProbabilities(allRows, env);
@@ -188,8 +188,14 @@ export function IbProbabilityEngine({ rules, env, sym }: { rules: EngineRule[]; 
             <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: C.cyan,
               border: `1px solid ${C.cyan}66`, background: `${C.cyan}14`, borderRadius: 5, padding: "2px 8px" }}>{sym}</span>
           )}
+          {stamp && (
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase",
+              color: stamp === "LIVE" ? POS : HOME_THEME.orange,
+              border: `1px solid ${(stamp === "LIVE" ? POS : HOME_THEME.orange)}66`,
+              background: `${(stamp === "LIVE" ? POS : HOME_THEME.orange)}14`, borderRadius: 5, padding: "2px 8px" }}>{stamp}</span>
+          )}
         </div>
-        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>Live mathematical projection of final intraday session behavior based on active indicators{sym ? ` — ${sym} futures` : ""}.</p>
+        <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>{subtitle ?? `Live mathematical projection of final intraday session behavior based on active indicators${sym ? ` — ${sym} futures` : ""}.`}</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: 22 }}>
           <Gauge pct={p.bull} color={C.bull} label="Bullish<br/>Edge" />
           <Gauge pct={p.bear} color={C.bear} label="Bearish<br/>Edge" />

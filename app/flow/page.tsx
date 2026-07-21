@@ -649,8 +649,16 @@ export default function FlowPage() {
 
   // ── Dislocation velocity — z-scored 1m bar-range deviation, gated on close
   // location. Bars built locally from SPX spot (isolated from es_candles). ──
-  const spxSpot = useLiveSpots(["SPX"], shouldConnect);
-  const dvBars = useMinuteBars(spxSpot["SPX"]);
+  // FlowOrder.spot is the SPX level on EVERY print (WS), so use the newest
+  // print's spot. /proxy/quotes returns last=0 for the SPX index, so the old
+  // useLiveSpots(["SPX"]) source was always empty → bars never built.
+  const spxSpot = useLiveSpots(["SPX"], shouldConnect); // fallback only
+  const liveSpx = useMemo(() => {
+    let px = 0, ts = 0;
+    for (const o of orders) if (o.spot && o.ts > ts) { ts = o.ts; px = o.spot; }
+    return px || spxSpot["SPX"];
+  }, [orders, spxSpot]);
+  const dvBars = useMinuteBars(liveSpx);
   const dv = useMemo(() => {
     let st = initDV(); let out;
     for (const b of dvBars) ({ state: st, out } = pushDV(st, b, { lambda: 0.05, zThresh: 2 }));

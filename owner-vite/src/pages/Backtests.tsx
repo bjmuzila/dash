@@ -169,6 +169,18 @@ export default function Backtests() {
           { key: "expiration", label: "expiration (YYYY-MM-DD)", type: "text", def: "" },
         ]}
       />
+
+      <Panel
+        title="GEX / DEX flip cross → MFE/MAE" test="gex-dex-cross"
+        subtitle="When SPX crosses the zero-gamma / zero-delta flip, what's the forward excursion? Continuation vs fade, per side."
+        fields={[
+          { key: "horizon", label: "horizon (m)", type: "number", def: 30 },
+          { key: "hit", label: "hit ≥ (pt)", type: "number", def: 5 },
+          { key: "band", label: "flip band (pt)", type: "number", def: 60 },
+          { key: "days", label: "lookback (d)", type: "number", def: 30 },
+          { key: "gap", label: "debounce (m)", type: "number", def: 5 },
+        ]}
+      />
     </PageShell>
   );
 }

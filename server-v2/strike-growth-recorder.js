@@ -411,8 +411,10 @@ async function rollupDayOverDay(p, date) {
       prev_e AS (
         SELECT DISTINCT ON (symbol, expiry, strike) symbol, expiry, strike,
                (gex_now + gex_open) AS net
-        FROM strike_growth WHERE date < $1 AND ${pred}
-        ORDER BY symbol, expiry, strike, date DESC, ts DESC
+        FROM strike_growth
+        WHERE date = (SELECT max(date) FROM strike_growth WHERE date < $1 AND ${pred})
+          AND ${pred}
+        ORDER BY symbol, expiry, strike, ts DESC
       ),
       cur AS (
         SELECT symbol, strike, max(spot) AS spot, sum(net) AS net, sum(vol) AS vol,
