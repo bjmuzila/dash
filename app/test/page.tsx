@@ -6,6 +6,7 @@ import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle, homeI
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ObookView } from "@/components/shared/ObookView";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import { GexRegimeCard } from "@/components/dashboard/GexRegimeCard";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
@@ -2094,13 +2095,26 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "gexlevels" | "obook" | "squeeze";
+type TestTab = "overview" | "flow" | "gexlevels" | "obook" | "squeeze" | "regime";
+
+// SPY / QQQ "market condition" cards — WAVE (net premium) + 0-DTE GEX structure,
+// mirroring the SPX regime tile. Built entirely from the per-symbol flow tape and
+// /api/chains greeks (see components/dashboard/GexRegimeCard).
+function RegimeTab() {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: 24 }}>
+      <GexRegimeCard symbol="SPY" subtitle="SPDR S&P 500 ETF · live WAVE + 0-DTE gamma" />
+      <GexRegimeCard symbol="QQQ" subtitle="Invesco QQQ Trust · live WAVE + 0-DTE gamma" />
+    </div>
+  );
+}
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
     { key: "overview", label: "Overview" },
     { key: "squeeze", label: "Squeeze" },
     { key: "gexlevels", label: "GEX Levels" },
+    { key: "regime", label: "Condition" },
     { key: "flow", label: "Flow Inventory" },
     { key: "obook", label: "Order Book" },
   ];
@@ -2201,6 +2215,8 @@ export default function TestPage() {
         <SqueezeBoard />
       ) : tab === "gexlevels" ? (
         <GexLevelsTab />
+      ) : tab === "regime" ? (
+        <RegimeTab />
       ) : tab === "obook" ? (
         <ObookView />
       ) : (

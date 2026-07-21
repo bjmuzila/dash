@@ -7,6 +7,7 @@ import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
+import IbStatsTab from "@/components/scanner/IbStatsTab";
 // The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
 // (same pattern as the Chain tab reusing /options-chain below) rather than the
 // trimmed EsCandlesFullPanel embed — that panel has no dock, and no bubbles /
@@ -396,6 +397,11 @@ const ScannerIcon = () => (
     <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
   </svg>
 );
+const IbIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="21" x2="21" y2="21" /><rect x="5" y="10" width="4" height="8" /><rect x="15" y="6" width="4" height="12" /><line x1="12" y1="3" x2="12" y2="21" />
+  </svg>
+);
 const LayersIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" />
@@ -462,7 +468,7 @@ export function HomeClient({
   const lastFlowAppliedRef = useRef(0);
 
   // "escandles" left the strip — it now lives on the GEX panel's view switcher.
-  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner" | "ib">("calendar");
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
   // the column with the GEX chart above it, "full" = fills the whole left column
   // (chart hidden). Replaces the old econCollapsed boolean.
@@ -1438,6 +1444,7 @@ export function HomeClient({
                   { id: "whale", label: "Whale", icon: <WhaleIcon /> },
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
                   { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
+                  { id: "ib", label: "IB", icon: <IbIcon /> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
@@ -1499,6 +1506,11 @@ export function HomeClient({
                 {activeTab === "scanner" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <ScannerHomePanel />
+                  </div>
+                )}
+                {activeTab === "ib" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)", overflow: "auto" }}>
+                    <IbStatsTab />
                   </div>
                 )}
               </div>

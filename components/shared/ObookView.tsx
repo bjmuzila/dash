@@ -281,6 +281,25 @@ export function ObookView() {
         <div style={{ fontSize: 13, color: HOME_THEME.muted, marginTop: 18, lineHeight: 1.6 }}>{d.curveNote}</div>
         <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 16, lineHeight: 1.55, opacity: 0.75 }}>{d.disclaimer}</div>
       </Card>
+
+      {/* Footer — tenor stat lines */}
+      <Card accent={LIGHT_BLUE}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {d.tenors.map((c) => {
+            const side = c.side === "bull" ? BULL : BEAR;
+            const label = c.tag === "FRONT MONTH" ? "front month" : "intermediate term";
+            return (
+              <div key={c.tag} style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 16px", fontSize: 13 }}>
+                <span style={{ fontWeight: 800, color: side, letterSpacing: "0.05em", minWidth: 150 }}>{label}</span>
+                <span style={{ color: HOME_THEME.muted }}>{c.meta}</span>
+                {c.rows.map(([k, v]) => (
+                  <span key={k} style={{ color: HOME_THEME.muted }}>{k} <b style={{ color: side }}>{v}</b></span>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
     </>
   );
 }

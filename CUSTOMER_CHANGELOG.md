@@ -2,6 +2,9 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 7/21/2026
+* Added an **IB tab** to the home page calendar tab group, so you can pull up the full Initial Balance board straight from the home screen without opening the ES-candles chart.
+
 ## Monday 7/20/2026
 * Added a new IB stat that shows how a **narrow, normal, or wide opening range** tends to play out — whether it breaks one side, both sides, or neither — with the actual point ranges for each.
 * Added two new "reference candle" stats: the **8am hour** (how often the day later takes out both its high and its low, and by what time) and the **2–3pm hour** (breaks one side, both, or neither into the close).

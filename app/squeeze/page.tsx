@@ -451,7 +451,7 @@ export function SqueezeBoard() {
   return (
     <>
       {/* header */}
-      <div style={{ ...cardBase, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+      <div style={{ ...cardBase, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{ fontSize: 24, fontWeight: 800, color: HOME_THEME.text }}>{d?.symbol ?? snap?.symbol ?? "SPX"} Gamma Exposure</div>
           <div style={{ fontSize: 12, fontWeight: 700, padding: "5px 12px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, color: rgba(HOME_THEME.text, 0.7) }}>As of {asOf}</div>
@@ -465,7 +465,7 @@ export function SqueezeBoard() {
       {d && (
         <>
           {/* metrics strip */}
-          <div style={{ ...cardBase, display: "flex", flexWrap: "wrap", padding: 0, overflow: "hidden" }}>
+          <div style={{ ...cardBase, display: "flex", flexWrap: "wrap", padding: 0, overflow: "hidden", flexShrink: 0 }}>
             <Stat label="Spot Price" value={fmtPx(d.spot)} sub={d.symbol} />
             <Stat label="Net GEX" value={fmtB(d.netGex)} sub={`Ratio: ${d.ratio.toFixed(2)}`} valueColor={d.netGex >= 0 ? CALL_GREEN : PUT_RED} />
             <Stat label="Call GEX" value={fmtB(Math.abs(d.callGex))} sub={`${fmtInt(d.callOI)} OI`} valueColor={CALL_GREEN} />

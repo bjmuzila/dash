@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-21 — Home: IB tab added to the Econ Calendar tab strip (`app/home/HomeClient.tsx`)
+
+Added an "IB" tab (new `IbIcon`) to the home GEX-card tab strip (calendar/flow/whale/greeks/scanner/**ib**); the `activeTab` union gained `"ib"` and the new panel renders `<IbStatsTab />` (imported from `@/components/scanner/IbStatsTab`) in an `overflow:auto` wrapper — the same IB board the ES-candles IB dock hover previews. ES-candles IB dock button left intact (still toggles the IB lines + its own hover preview). Not build-verified.
+
+
 ## 2026-07-20 — ES Candles: heatmap fetch dedupe + backfill race fix, 2-day retention, new GEX-bubble sliders; EOD GEX all-exp-ex-0DTE (`app/es-candles/page.tsx`, `app/api/snapshots/option-strike-gex-history/route.ts`, `lib/db.ts`, `server-v2/eod-gex-recorder.js`)
 
 `page.tsx`: collapsed 3 duplicate `option-strike-gex-history` heatmap calls to 1 via `lastHeatmapKeyRef`, and fixed the in-flight race (resolution-time key guard, no cleanup-cancel) that was wiping the historical bubble trail + heatmap columns on load. Added 2-day retention (1D/2D range toggle, 2880-min window cap). Replaced the size/variance bubble knobs with a new control set (persisted `bubbleCfg`): Show Top Strikes (N per column by |GEX|), Highlight Top N Walls (X≤N, ×1.3 + glow), Min/Max Bubble Size (`scaleSqrt` range, area ∝ |GEX|), and Brightness (opacity gradient, `minOpacity = max(0.1, 1-intensity)`).

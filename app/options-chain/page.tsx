@@ -1021,7 +1021,6 @@ const ChainMatrix = memo(function ChainMatrix({
   const HDR_BG = "#0D1119";
   // ⅀ Total column — per-strike sum across every rendered expiration, with its
   // own heat scale (over the visible strikes) so the biggest net totals pop.
-  const todayKey = etDateKey(etToday());
   const rowTotals = new Map<number, number>();
   visibleStrikes.forEach((strike) => {
     if (strike == null) return;
@@ -1029,8 +1028,6 @@ const ChainMatrix = memo(function ChainMatrix({
     renderIdx.forEach((colIdx) => {
       const col = columns[colIdx];
       if (!col) return;
-      // Total EXCLUDES the 0DTE (today's expiration) column.
-      if (col.expiration === todayKey) return;
       const isCh = !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
       const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike);
       if (v != null) sum += v;
@@ -1077,7 +1074,6 @@ const ChainMatrix = memo(function ChainMatrix({
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
       <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
-        <div style={{ fontSize: 8, fontWeight: 700, color: HT.muted, letterSpacing: "0.06em", marginTop: -1 }}>EX 0DTE</div>
         <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
           {fmtMoney(grandVisibleTotal)}
         </div>
@@ -1670,15 +1666,6 @@ export default function OptionsChainPage({
     return [...set].sort((a, b) => a - b);
   }, [columns]);
 
-  const grandTotal = useMemo(
-    () => columns.reduce((sum, c) => {
-      let s = 0;
-      c.cells.forEach(cell => { s += cell[greekMode]; });
-      return sum + s;
-    }, 0),
-    [columns, greekMode],
-  );
-
   const nearestStrike = useMemo(() => {
     if (!allStrikes.length) return 0;
     const ref = spot > 0 ? spot : allStrikes[Math.floor(allStrikes.length / 2)];
@@ -1925,6 +1912,20 @@ export default function OptionsChainPage({
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
+  // Grand total of the active greek across the VISIBLE strike window × every
+  // expiration (matches the sum of the Total column). Shown in the toolbar.
+  const visibleTotal = useMemo(() => {
+    let sum = 0;
+    for (const col of columns) {
+      for (const s of visibleStrikes) {
+        if (s == null) continue;
+        const v = col.cells.get(s)?.[greekMode];
+        if (v != null) sum += v;
+      }
+    }
+    return sum;
+  }, [columns, visibleStrikes, greekMode]);
+
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
   const segBtnStyle = (on: boolean): React.CSSProperties => ({
@@ -1962,7 +1963,7 @@ export default function OptionsChainPage({
       {/* Toolbar pinned at the top — ALWAYS visible (never scrolls away). The
           grid scrolls below it in its own container, keeping its expiry-date
           header row stuck to the top of that scroll area. */}
-      <div style={{ display: "flex", padding: "6px 10px 6px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: "#05060A", borderBottom: `1px solid ${HT.border}` }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "3px 10px 4px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: "#05060A", borderBottom: `1px solid ${HT.border}` }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
@@ -2004,18 +2005,6 @@ export default function OptionsChainPage({
           </>
         )}
 
-        {showGrandTotal && !isStandalone && (
-          <>
-            <span style={{ color: HT.border }}>|</span>
-            <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
-              Total {greekMode}: {fmtMoney(grandTotal)}
-              {autoPercentNote && (
-                <span style={{ color: "#fff", marginLeft: 8 }}>{autoPercentNote}</span>
-              )}
-            </span>
-          </>
-        )}
-
         <div style={{ flex: 1 }} />
 
         <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
@@ -2032,7 +2021,7 @@ export default function OptionsChainPage({
         <span style={{ color: HT.border }}>|</span>
 
         <SegGroup
-          options={DATA_MODES.map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
+          options={DATA_MODES.filter(m => m !== "flow").map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
           active={dataMode}
           onChange={(v) => setDataMode(v as DataMode)}
         />
@@ -2057,6 +2046,19 @@ export default function OptionsChainPage({
           message={`📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </Dock>
+      {/* Row 2 — total net GEX (active greek) across the visible window. */}
+      {showGrandTotal && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px", fontSize: 11, whiteSpace: "nowrap" }}>
+          <span style={{ fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HT.muted }}>
+            Total Net {greekMode.toUpperCase()}
+          </span>
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 12, color: visibleTotal >= 0 ? HT.green : HT.red }}>
+            {fmtMoney(visibleTotal)}
+          </span>
+          <span style={{ color: HT.border }}>·</span>
+          <span style={{ color: HT.muted, opacity: 0.75 }}>{activeTicker} · {displayPercent}% strikes{autoPercentNote ? ` · ${autoPercentNote}` : ""}</span>
+        </div>
+      )}
       </div>
 
       {!visibleStrikes.length ? (
