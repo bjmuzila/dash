@@ -98,7 +98,13 @@ class FlowProcessor {
     // of the order's first fill merge into one aggregated order. "All trades under
     // 1 second add up." Overridable via FLOW_COALESCE_MS.
     coalesceMs = Number(process.env.FLOW_COALESCE_MS || 1000),
+    // SPX-only lock (default true): drop every non-SPX print at the source so the
+    // live SPX flow card's bucket() aggregate stays pure SPX. The multi-ticker
+    // recorder (proxy-tastytrade _startFlowRecord) sets this false so its OWN
+    // isolated instance accepts SPY/QQQ/AAPL/... prints for flow_prints only.
+    spxOnly = true,
   } = {}) {
+    this.spxOnly = spxOnly;
     this.coalesceMs = coalesceMs;
     this.windowMs = windowMs;
     this.maxPrints = maxPrints;
@@ -131,7 +137,8 @@ class FlowProcessor {
     if (!parsed || !(price > 0) || !(size > 0)) return;
     // SPX-only lock: drop any non-SPX print at the source so the tape, prints[],
     // and the flow_prints writer can only ever hold SPX (root SPX/SPXW → 'SPX').
-    if (displayUnderlying(parsed.root) !== 'SPX') return;
+    // The isolated multi-ticker recorder disables this (spxOnly:false).
+    if (this.spxOnly && displayUnderlying(parsed.root) !== 'SPX') return;
     const lastTrade = this.lastTradePx.get(streamerSymbol);
     const side = inferSide(price, quote, lastTrade, time);
     this.lastTradePx.set(streamerSymbol, price);

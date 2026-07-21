@@ -21,6 +21,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   EstimatedMove: lazy(() => import("./EstimatedMove")),
   Changelog: lazy(() => import("./Changelog")),
   SocialMedia: lazy(() => import("./SocialMedia")),
+  Newsletter: lazy(() => import("./Newsletter")),
   Emails: lazy(() => import("./Emails")),
   PostStudio: lazy(() => import("./PostStudio")),
   Budget: lazy(() => import("./Budget")),

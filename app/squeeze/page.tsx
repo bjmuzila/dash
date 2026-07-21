@@ -99,6 +99,10 @@ type Derived = {
   ratio: number;
   callOI: number;
   putOI: number;
+  netVolGex: number;
+  totalVolGex: number;
+  callVol: number;
+  putVol: number;
   callWall: number;
   putWall: number;
   flip: number;
@@ -124,6 +128,7 @@ function derive(s: Snapshot): Derived | null {
   let callGex = 0, netGex = 0, callOI = 0, putOI = 0, callVol = 0, putVol = 0;
   let posDex = 0, absDex = 0;
   let flowGex = 0, volGexDir = 0, vanna = 0, charm = 0, absVanna = 0, absCharm = 0;
+  let netVolGex = 0, totalVolGex = 0;
   let atmIV = 0, atmDist = Infinity, atmDte = 1;
   for (const r of rows) {
     callGex += num(r.callGEX);
@@ -133,6 +138,8 @@ function derive(s: Snapshot): Derived | null {
     callVol += num(r.callVolume);
     putVol += num(r.putVolume);
     flowGex += num(r.flowGEX);
+    netVolGex += num(r.netVolGEX);
+    totalVolGex += Math.abs(num(r.netVolGEX));
     volGexDir += num(r.netVolGexDir);
     vanna += num(r.netVanna); absVanna += Math.abs(num(r.netVanna));
     charm += num(r.chex);    absCharm += Math.abs(num(r.chex));
@@ -226,6 +233,7 @@ function derive(s: Snapshot): Derived | null {
   return {
     symbol: s.symbol ?? "SPX",
     spot, rows, callGex, putGex, netGex, totalGex, ratio, callOI, putOI,
+    netVolGex, totalVolGex, callVol, putVol,
     callWall, putWall, flip,
     callWallPct: pct(callWall), putWallPct: pct(putWall), flipPct: pct(flip),
     bias, score, status, factors, triggerLevel,
@@ -474,6 +482,15 @@ export function SqueezeBoard() {
             <Stat label="Call Wall" value={fmtWall(d.callWall)} sub={fmtPct(d.callWallPct)} subColor={CALL_GREEN} valueColor={CALL_GREEN} />
             <Stat label="Put Wall" value={fmtWall(d.putWall)} sub={fmtPct(d.putWallPct)} subColor={PUT_RED} valueColor={PUT_RED} />
             <Stat label="Zero Gamma" value={fmtWall(d.flip)} sub={fmtPct(d.flipPct)} valueColor={HOME_THEME.cyan} />
+          </div>
+
+          {/* volume book strip */}
+          <div style={{ ...cardBase, display: "flex", flexWrap: "wrap", padding: 0, overflow: "hidden", flexShrink: 0, marginTop: 8 }}>
+            <Stat label="Vol Spot" value={fmtPx(d.spot)} sub="volume book" />
+            <Stat label="Net Vol GEX" value={fmtB(d.netVolGex)} sub="today's flow" valueColor={d.netVolGex >= 0 ? CALL_GREEN : PUT_RED} />
+            <Stat label="Total Vol GEX" value={fmtB(d.totalVolGex)} sub={`${fmtInt(d.callVol + d.putVol)} Vol`} valueColor={HOME_THEME.cyan} />
+            <Stat label="Call Vol" value={fmtInt(d.callVol)} sub="contracts" valueColor={CALL_GREEN} />
+            <Stat label="Put Vol" value={fmtInt(d.putVol)} sub="contracts" valueColor={PUT_RED} />
           </div>
 
           {/* main two-column */}

@@ -144,6 +144,29 @@ const FLOW_AGGREGATE_MS = Number(process.env.FLOW_AGGREGATE_MS || 500);
 // parses the whole OPRA tape, so only flip it when going wide.
 const FLOW_BULK_STREAM = process.env.FLOW_BULK_STREAM === '1';
 
+// ── Multi-ticker flow RECORDER (DATA_SOURCE=tt) ─────────────────────────────
+// Extra option roots whose near-spot trades we subscribe on the SAME dxLink
+// client and route into an ISOLATED FlowProcessor (this.flowRecord) that only
+// feeds flow_prints — never the live SPX card's bucket(). SPX/SPXW are dropped
+// (the core engine already owns them). Empty = SPX-only, zero behavior change.
+const FLOW_RECORD_TICKERS = String(process.env.FLOW_RECORD_TICKERS || '')
+  .split(/[,\s]+/).map((s) => s.trim().toUpperCase())
+  .filter(Boolean).filter((t) => t !== 'SPX' && t !== 'SPXW');
+// Strike band around spot to subscribe per root (% of spot) and per-root contract
+// cap, so a wide chain can't blow up the dxLink sub list.
+const FLOW_RECORD_WINDOW_PCT = Number(process.env.FLOW_RECORD_WINDOW_PCT || 0.06);
+const FLOW_RECORD_MAX_CONTRACTS = Number(process.env.FLOW_RECORD_MAX_CONTRACTS || 80);
+// Nearest N expirations per root (0DTE + a couple out). Keeps the sub list sane
+// while still catching weekly/dated flow.
+const FLOW_RECORD_EXPIRIES = Number(process.env.FLOW_RECORD_EXPIRIES || 2);
+// Re-pick each root's window as spot drifts (ms).
+const FLOW_RECORD_REFRESH_MS = Number(process.env.FLOW_RECORD_REFRESH_MS || 5 * 60 * 1000);
+// Recorder tape sizing — bigger than the SPX cap since it holds many roots.
+const FLOW_RECORD_TAPE_CAP = Number(process.env.FLOW_RECORD_TAPE_CAP || 8000);
+// Recorder noise floor ($premium). Equity-option blocks are smaller than SPX
+// index blocks, so keep this low so real prints survive to flow_prints.
+const FLOW_RECORD_TAPE_FLOOR = Number(process.env.FLOW_RECORD_TAPE_FLOOR || 1000);
+
 // ES 5-minute candle broadcast cadence. The forming bar updates on nearly every
 // flush while ES is live, so this is effectively how often the live candle
 // repaints. 10s keeps it visibly live without one delta every ~5s.
@@ -1885,6 +1908,16 @@ class TastytradeProxy {
   constructor() {
     this.client = null;
     this.flow = new FlowProcessor();
+    // Isolated multi-ticker flow recorder (DATA_SOURCE=tt). Accepts all roots
+    // (spxOnly:false) and feeds ONLY flow_prints via writeFlowTape(...,'record')
+    // — never the SPX card's bucket(). Null when FLOW_RECORD_TICKERS is empty.
+    this.flowRecord = FLOW_RECORD_TICKERS.length
+      ? new FlowProcessor({ spxOnly: false, tapeCap: FLOW_RECORD_TAPE_CAP, tapeFloorPremium: FLOW_RECORD_TAPE_FLOOR })
+      : null;
+    this.flowRecordContracts = new Map(); // option streamerSymbol -> root (routing key)
+    this.flowRecordSpotSym = new Map();   // underlying streamerSymbol -> root (spot key)
+    this.flowRecordSpot = new Map();      // root -> live spot (for isOtm tagging)
+    this.flowRecordTimer = null;          // window-refresh interval
     this.flowGexAccumulator = new FlowGexAccumulator(); // tracks dealer inventory for flow GEX
     this.contracts = new Map(); // streamerSymbol -> contract meta
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
@@ -2140,6 +2173,15 @@ class TastytradeProxy {
     this.greeksPlateauHits = 0;
     this._resubscribe();
 
+    // Multi-ticker flow recorder: subscribe each FLOW_RECORD_TICKERS root's
+    // near-spot chain on this SAME dxLink client and route its option trades into
+    // this.flowRecord (flow_prints only). tt mode only — theta owns option flow
+    // under useTheta(). Re-runs on reconnect because it lives in the bring-up.
+    if (!useTheta() && this.flowRecord) {
+      this._startFlowRecord().catch((e) =>
+        console.warn('[FLOW-RECORD] start failed:', String(e?.message || e).slice(0, 160)));
+    }
+
     // Subscribe to the 5-minute ES candle stream. fromTime requests a historical
     // snapshot of the past ~15 sessions of 5m bars, then live forming-bar updates.
     if (this.esCandleSymbol) {
@@ -2299,6 +2341,12 @@ class TastytradeProxy {
       // Persist the (coalesced, floor-filtered) tape so /flow can backfill today.
       // Fire-and-forget; no-ops without DATABASE_URL.
       writeFlowTape(bucket.tape);
+      // Isolated multi-ticker recorder → same flow_prints table, tagged per
+      // underlying, on its OWN flush cursor so it can't clobber SPX's tail.
+      if (this.flowRecord) {
+        const recBucket = this.flowRecord.bucket('RECORD');
+        writeFlowTape(recBucket.tape, 'record');
+      }
       // Flow GEX has read as ~0 with no clear cause from static review alone —
       // throttled (~every 5s) visibility into the actual pipeline counts so it
       // can be diagnosed from `docker compose logs` instead of guessing again:
@@ -2706,6 +2754,85 @@ class TastytradeProxy {
     }
     this.client.subscribe([...syms]);
     marketState.setStatus({ contractsSubscribed: syms.size });
+  }
+
+  // ── Multi-ticker flow recorder (tt) ───────────────────────────────────────
+  // Subscribe each FLOW_RECORD_TICKERS root's underlying spot + near-spot option
+  // window on the SHARED dxLink client. Option trades route into this.flowRecord
+  // (see _onEvent Trade branch) → flow_prints only. Idempotent: clears its own
+  // routing maps first so a reconnect (new dxLink channel) fully re-subscribes.
+  async _startFlowRecord() {
+    if (!this.flowRecord || !this.client) return;
+    // Rebuild routing on every bring-up: the new channel has none of the prior
+    // subs, so a stale "already subscribed" map would leave the recorder silent.
+    this.flowRecordContracts.clear();
+    this.flowRecordSpotSym.clear();
+    for (const root of FLOW_RECORD_TICKERS) {
+      // Sequential to keep TT REST gentle on startup.
+      await this._subscribeFlowRecordRoot(root).catch((e) => // eslint-disable-line no-await-in-loop
+        console.warn(`[FLOW-RECORD] ${root} subscribe failed:`, String(e?.message || e).slice(0, 120)));
+    }
+    console.log(`[FLOW-RECORD] recording ${FLOW_RECORD_TICKERS.join(', ')} — roots=${this.flowRecordSpotSym.size} contracts=${this.flowRecordContracts.size}`);
+    if (this.flowRecordTimer) clearInterval(this.flowRecordTimer);
+    this.flowRecordTimer = setInterval(() => {
+      for (const root of FLOW_RECORD_TICKERS) {
+        this._subscribeFlowRecordRoot(root).catch(() => {});
+      }
+    }, FLOW_RECORD_REFRESH_MS);
+    if (this.flowRecordTimer.unref) this.flowRecordTimer.unref();
+  }
+
+  /** Resolve+subscribe one recorder root's spot symbol and near-spot window. */
+  async _subscribeFlowRecordRoot(root) {
+    if (!this.client || !this.flowRecord) return;
+    // Underlying spot streamer symbol — subscribe once so isOtm/spot stay live.
+    if (![...this.flowRecordSpotSym.values()].includes(root)) {
+      try {
+        const u = await resolveUnderlying(root);
+        if (u?.streamerSymbol) {
+          this.flowRecordSpotSym.set(u.streamerSymbol, root);
+          this.client.subscribe([u.streamerSymbol]);
+        }
+      } catch (e) {
+        console.warn(`[FLOW-RECORD] ${root} underlying resolve failed:`, String(e?.message || e).slice(0, 120));
+      }
+    }
+    const chain = await fetchChain(root); // { expirations[], contracts[] }
+    if (!chain?.contracts?.length) return;
+    const legs = this._flowRecordWindow(chain, this.flowRecordSpot.get(root) || 0);
+    const fresh = [];
+    for (const c of legs) {
+      if (c.streamerSymbol && !this.flowRecordContracts.has(c.streamerSymbol)) {
+        this.flowRecordContracts.set(c.streamerSymbol, root);
+        fresh.push(c.streamerSymbol);
+      }
+    }
+    if (fresh.length) this.client.subscribe(fresh);
+  }
+
+  /** Near-spot window across the nearest FLOW_RECORD_EXPIRIES expirations. */
+  _flowRecordWindow(chain, spot) {
+    const exps = (chain.expirations || []).slice(0, Math.max(1, FLOW_RECORD_EXPIRIES));
+    if (!exps.length) return [];
+    let center = spot;
+    if (!(center > 0)) {
+      // Spot unknown (first pass before a quote lands): center on the nearest
+      // expiry's MEDIAN strike — near-the-money for a symmetric chain — rather
+      // than 0, which would grab deep-ITM/OTM strikes that never trade.
+      const near = chain.contracts.filter((c) => c.expiration === exps[0]);
+      const strikes = [...new Set(near.map((c) => c.strike))].sort((a, b) => a - b);
+      center = strikes[Math.floor(strikes.length / 2)] || 0;
+    }
+    const band = center > 0 ? center * FLOW_RECORD_WINDOW_PCT : Infinity;
+    const out = [];
+    for (const exp of exps) {
+      const legs = chain.contracts
+        .filter((c) => c.expiration === exp && (center <= 0 || Math.abs(c.strike - center) <= band))
+        .sort((a, b) => Math.abs(a.strike - center) - Math.abs(b.strike - center))
+        .slice(0, FLOW_RECORD_MAX_CONTRACTS);
+      out.push(...legs);
+    }
+    return out;
   }
 
   setExpiry(expiry) {
@@ -3141,6 +3268,13 @@ class TastytradeProxy {
         this._publishNqFut();
         return;
       }
+      // Recorder underlying quote → track that root's spot for isOtm tagging.
+      // It's not an option, so don't fall through into the option quote cache.
+      const recRoot = this.flowRecordSpotSym.get(sym);
+      if (recRoot) {
+        if (mid > 0) this.flowRecordSpot.set(recRoot, mid);
+        return;
+      }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize), t: Date.now() });
       return;
     }
@@ -3203,6 +3337,14 @@ class TastytradeProxy {
         }
         return;
       }
+      // Recorder underlying trade → backup spot (Quote mid is preferred, but a
+      // trade keeps spot fresh between quotes). Not an option; stop here.
+      const recRootT = this.flowRecordSpotSym.get(sym);
+      if (recRootT) {
+        const px = Number(ev.price);
+        if (px > 0) this.flowRecordSpot.set(recRootT, px);
+        return;
+      }
       // dayVolume on the Trade event is the running daily volume for the
       // contract — the correct source for per-strike volume (Summary has none).
       // Store live dayVolume even when it's 0: presence in the map means the
@@ -3222,6 +3364,22 @@ class TastytradeProxy {
       const gk = this.greeks.get(sym);
       const sm = this.summaries.get(sym);
       const dvol = this.volumes.get(sym);
+      // Isolated recorder: extra-root option prints go to this.flowRecord ONLY
+      // (flow_prints), never the SPX card. isOtm uses that root's tracked spot.
+      const recRoot = this.flowRecordContracts.get(sym);
+      if (recRoot) {
+        this.flowRecord.addPrint({
+          streamerSymbol: sym,
+          price: Number(ev.price),
+          size: Number.isFinite(sz) ? sz : 0,
+          quote,
+          spot: this.flowRecordSpot.get(recRoot) || 0,
+          iv: gk?.iv,
+          oi: sm?.oi,
+          volume: dvol,
+        });
+        return;
+      }
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
@@ -3892,6 +4050,8 @@ class TastytradeProxy {
     if (this.oiTimer) clearTimeout(this.oiTimer);
     if (this.volTimer) clearTimeout(this.volTimer);
     if (this.flowTimer) clearInterval(this.flowTimer);
+    if (this.flowRecordTimer) clearInterval(this.flowRecordTimer);
+    this.flowRecordTimer = null;
     if (this.premiumTimer) clearInterval(this.premiumTimer);
     if (this.thetaGreeksTimer) clearInterval(this.thetaGreeksTimer);
     this.recomputeTimer = null;

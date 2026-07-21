@@ -95,14 +95,19 @@ function todayYmdET() {
 // Track the newest ts we've already flushed, so each tick only writes the tail.
 // Coalescing mutates the latest slot in place, so we re-write any entry whose ts
 // is >= (lastFlushedTs − one slot) to capture the slot's final accumulated size.
-let lastFlushedTs = 0;
+// Keyed by cursor so INDEPENDENT tape streams (SPX engine vs. the multi-ticker
+// recorder) each keep their own flush position — sharing one global cursor let
+// whichever stream flushed last advance the tail past the other's unflushed rows.
+const lastFlushedByCursor = new Map();
 const SLOT_MS = 500;
 
 /**
  * Persist new/updated tape entries. Fire-and-forget; never throws into caller.
  * @param {Array<object>} tape  FlowOrder-shaped entries (oldest-first)
+ * @param {string} [cursor]     independent flush cursor (default 'spx'); the
+ *                              multi-ticker recorder passes 'record'.
  */
-async function writeFlowTape(tape) {
+async function writeFlowTape(tape, cursor = 'spx') {
   const p = getPool();
   if (!p || !Array.isArray(tape) || !tape.length) return;
 
@@ -110,6 +115,7 @@ async function writeFlowTape(tape) {
     await ensureTable(p);
 
     // Only the tail can have changed: anything at or after the last-flushed slot.
+    const lastFlushedTs = lastFlushedByCursor.get(cursor) || 0;
     const cutoff = lastFlushedTs - SLOT_MS;
     // Dedupe within the batch by the PK (ts|symbol|side): the tape can hold more
     // than one entry sharing that key (e.g. different action in the same slot),
@@ -172,7 +178,7 @@ async function writeFlowTape(tape) {
          spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
       params
     );
-    lastFlushedTs = maxTs;
+    lastFlushedByCursor.set(cursor, maxTs);
   } catch (e) {
     console.warn('[flow-history] write failed (will retry next tick):', e.message);
     const msg = String(e?.message || '');
