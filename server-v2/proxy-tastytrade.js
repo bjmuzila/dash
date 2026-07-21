@@ -27,7 +27,7 @@ const { useTheta, useThetaIndex } = require('./config/data-source');
 const thetaAdapterQuotes = require('./proxy-thetadata'); // stock quotes when DATA_SOURCE=theta
 const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
-const { writeGexSnapshot } = require('./state/gex-history-writer');
+const { writeGexSnapshot } = require('./gex-history-writer');
 const { writeFlowTape } = require('./state/flow-history-writer');
 const { rehydrateAccumulator } = require('./state/flow-gex-rehydrate');
 const { writeEsCandles, writeNqCandles } = require('./state/es-candle-writer');

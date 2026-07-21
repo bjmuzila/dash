@@ -1018,15 +1018,17 @@ const ChainMatrix = memo(function ChainMatrix({
   const STRIKE_COL = 56;
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
-  // ⅀ Total column — per-strike sum across every rendered expiration, with its
-  // own heat scale (over the visible strikes) so the biggest net totals pop.
+  // ⅀ Total column — per-strike sum across every rendered expiration EXCEPT
+  // 0DTE (front expiry excluded on purpose; label stays plain "Total"), with
+  // its own heat scale (over the visible strikes) so the biggest net totals pop.
+  const todayKey = etDateKey(etToday());
   const rowTotals = new Map<number, number>();
   visibleStrikes.forEach((strike) => {
     if (strike == null) return;
     let sum = 0;
     renderIdx.forEach((colIdx) => {
       const col = columns[colIdx];
-      if (!col) return;
+      if (!col || col.expiration === todayKey) return;
       const isCh = !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
       const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike);
       if (v != null) sum += v;
@@ -1910,10 +1912,13 @@ export default function OptionsChainPage({
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
   // Grand total of the active greek across the VISIBLE strike window × every
-  // expiration (matches the sum of the Total column). Shown in the toolbar.
+  // non-0DTE expiration (matches the sum of the Total column — front expiry
+  // excluded, label stays plain "Total Net {greek}"). Shown in the toolbar.
   const visibleTotal = useMemo(() => {
+    const todayKey = etDateKey(etToday());
     let sum = 0;
     for (const col of columns) {
+      if (col.expiration === todayKey) continue;
       for (const s of visibleStrikes) {
         if (s == null) continue;
         const v = col.cells.get(s)?.[greekMode];

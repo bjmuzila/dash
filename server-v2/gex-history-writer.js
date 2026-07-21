@@ -143,8 +143,10 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
       else if (Math.abs(netVolGex) < 1e-30) netVolGex = 0;
       let callGamma = Number(row.callGamma);
       if (!Number.isFinite(callGamma)) callGamma = null;
+      else if (Math.abs(callGamma) < 1e-30) callGamma = 0;
       let putGamma = Number(row.putGamma);
       if (!Number.isFinite(putGamma)) putGamma = null;
+      else if (Math.abs(putGamma) < 1e-30) putGamma = 0;
       values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
       params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma);
     }
