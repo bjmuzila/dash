@@ -3871,6 +3871,16 @@ export interface OptionStrikeGexRecord {
   net_vol_gex?: number;
 }
 
+// Postgres `real` (float4) underflows on any non-zero magnitude below ~1.18e-38
+// and throws "out of range for type real" — a deep-OTM strike with gamma≈0 and
+// tiny OI can legitimately compute to e.g. 8.3e-48, which is indistinguishable
+// from 0 at this precision anyway. Clamp instead of losing the whole batch.
+const REAL_MIN_MAGNITUDE = 1e-37;
+function clampReal(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  return Math.abs(v) < REAL_MIN_MAGNITUDE ? 0 : v;
+}
+
 export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord, "id">[]): Promise<void> {
   if (!rows.length) return;
   const pool = await getDb();
@@ -3878,8 +3888,8 @@ export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord
     await pool.query(
       `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [row.timestamp, row.date, row.expiry, row.spot, row.strike, row.net_gex,
-       Number.isFinite(row.net_vol_gex as number) ? row.net_vol_gex : null]
+      [row.timestamp, row.date, row.expiry, row.spot, row.strike, clampReal(row.net_gex),
+       Number.isFinite(row.net_vol_gex as number) ? clampReal(row.net_vol_gex as number) : null]
     );
   }
   // Retention: keep only the last 2 days. The heatmap + bubble backfill never

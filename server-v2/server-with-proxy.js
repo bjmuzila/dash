@@ -1418,6 +1418,75 @@ async function main() {
         })();
         return;
       }
+      // Per-symbol, per-STRIKE day-over-day growth: EVERY strike for one ticker
+      // with its prior-session net GEX vs the latest snapshot, so you can see
+      // WHICH strike is growing (not just the single top mover strike_dod_max
+      // keeps). Computed live from strike_growth using the same 0DTE/SWING
+      // predicate + (gex_now+gex_open) basis as rollupDayOverDay.
+      //   GET /proxy/strike-dod-strikes?symbol=NVDA&bucket=0DTE&floor=50000000&limit=400
+      if (pathname === '/proxy/strike-dod-strikes' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const bk = (u.searchParams.get('bucket') || '0DTE').toUpperCase();
+            // Same self-classifying predicate rollupDayOverDay uses (row vs ITS date).
+            const pred = bk === 'SWING'
+              ? `expiry <> to_char(date,'YYYY-MM-DD')`
+              : `expiry =  to_char(date,'YYYY-MM-DD')`;
+            // Min |net_yest| a strike needs before we report a % (tiny bases → fake 900%).
+            const floor = Math.max(0, Number(u.searchParams.get('floor') || 50e6));
+            const limit = Math.min(1000, Number(u.searchParams.get('limit') || 400));
+            const { rows } = await p.query(
+              `WITH cur_d AS (
+                 SELECT max(date) AS d FROM strike_growth WHERE symbol=$1 AND ${pred}
+               ),
+               prev_d AS (
+                 SELECT max(date) AS d FROM strike_growth
+                 WHERE symbol=$1 AND ${pred} AND date < (SELECT d FROM cur_d)
+               ),
+               cur_e AS (
+                 SELECT DISTINCT ON (expiry, strike) strike, expiry, spot,
+                        (gex_now + gex_open) AS net, gex_now AS vol
+                 FROM strike_growth
+                 WHERE symbol=$1 AND date=(SELECT d FROM cur_d) AND ${pred}
+                 ORDER BY expiry, strike, ts DESC
+               ),
+               prev_e AS (
+                 SELECT DISTINCT ON (expiry, strike) strike, (gex_now + gex_open) AS net
+                 FROM strike_growth
+                 WHERE symbol=$1 AND date=(SELECT d FROM prev_d) AND ${pred}
+                 ORDER BY expiry, strike, ts DESC
+               ),
+               cur AS (
+                 SELECT strike, max(spot) AS spot, sum(net) AS net_now,
+                        sum(vol) AS vol_today, min(expiry) AS expiry
+                 FROM cur_e GROUP BY strike
+               ),
+               prev AS ( SELECT strike, sum(net) AS net_yest FROM prev_e GROUP BY strike )
+               SELECT c.strike, c.expiry, c.spot, c.net_now,
+                      COALESCE(pv.net_yest, 0) AS net_yest, c.vol_today,
+                      (c.net_now - COALESCE(pv.net_yest, 0)) AS delta,
+                      CASE WHEN abs(COALESCE(pv.net_yest, 0)) >= $2
+                           THEN (c.net_now - pv.net_yest) / abs(pv.net_yest) * 100
+                           ELSE NULL END AS growth_pct,
+                      (pv.net_yest IS NULL) AS is_new,
+                      (SELECT to_char(d,'YYYY-MM-DD') FROM cur_d)  AS date,
+                      (SELECT to_char(d,'YYYY-MM-DD') FROM prev_d) AS prev_date
+               FROM cur c LEFT JOIN prev pv USING (strike)
+               ORDER BY abs(c.net_now - COALESCE(pv.net_yest, 0)) DESC
+               LIMIT $3`,
+              [symbol, floor, limit]
+            );
+            sendJson(res, 200, { ok: true, symbol, bucket: bk, rows });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire (testing): POST /proxy/gex-levels-history-run
       if (pathname === '/proxy/gex-levels-history-run' && req.method === 'POST') {
         const { collectGexLevelsHistory } = require('./gex-levels-history-recorder');

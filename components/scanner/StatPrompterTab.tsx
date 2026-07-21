@@ -26,7 +26,6 @@ import { useEffect, useMemo, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
-import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 import { failOutcome, type FailOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
@@ -1770,10 +1769,6 @@ export default function StatPrompterTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Today's IB, priced, with the historical reach rate on every level.
-          Sits above the library because it's the thing you look at first. */}
-      <IbLevelCanvas />
-
       <Card title="Stat Prompter" subtitle="Canned questions over the ES + NQ Initial Balance book. Click one, it runs on the real history.">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {CATS.map((c) => (
