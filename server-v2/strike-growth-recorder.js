@@ -5,16 +5,27 @@
  * Tracks PER-STRIKE GEX growth across a watchlist of tickers so a tracker page
  * can answer: "which strike is growing HUGE today?"
  *
- * For each active watchlist symbol we snapshot the per-strike OI+Vol net GEX
- * (the canonical `oiVolNet` basis from gex-calculator.js — same basis the
- * dashboard heatmap/chart/MVC use) for the front active expiry, limited to a
- * window of strikes around spot. The FIRST snapshot of the session per symbol
- * is the "open" baseline; every later snapshot stores delta_abs = now − open so
- * the page can rank strikes by absolute dollar gamma added since the open.
+ * For each active watchlist symbol we read the LIVE dxLink feed (see
+ * TastytradeProxy.startStrikeGrowthFeed/getStrikeGrowthSnapshot in
+ * proxy-tastytrade.js — a persistent multi-ticker subscription on the SAME
+ * shared connection as the SPX GEX feed, not Theta). A newly-subscribed leg
+ * has no streamed data for the first few seconds, so proxy-tastytrade.js
+ * pre-warms it with one TT REST snapshot (fetchChainFull) right after
+ * subscribing, then hands off to dxLink as live events land (same in-memory
+ * maps — no mode switch on this side, snapshotTicker always just reads
+ * whatever's current). Not Theta, not a steady-state REST poll — REST here
+ * is a one-shot cold-start fill, not the data source. Keep
+ * only the top TOP_N_EACH_SIDE strikes by combined net GEX on each side (call
+ * side positive, put side negative) — the actual walls, not just whatever sits
+ * near spot. The FIRST snapshot of the session per symbol is the "open"
+ * baseline; every later snapshot stores delta_abs = now − open so the page can
+ * rank strikes by absolute dollar gamma added since the open.
  *
- * Cadence: whole watchlist swept every SWEEP_MINS (default 30) during RTH,
- * tickers fetched SEQUENTIALLY with a small delay to protect the standalone
- * theta-terminal (which OOMs under burst load — run it with -Xmx1500m).
+ * Cadence: whole watchlist swept every SWEEP_MINS (default 5) during RTH. No
+ * network fetch happens in the sweep itself — getStrikeGrowthSnapshot reads
+ * in-memory feed maps (plus a 10-min-cached chain-structure lookup), so the
+ * TICKER_DELAY_MS pacing here is just cold-cache-burst insurance, not the
+ * heavy per-request pacing a REST/Theta path needed.
  *
  * Tables (self-created, like gex-history-writer's ensureVolColumn):
  *   strike_growth_watchlist(symbol PK, active bool, sort_idx int, added_at)
@@ -22,30 +33,18 @@
  *                 gex_now, gex_open, delta_abs, delta_pct, spot, ts,
  *                 PRIMARY KEY(date,symbol,strike,ts))
  *
- * Wiring: startStrikeGrowthRecorder(PORT) from server-with-proxy.js, next to
- * startEodGexRecorder(PORT). Manual fire: POST /proxy/strike-growth-run.
+ * Wiring: startStrikeGrowthRecorder(PORT, proxy) from server-with-proxy.js,
+ * where `proxy` is the live TastytradeProxy instance (its dxLink connection is
+ * shared — see proxy-tastytrade.js's STRIKE_GROWTH_FEED_* section). Manual
+ * fire: POST /proxy/strike-growth-run.
  */
 
 const { computeGexRows } = require('./computation/gex-calculator');
-const { useTheta } = require('./config/data-source');
-// Option data source follows the SAME DATA_SOURCE flag as the main feed:
-// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
-const {
-  fetchChainTheta,
-  fetchGreeksTheta,
-  fetchOpenInterestTheta,
-  fetchVolumeTheta,
-  fetchStockQuoteTheta,
-  fetchIndexPriceTheta,
-} = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 const { SCANNER_TICKERS, SCANNER_HOT } = require('./scanner-tickers');
 
-// Cash indices price off the index snapshot endpoint, NOT the stock-quote one
-// (which returns "no data" for them). Equities/ETFs use the stock quote.
-const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
-
-// `exp|strike|type` key matching proxy-thetadata's keyOf()
-const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
+// Set once by startStrikeGrowthRecorder(port, proxy) — the live TastytradeProxy
+// instance whose shared dxLink connection this recorder reads from.
+let _proxy = null;
 
 // "Open" baseline = OI-only net GEX (netGEX). OI is yesterday's carried-over
 // open interest (options don't trade until the open), so this is the positioning
@@ -57,26 +56,26 @@ const volOnlyNet = (r) => Number(r.netVolGEX ?? 0);
 
 // ── Tunables (env-overridable) ───────────────────────────────────────────────
 
-// Minutes between full watchlist sweeps. 5m gives exact 15/30/60-min lookbacks
-// (3/6/12 sweeps back) but is the heaviest on the standalone theta-terminal —
-// keep the ACTIVE watchlist tight at 5m to avoid OOM. Raise via env if needed.
+// Minutes between full watchlist sweeps. Cheap now (no network call per
+// ticker — see header), so this mostly governs DoD-diff resolution.
 const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
 // Fast-lane cadence for the small "hot" watchlist — swept far more often than the
-// full ~380-name roster so a handful of names stay near-live. Keep the hot list
-// short (a few dozen max) or this loses its speed advantage.
+// full roster so a handful of names stay near-live.
 const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
-// Strikes to keep each side of spot per ticker (28 total at 14). Caps Theta work.
-const STRIKES_EACH_SIDE = Number(process.env.STRIKE_GROWTH_STRIKES_SIDE || 14);
-// How many front expiries to snapshot per ticker. 1 = nearest expiration only —
-// keeps Theta load minimal across the full ~380-name EM roster. THIS IS THE LOAD
-// MULTIPLIER: each expiry = a full greeks/OI/vol fetch, so N ≈ N× the calls.
-// Raise via env (e.g. 14 for the full chain matrix) if load headroom allows.
-const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 1);
-// Delay between expiry fetches within one ticker (ms) — extra pacing for Theta.
-const EXPIRY_DELAY_MS = Number(process.env.STRIKE_GROWTH_EXPIRY_DELAY_MS || 150);
-// Delay between tickers in a sweep (ms) — paces the standalone theta-terminal.
+// How many strikes to WRITE to strike_growth per side, per expiry — ranked by
+// combined net GEX (gex_now+gex_open), not distance from spot. Keeps the table
+// to the strikes that actually matter (real call/put walls) instead of a
+// fixed spot-centered window. The subscription window that makes these strikes
+// visible in the first place is STRIKE_GROWTH_FEED_WINDOW in proxy-tastytrade.js.
+const TOP_N_EACH_SIDE = Number(process.env.STRIKE_GROWTH_TOP_N || 5);
+// How many front expiries to snapshot per ticker. Must be <= the live feed's
+// STRIKE_GROWTH_FEED_EXPIRIES (proxy-tastytrade.js) — a larger value here just
+// gets clamped to whatever the feed actually subscribed.
+const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 2);
+// Delay between tickers in a sweep (ms) — insurance against a burst of cold
+// fetchChain() cache misses on startup, not per-request network pacing.
 const TICKER_DELAY_MS = Number(process.env.STRIKE_GROWTH_TICKER_DELAY_MS || 600);
-// Hard cap on active tickers fetched per sweep, belt-and-suspenders vs OOM.
+// Hard cap on active tickers per sweep, belt-and-suspenders vs a runaway roster.
 const MAX_ACTIVE = Number(process.env.STRIKE_GROWTH_MAX_ACTIVE || 600);
 
 // RTH window (ET minutes-since-midnight): 09:30–16:00.
@@ -284,78 +283,47 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Per-ticker snapshot ──────────────────────────────────────────────────────
 
-// Build the per-strike rows for ONE expiry, windowed to ±STRIKES_EACH_SIDE
-// strikes around spot. Returns [{ strike, gex, open }] or [] if no usable data.
-async function snapshotOneExpiry(chainTicker, expiry, expContracts, spot) {
-  // Window the chain to ±STRIKES_EACH_SIDE strikes around spot BEFORE fetching
-  // greeks/OI/vol — this is what keeps Theta load bounded per expiry.
-  const uniqStrikes = [...new Set(expContracts.map((c) => Number(c.strike)))].sort((a, b) => a - b);
-  let pivot = uniqStrikes.findIndex((s) => s >= spot);
-  if (pivot < 0) pivot = uniqStrikes.length - 1;
-  const lo = Math.max(0, pivot - STRIKES_EACH_SIDE);
-  const hi = Math.min(uniqStrikes.length, pivot + STRIKES_EACH_SIDE);
-  const keepStrikes = new Set(uniqStrikes.slice(lo, hi));
-  const windowed = expContracts.filter((c) => keepStrikes.has(Number(c.strike)));
-  if (!windowed.length) return [];
-
-  const [greekMap, oiMap, volMap] = await Promise.all([
-    fetchGreeksTheta(chainTicker, expiry).catch(() => new Map()),
-    fetchOpenInterestTheta(chainTicker, expiry).catch(() => new Map()),
-    fetchVolumeTheta(chainTicker, expiry).catch(() => new Map()),
-  ]);
-
-  const flatRows = [];
-  for (const c of windowed) {
-    const k = keyOf(c.expiration, c.strike, c.type);
-    const g = greekMap.get(k) || {};
-    const oi = Number(oiMap.get(k)?.oi ?? 0);
-    const vol = Number(volMap.get(k) ?? 0);
-    const gamma = Math.abs(Number(g.gamma ?? 0));
-    const delta = Math.abs(Number(g.delta ?? 0));
-    if (!(gamma > 0) && !(oi > 0) && !(vol > 0)) continue;
-    flatRows.push({ strike: c.strike, side: c.type === 'C' ? 'call' : 'put', oi, volume: vol, gamma, delta });
-  }
+// Rank one expiry's legs by combined net GEX (gex_now+gex_open, same "net"
+// rollupDayOverDay already uses) and keep the top TOP_N_EACH_SIDE on the call
+// side (positive) and put side (negative). Returns [{ strike, gex, open }].
+function pickTopEachSide(legRows, spot) {
+  const flatRows = legRows
+    .filter((r) => r.gamma > 0 || r.oi > 0 || r.volume > 0)
+    .map((r) => ({ strike: r.strike, side: r.type === 'C' ? 'call' : 'put', oi: r.oi, volume: r.volume, gamma: r.gamma }));
   if (!flatRows.length) return [];
 
   const gexRows = computeGexRows(flatRows, spot);
   // gex = volume-only (today's traded volume); open = OI-only (carried OI, pre-open).
-  return gexRows.map((r) => ({ strike: r.strike, gex: volOnlyNet(r), open: oiOnlyNet(r) }));
+  const scored = gexRows.map((r) => {
+    const gex = volOnlyNet(r), open = oiOnlyNet(r);
+    return { strike: r.strike, gex, open, net: gex + open };
+  });
+  const topCalls = scored.filter((r) => r.net > 0).sort((a, b) => b.net - a.net).slice(0, TOP_N_EACH_SIDE);
+  const topPuts = scored.filter((r) => r.net < 0).sort((a, b) => a.net - b.net).slice(0, TOP_N_EACH_SIDE);
+  return [...topCalls, ...topPuts].map(({ strike, gex, open }) => ({ strike, gex, open }));
 }
 
 /**
- * Snapshot the front EXPIRIES_PER_TICKER expiries for one ticker, each windowed
- * to ±STRIKES_EACH_SIDE strikes around spot. Returns { spot, expiries:[{expiry,
- * rows}] }. Expiries are fetched SEQUENTIALLY with EXPIRY_DELAY_MS pacing — this
- * is the load multiplier vs the old front-only recorder, so it's paced hard.
+ * Snapshot the front EXPIRIES_PER_TICKER expiries for one ticker straight off
+ * the live dxLink feed (TastytradeProxy.getStrikeGrowthSnapshot) — no network
+ * call, just a read of the in-memory feed maps the shared connection already
+ * keeps warm. Returns { spot, expiries:[{expiry, rows}] } where rows is only
+ * the top TOP_N_EACH_SIDE strikes per side, ranked by combined net GEX.
  */
 async function snapshotTicker(chainTicker) {
-  let spot;
-  if (INDEX_SYMBOLS.has(chainTicker.toUpperCase())) {
-    spot = Number(await fetchIndexPriceTheta(chainTicker));
-  } else {
-    const quote = await fetchStockQuoteTheta(chainTicker);
-    spot = Number(quote?.last ?? quote?.mark ?? 0);
-  }
-  if (!(spot > 0)) throw new Error(`spot 0 for ${chainTicker}`);
+  if (!_proxy) throw new Error('dxLink feed not wired (no proxy passed to startStrikeGrowthRecorder)');
+  const snap = await _proxy.getStrikeGrowthSnapshot(chainTicker);
+  if (!snap) throw new Error(`no live snapshot yet for ${chainTicker} (feed still warming up)`);
+  if (!(snap.spot > 0)) throw new Error(`spot 0 for ${chainTicker}`);
 
-  const { contracts, expirations } = await fetchChainTheta(chainTicker);
-  if (!expirations?.length) throw new Error(`no expirations ${chainTicker}`);
-  const targetExps = expirations.slice(0, EXPIRIES_PER_TICKER); // ascending → front N
-
+  const targetExps = snap.expiries.slice(0, EXPIRIES_PER_TICKER);
   const out = [];
-  for (const expiry of targetExps) {
-    const expContracts = contracts.filter((c) => c.expiration === expiry);
-    if (!expContracts.length) continue;
-    try {
-      const rows = await snapshotOneExpiry(chainTicker, expiry, expContracts, spot);
-      if (rows.length) out.push({ expiry, rows });
-    } catch (e) {
-      console.warn(`[strike-growth] ${chainTicker} ${expiry} — ${e.message}`);
-    }
-    await sleep(EXPIRY_DELAY_MS); // pace Theta between expiries
+  for (const { expiry, rows: legRows } of targetExps) {
+    const picked = pickTopEachSide(legRows, snap.spot);
+    if (picked.length) out.push({ expiry, rows: picked });
   }
   if (!out.length) throw new Error(`no usable expiries ${chainTicker}`);
-  return { spot, expiries: out };
+  return { spot: snap.spot, expiries: out };
 }
 
 // ── Sweep ────────────────────────────────────────────────────────────────────
@@ -459,6 +427,15 @@ async function runSweep(opts = {}) {
   const done = [];
   const failed = [];
 
+  // Keep the live dxLink feed's roster in sync with this sweep's symbol list.
+  // Additive (see startStrikeGrowthFeed in proxy-tastytrade.js) — safe to call
+  // every sweep, including the small hot-lane subset, without dropping tickers
+  // the full sweep already subscribed.
+  if (_proxy) {
+    await _proxy.startStrikeGrowthFeed(symbols).catch((e) =>
+      console.warn('[strike-growth] feed subscribe:', e.message));
+  }
+
   console.log(`[strike-growth] ${onlyHot ? 'HOT ' : ''}sweep ${date} — ${symbols.length} symbols`);
   for (const symbol of symbols) {
     try {
@@ -471,7 +448,7 @@ async function runSweep(opts = {}) {
       failed.push(`${symbol}:${e.message}`);
       console.warn(`[strike-growth] ${symbol} — ${e.message}`);
     }
-    await sleep(TICKER_DELAY_MS); // pace theta-terminal
+    await sleep(TICKER_DELAY_MS); // insurance vs a cold fetchChain() cache-miss burst
   }
   console.log(`[strike-growth] sweep done — ${done.length} ok, ${failed.length} failed`);
 
@@ -490,16 +467,27 @@ let _timer = null;
 // minute is a multiple of SWEEP_MINS and we're inside RTH, de-duped per minute.
 let _lastSweepKey = null;
 let _lastHotKey = null;
-// SEPARATE guards so the fast lane isn't starved by a long full sweep. The full
-// roster (~400 names) can take ~10 min; if the hot lane shared one mutex it would
-// almost never fire. Each guard only blocks a second sweep OF THE SAME KIND, so
-// a 15-name hot sweep can run concurrently with the full sweep — at most 2 paced
-// Theta requests overlap, well under the burst that OOMs theta-terminal.
+// SEPARATE guards so the fast lane isn't starved by a long full sweep. Each
+// guard only blocks a second sweep OF THE SAME KIND, so a small hot sweep can
+// run concurrently with the full sweep — both just read in-memory feed maps
+// now, so there's no Theta-style burst risk to guard against, but the
+// de-dupe still matters so a slow DB write doesn't double-fire a sweep.
 let _fullSweeping = false;
 let _hotSweeping = false;
 
-function startStrikeGrowthRecorder(_port) {
-  console.log(`[strike-growth] enabled — ${SWEEP_MINS}m full sweeps + ${HOT_MINS}m hot-lane during RTH, ${STRIKES_EACH_SIDE}±strikes/ticker, ${TICKER_DELAY_MS}ms/ticker pacing`);
+/**
+ * @param {number} _port unused, kept for call-site symmetry with the other
+ *   startXRecorder(PORT) functions in server-with-proxy.js.
+ * @param {import('./proxy-tastytrade').TastytradeProxy} proxy the live feed
+ *   instance whose shared dxLink connection this recorder reads from. Without
+ *   it every sweep fails fast with "dxLink feed not wired".
+ */
+function startStrikeGrowthRecorder(_port, proxy) {
+  _proxy = proxy || null;
+  if (!_proxy) {
+    console.warn('[strike-growth] started WITHOUT a proxy instance — every sweep will fail until this is wired (see startStrikeGrowthRecorder call site in server-with-proxy.js)');
+  }
+  console.log(`[strike-growth] enabled — ${SWEEP_MINS}m full sweeps + ${HOT_MINS}m hot-lane during RTH, top ${TOP_N_EACH_SIDE} each side × ${EXPIRIES_PER_TICKER} expiries/ticker, dxLink-fed (no REST/Theta)`);
   const tick = async () => {
     if (!isRthWindow()) return;
     const { hour, minute } = etParts();

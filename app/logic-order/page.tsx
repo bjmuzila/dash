@@ -11,24 +11,48 @@ import {
   fmtUsdShort,
 } from "@/components/dashboard/GexRegimeCard";
 
-const DEFAULT_TICKERS = ["SPX", "SPY", "QQQ"];
+// Mirrors server-v2/far-cb-tickers.js CORE_TICKERS — the "Far CB Watch"
+// roster (your actual TradingView "In positions" set). Same mirror pattern
+// TickerListDropdown.tsx already uses for the scanner universe: the curated
+// list is edited server-side and copied here, since it's a static constant.
+const FAR_CB_CORE_TICKERS = [
+  // Indices / broad ETFs
+  "SPX", "SPY", "QQQ", "NDX", "IWM", "RSP", "MAGS", "VIX", "TLT", "UVXY",
+  // Mega-cap / mains
+  "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
+  // Shares
+  "AAPU", "ASTS", "AVGO", "BYND", "CMG", "COIN", "CWVX", "ETHA", "FBL", "FIG",
+  "GME", "HIMZ", "HOOD", "IBIT", "LLYX", "MSFU", "NFLX", "NOK", "NVDX", "OSCR",
+  "PLTR", "PONY", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
+  "SOXL", "TQQQ", "TSLL", "UUUU",
+  // Spreads
+  "ABNB", "AFRM", "ARM", "BA", "BABA", "CCJ", "CHWY", "COST", "CRCL", "CRM",
+  "CRWD", "CRWV", "DJT", "FDX", "GS", "HIMS", "INTC", "IREN", "LAC", "LLY",
+  "MA", "MARA", "MCD", "MRK", "MRNA", "MU", "NIO", "NKE", "NNE", "NXE", "OKLO",
+  "OPEN", "OXY", "PDD", "PFE", "PTON", "RBLX", "RIOT", "RKLB", "ROKU", "SE",
+  "SMH", "SNDK", "SNOW", "TGT", "TSM", "TTD", "U", "UNH", "UPS", "UPST", "V",
+  "XPEV", "XYZ",
+];
 
-/** The user's saved 4-ticker Positioning list (same source as /test Positioning
- * tab) — falls back to the SPX/SPY/QQQ core set when signed out or unset. */
-function useMainTickers(): string[] {
-  const [tickers, setTickers] = useState<string[]>(DEFAULT_TICKERS);
+/** Far CB Watch roster = CORE_TICKERS ∪ your customer-added tickers
+ * (/api/far-cb-tickers, requires sign-in). Falls back to CORE alone when
+ * signed out or the fetch fails. */
+function useFarCbTickers(): string[] {
+  const [custom, setCustom] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
-    fetch("/api/positioning-tickers", { cache: "no-store" })
+    fetch("/api/far-cb-tickers", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!alive) return;
-        if (Array.isArray(j?.tickers) && j.tickers.length) setTickers(j.tickers);
+        const rows = Array.isArray(j?.rows) ? j.rows : [];
+        const syms = rows.map((r: { symbol?: string }) => String(r.symbol || "").toUpperCase()).filter(Boolean);
+        if (syms.length) setCustom(syms);
       })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
-  return tickers;
+  return useMemo(() => [...new Set([...FAR_CB_CORE_TICKERS, ...custom])], [custom]);
 }
 
 type Step = { n: number; title: string; body: string; live: string; liveTone?: string };
@@ -89,9 +113,8 @@ function StepCard({ step }: { step: Step }) {
 }
 
 export default function LogicOrderPage() {
-  const mainTickers = useMainTickers();
-  const [ticker, setTicker] = useState(DEFAULT_TICKERS[0]);
-  useEffect(() => { setTicker(mainTickers[0] ?? DEFAULT_TICKERS[0]); }, [mainTickers]);
+  const roster = useFarCbTickers();
+  const [ticker, setTicker] = useState(FAR_CB_CORE_TICKERS[0]);
 
   const { wave, gex, err, loadedAt } = useRegimeData(ticker);
   const cond = useMemo(() => synthesize(wave, gex, ticker), [wave, gex, ticker]);
@@ -141,14 +164,14 @@ export default function LogicOrderPage() {
         subtitle={
           loadedAt
             ? `Live read for ${ticker} · updated ${new Date(loadedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })} ET`
-            : "How to read the map, step by step."
+            : `Far CB Watch roster · ${roster.length} tickers`
         }
       >
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
           <TickerListDropdown
             activeTicker={ticker}
             onSelect={setTicker}
-            universe={mainTickers}
+            universe={roster}
             triggerLabel={ticker}
           />
         </div>

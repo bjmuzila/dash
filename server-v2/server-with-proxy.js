@@ -2717,9 +2717,11 @@ async function main() {
     // (Anthropic via /api/social-media/day-post) into day_posts at their slot
     // times, so the Social Media → Day Posts tab has a ready copy/paste list.
     require('./day-post-writer').startDayPostWriter(PORT);
-    // Per-strike GEX growth recorder: sweeps the watchlist every 30m during RTH
-    // and stores delta-vs-open per strike (feeds /strike-growth tracker page).
-    startStrikeGrowthRecorder(PORT);
+    // Per-strike GEX growth recorder: sweeps the watchlist during RTH and stores
+    // delta-vs-open per strike (feeds /strike-growth tracker + DoD Movers tabs).
+    // Reads the LIVE dxLink feed (not Theta/REST) — pass the shared proxy so
+    // startStrikeGrowthFeed() can subscribe on the same connection.
+    startStrikeGrowthRecorder(PORT, proxy);
     // Per-strike Greek snapshots: records gamma/delta/vanna/charm per strike
     // every 5m for the Greek Sensitivity Scanner (/scanner Greeks tab).
     startGreekScannerRecorder(PORT);

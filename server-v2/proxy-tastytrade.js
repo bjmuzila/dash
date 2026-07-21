@@ -161,6 +161,16 @@ const FLOW_RECORD_MAX_CONTRACTS = Number(process.env.FLOW_RECORD_MAX_CONTRACTS |
 const FLOW_RECORD_EXPIRIES = Number(process.env.FLOW_RECORD_EXPIRIES || 2);
 // Re-pick each root's window as spot drifts (ms).
 const FLOW_RECORD_REFRESH_MS = Number(process.env.FLOW_RECORD_REFRESH_MS || 5 * 60 * 1000);
+// ── Strike-growth (DoD) recorder feed — SAME shared dxLink client, a SEPARATE
+// persistent multi-ticker subscription from FLOW_RECORD above. Mirrors that
+// pattern (resolve underlying, subscribe a strike window, keep it alive with
+// periodic re-pick) but feeds server-v2/strike-growth-recorder.js's per-strike
+// GEX snapshots instead of the flow tape. No FlowProcessor involved — reads
+// come straight off the generic this.greeks/summaries/volumes maps.
+const STRIKE_GROWTH_FEED_WINDOW = Number(process.env.STRIKE_GROWTH_FEED_WINDOW || 20); // ± strikes around spot
+const STRIKE_GROWTH_FEED_EXPIRIES = Number(process.env.STRIKE_GROWTH_FEED_EXPIRIES || 2);
+const STRIKE_GROWTH_FEED_REFRESH_MS = Number(process.env.STRIKE_GROWTH_FEED_REFRESH_MS || 5 * 60 * 1000);
+
 // Recorder tape sizing — bigger than the SPX cap since it holds many roots.
 const FLOW_RECORD_TAPE_CAP = Number(process.env.FLOW_RECORD_TAPE_CAP || 8000);
 // Recorder noise floor ($premium). Equity-option blocks are smaller than SPX
@@ -1918,6 +1928,13 @@ class TastytradeProxy {
     this.flowRecordSpotSym = new Map();   // underlying streamerSymbol -> root (spot key)
     this.flowRecordSpot = new Map();      // root -> live spot (for isOtm tagging)
     this.flowRecordTimer = null;          // window-refresh interval
+    // Strike-growth (DoD) recorder feed — separate from flow-record above, see
+    // the STRIKE_GROWTH_FEED_* constants for the why.
+    this.strikeGrowthContracts = new Map(); // option streamerSymbol -> ticker root
+    this.strikeGrowthSpotSym = new Map();   // underlying streamerSymbol -> ticker root
+    this.strikeGrowthSpot = new Map();      // ticker root -> live spot
+    this.strikeGrowthTickers = [];          // roster this feed is currently tracking
+    this.strikeGrowthTimer = null;          // window-refresh interval
     this.flowGexAccumulator = new FlowGexAccumulator(); // tracks dealer inventory for flow GEX
     this.contracts = new Map(); // streamerSymbol -> contract meta
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
@@ -2180,6 +2197,21 @@ class TastytradeProxy {
     if (!useTheta() && this.flowRecord) {
       this._startFlowRecord().catch((e) =>
         console.warn('[FLOW-RECORD] start failed:', String(e?.message || e).slice(0, 160)));
+    }
+
+    // Strike-growth (DoD) recorder feed: re-subscribe the last known roster on
+    // every bring-up, same as flow-record above — a reconnect gets a brand new
+    // dxLink channel with none of the prior subs, so the bookkeeping maps must
+    // be cleared (they'd otherwise claim symbols are "already subscribed" on a
+    // channel that has never seen them). No-op if the recorder hasn't called
+    // startStrikeGrowthFeed() yet (strikeGrowthTickers still empty).
+    if (this.strikeGrowthTickers.length) {
+      const roster = this.strikeGrowthTickers;
+      this.strikeGrowthTickers = [];
+      this.strikeGrowthContracts.clear();
+      this.strikeGrowthSpotSym.clear();
+      this.startStrikeGrowthFeed(roster).catch((e) =>
+        console.warn('[STRIKE-GROWTH-FEED] resume failed:', String(e?.message || e).slice(0, 160)));
     }
 
     // Subscribe to the 5-minute ES candle stream. fromTime requests a historical
@@ -2835,6 +2867,200 @@ class TastytradeProxy {
     return out;
   }
 
+  // ── Strike-growth (DoD) recorder feed (tt) ────────────────────────────────
+  // Persistent multi-ticker subscription on the SAME shared dxLink client,
+  // separate from flow-record above. server-v2/strike-growth-recorder.js calls
+  // startStrikeGrowthFeed(tickers) once at boot, then reads current values via
+  // getStrikeGrowthSnapshot(root) on its own sweep cadence — no REST calls, no
+  // Theta, no subscribe/unsubscribe churn per sweep. Idempotent re-subscribe:
+  // safe to call again with a new roster (e.g. watchlist changed).
+  // ADDITIVE — merges `tickers` into the tracked roster and subscribes whatever
+  // isn't already covered. Called repeatedly with different subsets (e.g. the
+  // recorder's hot-lane sweep passes a small list, the full sweep passes the
+  // whole watchlist) — it must NEVER drop a previously-tracked ticker just
+  // because this particular call's list is smaller. Map clearing only happens
+  // on a genuine reconnect (see start(), which clears then re-adds the full
+  // remembered roster since a new dxLink channel has none of the prior subs).
+  async startStrikeGrowthFeed(tickers) {
+    if (!this.client) return;
+    const incoming = new Set((tickers || []).map((t) => String(t).toUpperCase()));
+    const isFirstRun = this.strikeGrowthTickers.length === 0;
+    for (const t of incoming) {
+      if (!this.strikeGrowthTickers.includes(t)) this.strikeGrowthTickers.push(t);
+    }
+    for (const root of incoming) {
+      // Sequential to keep TT REST (chain fetch) gentle on startup.
+      await this._subscribeStrikeGrowthRoot(root).catch((e) => // eslint-disable-line no-await-in-loop
+        console.warn(`[STRIKE-GROWTH-FEED] ${root} subscribe failed:`, String(e?.message || e).slice(0, 120)));
+    }
+    console.log(`[STRIKE-GROWTH-FEED] tracking ${this.strikeGrowthTickers.length} tickers — contracts=${this.strikeGrowthContracts.size}`);
+    // Refresh timer covers the WHOLE remembered roster (not just this call's
+    // subset) — start it once, on the first ticker(s) this feed ever sees.
+    if (isFirstRun) {
+      if (this.strikeGrowthTimer) clearInterval(this.strikeGrowthTimer);
+      this.strikeGrowthTimer = setInterval(() => {
+        for (const root of this.strikeGrowthTickers) this._subscribeStrikeGrowthRoot(root).catch(() => {});
+      }, STRIKE_GROWTH_FEED_REFRESH_MS);
+      if (this.strikeGrowthTimer.unref) this.strikeGrowthTimer.unref();
+    }
+  }
+
+  /** Resolve+subscribe one ticker's underlying spot + a ±STRIKE_GROWTH_FEED_WINDOW
+   *  strike band around spot, across the front STRIKE_GROWTH_FEED_EXPIRIES
+   *  expirations. Re-picking on refresh only ADDS newly-in-window contracts —
+   *  it never unsubscribes, so a strike that drifts out of the window stays
+   *  live (cheap to keep; avoids subscribe/unsubscribe races on the shared
+   *  connection). */
+  async _subscribeStrikeGrowthRoot(root) {
+    if (!this.client) return;
+    if (![...this.strikeGrowthSpotSym.values()].includes(root)) {
+      try {
+        const u = await resolveUnderlying(root);
+        if (u?.streamerSymbol) {
+          this.strikeGrowthSpotSym.set(u.streamerSymbol, root);
+          this.client.subscribe([u.streamerSymbol]);
+        }
+      } catch (e) {
+        console.warn(`[STRIKE-GROWTH-FEED] ${root} underlying resolve failed:`, String(e?.message || e).slice(0, 120));
+      }
+    }
+    const chain = await fetchChain(root); // cached (REST_CHAIN_TTL_MS)
+    if (!chain?.contracts?.length) return;
+    const spot = this.strikeGrowthSpot.get(root) || 0;
+    const exps = (chain.expirations || []).slice(0, STRIKE_GROWTH_FEED_EXPIRIES);
+    const fresh = [];
+    const freshByExp = new Map(); // expiration -> streamerSymbols newly added THIS call
+    for (const exp of exps) {
+      const legs = this._strikeGrowthWindow(chain, exp, spot);
+      const freshLegs = [];
+      for (const c of legs) {
+        if (c.streamerSymbol && !this.strikeGrowthContracts.has(c.streamerSymbol)) {
+          this.strikeGrowthContracts.set(c.streamerSymbol, root);
+          fresh.push(c.streamerSymbol);
+          freshLegs.push(c.streamerSymbol);
+        }
+      }
+      if (freshLegs.length) freshByExp.set(exp, freshLegs);
+    }
+    if (fresh.length) {
+      this.client.subscribe(fresh);
+      // Pre-warm, THEN hand off: a leg just subscribed on dxLink has no
+      // streamed Greeks/Summary/Trade yet — a sweep landing in the first few
+      // seconds would see nothing. Seed this.greeks/summaries/volumes for
+      // exactly these legs off one TT REST snapshot (fetchChainFull) so
+      // getStrikeGrowthSnapshot() has usable data immediately. These are the
+      // SAME maps the live dxLink events write to, so the moment a leg's real
+      // Quote/Greeks/Trade event lands it just overwrites the seed value —
+      // the hand-off is automatic, not a separate mode switch.
+      await this._prewarmStrikeGrowthLegs(root, freshByExp);
+    }
+  }
+
+  /** One-shot TT REST snapshot (fetchChainFull) to seed this.greeks/summaries/
+   *  volumes for legs that were JUST subscribed on dxLink and have no streamed
+   *  data yet. Pure seed, never clobbers: skips any leg that already has an
+   *  entry in a given map (live data always wins over a REST snapshot that
+   *  may resolve after the first real event). Best-effort — a failed REST
+   *  call here just means that leg waits for dxLink to warm it up live,
+   *  same as before this existed. */
+  async _prewarmStrikeGrowthLegs(root, freshByExp) {
+    for (const [exp, streamerSymbols] of freshByExp) {
+      const want = new Set(streamerSymbols);
+      let full;
+      try {
+        full = await fetchChainFull(root, exp);
+      } catch (e) {
+        console.warn(`[STRIKE-GROWTH-FEED] ${root} ${exp} REST prewarm fetch failed:`, String(e?.message || e).slice(0, 120));
+        continue;
+      }
+      if (Number.isFinite(full?.underlyingPrice) && full.underlyingPrice > 0 && !(this.strikeGrowthSpot.get(root) > 0)) {
+        this.strikeGrowthSpot.set(root, full.underlyingPrice);
+      }
+      const strikes = full?.items?.[0]?.strikes || [];
+      let seeded = 0;
+      for (const s of strikes) {
+        for (const side of ['call', 'put']) {
+          const o = s[side];
+          const sym = o?.['streamer-symbol'];
+          if (!sym || !want.has(sym)) continue;
+          if (!this.greeks.has(sym)) {
+            const gamma = firstFiniteNumber(o.gamma);
+            const delta = firstFiniteNumber(o.delta);
+            const theta = firstFiniteNumber(o.theta);
+            const vega = firstFiniteNumber(o.vega);
+            const iv = firstFiniteNumber(o['implied-volatility']);
+            if (gamma || delta || theta || vega || iv) this.greeks.set(sym, { gamma, delta, theta, vega, iv });
+          }
+          if (!this.summaries.has(sym)) {
+            const oi = firstFiniteNumber(o['open-interest']);
+            if (oi > 0) this.summaries.set(sym, { oi, prevClose: 0 });
+          }
+          if (!this.volumes.has(sym)) {
+            const vol = firstFiniteNumber(o.volume);
+            if (Number.isFinite(vol)) this.volumes.set(sym, vol);
+          }
+          seeded++;
+        }
+      }
+      if (seeded) {
+        console.log(`[STRIKE-GROWTH-FEED] ${root} ${exp} REST pre-warm seeded ${seeded}/${want.size * 2} legs — dxLink will take over per-leg as live events arrive`);
+      }
+    }
+  }
+
+  /** ±STRIKE_GROWTH_FEED_WINDOW strikes around spot for one expiration. Spot
+   *  unknown yet (first pass, before a quote lands) → center on the median
+   *  strike, same fallback _flowRecordWindow uses. */
+  _strikeGrowthWindow(chain, expiration, spot) {
+    const contracts = chain.contracts.filter((c) => c.expiration === expiration);
+    if (!contracts.length) return [];
+    const strikes = [...new Set(contracts.map((c) => c.strike))].sort((a, b) => a - b);
+    let pivot = spot > 0 ? strikes.findIndex((s) => s >= spot) : Math.floor(strikes.length / 2);
+    if (pivot < 0) pivot = strikes.length - 1;
+    const lo = Math.max(0, pivot - STRIKE_GROWTH_FEED_WINDOW);
+    const hi = Math.min(strikes.length, pivot + STRIKE_GROWTH_FEED_WINDOW);
+    const keep = new Set(strikes.slice(lo, hi));
+    return contracts.filter((c) => keep.has(c.strike));
+  }
+
+  /**
+   * Read back the current live snapshot for one ticker: { spot, expiries:
+   * [{ expiry, rows:[{strike,type,gamma,oi,volume}] }] }, limited to whatever
+   * this feed has actually subscribed (see _subscribeStrikeGrowthRoot) — a
+   * strike outside the window simply isn't in the result. Chain structure
+   * comes from the same cached fetchChain() the subscriber uses, so this never
+   * makes a live network call; it only reads the in-memory feed maps.
+   */
+  async getStrikeGrowthSnapshot(root) {
+    const up = String(root).toUpperCase();
+    const chain = await fetchChain(up).catch(() => null);
+    if (!chain?.contracts?.length) return null;
+    const spot = this.strikeGrowthSpot.get(up) || 0;
+    const exps = (chain.expirations || []).slice(0, STRIKE_GROWTH_FEED_EXPIRIES);
+    const expiries = [];
+    for (const exp of exps) {
+      const rows = [];
+      for (const c of chain.contracts) {
+        if (c.expiration !== exp) continue;
+        if (this.strikeGrowthContracts.get(c.streamerSymbol) !== up) continue; // only subscribed legs
+        const g = this.greeks.get(c.streamerSymbol);
+        const s = this.summaries.get(c.streamerSymbol);
+        const v = this.volumes.get(c.streamerSymbol);
+        if (!g && !s && v == null) continue; // nothing streamed yet for this leg
+        rows.push({
+          strike: c.strike,
+          type: c.type,
+          gamma: Number(g?.gamma) || 0,
+          oi: Number(s?.oi) || 0,
+          volume: Number(v) || 0,
+        });
+      }
+      if (rows.length) expiries.push({ expiry: exp, rows });
+    }
+    if (!expiries.length) return null;
+    return { spot, expiries };
+  }
+
   setExpiry(expiry) {
     if (!expiry || expiry === this.expiry) return;
     this.expiry = expiry;
@@ -3275,6 +3501,12 @@ class TastytradeProxy {
         if (mid > 0) this.flowRecordSpot.set(recRoot, mid);
         return;
       }
+      // Strike-growth recorder's underlying quote → same idea, own map.
+      const sgRoot = this.strikeGrowthSpotSym.get(sym);
+      if (sgRoot) {
+        if (mid > 0) this.strikeGrowthSpot.set(sgRoot, mid);
+        return;
+      }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize), t: Date.now() });
       return;
     }
@@ -3345,6 +3577,12 @@ class TastytradeProxy {
         if (px > 0) this.flowRecordSpot.set(recRootT, px);
         return;
       }
+      const sgRootT = this.strikeGrowthSpotSym.get(sym);
+      if (sgRootT) {
+        const px = Number(ev.price);
+        if (px > 0) this.strikeGrowthSpot.set(sgRootT, px);
+        return;
+      }
       // dayVolume on the Trade event is the running daily volume for the
       // contract — the correct source for per-strike volume (Summary has none).
       // Store live dayVolume even when it's 0: presence in the map means the
@@ -3352,6 +3590,10 @@ class TastytradeProxy {
       // recompute can trust it over the stale prior-session REST volume.
       const dv = firstFiniteNumber(ev.dayVolume);
       if (Number.isFinite(dv)) this.volumes.set(sym, dv);
+      // Strike-growth recorder's option contracts: volume is already cached
+      // above (that's all this feed needs) — stop here so these prints never
+      // fall through into the SPX card's flow tape below.
+      if (this.strikeGrowthContracts.has(sym)) return;
       // In Theta mode the FPSS Trade stream owns option flow — don't double-feed
       // FlowProcessor from the dxLink option Trade events too. (Volume capture
       // above is still fine; it's keyed per-symbol and idempotent.)
@@ -4052,6 +4294,8 @@ class TastytradeProxy {
     if (this.flowTimer) clearInterval(this.flowTimer);
     if (this.flowRecordTimer) clearInterval(this.flowRecordTimer);
     this.flowRecordTimer = null;
+    if (this.strikeGrowthTimer) clearInterval(this.strikeGrowthTimer);
+    this.strikeGrowthTimer = null;
     if (this.premiumTimer) clearInterval(this.premiumTimer);
     if (this.thetaGreeksTimer) clearInterval(this.thetaGreeksTimer);
     this.recomputeTimer = null;
