@@ -181,6 +181,16 @@ export default function Backtests() {
           { key: "gap", label: "debounce (m)", type: "number", def: 5 },
         ]}
       />
+
+      <Panel
+        title="Strike GEX since touch" test="strike-touch"
+        subtitle="How much net GEX at a strike grew or bled since price last tagged it. Touch = first snapshot within ±band."
+        fields={[
+          { key: "strike", label: "strike", type: "number", def: 7500 },
+          { key: "band", label: "touch band (pt)", type: "number", def: 0.75 },
+          { key: "days", label: "lookback (d)", type: "number", def: 1 },
+        ]}
+      />
     </PageShell>
   );
 }
