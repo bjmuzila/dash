@@ -11,6 +11,7 @@ import { tryCbEdge30Email, tryCbEdge30Text, TRY_CBEDGE_30_SUBJECT } from "@/lib/
 import { scannerCatchEmail, scannerCatchText, SCANNER_CATCH_SUBJECT } from "@/lib/emails/scanner-catch";
 import { flowCatchEmail, flowCatchText, FLOW_CATCH_SUBJECT } from "@/lib/emails/flow-catch";
 import { autoGexTrialEmail, autoGexTrialText, AUTO_GEX_TRIAL_SUBJECT } from "@/lib/emails/auto-gex-trial";
+import { cbConfidenceEmail, cbConfidenceText, CB_CONFIDENCE_SUBJECT } from "@/lib/emails/cb-confidence";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -71,6 +72,13 @@ function buildTemplates(): Template[] {
       subject: AUTO_GEX_TRIAL_SUBJECT,
       html: autoGexTrialEmail(),
       text: autoGexTrialText(),
+    },
+    {
+      id: "cb-confidence",
+      label: "CB Confidence hit rate — 71-86% this week",
+      subject: CB_CONFIDENCE_SUBJECT,
+      html: cbConfidenceEmail(),
+      text: cbConfidenceText(),
     },
     {
       id: "founder-thankyou",
