@@ -1270,9 +1270,13 @@ export interface TradingFill {
   account: string;
 }
 
-/** Bulk insert. ON CONFLICT DO NOTHING on (user_id, ext_id) → re-importing the
- *  same statement inserts nothing instead of doubling every stat. Returns the
- *  number of NEW fills actually written. */
+/** Bulk insert. ON CONFLICT (user_id, ext_id) → re-importing the same
+ *  statement doesn't double every stat. It's a DO UPDATE (not DO NOTHING)
+ *  scoped to JUST the account column, and only when the existing row's
+ *  account is still blank — this is what backfills `account` onto fills that
+ *  were imported before that column existed, the first time the same
+ *  statement is re-uploaded. Once a row has a non-empty account it's never
+ *  overwritten. Returns the number of rows inserted OR backfilled. */
 export async function insertTradingFills(userId: string, fills: TradingFill[]): Promise<number> {
   if (!fills.length) return 0;
   const pool = await getDb();
@@ -1288,7 +1292,8 @@ export async function insertTradingFills(userId: string, fills: TradingFill[]): 
     `INSERT INTO trading_fills
        (user_id, date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id, account)
      VALUES ${tuples.join(",")}
-     ON CONFLICT (user_id, ext_id) DO NOTHING`,
+     ON CONFLICT (user_id, ext_id) DO UPDATE SET account = EXCLUDED.account
+       WHERE trading_fills.account = '' AND EXCLUDED.account <> ''`,
     values
   );
   return res.rowCount ?? 0;
