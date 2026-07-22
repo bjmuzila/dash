@@ -70,8 +70,10 @@ const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
 const TOP_N_EACH_SIDE = Number(process.env.STRIKE_GROWTH_TOP_N || 5);
 // How many front expiries to snapshot per ticker. Must be <= the live feed's
 // STRIKE_GROWTH_FEED_EXPIRIES (proxy-tastytrade.js) — a larger value here just
-// gets clamped to whatever the feed actually subscribed.
-const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 2);
+// gets clamped to whatever the feed actually subscribed. 3 = 0DTE+1DTE+2DTE,
+// what getForwardBuildLeaderboard() needs to rank strikes accelerating ahead
+// of today, not just today's front expiry.
+const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 3);
 // Delay between tickers in a sweep (ms) — insurance against a burst of cold
 // fetchChain() cache misses on startup, not per-request network pacing.
 const TICKER_DELAY_MS = Number(process.env.STRIKE_GROWTH_TICKER_DELAY_MS || 600);
@@ -410,6 +412,96 @@ async function rollupDayOverDay(p, date) {
   }
 }
 
+// ── Forward Build: 0/1/2-DTE acceleration leaderboard ───────────────────────
+// A DIFFERENT cut than the 0DTE/SWING split above. Question this answers: for
+// EVERY active ticker's front 3 expiries (0DTE/1DTE/2DTE as of the latest
+// recorded session), which strike is ACCELERATING — today's day-over-day Δ
+// bigger than yesterday's Δ — not just biggest total growth? A strike quietly
+// speeding up on tomorrow's or the day-after's expiry is where price may be
+// headed before it ever becomes today's 0DTE. Needs EXPIRIES_PER_TICKER>=3
+// (bumped 2->3 for this) and STRIKE_GROWTH_FEED_EXPIRIES>=3 in
+// proxy-tastytrade.js so 2DTE actually gets subscribed/recorded at all.
+// Pure read over rows the sweep already wrote — one query, no extra network
+// call, computed in JS since the per-strike history here is small (top 5/side
+// × 3 expiries × ~130 tickers × a few days ≈ a few thousand rows).
+const FORWARD_BUILD_MIN_BASE = Number(process.env.STRIKE_GROWTH_FORWARD_MIN_BASE || 20e6);
+const FORWARD_BUILD_LOOKBACK_DAYS = Number(process.env.STRIKE_GROWTH_FORWARD_LOOKBACK_DAYS || 3);
+
+async function getForwardBuildLeaderboard(opts = {}) {
+  const limit = Math.min(200, Number(opts.limit) || 40);
+  const minBase = Number(opts.minBase) || FORWARD_BUILD_MIN_BASE;
+  if (!(await ensureSchema())) return { asOf: null, rows: [] };
+  const p = getPool();
+  const symbols = await getActiveSymbols(p);
+  if (!symbols.length) return { asOf: null, rows: [] };
+
+  // Last snapshot per (symbol,expiry,strike,date) over a short calendar window
+  // (generous vs FORWARD_BUILD_LOOKBACK_DAYS=3 trading days to absorb weekends).
+  const { rows: raw } = await p.query(
+    `SELECT DISTINCT ON (symbol, expiry, strike, date)
+       to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry,
+       gex_now, gex_open, spot
+     FROM strike_growth
+     WHERE date >= (CURRENT_DATE - INTERVAL '9 days') AND symbol = ANY($1)
+     ORDER BY symbol, expiry, strike, date, ts DESC`,
+    [symbols]
+  );
+  if (!raw.length) return { asOf: null, rows: [] };
+
+  // "Today" = the most recent session actually present, not wall-clock — so
+  // this stays correct pre-open/after-hours when the latest sweep is stale.
+  const asOf = raw.reduce((m, r) => (r.date > m ? r.date : m), raw[0].date);
+  const asOfMs = new Date(`${asOf}T00:00:00Z`).getTime();
+
+  // `symbol|expiry` -> { symbol, expiry, dte, spot, strikes: Map<strike, [{date,net}]> }
+  const groups = new Map();
+  for (const r of raw) {
+    const expiry = String(r.expiry || '');
+    if (!/^\d{4}-\d{2}-\d{2}/.test(expiry)) continue;
+    const expMs = new Date(`${expiry.slice(0, 10)}T00:00:00Z`).getTime();
+    const dte = Math.round((expMs - asOfMs) / 86400000);
+    if (dte < 0 || dte > 2) continue; // only 0/1/2-DTE — the forward window this view is about
+    const gk = `${r.symbol}|${expiry}`;
+    if (!groups.has(gk)) groups.set(gk, { symbol: r.symbol, expiry, dte, spot: 0, strikes: new Map() });
+    const g = groups.get(gk);
+    if (Number(r.spot) > 0) g.spot = Number(r.spot);
+    const sk = Number(r.strike);
+    if (!g.strikes.has(sk)) g.strikes.set(sk, []);
+    g.strikes.get(sk).push({ date: r.date, net: Number(r.gex_now || 0) + Number(r.gex_open || 0) });
+  }
+
+  const out = [];
+  for (const g of groups.values()) {
+    for (const [strike, pts] of g.strikes) {
+      pts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      const last = pts.slice(-FORWARD_BUILD_LOOKBACK_DAYS);
+      if (last.length < 2) continue; // need at least one Δ to rank anything
+      const latest = last[last.length - 1].net;
+      if (Math.abs(latest) < minBase) continue; // tiny strikes → noisy % / accel, skip
+      const deltaLast = last[last.length - 1].net - last[last.length - 2].net;
+      // deltaPrev = the Δ BEFORE deltaLast (needs a 3rd point) — accel compares
+      // the two, so a strike whose Δ is growing day-over-day ranks above one
+      // that grew a lot once and has since flattened.
+      const deltaPrev = last.length >= 3 ? last[last.length - 2].net - last[last.length - 3].net : null;
+      const accel = deltaPrev != null ? deltaLast - deltaPrev : deltaLast;
+      out.push({
+        symbol: g.symbol, dte: g.dte, expiry: g.expiry, strike, spot: g.spot,
+        side: latest >= 0 ? 'call' : 'put',
+        trend: last.map((x) => ({ date: x.date, net: x.net })),
+        delta_last: deltaLast, delta_prev: deltaPrev, accel,
+        has_accel: deltaPrev != null,
+      });
+    }
+  }
+
+  out.sort((a, b) => {
+    if (a.has_accel !== b.has_accel) return a.has_accel ? -1 : 1;
+    return b.accel - a.accel;
+  });
+
+  return { asOf, rows: out.slice(0, limit) };
+}
+
 /**
  * One full sweep over the active watchlist. Sequential, paced. Returns a small
  * summary. `force` skips the RTH gate (for the manual /proxy route + dry runs).
@@ -528,4 +620,5 @@ module.exports = {
   getPool,
   snapshotTicker,
   rollupDayOverDay,
+  getForwardBuildLeaderboard,
 };

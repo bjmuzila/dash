@@ -103,7 +103,7 @@ function DodHistoryPanel({ symbol, onClose }: { symbol: string; onClose: () => v
   return (
     <Card variant="budget" accent={HOME_THEME.orange} title={`${symbol} · day-by-day peak movers`}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
-        <div style={{ fontSize: 12.5, color: HOME_THEME.text, opacity: 0.7 }}>
+        <div style={{ fontSize: 12.5, color: HOME_THEME.text }}>
           {loading ? "Loading history…" : `${rows.length} session${rows.length === 1 ? "" : "s"} · newest first`}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -129,9 +129,9 @@ function DodHistoryPanel({ symbol, onClose }: { symbol: string; onClose: () => v
             {rows.map((d) => (
               <tr key={d.date}>
                 <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{d.date}</td>
-                <td style={{ ...td, textAlign: "left", opacity: 0.7 }}>{dodExp(d.expiry)}</td>
+                <td style={{ ...td, textAlign: "left", color: HOME_THEME.text }}>{dodExp(d.expiry)}</td>
                 <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{dodNum(d.strike)}</td>
-                <td style={{ ...td, opacity: 0.7 }}>{dodNum(d.spot)}</td>
+                <td style={{ ...td, color: HOME_THEME.text }}>{dodNum(d.spot)}</td>
                 <td style={{ ...td, ...posNeg(d.net_today) }}>{dodSigned(d.net_today)}</td>
                 <td style={{ ...td, ...posNeg(d.net_yest) }}>{dodSigned(d.net_yest)}</td>
                 <td style={{ ...td, ...posNeg(d.delta), fontWeight: 700 }}>{dodSigned(d.delta)}</td>
@@ -140,7 +140,7 @@ function DodHistoryPanel({ symbol, onClose }: { symbol: string; onClose: () => v
               </tr>
             ))}
             {!loading && !rows.length && (
-              <tr><td colSpan={9} style={{ ...td, textAlign: "center", opacity: 0.6, padding: 20 }}>No history yet for {symbol}.</td></tr>
+              <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: HOME_THEME.text, padding: 20 }}>No history yet for {symbol}.</td></tr>
             )}
           </tbody>
         </table>
@@ -186,6 +186,23 @@ function DodStrikesPanel({ symbol, bucket, onClose, onHistory }: {
   const spot = rows.find((r) => Number.isFinite(r.spot))?.spot ?? 0;
   const asOf = rows[0]?.date || "";
   const prevOf = rows[0]?.prev_date || "";
+  // The server picks prev_date as "the most recent PRIOR session that has any
+  // rows for this bucket" — if a weekday sweep failed (recorder down, feed not
+  // warmed, etc.) it silently skips past it and compares against an OLDER
+  // session instead, which can make Δ/Growth % look inflated (2+ sessions of
+  // drift, not 1). Flag it here instead of leaving it silent. Approximates
+  // "expected prior session" as the last Mon–Fri before asOf — doesn't know
+  // about market holidays, so a real holiday gap can still show this warning;
+  // that's fine, it's a hint to double-check, not a hard error.
+  const expectedPrev = useMemo(() => {
+    if (!asOf) return "";
+    const d = new Date(`${asOf}T00:00:00Z`);
+    if (isNaN(d.getTime())) return "";
+    d.setUTCDate(d.getUTCDate() - 1);
+    while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }, [asOf]);
+  const staleBaseline = !!asOf && !!prevOf && prevOf !== expectedPrev;
 
   const view = useMemo(() => {
     const f = growersOnly ? rows.filter((r) => r.delta > 0) : rows;
@@ -211,7 +228,7 @@ function DodStrikesPanel({ symbol, bucket, onClose, onHistory }: {
   return (
     <Card variant="budget" accent={HOME_THEME.green} title={`${symbol} · which strike is growing (${bkt})`}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
-        <div style={{ fontSize: 12.5, color: HOME_THEME.text, opacity: 0.75 }}>
+        <div style={{ fontSize: 12.5, color: HOME_THEME.text }}>
           {loading ? "Loading strikes…"
             : rows.length ? `${view.length} strike${view.length === 1 ? "" : "s"} · spot ${dodNum(spot)} · ${prevOf || "prev"} → ${asOf || "now"}`
             : "No strike data (needs 2 sessions of history)."}
@@ -226,6 +243,16 @@ function DodStrikesPanel({ symbol, bucket, onClose, onHistory }: {
         </div>
       </div>
       {err && <div style={{ fontSize: 13, color: HOME_THEME.red }}>Error: {err}</div>}
+      {staleBaseline && (
+        <div style={{
+          fontSize: 12.5, color: HOME_THEME.orange, background: `${HOME_THEME.orange}14`,
+          border: `1px solid ${HOME_THEME.orange}40`, borderRadius: 8, padding: "8px 12px", marginBottom: 8,
+        }}>
+          ⚠ Gap in the data: expected the prior session to be {expectedPrev}, but the closest one with {bkt} rows is {prevOf}.
+          &ldquo;Yest Net&rdquo; / Δ / Growth % below are comparing against that older session, not literally yesterday — a
+          sweep likely didn&rsquo;t run on {expectedPrev} (or the DB gap between them), so numbers can read as inflated.
+        </div>
+      )}
       <div style={{ maxHeight: 380, overflow: "auto", borderRadius: 10, border: `1px solid ${HOME_THEME.border}` }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead><tr>
@@ -246,18 +273,18 @@ function DodStrikesPanel({ symbol, bucket, onClose, onHistory }: {
                   <td style={{ ...td, ...posNeg(d.net_yest) }}>{dodSigned(d.net_yest)}</td>
                   <td style={{ ...td, ...posNeg(d.net_now), fontWeight: 700 }}>{dodSigned(d.net_now)}</td>
                   <td style={{ ...td, ...posNeg(d.delta), fontWeight: 700 }}>{dodSigned(d.delta)}</td>
-                  <td style={{ ...td, ...(d.growth_pct == null ? { opacity: 0.4 } : posNeg(d.growth_pct)), fontWeight: 800 }}>{dodPct(d.growth_pct)}</td>
+                  <td style={{ ...td, ...(d.growth_pct == null ? { color: HOME_THEME.text } : posNeg(d.growth_pct)), fontWeight: 800 }}>{dodPct(d.growth_pct)}</td>
                   <td style={{ ...td, ...posNeg(d.vol_today) }}>{dodSigned(d.vol_today)}</td>
                 </tr>
               );
             })}
             {!loading && !view.length && (
-              <tr><td colSpan={cols.length} style={{ ...td, textAlign: "center", opacity: 0.6, padding: 18 }}>No strikes to show.</td></tr>
+              <tr><td colSpan={cols.length} style={{ ...td, textAlign: "center", color: HOME_THEME.text, padding: 18 }}>No strikes to show.</td></tr>
             )}
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 8, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 8, lineHeight: 1.6 }}>
         ● = within 1% of spot. <b>Δ vs Yest / Growth %</b> compare each strike&rsquo;s live net GEX (gex_now + gex_open) to its prior session.
         Growth % is hidden when yesterday&rsquo;s base is under {dodGex(DOD_GROWTH_FLOOR)} (tiny bases → fake %). Positive &amp; near spot = a level building where price is.
       </div>
@@ -367,7 +394,7 @@ export default function DodMoversTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
-        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text }}>
           {loading ? "Loading day-over-day movers…"
             : asOf ? `Biggest OI+Vol net-GEX change vs prior session · ${asOf} · ${rows.length} tickers${historical ? " · historical (live cols N/A)" : ""}`
             : "No day-over-day rows yet (needs 2 sessions of history)"}
@@ -420,18 +447,18 @@ export default function DodMoversTab() {
                 const w = ((d.peak_abs || 0) / maxAbs) * 100;
                 return (
                   <tr key={d.symbol}>
-                    <td style={{ ...td, textAlign: "left", color: HOME_THEME.green, opacity: 0.7 }}>{i + 1}</td>
+                    <td style={{ ...td, textAlign: "left", color: HOME_THEME.green }}>{i + 1}</td>
                     <td
                       onClick={() => setSelStrike({ symbol: d.symbol, bucket: d.expiry && d.date && d.expiry.slice(0, 10) === d.date ? "0DTE" : "SWING" })}
                       title="See which strike is growing on this ticker"
                       style={{ ...td, textAlign: "left", fontWeight: 800, letterSpacing: "0.03em", cursor: "pointer", color: HOME_THEME.cyan, textDecoration: "underline", textDecorationColor: "rgba(255,255,255,0.25)" }}
                     >{d.symbol}</td>
-                    <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, opacity: 0.7 }}>{dodExp(d.expiry)}</td>
+                    <td style={{ ...td, textAlign: "left", color: HOME_THEME.text }}>{dodExp(d.expiry)}</td>
                     <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 700 }}>{dodNum(d.strike)}</td>
-                    <td style={{ ...td, opacity: 0.7 }}>{dodNum(d.spot)}</td>
+                    <td style={{ ...td, color: HOME_THEME.text }}>{dodNum(d.spot)}</td>
                     <td style={{ ...td, ...posNeg(d.net_yest) }}>{dodSigned(d.net_yest)}</td>
                     <td style={{ ...td, ...posNeg(d.net_today) }}>{dodSigned(d.net_today)}</td>
-                    <td style={{ ...td, ...(d.net_now == null ? { opacity: 0.4 } : posNeg(d.net_now)), fontWeight: 700 }}>{d.net_now == null ? "—" : dodSigned(d.net_now)}</td>
+                    <td style={{ ...td, ...(d.net_now == null ? { color: HOME_THEME.text } : posNeg(d.net_now)), fontWeight: 700 }}>{d.net_now == null ? "—" : dodSigned(d.net_now)}</td>
                     <td style={{ ...td, ...posNeg(d.vol_today) }}>{dodSigned(d.vol_today)}</td>
                     <td style={{ ...td, ...posNeg(d.delta), fontWeight: 700 }}>{dodSigned(d.delta)}</td>
                     <td style={{ ...td, position: "relative", fontWeight: 800 }}>
@@ -442,24 +469,24 @@ export default function DodMoversTab() {
                       }} />
                       <span style={{ position: "relative", zIndex: 1 }}>{dodGex(d.peak_abs)}</span>
                     </td>
-                    <td style={{ ...td, ...(d.now_delta == null ? { opacity: 0.4 } : posNeg(d.now_delta)), fontWeight: 700 }}>{dodChg(d.now_delta)}</td>
-                    <td style={{ ...td, ...(d.growth == null ? { opacity: 0.4 } : posNeg(d.growth)), fontWeight: 800 }}>{dodPct(d.growth)}</td>
-                    <td style={{ ...td, ...(d.chg_30m == null ? { opacity: 0.4 } : posNeg(d.chg_30m)) }}>{dodChg(d.chg_30m)}</td>
-                    <td style={{ ...td, ...(d.chg_60m == null ? { opacity: 0.4 } : posNeg(d.chg_60m)) }}>{dodChg(d.chg_60m)}</td>
-                    <td style={{ ...td, ...(d.chg_4h == null ? { opacity: 0.4 } : posNeg(d.chg_4h)) }}>{dodChg(d.chg_4h)}</td>
-                    <td style={{ ...td, opacity: 0.6 }}>{dodTime(d.t)}</td>
+                    <td style={{ ...td, ...(d.now_delta == null ? { color: HOME_THEME.text } : posNeg(d.now_delta)), fontWeight: 700 }}>{dodChg(d.now_delta)}</td>
+                    <td style={{ ...td, ...(d.growth == null ? { color: HOME_THEME.text } : posNeg(d.growth)), fontWeight: 800 }}>{dodPct(d.growth)}</td>
+                    <td style={{ ...td, ...(d.chg_30m == null ? { color: HOME_THEME.text } : posNeg(d.chg_30m)) }}>{dodChg(d.chg_30m)}</td>
+                    <td style={{ ...td, ...(d.chg_60m == null ? { color: HOME_THEME.text } : posNeg(d.chg_60m)) }}>{dodChg(d.chg_60m)}</td>
+                    <td style={{ ...td, ...(d.chg_4h == null ? { color: HOME_THEME.text } : posNeg(d.chg_4h)) }}>{dodChg(d.chg_4h)}</td>
+                    <td style={{ ...td, color: HOME_THEME.text }}>{dodTime(d.t)}</td>
                   </tr>
                 );
               })}
               {!loading && !view.length && (
-                <tr><td colSpan={cols.length} style={{ ...td, textAlign: "center", opacity: 0.6, padding: 22 }}>
+                <tr><td colSpan={cols.length} style={{ ...td, textAlign: "center", color: HOME_THEME.text, padding: 22 }}>
                   No movers to show.
                 </td></tr>
               )}
             </tbody>
           </table>
         </div>
-        <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 8, lineHeight: 1.6 }}>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 8, lineHeight: 1.6 }}>
           Δ = vs yesterday on the OI+Vol basis (gex_now + gex_open). <b>Peak Net / Peak Δ</b> are frozen at the session&rsquo;s max; <b>Now Net / Now Δ</b> are live —
           a strike that hit max and then faded shows |Now Δ| well below |Peak Δ|. &ldquo;Today (vol only)&rdquo; is today&rsquo;s traded-volume GEX at that strike.
           Click any ticker for its day-by-day peak-mover history.

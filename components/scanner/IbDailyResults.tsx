@@ -119,6 +119,20 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
             <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 3 }}>
               Recorded automatically at 16:30 ET every trading day. ✓ rule hit · ✗ rule missed · — not in play. Hover a cell for the rule + trigger.
             </div>
+            {data && data.length > 0 && (() => {
+              const biased = data.filter((r) => r.bias === "H" || r.bias === "L");
+              const bull = biased.filter((r) => r.bias === "H").length;
+              const bullPct = biased.length ? (100 * bull) / biased.length : null;
+              const bearPct = bullPct == null ? null : 100 - bullPct;
+              return (
+                <div style={{ fontSize: 14, marginTop: 6 }}>
+                  <span style={{ color: HOME_THEME.text, opacity: 0.85 }}>Bias @ 10:30 (last {biased.length}): </span>
+                  <span style={{ color: HOME_THEME.green, fontWeight: 800 }}>{bullPct == null ? "—" : `${bullPct.toFixed(0)}% Bullish`}</span>
+                  <span style={{ color: HOME_THEME.text, opacity: 0.6 }}> / </span>
+                  <span style={{ color: HOME_THEME.red, fontWeight: 800 }}>{bearPct == null ? "—" : `${bearPct.toFixed(0)}% Bearish`}</span>
+                </div>
+              );
+            })()}
           </div>
 
           {err && <div style={{ color: HOME_THEME.red, fontSize: 14 }}>{err}</div>}
@@ -145,6 +159,7 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
                     {RULE_IDS.map((id) => (
                       <th key={id} style={th} title={RULE_NAMES[id]}>R{id}</th>
                     ))}
+                    <th style={th} title="The side the 10:30 bias called that did NOT hold — what price shouldn't have been.">Shouldn't Be</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -170,6 +185,18 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
                           {r.break_side ? (r.ext_10 ? "✓" : "✗") : "—"}
                         </td>
                         {RULE_IDS.map((id) => <RuleCell key={id} r={byId.get(id)} />)}
+                        {(() => {
+                          const brokeSide = r.break_side === "H" || r.break_side === "L" ? r.break_side : null;
+                          const failed = r.bias && brokeSide && r.bias !== brokeSide ? r.bias : null;
+                          return (
+                            <td
+                              style={{ ...td, color: failed ? HOME_THEME.red : HOME_THEME.text, fontWeight: failed ? 800 : 400, opacity: failed ? 1 : 0.4 }}
+                              title={failed ? `Bias called ${failed === "H" ? "HIGH" : "LOW"} first — price didn't go there; broke ${brokeSide} instead.` : "Bias call held — nothing to fade."}
+                            >
+                              {failed ? `¬${failed}` : "—"}
+                            </td>
+                          );
+                        })()}
                       </tr>
                     );
                   })}
@@ -190,6 +217,7 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
                         </td>
                       );
                     })}
+                    <td style={td} />
                   </tr>
                 </tbody>
               </table>

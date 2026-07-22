@@ -36,7 +36,7 @@ import type { FlowOrder } from "@/hooks/useSpxFlow";
 const GREEN = "#22c55e"; // support / bullish
 const RED = "#ef4444"; // magnet / bearish
 const AXIS = "rgba(255,255,255,0.10)";
-const SUB = "rgba(255,255,255,0.55)";
+const SUB = "#FFFFFF"; // was rgba(255,255,255,0.55) — gray subtext, now full white
 
 // ── Time helpers (ET) ────────────────────────────────────────────────────────
 function todayEtYmd(): string {
@@ -144,7 +144,8 @@ export type GexModel = {
   nearestResistAbove: number | null;
   // Strongest dealer gamma pull across the WHOLE 0-DTE chain (not just the
   // ±window around spot) — "the strike the map is drawing price toward".
-  apex: GexLevel | null;
+  // CB = Core Bullseye (was "Apex" — renamed to match the app's level naming).
+  cbLevel: GexLevel | null;
   // Aggregate net GEX across every strike + the nearest gamma-flip (zero-cross)
   // to spot — the classic "check the bias" read (see Logic & Order page).
   totalGex: number;
@@ -239,7 +240,7 @@ function buildGex(items: ChainGroup[], spot: number): GexModel | null {
   const band = spot * BAND_FRAC;
   const supBelow = all.filter((l) => l.strike < spot && l.strike >= spot - band && l.gex > 0).sort((a, b) => b.strike - a.strike);
   const resAbove = all.filter((l) => l.strike > spot && l.strike <= spot + band && l.gex > 0).sort((a, b) => a.strike - b.strike);
-  const apex = all.reduce<GexLevel | null>(
+  const cbLevel = all.reduce<GexLevel | null>(
     (m, l) => (m == null || Math.abs(l.gex) > Math.abs(m.gex) ? l : m),
     null
   );
@@ -265,7 +266,7 @@ function buildGex(items: ChainGroup[], spot: number): GexModel | null {
     cleanAbove: resAbove.length === 0,
     nearestSupportBelow: supBelow[0]?.strike ?? null,
     nearestResistAbove: resAbove[0]?.strike ?? null,
-    apex,
+    cbLevel,
     totalGex,
     flip,
     callWall,
@@ -625,7 +626,7 @@ export function GexRegimeCard({ symbol, subtitle }: { symbol: string; subtitle?:
         </div>
         <ul style={{ margin: "10px 0 0", paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
           {cond.bullets.map((b, i) => (
-            <li key={i} style={{ fontSize: 12.5, color: HOME_THEME.text, opacity: 0.9, lineHeight: 1.45 }}>{b}</li>
+            <li key={i} style={{ fontSize: 12.5, color: HOME_THEME.text, lineHeight: 1.45 }}>{b}</li>
           ))}
         </ul>
       </div>

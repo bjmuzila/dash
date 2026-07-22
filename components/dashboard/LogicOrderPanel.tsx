@@ -103,7 +103,7 @@ function StepCard({ step }: { step: Step }) {
       <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.text, lineHeight: 1.3 }}>
         {step.title}
       </div>
-      <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.6 }}>
         {step.body}
       </div>
       <div
@@ -142,10 +142,10 @@ export function LogicOrderPanel() {
     },
     {
       n: 2,
-      title: "Find the Apex Level",
-      body: "The Apex Level is the strongest pull on the map — the strike with the largest dealer gamma concentration, drawing price toward it like a magnet, especially near expiration.",
-      live: gex?.apex
-        ? `CB Level: ${Math.round(gex.apex.strike)} (${fmtUsdShort(gex.apex.gex)}) — heaviest dealer hedging on the chain.`
+      title: "Find the CB Level",
+      body: "The CB Level (Core Bullseye) is the strongest pull on the map — the strike with the largest dealer gamma concentration, drawing price toward it like a magnet, especially near expiration.",
+      live: gex?.cbLevel
+        ? `CB Level: ${Math.round(gex.cbLevel.strike)} (${fmtUsdShort(gex.cbLevel.gex)}) — heaviest dealer hedging on the chain.`
         : "Loading chain…",
     },
     {

@@ -168,7 +168,10 @@ const FLOW_RECORD_REFRESH_MS = Number(process.env.FLOW_RECORD_REFRESH_MS || 5 * 
 // GEX snapshots instead of the flow tape. No FlowProcessor involved — reads
 // come straight off the generic this.greeks/summaries/volumes maps.
 const STRIKE_GROWTH_FEED_WINDOW = Number(process.env.STRIKE_GROWTH_FEED_WINDOW || 20); // ± strikes around spot
-const STRIKE_GROWTH_FEED_EXPIRIES = Number(process.env.STRIKE_GROWTH_FEED_EXPIRIES || 2);
+// 3, not 2: the "Forward Build" leaderboard (strike-growth-recorder.js's
+// getForwardBuildLeaderboard) needs 0DTE + 1DTE + 2DTE all live so it can show
+// which strike is accelerating ahead of today, not just today's front expiry.
+const STRIKE_GROWTH_FEED_EXPIRIES = Number(process.env.STRIKE_GROWTH_FEED_EXPIRIES || 3);
 const STRIKE_GROWTH_FEED_REFRESH_MS = Number(process.env.STRIKE_GROWTH_FEED_REFRESH_MS || 5 * 60 * 1000);
 
 // Recorder tape sizing — bigger than the SPX cap since it holds many roots.
