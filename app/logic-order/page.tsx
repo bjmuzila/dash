@@ -167,13 +167,15 @@ export default function LogicOrderPage() {
             : `Far CB Watch roster · ${roster.length} tickers`
         }
       >
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
-          <TickerListDropdown
-            activeTicker={ticker}
-            onSelect={setTicker}
-            universe={roster}
-            triggerLabel={ticker}
-          />
+        <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 16 }}>
+          <div style={{ transform: "scale(1.3)", transformOrigin: "left center" }}>
+            <TickerListDropdown
+              activeTicker={ticker}
+              onSelect={setTicker}
+              universe={roster}
+              triggerLabel={ticker}
+            />
+          </div>
         </div>
 
         {err && (
