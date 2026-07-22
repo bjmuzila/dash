@@ -22,6 +22,7 @@ import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import SemisTab from "@/components/scanner/SemisTab";
 import DodMoversTab from "@/components/scanner/DodMoversTab";
+import { LogicOrderPanel } from "@/components/dashboard/LogicOrderPanel";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers" | "logicorder";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -3160,6 +3161,7 @@ export default function ScannerPage() {
         <option value="statprompter">Stat Prompter</option>
         <option value="semis">Semi Strength</option>
         <option value="dodmovers">DoD Movers</option>
+        <option value="logicorder">Logic &amp; Order</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3198,6 +3200,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "dodmovers" ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
           background: tab === "dodmovers" ? `${HOME_THEME.cyan}22` : "transparent",
         }}>DoD Movers</button>
+        <button onClick={() => setTab("logicorder")} style={{
+          ...tabStyle(tab === "logicorder"),
+          border: `1px solid ${tab === "logicorder" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
+          background: tab === "logicorder" ? `${HOME_THEME.green}22` : "transparent",
+        }}>Logic & Order</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -3210,6 +3217,7 @@ export default function ScannerPage() {
       {tab === "statprompter" && <StatPrompterTab />}
       {tab === "semis" && <SemisTab />}
       {tab === "dodmovers" && <DodMoversTab />}
+      {tab === "logicorder" && <LogicOrderPanel />}
     </PageShell>
   );
 }
