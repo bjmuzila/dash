@@ -35,11 +35,52 @@ interface JournalRow {
   kind: "manual" | "verified";
 }
 
+/** Wire shape from /api/journal/trades — one closed round-trip, derived live
+ *  from the persisted fills (symbol, time in/out, price in/out, account). */
+interface JournalTrade {
+  symbol: string;
+  underlying: string;
+  asset_type: string;
+  direction: "long" | "short";
+  open_ts: number;
+  close_ts: number;
+  date: string;
+  qty: number;
+  entry: number;
+  exit: number;
+  fees: number;
+  pnl: number;
+  account: string;
+}
+
+interface AccountStat {
+  account: string;
+  sessions: number;
+  first_date: string;
+  last_date: string;
+  trades: number;
+  net_pnl: number;
+  win_rate: number;
+  avg_tit_ms: number;
+}
+
 const LS_KEY = "trading_journals";          // legacy localStorage key (migrated once)
 const LS_MIGRATED = "trading_journals_migrated";
 
-// Data-viz encodings (win/loss cells + chart series), sourced from the theme.
-const T = { green: HT.green, red: HT.red };
+/** ms → "H:MM:SS" for avg time-in-trade. */
+const fmtDur = (ms: number) => {
+  if (!ms || ms < 0) return "—";
+  const s = Math.round(ms / 1000);
+  const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+};
+
+// Data-viz encodings (win/loss cells + chart series). Gain/loss is a strict
+// green-or-red convention on this page — NOT sourced from HOME_THEME.green,
+// which is actually a pale BLUE (#8ECAE6, shared chrome for other pages) and
+// would read as "gain = blue" here. red still comes from the theme since
+// HOME_THEME.red is a real red.
+const T = { green: "#22C55E", red: HT.red };
 
 // Softer secondary text — a real muted gray, not the theme's flat white, so
 // labels/captions read one step back from primary values.
@@ -158,26 +199,26 @@ function useHoverIndex(count: number) {
   return { i, onMove, onLeave: () => setI(null) };
 }
 
-function MiniLine({ points, color, fmt = fmt$ }: { points: Pt[]; color: string; fmt?: (v: number) => string }) {
+function MiniLine({ points, color, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; color: string; fmt?: (v: number) => string; w?: number; h?: number }) {
   const { i, onMove, onLeave } = useHoverIndex(points.length);
   if (points.length < 2) return emptyChart;
 
   const vals = points.map((p) => p.value);
   const min = Math.min(...vals, 0), max = Math.max(...vals, 0);
   const range = max - min || 1;
-  const x = (n: number) => CH_PAD + ((CH_W - 2 * CH_PAD) * n) / (points.length - 1);
-  const y = (v: number) => CH_PAD + (CH_H - 2 * CH_PAD) * (1 - (v - min) / range);
+  const x = (n: number) => CH_PAD + ((w - 2 * CH_PAD) * n) / (points.length - 1);
+  const y = (v: number) => CH_PAD + (h - 2 * CH_PAD) * (1 - (v - min) / range);
   const d = vals.map((v, n) => `${n === 0 ? "M" : "L"}${x(n)},${y(v)}`).join(" ");
-  const hoverX = i != null ? (x(i) / CH_W) * 100 : 0;
+  const hoverX = i != null ? (x(i) / w) * 100 : 0;
 
   return (
     <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
-      <svg viewBox={`0 0 ${CH_W} ${CH_H}`} preserveAspectRatio="none" style={{ width: "100%", height: CH_H, display: "block", cursor: "crosshair" }}>
-        <line x1={CH_PAD} y1={y(0)} x2={CH_W - CH_PAD} y2={y(0)} stroke={HT.border} />
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block", cursor: "crosshair" }}>
+        <line x1={CH_PAD} y1={y(0)} x2={w - CH_PAD} y2={y(0)} stroke={HT.border} />
         <path d={d} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
         {i != null && (
           <>
-            <line x1={x(i)} y1={CH_PAD} x2={x(i)} y2={CH_H - CH_PAD} stroke={HT.border} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+            <line x1={x(i)} y1={CH_PAD} x2={x(i)} y2={h - CH_PAD} stroke={HT.border} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
             <circle cx={x(i)} cy={y(vals[i])} r={3.5} fill={color} stroke={HT.bg} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
           </>
         )}
@@ -187,23 +228,23 @@ function MiniLine({ points, color, fmt = fmt$ }: { points: Pt[]; color: string; 
   );
 }
 
-function MiniBars({ points, fmt = fmt$ }: { points: Pt[]; fmt?: (v: number) => string }) {
+function MiniBars({ points, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; fmt?: (v: number) => string; w?: number; h?: number }) {
   const { i, onMove, onLeave } = useHoverIndex(points.length);
   if (!points.length) return emptyChart;
 
   const vals = points.map((p) => p.value);
   const maxAbs = Math.max(...vals.map(Math.abs), 1);
-  const slot = (CH_W - 2 * CH_PAD) / points.length;
+  const slot = (w - 2 * CH_PAD) / points.length;
   const bw = Math.max(2, slot - 2);
-  const zero = CH_H / 2;
-  const hoverX = i != null ? ((CH_PAD + i * slot + bw / 2) / CH_W) * 100 : 0;
+  const zero = h / 2;
+  const hoverX = i != null ? ((CH_PAD + i * slot + bw / 2) / w) * 100 : 0;
 
   return (
     <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
-      <svg viewBox={`0 0 ${CH_W} ${CH_H}`} preserveAspectRatio="none" style={{ width: "100%", height: CH_H, display: "block", cursor: "crosshair" }}>
-        <line x1={CH_PAD} y1={zero} x2={CH_W - CH_PAD} y2={zero} stroke={HT.border} />
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block", cursor: "crosshair" }}>
+        <line x1={CH_PAD} y1={zero} x2={w - CH_PAD} y2={zero} stroke={HT.border} />
         {vals.map((v, n) => {
-          const bh = (Math.abs(v) / maxAbs) * (CH_H / 2 - CH_PAD);
+          const bh = (Math.abs(v) / maxAbs) * (h / 2 - CH_PAD);
           return (
             <rect key={n}
               x={CH_PAD + n * slot} y={v >= 0 ? zero - bh : zero}
@@ -216,9 +257,9 @@ function MiniBars({ points, fmt = fmt$ }: { points: Pt[]; fmt?: (v: number) => s
       {/* Value labels above each bar. Rendered as HTML (not SVG <text>) because
           the chart uses preserveAspectRatio="none", which would stretch text. */}
       {vals.map((v, n) => {
-        const bh = (Math.abs(v) / maxAbs) * (CH_H / 2 - CH_PAD);
-        const xPct = ((CH_PAD + n * slot + bw / 2) / CH_W) * 100;
-        const tipPct = ((v >= 0 ? zero - bh : zero + bh) / CH_H) * 100;
+        const bh = (Math.abs(v) / maxAbs) * (h / 2 - CH_PAD);
+        const xPct = ((CH_PAD + n * slot + bw / 2) / w) * 100;
+        const tipPct = ((v >= 0 ? zero - bh : zero + bh) / h) * 100;
         return (
           <div key={n}
             style={{
@@ -232,6 +273,50 @@ function MiniBars({ points, fmt = fmt$ }: { points: Pt[]; fmt?: (v: number) => s
         );
       })}
       {i != null && <ChartTip pt={points[i]} xPct={hoverX} fmt={fmt} />}
+    </div>
+  );
+}
+
+/** Bar chart with an always-visible category label under each bar (day-of-week,
+ * $ bucket, …) instead of hover-only tooltips — matches how these read best. */
+function MiniLabeledBars({ data, w = CH_W, h = CH_H, barColor }: {
+  data: { label: string; value: number }[]; fmt?: (v: number) => string; w?: number; h?: number;
+  barColor?: (v: number, i: number) => string;
+}) {
+  if (!data.length) return emptyChart;
+  const vals = data.map((d) => d.value);
+  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  const slot = (w - 2 * CH_PAD) / data.length;
+  const bw = Math.max(3, slot - Math.max(4, slot * 0.25));
+  const zero = h - CH_PAD - 14; // leave room for the label row
+  const color = barColor ?? ((v: number) => (v >= 0 ? T.green : T.red));
+
+  return (
+    <div style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block" }}>
+        <line x1={CH_PAD} y1={zero} x2={w - CH_PAD} y2={zero} stroke={HT.border} />
+        {vals.map((v, n) => {
+          const bh = (Math.abs(v) / maxAbs) * (zero - CH_PAD);
+          const cx = CH_PAD + n * slot + slot / 2;
+          return (
+            <rect key={n}
+              x={cx - bw / 2} y={v >= 0 ? zero - bh : zero}
+              width={bw} height={Math.max(bh, 1)}
+              fill={color(v, n)} opacity={0.9} rx={1.5} />
+          );
+        })}
+      </svg>
+      {data.map((d, n) => {
+        const xPct = ((CH_PAD + n * slot + slot / 2) / w) * 100;
+        return (
+          <div key={n} style={{
+            position: "absolute", left: `${xPct}%`, bottom: 0,
+            transform: "translateX(-50%)", fontSize: 10, color: HT.muted, whiteSpace: "nowrap",
+          }}>
+            {d.label}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -258,6 +343,16 @@ export default function TradingPage() {
   // Modal fields (strings — coerced on save).
   const [f, setF] = useState(EMPTY_FORM);
 
+  // Trade-level detail (symbol, time in/out, price in/out, account) — derived
+  // live from the fills a CSV import already persisted. Day-level KPIs above
+  // still come from `journals`; this powers the by-account panel and the
+  // long/short + time-in-trade stats that only exist at the trade level.
+  const [trades, setTrades] = useState<JournalTrade[]>([]);
+  const [accounts, setAccounts] = useState<AccountStat[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  // Which chart card is popped out into the bigger modal view, if any.
+  const [expandedChart, setExpandedChart] = useState<string | null>(null);
+
   // ── Load from the API ────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     try {
@@ -271,6 +366,16 @@ export default function TradingPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const loadTrades = useCallback(async () => {
+    try {
+      const res = await fetch("/api/journal/trades", { cache: "no-store" });
+      if (res.status === 401) return;
+      const j = await res.json();
+      setTrades(Array.isArray(j.trades) ? j.trades : []);
+      setAccounts(Array.isArray(j.accounts) ? j.accounts : []);
+    } catch { /* trade-level detail is supplementary; day KPIs still work without it */ }
   }, []);
 
   /**
@@ -303,8 +408,8 @@ export default function TradingPage() {
   }, []);
 
   useEffect(() => {
-    (async () => { await migrateLocal(); await load(); })();
-  }, [migrateLocal, load]);
+    (async () => { await migrateLocal(); await load(); await loadTrades(); })();
+  }, [migrateLocal, load, loadTrades]);
 
   // Every entry counts — there's no manual/verified split any more (imported and
   // hand-typed days are the same thing to the stats). The only filter left is a
@@ -359,10 +464,76 @@ export default function TradingPage() {
       return d;
     });
     const winPct = wins.length + losses.length > 0 ? (wins.length / (wins.length + losses.length)) * 100 : null;
+
+    // Best/worst single day — surfaced separately from the avg win/loss tiles
+    // (avg is per-trade, this is per-session).
+    const maxGainDay = visible.reduce<JournalRow | null>((best, j) => (!best || j.net_pnl > best.net_pnl ? j : best), null);
+    const maxLossDay = visible.reduce<JournalRow | null>((worst, j) => (!worst || j.net_pnl < worst.net_pnl ? j : worst), null);
+    const sessions = visible.length;
+    const avgTradesPerSession = sessions ? totalTrades / sessions : 0;
+    // Per-trade expectancy: $ per trade if the historical win rate/avg win/avg
+    // loss holds. Running cumulative version below is what the "Expectancy"
+    // chart plots — it should settle toward this number as sessions accumulate.
+    const expectancy = winCt + lossCt > 0
+      ? (winCt / (winCt + lossCt)) * avgWin + (lossCt / (winCt + lossCt)) * avgLoss
+      : null;
+
+    // Cumulative win-rate trend, day by day (what "Win/Loss" plots).
+    let rWin = 0, rLoss = 0;
+    const winRateSeries = visible.map((j) => {
+      if (j.net_pnl > 0) rWin++; else if (j.net_pnl < 0) rLoss++;
+      const decided = rWin + rLoss;
+      return { label: j.date, value: decided ? (rWin / decided) * 100 : 0, sub: `${rWin}W - ${rLoss}L so far` };
+    });
+
+    // Running (cumulative) expectancy per trade, day by day.
+    let cGrossWin = 0, cGrossLoss = 0, cWinCt = 0, cLossCt = 0;
+    const expectancySeries = visible.map((j) => {
+      const lc = Math.round(j.trades * (1 - j.win_rate / 100));
+      const wc = j.trades - lc;
+      cWinCt += wc; cLossCt += lc;
+      cGrossWin += (j.avg_win || 0) * wc;
+      cGrossLoss += Math.abs(j.avg_loss || 0) * lc;
+      const n = cWinCt + cLossCt;
+      const value = n ? (cGrossWin - cGrossLoss) / n : 0;
+      return { label: j.date, value, sub: `running avg over ${n} trades` };
+    });
+
+    // P&L distribution — day net_pnl bucketed into fixed-width $ ranges.
+    const pnls = visible.map((j) => j.net_pnl);
+    const distBuckets: { label: string; value: number; positive: boolean }[] = [];
+    if (pnls.length) {
+      const maxAbs = Math.max(...pnls.map(Math.abs), 1);
+      const bucketW = Math.max(25, Math.ceil(maxAbs / 4 / 25) * 25);
+      const counts = new Map<number, number>();
+      for (const v of pnls) {
+        const idx = Math.trunc(v / bucketW) + (v < 0 && v % bucketW !== 0 ? -1 : 0);
+        counts.set(idx, (counts.get(idx) ?? 0) + 1);
+      }
+      const idxs = [...counts.keys()].sort((a, b) => a - b);
+      for (const idx of idxs) {
+        const lo = idx * bucketW;
+        distBuckets.push({ label: `$${lo}`, value: counts.get(idx)!, positive: lo >= 0 });
+      }
+    }
+
+    // Median P&L by day of week (Sun..Sat), matching the calendar's own week.
+    const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const byWeekday: number[][] = Array.from({ length: 7 }, () => []);
+    for (const j of visible) byWeekday[new Date(`${j.date}T00:00:00`).getDay()].push(j.net_pnl);
+    const median = (arr: number[]) => {
+      if (!arr.length) return 0;
+      const s = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    };
+    const weekdaySeries = WEEKDAYS.map((label, i) => ({ label, value: median(byWeekday[i]) }));
+
     return {
       wins: wins.length, losses: losses.length, winPct, totalPnl, totalTrades,
       avgWin, avgLoss, bestW, bestL, bestTW, bestTL, winCt, lossCt, tradeWinPct, cum, dd, maxDD,
       pnlPerTrade: totalTrades > 0 ? totalPnl / totalTrades : null,
+      maxGainDay, maxLossDay, sessions, avgTradesPerSession, expectancy, distBuckets, weekdaySeries,
       // Profit factor across the whole filtered set: gross wins / gross losses.
       // This replaced the old "capture efficiency" score, which was defined
       // against avg MFE — a per-trade excursion stat the journal no longer keeps.
@@ -389,8 +560,33 @@ export default function TradingPage() {
         value: j.net_pnl,
         sub: `${j.trades} trades · ${j.win_rate.toFixed(0)}% win · fees ${fmt$(j.commissions)}`,
       })),
+      winRateSeries,
+      expectancySeries,
     };
   }, [visible]);
+
+  // ── Trade-level: long/short + time-in-trade + by-account ────────────────────
+  // Filtered by the same day-click as the day KPIs, plus an optional account
+  // filter from the By Account panel.
+  const visibleTrades = useMemo(() => {
+    let v = trades;
+    if (selectedDay) v = v.filter((t) => t.date === selectedDay);
+    if (selectedAccount) v = v.filter((t) => (t.account || "Unlabeled") === selectedAccount);
+    return v;
+  }, [trades, selectedDay, selectedAccount]);
+
+  const tradeStats = useMemo(() => {
+    const long = visibleTrades.filter((t) => t.direction === "long");
+    const short = visibleTrades.filter((t) => t.direction === "short");
+    const sum = (arr: JournalTrade[]) => arr.reduce((s, t) => s + t.pnl, 0);
+    const avgTiT = (arr: JournalTrade[]) => arr.length
+      ? arr.reduce((s, t) => s + (t.close_ts - t.open_ts), 0) / arr.length : 0;
+    return {
+      longCt: long.length, shortCt: short.length,
+      longPnl: sum(long), shortPnl: sum(short),
+      avgLongTiT: avgTiT(long), avgShortTiT: avgTiT(short),
+    };
+  }, [visibleTrades]);
 
   // ── Calendar ─────────────────────────────────────────────────────────────────
   const calCells = useMemo(() => {
@@ -509,6 +705,7 @@ export default function TradingPage() {
       setPreview(null);
       setCsvText("");
       await load();                                       // pull the upserted day rows
+      await loadTrades();                                 // refresh per-trade + by-account detail
     } catch (e) {
       setImportErr(String(e));
     } finally {
@@ -527,6 +724,78 @@ export default function TradingPage() {
     a.download = `trading-journals-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
+  };
+
+  // ── Chart cards — each one can "pop out" into a bigger modal view ──────────
+  // One definition per chart, reused for both the inline mini card and the
+  // expanded modal (same series, just a bigger w/h passed to the renderer).
+  const chartDefs: Record<string, { title: string; accent: string; value: React.ReactNode; render: (w: number, h: number) => React.ReactNode }> = {
+    pf: {
+      title: "Profit Factor", accent: HT.cyan,
+      value: <span style={{ color: HT.text }}>{k.profitFactor != null ? k.profitFactor.toFixed(2) : "—"}</span>,
+      render: (w, h) => <MiniLine points={k.pfSeries} color={HT.cyan} fmt={(v) => (v ? v.toFixed(2) : "—")} w={w} h={h} />,
+    },
+    cum: {
+      title: "Cumulative PnL", accent: T.green,
+      value: <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>,
+      render: (w, h) => <MiniLine points={k.cumSeries} color={T.green} w={w} h={h} />,
+    },
+    dd: {
+      title: "Drawdown (Max)", accent: T.red,
+      value: <span style={{ color: T.red }}>{visible.length ? fmt$(k.maxDD) : "—"}</span>,
+      render: (w, h) => <MiniLine points={k.ddSeries} color={T.red} w={w} h={h} />,
+    },
+    pnl: {
+      title: "PnL Per Day", accent: HT.orange, value: null,
+      render: (w, h) => <MiniBars points={k.pnlSeries} w={w} h={h} />,
+    },
+    winloss: {
+      title: "Win/Loss", accent: T.green,
+      value: <span style={{ color: HT.text }}>{k.winPct != null ? `${k.winPct.toFixed(0)}%` : "—"}</span>,
+      render: (w, h) => <MiniLine points={k.winRateSeries} color={T.green} fmt={(v) => `${v.toFixed(0)}%`} w={w} h={h} />,
+    },
+    expectancy: {
+      title: "Expectancy", accent: HT.purple,
+      value: <span style={{ color: k.expectancy != null ? (k.expectancy >= 0 ? T.green : T.red) : HT.text }}>{k.expectancy != null ? fmt$(k.expectancy) : "—"}</span>,
+      render: (w, h) => <MiniLine points={k.expectancySeries} color={HT.purple} w={w} h={h} />,
+    },
+    dist: {
+      title: "P&L Distribution", accent: HT.cyan, value: null,
+      render: (w, h) => (
+        <MiniLabeledBars
+          w={w} h={h}
+          data={k.distBuckets.map((b) => ({ label: b.label, value: b.value }))}
+          barColor={(_v, i) => (k.distBuckets[i]?.positive ? T.green : T.red)}
+        />
+      ),
+    },
+    weekday: {
+      title: "Median PnL vs Day of Week", accent: T.green, value: null,
+      render: (w, h) => <MiniLabeledBars w={w} h={h} data={k.weekdaySeries} />,
+    },
+  };
+  const chartOrder = ["pf", "cum", "dd", "pnl", "winloss", "expectancy", "dist", "weekday"];
+
+  const chartCard = (key: string, big = false) => {
+    const def = chartDefs[key];
+    const w = big ? 720 : CH_W, h = big ? 340 : CH_H;
+    return (
+      <Card key={key} padding={16} style={big ? { width: "100%" } : undefined}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ ...titleStyle, color: def.accent, marginBottom: 0 }}>
+            {def.title} {def.value}
+          </div>
+          {!big && (
+            <button
+              onClick={() => setExpandedChart(key)}
+              title="Expand"
+              style={{ background: "none", border: "none", color: HT.muted, cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1 }}
+            >⤢</button>
+          )}
+        </div>
+        <div style={{ marginTop: 10 }}>{def.render(w, h)}</div>
+      </Card>
+    );
   };
 
   const kpiCard = (title: string, val: React.ReactNode, sub: React.ReactNode, extra?: React.ReactNode, accent: string = HT.cyan) => (
@@ -558,6 +827,9 @@ export default function TradingPage() {
             {selectedDay && (
               <button style={btnStyle()} onClick={() => setSelectedDay(null)}>Day: {selectedDay} ✕</button>
             )}
+            {selectedAccount && (
+              <button style={btnStyle()} onClick={() => setSelectedAccount(null)}>Account: {selectedAccount} ✕</button>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
@@ -577,7 +849,7 @@ export default function TradingPage() {
         )}
 
         {/* KPI strip */}
-            <div className="journal-kpis" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+            <div className="journal-kpis" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
               {kpiCard("Day Win %",
                 k.winPct != null ? `${k.winPct.toFixed(0)}%` : "—",
                 <>
@@ -610,36 +882,99 @@ export default function TradingPage() {
                 k.pnlPerTrade != null ? fmt$(k.pnlPerTrade) : "—",
                 "Net PnL / trade",
                 <div style={{ fontSize: 14, color: SOFT }}>Total Trades <span style={{ color: HT.text }}>{k.totalTrades}</span></div>, HT.cyan)}
+              {kpiCard("Sessions",
+                k.sessions || "—",
+                `Avg ${k.avgTradesPerSession ? k.avgTradesPerSession.toFixed(1) : "0"} trades/session`,
+                <div style={{ fontSize: 13, color: SOFT }}>
+                  Expectancy{" "}
+                  <span style={{ color: k.expectancy != null ? (k.expectancy >= 0 ? T.green : T.red) : HT.text, fontWeight: 700 }}>
+                    {k.expectancy != null ? fmt$(k.expectancy) : "—"}
+                  </span>
+                </div>, HT.cyan)}
+              {kpiCard("Max Gain / Loss",
+                <span>
+                  <span style={{ color: T.green }}>{k.maxGainDay ? fmt$(k.maxGainDay.net_pnl) : "—"}</span>
+                  {" / "}
+                  <span style={{ color: T.red }}>{k.maxLossDay ? fmt$(k.maxLossDay.net_pnl) : "—"}</span>
+                </span>,
+                "Best / worst single session",
+                <div style={{ fontSize: 12, color: SOFT }}>
+                  {k.maxGainDay ? k.maxGainDay.date : "—"} · {k.maxLossDay ? k.maxLossDay.date : "—"}
+                </div>, HT.orange)}
+              {kpiCard("Long / Short",
+                <span>
+                  <span style={{ color: HT.text }}>{tradeStats.longCt}</span>
+                  {" / "}
+                  <span style={{ color: HT.text }}>{tradeStats.shortCt}</span>
+                </span>,
+                "Trades by direction",
+                <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  <div>Long PnL <span style={{ color: tradeStats.longPnl >= 0 ? T.green : T.red }}>{tradeStats.longCt ? fmt$(tradeStats.longPnl) : "—"}</span></div>
+                  <div>Short PnL <span style={{ color: tradeStats.shortPnl >= 0 ? T.green : T.red }}>{tradeStats.shortCt ? fmt$(tradeStats.shortPnl) : "—"}</span></div>
+                </div>, HT.purple)}
+              {kpiCard("Avg Time in Trade",
+                tradeStats.longCt || tradeStats.shortCt
+                  ? fmtDur((tradeStats.avgLongTiT * tradeStats.longCt + tradeStats.avgShortTiT * tradeStats.shortCt) / (tradeStats.longCt + tradeStats.shortCt))
+                  : "—",
+                "Entry → exit, HH:MM:SS",
+                <div style={{ fontSize: 13, color: SOFT }}>
+                  Long <span style={{ color: HT.text }}>{tradeStats.longCt ? fmtDur(tradeStats.avgLongTiT) : "—"}</span>
+                  {" · "}Short <span style={{ color: HT.text }}>{tradeStats.shortCt ? fmtDur(tradeStats.avgShortTiT) : "—"}</span>
+                </div>, HT.green)}
             </div>
 
-            {/* Charts strip */}
-            <div className="journal-charts" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              <Card padding={16}>
-                <div style={{ ...titleStyle, color: HT.cyan }}>
-                  Profit Factor <span style={{ color: HT.text }}>{k.profitFactor != null ? k.profitFactor.toFixed(2) : "—"}</span>
-                </div>
-                <MiniLine points={k.pfSeries} color={HT.cyan} fmt={(v) => (v ? v.toFixed(2) : "—")} />
-              </Card>
-              <Card padding={16}>
-                <div style={{ ...titleStyle, color: T.green }}>
-                  Cumulative PnL <span style={{ color: k.totalPnl >= 0 ? T.green : T.red }}>{visible.length ? fmt$(k.totalPnl) : "—"}</span>
-                </div>
-                <MiniLine points={k.cumSeries} color={T.green} />
-              </Card>
-              <Card padding={16}>
-                <div style={{ ...titleStyle, color: T.red }}>
-                  Drawdown (Max) <span style={{ color: T.red }}>{visible.length ? fmt$(k.maxDD) : "—"}</span>
-                </div>
-                <MiniLine points={k.ddSeries} color={T.red} />
-              </Card>
-              <Card padding={16}>
-                <div style={{ ...titleStyle, color: HT.orange }}>PnL Per Day</div>
-                <MiniBars points={k.pnlSeries} />
-              </Card>
+            {/* Charts strip — click ⤢ on any card to pop it out bigger */}
+            <div className="journal-charts" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+              {chartOrder.map((key) => chartCard(key))}
             </div>
 
             {/* Tables */}
-            <div className="journal-tables" style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+            <div className="journal-tables" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 }}>
+              <Card padding={16}>
+                <div
+                  onClick={() => setCollapsed((c) => ({ ...c, accounts: !c.accounts }))}
+                  style={{ ...collapseTitleStyle, color: HT.cyan }}
+                >
+                  <span>By Account{selectedAccount ? ` — ${selectedAccount} ✕` : ""}</span><span>{collapsed.accounts ? "▶" : "▼"}</span>
+                </div>
+                {!collapsed.accounts && (
+                  accounts.length ? (
+                    <table style={tableStyle}>
+                      <thead>
+                        <tr>
+                          {["Account", "Sessions", "Trades", "Net P&L", "Win %"].map((h) => (
+                            <th key={h} style={{ textAlign: h === "Account" ? "left" : "right", fontSize: 12, color: HT.muted, textTransform: "uppercase", padding: "4px 6px", borderBottom: `1px solid ${HT.border}` }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accounts.map((a) => {
+                          const label = a.account || "Unlabeled";
+                          const active = selectedAccount === label;
+                          return (
+                            <tr
+                              key={label}
+                              onClick={() => setSelectedAccount(active ? null : label)}
+                              style={{ cursor: "pointer", background: active ? `${HT.cyan}14` : "transparent" }}
+                            >
+                              <td style={{ ...cellStyle, color: active ? HT.cyan : HT.text, fontWeight: active ? 700 : 400 }}>{label}</td>
+                              <td style={{ ...cellStyle, color: HT.text, textAlign: "right" }}>{a.sessions}</td>
+                              <td style={{ ...cellStyle, color: HT.text, textAlign: "right" }}>{a.trades}</td>
+                              <td style={{ ...cellStyle, color: a.net_pnl >= 0 ? T.green : T.red, textAlign: "right", fontWeight: 700 }}>{fmt$(a.net_pnl)}</td>
+                              <td style={{ ...cellStyle, color: HT.text, textAlign: "right" }}>{a.win_rate.toFixed(0)}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div style={{ padding: 12, color: HT.muted, fontSize: 13 }}>
+                      No account column found on the imported CSV yet — every trade is grouped as one account.
+                    </div>
+                  )
+                )}
+              </Card>
+
               <Card padding={16}>
                 <div
                   onClick={() => setCollapsed((c) => ({ ...c, targets: !c.targets }))}
@@ -714,6 +1049,55 @@ export default function TradingPage() {
                 )}
               </Card>
             </div>
+
+            {/* Trade-level detail — symbol, time in/out, price in/out, direction,
+                account. Populated from the fills a CSV import already saved. */}
+            <Card padding={16}>
+              <div
+                onClick={() => setCollapsed((c) => ({ ...c, trades: !c.trades }))}
+                style={{ ...collapseTitleStyle, color: HT.cyan }}
+              >
+                <span>Trades ({visibleTrades.length})</span><span>{collapsed.trades ? "▶" : "▼"}</span>
+              </div>
+              {!collapsed.trades && (
+                visibleTrades.length ? (
+                  <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                    <table style={tableStyle}>
+                      <thead>
+                        <tr>
+                          {["Date", "Symbol", "Side", "Account", "Time In", "Time Out", "Price In", "Price Out", "Qty", "P&L"].map((h) => (
+                            <th key={h} style={{ textAlign: "left", fontSize: 12, color: HT.muted, textTransform: "uppercase", padding: "4px 6px", borderBottom: `1px solid ${HT.border}` }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...visibleTrades].sort((a, b) => b.close_ts - a.close_ts).slice(0, 300).map((t, i) => (
+                          <tr key={`${t.symbol}-${t.close_ts}-${i}`}>
+                            <td style={{ ...cellStyle, color: HT.text }}>{t.date}</td>
+                            <td style={{ ...cellStyle, color: HT.text }}>{t.symbol}</td>
+                            <td style={{ ...cellStyle, color: t.direction === "long" ? T.green : T.red }}>{t.direction === "long" ? "Long" : "Short"}</td>
+                            <td style={{ ...cellStyle, color: HT.muted }}>{t.account || "—"}</td>
+                            <td style={{ ...cellStyle, color: HT.muted, whiteSpace: "nowrap" }}>{new Date(t.open_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+                            <td style={{ ...cellStyle, color: HT.muted, whiteSpace: "nowrap" }}>{new Date(t.close_ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+                            <td style={{ ...cellStyle, color: HT.text }}>{t.entry.toFixed(2)}</td>
+                            <td style={{ ...cellStyle, color: HT.text }}>{t.exit.toFixed(2)}</td>
+                            <td style={{ ...cellStyle, color: HT.text }}>{t.qty}</td>
+                            <td style={{ ...cellStyle, color: t.pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>{fmt$(t.pnl)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {visibleTrades.length > 300 && (
+                      <div style={{ fontSize: 12, color: HT.muted, padding: "8px 4px" }}>Showing the most recent 300 of {visibleTrades.length} trades.</div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ padding: 12, color: HT.muted, fontSize: 13 }}>
+                    No per-trade detail yet — import a broker CSV to populate symbol / time in-out / price in-out per trade.
+                  </div>
+                )
+              )}
+            </Card>
 
             {/* Calendar */}
             <Card padding={16}>
@@ -809,6 +1193,26 @@ export default function TradingPage() {
                   {importing ? "Importing…" : `Import ${preview.counts.days} Days`}
                 </button>
               </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* EXPANDED CHART — pop-out view of whichever card's ⤢ was clicked */}
+      {expandedChart && chartDefs[expandedChart] && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}
+          onClick={() => setExpandedChart(null)}
+        >
+          <Card className="no-card-lift" padding={20} style={{ maxWidth: 800, width: "95vw" }}>
+            <div onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, paddingBottom: 10, borderBottom: `1px solid ${HT.border}` }}>
+                <div style={{ ...titleStyle, marginBottom: 0, color: chartDefs[expandedChart].accent }}>
+                  {chartDefs[expandedChart].title} {chartDefs[expandedChart].value}
+                </div>
+                <button onClick={() => setExpandedChart(null)} style={{ background: "none", border: "none", fontSize: 20, color: HT.muted, cursor: "pointer" }}>×</button>
+              </div>
+              {chartDefs[expandedChart].render(720, 340)}
             </div>
           </Card>
         </div>

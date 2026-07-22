@@ -36,11 +36,12 @@ const dodGrowth = (nowDelta: number | null, delta: number, netYest: number): num
 const dodPct = (v: number | null): string =>
   v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(v >= 1000 || v <= -1000 ? 0 : 1)}%`;
 
+// Always in millions — no raw-dollar or billion fallback, so every number in
+// this tab (main table + the per-strike drill-down) reads on the same scale
+// instead of switching formats at $1M/$1B (e.g. "$144,533" next to "$17M").
 const dodGex = (v: number): string => {
   const a = Math.abs(v), s = v < 0 ? "-" : "";
-  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(0)}M`;
-  return `${s}$${Math.round(a).toLocaleString("en-US")}`;
+  return `${s}$${(a / 1e6).toFixed(2)}M`;
 };
 const dodSigned = (v: number): string => (v >= 0 ? "+" : "") + dodGex(v);
 const dodChg = (v: number | null): string =>

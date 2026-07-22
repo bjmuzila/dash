@@ -20,6 +20,7 @@ import IbStatsTab from "@/components/scanner/IbStatsTab";
 import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import TpoForecastCard from "@/components/scanner/TpoForecastCard";
+import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import SemisTab from "@/components/scanner/SemisTab";
 import DodMoversTab from "@/components/scanner/DodMoversTab";
 import { LogicOrderPanel } from "@/components/dashboard/LogicOrderPanel";
@@ -2900,6 +2901,9 @@ function TpoStructuresScanner() {
 
       {/* ── Live TPO forecast: predicted (from IB) vs realized-so-far ─────── */}
       <TpoForecastCard instr={instr} />
+
+      {/* ── TPO forward map: open (unfinished) structures ranked vs spot ──── */}
+      {enoughHistory && <TpoForwardMap res={res} spot={spot} />}
 
       {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
       <Card variant="budget"

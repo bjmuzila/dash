@@ -964,11 +964,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       multiplier  REAL NOT NULL DEFAULT 1,
       source      TEXT NOT NULL,          -- broker id
       ext_id      TEXT NOT NULL,
+      account     TEXT NOT NULL DEFAULT '', -- broker account #/label, '' if the file has none
       created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (user_id, ext_id)
     );
     CREATE INDEX IF NOT EXISTS idx_trading_fills_user_date ON trading_fills(user_id, date);
     CREATE INDEX IF NOT EXISTS idx_trading_fills_user_ts   ON trading_fills(user_id, ts);
+    -- Backfill for pre-existing tables (per-account P&L breakdown).
+    ALTER TABLE trading_fills ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT '';
 
     -- ── Custom auth (replaces Supabase Auth) ──────────────────────────────────
     -- One row per account. id is a plain TEXT uuid generated app-side
@@ -1264,6 +1267,7 @@ export interface TradingFill {
   date: string; ts: number; symbol: string; underlying: string;
   asset_type: string; side: string; qty: number; price: number;
   fees: number; multiplier: number; source: string; ext_id: string;
+  account: string;
 }
 
 /** Bulk insert. ON CONFLICT DO NOTHING on (user_id, ext_id) → re-importing the
@@ -1272,17 +1276,17 @@ export interface TradingFill {
 export async function insertTradingFills(userId: string, fills: TradingFill[]): Promise<number> {
   if (!fills.length) return 0;
   const pool = await getDb();
-  const COLS = 13;                       // must match the column list below
+  const COLS = 14;                       // must match the column list below
   const values: unknown[] = [];
   const tuples = fills.map((f, i) => {
     values.push(userId, f.date, f.ts, f.symbol, f.underlying, f.asset_type,
-      f.side, f.qty, f.price, f.fees, f.multiplier, f.source, f.ext_id);
+      f.side, f.qty, f.price, f.fees, f.multiplier, f.source, f.ext_id, f.account ?? "");
     const ph = Array.from({ length: COLS }, (_, c) => `$${i * COLS + c + 1}`);
     return `(${ph.join(", ")})`;
   });
   const res = await pool.query(
     `INSERT INTO trading_fills
-       (user_id, date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id)
+       (user_id, date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id, account)
      VALUES ${tuples.join(",")}
      ON CONFLICT (user_id, ext_id) DO NOTHING`,
     values
@@ -1298,9 +1302,9 @@ export async function insertTradingFills(userId: string, fills: TradingFill[]): 
 export async function getTradingFills(userId: string, date?: string): Promise<TradingFill[]> {
   await getDb();
   const sql = date
-    ? `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
+    ? `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id, account
          FROM trading_fills WHERE user_id = ? AND date = ? ORDER BY ts ASC`
-    : `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id
+    : `SELECT date, ts, symbol, underlying, asset_type, side, qty, price, fees, multiplier, source, ext_id, account
          FROM trading_fills WHERE user_id = ? ORDER BY ts ASC`;
   const rows = await queryAll<TradingFill>(sql, date ? [userId, date] : [userId]);
   return rows.map((r) => ({
@@ -1310,6 +1314,7 @@ export async function getTradingFills(userId: string, date?: string): Promise<Tr
     price: Number(r.price),
     fees: Number(r.fees),
     multiplier: Number(r.multiplier),
+    account: r.account ?? "",
   }));
 }
 

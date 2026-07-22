@@ -34,6 +34,7 @@ export interface Fill {
   multiplier: number;     // 100 for options, per-contract $ for futures, 1 equity
   source: BrokerId;
   ext_id: string;         // stable hash of the raw row → dedupes re-imports
+  account: string;        // broker account number/label, "" if the file has none
 }
 
 export interface Trade {
@@ -41,14 +42,15 @@ export interface Trade {
   underlying: string;
   asset_type: Fill["asset_type"];
   direction: "long" | "short";
-  open_ts: number;
-  close_ts: number;
+  open_ts: number;        // "time in"
+  close_ts: number;       // "time out"
   date: string;           // session date of the CLOSE (when P&L is realized)
   qty: number;
-  entry: number;
-  exit: number;
+  entry: number;          // "price in"
+  exit: number;           // "price out"
   fees: number;
   pnl: number;            // net of fees
+  account: string;
 }
 
 /** What a journal day stores. Day-level only — no per-trade excursion stats. */
@@ -148,6 +150,10 @@ const ALIASES: Record<string, string[]> = {
   fees:   ["commission", "commissions", "fees", "commfee", "ibcommission", "totalfees", "commissionsandfees"],
   // Optional — used only as a cross-check, never as the source of truth.
   pnl:    ["pnl", "realizedpnl", "netpnl", "profit", "grosspl", "realizedp", "value"],
+  // Optional — most brokers omit this on a single-account export. When present
+  // it lets the journal split stats "by account" (e.g. a prop account vs a
+  // personal account traded the same week).
+  account: ["account", "accountnumber", "accountid", "acctnum", "acct", "accountnickname"],
 };
 
 export type ColumnMap = Partial<Record<keyof typeof ALIASES, number>>;
@@ -315,6 +321,7 @@ export function toFills(rows: string[][], broker?: BrokerId, map?: ColumnMap): P
       asset_type: cls.asset_type,
       multiplier: cls.multiplier,
       source: b,
+      account: (at(r, m.account) ?? "").trim(),
     };
 
     // MotiveWave: one row = a completed trade (entry + exit on the same line).
@@ -345,15 +352,20 @@ export function toFills(rows: string[][], broker?: BrokerId, map?: ColumnMap): P
  * can't affect a day stat. It'll close on a later import and be counted then.
  */
 export function matchRoundTrips(fills: Fill[]): Trade[] {
+  // Keyed by account+symbol — the same symbol held in two different accounts at
+  // once (e.g. a prop account and a personal account) must not net against
+  // each other.
   const open = new Map<string, { ts: number; qty: number; price: number; fees: number; side: "BUY" | "SELL" }[]>();
   const trades: Trade[] = [];
+  const key = (f: { account: string; symbol: string }) => `${f.account}|${f.symbol}`;
 
   for (const f of fills) {
-    const lots = open.get(f.symbol) ?? [];
+    const k = key(f);
+    const lots = open.get(k) ?? [];
     // Same direction as what's open (or nothing open) → this is an opening lot.
     if (!lots.length || lots[0].side === f.side) {
       lots.push({ ts: f.ts, qty: f.qty, price: f.price, fees: f.fees, side: f.side });
-      open.set(f.symbol, lots);
+      open.set(k, lots);
       continue;
     }
 
@@ -381,6 +393,7 @@ export function matchRoundTrips(fills: Fill[]): Trade[] {
         exit: f.price,
         fees: feeShare,
         pnl: gross - feeShare,
+        account: f.account,
       });
 
       lot.fees -= lot.fees * (q / lot.qty);
@@ -393,7 +406,7 @@ export function matchRoundTrips(fills: Fill[]): Trade[] {
     if (remaining > 0) {
       lots.push({ ts: f.ts, qty: remaining, price: f.price, fees: 0, side: f.side });
     }
-    open.set(f.symbol, lots);
+    open.set(k, lots);
   }
 
   return trades.sort((a, b) => a.close_ts - b.close_ts);
@@ -437,6 +450,49 @@ export function deriveDays(trades: Trade[]): DayStats[] {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// ── Stage 6: trades → per-account rollup ────────────────────────────────────
+
+export interface AccountStats {
+  account: string;               // "" → "Unlabeled" in the UI
+  sessions: number;               // distinct trading days
+  first_date: string;
+  last_date: string;
+  trades: number;
+  net_pnl: number;
+  win_rate: number;
+  avg_tit_ms: number;             // avg time-in-trade, all trades
+}
+
+/** Per-account rollup so the journal can answer "which account did today's
+ *  trades come out of, and how has it done" — e.g. one account for the last
+ *  5 sessions, a different one today. */
+export function deriveAccountStats(trades: Trade[]): AccountStats[] {
+  const byAcct = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const arr = byAcct.get(t.account) ?? [];
+    arr.push(t);
+    byAcct.set(t.account, arr);
+  }
+  const out: AccountStats[] = [];
+  for (const [account, ts] of byAcct) {
+    const dates = ts.map((t) => t.date).sort();
+    const wins = ts.filter((t) => t.pnl > 0).length;
+    const losses = ts.filter((t) => t.pnl < 0).length;
+    const decided = wins + losses;
+    out.push({
+      account,
+      sessions: new Set(dates).size,
+      first_date: dates[0],
+      last_date: dates[dates.length - 1],
+      trades: ts.length,
+      net_pnl: round2(ts.reduce((s, t) => s + t.pnl, 0)),
+      win_rate: decided ? round2((wins / decided) * 100) : 0,
+      avg_tit_ms: ts.length ? Math.round(ts.reduce((s, t) => s + (t.close_ts - t.open_ts), 0) / ts.length) : 0,
+    });
+  }
+  return out.sort((a, b) => b.last_date.localeCompare(a.last_date));
+}
 
 /** One-call convenience: CSV text → everything the import preview needs. */
 export function importCsv(text: string, broker?: BrokerId, map?: ColumnMap) {
