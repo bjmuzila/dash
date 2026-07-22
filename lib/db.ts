@@ -973,6 +973,41 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Backfill for pre-existing tables (per-account P&L breakdown).
     ALTER TABLE trading_fills ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT '';
 
+    -- Per-trade edits/deletes for the /trading "Trades" table. Trades are
+    -- DERIVED (FIFO-matched from trading_fills), never stored directly, so an
+    -- edit can't just UPDATE a trade row — and editing the underlying fills
+    -- directly is unsafe when one fill is split across several trades (e.g. a
+    -- 10-lot entry closed by five separate 2-lot exits all share one opening
+    -- fill). Instead an edit is a shadow row keyed to the specific trade's
+    -- (open_ext_id, close_ext_id) pair — the two fills THAT trade matched —
+    -- applied on top of the derived trade at read time. Never touches
+    -- trading_fills, so it can't bleed into a sibling trade that happens to
+    -- share one of those two fills.
+    CREATE TABLE IF NOT EXISTS trading_trade_overrides (
+      id            SERIAL PRIMARY KEY,
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      open_ext_id   TEXT NOT NULL,
+      close_ext_id  TEXT NOT NULL,
+      symbol        TEXT NOT NULL,
+      underlying    TEXT NOT NULL,
+      asset_type    TEXT NOT NULL,
+      direction     TEXT NOT NULL,          -- 'long' | 'short'
+      open_ts       BIGINT NOT NULL,
+      close_ts      BIGINT NOT NULL,
+      date          TEXT NOT NULL,
+      qty           REAL NOT NULL,
+      entry         REAL NOT NULL,
+      exit          REAL NOT NULL,
+      fees          REAL NOT NULL DEFAULT 0,
+      pnl           REAL NOT NULL,
+      account       TEXT NOT NULL DEFAULT '',
+      deleted       BOOLEAN NOT NULL DEFAULT FALSE,  -- hides the trade instead of dropping the row
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (user_id, open_ext_id, close_ext_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trading_trade_overrides_user ON trading_trade_overrides(user_id);
+
     -- ── Custom auth (replaces Supabase Auth) ──────────────────────────────────
     -- One row per account. id is a plain TEXT uuid generated app-side
     -- (crypto.randomUUID()) rather than a DB default, so the migration script can
@@ -1321,6 +1356,64 @@ export async function getTradingFills(userId: string, date?: string): Promise<Tr
     multiplier: Number(r.multiplier),
     account: r.account ?? "",
   }));
+}
+
+// ── Trade edits (/trading "Trades" table) ────────────────────────────────────
+// See the trading_trade_overrides CREATE TABLE comment: a shadow row keyed to
+// the (open_ext_id, close_ext_id) pair of the two fills a trade matched,
+// applied on top of the FIFO-derived trade at read time. Never touches
+// trading_fills.
+
+export interface TradeOverride {
+  open_ext_id: string; close_ext_id: string;
+  symbol: string; underlying: string; asset_type: string; direction: string;
+  open_ts: number; close_ts: number; date: string; qty: number;
+  entry: number; exit: number; fees: number; pnl: number; account: string;
+  deleted: boolean;
+}
+
+/** All overrides for a user, as a Map keyed by "openExtId|closeExtId" for O(1)
+ *  lookup while walking the freshly FIFO-derived trades. */
+export async function getTradeOverrides(userId: string): Promise<Map<string, TradeOverride>> {
+  await getDb();
+  const rows = await queryAll<TradeOverride>(
+    `SELECT open_ext_id, close_ext_id, symbol, underlying, asset_type, direction,
+            open_ts, close_ts, date, qty, entry, exit, fees, pnl, account, deleted
+       FROM trading_trade_overrides WHERE user_id = ?`,
+    [userId]
+  );
+  const map = new Map<string, TradeOverride>();
+  for (const r of rows) {
+    map.set(`${r.open_ext_id}|${r.close_ext_id}`, {
+      ...r,
+      open_ts: Number(r.open_ts), close_ts: Number(r.close_ts),
+      qty: Number(r.qty), entry: Number(r.entry), exit: Number(r.exit),
+      fees: Number(r.fees), pnl: Number(r.pnl),
+    });
+  }
+  return map;
+}
+
+/** Create or replace the override for one trade. Scoped by user_id + the
+ *  (open_ext_id, close_ext_id) unique constraint, so a guessed pair can't
+ *  touch someone else's fills — and there's nothing to guess since both ids
+ *  come from a trade the user's own GET /api/journal/trades already returned. */
+export async function upsertTradeOverride(userId: string, o: TradeOverride): Promise<void> {
+  await getDb();
+  await queryAll(
+    `INSERT INTO trading_trade_overrides
+       (user_id, open_ext_id, close_ext_id, symbol, underlying, asset_type, direction,
+        open_ts, close_ts, date, qty, entry, exit, fees, pnl, account, deleted)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (user_id, open_ext_id, close_ext_id) DO UPDATE SET
+       symbol = EXCLUDED.symbol, underlying = EXCLUDED.underlying, asset_type = EXCLUDED.asset_type,
+       direction = EXCLUDED.direction, open_ts = EXCLUDED.open_ts, close_ts = EXCLUDED.close_ts,
+       date = EXCLUDED.date, qty = EXCLUDED.qty, entry = EXCLUDED.entry, exit = EXCLUDED.exit,
+       fees = EXCLUDED.fees, pnl = EXCLUDED.pnl, account = EXCLUDED.account, deleted = EXCLUDED.deleted,
+       updated_at = CURRENT_TIMESTAMP`,
+    [userId, o.open_ext_id, o.close_ext_id, o.symbol, o.underlying, o.asset_type, o.direction,
+     o.open_ts, o.close_ts, o.date, o.qty, o.entry, o.exit, o.fees, o.pnl, o.account, o.deleted]
+  );
 }
 
 export async function insertWatchSnapshot(s: WatchSnapshot): Promise<void> {

@@ -19,7 +19,7 @@
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type BrokerId =
-  | "tastytrade" | "tos" | "ibkr" | "rithmic" | "motivewave" | "tradovate" | "generic";
+  | "tastytrade" | "tos" | "ibkr" | "rithmic" | "motivewave" | "tradovate" | "tpt" | "generic";
 
 export interface Fill {
   ts: number;             // epoch ms (execution time)
@@ -51,6 +51,11 @@ export interface Trade {
   fees: number;
   pnl: number;            // net of fees
   account: string;
+  // Stable identity — the ext_id of the two fills this round trip matched.
+  // Not a database id (trades are never stored, only fills are); this is
+  // what /api/journal/trades keys an edit/delete override to.
+  open_ext_id: string;
+  close_ext_id: string;
 }
 
 /** What a journal day stores. Day-level only — no per-trade excursion stats. */
@@ -119,6 +124,10 @@ const SIGNATURES: { id: Exclude<BrokerId, "generic">; need: string[] }[] = [
   { id: "rithmic",    need: ["instrument", "buysell", "quantity", "price"] },
   // MotiveWave trade log.
   { id: "motivewave", need: ["instrument", "side", "quantity", "entryprice", "exitprice"] },
+  // TPT "completed trades" export — already ROUND TRIPS (one row = one closed
+  // trade), not raw executions. tradeAccount/position/entryDate/exitDate/
+  // pnlDollars is the unique fingerprint; nothing else exports this shape.
+  { id: "tpt",         need: ["tradeid", "tradeaccount", "symbol", "position", "entrydate", "exitdate", "pnldollars"] },
   // Thinkorswim / Schwab "Account Statement" → Account Trade History.
   { id: "tos",        need: ["execttime", "symbol", "side", "qty", "price"] },
   { id: "tos",        need: ["exectime", "symbol", "side", "qty", "price"] },
@@ -299,6 +308,56 @@ export function toFills(rows: string[][], broker?: BrokerId, map?: ColumnMap): P
 
   const at = (r: string[], i?: number) => (i == null ? undefined : r[i]);
 
+  // TPT "completed trades" — each row is a CLOSED trade, not a single
+  // execution: it carries entryDate/exitDate + entryPrice/exitPrice on one
+  // line, plus its own account/position/qty/pnl/commission columns. None of
+  // that fits the generic one-ts/one-price ColumnMap (built for
+  // one-row-per-execution files), so it gets its own pass, synthesized into
+  // an open + close fill pair per row — same trick as the MotiveWave branch
+  // below, just with its own column lookup instead of `m`.
+  if (b === "tpt") {
+    const cols = header.map(norm);
+    const idx = (...names: string[]) => { for (const n of names) { const i = cols.indexOf(n); if (i >= 0) return i; } return undefined; };
+    const c = {
+      id: idx("tradeid"), account: idx("tradeaccount"), symbol: idx("symbol"),
+      position: idx("position"), entryDate: idx("entrydate"), exitDate: idx("exitdate"),
+      qty: idx("maxquantity"), pnl: idx("pnldollars"), fees: idx("commission"),
+      entryPx: idx("entryprice"), exitPx: idx("exitprice"),
+    };
+    for (let ri = 1; ri < rows.length; ri++) {
+      const r = rows[ri];
+      const rawSym = (at(r, c.symbol) ?? "").trim();
+      const openTs = parseTs(at(r, c.entryDate));
+      const closeTs = parseTs(at(r, c.exitDate));
+      const qty = Math.abs(money(at(r, c.qty)));
+      const entryPx = money(at(r, c.entryPx));
+      const exitPx = money(at(r, c.exitPx));
+      if (!rawSym || openTs == null || closeTs == null || !qty || !Number.isFinite(entryPx) || !Number.isFinite(exitPx)) {
+        skipped++; continue;
+      }
+      const cls = classify(rawSym);
+      if (cls.asset_type === "future" && cls.multiplier === 1) unknown.add(cls.underlying);
+      const long = (at(r, c.position) ?? "").trim().toUpperCase() !== "S";
+      const fees = Math.abs(money(at(r, c.fees)));
+      const account = (at(r, c.account) ?? "").trim();
+      const tradeId = (at(r, c.id) ?? "").trim() || String(ri);
+      const base = {
+        symbol: rawSym.toUpperCase(), underlying: cls.underlying, asset_type: cls.asset_type,
+        multiplier: cls.multiplier, source: b, account, qty,
+      };
+      // ext_id keys off the broker's own tradeId (stable across re-exports of
+      // the same statement) rather than a full-row hash — TPT recomputes
+      // derived columns (win%, expectancy…) between exports, which would
+      // otherwise change the hash and duplicate the trade on re-import.
+      fills.push({ ...base, ts: openTs, date: sessionDate(openTs), price: entryPx, fees: fees / 2,
+        side: long ? "BUY" : "SELL", ext_id: hash(`tpt|${tradeId}|o`) });
+      fills.push({ ...base, ts: closeTs, date: sessionDate(closeTs), price: exitPx, fees: fees / 2,
+        side: long ? "SELL" : "BUY", ext_id: hash(`tpt|${tradeId}|c`) });
+    }
+    fills.sort((a, z) => a.ts - z.ts);
+    return { broker: b, fills, skipped, unknownRoots: [...unknown] };
+  }
+
   for (let ri = 1; ri < rows.length; ri++) {
     const r = rows[ri];
     const rawSym = (at(r, m.symbol) ?? "").trim();
@@ -355,7 +414,7 @@ export function matchRoundTrips(fills: Fill[]): Trade[] {
   // Keyed by account+symbol — the same symbol held in two different accounts at
   // once (e.g. a prop account and a personal account) must not net against
   // each other.
-  const open = new Map<string, { ts: number; qty: number; price: number; fees: number; side: "BUY" | "SELL" }[]>();
+  const open = new Map<string, { ts: number; qty: number; price: number; fees: number; side: "BUY" | "SELL"; ext_id: string }[]>();
   const trades: Trade[] = [];
   const key = (f: { account: string; symbol: string }) => `${f.account}|${f.symbol}`;
 
@@ -364,7 +423,7 @@ export function matchRoundTrips(fills: Fill[]): Trade[] {
     const lots = open.get(k) ?? [];
     // Same direction as what's open (or nothing open) → this is an opening lot.
     if (!lots.length || lots[0].side === f.side) {
-      lots.push({ ts: f.ts, qty: f.qty, price: f.price, fees: f.fees, side: f.side });
+      lots.push({ ts: f.ts, qty: f.qty, price: f.price, fees: f.fees, side: f.side, ext_id: f.ext_id });
       open.set(k, lots);
       continue;
     }
@@ -394,6 +453,8 @@ export function matchRoundTrips(fills: Fill[]): Trade[] {
         fees: feeShare,
         pnl: gross - feeShare,
         account: f.account,
+        open_ext_id: lot.ext_id,
+        close_ext_id: f.ext_id,
       });
 
       lot.fees -= lot.fees * (q / lot.qty);
@@ -404,7 +465,7 @@ export function matchRoundTrips(fills: Fill[]): Trade[] {
     // Flipped through flat (closed more than was open) → the excess opens the
     // other way. Rare but real (a sell-to-flip order).
     if (remaining > 0) {
-      lots.push({ ts: f.ts, qty: remaining, price: f.price, fees: 0, side: f.side });
+      lots.push({ ts: f.ts, qty: remaining, price: f.price, fees: 0, side: f.side, ext_id: f.ext_id });
     }
     open.set(k, lots);
   }

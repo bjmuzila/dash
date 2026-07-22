@@ -51,6 +51,8 @@ interface JournalTrade {
   fees: number;
   pnl: number;
   account: string;
+  open_ext_id: string;
+  close_ext_id: string;
 }
 
 interface AccountStat {
@@ -74,6 +76,15 @@ const fmtDur = (ms: number) => {
   const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 };
+
+/** epoch ms → local "YYYY-MM-DDTHH:MM:SS" for a datetime-local input value. */
+const toLocalInput = (ts: number) => {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+/** datetime-local input value → epoch ms (local time, same as the input picker). */
+const fromLocalInput = (v: string) => { const t = new Date(v).getTime(); return Number.isFinite(t) ? t : Date.now(); };
 
 // Data-viz encodings (win/loss cells + chart series). Gain/loss is a strict
 // green-or-red convention on this page — NOT sourced from HOME_THEME.green,
@@ -353,6 +364,17 @@ export default function TradingPage() {
   // Which chart card is popped out into the bigger modal view, if any.
   const [expandedChart, setExpandedChart] = useState<string | null>(null);
 
+  // Trade edit modal — editing a trade writes an override row (see
+  // /api/journal/trades), never the underlying fills, so it can't bleed into
+  // a sibling trade that happens to share one of those two fills.
+  const [editingTrade, setEditingTrade] = useState<JournalTrade | null>(null);
+  const [tradeForm, setTradeForm] = useState({
+    symbol: "", account: "", direction: "long" as "long" | "short",
+    openLocal: "", closeLocal: "", qty: "", entry: "", exit: "", fees: "",
+  });
+  const [tradeSaving, setTradeSaving] = useState(false);
+  const [tradeModalErr, setTradeModalErr] = useState("");
+
   // ── Load from the API ────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     try {
@@ -377,6 +399,53 @@ export default function TradingPage() {
       setAccounts(Array.isArray(j.accounts) ? j.accounts : []);
     } catch { /* trade-level detail is supplementary; day KPIs still work without it */ }
   }, []);
+
+  // ── Trade edit / delete ──────────────────────────────────────────────────────
+  const openEditTrade = (t: JournalTrade) => {
+    setTradeForm({
+      symbol: t.symbol, account: t.account, direction: t.direction,
+      openLocal: toLocalInput(t.open_ts), closeLocal: toLocalInput(t.close_ts),
+      qty: String(t.qty), entry: String(t.entry), exit: String(t.exit), fees: String(t.fees),
+    });
+    setTradeModalErr("");
+    setEditingTrade(t);
+  };
+
+  const saveTrade = async () => {
+    if (!editingTrade) return;
+    if (!tradeForm.symbol.trim()) { setTradeModalErr("Symbol is required."); return; }
+    if (tradeForm.entry.trim() === "" || !Number.isFinite(num(tradeForm.entry))) { setTradeModalErr("Price In must be a number."); return; }
+    if (tradeForm.exit.trim() === "" || !Number.isFinite(num(tradeForm.exit))) { setTradeModalErr("Price Out must be a number."); return; }
+    setTradeSaving(true);
+    try {
+      const res = await fetch("/api/journal/trades", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          openExtId: editingTrade.open_ext_id, closeExtId: editingTrade.close_ext_id,
+          symbol: tradeForm.symbol, account: tradeForm.account, direction: tradeForm.direction,
+          openTs: fromLocalInput(tradeForm.openLocal), closeTs: fromLocalInput(tradeForm.closeLocal),
+          qty: num(tradeForm.qty), entry: num(tradeForm.entry), exit: num(tradeForm.exit), fees: num(tradeForm.fees),
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok) { setTradeModalErr(j.error || "Save failed."); return; }
+      setEditingTrade(null);
+      await loadTrades();
+    } catch (e) {
+      setTradeModalErr(String(e));
+    } finally {
+      setTradeSaving(false);
+    }
+  };
+
+  const deleteTrade = async (t: JournalTrade) => {
+    const prev = trades;
+    setTrades((all) => all.filter((x) => !(x.open_ext_id === t.open_ext_id && x.close_ext_id === t.close_ext_id))); // optimistic
+    const res = await fetch(`/api/journal/trades?openExtId=${encodeURIComponent(t.open_ext_id)}&closeExtId=${encodeURIComponent(t.close_ext_id)}`, { method: "DELETE" });
+    if (!res.ok) { setTrades(prev); setErr("Delete trade failed."); return; }
+    await loadTrades();
+  };
 
   /**
    * One-time lift of legacy localStorage entries into Postgres. Runs before the
@@ -924,7 +993,13 @@ export default function TradingPage() {
             </div>
 
             {/* Charts strip — click ⤢ on any card to pop it out bigger */}
-            <div className="journal-charts" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+            {/* Fixed 4-across — NOT auto-fit. Auto-fit reflows the column count
+                with viewport width, which is what left "Median PnL vs Day of
+                Week" stranded alone on its own row at narrower widths. A fixed
+                4 columns keeps every row (and the last, partial one) the same
+                card width regardless of window size; overflow is handled by
+                each card shrinking, not by the grid adding/dropping columns. */}
+            <div className="journal-charts" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
               {chartOrder.map((key) => chartCard(key))}
             </div>
 
@@ -1065,14 +1140,14 @@ export default function TradingPage() {
                     <table style={tableStyle}>
                       <thead>
                         <tr>
-                          {["Date", "Symbol", "Side", "Account", "Time In", "Time Out", "Price In", "Price Out", "Qty", "P&L"].map((h) => (
+                          {["Date", "Symbol", "Side", "Account", "Time In", "Time Out", "Price In", "Price Out", "Qty", "P&L", ""].map((h) => (
                             <th key={h} style={{ textAlign: "left", fontSize: 12, color: HT.muted, textTransform: "uppercase", padding: "4px 6px", borderBottom: `1px solid ${HT.border}` }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {[...visibleTrades].sort((a, b) => b.close_ts - a.close_ts).slice(0, 300).map((t, i) => (
-                          <tr key={`${t.symbol}-${t.close_ts}-${i}`}>
+                          <tr key={`${t.open_ext_id}-${t.close_ext_id}-${i}`}>
                             <td style={{ ...cellStyle, color: HT.text }}>{t.date}</td>
                             <td style={{ ...cellStyle, color: HT.text }}>{t.symbol}</td>
                             <td style={{ ...cellStyle, color: t.direction === "long" ? T.green : T.red }}>{t.direction === "long" ? "Long" : "Short"}</td>
@@ -1083,6 +1158,12 @@ export default function TradingPage() {
                             <td style={{ ...cellStyle, color: HT.text }}>{t.exit.toFixed(2)}</td>
                             <td style={{ ...cellStyle, color: HT.text }}>{t.qty}</td>
                             <td style={{ ...cellStyle, color: t.pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>{fmt$(t.pnl)}</td>
+                            <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                              <button style={{ ...btnStyle(), padding: "3px 9px", fontSize: 12, marginRight: 4 }}
+                                onClick={() => openEditTrade(t)}>Edit</button>
+                              <button style={{ ...btnStyle(), padding: "3px 9px", fontSize: 12 }}
+                                onClick={() => deleteTrade(t)}>✕</button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1213,6 +1294,59 @@ export default function TradingPage() {
                 <button onClick={() => setExpandedChart(null)} style={{ background: "none", border: "none", fontSize: 20, color: HT.muted, cursor: "pointer" }}>×</button>
               </div>
               {chartDefs[expandedChart].render(720, 340)}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* EDIT TRADE MODAL — writes an override, never the underlying fills */}
+      {editingTrade && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}
+          onClick={() => setEditingTrade(null)}
+        >
+          <Card className="no-card-lift" padding={20} style={{ maxWidth: 520, width: "95vw" }}>
+            <div onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, paddingBottom: 10, borderBottom: `1px solid ${HT.border}` }}>
+                <div style={{ ...titleStyle, marginBottom: 0 }}>Edit Trade</div>
+                <button onClick={() => setEditingTrade(null)} style={{ background: "none", border: "none", fontSize: 20, color: HT.muted, cursor: "pointer" }}>×</button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="journal-form-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div><label style={labelStyle}>Symbol</label><input style={inputStyle} value={tradeForm.symbol} onChange={(e) => setTradeForm({ ...tradeForm, symbol: e.target.value })} /></div>
+                  <div>
+                    <label style={labelStyle}>Side</label>
+                    <select style={inputStyle} value={tradeForm.direction} onChange={(e) => setTradeForm({ ...tradeForm, direction: e.target.value === "short" ? "short" : "long" })}>
+                      <option value="long">Long</option>
+                      <option value="short">Short</option>
+                    </select>
+                  </div>
+                  <div><label style={labelStyle}>Account</label><input style={inputStyle} value={tradeForm.account} onChange={(e) => setTradeForm({ ...tradeForm, account: e.target.value })} /></div>
+                </div>
+                <div className="journal-form-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div><label style={labelStyle}>Time In</label><input type="datetime-local" step="1" style={inputStyle} value={tradeForm.openLocal} onChange={(e) => setTradeForm({ ...tradeForm, openLocal: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Time Out</label><input type="datetime-local" step="1" style={inputStyle} value={tradeForm.closeLocal} onChange={(e) => setTradeForm({ ...tradeForm, closeLocal: e.target.value })} /></div>
+                </div>
+                <div className="journal-form-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                  <div><label style={labelStyle}>Price In</label><input type="number" step="0.01" style={inputStyle} value={tradeForm.entry} onChange={(e) => setTradeForm({ ...tradeForm, entry: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Price Out</label><input type="number" step="0.01" style={inputStyle} value={tradeForm.exit} onChange={(e) => setTradeForm({ ...tradeForm, exit: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Qty</label><input type="number" step="1" min="1" style={inputStyle} value={tradeForm.qty} onChange={(e) => setTradeForm({ ...tradeForm, qty: e.target.value })} /></div>
+                  <div><label style={labelStyle}>Fees ($)</label><input type="number" step="0.01" style={inputStyle} value={tradeForm.fees} onChange={(e) => setTradeForm({ ...tradeForm, fees: e.target.value })} /></div>
+                </div>
+                <div style={{ fontSize: 12, color: HT.muted }}>
+                  P&L recalculates from Price In/Out × Qty × the contract's point value, minus Fees.
+                </div>
+              </div>
+
+              {tradeModalErr && <div style={{ fontSize: 14, color: T.red, marginTop: 8 }}>{tradeModalErr}</div>}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${HT.border}` }}>
+                <button style={btnStyle()} onClick={() => setEditingTrade(null)} disabled={tradeSaving}>Cancel</button>
+                <button style={btnStyle(true)} onClick={saveTrade} disabled={tradeSaving}>
+                  {tradeSaving ? "Saving…" : "Save Changes"}
+                </button>
+              </div>
             </div>
           </Card>
         </div>
