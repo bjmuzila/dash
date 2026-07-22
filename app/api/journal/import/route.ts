@@ -29,10 +29,15 @@ export const runtime = "nodejs";
 const MAX_CSV_BYTES = 8 * 1024 * 1024;   // ~8MB — a decade of retail fills
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession();
-  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
+  // Everything — including getServerSession() — is inside this try/catch now.
+  // It used to run before the try block; any throw there (or anywhere else)
+  // escaped our error handling entirely and Next served its own HTML error
+  // page instead of JSON, which is what broke the client's res.json() call
+  // ("Unexpected token '<'") instead of showing a real error message.
   try {
+    const session = await getServerSession();
+    if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
     const body = await req.json().catch(() => ({}));
     const csv = String(body.csv ?? "");
     if (!csv.trim()) return NextResponse.json({ error: "csv required" }, { status: 400 });
@@ -56,6 +61,8 @@ export async function POST(req: NextRequest) {
 
     // ── Preview ──────────────────────────────────────────────────────────────
     if (!commit) {
+      const existingFills = await getTradingFills(session.userId);
+      const crossSource = crossSourceWarning(existingFills, parsed.days.map((d) => d.date), parsed.broker);
       return NextResponse.json({
         ok: true,
         preview: true,
@@ -65,7 +72,7 @@ export async function POST(req: NextRequest) {
         days: parsed.days,
         trades: parsed.trades.slice(0, 50),
         skipped: parsed.skipped,
-        warnings: warningsFor(parsed.unknownRoots, parsed.skipped, parsed.fills),
+        warnings: [...warningsFor(parsed.unknownRoots, parsed.skipped, parsed.fills), ...crossSource],
       });
     }
 
@@ -99,6 +106,35 @@ export async function POST(req: NextRequest) {
     console.error("[/api/journal/import]", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
+}
+
+/**
+ * If any of this file's session dates already have fills from a DIFFERENT
+ * broker/source, flag it before commit. This is the "raw execution export"
+ * + "already-matched trade export" collision — e.g. a Rithmic fills CSV and
+ * a TPT completed-trades CSV covering the same session both get imported —
+ * which would double every trade FIFO-matches after (both sets share the
+ * same account+symbol, so they get matched against each other). Not fatal
+ * (a legitimately different account trading the same day is fine), just
+ * surfaced so it's a conscious choice, not a silent double-count.
+ *
+ * Takes the user's fills already fetched by the caller (one query) instead of
+ * querying per date — a multi-month statement can cover 50+ distinct dates,
+ * and 50+ sequential round-trips was slow enough to occasionally time out.
+ */
+function crossSourceWarning(existingFills: { date: string; source: string }[], dates: string[], incomingSource: string): string[] {
+  const touched = new Set(dates);
+  const otherSources = new Set<string>();
+  for (const f of existingFills) {
+    if (touched.has(f.date) && f.source && f.source !== incomingSource) otherSources.add(f.source);
+  }
+  if (!otherSources.size) return [];
+  return [
+    `${dates.length === 1 ? "This date" : "Some of these dates"} already ha${dates.length === 1 ? "s" : "ve"} fills imported from a different source ` +
+    `(${[...otherSources].join(", ")}). If that's the SAME trading activity re-exported from a different tool ` +
+    `(e.g. a raw fills export vs. an already-matched trades export), importing both will double-count every trade. ` +
+    `Only proceed if this file covers different trades or a different account than what's already there.`,
+  ];
 }
 
 /** Human-readable caveats surfaced in the preview so nothing lands silently wrong. */

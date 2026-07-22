@@ -45,9 +45,9 @@ async function loadTrades(userId: string): Promise<Trade[]> {
 }
 
 export async function GET() {
-  const session = await getServerSession();
-  if (!session) return NextResponse.json({ trades: [], accounts: [] }, { status: 401 });
   try {
+    const session = await getServerSession();
+    if (!session) return NextResponse.json({ trades: [], accounts: [] }, { status: 401 });
     const trades = await loadTrades(session.userId);
     const accounts = deriveAccountStats(trades);
     return NextResponse.json({ trades, accounts });
@@ -58,9 +58,9 @@ export async function GET() {
 }
 
 export async function PATCH(req: NextRequest) {
-  const session = await getServerSession();
-  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
+    const session = await getServerSession();
+    if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const body = await req.json().catch(() => ({}));
     const openExtId = String(body.openExtId ?? "").trim();
     const closeExtId = String(body.closeExtId ?? "").trim();
@@ -111,9 +111,9 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const session = await getServerSession();
-  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
+    const session = await getServerSession();
+    if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const openExtId = String(req.nextUrl.searchParams.get("openExtId") ?? "").trim();
     const closeExtId = String(req.nextUrl.searchParams.get("closeExtId") ?? "").trim();
     if (!openExtId || !closeExtId) {

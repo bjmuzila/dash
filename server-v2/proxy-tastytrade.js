@@ -1920,7 +1920,9 @@ const COMPACT_FIELDS = {
 class TastytradeProxy {
   constructor() {
     this.client = null;
-    this.flow = new FlowProcessor();
+    this.flow = new FlowProcessor({
+  tapeCap: Number(process.env.FLOW_TAPE_CAP || 8000),
+});
     // Isolated multi-ticker flow recorder (DATA_SOURCE=tt). Accepts all roots
     // (spxOnly:false) and feeds ONLY flow_prints via writeFlowTape(...,'record')
     // — never the SPX card's bucket(). Null when FLOW_RECORD_TICKERS is empty.

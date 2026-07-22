@@ -86,18 +86,18 @@ class FlowProcessor {
     // SPX-only 1-minute flow: rolling aggregation window is 1 min (env-overridable)
     // so bucket() vols/netPremium/buyPct reflect the last 60s and prints[] can't
     // balloon into a 5-minute backlog.
-    windowMs = Number(process.env.FLOW_WINDOW_MS || 60 * 1000),
+    windowMs = Number(process.env.FLOW_WINDOW_MS || 60 * 5000),
     maxPrints = 50000,
     // SPX-only now, so the cap no longer has to cover a multi-root roster.
-    tapeCap = Number(process.env.FLOW_TAPE_CAP || 1500),
+    tapeCap = Number(process.env.FLOW_TAPE_CAP || 8000),
     // Server-side noise floor ($). Lowered/overridable via FLOW_TAPE_FLOOR so
     // equity-option blocks (much smaller premium than SPX index blocks) survive
     // long enough for the client's per-ticker premium filter to see them.
-    tapeFloorPremium = Number(process.env.FLOW_TAPE_FLOOR || 2500),
+    tapeFloorPremium = Number(process.env.FLOW_TAPE_FLOOR || 5000),
     // Rolling coalescing window (ms): same-contract+side fills within this many ms
     // of the order's first fill merge into one aggregated order. "All trades under
     // 1 second add up." Overridable via FLOW_COALESCE_MS.
-    coalesceMs = Number(process.env.FLOW_COALESCE_MS || 1000),
+    coalesceMs = Number(process.env.FLOW_COALESCE_MS || 5000),
     // SPX-only lock (default true): drop every non-SPX print at the source so the
     // live SPX flow card's bucket() aggregate stays pure SPX. The multi-ticker
     // recorder (proxy-tastytrade _startFlowRecord) sets this false so its OWN
