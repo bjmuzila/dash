@@ -107,6 +107,17 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
+// Soft-white cell value + green/red leading sign — matches the Multi-Greek cell
+// format so the heatmap / option chain / mult-greek all read identically.
+const SOFT_WHITE = "#c3ccda";
+function SignVal({ text }: { text: string }) {
+  if (!text || text === "--" || text === "·") return <>{text}</>;
+  const s = text[0] === "+" || text[0] === "-" ? text[0] : "";
+  const rest = s ? text.slice(1) : text;
+  const c = s === "+" ? "#22c55e" : s === "-" ? "#ef4444" : SOFT_WHITE;
+  return <>{s && <span style={{ color: c }}>{s}</span>}{rest}</>;
+}
+
 type ExpiryOption = { value: string; label: string };
 type GexMode = "net" | "call-put";
 type DataMode = "oi-vol" | "vol-only";
@@ -1645,7 +1656,7 @@ export function HomeClient({
                   <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
                 ) : (
                 <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
-                <table style={{ flex: 1, minWidth: 0, height: "100%", textAlign: "right", fontSize: 12, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                <table style={{ flex: 1, minWidth: 0, height: "100%", textAlign: "right", fontSize: 10, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
                     <col style={{ width: "9%" }} />
                     <col style={{ width: "19%" }} />
@@ -1654,7 +1665,7 @@ export function HomeClient({
                     <col style={{ width: "17%" }} />
                     <col style={{ width: "19%" }} />
                   </colgroup>
-                  <thead style={{ fontSize: 12, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
+                  <thead style={{ fontSize: 10, color: "#fff", textTransform: "uppercase", letterSpacing: "0.1em", position: "sticky", top: 0, zIndex: 10, background: "rgba(13,17,25,0.95)" }}>
                     <tr>
                       {[
                         { label: "Strike", tip: undefined as string | undefined },
@@ -1744,10 +1755,10 @@ export function HomeClient({
                         // Column peak (SPY/QQQ) — same white box + glow as the SPX NET GEX peak.
                         const isPeak = !isTable && peakStrikeByCol[colKey] != null && row.strikeNum === peakStrikeByCol[colKey];
                         return (
-                          <td key={colIdx} title={title} className={isPeak ? "mvc-peak-cell" : undefined} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(isPeak ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
+                          <td key={colIdx} title={title} className={isPeak ? "mvc-peak-cell" : undefined} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(isPeak ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                             {isTable
                               ? barEl(value, colKey)
-                              : <span style={{ position: "relative", zIndex: 1 }}>{text}</span>}
+                              : <span style={{ position: "relative", zIndex: 1 }}><SignVal text={text} /></span>}
                           </td>
                         );
                       };
@@ -1775,7 +1786,7 @@ export function HomeClient({
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.62)", ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
+                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                               {heatmapView === "table" ? (
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (
@@ -1787,7 +1798,7 @@ export function HomeClient({
                                     {row.strikeNum === mvcStrikeHeatmap && (
                                       <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", fontSize: 12, lineHeight: 1, textShadow: "0 0 3px rgba(0,0,0,.8)" }}>★</span>
                                     )}
-                                    {row.netGex}
+                                    <SignVal text={row.netGex} />
                                   </span>
                                 </div>
                               )}

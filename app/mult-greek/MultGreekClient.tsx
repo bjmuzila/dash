@@ -511,13 +511,13 @@ function TickerPanel({
 
       {/* Column headers — STRIKE + one NET GEX column per expiry */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
+        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
         {cols.map(c => {
           const lbl = colLabel(c.date);
           return (
             <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
-              <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
-              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>GEX · {lbl.md}</div>
+              <div style={{ color: HT.cyan, fontSize: 9, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
+              <div style={{ color: HT.muted, fontSize: 7, fontWeight: 700 }}>GEX · {lbl.md}</div>
             </div>
           );
         })}
@@ -525,13 +525,13 @@ function TickerPanel({
 
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
+        <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {cols.map(c => {
           const v = totals?.[c.date] ?? 0;
           const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c.date} style={{
-              padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
+              padding: "4px 4px", fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
@@ -579,7 +579,7 @@ function TickerPanel({
                 />
               )}
               <div style={{
-                padding: "4px 4px", fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)",
+                padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
               }}>
@@ -613,7 +613,7 @@ function TickerPanel({
                         : { strike: r.strike, expiry: e, x: ev.clientX, y: ev.clientY });
                     }}
                     style={{
-                    padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
+                    padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),

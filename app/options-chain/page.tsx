@@ -16,6 +16,17 @@ function rgba(hex: string, a: number): string {
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
+// Soft-white cell value + green/red leading sign — the Multi-Greek cell format,
+// shared here so the option chain / heatmap / mult-greek read identically.
+const SOFT_WHITE = "#c3ccda";
+function SignVal({ text }: { text: string }) {
+  if (!text || text === "--" || text === "·") return <>{text}</>;
+  const s = text[0] === "+" || text[0] === "-" ? text[0] : "";
+  const rest = s ? text.slice(1) : text;
+  const c = s === "+" ? "#22c55e" : s === "-" ? "#ef4444" : SOFT_WHITE;
+  return <>{s && <span style={{ color: c }}>{s}</span>}{rest}</>;
+}
+
 // ── Custom dropdown (bypasses native OS rendering) ─────────────────────────
 function CustomDropdown<T extends string | number>({
   value,
@@ -1063,7 +1074,7 @@ const ChainMatrix = memo(function ChainMatrix({
           : null;
         return (
           <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
+            <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
             {!isStandalone && (
               <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
                 {colTotal == null ? "—" : fmtMoney(colTotal)}
@@ -1074,7 +1085,7 @@ const ChainMatrix = memo(function ChainMatrix({
       })}
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
       <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
         <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
           {fmtMoney(grandVisibleTotal)}
         </div>
@@ -1122,7 +1133,7 @@ const ChainMatrix = memo(function ChainMatrix({
             {/* Shared strike label (sticky left) */}
             <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
               position: "sticky", left: 0, zIndex: 2,
-              padding: "2px 5px", fontSize: 11, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
+              padding: "2px 5px", fontSize: 10, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
               color: isATM ? "#0a0e14" : "#e4e4e7",
               background: isATM ? "#ffb300" : HDR_BG,
               borderRight: `1px solid ${HT.border}`,
@@ -1181,8 +1192,8 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
-                    padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
-                    color: value == null ? "#3a4a5e" : "rgba(255,255,255,0.62)",
+                    padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
+                    color: value == null ? "#3a4a5e" : SOFT_WHITE,
                     background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                     borderTop: rowEmBorder,
                     boxShadow: atmShadow,
@@ -1202,7 +1213,7 @@ const ChainMatrix = memo(function ChainMatrix({
                       </svg>
                     </span>
                   )}
-                  <span>{value == null ? "·" : fmtMoney(value)}</span>
+                  <span><SignVal text={value == null ? "·" : fmtMoney(value)} /></span>
                 </div>
               );
             })}
@@ -1214,7 +1225,7 @@ const ChainMatrix = memo(function ChainMatrix({
                 : undefined;
               return (
                 <div style={{
-                  padding: "2px 8px", fontSize: 12, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
+                  padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
                   background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
                   borderLeft: `2px solid ${rgba(HT.cyan, 0.35)}`,
@@ -1223,7 +1234,7 @@ const ChainMatrix = memo(function ChainMatrix({
                   whiteSpace: "nowrap", overflow: "hidden",
                   display: "flex", alignItems: "baseline", justifyContent: "flex-end",
                 }}>
-                  {tot === 0 ? "·" : fmtMoney(tot)}
+                  <SignVal text={tot === 0 ? "·" : fmtMoney(tot)} />
                 </div>
               );
             })()}
