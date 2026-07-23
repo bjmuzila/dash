@@ -94,12 +94,12 @@ export default function TpoForecastCard({ instr }: { instr: "ESU" | "NQU" }) {
   }
 
   const c = chart!;
-  const yMark = (px: number, color: string, dash: string, label: string) => (
-    <g>
-      <line x1={c.X0} y1={c.y(px)} x2={68} y2={c.y(px)} stroke={color} strokeWidth={0.5} strokeDasharray={dash} opacity={0.9} />
-      <text x={69} y={c.y(px) + 1.5} fill={color} fontSize={4.2} style={{ fontVariantNumeric: "tabular-nums" }}>{label} {px.toFixed(0)}</text>
-    </g>
-  );
+  const topPct = (px: number) => `${Math.max(1, Math.min(99, (c.y(px) / c.H) * 100))}%`;
+  const markers = [
+    { px: fc.predicted_poc, color: LIGHT_BLUE, label: "pred POC", dash: "3 2", side: "R" as const },
+    { px: fc.realized_poc, color: HOME_THEME.text, label: "real POC", dash: "0", side: "R" as const },
+    ...(fc.spot != null ? [{ px: fc.spot, color: HOME_THEME.green, label: "spot", dash: "4 2", side: "L" as const }] : []),
+  ];
 
   return (
     <Card variant="budget" title={title}
@@ -123,19 +123,32 @@ export default function TpoForecastCard({ instr }: { instr: "ESU" | "NQU" }) {
         </span>
       </div>
 
-      <svg viewBox={`0 0 100 ${c.H}`} preserveAspectRatio="none" style={{ width: "100%", height: 300, display: "block" }}>
-        {/* IB band */}
-        <rect x={c.X0} y={c.y(fc.ibHigh)} width={65} height={Math.max(0, c.y(fc.ibLow) - c.y(fc.ibHigh))}
-          fill={HOME_THEME.cyan} opacity={0.06} />
-        {/* realized-so-far (filled) */}
-        <path d={c.realizedArea} fill={`${HOME_THEME.text}22`} stroke={HOME_THEME.text} strokeWidth={0.4} />
-        {/* predicted (line) */}
-        <path d={c.predictedLine} fill="none" stroke={LIGHT_BLUE} strokeWidth={0.9} />
-        {/* POC markers */}
-        {yMark(fc.predicted_poc, LIGHT_BLUE, "1.5 1", "pred POC")}
-        {yMark(fc.realized_poc, HOME_THEME.text, "0", "real POC")}
-        {fc.spot != null && yMark(fc.spot, HOME_THEME.green, "2 1.5", "spot")}
-      </svg>
+      <div style={{ position: "relative", width: "100%", height: 300 }}>
+        <svg viewBox={`0 0 100 ${c.H}`} preserveAspectRatio="none"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }}>
+          {/* IB band */}
+          <rect x={0} y={c.y(fc.ibHigh)} width={100} height={Math.max(0, c.y(fc.ibLow) - c.y(fc.ibHigh))}
+            fill={HOME_THEME.cyan} opacity={0.06} />
+          {/* realized-so-far (filled) */}
+          <path d={c.realizedArea} fill={`${HOME_THEME.text}22`} stroke={HOME_THEME.text} strokeWidth={0.4} />
+          {/* predicted (line) */}
+          <path d={c.predictedLine} fill="none" stroke={LIGHT_BLUE} strokeWidth={0.9} />
+          {/* marker lines — labels live in the HTML overlay below (SVG text stretches) */}
+          {markers.map((m, i) => (
+            <line key={i} x1={0} y1={c.y(m.px)} x2={100} y2={c.y(m.px)} stroke={m.color}
+              strokeWidth={0.5} strokeDasharray={m.dash} opacity={0.85} />
+          ))}
+        </svg>
+        {markers.map((m, i) => (
+          <div key={i} style={{
+            position: "absolute", top: topPct(m.px), transform: "translateY(-50%)",
+            left: m.side === "L" ? 6 : undefined, right: m.side === "R" ? 6 : undefined,
+            fontSize: 11, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: m.color,
+            background: HOME_THEME.panel, border: `1px solid ${m.color}66`, borderRadius: 5,
+            padding: "1px 6px", whiteSpace: "nowrap", pointerEvents: "none",
+          }}>{m.label} {m.px.toFixed(2)}</div>
+        ))}
+      </div>
 
       <div style={{ marginTop: 10, fontSize: 13, color: HOME_THEME.text, lineHeight: 1.5 }}>
         Prediction is the average of the {fc.k} past sessions whose Initial Balance most resembles today&apos;s, re-centered on today&apos;s IB midpoint. It&apos;s a base-rate shape, not a promise — read it against where the day is actually building. Predicted value area {fc.predicted_va[0].toFixed(0)}–{fc.predicted_va[1].toFixed(0)}.
