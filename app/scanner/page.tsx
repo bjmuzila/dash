@@ -2222,8 +2222,8 @@ const IB_PERIODS = 2; // 09:30–10:30
 
 const VIEW_H = 660;  // fixed viewport; the profile pans/zooms INSIDE it
 
-function TpoLetterProfile({ sessions, spot, binSize }: {
-  sessions: TpoSession[]; spot: number | null; binSize: number;
+function TpoLetterProfile({ sessions, spot, binSize, levels }: {
+  sessions: TpoSession[]; spot: number | null; binSize: number; levels?: TpoStructure[];
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -2471,6 +2471,26 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       g.fillText(spot.toFixed(2), w - 6, y(spot) - 7);
     }
 
+    // ── open-business levels: unfinished structures drawn ACROSS the strip ──
+    // (naked POC / poor high-low / excess / hole), dashed, colored by kind, so
+    // "open business" lives on the chart instead of a separate table.
+    if (levels && levels.length) {
+      g.save();
+      for (const st of levels) {
+        const pr = (st.priceLo + st.priceHi) / 2;
+        const py = y(pr);
+        if (!vis(py)) continue;
+        const col = KIND_COLOR[st.kind] || "#ffffff";
+        g.setLineDash([5, 4]); g.globalAlpha = 0.5; g.strokeStyle = col; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(AXIS, py); g.lineTo(w - 4, py); g.stroke();
+        g.setLineDash([]); g.globalAlpha = 1;
+        g.font = "700 10px ui-monospace, monospace"; g.textAlign = "right"; g.textBaseline = "bottom";
+        g.fillStyle = col;
+        g.fillText(`${KIND_LABEL[st.kind]} ${pr.toFixed(2)}`, w - 6, py - 1);
+      }
+      g.restore();
+    }
+
     g.restore();
 
     // ── price axis, drawn OUTSIDE the clip so it never scrolls away ─────────
@@ -2489,7 +2509,7 @@ function TpoLetterProfile({ sessions, spot, binSize }: {
       g.fillStyle = "rgba(255,255,255,0.9)";
       g.fillText(p.toFixed(2), 4, py);
     }
-  }, [sessions, spot, binSize, w, split, labels, zx, zy, ox, oy]);
+  }, [sessions, spot, binSize, w, split, labels, zx, zy, ox, oy, levels]);
 
   const btn = (active: boolean): React.CSSProperties => ({
     padding: "3px 10px", borderRadius: 6, fontSize: 14, cursor: "pointer", fontWeight: 700,
@@ -2789,38 +2809,38 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
         <div style={{ fontSize: 14, fontWeight: 400, color: HOME_THEME.text, marginTop: 4 }}>{amt.location}</div>
       </div>
 
-      {/* signal rail */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 10, marginBottom: 10,
-        padding: "8px 12px", borderRadius: 10,
-        border: `1px solid ${(liveCount ? HOME_THEME.green : HOME_THEME.orange)}40`,
-        background: `${liveCount ? HOME_THEME.green : HOME_THEME.orange}0F`,
-        borderLeft: `3px solid ${liveCount ? HOME_THEME.green : HOME_THEME.orange}`,
-      }}>
-        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text }}>
-          Signals &amp; Alerts
-        </span>
-        <span style={{
-          fontSize: 12, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase",
-          padding: "2px 8px", borderRadius: 999,
-          color: liveCount ? HOME_THEME.green : HOME_THEME.text,
-          border: `1px solid ${liveCount ? HOME_THEME.green : "rgba(255,255,255,0.25)"}`,
-          background: liveCount ? `${HOME_THEME.green}1A` : "rgba(255,255,255,0.04)",
+      {/* signal rail — collapsed by default; the header is the toggle */}
+      <details>
+        <summary style={{
+          display: "flex", alignItems: "center", gap: 10, cursor: "pointer", listStyle: "none",
+          padding: "8px 12px", borderRadius: 10,
+          border: `1px solid ${(liveCount ? HOME_THEME.green : HOME_THEME.orange)}40`,
+          background: `${liveCount ? HOME_THEME.green : HOME_THEME.orange}0F`,
+          borderLeft: `3px solid ${liveCount ? HOME_THEME.green : HOME_THEME.orange}`,
         }}>
-          {liveCount ? `● ${liveCount} live` : `${signals.length} armed`}
-        </span>
-        <span style={{ marginLeft: "auto", fontSize: 13, color: HOME_THEME.text }}>
-          a row lights green when spot reaches its trigger
-        </span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        {signals.map((s) => <AmtSignalRow key={s.id} s={s} spot={spot} livePad={livePad} />)}
-        {!signals.length && (
-          <div style={{ padding: 16, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
-            No actionable auction signals yet — waiting on IB and structure to form.
-          </div>
-        )}
-      </div>
+          <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: HOME_THEME.text }}>
+            Signals &amp; Alerts
+          </span>
+          <span style={{
+            fontSize: 12, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase",
+            padding: "2px 8px", borderRadius: 999,
+            color: liveCount ? HOME_THEME.green : HOME_THEME.text,
+            border: `1px solid ${liveCount ? HOME_THEME.green : "rgba(255,255,255,0.25)"}`,
+            background: liveCount ? `${HOME_THEME.green}1A` : "rgba(255,255,255,0.04)",
+          }}>
+            {liveCount ? `● ${liveCount} live` : `${signals.length} armed`}
+          </span>
+          <span style={{ marginLeft: "auto", fontSize: 13, color: HOME_THEME.text }}>tap to expand</span>
+        </summary>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+          {signals.map((s) => <AmtSignalRow key={s.id} s={s} spot={spot} livePad={livePad} />)}
+          {!signals.length && (
+            <div style={{ padding: 16, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
+              No actionable auction signals yet — waiting on IB and structure to form.
+            </div>
+          )}
+        </div>
+      </details>
 
       {/* playbook */}
       <details style={{ marginTop: 14 }}>
@@ -2907,19 +2927,19 @@ function TpoStructuresScanner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-      {/* ── Live TPO forecast: predicted (from IB) vs realized-so-far ─────── */}
-      <TpoForecastCard instr={instr} />
+      {/* ── AMT auction read — top; signals collapsed inside it ──────────── */}
+      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
 
-      {/* ── TPO forward map: open (unfinished) structures ranked vs spot ──── */}
-      {enoughHistory && <TpoForwardMap res={res} spot={spot} />}
+      {/* ── Forecast one-liner (paired with the auction read) ────────────── */}
+      <TpoForecastCard instr={instr} />
 
       {/* ── RTH open vs prior day + prior week + open naked levels ────────── */}
       {enoughHistory && <TpoOpenLocation res={res} spot={spot} candles={candles} />}
 
-      {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
+      {/* ── TPO profile + open-business levels drawn on the chart ────────── */}
       <Card variant="budget"
-        title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
-        subtitle={`${instr} · ${binSize}-pt bins (4 ticks) · 30-min periods · RTH only · shared price axis`}>
+        title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile + open levels — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
+        subtitle={`${instr} · ${binSize}-pt bins · 30-min periods · RTH · dashed lines = unfinished business (${open.length})`}>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
           <button onClick={() => setInstr("ESU")} style={seg(instr === "ESU")}>ESU</button>
@@ -2928,11 +2948,6 @@ function TpoStructuresScanner() {
           {([5, 10, 30] as const).map((n) => (
             <button key={n} onClick={() => setNSessions(n)} style={seg(nSessions === n)}>{n}D</button>
           ))}
-          {nSessions === 30 && shown.length < 30 && (
-            <span style={{ fontSize: 14, color: HOME_THEME.text }}>
-              {shown.length} loaded — SQLite history only goes back so far
-            </span>
-          )}
         </div>
 
         {!shown.length && (
@@ -2940,198 +2955,51 @@ function TpoStructuresScanner() {
             Waiting on RTH candles.
           </div>
         )}
-        {!!shown.length && <TpoLetterProfile sessions={shown} spot={spot} binSize={binSize} />}
+        {!!shown.length && <TpoLetterProfile sessions={shown} spot={spot} binSize={binSize} levels={open.slice(0, 12)} />}
 
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 14 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
-            <span style={{ width: 12, height: 12, borderRadius: 2, background: HOME_THEME.red, display: "inline-block" }} />
-            A–B · initial balance (09:30–10:30)
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
-            <span style={{ width: 12, height: 12, borderRadius: 2, background: "#5B9BD5", display: "inline-block" }} />
-            C+ · later periods
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
-            <span style={{ width: 12, height: 12, borderRadius: 2, background: "#F2A93B", display: "inline-block" }} /> POC row
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
-            <span style={{ width: 12, height: 12, borderRadius: 2, background: "rgba(255,255,255,0.1)", display: "inline-block" }} /> value area (70%)
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, color: HOME_THEME.text }}>
-            <span style={{ width: 4, height: 12, background: HOME_THEME.orange, display: "inline-block" }} />
-            left bracket = structure (excess / tail / poor / hole)
-          </span>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 13, color: HOME_THEME.text }}>
+          <span><b style={{ color: KIND_COLOR.naked_poc }}>naked POC</b> — magnet</span>
+          <span><b style={{ color: KIND_COLOR.poor_high }}>poor hi/lo</b> — unfinished, target</span>
+          <span><b style={{ color: KIND_COLOR.excess_high }}>excess</b> — rejection, holds</span>
+          <span><b style={{ color: KIND_COLOR.hole }}>hole</b> — thin, runs through</span>
+          <span>· dashed lines = the {open.length} open structures nearest spot</span>
         </div>
       </Card>
 
-      {/* ── AMT auction read + live signals ──────────────────────────────── */}
-      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
-
-    <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
-
-      {/* ── Open Business rail ───────────────────────────────────────────── */}
-      <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.orange }}>Open business</span>}
-        subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-          <button onClick={() => setKindFilter("all")} style={seg(kindFilter === "all")}>All</button>
-          <button onClick={() => setKindFilter("extremes")} style={seg(kindFilter === "extremes")}>Extremes</button>
-          <button onClick={() => setKindFilter("holes")} style={seg(kindFilter === "holes")}>Holes</button>
-        </div>
-
-        {!enoughHistory && (
-          <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
-            Needs at least two completed RTH sessions to have any structure to forward-fill.
-          </div>
-        )}
-
-        {enoughHistory && (
-          <>
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: GRID,
-              gap: 8, padding: "6px 12px",
-              borderBottom: "1px solid rgba(255,255,255,0.12)",
-              fontSize: 14, color: HOME_THEME.text,
-              textTransform: "uppercase", letterSpacing: "0.05em",
-            }}>
-              <span>kind</span><span>level</span><span>age</span><span>dist</span>
-              <span title="Historical test rate for this KIND of structure at this AGE — a base rate for the type, NOT a probability for this specific level.">
-                base %
-              </span>
-              <span>hits</span>
-            </div>
-
-            {open.map((s) => (
-              <StructureRow key={s.id} s={s} spot={spot} base={baseRateFor(res, s.kind, s.ageSessions)} />
-            ))}
-
-            {!open.length && (
-              <div style={{ padding: 20, textAlign: "center", color: HOME_THEME.text, fontSize: 14 }}>
-                No open business — every structure in the loaded history has been repaired.
-              </div>
-            )}
-          </>
-        )}
-      </Card>
-
-      {/* ── Today's session + stats rollup ──────────────────────────────── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-        <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.green }}>Today&apos;s profile</span>}
-          subtitle={today ? `${today.date} · ${today.periods} periods · ${today.singles.length} single prints` : "—"}>
-          {!today && <div style={{ color: HOME_THEME.text, fontSize: 14 }}>No RTH session yet.</div>}
-          {today && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 14 }}>
-              <div>VAH <b style={{ color: HOME_THEME.cyan }}>{today.vah.toFixed(2)}</b></div>
-              <div>IB high <b style={{ color: HOME_THEME.text }}>{today.ibHigh?.toFixed(2) ?? "—"}</b></div>
-              <div>POC <b style={{ color: LIGHT_BLUE }}>{today.poc.toFixed(2)}</b></div>
-              <div>IB low <b style={{ color: HOME_THEME.text }}>{today.ibLow?.toFixed(2) ?? "—"}</b></div>
-              <div>VAL <b style={{ color: HOME_THEME.cyan }}>{today.val.toFixed(2)}</b></div>
-              <div>IB range <b style={{ color: HOME_THEME.text }}>{today.ibRange?.toFixed(2) ?? "—"}</b></div>
-              <div style={{ gridColumn: "1 / -1", marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {today.structures
-                  .filter((s) => s.kind !== "naked_poc")
-                  .map((s) => (
-                    <span key={s.id} title={KIND_MEANING[s.kind]} style={{
-                      fontSize: 14, fontWeight: 700, padding: "3px 9px", borderRadius: 6,
-                      color: KIND_COLOR[s.kind],
-                      border: `1px solid ${KIND_COLOR[s.kind]}55`,
-                      background: `${KIND_COLOR[s.kind]}1A`,
-                    }}>
-                      {KIND_LABEL[s.kind]} {s.priceLo.toFixed(2)}
-                    </span>
-                  ))}
-                {today.structures.filter((s) => s.kind !== "naked_poc").length === 0 && (
-                  <span style={{ color: HOME_THEME.text, fontSize: 14 }}>
-                    No extremes or holes formed today.
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-        </Card>
-
+      {/* ── Structure stats — collapsed by default ───────────────────────── */}
+      <details>
+        <summary style={{ cursor: "pointer", listStyle: "none", fontSize: 15, fontWeight: 800, color: HOME_THEME.cyan, padding: "12px 16px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.09)" }}>
+          Structure stats <span style={{ fontSize: 12, fontWeight: 600, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.05em" }}>· base rates by kind · tap to expand</span>
+        </summary>
         <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.cyan }}>Structure stats</span>}
           subtitle={`${res.sessions.length} sessions loaded · graded once ≥1 later session exists`}>
-          <div style={{
-            display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
-            gap: 6, padding: "4px 0 6px",
-            borderBottom: "1px solid rgba(255,255,255,0.12)",
-            fontSize: 14, color: HOME_THEME.text,
-            textTransform: "uppercase", letterSpacing: "0.05em",
-          }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px", gap: 6, padding: "4px 0 6px", borderBottom: "1px solid rgba(255,255,255,0.12)", fontSize: 14, color: HOME_THEME.text, textTransform: "uppercase", letterSpacing: "0.05em" }}>
             <span>kind</span><span>n</span><span>test %</span><span>repair %</span><span>med d</span>
           </div>
           {res.stats.filter((s) => s.n > 0).map((s) => {
             const bks = res.buckets.filter((b) => b.kind === s.kind && b.n > 0);
             return (
               <div key={s.kind} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "7px 0" }}>
-                <div style={{
-                  display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px",
-                  gap: 6, fontSize: 14,
-                }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 44px 62px 70px 56px", gap: 6, fontSize: 14 }}>
                   <span style={{ color: KIND_COLOR[s.kind], fontWeight: 700 }}>{KIND_LABEL[s.kind]}</span>
                   <span style={{ color: HOME_THEME.text }}>{s.n}</span>
                   <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.testRate)}</span>
                   <span style={{ color: HOME_THEME.text }}>{pctOrDash(s.repairRate)}</span>
                   <span style={{ color: HOME_THEME.text }}>{s.medSessionsToTest ?? "—"}</span>
                 </div>
-                {/* age buckets — a 2-day-old excess is a different bet than a 3-week-old one */}
                 <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
                   {bks.map((b) => (
-                    <span key={b.bucket} style={{ fontSize: 14, color: HOME_THEME.text }}>
-                      {b.bucket}{" "}
-                      <b style={{ color: b.n >= 5 ? HOME_THEME.text : HOME_THEME.text }}>
-                        {pctOrDash(b.testRate)}
-                      </b>{" "}
-                      <span style={{ color: HOME_THEME.text }}>n={b.n}</span>
-                    </span>
+                    <span key={b.bucket} style={{ fontSize: 14, color: HOME_THEME.text }}>{b.bucket} <b>{pctOrDash(b.testRate)}</b> n={b.n}</span>
                   ))}
                 </div>
               </div>
             );
           })}
           {!res.stats.some((s) => s.n > 0) && (
-            <div style={{ padding: 16, color: HOME_THEME.text, fontSize: 14 }}>
-              Not enough history loaded to grade anything yet.
-            </div>
+            <div style={{ padding: 16, color: HOME_THEME.text, fontSize: 14 }}>Not enough history loaded to grade anything yet.</div>
           )}
         </Card>
-
-        <div style={{
-          padding: "10px 14px", borderRadius: 10,
-          border: `1px solid ${LIGHT_BLUE}30`, background: `${LIGHT_BLUE}0A`,
-          fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5,
-        }}>
-          <b style={{ color: LIGHT_BLUE }}>Base % is a prior on the TYPE, not this level. </b>
-          It answers &ldquo;how often does a structure of this kind, at this age, eventually get
-          tested?&rdquo; — so three excess lows at three different prices will all show the same
-          number. It is not a probability that <i>this</i> level gets hit. Rates fall back to the
-          all-ages figure below n=5, and render a dash rather than a fake 0% when the sample is
-          empty. The row&apos;s own status is the <b>hits</b> column.
-        </div>
-
-        <div style={{
-          padding: "10px 14px", borderRadius: 10,
-          border: `1px solid ${HOME_THEME.orange}30`, background: `${HOME_THEME.orange}0A`,
-          fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5,
-        }}>
-          <b style={{ color: HOME_THEME.orange }}>Small sample: </b>
-          these rates are computed from whatever candle history is currently loaded
-          (~{res.sessions.length} sessions), not a real backtest. They will move a lot as the
-          window fills. The durable version needs a <code>tpo_structures</code> table with a
-          recorder forward-filling <code>tested_at</code>/<code>repaired_at</code> nightly —
-          until then treat every number here as directional, not tradeable.
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          <span>TPO = one touch per 30-min period per {binSize}-pt bin — TIME, not volume. RTH only.</span>
-          <span>Excess = singles at an extreme whose period closed back INSIDE (rejection → level holds). Tail = same singles but the period closed away (trend continuation → do not fade).</span>
-          <span>Poor high/low = flat stack at the extreme, no tail → unfinished, expect it taken out. Hole = mid-profile singles → price accelerates through, never target inside.</span>
-        </div>
-      </div>
-    </div>
+      </details>
     </div>
   );
 }
