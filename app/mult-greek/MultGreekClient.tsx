@@ -287,6 +287,7 @@ function computeRows(
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
+  showCB, showCW, showPW,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -299,6 +300,11 @@ function TickerPanel({
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
+  /** Toolbar toggles: show the CB (1st) / CW (2nd) / PW (3rd) top-|GEX| level
+   *  badges on the FRONT expiry column. */
+  showCB: boolean;
+  showCW: boolean;
+  showPW: boolean;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
@@ -499,16 +505,25 @@ function TickerPanel({
               }}>
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>
-              {computed.cols.map(e => {
+              {computed.cols.map((e, ci) => {
                 const val = r.gex[e];
                 const topRank = (computed.top3[e]?.[r.strike]) || 0;
                 const scaleMax = computed.maxAbs[e];
                 const weight = topRank === 1 ? 900 : topRank ? 800 : 700;
                 const formatted = val == null ? { sign: "", value: "--" } : fmtMoney(val);
                 const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
-                const isPeak = r.strike === computed.mvcStrike[e];
+                // CB (1st) / CW (2nd) / PW (3rd) highest-|GEX| level badges — only
+                // on the FRONT expiry column, each gated by its toolbar toggle.
+                const isFront = ci === 0;
+                const lvl = isFront
+                  ? (topRank === 1 && showCB ? { t: "CB", c: "#ffd600", title: "CB — highest |GEX| level" }
+                    : topRank === 2 && showCW ? { t: "CW", c: "#29b6f6", title: "CW — 2nd highest |GEX| level" }
+                    : topRank === 3 && showPW ? { t: "PW", c: "#ff9f43", title: "PW — 3rd highest |GEX| level" }
+                    : null)
+                  : null;
+                const isCB = lvl?.t === "CB";
                 return (
-                  <div key={e} className={isPeak ? "mvc-peak-cell" : undefined} style={{
+                  <div key={e} className={isCB ? "mvc-peak-cell" : undefined} style={{
                     padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE,
@@ -516,19 +531,22 @@ function TickerPanel({
                     fontWeight: weight,
                     position: "relative",
                     ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
-                    ...(isPeak ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
+                    ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
                   }}>
-                    {topRank === 1 && (
+                    {/* Non-front columns keep the plain gold peak star. */}
+                    {!isFront && topRank === 1 && (
                       <span style={{
                         position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
-                    {isPeak && (
-                      <span title="CB - Core Bullseye — highest |net GEX| for this expiry" style={{
-                        position: "absolute", top: 1, right: 2, fontSize: 12, lineHeight: 1,
-                        color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
-                      }}>★</span>
+                    {lvl && (
+                      <span title={lvl.title} style={{
+                        position: "absolute", top: 0, right: 1, fontSize: 8, fontWeight: 900,
+                        lineHeight: 1.2, letterSpacing: "0.02em",
+                        color: "#04121a", background: lvl.c, borderRadius: 2, padding: "0 2px",
+                        pointerEvents: "none",
+                      }}>{lvl.t}</span>
                     )}
                     <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                   </div>
@@ -577,6 +595,12 @@ export function MultGreekClient({
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
+
+  // Front-column level badges: CB (highest |GEX|), CW (2nd), PW (3rd). Toggled
+  // from the toolbar; all on by default.
+  const [showCB, setShowCB] = useState(true);
+  const [showCW, setShowCW] = useState(true);
+  const [showPW, setShowPW] = useState(true);
 
   // User-configurable 4th ticker, persisted per browser (localStorage). Live
   // mode only — the delayed snapshot recorder only carries SPX/SPY/QQQ.
@@ -1005,6 +1029,29 @@ export function MultGreekClient({
           onChange={(v) => setContractMode(v as typeof contractMode)}
         />
 
+        <DockGap />
+
+        {/* CB / CW / PW top-|GEX| level badges (front expiry). Click to toggle. */}
+        {[
+          { key: "CB", on: showCB, set: setShowCB, color: "#ffd600", title: "Highest |GEX| level" },
+          { key: "CW", on: showCW, set: setShowCW, color: "#29b6f6", title: "2nd highest |GEX| level" },
+          { key: "PW", on: showPW, set: setShowPW, color: "#ff9f43", title: "3rd highest |GEX| level" },
+        ].map(b => (
+          <button
+            key={b.key}
+            onClick={() => b.set(v => !v)}
+            title={`${b.key}: ${b.title} — click to ${b.on ? "hide" : "show"}`}
+            style={{
+              padding: "3px 7px", fontSize: 10, fontWeight: 900, letterSpacing: "0.04em",
+              borderRadius: 5, cursor: "pointer", whiteSpace: "nowrap",
+              color: b.on ? "#04121a" : HT.muted,
+              background: b.on ? b.color : "transparent",
+              border: `1px solid ${b.on ? b.color : HT.border}`,
+              opacity: b.on ? 1 : 0.65,
+            }}
+          >{b.key}</button>
+        ))}
+
         {/* 4th ticker input — persisted per browser (localStorage). Live only. */}
         {!isStatic && (
           <>
@@ -1065,6 +1112,9 @@ export function MultGreekClient({
             emLevels={emByTicker[ticker] ?? null}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
+            showCB={showCB}
+            showCW={showCW}
+            showPW={showPW}
           />
         ))}
       </div>
