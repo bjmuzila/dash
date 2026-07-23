@@ -50,18 +50,12 @@ ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
 RUN npm run build
 
-# ---- customer /app SPA (app-vite) ----
-# app-vite compiles the SAME Next client pages via the '@' alias (→ repo root)
-# and is served at /app. `next build` above does NOT build it and its dist is
-# gitignored, so build it here — otherwise the customer /app bundle never picks
-# up changes to app/**/page.tsx or components/**. vite build uses esbuild (no
-# tsc gate). node_modules is dropped after so it doesn't bloat the runtime image.
-RUN cd app-vite && npm install --no-audit --no-fund && npm run build \
-    && rm -rf /app/public/app && mkdir -p /app/public/app && cp -r dist/. /app/public/app/ \
-    && rm -rf node_modules
-# serveSpaShell (lib/serveSpaShell.ts) serves /app from public/app/index.html and
-# Next serves public/app/assets/* at /app/assets/* — so the fresh vite dist MUST be
-# copied into public/app, or the customer /app bundle stays stale no matter what.
+# Build the customer SPA (app-vite) and place its bundle where serveSpaShell
+# reads from (public/app/). Without this copy, /app keeps serving whatever
+# stale files were already committed to public/app — app-vite source edits
+# (app/**/page.tsx via the '@' alias) never reach the live SPA otherwise.
+RUN cd app-vite && npm install --no-audit --no-fund && npm run build
+RUN rm -rf public/app && cp -r app-vite/dist public/app
 
 # ---- runtime ----
 FROM base AS runtime
