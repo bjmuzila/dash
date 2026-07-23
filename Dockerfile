@@ -56,7 +56,12 @@ RUN npm run build
 # gitignored, so build it here — otherwise the customer /app bundle never picks
 # up changes to app/**/page.tsx or components/**. vite build uses esbuild (no
 # tsc gate). node_modules is dropped after so it doesn't bloat the runtime image.
-RUN cd app-vite && npm install --no-audit --no-fund && npm run build && rm -rf node_modules
+RUN cd app-vite && npm install --no-audit --no-fund && npm run build \
+    && rm -rf /app/public/app && mkdir -p /app/public/app && cp -r dist/. /app/public/app/ \
+    && rm -rf node_modules
+# serveSpaShell (lib/serveSpaShell.ts) serves /app from public/app/index.html and
+# Next serves public/app/assets/* at /app/assets/* — so the fresh vite dist MUST be
+# copied into public/app, or the customer /app bundle stays stale no matter what.
 
 # ---- runtime ----
 FROM base AS runtime
