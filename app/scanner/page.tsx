@@ -24,6 +24,7 @@ import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import SemisTab from "@/components/scanner/SemisTab";
 import DodMoversTab from "@/components/scanner/DodMoversTab";
+import ForwardBuildStructure from "@/components/scanner/ForwardBuildStructure";
 import { LogicOrderPanel } from "@/components/dashboard/LogicOrderPanel";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers" | "logicorder";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers" | "forwardbuild" | "logicorder";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -140,6 +141,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "SMH top 10 · live",
     what: "An SMH-weight-weighted composite of the top 10 semiconductor holdings' intraday move vs prior close, squashed to a 0–100 Semiconductor Strength Index, alongside equal-weight breadth, relative strength vs SPX and NQ, and a SOXL 3× confirmation check.",
     tells: "How strong semis are right now, and whether the move is real — broad participation and sector leadership, or just NVDA carrying a thin tape. All Tastytrade-sourced, with a vs-RTH-open / vs-prior-close toggle.",
+  },
+  {
+    tab: "forwardbuild",
+    title: "Forward Build",
+    accent: HOME_THEME.orange,
+    scope: "Full roster · 0/1/2-DTE structure",
+    what: "Groups every active ticker into a collapsible card showing its front 0DTE / 1DTE / 2DTE GEX walls on a shared strike ladder, with each strike's day-over-day Δ and the call/put wall migration across the three days.",
+    tells: "Where each ticker's gamma is stacking and which strikes are building vs. leaving day to day — so you can see where the GEX flow (and often price) is drifting before it becomes today's 0DTE.",
   },
 ];
 
@@ -2909,8 +2918,7 @@ function TpoStructuresScanner() {
       {/* ── RTH open vs prior day + prior week + open naked levels ────────── */}
       {enoughHistory && <TpoOpenLocation res={res} spot={spot} candles={candles} />}
 
-      {/* ── TPO profile + Open business, side by side ────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16, alignItems: "start" }}>
+      {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
       <Card variant="budget"
         title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
         subtitle={`${instr} · ${binSize}-pt bins (4 ticks) · 30-min periods · RTH only · shared price axis`}>
@@ -2958,7 +2966,12 @@ function TpoStructuresScanner() {
         </div>
       </Card>
 
-      {/* ── Open business — right of the TPO profile ─────────────────────── */}
+      {/* ── AMT auction read + live signals ──────────────────────────────── */}
+      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
+
+    <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
+
+      {/* ── Open Business rail ───────────────────────────────────────────── */}
       <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.orange }}>Open business</span>}
         subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
@@ -3003,10 +3016,6 @@ function TpoStructuresScanner() {
           </>
         )}
       </Card>
-    </div>
-
-      {/* ── AMT auction read + live signals ──────────────────────────────── */}
-      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
 
       {/* ── Today's session + stats rollup ──────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -3125,6 +3134,7 @@ function TpoStructuresScanner() {
         </div>
       </div>
     </div>
+    </div>
   );
 }
 
@@ -3168,6 +3178,7 @@ export default function ScannerPage() {
         <option value="statprompter">Stat Prompter</option>
         <option value="semis">Semi Strength</option>
         <option value="dodmovers">DoD Movers</option>
+        <option value="forwardbuild">Forward Build</option>
         <option value="logicorder">Logic &amp; Order</option>
       </select>
 
@@ -3207,6 +3218,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "dodmovers" ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
           background: tab === "dodmovers" ? `${HOME_THEME.cyan}22` : "transparent",
         }}>DoD Movers</button>
+        <button onClick={() => setTab("forwardbuild")} style={{
+          ...tabStyle(tab === "forwardbuild"),
+          border: `1px solid ${tab === "forwardbuild" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
+          background: tab === "forwardbuild" ? `${HOME_THEME.orange}22` : "transparent",
+        }}>Forward Build</button>
         <button onClick={() => setTab("logicorder")} style={{
           ...tabStyle(tab === "logicorder"),
           border: `1px solid ${tab === "logicorder" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
@@ -3224,6 +3240,7 @@ export default function ScannerPage() {
       {tab === "statprompter" && <StatPrompterTab />}
       {tab === "semis" && <SemisTab />}
       {tab === "dodmovers" && <DodMoversTab />}
+      {tab === "forwardbuild" && <ForwardBuildStructure />}
       {tab === "logicorder" && <LogicOrderPanel />}
     </PageShell>
   );
