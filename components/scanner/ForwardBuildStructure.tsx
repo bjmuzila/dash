@@ -3,12 +3,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Forward Build — STRUCTURE view ("where is the GEX flow going?")
 //
-// Grouped by ticker (all collapsed by default). Expand a ticker to see its front
-// 0DTE / 1DTE / 2DTE GEX wall structure side-by-side on a SHARED strike ladder,
-// with each strike's day-over-day Δ (is gamma building here or leaving?). The
-// collapsed row already carries the essentials — spot, net GEX per DTE, and
-// call/put wall migration across the three days — so the whole roster is
-// scannable without opening anything.
+// Full roster as a 5-across CARD grid. Each card carries the essentials — spot,
+// net GEX per DTE (0d/1d/2d), call/put wall migration, and a tiny 0→1→2 net
+// sparkline — so the whole roster is scannable at a glance. Click a card to open
+// that ticker's front 0DTE / 1DTE / 2DTE GEX walls in a full-width panel below,
+// on a shared strike ladder, with each strike's net-$ and its day-over-day Δ
+// (is gamma building here or leaving?). The bars are styled to match the
+// Logic & Order page's GexStructure (solid centre-anchored fill in a subtle
+// track, spot row outlined in orange with a ◄ marker).
 //
 // Reads GET /proxy/forward-build-structure (getForwardBuildStructure in
 // server-v2/strike-growth-recorder.js) — one query over rows the strike-growth
@@ -29,6 +31,10 @@ type Dte = {
 };
 type Ticker = { symbol: string; spot: number; dtes: Dte[] };
 
+const GREEN = HOME_THEME.green;
+const RED = HOME_THEME.red;
+const SPOT = HOME_THEME.orange;
+
 // Adaptive $ formatting — SPX nets run to billions, single names to millions.
 const fmtGex = (v: number): string => {
   const a = Math.abs(v), s = v < 0 ? "-" : "";
@@ -38,129 +44,126 @@ const fmtGex = (v: number): string => {
 const fmtSigned = (v: number): string => (v >= 0 ? "+" : "") + fmtGex(v);
 const fmtStrike = (v: number): string =>
   Number.isInteger(v) ? v.toLocaleString("en-US") : String(v);
+const fmtSpot = (v: number): string =>
+  v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2);
 
 const DTE_LABEL = (d: number) => (d === 0 ? "0DTE" : `${d}DTE`);
-const dteColor = (d: number) =>
-  d === 0 ? HOME_THEME.orange : d === 1 ? HOME_THEME.cyan : HOME_THEME.purple;
+const dteColor = (d: number) => (d === 0 ? SPOT : d === 1 ? HOME_THEME.cyan : HOME_THEME.purple);
 
-// One strike ladder cell for a single DTE column: a centred bar (call grows
-// right, put grows left) + the day-over-day Δ chip.
-function LadderCell({ row, maxAbs }: { row: StrikeRow | null; maxAbs: number }) {
-  if (!row) {
-    return (
-      <div className="fb-cell">
-        <div className="fb-bar" />
-        <span className="fb-delta" style={{ color: HOME_THEME.border }}>·</span>
-      </div>
-    );
-  }
-  const w = maxAbs > 0 ? Math.max(3, (Math.abs(row.net) / maxAbs) * 47) : 0;
-  const call = row.net >= 0;
-  const barColor = call ? HOME_THEME.green : HOME_THEME.red;
-  const fillStyle: CSSProperties = call
-    ? { left: "50%", width: `${w}%`, background: `linear-gradient(90deg, ${barColor}, transparent)` }
-    : { right: "50%", width: `${w}%`, background: `linear-gradient(270deg, ${barColor}, transparent)` };
-  const d = row.delta;
-  const dColor = d == null ? HOME_THEME.text : d > 0 ? HOME_THEME.green : d < 0 ? HOME_THEME.red : HOME_THEME.text;
-  const arrow = d == null ? "—" : d > 0 ? "▲" : d < 0 ? "▼" : "—";
+// Tiny 0→1→2 net sparkline for the card face (3 points, self-normalized).
+function CardSpark({ pts }: { pts: number[] }) {
+  const w = 46, h = 16;
+  if (pts.length < 2) return null;
+  const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1;
+  const d = pts.map((v, i) => `${((i / (pts.length - 1)) * w).toFixed(1)},${(h - ((v - lo) / span) * h).toFixed(1)}`).join(" ");
+  const up = pts[pts.length - 1] >= pts[0];
   return (
-    <div className="fb-cell" title={`net ${fmtSigned(row.net)}${d != null ? ` · Δ ${fmtSigned(d)}` : ""}`}>
-      <div className="fb-bar">
-        <div className="fb-mid" />
-        <div className="fb-fill" style={fillStyle} />
+    <svg width={w} height={h} style={{ display: "block", opacity: 0.6 }}>
+      <polyline points={d} fill="none" stroke={up ? GREEN : RED} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// One DTE column's ladder, Logic & Order GexStructure style. `rows` is the
+// shared ladder (union of strikes across the 3 columns, with spot markers);
+// `col` maps strike→this DTE's row; maxAbs scales bars across the whole ticker.
+function LadderColumn({ info, rows, col, maxAbs, spot }: {
+  info: Dte; rows: Array<{ spot: true } | { strike: number }>;
+  col: Map<number, StrikeRow>; maxAbs: number; spot: number;
+}) {
+  const cell: CSSProperties = {
+    display: "grid", gridTemplateColumns: "54px 1fr 66px 60px", alignItems: "center",
+    gap: 8, padding: "3px 6px", borderRadius: 4,
+  };
+  return (
+    <div style={{ background: HOME_THEME.panel, padding: "12px 14px 14px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 9 }}>
+        <span style={{ fontWeight: 800, fontSize: 12.5, color: dteColor(info.dte) }}>{DTE_LABEL(info.dte)}</span>
+        <span style={{ color: HOME_THEME.border, fontSize: 11, fontFamily: "var(--font-mono, monospace)" }}>{info.expiry.slice(5)}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: info.netTotal >= 0 ? GREEN : RED }}>
+          {fmtSigned(info.netTotal)}
+        </span>
       </div>
-      <span className="fb-delta" style={{ color: dColor }}>
-        {d == null ? "—" : `${arrow} ${fmtGex(Math.abs(d))}`}
-      </span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {rows.map((r, i) => {
+          if ("spot" in r) {
+            return (
+              <div key={`s${i}`} style={{ ...cell, background: "rgba(255,255,255,0.06)", outline: `1px solid ${SPOT}66` }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: SPOT, fontFamily: "var(--font-mono, monospace)" }}>{fmtSpot(spot)}<span style={{ fontSize: 9, marginLeft: 3 }}>◄</span></span>
+                <div /><div /><div />
+              </div>
+            );
+          }
+          const s = col.get(r.strike) ?? null;
+          const pos = !!s && s.net >= 0;
+          const frac = s && maxAbs > 0 ? Math.abs(s.net) / maxAbs : 0;
+          const dTone = s?.delta == null ? HOME_THEME.text : s.delta > 0 ? GREEN : s.delta < 0 ? RED : HOME_THEME.text;
+          const arrow = s?.delta == null ? "" : s.delta > 0 ? "▲ " : s.delta < 0 ? "▼ " : "";
+          return (
+            <div key={r.strike} style={cell}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>{fmtStrike(r.strike)}</span>
+              <div style={{ position: "relative", height: 12, background: "rgba(255,255,255,0.04)", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
+                {s && (
+                  <div style={{ position: "absolute", top: 1, bottom: 1, [pos ? "left" : "right"]: "50%", width: `${Math.max(2, frac * 50)}%`, background: pos ? GREEN : RED, borderRadius: 2 } as CSSProperties} />
+                )}
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: s ? (pos ? GREEN : RED) : HOME_THEME.border }}>
+                {s ? fmtSigned(s.net) : "—"}
+              </span>
+              <span style={{ fontSize: 10.5, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: dTone }}>
+                {s && s.delta != null ? `${arrow}${fmtGex(Math.abs(s.delta))}` : "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function TickerBlock({ t }: { t: Ticker }) {
+function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
   const byDte = useMemo(() => {
     const m = new Map<number, Map<number, StrikeRow>>();
-    for (const d of t.dtes) {
-      const sm = new Map<number, StrikeRow>();
-      d.strikes.forEach((s) => sm.set(s.strike, s));
-      m.set(d.dte, sm);
-    }
+    for (const d of t.dtes) { const sm = new Map<number, StrikeRow>(); d.strikes.forEach((s) => sm.set(s.strike, s)); m.set(d.dte, sm); }
     return m;
   }, [t]);
-
-  // Shared ladder = union of every strike across the 3 columns, high→low, with a
-  // spot marker inserted so each column's rows line up (read migration vertically).
   const ladder = useMemo(() => {
     const set = new Set<number>();
     t.dtes.forEach((d) => d.strikes.forEach((s) => set.add(s.strike)));
     const strikes = [...set].sort((a, b) => b - a);
     const rows: Array<{ spot: true } | { strike: number }> = [];
     let placed = false;
-    for (const k of strikes) {
-      if (!placed && k < t.spot) { rows.push({ spot: true }); placed = true; }
-      rows.push({ strike: k });
-    }
+    for (const k of strikes) { if (!placed && k < t.spot) { rows.push({ spot: true }); placed = true; } rows.push({ strike: k }); }
     if (!placed) rows.push({ spot: true });
     return rows;
   }, [t]);
-
   const maxAbs = useMemo(() => {
-    let m = 0;
-    t.dtes.forEach((d) => d.strikes.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); }));
-    return m;
+    let m = 0; t.dtes.forEach((d) => d.strikes.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); })); return m;
   }, [t]);
-
   const dtesShown = [0, 1, 2].filter((d) => byDte.has(d));
-  const callMig = dtesShown.map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike).filter((x) => x != null);
-  const putMig = dtesShown.map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike).filter((x) => x != null);
+  const wall = (side: "callWall" | "putWall") =>
+    dtesShown.map((d) => t.dtes.find((x) => x.dte === d)?.[side]?.strike).filter((x) => x != null) as number[];
+  const cw = wall("callWall"), pw = wall("putWall");
 
   return (
-    <div className="fb-body">
-      <div className="fb-cols" style={{ gridTemplateColumns: `repeat(${dtesShown.length}, 1fr)` }}>
-        {dtesShown.map((d) => {
-          const info = t.dtes.find((x) => x.dte === d)!;
-          const col = byDte.get(d)!;
-          return (
-            <div key={d} className="fb-col">
-              <div className="fb-chead">
-                <span style={{ fontWeight: 800, fontSize: 12.5, color: dteColor(d) }}>{DTE_LABEL(d)}</span>
-                <span style={{ color: HOME_THEME.border, fontSize: 11, fontFamily: "var(--fb-mono)" }}>{info.expiry.slice(5)}</span>
-                <span
-                  className="fb-netchip"
-                  style={{ color: info.netTotal >= 0 ? HOME_THEME.green : HOME_THEME.red, marginLeft: "auto" }}
-                >
-                  {fmtSigned(info.netTotal)}
-                </span>
-              </div>
-              <div className="fb-ladder">
-                {ladder.map((r, i) =>
-                  "spot" in r ? (
-                    <div key={`s${i}`} className="fb-row fb-spotrow">
-                      <span className="fb-strike">{fmtStrike(Math.round(t.spot))}</span>
-                      <div className="fb-bar"><div className="fb-mid" /></div>
-                      <span className="fb-delta" style={{ color: HOME_THEME.orange }}>spot</span>
-                    </div>
-                  ) : (
-                    <div key={r.strike} className="fb-row">
-                      <span className="fb-strike">{fmtStrike(r.strike)}</span>
-                      <LadderCell row={col.get(r.strike) ?? null} maxAbs={maxAbs} />
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-          );
-        })}
+    <div style={{ marginTop: 14, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 12, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+        <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.03em" }}>{t.symbol}</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: SPOT }}>spot {fmtSpot(t.spot)}</span>
+        <span style={{ marginLeft: "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 16, lineHeight: 1 }} onClick={onClose}>✕</span>
       </div>
-      <div className="fb-foot">
-        {callMig.length > 1 && (
-          <span><b style={{ color: HOME_THEME.text }}>Call wall:</b>{" "}
-            <span style={{ color: HOME_THEME.green, fontFamily: "var(--fb-mono)" }}>{callMig.map(fmtStrike).join(" → ")}</span></span>
-        )}
-        {putMig.length > 1 && (
-          <span><b style={{ color: HOME_THEME.text }}>Put wall:</b>{" "}
-            <span style={{ color: HOME_THEME.red, fontFamily: "var(--fb-mono)" }}>{putMig.map(fmtStrike).join(" → ")}</span></span>
-        )}
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${dtesShown.length}, 1fr)`, gap: 1, background: HOME_THEME.border }}>
+        {dtesShown.map((d) => (
+          <LadderColumn key={d} info={t.dtes.find((x) => x.dte === d)!} rows={ladder} col={byDte.get(d)!} maxAbs={maxAbs} spot={t.spot} />
+        ))}
       </div>
+      {(cw.length > 1 || pw.length > 1) && (
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", padding: "10px 16px", borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11.5, color: HOME_THEME.text }}>
+          {cw.length > 1 && <span><b>Call wall:</b> <span style={{ color: GREEN, fontFamily: "var(--font-mono, monospace)" }}>{cw.map(fmtStrike).join(" → ")}</span></span>}
+          {pw.length > 1 && <span><b>Put wall:</b> <span style={{ color: RED, fontFamily: "var(--font-mono, monospace)" }}>{pw.map(fmtStrike).join(" → ")}</span></span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -171,7 +174,7 @@ export default function ForwardBuildStructure() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [sel, setSel] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true); setErr(null);
@@ -180,10 +183,8 @@ export default function ForwardBuildStructure() {
       .then((j) => {
         if (!j.ok) throw new Error(j.error || "load failed");
         const rows: Ticker[] = Array.isArray(j.tickers) ? j.tickers : [];
-        setTickers(rows);
-        setAsOf(j.asOf || "");
-        // Expand the first ticker so the layout is visible on load.
-        setOpen(new Set(rows.length ? [rows[0].symbol] : []));
+        setTickers(rows); setAsOf(j.asOf || "");
+        setSel(rows.length ? rows[0].symbol : null);
       })
       .catch((e) => setErr(String((e as Error)?.message || e)))
       .finally(() => setLoading(false));
@@ -194,119 +195,83 @@ export default function ForwardBuildStructure() {
     const needle = q.trim().toUpperCase();
     return needle ? tickers.filter((t) => t.symbol.includes(needle)) : tickers;
   }, [tickers, q]);
-
-  const toggle = (sym: string) =>
-    setOpen((prev) => { const n = new Set(prev); n.has(sym) ? n.delete(sym) : n.add(sym); return n; });
-  const expandAll = () => setOpen(new Set(view.map((t) => t.symbol)));
-  const collapseAll = () => setOpen(new Set());
+  const selected = useMemo(() => tickers.find((t) => t.symbol === sel) || null, [tickers, sel]);
 
   const inputStyle: CSSProperties = {
     minWidth: 160, padding: "7px 10px", borderRadius: 8, fontSize: 13,
     border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text,
   };
+  const net = (t: Ticker, d: number) => t.dtes.find((x) => x.dte === d)?.netTotal;
 
   return (
     <>
       <style>{`
-        .fb-scope{ --fb-mono: ui-monospace, 'SF Mono', Menlo, monospace; }
-        .fb-tk{ background:${HOME_THEME.panel}; border:1px solid ${HOME_THEME.border};
-          border-radius:11px; margin-bottom:9px; overflow:hidden; }
-        .fb-head{ display:grid; grid-template-columns:20px 74px 92px 1fr auto; align-items:center;
-          gap:14px; padding:11px 15px; cursor:pointer; user-select:none; }
-        .fb-head:hover{ background:rgba(255,255,255,0.03); }
-        .fb-caret{ color:${HOME_THEME.border}; font-size:11px; transition:transform .15s; justify-self:center; }
-        .fb-tk.open .fb-caret{ transform:rotate(90deg); }
-        .fb-sym{ font-size:15px; font-weight:800; letter-spacing:.03em; color:${HOME_THEME.cyan}; }
-        .fb-spot{ font:11.5px/1 var(--fb-mono); color:${HOME_THEME.orange};
-          background:rgba(255,170,40,0.08); border:1px solid rgba(255,170,40,0.25);
-          border-radius:6px; padding:5px 8px; justify-self:start; }
-        .fb-nets{ display:flex; gap:7px; }
-        .fb-mini{ font:11px/1 var(--fb-mono); padding:4px 7px; border-radius:5px; white-space:nowrap;
-          border:1px solid ${HOME_THEME.border}; }
-        .fb-mini .l{ color:${HOME_THEME.border}; margin-right:4px; }
-        .fb-mig{ color:${HOME_THEME.text}; font-size:11px; justify-self:end; text-align:right; font-family:var(--fb-mono); }
-        .fb-body{ display:none; border-top:1px solid ${HOME_THEME.border}; }
-        .fb-tk.open .fb-body{ display:block; }
-        .fb-cols{ display:grid; gap:1px; background:${HOME_THEME.border}; }
-        .fb-col{ background:${HOME_THEME.panel}; padding:12px 14px 14px; }
-        .fb-chead{ display:flex; align-items:baseline; gap:8px; margin-bottom:9px; }
-        .fb-netchip{ font:11px/1 var(--fb-mono); }
-        .fb-ladder{ display:flex; flex-direction:column; gap:3px; }
-        .fb-row{ display:grid; grid-template-columns:54px 1fr; align-items:center; gap:8px; height:24px; }
-        .fb-spotrow{ background:rgba(255,170,40,0.06); border-radius:5px; }
-        .fb-strike{ font:12px/1 var(--fb-mono); color:${HOME_THEME.text}; text-align:right; }
-        .fb-spotrow .fb-strike{ color:${HOME_THEME.orange}; font-weight:800; }
-        .fb-cell{ display:grid; grid-template-columns:1fr 58px; align-items:center; gap:6px; }
-        .fb-bar{ position:relative; height:15px; }
-        .fb-fill{ position:absolute; top:2px; bottom:2px; border-radius:3px; }
-        .fb-mid{ position:absolute; left:50%; top:-4px; bottom:-4px; width:1px; background:${HOME_THEME.border}; }
-        .fb-delta{ font:11px/1 var(--fb-mono); text-align:left; }
-        .fb-foot{ display:flex; gap:16px; flex-wrap:wrap; padding:9px 15px;
-          border-top:1px solid ${HOME_THEME.border}; font-size:11.5px; color:${HOME_THEME.text}; }
-        .scanner-mobile .fb-head{ grid-template-columns:18px 1fr auto; }
-        .scanner-mobile .fb-spot, .scanner-mobile .fb-mig{ display:none; }
+        .fb-grid{ display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
+        @media (max-width:1400px){ .fb-grid{ grid-template-columns:repeat(4,1fr); } }
+        @media (max-width:1100px){ .fb-grid{ grid-template-columns:repeat(3,1fr); } }
+        @media (max-width:820px){ .fb-grid{ grid-template-columns:repeat(2,1fr); } }
+        .fb-card{ background:${HOME_THEME.panel}; border:1px solid ${HOME_THEME.border}; border-radius:11px;
+          padding:13px 14px; cursor:pointer; transition:border-color .12s, transform .12s; position:relative; }
+        .fb-card:hover{ border-color:#2b3a4d; transform:translateY(-1px); }
+        .fb-card.sel{ border-color:${HOME_THEME.cyan}; box-shadow:0 0 0 1px ${HOME_THEME.cyan} inset; }
       `}</style>
 
-      <div className="fb-scope">
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-          <div style={{ fontSize: 14, color: HOME_THEME.text }}>
-            {loading ? "Loading forward build…"
-              : asOf ? `0/1/2-DTE GEX structure by ticker · as of ${asOf} · ${tickers.length} tickers`
-              : "No structure yet (needs live dxLink data + a session or two of history)."}
-          </div>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter ticker…" style={inputStyle} />
-          <button onClick={expandAll} style={homeButtonStyle}>Expand all</button>
-          <button onClick={collapseAll} style={homeButtonStyle}>Collapse all</button>
-          <button onClick={load} style={homeButtonStyle}>Refresh</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text }}>
+          {loading ? "Loading forward build…"
+            : asOf ? `0/1/2-DTE GEX structure by ticker · as of ${asOf} · ${tickers.length} tickers`
+            : "No structure yet (needs live dxLink data + a session or two of history)."}
         </div>
-        {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>Error: {err}</div>}
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter ticker…" style={inputStyle} />
+        <button onClick={load} style={homeButtonStyle}>Refresh</button>
+      </div>
+      {err && <div style={{ fontSize: 14, color: RED, marginBottom: 8 }}>Error: {err}</div>}
 
-        <Card variant="budget" accent={HOME_THEME.orange} title="Forward Build — GEX structure & day-over-day flow">
+      <Card variant="budget" accent={SPOT} title="Forward Build — GEX structure & day-over-day flow">
+        <div className="fb-grid">
           {view.map((t) => {
-            const isOpen = open.has(t.symbol);
-            const net = (d: number) => t.dtes.find((x) => x.dte === d)?.netTotal;
-            const chip = (d: number) => {
-              const v = net(d);
-              if (v == null) return null;
-              return (
-                <span key={d} className="fb-mini" style={{ color: v >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                  <span className="l">{d}d</span>{fmtSigned(v)}
-                </span>
-              );
-            };
-            const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike).filter((x) => x != null);
-            const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike).filter((x) => x != null);
+            const chips = [0, 1, 2].map((d) => ({ d, v: net(t, d) })).filter((x) => x.v != null) as { d: number; v: number }[];
+            const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike).filter((x) => x != null) as number[];
+            const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike).filter((x) => x != null) as number[];
             return (
-              <div key={t.symbol} className={`fb-tk${isOpen ? " open" : ""}`}>
-                <div className="fb-head" onClick={() => toggle(t.symbol)}>
-                  <span className="fb-caret">▶</span>
-                  <span className="fb-sym">{t.symbol}</span>
-                  <span className="fb-spot">{fmtStrike(t.spot >= 100 ? Math.round(t.spot) : Number(t.spot.toFixed(2)))}</span>
-                  <span className="fb-nets">{[0, 1, 2].map(chip)}</span>
-                  <span className="fb-mig">
-                    {cw.length > 1 && <>calls {cw.map(fmtStrike).join("→")}</>}
-                    {cw.length > 1 && pw.length > 1 && <span style={{ color: HOME_THEME.border }}> · </span>}
-                    {pw.length > 1 && <>puts {pw.map(fmtStrike).join("→")}</>}
-                  </span>
+              <div key={t.symbol} className={`fb-card${sel === t.symbol ? " sel" : ""}`} onClick={() => setSel(t.symbol)}>
+                <div style={{ position: "absolute", top: 12, right: 12 }}><CardSpark pts={chips.map((c) => c.v)} /></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.03em", color: "#cfe0ff" }}>{t.symbol}</span>
+                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: SPOT, background: "rgba(233,185,73,0.08)", border: `1px solid ${SPOT}44`, borderRadius: 5, padding: "3px 7px" }}>{fmtSpot(t.spot)}</span>
                 </div>
-                {isOpen && <TickerBlock t={t} />}
+                <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+                  {chips.map(({ d, v }) => (
+                    <span key={d} style={{ flex: 1, textAlign: "center", fontSize: 10.5, fontFamily: "var(--font-mono, monospace)", padding: "5px 3px", borderRadius: 5, border: `1px solid ${HOME_THEME.border}` }}>
+                      <span style={{ display: "block", color: HOME_THEME.border, fontSize: 9, marginBottom: 3 }}>{d}D</span>
+                      <span style={{ color: v >= 0 ? GREEN : RED }}>{fmtSigned(v)}</span>
+                    </span>
+                  ))}
+                </div>
+                <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8, fontSize: 10, color: HOME_THEME.text, lineHeight: 1.5 }}>
+                  {cw.length > 1 && <div>calls <span style={{ color: GREEN, fontFamily: "var(--font-mono, monospace)" }}>{cw.map(fmtStrike).join(" → ")}</span></div>}
+                  {pw.length > 1 && <div>puts <span style={{ color: RED, fontFamily: "var(--font-mono, monospace)" }}>{pw.map(fmtStrike).join(" → ")}</span></div>}
+                  {cw.length <= 1 && pw.length <= 1 && <span style={{ color: HOME_THEME.border }}>walls forming…</span>}
+                </div>
               </div>
             );
           })}
           {!loading && !view.length && (
-            <div style={{ textAlign: "center", color: HOME_THEME.text, padding: 24 }}>No tickers to show.</div>
+            <div style={{ gridColumn: "1 / -1", textAlign: "center", color: HOME_THEME.text, padding: 24 }}>No tickers to show.</div>
           )}
-          <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 10, lineHeight: 1.6 }}>
-            Each ticker shows its front <b>0/1/2-DTE</b> GEX walls on a shared strike ladder (spot in the middle).
-            Bars: <span style={{ color: HOME_THEME.green }}>green</span> = positive GEX (support),{" "}
-            <span style={{ color: HOME_THEME.red }}>red</span> = negative (resistance). The Δ next to each strike is its
-            net-GEX change vs the <b>same expiry&rsquo;s prior session</b> — <span style={{ color: HOME_THEME.green }}>▲</span> gamma
-            building here, <span style={{ color: HOME_THEME.red }}>▼</span> leaving. A 2DTE strike that just entered the window
-            shows &ldquo;—&rdquo; until it has a prior session to compare. The collapsed row&rsquo;s wall-migration line (e.g.
-            calls 6400→6410→6425) is where the walls are drifting across the three days — often where price is headed next.
-          </div>
-        </Card>
-      </div>
+        </div>
+
+        {selected && <DetailPanel t={selected} onClose={() => setSel(null)} />}
+
+        <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 12, lineHeight: 1.6 }}>
+          Each card is a ticker — spot, net GEX for the front <b>0/1/2-DTE</b> expiries, and where the call/put walls are
+          migrating across the three days. Click a card to open its ladder: bars are net GEX per strike
+          (<span style={{ color: GREEN }}>green</span> = support, <span style={{ color: RED }}>red</span> = resistance),
+          the right numbers are the strike&rsquo;s net-$ and its <b>day-over-day Δ</b> vs the same expiry&rsquo;s prior
+          session (<span style={{ color: GREEN }}>▲</span> building, <span style={{ color: RED }}>▼</span> leaving). A 2DTE
+          strike that just entered the window shows &ldquo;—&rdquo; until it has a prior session to compare.
+        </div>
+      </Card>
     </>
   );
 }

@@ -2396,6 +2396,15 @@ class TastytradeProxy {
           `bucketTape=${bucket.tape.length} floor=$${this.flow.tapeFloorPremium} ` +
           `dealerStrikes=${inv.size}`
         );
+        // TEMP: premium-flow accumulator is stuck at 0 in prod despite a live
+        // tape — surface the raw session totals every ~5s so we can see
+        // whether onTrade's premium branch runs at all before digging further.
+        console.log(
+          `[PREMIUM_DEBUG] sessionCallPremium=${this.sessionCallPremium} ` +
+          `sessionPutPremium=${this.sessionPutPremium} ` +
+          `parseWarnCount=${this._premiumParseWarnCount || 0} ` +
+          `addPrintErrCount=${this._addPrintErrCount || 0}`
+        );
       }
     }, FLOW_AGGREGATE_MS);
 
