@@ -724,9 +724,11 @@ export function MultGreekClient({
 
     const newStrikes: Record<string, Record<string, StrikeRow[]>> = {};
     const newSpots: Record<string, number> = {};
-    let successCount = 0;
     const errStatuses: number[] = [];
 
+    // Phase 1 — the one-shot range=all per ticker. This covers the REST tickers'
+    // first ≤3 expiries and, for the live-streamed underlying (SPX), only its
+    // single active gated expiry.
     for (const result of results) {
       if (result.status !== "fulfilled") continue;
       const { ticker, json, ok, status } = result.value as { ticker: Ticker; json: Record<string, unknown>; ok: boolean; status: number };
@@ -736,8 +738,6 @@ export function MultGreekClient({
         continue;
       }
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
-      if (!items.length) continue;
-
       const byExp: Record<string, StrikeRow[]> = {};
       colDates.forEach(cd => {
         const target = (items as { "expiration-date"?: string }[]).filter(i =>
@@ -747,11 +747,45 @@ export function MultGreekClient({
         const parsed = buildStrikes(target, liveDataRef.current);
         if (parsed.length) byExp[cd] = parsed;
       });
-
-      if (Object.keys(byExp).length) { newStrikes[ticker] = byExp; successCount++; }
+      newStrikes[ticker] = byExp;
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
+
+    // Phase 2 — gap-fill. range=all is capped (REST → 3 expiries; SPX live → its
+    // 1 active expiry), so any column expiry it didn't return is fetched
+    // EXPLICITLY. An explicit ?expiration= bypasses both caps (SPX's non-active
+    // expiries then come from REST). An expiry a ticker doesn't list returns
+    // empty → that column just shows "--" for it, which is correct.
+    const gaps: { ticker: Ticker; date: string }[] = [];
+    Object.keys(newStrikes).forEach(ticker => {
+      colDates.forEach(cd => {
+        if (!(newStrikes[ticker][cd]?.length)) gaps.push({ ticker, date: cd });
+      });
+    });
+    if (gaps.length) {
+      const filled = await Promise.allSettled(
+        gaps.map(g =>
+          fetch(`/api/chains?ticker=${encodeURIComponent(g.ticker)}&expiration=${encodeURIComponent(g.date)}${bust}`)
+            .then(async r => ({ ...g, json: await r.json(), ok: r.ok }))
+        )
+      );
+      if (token !== loadTokenRef.current) return;
+      for (const f of filled) {
+        if (f.status !== "fulfilled" || !f.value.ok) continue;
+        const { ticker, date, json } = f.value as { ticker: Ticker; date: string; json: Record<string, unknown> };
+        const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
+        if (!items.length) continue;
+        const parsed = buildStrikes(items, liveDataRef.current);
+        if (parsed.length) newStrikes[ticker][date] = parsed;
+        if (!(newSpots[ticker] > 0)) {
+          const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
+          if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
+        }
+      }
+    }
+
+    const successCount = Object.keys(newStrikes).filter(t => Object.keys(newStrikes[t]).length).length;
 
     activeExpiryRef.current = expDate;
     setActiveExpiry(expDate);

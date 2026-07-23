@@ -516,8 +516,25 @@ async function getForwardBuildLeaderboard(opts = {}) {
 // (2 points -> 1 Δ) and 0DTE the session after (3 points). So 0DTE/1DTE strikes
 // normally have a Δ; a freshly-appeared 2DTE strike shows "—" until it has a
 // prior session to compare against.
+// Short in-process cache: the DB scan over ~9 days of strike_growth for the
+// whole roster is the expensive part of this endpoint, and the data only
+// changes each sweep (2–5 min). Cache the grouped structure for
+// FB_STRUCT_CACHE_MS so re-opening the tab is instant; the live spot is overlaid
+// FRESH on every request (a cheap Map.get) so it stays live even on a cache hit.
+const FB_STRUCT_CACHE_MS = Number(process.env.STRIKE_GROWTH_FB_CACHE_MS || 45000);
+let _fbStructCache = { at: 0, key: '', asOf: null, tickers: null };
+
 async function getForwardBuildStructure(opts = {}) {
   const maxTickers = Math.min(600, Number(opts.limit) || 400);
+  const cacheKey = String(maxTickers);
+  const nowMs = Date.now();
+
+  // Fast path: recent cached build → skip the query entirely.
+  if (_fbStructCache.tickers && _fbStructCache.key === cacheKey
+      && nowMs - _fbStructCache.at < FB_STRUCT_CACHE_MS) {
+    return { asOf: _fbStructCache.asOf, tickers: overlayLiveSpot(_fbStructCache.tickers).slice(0, maxTickers) };
+  }
+
   if (!(await ensureSchema())) return { asOf: null, tickers: [] };
   const p = getPool();
   const symbols = await getActiveSymbols(p); // sort_idx order (hot/majors first)
@@ -591,17 +608,29 @@ async function getForwardBuildStructure(opts = {}) {
     }
     if (!dtes.length) continue;
     dtes.sort((a, b) => a.dte - b.dte);
-    // Prefer the LIVE in-memory spot (updated on every underlying Quote/Trade)
-    // over the last-swept DB spot, which lags by up to a sweep (≤5 min). The GEX
-    // structure/walls are still from the last sweep — only the spot marker is
-    // live. Falls back to the DB spot when the feed has no live value (e.g. this
-    // process just restarted, or after hours).
-    const liveSpot = _proxy?.getStrikeGrowthSpot ? Number(_proxy.getStrikeGrowthSpot(symbol)) : 0;
-    tickers.push({ symbol, spot: liveSpot > 0 ? liveSpot : s.spot, dtes });
+    // Store the last-swept DB spot in the cache; the live spot is overlaid at
+    // return time (see overlayLiveSpot) so a cache hit still shows a live spot.
+    tickers.push({ symbol, spot: s.spot, dtes });
   }
 
   tickers.sort((a, b) => (order.get(a.symbol) ?? 1e9) - (order.get(b.symbol) ?? 1e9));
-  return { asOf, tickers: tickers.slice(0, maxTickers) };
+  _fbStructCache = { at: nowMs, key: cacheKey, asOf, tickers };
+  return { asOf, tickers: overlayLiveSpot(tickers).slice(0, maxTickers) };
+}
+
+// Overlay the LIVE in-memory spot (updated on every underlying Quote/Trade)
+// onto each cached ticker, replacing the last-swept DB spot which lags by up to
+// a sweep (≤5 min). The GEX structure/walls stay from the last sweep — only the
+// spot marker goes live. Falls back to the DB spot when the feed has no live
+// value (e.g. this process just restarted, or after hours). Cheap (a Map.get
+// per ticker), so it runs on every request including cache hits.
+function overlayLiveSpot(tickers) {
+  const getLive = _proxy?.getStrikeGrowthSpot ? (sym) => Number(_proxy.getStrikeGrowthSpot(sym)) : null;
+  if (!getLive) return tickers;
+  return tickers.map((t) => {
+    const live = getLive(t.symbol);
+    return live > 0 ? { ...t, spot: live } : t;
+  });
 }
 
 /**
