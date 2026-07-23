@@ -7,7 +7,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
-import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "@/components/shared/DockToolbar";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -1332,8 +1332,17 @@ export function MultGreekClient({
 
         <DockGap />
 
-        {/* Intensity slider */}
-        <DockSlider label="Intensity" value={intensity} min={0.5} max={3} step={0.01} onChange={setIntensity} width={80} format={(v) => `${v.toFixed(2)}x`} />
+        {/* Intensity slider — matches the home GEX heatmap slider */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
+          <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
+          <input
+            type="range" min={0.5} max={5} step={0.01}
+            value={intensity}
+            onChange={(e) => setIntensity(Number(e.target.value))}
+            style={{ width: 80, height: 3, accentColor: "#219EBC" }}
+          />
+          <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
+        </div>
 
         {/* Refresh / Snap / Discord */}
         <DockSpacer />

@@ -2028,14 +2028,14 @@ export default function OptionsChainPage({
 
         <div style={{ flex: 1 }} />
 
-        <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
+        <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
         <input
-          type="range" min={0.5} max={3} step={0.01}
+          type="range" min={0.5} max={5} step={0.01}
           value={intensity}
           onChange={(event) => setIntensity(Number(event.target.value))}
-          style={{ width: 80, height: 3, accentColor: HT.cyan }}
+          style={{ width: 80, height: 3, accentColor: "#219EBC" }}
         />
-        <span style={{ fontSize: 10, color: HT.cyan, fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>
+        <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>
           {intensity.toFixed(2)}x
         </span>
 

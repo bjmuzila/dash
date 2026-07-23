@@ -285,14 +285,6 @@ export function ChainReplay({
           })}
         </div>
       )}
-
-      <div style={{ marginTop: 16, fontSize: 11, color: SUB, lineHeight: 1.5 }}>
-        Net GEX = OI + volume (gex_now + gex_open), front active expiry, ±14 strikes.
-        Green = positive, red = negative. Scale <strong>Frame</strong> = each
-        snapshot scaled to its own peak (bars stay readable all day);{" "}
-        <strong>Day</strong> = fixed session-wide scale (magnitudes comparable
-        across time). History window ≈ 5 trading days.
-      </div>
     </>
   );
 
@@ -341,8 +333,9 @@ export function ChainReplay({
           </div>
         </div>
         {body}
-        <div style={{ textAlign: "right", marginTop: 6, fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: SUB }}>
-          cbedge.net
+        <div style={{ marginTop: 10 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 22, width: "auto", display: "block" }} />
         </div>
       </div>
     </div>,

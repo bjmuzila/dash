@@ -1267,7 +1267,8 @@ function OiByExpirationPanel({ symbol, expirations }: { symbol: string; expirati
 // from the eod_gex table (written by server-v2/eod-gex-recorder.js). Read via
 // GET /api/eod-gex?symbol=$SPX&limit=N — same endpoint /es-candles uses for the
 // prior-day SPX close. Positive net GEX = light blue, negative = red.
-type EodGexRow = { date: string; totalGex: number; spot: number };
+type EodGexRow = { date: string; totalGex: number; totalGexEx0dte: number | null; spot: number };
+type EodGexField = "totalGex" | "totalGexEx0dte";
 
 const EOD_GEX_SYMBOL = "$SPX";
 const EOD_GEX_DAYS = 30;
@@ -1288,10 +1289,11 @@ function useEodGex(days: number) {
       const raw: unknown[] = Array.isArray(json?.rows) ? json.rows : [];
       const next: EodGexRow[] = raw
         .map((r) => {
-          const o = r as { date?: string; total_gex?: number | string; spot?: number | string };
+          const o = r as { date?: string; total_gex?: number | string; total_gex_ex0dte?: number | string | null; spot?: number | string };
           return {
             date: String(o.date ?? "").slice(0, 10),
             totalGex: Number(o.total_gex ?? 0) || 0,
+            totalGexEx0dte: o.total_gex_ex0dte == null ? null : (Number(o.total_gex_ex0dte) || 0),
             spot: Number(o.spot ?? 0) || 0,
           };
         })
@@ -1312,19 +1314,23 @@ function useEodGex(days: number) {
   return { rows, loading, err, loadedAt, refresh: run };
 }
 
-function EodGexBarChart({ rows }: { rows: EodGexRow[] }) {
+function EodGexBarChart({ rows, field = "totalGex" }: { rows: EodGexRow[]; field?: EodGexField }) {
   const W = 700, H = 240, padL = 52, padR = 12, padB = 34, padT = 16;
   const { containerRef, hover, show, hide } = useChartHover();
-  if (!rows.length) return <GlEmpty note="no eod_gex rows" />;
-  const n = rows.length;
-  const maxAbs = Math.max(1, ...rows.map((r) => Math.abs(r.totalGex)));
+  // ex-0DTE rows can be null (older sessions / unreadable chain) — drop them so
+  // the bar chart only plots sessions that actually have a settled ex-0DTE total.
+  const data = rows.filter((r) => Number.isFinite(r[field] as number));
+  const val = (r: EodGexRow) => (r[field] as number) ?? 0;
+  if (!data.length) return <GlEmpty note={field === "totalGexEx0dte" ? "no ex-0DTE data yet" : "no eod_gex rows"} />;
+  const n = data.length;
+  const maxAbs = Math.max(1, ...data.map((r) => Math.abs(val(r))));
   const slotW = (W - padL - padR) / n;
   const barW = Math.max(3, slotW * 0.6);
   const plotH = H - padT - padB;
   // Zero line sits proportionally between the +max and −max extremes so a
   // sign flip is visible instead of being squashed against the axis.
-  const hasNeg = rows.some((r) => r.totalGex < 0);
-  const hasPos = rows.some((r) => r.totalGex > 0);
+  const hasNeg = data.some((r) => val(r) < 0);
+  const hasPos = data.some((r) => val(r) > 0);
   const yZero = hasNeg && hasPos ? padT + plotH / 2 : hasNeg ? padT : padT + plotH;
   const half = hasNeg && hasPos ? plotH / 2 : plotH;
   const barH = (v: number) => (Math.abs(v) / maxAbs) * half;
@@ -1333,10 +1339,11 @@ function EodGexBarChart({ rows }: { rows: EodGexRow[] }) {
     <div ref={containerRef} style={{ position: "relative" }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }} onMouseLeave={hide}>
         <line x1={padL} x2={W - padR} y1={yZero} y2={yZero} stroke={HOME_THEME.border} strokeWidth={1} />
-        {rows.map((r, i) => {
+        {data.map((r, i) => {
           const cx = padL + slotW * (i + 0.5);
-          const h = Math.max(1, barH(r.totalGex));
-          const pos = r.totalGex >= 0;
+          const v = val(r);
+          const h = Math.max(1, barH(v));
+          const pos = v >= 0;
           return (
             <rect
               key={r.date}
@@ -1351,7 +1358,7 @@ function EodGexBarChart({ rows }: { rows: EodGexRow[] }) {
             />
           );
         })}
-        {rows.map((r, i) => (
+        {data.map((r, i) => (
           (n <= 10 || i % Math.ceil(n / 10) === 0) && (
             <text key={r.date} x={padL + slotW * (i + 0.5)} y={H - padB + 16} textAnchor="middle" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>
               {glFmtExpiryLabel(r.date)}
@@ -1366,17 +1373,19 @@ function EodGexBarChart({ rows }: { rows: EodGexRow[] }) {
       </svg>
       {hover && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>{glFmtDate(rows[hover.idx].date)}</div>
-          <div>Net GEX: {glFmtBn(rows[hover.idx].totalGex)}</div>
-          <div>SPX close: {glFmt2(rows[hover.idx].spot)}</div>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(data[hover.idx].date)}</div>
+          <div>{field === "totalGexEx0dte" ? "Net GEX (ex-0DTE)" : "Net GEX"}: {glFmtBn(val(data[hover.idx]))}</div>
+          <div>SPX close: {glFmt2(data[hover.idx].spot)}</div>
         </ChartTooltip>
       )}
     </div>
   );
 }
 
-function EodGexPanel() {
+function EodGexPanel({ field = "totalGex" }: { field?: EodGexField }) {
   const { rows, loading, err, loadedAt, refresh } = useEodGex(EOD_GEX_DAYS);
+  const ex0dte = field === "totalGexEx0dte";
+  const hasData = ex0dte ? rows.some((r) => r.totalGexEx0dte != null) : rows.length > 0;
   const updatedLabel = loadedAt
     ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).format(new Date(loadedAt))
     : null;
@@ -1384,17 +1393,17 @@ function EodGexPanel() {
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
         <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
-          {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · one bar per session (eod_gex)` : "—"}
+          {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · one bar per session (eod_gex${ex0dte ? ", ex-0DTE" : ""})` : "—"}
         </div>
         <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
       </div>
       {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>EOD GEX error: {err}</div>}
-      {!rows.length && !err ? (
-        <GlEmpty note={loading ? "loading eod_gex…" : "no data yet"} />
+      {!hasData && !err ? (
+        <GlEmpty note={loading ? "loading eod_gex…" : ex0dte ? "no ex-0DTE data yet" : "no data yet"} />
       ) : (
         <>
-          <EodGexBarChart rows={rows} />
-          <ChartLegend items={[{ label: "Positive net GEX", color: LIGHT_BLUE }, { label: "Negative net GEX", color: HOME_THEME.red }]} />
+          <EodGexBarChart rows={rows} field={field} />
+          <ChartLegend items={[{ label: `Positive net GEX${ex0dte ? " (ex-0DTE)" : ""}`, color: LIGHT_BLUE }, { label: `Negative net GEX${ex0dte ? " (ex-0DTE)" : ""}`, color: HOME_THEME.red }]} />
         </>
       )}
     </div>
@@ -1609,7 +1618,7 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
 // session, and the history of key level changes.
 // Right column = the live-chain stack: OI by expiration + the continuous
 // by-strike charts (net gamma, call/put gamma, net delta).
-const LEFT_CARD_KEYS = ["oiDate", "eodGex", "history"] as const;
+const LEFT_CARD_KEYS = ["oiDate", "eodGex", "eodGexEx0dte", "history"] as const;
 type LeftCardKey = (typeof LEFT_CARD_KEYS)[number];
 const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "callPutGamma", "netDelta"] as const;
 type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
@@ -1846,6 +1855,16 @@ function GexLevelsTab() {
                     <EodGexPanel />
                   </Card>
                 ),
+                eodGexEx0dte: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="SPX EOD GEX (ex-0DTE) by session" onDragStart={leftOrder.handleDragStart("eodGexEx0dte")} onDragEnd={leftOrder.handleDragEnd} />}
+                    subtitle={`Net GEX at the close across all listed expirations except 0DTE · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_ex0dte, ${EOD_GEX_SYMBOL})`}
+                  >
+                    <EodGexPanel field="totalGexEx0dte" />
+                  </Card>
+                ),
                 history: (
                   <Card
                     variant="budget"
@@ -1979,7 +1998,7 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     blurb: "SqueezeMetrics-style GEX dashboard for the live 0DTE symbol.",
     points: [
       "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
-      "SPX EOD GEX bar chart — total net GEX at the close, one bar per session (eod_gex)",
+      "SPX EOD GEX bar charts — total net GEX and ex-0DTE net GEX at the close, one bar per session (eod_gex)",
       "Open interest by expiration (real, once/day), cumulative net gamma, call/put gamma, net delta, and OI-by-date charts",
       "Daily history of level changes persisted forever in Postgres (gex_levels_history)",
     ],
