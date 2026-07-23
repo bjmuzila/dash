@@ -293,11 +293,36 @@ function computeRows(
   return { rows: out, cols, maxAbs, top3, atmStrike, mvcStrike };
 }
 
+interface Walls {
+  cb: number | null; cbVal: number;   // highest |GEX| strike
+  cw: number | null; cwVal: number;   // highest +GEX strike (2nd if CB is that one)
+  pw: number | null; pwVal: number;   // most −GEX strike (2nd if CB is that one)
+}
+
+// CB / CW / PW levels for ONE expiry column. Three DISTINCT strikes:
+//   CB = max |GEX|. CW = top positive GEX (skips CB if CB is the top positive).
+//   PW = most negative GEX (skips CB if CB is the most negative).
+function computeWalls(rows: ComputedRow[], expiry: string): Walls {
+  let cb: number | null = null, cbAbs = -1, cbVal = 0;
+  rows.forEach(r => { const v = r.gex[expiry] ?? 0; const a = Math.abs(v); if (a > cbAbs) { cbAbs = a; cb = r.strike; cbVal = v; } });
+  const pos = rows.filter(r => (r.gex[expiry] ?? 0) > 0).sort((a, b) => (b.gex[expiry] ?? 0) - (a.gex[expiry] ?? 0));
+  const neg = rows.filter(r => (r.gex[expiry] ?? 0) < 0).sort((a, b) => (a.gex[expiry] ?? 0) - (b.gex[expiry] ?? 0));
+  const cwRow = pos.find(r => r.strike !== cb) ?? null;
+  const pwRow = neg.find(r => r.strike !== cb) ?? null;
+  return {
+    cb, cbVal,
+    cw: cwRow?.strike ?? null, cwVal: cwRow ? (cwRow.gex[expiry] ?? 0) : 0,
+    pw: pwRow?.strike ?? null, pwVal: pwRow ? (pwRow.gex[expiry] ?? 0) : 0,
+  };
+}
+
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
+
+interface GexChange { now: number; d15: number | null; d30: number | null; dOpen: number | null; spanMs: number; }
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW,
+  showCB, showCW, showPW, getGexChange,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -318,9 +343,14 @@ function TickerPanel({
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
+  /** Read a cell's 15m / 30m / open NET GEX change for the click card. */
+  getGexChange: (ticker: string, expiry: string, strike: number) => GexChange;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
+
+  // Click card: a specific (strike, expiry) cell's GEX change over 15m/30m/open.
+  const [clickCell, setClickCell] = useState<{ strike: number; expiry: string; x: number; y: number } | null>(null);
 
   const colDates = useMemo(() => cols.map(c => c.date), [cols]);
   const frontExpiry = cols[0]?.date ?? null;
@@ -345,6 +375,13 @@ function TickerPanel({
   const hasData = cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
   const computedFull = hasData
     ? computeRows(strikesByExp, colDates, liveData, spot, contractMode)
+    : null;
+
+  // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
+  // the front column. Computed from the full (untrimmed) rows so the capture
+  // window doesn't change which strikes are the walls.
+  const walls = (computedFull && computedFull.cols.length)
+    ? computeWalls(computedFull.rows, computedFull.cols[0])
     : null;
 
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
@@ -426,10 +463,27 @@ function TickerPanel({
     >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
-      {/* Panel header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
+      {/* Panel header — ticker · CB/CW/PW front-expiry levels · spot */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
+        <div style={{ display: "flex", gap: 5, alignItems: "center", overflow: "hidden", flex: 1, justifyContent: "flex-end" }}>
+          {([
+            { on: showCB, t: "CB", c: "#ffd600", s: walls?.cb ?? null, title: "Core Bullseye — highest |GEX| level" },
+            { on: showCW, t: "CW", c: "#29b6f6", s: walls?.cw ?? null, title: "Call Wall — highest +GEX level" },
+            { on: showPW, t: "PW", c: "#ff4757", s: walls?.pw ?? null, title: "Put Wall — most −GEX level" },
+          ] as const).filter(x => x.on && x.s != null).map(x => (
+            <span key={x.t} title={x.title} style={{
+              display: "inline-flex", alignItems: "baseline", gap: 3, whiteSpace: "nowrap",
+              padding: "2px 6px", borderRadius: 5, background: `${x.c}1f`, border: `1px solid ${x.c}66`,
+            }}>
+              <span style={{ fontSize: 9, fontWeight: 900, color: x.c, letterSpacing: "0.04em" }}>{x.t}</span>
+              <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: "#e2e8f0" }}>
+                {Number.isInteger(x.s as number) ? x.s : (x.s as number).toFixed(2)}
+              </span>
+            </span>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8", flexShrink: 0 }}>
           {spot > 0 && (
             <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
           )}
@@ -471,7 +525,7 @@ function TickerPanel({
       </div>
 
       {/* Body */}
-      <div ref={bodyRef} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
+      <div ref={bodyRef} onClick={() => setClickCell(null)} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
         {!computed ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 12, color: "#475569", }}>
             Select an expiry and click GO
@@ -522,26 +576,36 @@ function TickerPanel({
                 const weight = topRank === 1 ? 900 : topRank ? 800 : 700;
                 const formatted = val == null ? { sign: "", value: "--" } : fmtMoney(val);
                 const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
-                // CB (1st) / CW (2nd) / PW (3rd) highest-|GEX| level badges — only
-                // on the FRONT expiry column, each gated by its toolbar toggle.
+                // CB / CW / PW level badges — only on the FRONT expiry column,
+                // each gated by its toolbar toggle. Strikes come from computeWalls
+                // (CB = max |GEX|, CW = top +GEX, PW = most −GEX; all distinct).
                 const isFront = ci === 0;
-                const lvl = isFront
-                  ? (topRank === 1 && showCB ? { t: "CB", c: "#ffd600", title: "CB — highest |GEX| level" }
-                    : topRank === 2 && showCW ? { t: "CW", c: "#29b6f6", title: "CW — 2nd highest |GEX| level" }
-                    : topRank === 3 && showPW ? { t: "PW", c: "#ff9f43", title: "PW — 3rd highest |GEX| level" }
+                const lvl = isFront && walls
+                  ? (walls.cb === r.strike && showCB ? { t: "CB", c: "#ffd600", title: "CB — highest |GEX| level" }
+                    : walls.cw === r.strike && showCW ? { t: "CW", c: "#29b6f6", title: "CW — highest +GEX level" }
+                    : walls.pw === r.strike && showPW ? { t: "PW", c: "#ff4757", title: "PW — most −GEX level" }
                     : null)
                   : null;
                 const isCB = lvl?.t === "CB";
+                const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
                 return (
-                  <div key={e} className={isCB ? "mvc-peak-cell" : undefined} style={{
+                  <div key={e} className={isCB ? "mvc-peak-cell" : undefined}
+                    onClick={isCapturing ? undefined : (ev) => {
+                      ev.stopPropagation();
+                      setClickCell(prev => (prev && prev.strike === r.strike && prev.expiry === e)
+                        ? null
+                        : { strike: r.strike, expiry: e, x: ev.clientX, y: ev.clientY });
+                    }}
+                    style={{
                     padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                    textAlign: "center", color: SOFT_WHITE,
+                    textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
                     position: "relative",
                     ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
                     ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
+                    ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
                     {/* Non-front columns keep the plain gold peak star. */}
                     {!isFront && topRank === 1 && (
@@ -578,6 +642,56 @@ function TickerPanel({
           y={hoverCell.y}
         />
       )}
+
+      {/* Click card — NET GEX change over 15m / 30m / open for the clicked cell. */}
+      {clickCell && !isCapturing && (() => {
+        const ch = getGexChange(ticker, clickCell.expiry, clickCell.strike);
+        const dt = daysTo(clickCell.expiry);
+        const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
+        const left = Math.min(clickCell.x + 14, vw - 208);
+        const nowFmt = fmtMoney(ch.now);
+        const nowColor = ch.now > 0 ? "#22c55e" : ch.now < 0 ? "#ef4444" : SOFT_WHITE;
+        const drow = (label: string, v: number | null, building: boolean) => {
+          const f = v == null ? null : fmtMoney(v);
+          const col = v == null ? "#64748b" : v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE;
+          return (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "3px 0" }}>
+              <span style={{ color: HT.muted, fontSize: 10, fontWeight: 700 }}>{label}</span>
+              <span style={{ color: col, fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)" }}>
+                {f ? `${f.sign}${f.value}` : building ? "building…" : "—"}
+              </span>
+            </div>
+          );
+        };
+        return (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed", left, top: Math.min(clickCell.y + 14, (typeof window !== "undefined" ? window.innerHeight : 800) - 170),
+              width: 194, zIndex: 60, padding: "9px 11px",
+              background: "rgba(10,15,26,0.97)", border: `1px solid ${HT.cyan}66`, borderRadius: 10,
+              boxShadow: "0 8px 28px rgba(0,0,0,0.55)", backdropFilter: "blur(6px)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+              <span style={{ color: HT.cyan, fontSize: 12, fontWeight: 800, letterSpacing: "0.04em" }}>
+                {ticker} {Number.isInteger(clickCell.strike) ? clickCell.strike : clickCell.strike.toFixed(2)}
+                <span style={{ color: HT.muted, fontWeight: 700, marginLeft: 5 }}>{dt}DTE</span>
+              </span>
+              <span onClick={() => setClickCell(null)} style={{ color: HT.muted, fontSize: 13, cursor: "pointer", lineHeight: 1, padding: "0 2px" }}>×</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", paddingBottom: 5, borderBottom: `1px solid ${HT.border}` }}>
+              <span style={{ color: HT.muted, fontSize: 10, fontWeight: 700 }}>NET GEX</span>
+              <span style={{ color: nowColor, fontSize: 13, fontWeight: 900, fontFamily: "var(--font-mono)" }}>{nowFmt.sign}{nowFmt.value}</span>
+            </div>
+            <div style={{ marginTop: 3 }}>
+              {drow("Δ 15 min", ch.d15, ch.spanMs < 15 * 60_000)}
+              {drow("Δ 30 min", ch.d30, ch.spanMs < 30 * 60_000)}
+              {drow("Δ Open", ch.dOpen, false)}
+            </div>
+          </div>
+        );
+      })()}
     </Card>
   );
 }
@@ -653,6 +767,12 @@ export function MultGreekClient({
   // mirrored into `expirations` above, which anchors the toolbar picker.
   const [expByTicker, setExpByTicker] = useState<Record<string, Expiry[]>>({});
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
+
+  // Client-side per-cell NET GEX history for the click card. Keyed
+  // `ticker|expiry|strike`. `gexHist` is a rolling ~35-min ring (for the 15m/30m
+  // deltas); `gexOpen` keeps the first RTH reading of the ET day (for Δ open).
+  const gexHistRef = useRef<Map<string, { t: number; v: number }[]>>(new Map());
+  const gexOpenRef = useRef<Map<string, { date: string; v: number }>>(new Map());
 
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
@@ -928,6 +1048,57 @@ export function MultGreekClient({
     return () => clearInterval(id);
   }, [isStatic, loadAll]);
 
+  // Sample every displayed cell's NET GEX on each data update so the click card
+  // can show 15m / 30m / open change. Ring pruned to ~35 min; the day's first
+  // RTH reading is kept separately for Δ-open.
+  useEffect(() => {
+    const now = Date.now();
+    const today = todayETStr();
+    const open = isMarketOpen();
+    const volOnly = contractMode === "vol";
+    const RING_MS = 35 * 60_000;
+    TICKERS.forEach(t => {
+      const spot = spots[t] ?? 0;
+      const byExp = strikes[t];
+      if (!(spot > 0) || !byExp) return;
+      Object.entries(byExp).forEach(([exp, rows]) => {
+        rows.forEach(r => {
+          const v = strikeGex(r, liveDataRef.current, spot, volOnly);
+          const key = `${t}|${exp}|${r.strike}`;
+          const arr = gexHistRef.current.get(key) ?? [];
+          arr.push({ t: now, v });
+          while (arr.length && arr[0].t < now - RING_MS) arr.shift();
+          gexHistRef.current.set(key, arr);
+          if (open) {
+            const o = gexOpenRef.current.get(key);
+            if (!o || o.date !== today) gexOpenRef.current.set(key, { date: today, v });
+          }
+        });
+      });
+    });
+  }, [strikes, spots, contractMode, TICKERS]);
+
+  // Read the 15m / 30m / open change for one cell (ticker+expiry+strike).
+  const getGexChange = useCallback((ticker: string, expiry: string, strike: number) => {
+    const arr = gexHistRef.current.get(`${ticker}|${expiry}|${strike}`) ?? [];
+    const now = arr.length ? arr[arr.length - 1].v : 0;
+    const at = (agoMs: number): number | null => {
+      const cutoff = Date.now() - agoMs;
+      for (let i = arr.length - 1; i >= 0; i--) if (arr[i].t <= cutoff) return arr[i].v;
+      return null; // not enough history yet
+    };
+    const v15 = at(15 * 60_000);
+    const v30 = at(30 * 60_000);
+    const o = gexOpenRef.current.get(`${ticker}|${expiry}|${strike}`);
+    return {
+      now,
+      d15: v15 == null ? null : now - v15,
+      d30: v30 == null ? null : now - v30,
+      dOpen: o == null ? null : now - o.v,
+      spanMs: arr.length ? Date.now() - arr[0].t : 0,
+    };
+  }, []);
+
   // ── Static (delayed) mode: seed from the frozen snapshot (single expiry),
   // then poll for the recorder's next ~30m tick. ──
   const [lastSnapshotTs, setLastSnapshotTs] = useState<number | null>(snapshotTs);
@@ -1070,9 +1241,9 @@ export function MultGreekClient({
 
         {/* CB / CW / PW top-|GEX| level badges (front expiry). Click to toggle. */}
         {[
-          { key: "CB", on: showCB, set: setShowCB, color: "#ffd600", title: "Highest |GEX| level" },
-          { key: "CW", on: showCW, set: setShowCW, color: "#29b6f6", title: "2nd highest |GEX| level" },
-          { key: "PW", on: showPW, set: setShowPW, color: "#ff9f43", title: "3rd highest |GEX| level" },
+          { key: "CB", on: showCB, set: setShowCB, color: "#ffd600", title: "Core Bullseye — highest |GEX| level" },
+          { key: "CW", on: showCW, set: setShowCW, color: "#29b6f6", title: "Call Wall — highest +GEX level" },
+          { key: "PW", on: showPW, set: setShowPW, color: "#ff4757", title: "Put Wall — most −GEX level" },
         ].map(b => (
           <button
             key={b.key}
@@ -1152,6 +1323,7 @@ export function MultGreekClient({
             showCB={showCB}
             showCW={showCW}
             showPW={showPW}
+            getGexChange={getGexChange}
           />
         ))}
       </div>

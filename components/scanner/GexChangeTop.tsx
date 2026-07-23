@@ -12,7 +12,7 @@
 // Reads GET /proxy/gex-change-top?date=YYYY-MM-DD (defaults to today).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
@@ -74,13 +74,63 @@ export default function GexChangeTop() {
     return () => clearInterval(t);
   }, [load, date]);
 
+  // ── Screenshot the card (html2canvas, dynamically imported, client-only) ──────
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [shooting, setShooting] = useState<null | "download" | "copy">(null);
+
+  const capture = useCallback(async (mode: "download" | "copy") => {
+    if (!cardRef.current || shooting) return;
+    setShooting(mode);
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const canvas = await html2canvas(cardRef.current, {
+        backgroundColor: (HOME_THEME as { bg?: string }).bg || "#0a0e14",
+        scale: 2,
+        useCORS: true,
+        // Exclude the controls row (date picker + buttons) from the image.
+        ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
+      });
+      const fname = `gex-change-top-${date || "today"}.png`;
+      if (mode === "copy" && typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+        await new Promise<void>((resolve, reject) =>
+          canvas.toBlob((b) => {
+            if (!b) return reject(new Error("no blob"));
+            navigator.clipboard.write([new ClipboardItem({ "image/png": b })]).then(resolve, reject);
+          }, "image/png"),
+        );
+      } else {
+        const a = document.createElement("a");
+        a.download = fname;
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      }
+    } catch (e) {
+      // Clipboard blocked or capture failed → fall back to a download.
+      try {
+        const html2canvas = (await import("html2canvas")).default;
+        const canvas = await html2canvas(cardRef.current, {
+          backgroundColor: (HOME_THEME as { bg?: string }).bg || "#0a0e14",
+          scale: 2, useCORS: true,
+          ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
+        });
+        const a = document.createElement("a");
+        a.download = `gex-change-top-${date || "today"}.png`;
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      } catch { /* give up silently */ }
+    } finally {
+      setShooting(null);
+    }
+  }, [date, shooting]);
+
   return (
+   <div ref={cardRef}>
     <Card
       variant="budget"
       title={<span style={{ fontSize: 17 }}>GEX Change · Hourly Top 5</span>}
-      subtitle={`★ Very strong picks (|Δ| ≥ $500k & |% vs open| ≥ 30%), ranked by score · captured every 30 min during RTH${loading ? " · refreshing…" : ""}`}
+      subtitle={`★ Very strong picks (|Δ| ≥ $200k & |% vs open| ≥ 30%), ranked by score · captured every 30 min during RTH${loading ? " · refreshing…" : ""}`}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+      <div data-noshot="1" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <input
           type="date"
           value={date}
@@ -89,6 +139,21 @@ export default function GexChangeTop() {
         />
         <button onClick={() => load(date || undefined)} style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13 }}>
           Refresh
+        </button>
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => capture("copy")}
+          disabled={shooting !== null}
+          style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13, opacity: shooting ? 0.6 : 1 }}
+        >
+          {shooting === "copy" ? "Copying…" : "⧉ Copy image"}
+        </button>
+        <button
+          onClick={() => capture("download")}
+          disabled={shooting !== null}
+          style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13, opacity: shooting ? 0.6 : 1, borderColor: HOME_THEME.orange, color: HOME_THEME.orange }}
+        >
+          {shooting === "download" ? "Saving…" : "📷 Screenshot"}
         </button>
       </div>
 
@@ -151,8 +216,9 @@ export default function GexChangeTop() {
 
       <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
         <span>Score = 0.6·|Δ| + 0.4·|% vs open|, normalized 0–100</span>
-        <span><span style={{ color: "#FFD166" }}>★ Very strong</span> = |Δ| ≥ $500k AND |% vs open| ≥ 30%</span>
+        <span><span style={{ color: "#FFD166" }}>★ Very strong</span> = |Δ| ≥ $200k AND |% vs open| ≥ 30%</span>
       </div>
     </Card>
+   </div>
   );
 }

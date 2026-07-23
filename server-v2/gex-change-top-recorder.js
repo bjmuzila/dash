@@ -6,7 +6,7 @@
  *
  * On each RTH interval boundary (:00 / :30 by default), runs the same scoring the
  * GEX Change Scanner tab uses (/proxy/strike-growth/scanner) over the
- * strike_growth table with a 60-minute change window, keeps ONLY the rows that
+ * strike_growth table with a 15-minute change window, keeps ONLY the rows that
  * qualify as "★ Very strong" (|Δ GEX| >= $500k AND |% vs open| >= 30%), ranks
  * them by the combined score (0.6·|Δ| + 0.4·|%|, normalized 0..100), and stores
  * the top 5 into gex_change_top — one time-slot bucket per row group. This builds
@@ -31,8 +31,8 @@ const sg = require('./strike-growth-recorder'); // shared getPool() over the sam
 // ── Tunables (env-overridable) ────────────────────────────────────────────────
 let INTERVAL_MIN  = Number(process.env.GEX_CHANGE_TOP_INTERVAL_MIN || 30);    // capture cadence (min)
 if (!(INTERVAL_MIN > 0) || 60 % INTERVAL_MIN !== 0) INTERVAL_MIN = 30;        // must divide 60 evenly
-const WINDOW_MIN  = Number(process.env.GEX_CHANGE_TOP_WINDOW    || 60);       // change window (min)
-const MIN_DOLLAR  = Number(process.env.GEX_CHANGE_TOP_MIN_DOLLAR || 500_000); // "very strong" $ floor
+const WINDOW_MIN  = Number(process.env.GEX_CHANGE_TOP_WINDOW    || 15);       // change window (min)
+const MIN_DOLLAR  = Number(process.env.GEX_CHANGE_TOP_MIN_DOLLAR || 200_000); // "very strong" $ floor
 const MIN_PCT     = Number(process.env.GEX_CHANGE_TOP_MIN_PCT    || 30);      // "very strong" % floor (vs open)
 const MIN_OTM     = Number(process.env.GEX_CHANGE_TOP_MIN_OTM    || 0.05);    // OTM-distance floor (frac)
 const DIR         = String(process.env.GEX_CHANGE_TOP_DIR        || 'build'); // all|build|pos|neg
@@ -82,6 +82,19 @@ async function ensureSchema() {
   if (!p) return false;
   if (ensured) return true;
   try {
+    // If a legacy hourly table exists (columns include hour_et but NOT slot), it
+    // can't satisfy the slot-keyed writes/reads. It only ever held throwaway
+    // intraday rows, so drop + recreate with the current schema.
+    try {
+      const { rows: cols } = await p.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = 'gex_change_top'`,
+      );
+      const names = cols.map((r) => r.column_name);
+      if (names.length && !names.includes('slot')) {
+        await p.query('DROP TABLE gex_change_top');
+        console.warn('[gex-change-top] dropped legacy hourly table (no slot column) — recreating with slot schema');
+      }
+    } catch { /* information_schema probe is best-effort */ }
     await p.query(`
       CREATE TABLE IF NOT EXISTS gex_change_top (
         date        TEXT        NOT NULL,
@@ -216,22 +229,28 @@ async function runOnce({ force = false } = {}) {
 // ── Read (feeds /proxy/gex-change-top + the viewer tab) ───────────────────────
 async function getHistory({ date, limitSlots = 20 } = {}) {
   const p = sg.getPool();
-  if (!p || !(await ensureSchema())) return { ok: false, error: 'no DB', slots: [] };
+  if (!p) return { ok: false, error: 'no DATABASE_URL in this process', slots: [] };
   const d = date || etDateStr();
-  const { rows } = await p.query(
-    `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts
-       FROM gex_change_top WHERE date = $1
-      ORDER BY slot DESC, rank ASC`,
-    [d],
-  );
-  // Group into time-slot buckets (most-recent slot first).
-  const bySlot = new Map();
-  for (const r of rows) {
-    if (!bySlot.has(r.slot)) bySlot.set(r.slot, { slot: r.slot, ts: r.ts, rows: [] });
-    bySlot.get(r.slot).rows.push(r);
+  try {
+    await ensureSchema(); // best-effort; surface the real error below if it or the read fails
+    const { rows } = await p.query(
+      `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts
+         FROM gex_change_top WHERE date = $1
+        ORDER BY slot DESC, rank ASC`,
+      [d],
+    );
+    // Group into time-slot buckets (most-recent slot first).
+    const bySlot = new Map();
+    for (const r of rows) {
+      if (!bySlot.has(r.slot)) bySlot.set(r.slot, { slot: r.slot, ts: r.ts, rows: [] });
+      bySlot.get(r.slot).rows.push(r);
+    }
+    const slots = [...bySlot.values()].slice(0, limitSlots);
+    return { ok: true, date: d, slots };
+  } catch (e) {
+    // Report the true DB error instead of a blanket "no DB".
+    return { ok: false, error: String(e?.message || e), slots: [] };
   }
-  const slots = [...bySlot.values()].slice(0, limitSlots);
-  return { ok: true, date: d, slots };
 }
 
 // ── Scheduler: fire on every INTERVAL_MIN boundary during RTH ─────────────────
