@@ -188,7 +188,7 @@ function StatTile({ label, value, color }: { label: string; value: string; color
   return (
     <div
       style={{
-        background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.10)} 0%, transparent 60%), rgba(13,17,25,0.20)`,
+        background: `rgba(13,17,25,0.20)`,
         backdropFilter: "blur(20px)",
         borderRadius: 12,
         padding: "6px 8px",
@@ -243,7 +243,7 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
           <div
             key={w.age}
             style={{
-              background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.06)} 0%, transparent 60%), rgba(13,17,25,0.18)`,
+              background: `rgba(13,17,25,0.18)`,
               backdropFilter: "blur(16px)",
               borderRadius: 10,
               padding: "5px 10px",
@@ -274,7 +274,7 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
             /test's Flow Inventory tab (see fetchFlowSentiment above). */}
         <div
           style={{
-            background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.06)} 0%, transparent 60%), rgba(13,17,25,0.18)`,
+            background: `rgba(13,17,25,0.18)`,
             backdropFilter: "blur(16px)",
             borderRadius: 10,
             padding: "5px 10px",
@@ -296,7 +296,7 @@ export default function ChainStatsBar({ ticker }: { ticker: string }) {
         </div>
         <div
           style={{
-            background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.06)} 0%, transparent 60%), rgba(13,17,25,0.18)`,
+            background: `rgba(13,17,25,0.18)`,
             backdropFilter: "blur(16px)",
             borderRadius: 10,
             padding: "5px 10px",

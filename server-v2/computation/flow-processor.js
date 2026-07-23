@@ -132,7 +132,7 @@ class FlowProcessor {
    * @param {object|null} [args.quote] prevailing quote {bid,ask} for side inference
    * @param {number} [args.spot] underlying spot at print time (for isOtm/bucket)
    */
-  addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0, iv, oi, volume }) {
+  addPrint({ streamerSymbol, price, size, time = Date.now(), quote = null, spot = 0, iv, oi, volume, side: explicitSide }) {
     const parsed = parseOptionSymbol(streamerSymbol);
     if (!parsed || !(price > 0) || !(size > 0)) return;
     // SPX-only lock: drop any non-SPX print at the source so the tape, prints[],
@@ -140,7 +140,11 @@ class FlowProcessor {
     // The isolated multi-ticker recorder disables this (spxOnly:false).
     if (this.spxOnly && displayUnderlying(parsed.root) !== 'SPX') return;
     const lastTrade = this.lastTradePx.get(streamerSymbol);
-    const side = inferSide(price, quote, lastTrade, time);
+    // TimeAndSale carries the exchange's true aggressorSide — trust it when the
+    // caller passes it; only fall back to the quote/tick-rule guess otherwise.
+    const side = (explicitSide === 'buy' || explicitSide === 'sell')
+      ? explicitSide
+      : inferSide(price, quote, lastTrade, time);
     this.lastTradePx.set(streamerSymbol, price);
     const premium = price * size * 100;
     this.prints.push({

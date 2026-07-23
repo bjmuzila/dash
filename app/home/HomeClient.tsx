@@ -1333,7 +1333,7 @@ export function HomeClient({
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
-            <div ref={gexContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
+            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
               {/* Full-featured toolbar — scales to fit instead of scrolling.
                   min is deliberately low: at 0.6 the bar still overflowed on
                   ~1280px-wide windows and fell back to a hidden scrollbar,
@@ -1390,7 +1390,7 @@ export function HomeClient({
                   { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
                   { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
                 ].map((t) => (
-                  <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
+                  <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
                     <span style={{ fontSize: 10, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: t.color }}>{t.value}</span>
                   </div>
@@ -1432,7 +1432,7 @@ export function HomeClient({
               </div>
             </div>
 
-            <div style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 24 }}>
+            <div style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 24 }}>
               {/* Tabs + right-side controls scale down together so the size
                   buttons / discord / refresh never get pushed out of the card
                   on a narrow window. */}
@@ -1525,7 +1525,7 @@ export function HomeClient({
               <SignalsFeed />
             </div>
 
-            <div ref={heatmapContainerRef} style={{ background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+            <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
                 {/* Header row scales to fit — title + intensity/speed controls on
                     the left and refresh/snap/discord/view-switch on the right

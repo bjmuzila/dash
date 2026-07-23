@@ -2790,7 +2790,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
                 padding: "9px 14px", borderRadius: 16,
                 border: "none",
-                background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.20)`,
+                background: `rgba(13,17,25,0.20)`,
                 backdropFilter: "blur(20px)",
                 WebkitBackdropFilter: "blur(20px)",
               }}

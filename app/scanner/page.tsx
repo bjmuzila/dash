@@ -1585,7 +1585,7 @@ function WatchThisScanner() {
             <div key={`${r.symbol}-${r.expiry}-${r.strike}`} style={{
               borderRadius: 12,
               padding: "14px 16px",
-              background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.20)`,
+              background: `rgba(13,17,25,0.20)`,
               backdropFilter: "blur(20px)",
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
@@ -1888,7 +1888,7 @@ function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
 
 function MqPanel({ title, accent, children }: { title: string; accent: string; score: number; children: React.ReactNode }) {
   return (
-    <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px", background: `radial-gradient(circle at 50% 0%, ${accent}14 0%, transparent 65%), rgba(13,17,25,0.25)` }}>
+    <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", padding: "14px 16px", background: `rgba(13,17,25,0.25)` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.05em", color: accent, textTransform: "uppercase" }}>{title}</span>
       </div>

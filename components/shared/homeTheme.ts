@@ -99,10 +99,10 @@ export const classicCardStyle: CSSProperties = {
   boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
 };
 
-/** Classic card + faint light-blue radial highlight on the body (no top bar). */
+/** Card body — solid frosted panel, no radial highlight (matches squeeze). */
 export const classicCardAccentStyle: CSSProperties = {
   ...classicCardStyle,
-  background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+  background: HOME_THEME.panelBg,
 };
 
 /**
@@ -122,10 +122,9 @@ export const dissolveCardStyle: CSSProperties = {
   WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
 };
 
-/** Stat/metric tile: dissolve idea at small scale — no border, faint highlight. */
+/** Stat/metric tile: solid frosted panel, no radial highlight (matches squeeze). */
 export const statTileStyle: CSSProperties = {
-  background:
-    "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.20)",
+  background: HOME_THEME.panelBg,
   backdropFilter: "blur(20px)",
   WebkitBackdropFilter: "blur(20px)",
   border: "none",

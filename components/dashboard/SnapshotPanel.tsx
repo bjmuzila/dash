@@ -277,7 +277,7 @@ function MetricCard({
 }) {
   return (
     <div style={{
-      background: `radial-gradient(circle at 50% 0%, ${color}14 0%, transparent 65%), ${HT.panelBg}`,
+      background: HT.panelBg,
       backdropFilter: "blur(8px)",
       border: `1px solid ${HT.border}`,
       borderTop: `2px solid ${color}99`,
@@ -305,7 +305,7 @@ function TopFlowList({
 
   return (
     <div style={{
-      background: `radial-gradient(circle at 50% 0%, ${barColor}10 0%, transparent 60%), ${HT.panelBg}`,
+      background: HT.panelBg,
       backdropFilter: "blur(8px)",
       border: `1px solid ${HT.border}`,
       borderTop: `2px solid ${barColor}88`,

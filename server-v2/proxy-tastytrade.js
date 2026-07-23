@@ -1882,6 +1882,32 @@ class DxLinkClient {
     }
   }
 
+  /**
+   * Subscribe TimeAndSale (true tick-by-tick, real per-print size + exchange
+   * aggressorSide) for a set of streamer symbols. Separate from subscribe() so
+   * the heavy per-print stream can be scoped to a near-spot option window while
+   * Quote/Greeks/Summary/Trade stay on the full chain. No-ops until the channel
+   * is open — the proxy's _syncTimeSaleWindow re-runs on the recompute loop and
+   * catches up once CHANNEL_OPENED lands.
+   */
+  subscribeTimeSales(symbols) {
+    if (!this.channelOpen || !symbols || !symbols.length) return;
+    const add = symbols.map((s) => ({ type: 'TimeAndSale', symbol: typeof s === 'string' ? s : s.symbol }));
+    const CHUNK = 500;
+    for (let i = 0; i < add.length; i += CHUNK) {
+      this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: add.slice(i, i + CHUNK) });
+    }
+  }
+
+  unsubscribeTimeSales(symbols) {
+    if (!this.channelOpen || !symbols || !symbols.length) return;
+    const remove = symbols.map((s) => ({ type: 'TimeAndSale', symbol: typeof s === 'string' ? s : s.symbol }));
+    const CHUNK = 500;
+    for (let i = 0; i < remove.length; i += CHUNK) {
+      this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, remove: remove.slice(i, i + CHUNK) });
+    }
+  }
+
   _startKeepalive() {
     this._stopKeepalive();
     this.keepalive = setInterval(() => this._send({ type: 'KEEPALIVE', channel: 0 }), 30000);
@@ -1914,6 +1940,20 @@ const COMPACT_FIELDS = {
 };
 
 // ---------------------------------------------------------------------------
+// Options flow via TimeAndSale (tick-by-tick), scoped to a near-spot window.
+// The conflated `Trade` event under-reports 0DTE SPX (one aggregated update per
+// symbol per aggregation period, and its `size` is not a true per-print size),
+// which starves the flow tape to a few orders/min. TimeAndSale gives real
+// per-print size + exchange aggressorSide — the same stream ES footprint uses.
+// Off = the legacy `Trade`-fed path (set FLOW_TIMESALES=0 to revert live).
+// The window is kept tight to bound per-print load on a 1-vCPU host; strikes
+// outside it still flow off `Trade` so nothing is dropped.
+// ---------------------------------------------------------------------------
+const FLOW_TIMESALES = process.env.FLOW_TIMESALES !== '0'; // default ON
+const FLOW_TS_WINDOW_PCT = Number(process.env.FLOW_TS_WINDOW_PCT || 0.02); // ±2% of spot
+const FLOW_TS_MAX = Number(process.env.FLOW_TS_MAX || 120); // hard cap on TS-subscribed contracts
+
+// ---------------------------------------------------------------------------
 // Feed orchestrator
 // ---------------------------------------------------------------------------
 
@@ -1942,6 +1982,7 @@ class TastytradeProxy {
     this.strikeGrowthTimer = null;          // window-refresh interval
     this.flowGexAccumulator = new FlowGexAccumulator(); // tracks dealer inventory for flow GEX
     this.contracts = new Map(); // streamerSymbol -> contract meta
+    this._tsSubs = new Set(); // streamerSymbols currently TimeAndSale-subscribed (near-spot window)
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
     this.summaries = new Map(); // streamerSymbol -> { oi, prevClose }
     this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
@@ -2361,7 +2402,7 @@ class TastytradeProxy {
     const scheduleRecompute = () => {
       const ms = isOptionsRthEt() ? RECOMPUTE_MS : RECOMPUTE_MS_OFFHOURS;
       this.recomputeTimer = setTimeout(() => {
-        if (!this.idle) this._recompute();
+        if (!this.idle) { this._recompute(); this._syncTimeSaleWindow(); }
         scheduleRecompute();
       }, ms);
     };
@@ -2788,6 +2829,9 @@ class TastytradeProxy {
 
   _resubscribe() {
     if (!this.client) return;
+    // A reconnect opens a brand-new dxLink channel with zero subscriptions, so
+    // the TimeAndSale window must be considered empty and re-synced from scratch.
+    this._tsSubs.clear();
     const syms = new Set([this.spotSymbol]);
     if (this.vixSymbol) syms.add(this.vixSymbol);
     if (this.esSymbol) syms.add(this.esSymbol);
@@ -2800,6 +2844,41 @@ class TastytradeProxy {
     }
     this.client.subscribe([...syms]);
     marketState.setStatus({ contractsSubscribed: syms.size });
+  }
+
+  /**
+   * Keep the TimeAndSale subscription pinned to a tight near-spot option window
+   * on the active expiry, diffing against what's already subscribed so a moving
+   * spot rolls the window (add new near strikes, drop ones that drifted away)
+   * without re-sending the whole set. Runs on the recompute cadence. Defensive:
+   * never throws into the recompute loop. No-op in theta mode or when disabled.
+   */
+  _syncTimeSaleWindow() {
+    if (!FLOW_TIMESALES || useTheta() || !this.client || !this.client.channelOpen) return;
+    try {
+      const spot = (this._effectiveSpot ? this._effectiveSpot() : this.spot) || marketState.getSpot() || 0;
+      const desired = new Set();
+      if (spot > 0 && this.expiry) {
+        const band = spot * FLOW_TS_WINDOW_PCT;
+        const near = [];
+        for (const c of this._activeContracts()) {
+          if (c.expiration !== this.expiry) continue;
+          if (Math.abs(c.strike - spot) <= band) near.push(c);
+        }
+        near.sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot));
+        for (const c of near.slice(0, FLOW_TS_MAX)) {
+          if (c.streamerSymbol) desired.add(c.streamerSymbol);
+        }
+      }
+      const toAdd = [];
+      for (const s of desired) if (!this._tsSubs.has(s)) toAdd.push(s);
+      const toRemove = [];
+      for (const s of this._tsSubs) if (!desired.has(s)) toRemove.push(s);
+      if (toAdd.length) { this.client.subscribeTimeSales(toAdd); for (const s of toAdd) this._tsSubs.add(s); }
+      if (toRemove.length) { this.client.unsubscribeTimeSales(toRemove); for (const s of toRemove) this._tsSubs.delete(s); }
+    } catch (e) {
+      console.warn('[FLOW_TS] window sync failed:', String(e?.message || e).slice(0, 120));
+    }
   }
 
   // ── Multi-ticker flow recorder (tt) ───────────────────────────────────────
@@ -3636,6 +3715,11 @@ class TastytradeProxy {
         });
         return;
       }
+      // Near-spot contracts stream tick-by-tick TimeAndSale (handled below with
+      // real per-print size + aggressorSide) — don't ALSO feed the conflated
+      // Trade for them or every print doubles. Far-OTM strikes outside the TS
+      // window aren't TS-subscribed, so they still flow off Trade here.
+      if (FLOW_TIMESALES && this._tsSubs.has(sym)) return;
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
@@ -3648,6 +3732,33 @@ class TastytradeProxy {
         iv: gk?.iv,
         oi: sm?.oi,
         volume: dvol,
+      });
+      return;
+    }
+
+    if (ev.eventType === 'TimeAndSale') {
+      // Tick-by-tick option prints for the near-spot window (see
+      // _syncTimeSaleWindow). Real per-print size + exchange aggressorSide, so
+      // the flow tape reflects true 0DTE activity instead of the conflated Trade
+      // trickle. Options only — ES/NQ/index TimeAndSale is not routed here.
+      if (useTheta()) return;
+      if (sym === this.esSymbol || sym === this.nqSymbol || sym === this.spotSymbol || sym === this.vixSymbol) return;
+      if (this.strikeGrowthContracts.has(sym) || this.flowRecordContracts.get(sym)) return;
+      const price = Number(ev.price);
+      const size = Number(ev.size);
+      if (!(price > 0) || !(size > 0)) return;
+      const agg = String(ev.aggressorSide || '').toLowerCase();
+      const side = agg === 'buy' ? 'buy' : agg === 'sell' ? 'sell' : undefined;
+      this.flow.addPrint({
+        streamerSymbol: sym,
+        price,
+        size,
+        side, // exchange-true side; addPrint falls back to inferSide when undefined
+        quote: this.quotes.get(sym) || null,
+        spot: this.spot || marketState.getSpot(),
+        iv: this.greeks.get(sym)?.iv,
+        oi: this.summaries.get(sym)?.oi,
+        volume: this.volumes.get(sym),
       });
       return;
     }

@@ -481,7 +481,7 @@ const S = {
   }),
   chips: { display: "flex", flexWrap: "wrap" as const, justifyContent: "center" as const, gap: 6 },
   searchCard: {
-    background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+    background: HOME_THEME.panelBg,
     border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 16,
     padding: "18px 18px",
@@ -545,7 +545,7 @@ const S = {
   },
   resultUpdated: { fontSize: 12, color: HOME_THEME.text, marginLeft: "auto" },
   card: {
-    background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 55%), ${HOME_THEME.panelBg}`,
+    background: HOME_THEME.panelBg,
     border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 12,
     padding: "16px 18px",
@@ -567,14 +567,14 @@ const S = {
     gap: 10,
   },
   stat: {
-    background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.06) 0%, transparent 60%), rgba(0,0,0,0.4)`,
+    background: `rgba(0,0,0,0.4)`,
     border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 8,
     padding: "12px 8px",
     textAlign: "center" as const,
   },
   avgStat: {
-    background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.06) 0%, transparent 60%), rgba(0,0,0,0.4)`,
+    background: `rgba(0,0,0,0.4)`,
     border: `1px solid ${HOME_THEME.border}`,
     borderRadius: 8,
     padding: "12px 8px",

@@ -154,7 +154,7 @@ function Callout({ kind = "note", title, children }: { kind?: CalloutKind; title
     <div
       style={{
         margin: "12px 0",
-        background: `radial-gradient(circle at 50% 0%, ${m.c}14 0%, transparent 60%), ${C.panel}`,
+        background: C.panel,
         border: `1px solid ${C.border}`,
         borderTop: `2px solid ${m.c}d9`,
         borderRadius: 12,
@@ -227,7 +227,7 @@ function Figure({ caption, maxWidth = 420, children }: { caption: React.ReactNod
     <figure style={{ margin: "18px auto 6px", maxWidth, width: "100%" }}>
       <div
         style={{
-          background: `radial-gradient(circle at 50% 0%, ${C.cyan}12 0%, transparent 60%), ${C.panelStrong}`,
+          background: C.panelStrong,
           border: `1px solid ${C.border}`,
           borderTop: `2px solid ${C.cyan}d9`,
           borderRadius: 12,

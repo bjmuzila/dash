@@ -336,7 +336,7 @@ function WatchThisPanel() {
             <div key={`${r.symbol}-${r.expiry}-${r.strike}`} style={{
               borderRadius: 10,
               padding: "10px 12px",
-              background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.08) 0%, transparent 60%), rgba(13,17,25,0.20)`,
+              background: `rgba(13,17,25,0.20)`,
               backdropFilter: "blur(20px)",
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>

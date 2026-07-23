@@ -130,9 +130,7 @@ function Cell({
         borderRadius: 14,
         border: `1px solid ${active ? c : HOME_THEME.border}`,
         borderLeft: `4px solid ${c}`,
-        background: active
-          ? `radial-gradient(circle at 50% 0%, ${c}22 0%, transparent 70%), ${HOME_THEME.panelBgStrong}`
-          : HOME_THEME.panelBg,
+        background: active ? HOME_THEME.panelBgStrong : HOME_THEME.panelBg,
         boxShadow: active ? `0 0 24px ${c}44` : "none",
         padding: "34px 20px",
         display: "flex",

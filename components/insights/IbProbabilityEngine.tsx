@@ -163,7 +163,7 @@ function RuleRow({ r }: { r: Row }) {
   );
 }
 
-export function IbProbabilityEngine({ rules, env, sym, closeRules, closeEnv }: { rules: EngineRule[]; env: EngineEnv; sym?: string; closeRules?: EngineRule[]; closeEnv?: EngineEnv }) {
+export function IbProbabilityEngine({ rules, env, sym, closeRules, closeEnv, showLive = true, showStages = true }: { rules: EngineRule[]; env: EngineEnv; sym?: string; closeRules?: EngineRule[]; closeEnv?: EngineEnv; showLive?: boolean; showStages?: boolean }) {
   const byId = new Map(rules.map((r) => [r.id, toRow(r)]));
   const allRows = STAGE_DEFS.flatMap((s) => s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[]);
   const p = calculateComplexProbabilities(allRows, env);
@@ -213,22 +213,25 @@ export function IbProbabilityEngine({ rules, env, sym, closeRules, closeEnv }: {
           </div>
         )}
 
-        {pClose && (
+        {/* Live gauges — shown when explicitly enabled, or as a provisional read before the 10:30 snapshot exists. */}
+        {(showLive || !pClose) && pClose && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "22px 0 8px" }}>
             <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: POS,
               border: `1px solid ${POS}66`, background: `${POS}14`, borderRadius: 5, padding: "2px 8px" }}>Live</span>
             <span style={{ fontSize: 11, color: C.muted }}>updating now</span>
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: pClose ? 0 : 22 }}>
-          <Gauge pct={p.bull} color={C.bull} label="Bullish<br/>Edge" />
-          <Gauge pct={p.bear} color={C.bear} label="Bearish<br/>Edge" />
-          <Gauge pct={p.rot} color={C.rot} label="Rotation<br/>Risk" />
-        </div>
+        {(showLive || !pClose) && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginTop: pClose ? 0 : 22 }}>
+            <Gauge pct={p.bull} color={C.bull} label="Bullish<br/>Edge" />
+            <Gauge pct={p.bear} color={C.bear} label="Bearish<br/>Edge" />
+            <Gauge pct={p.rot} color={C.rot} label="Rotation<br/>Risk" />
+          </div>
+        )}
       </section>
 
       {/* Stages */}
-      {STAGE_DEFS.map((s) => {
+      {showStages && STAGE_DEFS.map((s) => {
         const rows = s.ids.map((id) => byId.get(id)).filter(Boolean) as Row[];
         if (!rows.length) return null;
         return (

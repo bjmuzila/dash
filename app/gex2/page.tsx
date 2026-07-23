@@ -157,7 +157,7 @@ function Metric({ label, value, sub, valueColor }: { label: string; value: strin
       flex: "1 1 160px", minWidth: 150, padding: "14px 16px", borderRadius: 16,
       border: "none",
       backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
-      background: `radial-gradient(circle at 50% 0%, ${rgba(LIGHT_BLUE, 0.07)} 0%, transparent 70%), ${rgba("#0D1119", 0.22)}`,
+      background: rgba("#0D1119", 0.22),
     }}>
       <div style={labelCap}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 800, color: valueColor ?? HOME_THEME.text, marginTop: 4 }}>{value}</div>

@@ -96,7 +96,7 @@ export const homeHeaderStyle: CSSProperties = {
 
 // ── Panel (drop-in for homePanelStyle) — frosted card + light-blue highlight ──
 export const homePanelStyle: CSSProperties = {
-  background: `radial-gradient(circle at 50% 0%, ${rgba(OWNER_LIGHT_BLUE, 0.1)} 0%, transparent 60%), ${OWNER_THEME.panelBg}`,
+  background: OWNER_THEME.panelBg,
   backdropFilter: "blur(16px)",
   borderRadius: 18,
   border: `1px solid ${OWNER_THEME.border}`,
