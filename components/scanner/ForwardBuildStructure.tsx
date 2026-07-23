@@ -143,8 +143,9 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
   const maxAbs = useMemo(() => {
     let m = 0; t.dtes.forEach((d) => d.strikes.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); })); return m;
   }, [t]);
-  const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike).filter((x) => x != null) as number[];
-  const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike).filter((x) => x != null) as number[];
+  const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike ?? null);
+  const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike ?? null);
+  const hasWalls = cw.filter((x) => x != null).length + pw.filter((x) => x != null).length > 1;
 
   return (
     <div style={{ marginTop: 10, maxWidth: 620, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 10, overflow: "hidden" }}>
@@ -158,10 +159,30 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
           <LadderColumn key={d} dte={d} info={t.dtes.find((x) => x.dte === d) ?? null} rows={ladder} col={byDte.get(d) ?? new Map()} maxAbs={maxAbs} spot={t.spot} />
         ))}
       </div>
-      {(cw.length > 1 || pw.length > 1) && (
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "7px 12px", borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 10.5, color: HOME_THEME.text }}>
-          {cw.length > 1 && <span><b>Call wall:</b> <span style={{ color: GREEN, fontFamily: "var(--font-mono, monospace)" }}>{cw.map(fmtStrike).join(" → ")}</span></span>}
-          {pw.length > 1 && <span><b>Put wall:</b> <span style={{ color: RED, fontFamily: "var(--font-mono, monospace)" }}>{pw.map(fmtStrike).join(" → ")}</span></span>}
+      {hasWalls && (
+        <div style={{ padding: "7px 12px", borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: "var(--font-mono, monospace)" }}>
+            <tbody>
+              <tr>
+                <th style={{ textAlign: "left", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 10px 1px 0" }}></th>
+                {[0, 1, 2].map((d) => (
+                  <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 8px" }}>{d}D</th>
+                ))}
+              </tr>
+              <tr>
+                <td style={{ textAlign: "left", color: GREEN, padding: "1px 10px 1px 0" }}>Call wall</td>
+                {cw.map((s, i) => (
+                  <td key={i} style={{ textAlign: "right", color: s != null ? GREEN : DIM, padding: "1px 8px" }}>{s != null ? fmtStrike(s) : "—"}</td>
+                ))}
+              </tr>
+              <tr>
+                <td style={{ textAlign: "left", color: RED, padding: "1px 10px 1px 0" }}>Put wall</td>
+                {pw.map((s, i) => (
+                  <td key={i} style={{ textAlign: "right", color: s != null ? RED : DIM, padding: "1px 8px" }}>{s != null ? fmtStrike(s) : "—"}</td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -237,8 +258,9 @@ export default function ForwardBuildStructure() {
         <div className="fb-grid">
           {view.map((t) => {
             const chips = [0, 1, 2].map((d) => ({ d, v: net(t, d) })).filter((x) => x.v != null) as { d: number; v: number }[];
-            const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike).filter((x) => x != null) as number[];
-            const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike).filter((x) => x != null) as number[];
+            const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike ?? null);
+            const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike ?? null);
+            const hasWalls = cw.filter((x) => x != null).length + pw.filter((x) => x != null).length > 1;
             const isOpen = sel === t.symbol;
             return (
               <Fragment key={t.symbol}>
@@ -256,10 +278,31 @@ export default function ForwardBuildStructure() {
                     </span>
                   ))}
                 </div>
-                <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8, fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.5 }}>
-                  {cw.length > 1 && <div>calls <span style={{ color: GREEN, fontFamily: "var(--font-mono, monospace)" }}>{cw.map(fmtStrike).join(" → ")}</span></div>}
-                  {pw.length > 1 && <div>puts <span style={{ color: RED, fontFamily: "var(--font-mono, monospace)" }}>{pw.map(fmtStrike).join(" → ")}</span></div>}
-                  {cw.length <= 1 && pw.length <= 1 && <span style={{ color: DIM }}>walls forming…</span>}
+                <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8 }}>
+                  {hasWalls ? (
+                    <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: "var(--font-mono, monospace)" }}>
+                      <tbody>
+                        <tr>
+                          <th style={{ textAlign: "left", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 8px 1px 0" }}></th>
+                          {[0, 1, 2].map((d) => (
+                            <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 6px" }}>{d}D</th>
+                          ))}
+                        </tr>
+                        <tr>
+                          <td style={{ textAlign: "left", color: GREEN, padding: "1px 8px 1px 0" }}>calls</td>
+                          {cw.map((s, i) => (
+                            <td key={i} style={{ textAlign: "right", color: s != null ? GREEN : DIM, padding: "1px 6px" }}>{s != null ? fmtStrike(s) : "—"}</td>
+                          ))}
+                        </tr>
+                        <tr>
+                          <td style={{ textAlign: "left", color: RED, padding: "1px 8px 1px 0" }}>puts</td>
+                          {pw.map((s, i) => (
+                            <td key={i} style={{ textAlign: "right", color: s != null ? RED : DIM, padding: "1px 6px" }}>{s != null ? fmtStrike(s) : "—"}</td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  ) : <span style={{ fontSize: 11.5, color: DIM }}>walls forming…</span>}
                 </div>
               </div>
               {isOpen && (

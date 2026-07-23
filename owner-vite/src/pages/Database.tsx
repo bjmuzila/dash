@@ -371,7 +371,7 @@ export default function Database() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-auto">
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             {error ? (
               <div className="flex flex-col items-center justify-center h-40 gap-2 text-xs" style={{ color: HOME_THEME.red }}>
                 <div>{error}</div>

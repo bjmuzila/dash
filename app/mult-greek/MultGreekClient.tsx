@@ -7,7 +7,6 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
-import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -155,6 +154,22 @@ function fmtMoney(v: number): { sign: string; value: string } {
   const s = n >= 0 ? "+" : "-";
   const a = Math.abs(n);
   return { sign: s, value: "$" + (a / 1e6).toFixed(2) + "M" };
+}
+
+function fmtInt(n: number): string { return Math.round(n || 0).toLocaleString(); }
+function fmtUsd(n: number): string {
+  const a = Math.abs(n || 0);
+  const s = n < 0 ? "-" : "";
+  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(1)}K`;
+  return `${s}$${a.toFixed(0)}`;
+}
+function fmtExpShort(exp?: string | null): string {
+  if (!exp) return "";
+  const d = new Date(exp + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return exp;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function metricBg(value: number, maxValue: number, topRank: number, intensity: number): string {
@@ -353,24 +368,7 @@ function TickerPanel({
   const [clickCell, setClickCell] = useState<{ strike: number; expiry: string; x: number; y: number } | null>(null);
 
   const colDates = useMemo(() => cols.map(c => c.date), [cols]);
-  const frontExpiry = cols[0]?.date ?? null;
   const gridCols = `64px ${cols.map(() => "1fr").join(" ")}`.trim() || "64px";
-
-  // Cursor-anchored hover card (same as the options-chain matrix): pops after a
-  // short hover-intent delay so passing over rows doesn't flash cards. Suppressed
-  // during screenshot capture. Book stats are shown for the FRONT expiry.
-  const [hoverCell, setHoverCell] = useState<{ strike: number; x: number; y: number } | null>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const HOVER_DELAY_MS = 700;
-  const armHover = useCallback((v: { strike: number; x: number; y: number }) => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => setHoverCell(v), HOVER_DELAY_MS);
-  }, []);
-  const cancelHover = useCallback(() => {
-    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
-    setHoverCell(null);
-  }, []);
-  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
 
   const hasData = cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
   const computedFull = hasData
@@ -439,20 +437,19 @@ function TickerPanel({
   // full column height. See the isCapturing note in MultGreekClient above.
   const isCapturing = captureWindow != null;
 
-  // Per-side book stats (Volume / OI / Net Prem) for the hovered strike, keyed
-  // off the FRONT expiry's live symbols. Net Prem = mark × volume × 100.
-  const hoverData = (() => {
-    if (!hoverCell || !frontExpiry) return null;
-    const sr = (strikesByExp[frontExpiry] || []).find(s => s.strike === hoverCell.strike);
-    if (!sr) return null;
-    const side = (sym: string | null) => {
+  // Per-side book stats (Volume / OI / Net Prem) for the CLICKED cell, keyed off
+  // that cell's OWN expiry symbols. Net Prem = mark × volume × 100.
+  const clickData = (() => {
+    if (!clickCell) return null;
+    const sr = (strikesByExp[clickCell.expiry] || []).find(s => s.strike === clickCell.strike);
+    const side = (sym: string | null | undefined) => {
       const d = (sym && liveData[sym]) || {};
       const vol = d.vol ?? 0;
       const oi = d.oi ?? 0;
       const mark = (d.bid != null && d.ask != null && (d.bid > 0 || d.ask > 0)) ? (d.bid + d.ask) / 2 : 0;
       return { vol, oi, prem: mark * vol * 100 };
     };
-    return { calls: side(sr.callSym), puts: side(sr.putSym) };
+    return { calls: side(sr?.callSym), puts: side(sr?.putSym) };
   })();
 
   return (
@@ -467,11 +464,13 @@ function TickerPanel({
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
         <div style={{ display: "flex", gap: 5, alignItems: "center", overflow: "hidden", flex: 1, justifyContent: "flex-end" }}>
+          {/* Header readout always shows the CB/CW/PW levels — the toolbar
+              toggles only control the cell markers, per user. */}
           {([
-            { on: showCB, t: "CB", c: "#ffd600", s: walls?.cb ?? null, title: "Core Bullseye — highest |GEX| level" },
-            { on: showCW, t: "CW", c: "#29b6f6", s: walls?.cw ?? null, title: "Call Wall — highest +GEX level" },
-            { on: showPW, t: "PW", c: "#ff4757", s: walls?.pw ?? null, title: "Put Wall — most −GEX level" },
-          ] as const).filter(x => x.on && x.s != null).map(x => (
+            { t: "CB", c: "#ffd600", s: walls?.cb ?? null, title: "Core Bullseye — highest |GEX| level" },
+            { t: "CW", c: "#29b6f6", s: walls?.cw ?? null, title: "Call Wall — highest +GEX level" },
+            { t: "PW", c: "#ff4757", s: walls?.pw ?? null, title: "Put Wall — most −GEX level" },
+          ] as const).filter(x => x.s != null).map(x => (
             <span key={x.t} title={x.title} style={{
               display: "inline-flex", alignItems: "baseline", gap: 3, whiteSpace: "nowrap",
               padding: "2px 6px", borderRadius: 5, background: `${x.c}1f`, border: `1px solid ${x.c}66`,
@@ -551,8 +550,6 @@ function TickerPanel({
             <div
               key={r.strike}
               data-strike={r.strike}
-              onMouseEnter={isCapturing ? undefined : (e) => armHover({ strike: r.strike, x: e.clientX, y: e.clientY })}
-              onMouseLeave={isCapturing ? undefined : cancelHover}
               style={{ display: "grid", gridTemplateColumns: gridCols, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
             >
               {(is1x || is2x) && (
@@ -631,31 +628,38 @@ function TickerPanel({
         })}
       </div>
 
-      {hoverCell && hoverData && !isCapturing && (
-        <StrikeHoverCard
-          ticker={ticker}
-          strike={hoverCell.strike}
-          expiration={frontExpiry}
-          calls={hoverData.calls}
-          puts={hoverData.puts}
-          x={hoverCell.x}
-          y={hoverCell.y}
-        />
-      )}
-
-      {/* Click card — NET GEX change over 15m / 30m / open for the clicked cell. */}
-      {clickCell && !isCapturing && (() => {
+      {/* Combined CLICK popout: book stats (calls/puts) + NET GEX 15m/30m/open
+          change for the clicked cell. Replaces the old hover card. */}
+      {clickCell && clickData && !isCapturing && (() => {
         const ch = getGexChange(ticker, clickCell.expiry, clickCell.strike);
         const dt = daysTo(clickCell.expiry);
         const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
-        const left = Math.min(clickCell.x + 14, vw - 208);
+        const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+        const W = 250;
+        const left = Math.min(Math.max(8, clickCell.x + 14), vw - W - 8);
+        const top = Math.min(Math.max(8, clickCell.y + 14), vh - 320);
+        const netPrem = (clickData.calls.prem || 0) - (clickData.puts.prem || 0);
         const nowFmt = fmtMoney(ch.now);
         const nowColor = ch.now > 0 ? "#22c55e" : ch.now < 0 ? "#ef4444" : SOFT_WHITE;
+        const stat = (k: string, v: string, strong?: boolean) => (
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, lineHeight: 1.55 }}>
+            <span style={{ color: "#8B94A7" }}>{k}</span>
+            <span style={{ color: strong ? "#fff" : "#cfe", fontWeight: strong ? 800 : 600 }}>{v}</span>
+          </div>
+        );
+        const side = (label: string, c: string, s: { vol: number; oi: number; prem: number }) => (
+          <div style={{ background: `${c}12`, border: `1px solid ${c}47`, borderRadius: 8, padding: "6px 8px" }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: c, marginBottom: 4 }}>{label}</div>
+            {stat("Volume", fmtInt(s.vol))}
+            {stat("OI", fmtInt(s.oi))}
+            {stat("Net Prem", fmtUsd(s.prem), true)}
+          </div>
+        );
         const drow = (label: string, v: number | null, building: boolean) => {
           const f = v == null ? null : fmtMoney(v);
           const col = v == null ? "#64748b" : v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE;
           return (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "3px 0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "2px 0" }}>
               <span style={{ color: HT.muted, fontSize: 10, fontWeight: 700 }}>{label}</span>
               <span style={{ color: col, fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)" }}>
                 {f ? `${f.sign}${f.value}` : building ? "building…" : "—"}
@@ -667,22 +671,28 @@ function TickerPanel({
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              position: "fixed", left, top: Math.min(clickCell.y + 14, (typeof window !== "undefined" ? window.innerHeight : 800) - 170),
-              width: 194, zIndex: 60, padding: "9px 11px",
-              background: "rgba(10,15,26,0.97)", border: `1px solid ${HT.cyan}66`, borderRadius: 10,
-              boxShadow: "0 8px 28px rgba(0,0,0,0.55)", backdropFilter: "blur(6px)",
+              position: "fixed", left, top, width: W, zIndex: 1000, padding: 12,
+              background: "rgba(13,17,25,0.97)", border: `1px solid ${HT.cyan}4d`, borderRadius: 12,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.6)", backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)", fontFamily: "var(--font-mono)", color: "#fff",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-              <span style={{ color: HT.cyan, fontSize: 12, fontWeight: 800, letterSpacing: "0.04em" }}>
-                {ticker} {Number.isInteger(clickCell.strike) ? clickCell.strike : clickCell.strike.toFixed(2)}
-                <span style={{ color: HT.muted, fontWeight: 700, marginLeft: 5 }}>{dt}DTE</span>
-              </span>
-              <span onClick={() => setClickCell(null)} style={{ color: HT.muted, fontSize: 13, cursor: "pointer", lineHeight: 1, padding: "0 2px" }}>×</span>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 15, fontWeight: 800 }}>{ticker} {clickCell.strike.toLocaleString()}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#8B94A7" }}>{dt}DTE · {fmtExpShort(clickCell.expiry)}</span>
+              <span onClick={() => setClickCell(null)} style={{ fontSize: 14, color: "#8B94A7", cursor: "pointer", lineHeight: 1, marginLeft: 2 }}>×</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", paddingBottom: 5, borderBottom: `1px solid ${HT.border}` }}>
-              <span style={{ color: HT.muted, fontSize: 10, fontWeight: 700 }}>NET GEX</span>
-              <span style={{ color: nowColor, fontSize: 13, fontWeight: 900, fontFamily: "var(--font-mono)" }}>{nowFmt.sign}{nowFmt.value}</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {side("CALLS", "#29b6f6", clickData.calls)}
+              {side("PUTS", "#ff4757", clickData.puts)}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 12 }}>
+              <span style={{ color: "#8B94A7" }}>Net Prem (C−P)</span>
+              <span style={{ fontWeight: 800, color: netPrem >= 0 ? "#29b6f6" : "#ff4757" }}>{fmtUsd(netPrem)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 6, borderTop: `1px solid ${HT.border}`, fontSize: 12 }}>
+              <span style={{ color: "#8B94A7" }}>NET GEX</span>
+              <span style={{ color: nowColor, fontWeight: 900 }}>{nowFmt.sign}{nowFmt.value}</span>
             </div>
             <div style={{ marginTop: 3 }}>
               {drow("Δ 15 min", ch.d15, ch.spanMs < 15 * 60_000)}
