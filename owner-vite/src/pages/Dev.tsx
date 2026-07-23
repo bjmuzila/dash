@@ -22,7 +22,7 @@ function PageShell({ children }: { children: ReactNode }) {
 const C = {
   cyan: "#7dd3fc",
   border: HOME_THEME.border,
-  card: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+  card: HOME_THEME.panelBg,
   label: HOME_THEME.text,
 };
 const NA = "rgba(255,255,255,0.45)";        // n/a / muted

@@ -11,7 +11,7 @@ const LIGHT_BLUE = "#7dd3fc";
 const C = {
   bg: "#05060A",
   panel: "rgba(13,17,25,0.45)",
-  cardBg: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.45)",
+  cardBg: "rgba(13,17,25,0.45)",
   line: "rgba(255,255,255,0.10)",
   dim: "rgba(255,255,255,0.50)",
   text: "#FFFFFF",

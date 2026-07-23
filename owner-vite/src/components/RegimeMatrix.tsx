@@ -246,7 +246,7 @@ export default function RegimeMatrix({
       borderTop: `2px solid ${HOME_THEME.cyan}d9`,
       borderRadius: 16, marginBottom: 16, overflow: "hidden",
       backdropFilter: "blur(16px)",
-      background: `radial-gradient(circle at 50% 0%, ${HOME_THEME.cyan}1f 0%, transparent 55%), ${HOME_THEME.panelBg}`,
+      background: HOME_THEME.panelBg,
     }}>
       {/* Header */}
       <div style={{

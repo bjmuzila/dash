@@ -52,7 +52,7 @@ function StatTile({ label, value, color }: { label: string; value: string | numb
         padding: "12px 16px",
         borderRadius: 14,
         border: `1px solid ${OWNER_THEME.border}`,
-        background: `radial-gradient(circle at 50% 0%, ${rgba(color, 0.1)} 0%, transparent 60%), ${OWNER_THEME.panelBg}`,
+        background: OWNER_THEME.panelBg,
       }}
     >
       <div style={{ fontSize: 24, fontWeight: 800, color, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>{value}</div>

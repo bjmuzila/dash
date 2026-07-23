@@ -102,7 +102,7 @@ function VolCard({ vol }: { vol: VolData | null }) {
     <section className="card-hover" style={{
       marginTop: 14, border: `1px solid ${HOME_THEME.border}`,
       borderRadius: 16, padding: 16, backdropFilter: "blur(16px)",
-      background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.12) 0%, transparent 60%), rgba(13,17,25,0.45)",
+      background: "rgba(13,17,25,0.45)",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -502,7 +502,7 @@ function GreeksGauge({
   return (
     <div className="card-hover" style={{
       border: `1px solid ${HOME_THEME.border}`,
-      background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.12) 0%, transparent 62%), ${HOME_THEME.panelBg}`,
+      background: HOME_THEME.panelBg,
       backdropFilter: "blur(16px)", borderRadius: 14, padding: "12px 8px 10px",
       display: "flex", flexDirection: "column", alignItems: "center",
     }}>

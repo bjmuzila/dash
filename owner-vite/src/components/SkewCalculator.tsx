@@ -220,7 +220,7 @@ export default function SkewCalculator() {
     <section className="card-hover" style={{
       marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 16, padding: 16,
       backdropFilter: "blur(16px)",
-      background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.12) 0%, transparent 60%), ${HOME_THEME.panelBg}`,
+      background: HOME_THEME.panelBg,
     }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12, flexWrap: "wrap" }}>

@@ -105,9 +105,9 @@ export const homeHeaderStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-// ── Panel (frosted card + light-blue highlight) ──────────────────────────────
+// ── Panel (frosted card — solid fill, no highlight) ──────────────────────────
 export const homePanelStyle: CSSProperties = {
-  background: `radial-gradient(circle at 50% 0%, ${rgba(OWNER_LIGHT_BLUE, 0.1)} 0%, transparent 60%), ${OWNER_THEME.panelBg}`,
+  background: OWNER_THEME.panelBg,
   backdropFilter: "blur(16px)",
   borderRadius: 18,
   border: `1px solid ${OWNER_THEME.border}`,
@@ -129,16 +129,15 @@ export const classicCardStyle: CSSProperties = {
   boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
 };
 
-/** Classic card + faint light-blue radial highlight on the body (no top bar). */
+/** Card body — solid frosted panel, no radial highlight. */
 export const classicCardAccentStyle: CSSProperties = {
   ...classicCardStyle,
-  background: `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${OWNER_THEME.panelBg}`,
+  background: OWNER_THEME.panelBg,
 };
 
-/** Stat/metric tile: no border, faint highlight. */
+/** Stat/metric tile: solid frosted panel, no radial highlight. */
 export const statTileStyle: CSSProperties = {
-  background:
-    "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.20)",
+  background: OWNER_THEME.panelBg,
   backdropFilter: "blur(20px)",
   WebkitBackdropFilter: "blur(20px)",
   border: "none",

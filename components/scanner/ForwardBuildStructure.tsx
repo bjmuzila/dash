@@ -267,25 +267,25 @@ export default function ForwardBuildStructure() {
               <div className={`fb-card${isOpen ? " sel" : ""}`} onClick={() => setSel(isOpen ? null : t.symbol)}>
                 <div style={{ position: "absolute", top: 12, right: 12 }}><CardSpark pts={chips.map((c) => c.v)} /></div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-                  <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: "0.03em", color: "#cfe0ff" }}>{t.symbol}</span>
-                  <span style={{ fontSize: 12.5, fontFamily: "var(--font-mono, monospace)", color: SPOT, background: "rgba(233,185,73,0.08)", border: `1px solid ${SPOT}44`, borderRadius: 5, padding: "3px 7px" }}>{fmtSpot(t.spot)}</span>
+                  <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "0.03em", color: "#cfe0ff" }}>{t.symbol}</span>
+                  <span style={{ fontSize: 14, fontFamily: "var(--font-mono, monospace)", color: SPOT, background: "rgba(233,185,73,0.08)", border: `1px solid ${SPOT}44`, borderRadius: 5, padding: "3px 7px" }}>{fmtSpot(t.spot)}</span>
                 </div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
                   {chips.map(({ d, v }) => (
-                    <span key={d} style={{ flex: 1, textAlign: "center", fontSize: 12, fontFamily: "var(--font-mono, monospace)", padding: "6px 3px", borderRadius: 5, border: `1px solid ${HOME_THEME.border}` }}>
-                      <span style={{ display: "block", color: DIM, fontSize: 10, marginBottom: 3 }}>{d}D</span>
+                    <span key={d} style={{ flex: 1, textAlign: "center", fontSize: 14, fontFamily: "var(--font-mono, monospace)", padding: "6px 3px", borderRadius: 5, border: `1px solid ${HOME_THEME.border}` }}>
+                      <span style={{ display: "block", color: DIM, fontSize: 11, marginBottom: 3 }}>{d}D</span>
                       <span style={{ color: v >= 0 ? GREEN : RED }}>{fmtSigned(v)}</span>
                     </span>
                   ))}
                 </div>
                 <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8 }}>
                   {hasWalls ? (
-                    <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: "var(--font-mono, monospace)" }}>
+                    <table style={{ borderCollapse: "collapse", fontSize: 12.5, fontFamily: "var(--font-mono, monospace)" }}>
                       <tbody>
                         <tr>
-                          <th style={{ textAlign: "left", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 8px 1px 0" }}></th>
+                          <th style={{ textAlign: "left", fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", color: DIM, padding: "1px 8px 1px 0" }}></th>
                           {[0, 1, 2].map((d) => (
-                            <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 6px" }}>{d}D</th>
+                            <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", color: DIM, padding: "1px 6px" }}>{d}D</th>
                           ))}
                         </tr>
                         <tr>

@@ -32,7 +32,7 @@ const HOME_THEME = {
 };
 
 // Budget card surface: frosted panel + faint light-blue radial highlight (no top bar).
-const budgetRadial = `radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), ${HOME_THEME_BASE.panelBg}`;
+const budgetRadial = HOME_THEME_BASE.panelBg;
 
 // ── Types & defaults ──────────────────────────────────────────────────────────
 

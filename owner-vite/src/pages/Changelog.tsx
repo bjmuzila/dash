@@ -43,7 +43,7 @@ export default function Changelog() {
           style={{
             border: "1px solid rgba(255,255,255,0.10)",
             borderRadius: 18,
-            background: "radial-gradient(circle at 50% 0%, rgba(126,211,252,0.10) 0%, transparent 60%), rgba(13,17,25,0.45)",
+            background: "rgba(13,17,25,0.45)",
             backdropFilter: "blur(16px)",
             WebkitBackdropFilter: "blur(16px)",
             boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
