@@ -502,6 +502,102 @@ async function getForwardBuildLeaderboard(opts = {}) {
   return { asOf, rows: out.slice(0, limit) };
 }
 
+// ── Forward Build STRUCTURE: per-ticker 0/1/2-DTE GEX ladder + DoD Δ per strike ─
+// Same source rows as the leaderboard above, but a DIFFERENT shape: instead of
+// ranking individual accelerating strikes across the whole roster, this groups
+// by ticker and, for each of the front 0/1/2-DTE expiries, returns the CURRENT
+// wall structure (top strikes each side, from the latest session) plus each
+// strike's day-over-day Δ vs the SAME expiry's prior session. Feeds the
+// grouped, collapsible "Forward Build" structure tab: see where each ticker's
+// gamma is stacking and which strikes are building/leaving day to day.
+//
+// Δ availability note (data-driven, not a UI choice): an expiry first enters the
+// recorded window when it's 2DTE (1 point -> no Δ), becomes 1DTE the next session
+// (2 points -> 1 Δ) and 0DTE the session after (3 points). So 0DTE/1DTE strikes
+// normally have a Δ; a freshly-appeared 2DTE strike shows "—" until it has a
+// prior session to compare against.
+async function getForwardBuildStructure(opts = {}) {
+  const maxTickers = Math.min(600, Number(opts.limit) || 400);
+  if (!(await ensureSchema())) return { asOf: null, tickers: [] };
+  const p = getPool();
+  const symbols = await getActiveSymbols(p); // sort_idx order (hot/majors first)
+  if (!symbols.length) return { asOf: null, tickers: [] };
+  const order = new Map(symbols.map((s, i) => [s, i]));
+
+  const { rows: raw } = await p.query(
+    `SELECT DISTINCT ON (symbol, expiry, strike, date)
+       to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry,
+       gex_now, gex_open, spot
+     FROM strike_growth
+     WHERE date >= (CURRENT_DATE - INTERVAL '9 days') AND symbol = ANY($1)
+     ORDER BY symbol, expiry, strike, date, ts DESC`,
+    [symbols]
+  );
+  if (!raw.length) return { asOf: null, tickers: [] };
+
+  const asOf = raw.reduce((m, r) => (r.date > m ? r.date : m), raw[0].date);
+  const asOfMs = new Date(`${asOf}T00:00:00Z`).getTime();
+
+  // symbol -> { spot, exps: Map<expiry, { dte, strikes: Map<strike, [{date,net}]> }> }
+  const bySym = new Map();
+  for (const r of raw) {
+    const expiry = String(r.expiry || '');
+    if (!/^\d{4}-\d{2}-\d{2}/.test(expiry)) continue;
+    const dte = Math.round(
+      (new Date(`${expiry.slice(0, 10)}T00:00:00Z`).getTime() - asOfMs) / 86400000
+    );
+    if (dte < 0 || dte > 2) continue;
+    if (!bySym.has(r.symbol)) bySym.set(r.symbol, { spot: 0, exps: new Map() });
+    const s = bySym.get(r.symbol);
+    if (Number(r.spot) > 0) s.spot = Number(r.spot);
+    if (!s.exps.has(expiry)) s.exps.set(expiry, { dte, strikes: new Map() });
+    const e = s.exps.get(expiry);
+    const sk = Number(r.strike);
+    if (!e.strikes.has(sk)) e.strikes.set(sk, []);
+    e.strikes.get(sk).push({ date: r.date, net: Number(r.gex_now || 0) + Number(r.gex_open || 0) });
+  }
+
+  const tickers = [];
+  for (const [symbol, s] of bySym) {
+    const dtes = [];
+    for (const [expiry, e] of s.exps) {
+      const strikes = [];
+      for (const [strike, pts] of e.strikes) {
+        pts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+        // Only show strikes that are part of the CURRENT (asOf) structure — a
+        // strike whose latest recorded point is stale rotated out of the walls.
+        if (pts[pts.length - 1].date !== asOf) continue;
+        const net = pts[pts.length - 1].net;
+        const prev = pts.length >= 2 ? pts[pts.length - 2].net : null;
+        strikes.push({
+          strike,
+          side: net >= 0 ? 'call' : 'put',
+          net,
+          delta: prev != null ? net - prev : null,
+        });
+      }
+      if (!strikes.length) continue;
+      strikes.sort((a, b) => b.strike - a.strike); // high -> low, spot sits in the middle
+      const netTotal = strikes.reduce((a, r) => a + r.net, 0);
+      const calls = strikes.filter((r) => r.net > 0);
+      const puts = strikes.filter((r) => r.net < 0);
+      const callWall = calls.length ? calls.reduce((m, r) => (r.net > m.net ? r : m)) : null;
+      const putWall = puts.length ? puts.reduce((m, r) => (r.net < m.net ? r : m)) : null;
+      dtes.push({
+        dte: e.dte, expiry, netTotal, strikes,
+        callWall: callWall ? { strike: callWall.strike, net: callWall.net } : null,
+        putWall: putWall ? { strike: putWall.strike, net: putWall.net } : null,
+      });
+    }
+    if (!dtes.length) continue;
+    dtes.sort((a, b) => a.dte - b.dte);
+    tickers.push({ symbol, spot: s.spot, dtes });
+  }
+
+  tickers.sort((a, b) => (order.get(a.symbol) ?? 1e9) - (order.get(b.symbol) ?? 1e9));
+  return { asOf, tickers: tickers.slice(0, maxTickers) };
+}
+
 /**
  * One full sweep over the active watchlist. Sequential, paced. Returns a small
  * summary. `force` skips the RTH gate (for the manual /proxy route + dry runs).
@@ -621,4 +717,5 @@ module.exports = {
   snapshotTicker,
   rollupDayOverDay,
   getForwardBuildLeaderboard,
+  getForwardBuildStructure,
 };

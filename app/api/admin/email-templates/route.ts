@@ -12,6 +12,7 @@ import { scannerCatchEmail, scannerCatchText, SCANNER_CATCH_SUBJECT } from "@/li
 import { flowCatchEmail, flowCatchText, FLOW_CATCH_SUBJECT } from "@/lib/emails/flow-catch";
 import { autoGexTrialEmail, autoGexTrialText, AUTO_GEX_TRIAL_SUBJECT } from "@/lib/emails/auto-gex-trial";
 import { cbConfidenceEmail, cbConfidenceText, CB_CONFIDENCE_SUBJECT } from "@/lib/emails/cb-confidence";
+import { reorgBetaNoticeEmail, reorgBetaNoticeText, REORG_BETA_NOTICE_SUBJECT } from "@/lib/emails/reorg-beta-notice";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -79,6 +80,13 @@ function buildTemplates(): Template[] {
       subject: CB_CONFIDENCE_SUBJECT,
       html: cbConfidenceEmail(),
       text: cbConfidenceText(),
+    },
+    {
+      id: "reorg-beta-notice",
+      label: "Reorg heads-up — Scanner/Test are always beta",
+      subject: REORG_BETA_NOTICE_SUBJECT,
+      html: reorgBetaNoticeEmail(),
+      text: reorgBetaNoticeText(),
     },
     {
       id: "founder-thankyou",

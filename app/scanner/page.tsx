@@ -20,12 +20,15 @@ import IbStatsTab from "@/components/scanner/IbStatsTab";
 import ProbeButton from "@/components/scanner/ProbeButton";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import TpoForecastCard from "@/components/scanner/TpoForecastCard";
+import TpoForwardMap from "@/components/scanner/TpoForwardMap";
+import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import SemisTab from "@/components/scanner/SemisTab";
 import DodMoversTab from "@/components/scanner/DodMoversTab";
 import { LogicOrderPanel } from "@/components/dashboard/LogicOrderPanel";
-import ForwardBuildTab from "@/components/scanner/ForwardBuildTab";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
+
+const NEUTRAL = "#6B7280";
 
 const fmtB = (n: number) => {
   const a = Math.abs(n), s = n < 0 ? "-" : "+";
@@ -47,18 +50,18 @@ const seg = (active: boolean): React.CSSProperties => ({
   padding: "6px 14px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
   border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
   background: active ? "rgba(33,158,188,0.15)" : "transparent",
-  color: HOME_THEME.text,
+  color: active ? HOME_THEME.text : "rgba(255,255,255,0.7)",
 });
 
 const zColor = (z: number | null) =>
-  z == null ? HOME_THEME.text
+  z == null ? "rgba(255,255,255,0.4)"
   : Math.abs(z) >= 3 ? HOME_THEME.red
   : Math.abs(z) >= 2 ? HOME_THEME.orange
   : HOME_THEME.text;
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers" | "logicorder" | "forwardbuild";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers" | "logicorder";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -2182,7 +2185,7 @@ const KIND_COLOR: Record<StructureKind, string> = {
   tail_low: HOME_THEME.orange,
   poor_high: HOME_THEME.orange,
   poor_low: HOME_THEME.orange,
-  hole: HOME_THEME.text,
+  hole: NEUTRAL,
   naked_poc: LIGHT_BLUE,
 };
 
@@ -2900,7 +2903,14 @@ function TpoStructuresScanner() {
       {/* ── Live TPO forecast: predicted (from IB) vs realized-so-far ─────── */}
       <TpoForecastCard instr={instr} />
 
-      {/* ── 5-day TPO profile strip ──────────────────────────────────────── */}
+      {/* ── TPO forward map: open (unfinished) structures ranked vs spot ──── */}
+      {enoughHistory && <TpoForwardMap res={res} spot={spot} />}
+
+      {/* ── RTH open vs prior day + prior week + open naked levels ────────── */}
+      {enoughHistory && <TpoOpenLocation res={res} spot={spot} candles={candles} />}
+
+      {/* ── TPO profile + Open business, side by side ────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16, alignItems: "start" }}>
       <Card variant="budget"
         title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
         subtitle={`${instr} · ${binSize}-pt bins (4 ticks) · 30-min periods · RTH only · shared price axis`}>
@@ -2948,12 +2958,7 @@ function TpoStructuresScanner() {
         </div>
       </Card>
 
-      {/* ── AMT auction read + live signals ──────────────────────────────── */}
-      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
-
-    <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 16 }}>
-
-      {/* ── Open Business rail ───────────────────────────────────────────── */}
+      {/* ── Open business — right of the TPO profile ─────────────────────── */}
       <Card variant="budget" title={<span style={{ fontSize: 17, color: HOME_THEME.orange }}>Open business</span>}
         subtitle={`${instr} · unrepaired TPO structures, nearest to spot first${spot != null ? ` · spot ${spot.toFixed(2)}` : ""}`}>
 
@@ -2998,6 +3003,10 @@ function TpoStructuresScanner() {
           </>
         )}
       </Card>
+    </div>
+
+      {/* ── AMT auction read + live signals ──────────────────────────────── */}
+      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
 
       {/* ── Today's session + stats rollup ──────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -3116,7 +3125,6 @@ function TpoStructuresScanner() {
         </div>
       </div>
     </div>
-    </div>
   );
 }
 
@@ -3131,7 +3139,7 @@ export default function ScannerPage() {
     padding: "8px 20px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
     border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
     background: active ? "rgba(33,158,188,0.15)" : "transparent",
-    color: HOME_THEME.text,
+    color: active ? HOME_THEME.text : "rgba(255,255,255,0.55)",
     transition: "all 0.15s",
   });
 
@@ -3161,7 +3169,6 @@ export default function ScannerPage() {
         <option value="semis">Semi Strength</option>
         <option value="dodmovers">DoD Movers</option>
         <option value="logicorder">Logic &amp; Order</option>
-        <option value="forwardbuild">Forward Build</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3205,11 +3212,6 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "logicorder" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
           background: tab === "logicorder" ? `${HOME_THEME.green}22` : "transparent",
         }}>Logic & Order</button>
-        <button onClick={() => setTab("forwardbuild")} style={{
-          ...tabStyle(tab === "forwardbuild"),
-          border: `1px solid ${tab === "forwardbuild" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "forwardbuild" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>Forward Build</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -3223,7 +3225,6 @@ export default function ScannerPage() {
       {tab === "semis" && <SemisTab />}
       {tab === "dodmovers" && <DodMoversTab />}
       {tab === "logicorder" && <LogicOrderPanel />}
-      {tab === "forwardbuild" && <ForwardBuildTab />}
     </PageShell>
   );
 }

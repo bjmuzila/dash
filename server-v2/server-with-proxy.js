@@ -1507,6 +1507,23 @@ async function main() {
         })();
         return;
       }
+      // Forward Build STRUCTURE: same source rows, grouped by ticker. Per ticker,
+      // the front 0/1/2-DTE GEX wall structure (top strikes each side, latest
+      // session) with each strike's day-over-day Δ vs the same expiry's prior
+      // session. Feeds the collapsible grouped "Forward Build" structure tab.
+      //   GET /proxy/forward-build-structure?limit=400
+      if (pathname === '/proxy/forward-build-structure' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getForwardBuildStructure } = require('./strike-growth-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const limit = Math.min(600, Number(u.searchParams.get('limit') || 400));
+            const result = await getForwardBuildStructure({ limit });
+            sendJson(res, 200, { ok: true, ...result });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire (testing): POST /proxy/gex-levels-history-run
       if (pathname === '/proxy/gex-levels-history-run' && req.method === 'POST') {
         const { collectGexLevelsHistory } = require('./gex-levels-history-recorder');
@@ -2685,7 +2702,18 @@ async function main() {
   // unhealthy (Theta blip, dropped dxLink, no recent frames), kick it back to
   // life so the dashboard is always warm — no cold load waiting for the next
   // page visit. Idle stays sacred: when the owner pauses, we leave it paused.
+  //
+  // Runs 24/7 (no RTH gate, unlike flow-watchdog) — this is the dxLink feed
+  // itself, which is expected to stay live off-hours too, and the "flow
+  // stopped overnight, had to restart it by hand" incident (2026-07-23) was
+  // exactly this loop silently retrying with no page. If auto-restart hasn't
+  // brought it back within FEED_STALE_ALERT_MS, email/push via the same
+  // sendAlert channel flow-watchdog uses, then again on recovery.
   const FEED_WARM_INTERVAL_MS = 30000;
+  const FEED_STALE_ALERT_MS = Number(process.env.FEED_STALE_ALERT_MS || 5 * 60_000);
+  const { sendAlert } = require('./state/alerts');
+  let feedUnhealthySince = 0;
+  let feedStaleAlerted = false;
   setInterval(async () => {
     if (!proxy || proxy.idle) return;            // paused on purpose — don't touch
     let healthy = false;
@@ -2695,13 +2723,37 @@ async function main() {
       if (typeof proxy.isHealthy === 'function') healthy = !!proxy.isHealthy();
       else healthy = ((proxy.spot || marketState.getSpot?.() || 0) > 0);
     } catch { healthy = false; }
-    if (healthy) return;
+    if (healthy) {
+      if (feedStaleAlerted) {
+        const downMin = Math.round((Date.now() - feedUnhealthySince) / 60000);
+        sendAlert({
+          key: 'dxlink-feed-recovered',
+          subject: 'CB Edge: dxLink feed recovered',
+          message: `The Tastytrade/dxLink feed came back on its own after ~${downMin} min down. No action needed.`,
+        }).catch(() => {});
+      }
+      feedUnhealthySince = 0;
+      feedStaleAlerted = false;
+      return;
+    }
+    if (!feedUnhealthySince) feedUnhealthySince = Date.now();
     console.warn('[SERVER-V2] keep-warm: feed looks cold (no live spot) — restarting feed');
     try {
       if (typeof proxy.stop === 'function') { try { await proxy.stop(); } catch {} }
       await startFeedWithRetry();
     } catch (err) {
       console.error('[SERVER-V2] keep-warm restart failed:', err.message);
+    }
+    if (!feedStaleAlerted && Date.now() - feedUnhealthySince > FEED_STALE_ALERT_MS) {
+      feedStaleAlerted = true;
+      const downMin = Math.round((Date.now() - feedUnhealthySince) / 60000);
+      sendAlert({
+        key: 'dxlink-feed-stale',
+        subject: 'CB Edge: dxLink feed down',
+        message: `The Tastytrade/dxLink feed has been down ~${downMin} min. Automatic restarts are running every `
+          + `${FEED_WARM_INTERVAL_MS / 1000}s but haven't recovered it — check the box (docker compose logs -f `
+          + 'app) or restart the container by hand.',
+      }).catch(() => {});
     }
   }, FEED_WARM_INTERVAL_MS).unref();
 
