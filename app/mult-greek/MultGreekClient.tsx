@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
@@ -367,6 +368,24 @@ function TickerPanel({
   // Click card: a specific (strike, expiry) cell's GEX change over 15m/30m/open.
   const [clickCell, setClickCell] = useState<{ strike: number; expiry: string; x: number; y: number } | null>(null);
 
+  // Server-recorded baselines for the clicked cell (mult-greek-gex-recorder).
+  // Preferred over the client ring — instant 15m/30m/open with no warm-up. Falls
+  // back to the client ring for tickers the recorder doesn't cover.
+  const [srvChange, setSrvChange] = useState<{ key: string; vNow: number | null; v15: number | null; v30: number | null; vOpen: number | null } | null>(null);
+  useEffect(() => {
+    if (!clickCell) { setSrvChange(null); return; }
+    const key = `${ticker}|${clickCell.expiry}|${clickCell.strike}`;
+    let cancelled = false;
+    const load = () => fetch(`/api/mult-greek-gex-change?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(clickCell.expiry)}&strike=${clickCell.strike}`)
+      .then(r => r.json())
+      .then(j => { if (!cancelled) setSrvChange({ key, vNow: j?.data?.vNow ?? null, v15: j?.data?.v15 ?? null, v30: j?.data?.v30 ?? null, vOpen: j?.data?.vOpen ?? null }); })
+      .catch(() => { if (!cancelled) setSrvChange({ key, vNow: null, v15: null, v30: null, vOpen: null }); });
+    load();
+    const id = setInterval(load, 20_000);
+    return () => { cancelled = true; clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clickCell?.strike, clickCell?.expiry, ticker]);
+
   const colDates = useMemo(() => cols.map(c => c.date), [cols]);
   const gridCols = `64px ${cols.map(() => "1fr").join(" ")}`.trim() || "64px";
 
@@ -639,8 +658,23 @@ function TickerPanel({
         const left = Math.min(Math.max(8, clickCell.x + 14), vw - W - 8);
         const top = Math.min(Math.max(8, clickCell.y + 14), vh - 320);
         const netPrem = (clickData.calls.prem || 0) - (clickData.puts.prem || 0);
-        const nowFmt = fmtMoney(ch.now);
-        const nowColor = ch.now > 0 ? "#22c55e" : ch.now < 0 ? "#ef4444" : SOFT_WHITE;
+
+        // Live NET GEX = the displayed cell value (freshest); deltas diff it
+        // against the server-recorded baselines (instant), falling back to the
+        // client ring if the recorder doesn't cover this ticker.
+        const liveRow = computedFull?.rows.find(r => r.strike === clickCell.strike);
+        const liveNow = liveRow ? (liveRow.gex[clickCell.expiry] ?? 0) : ch.now;
+        const srv = (srvChange && srvChange.key === `${ticker}|${clickCell.expiry}|${clickCell.strike}`) ? srvChange : null;
+        const deltaFor = (srvPast: number | null | undefined, clientDelta: number | null, buildMs: number): { v: number | null; building: boolean } => {
+          if (srv && srvPast != null) return { v: liveNow - srvPast, building: false };
+          if (clientDelta != null) return { v: clientDelta, building: false };
+          return { v: null, building: buildMs > 0 && ch.spanMs < buildMs };
+        };
+        const r15 = deltaFor(srv?.v15, ch.d15, 15 * 60_000);
+        const r30 = deltaFor(srv?.v30, ch.d30, 30 * 60_000);
+        const rOpen = deltaFor(srv?.vOpen, ch.dOpen, 0);
+        const nowFmt = fmtMoney(liveNow);
+        const nowColor = liveNow > 0 ? "#22c55e" : liveNow < 0 ? "#ef4444" : SOFT_WHITE;
         const stat = (k: string, v: string, strong?: boolean) => (
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, lineHeight: 1.55 }}>
             <span style={{ color: "#8B94A7" }}>{k}</span>
@@ -667,11 +701,12 @@ function TickerPanel({
             </div>
           );
         };
-        return (
+        if (typeof document === "undefined") return null;
+        return createPortal(
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              position: "fixed", left, top, width: W, zIndex: 1000, padding: 12,
+              position: "fixed", left, top, width: W, zIndex: 4000, padding: 12,
               background: "rgba(13,17,25,0.97)", border: `1px solid ${HT.cyan}4d`, borderRadius: 12,
               boxShadow: "0 12px 40px rgba(0,0,0,0.6)", backdropFilter: "blur(12px)",
               WebkitBackdropFilter: "blur(12px)", fontFamily: "var(--font-mono)", color: "#fff",
@@ -695,11 +730,12 @@ function TickerPanel({
               <span style={{ color: nowColor, fontWeight: 900 }}>{nowFmt.sign}{nowFmt.value}</span>
             </div>
             <div style={{ marginTop: 3 }}>
-              {drow("Δ 15 min", ch.d15, ch.spanMs < 15 * 60_000)}
-              {drow("Δ 30 min", ch.d30, ch.spanMs < 30 * 60_000)}
-              {drow("Δ Open", ch.dOpen, false)}
+              {drow("Δ 15 min", r15.v, r15.building)}
+              {drow("Δ 30 min", r30.v, r30.building)}
+              {drow("Δ Open", rOpen.v, rOpen.building)}
             </div>
-          </div>
+          </div>,
+          document.body,
         );
       })()}
     </Card>

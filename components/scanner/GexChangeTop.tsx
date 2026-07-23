@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeButtonStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 
 type Row = {
@@ -24,15 +24,15 @@ type Row = {
 };
 type SlotBucket = { slot: string; ts: string; rows: Row[] };
 
-const fmtGex = (v: number | null): string => {
+// Big Δ headline, matching the GEX Change Scanner card ("-8.6M", no $ sign).
+const fmtBig = (v: number | null): string => {
   if (v == null) return "—";
   const a = Math.abs(v), s = v < 0 ? "-" : "";
-  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
-  return `${s}$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e9) return `${s}${(a / 1e9).toFixed(1)}B`;
+  return `${s}${(a / 1e6).toFixed(1)}M`;
 };
-const fmtSigned = (v: number | null): string => (v == null ? "—" : (v >= 0 ? "+" : "") + fmtGex(v).replace("-", ""));
 const fmtStrike = (v: number): string => (Number.isInteger(v) ? v.toLocaleString("en-US") : String(v));
-const fmtSpot = (v: number | null): string => (v == null ? "—" : v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2));
+const fmtSpot = (v: number | null): string => (v == null || !(v > 0) ? "—" : v.toFixed(2));
 // "HH:MM" (24h ET) → "H:MM AM/PM ET"
 const slotLabel = (slot: string): string => {
   const [hStr, mStr] = slot.split(":");
@@ -41,11 +41,6 @@ const slotLabel = (slot: string): string => {
   const hr = h % 12 === 0 ? 12 : h % 12;
   return `${hr}:${mStr ?? "00"} ${ampm} ET`;
 };
-
-const th: CSSProperties = { textAlign: "right", padding: "6px 10px", fontSize: 12, color: HOME_THEME.subtext ?? "rgba(255,255,255,0.6)", fontWeight: 700, whiteSpace: "nowrap", borderBottom: `1px solid rgba(255,255,255,0.1)` };
-const thL: CSSProperties = { ...th, textAlign: "left" };
-const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 14, whiteSpace: "nowrap" };
-const tdL: CSSProperties = { ...td, textAlign: "left" };
 
 export default function GexChangeTop() {
   const [slots, setSlots] = useState<SlotBucket[]>([]);
@@ -123,6 +118,36 @@ export default function GexChangeTop() {
     }
   }, [date, shooting]);
 
+  // Capture a SINGLE pick card to PNG. `node` is the card element; buttons inside
+  // it are marked data-noshot so the camera control never appears in the image.
+  const shotCard = useCallback(async (node: HTMLElement | null, name: string) => {
+    if (!node) return;
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const canvas = await html2canvas(node, {
+        backgroundColor: (HOME_THEME as { bg?: string }).bg || "#0a0e14",
+        scale: 2, useCORS: true,
+        ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
+      });
+      // Try clipboard first, fall back to a download.
+      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+        try {
+          await new Promise<void>((resolve, reject) =>
+            canvas.toBlob((b) => {
+              if (!b) return reject(new Error("no blob"));
+              navigator.clipboard.write([new ClipboardItem({ "image/png": b })]).then(resolve, reject);
+            }, "image/png"),
+          );
+          return;
+        } catch { /* clipboard blocked → download */ }
+      }
+      const a = document.createElement("a");
+      a.download = `${name}.png`;
+      a.href = canvas.toDataURL("image/png");
+      a.click();
+    } catch { /* give up silently */ }
+  }, []);
+
   return (
    <div ref={cardRef}>
     <Card
@@ -166,53 +191,68 @@ export default function GexChangeTop() {
       )}
 
       {slots.map((hb) => (
-        <div key={hb.slot} style={{ marginBottom: 20 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+        <div key={hb.slot} style={{ marginBottom: 22 }}>
+          <div data-noshot="1" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
             <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12 }}>{hb.rows.length} pick{hb.rows.length === 1 ? "" : "s"}</span>
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
-              <thead>
-                <tr>
-                  <th style={thL}>#</th>
-                  <th style={thL}>Symbol</th>
-                  <th style={th}>Strike</th>
-                  <th style={th}>Spot</th>
-                  <th style={thL}>Expiry</th>
-                  <th style={th}>{hb.rows[0]?.window_min ?? 60}m Δ GEX</th>
-                  <th style={th}>% vs open</th>
-                  <th style={th}>z</th>
-                  <th style={th}>Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hb.rows.map((r) => {
-                  const up = (r.latest_chg ?? 0) >= 0;
-                  return (
-                    <tr key={`${r.symbol}-${r.expiry}-${r.strike}`} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                      <td style={{ ...tdL, color: "rgba(255,255,255,0.5)", fontWeight: 700 }}>{r.rank}</td>
-                      <td style={{ ...tdL, fontWeight: 800 }}>
-                        {r.symbol}
-                        <span style={{ marginLeft: 6, color: "#FFD166", fontWeight: 800, fontSize: 12 }}>★</span>
-                      </td>
-                      <td style={td}>{fmtStrike(r.strike)}</td>
-                      <td style={{ ...td, color: "rgba(255,255,255,0.7)" }}>{fmtSpot(r.spot)}</td>
-                      <td style={{ ...tdL, color: "rgba(255,255,255,0.7)" }}>{r.expiry}</td>
-                      <td style={{ ...td, color: up ? HOME_THEME.green : HOME_THEME.red, fontWeight: 700 }}>{fmtSigned(r.latest_chg)}</td>
-                      <td style={{ ...td, color: (r.pct_open ?? 0) >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                        {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}%`}
-                      </td>
-                      <td style={{ ...td, color: "rgba(255,255,255,0.6)" }}>{r.z_score == null ? "—" : `${r.z_score >= 0 ? "+" : ""}${r.z_score.toFixed(1)}σ`}</td>
-                      <td style={{ ...td, color: HOME_THEME.cyan, fontWeight: 800 }}>{r.score == null ? "—" : r.score.toFixed(0)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="gct-grid" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+            {hb.rows.map((r) => {
+              const up = (r.latest_chg ?? 0) >= 0;
+              const col = up ? HOME_THEME.green : HOME_THEME.red;
+              const otmPct = r.spot && r.spot > 0 ? (Math.abs(r.strike - r.spot) / r.spot) * 100 : null;
+              return (
+                <div
+                  key={`${r.symbol}-${r.expiry}-${r.strike}`}
+                  data-card="1"
+                  style={{
+                    ...classicCardAccentStyle,
+                    position: "relative",
+                    padding: "12px 14px",
+                    background: "rgba(255,209,102,0.10)", // every recorded pick is ★ Very strong
+                  }}
+                >
+                  <button
+                    data-noshot="1"
+                    onClick={(e) => shotCard((e.currentTarget as HTMLElement).closest("[data-card]") as HTMLElement, `${r.symbol}-${r.strike}-${hb.slot.replace(":", "")}`)}
+                    title="Screenshot / copy this card"
+                    style={{
+                      position: "absolute", top: 8, right: 8, cursor: "pointer",
+                      border: "none", background: "transparent", fontSize: 14, lineHeight: 1,
+                      color: "rgba(255,255,255,0.45)", padding: 2,
+                    }}
+                  >
+                    📷
+                  </button>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4, paddingRight: 18 }}>
+                    <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>
+                      <span style={{ color: "rgba(255,255,255,0.35)", marginRight: 6 }}>{r.rank}</span>{r.symbol}
+                    </span>
+                    <span style={{ fontSize: 14, color: "rgba(255,255,255,0.6)" }}>{fmtStrike(r.strike)}</span>
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtBig(r.latest_chg)}</div>
+                  <div style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
+                    {r.expiry} · spot {fmtSpot(r.spot)}
+                  </div>
+                  <div style={{ display: "flex", gap: 10, fontSize: 14, marginTop: 6, flexWrap: "wrap" }}>
+                    {otmPct != null && <span style={{ color: HOME_THEME.orange }}>OTM {otmPct.toFixed(1)}%</span>}
+                    <span style={{ color: r.pct_open == null ? "rgba(255,255,255,0.4)" : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                      {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}% vs open`}
+                    </span>
+                    <span style={{ color: HOME_THEME.cyan }}>score {r.score == null ? "—" : r.score.toFixed(0)}</span>
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: "#FFD166" }}>★ Very strong</div>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}
+      <style>{`
+        @media (max-width: 1100px) { .gct-grid { grid-template-columns: repeat(3, 1fr) !important; } }
+        @media (max-width: 720px)  { .gct-grid { grid-template-columns: repeat(2, 1fr) !important; } }
+        @media (max-width: 460px)  { .gct-grid { grid-template-columns: 1fr !important; } }
+      `}</style>
 
       <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
         <span>Score = 0.6·|Δ| + 0.4·|% vs open|, normalized 0–100</span>

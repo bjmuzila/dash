@@ -2842,17 +2842,6 @@ function AmtPanel({ amt, spot, binSize }: { amt: AmtRead; spot: number | null; b
         </div>
       </details>
 
-      {/* playbook */}
-      <details style={{ marginTop: 14 }}>
-        <summary style={{ cursor: "pointer", fontSize: 14, color: LIGHT_BLUE, fontWeight: 700 }}>Playbook / process</summary>
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
-          {amt.playbook.map((p, i) => <span key={i}>{i + 1}. {p}</span>)}
-        </div>
-      </details>
-
-      <div style={{ marginTop: 12, fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5 }}>
-        Auction read is derived from 5-min RTH profiles — opening type is approximate (no tick tape). Responsive = fade back to value; initiative = follow. Not financial advice.
-      </div>
     </Card>
   );
 }
@@ -2927,15 +2916,6 @@ function TpoStructuresScanner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-      {/* ── AMT auction read — top; signals collapsed inside it ──────────── */}
-      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
-
-      {/* ── Forecast one-liner (paired with the auction read) ────────────── */}
-      <TpoForecastCard instr={instr} />
-
-      {/* ── RTH open vs prior day + prior week + open naked levels ────────── */}
-      {enoughHistory && <TpoOpenLocation res={res} spot={spot} candles={candles} />}
-
       {/* ── TPO profile + open-business levels drawn on the chart ────────── */}
       <Card variant="budget"
         title={<span style={{ fontSize: 17, color: LIGHT_BLUE }}>TPO profile + open levels — last {shown.length} session{shown.length === 1 ? "" : "s"}</span>}
@@ -2965,6 +2945,16 @@ function TpoStructuresScanner() {
           <span>· dashed lines = the {open.length} open structures nearest spot</span>
         </div>
       </Card>
+
+
+      {/* ── AMT auction read — top; signals collapsed inside it ──────────── */}
+      <AmtPanel amt={amt} spot={spot} binSize={binSize} />
+
+      {/* ── Forecast one-liner (paired with the auction read) ────────────── */}
+      <TpoForecastCard instr={instr} />
+
+      {/* ── RTH open vs prior day + prior week + open naked levels ────────── */}
+      {enoughHistory && <TpoOpenLocation res={res} spot={spot} candles={candles} />}
 
       {/* ── Structure stats — collapsed by default ───────────────────────── */}
       <details>

@@ -51,6 +51,11 @@ let startEtfCandleRecorder = () => {};
 try { ({ startEtfCandleRecorder } = require('./etf-candle-recorder')); }
 catch (e) { console.warn('[etf-candle] recorder not loaded:', e.message); }
 const { startEodGexRecorder } = require('./eod-gex-recorder');
+// Backs the /mult-greek click card's 15m/30m/open NET GEX change. Optional —
+// load defensively so a missing/broken module can't crash the origin.
+let multGreekGexRecorder = null;
+try { multGreekGexRecorder = require('./mult-greek-gex-recorder'); }
+catch (e) { console.warn('[mult-greek-gex] recorder not loaded:', e.message); }
 const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
@@ -313,6 +318,25 @@ async function handleProxyRest(req, res) {
     getEsSpxBasis()
       .then((b) => sendJson(res, 200, b ?? { basis: null }))
       .catch((e) => sendJson(res, 500, { error: 'es-spx-basis failed', detail: String(e?.message || e) }));
+    return true;
+  }
+
+  // /proxy/mult-greek-gex-change?ticker=SPX&expiry=YYYY-MM-DD&strike=7400
+  // Stored { vNow, v15, v30, vOpen } NET GEX for one /mult-greek cell
+  // (mult-greek-gex-recorder). The client diffs its live value against these.
+  if (pathname === '/proxy/mult-greek-gex-change') {
+    const u = new URL(req.url || '/', 'http://localhost');
+    const ticker = (u.searchParams.get('ticker') || '').trim().toUpperCase();
+    const expiry = (u.searchParams.get('expiry') || '').trim();
+    const strike = Number(u.searchParams.get('strike'));
+    if (!ticker || !expiry || !Number.isFinite(strike)) {
+      sendJson(res, 400, { error: 'ticker, expiry, strike required' });
+      return true;
+    }
+    if (!multGreekGexRecorder?.queryGexChange) { sendJson(res, 200, { data: null }); return true; }
+    multGreekGexRecorder.queryGexChange(ticker, expiry, strike)
+      .then((data) => sendJson(res, 200, { data }))
+      .catch((e) => sendJson(res, 500, { error: 'mult-greek-gex-change failed', detail: String(e?.message || e) }));
     return true;
   }
 
@@ -2901,6 +2925,11 @@ async function main() {
     // every 30m during RTH, snapshots the SPX/SPY/QQQ chain at one shared
     // near-dated expiry → mult_greek_static_snapshots.
     require('./mult-greek-snapshot-recorder').startMultGreekSnapshotRecorder(PORT);
+    // Per-strike NET GEX history (SPX/SPY/QQQ/IWM, 4 closest expiries) every 60s
+    // during RTH → mult_greek_gex_ring/open, backing the /mult-greek click card's
+    // 15m/30m/open change. Guarded — never crash startup if it fails to load.
+    try { multGreekGexRecorder?.startMultGreekGexRecorder?.(PORT); }
+    catch (e) { console.warn('[mult-greek-gex] start failed:', e.message); }
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.
