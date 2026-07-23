@@ -123,7 +123,7 @@ export default function TpoForecastCard({ instr }: { instr: "ESU" | "NQU" }) {
         </span>
       </div>
 
-      <div style={{ position: "relative", width: "100%", height: 300 }}>
+      <div style={{ position: "relative", width: "100%", maxWidth: 460, height: 360, margin: "0 auto" }}>
         <svg viewBox={`0 0 100 ${c.H}`} preserveAspectRatio="none"
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }}>
           {/* IB band */}

@@ -22,10 +22,7 @@ import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
-import SemisTab from "@/components/scanner/SemisTab";
-import DodMoversTab from "@/components/scanner/DodMoversTab";
 import ForwardBuildStructure from "@/components/scanner/ForwardBuildStructure";
-import { LogicOrderPanel } from "@/components/dashboard/LogicOrderPanel";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -62,7 +59,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "semis" | "dodmovers" | "forwardbuild" | "logicorder";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "forwardbuild";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -133,14 +130,6 @@ const SCAN_META: ScanMeta[] = [
     scope: "ES + NQ · paired IB sessions",
     what: "A library of canned questions over the ES and NQ Initial Balance book — cross-index divergence (ES breaks high while NQ breaks low), confirm-vs-diverge break quality, follow-the-first-breaker, width/open-type/ORB/FVG context, break timing, and trend-day filters. Click one and it runs on the real history.",
     tells: "The base rate for whatever shape today just printed, in one click — with n, a 95% confidence interval, a THIN badge under n=30, and a bias flag on anything above 85%.",
-  },
-  {
-    tab: "semis",
-    title: "Semi Strength",
-    accent: HOME_THEME.cyan,
-    scope: "SMH top 10 · live",
-    what: "An SMH-weight-weighted composite of the top 10 semiconductor holdings' intraday move vs prior close, squashed to a 0–100 Semiconductor Strength Index, alongside equal-weight breadth, relative strength vs SPX and NQ, and a SOXL 3× confirmation check.",
-    tells: "How strong semis are right now, and whether the move is real — broad participation and sector leadership, or just NVDA carrying a thin tape. All Tastytrade-sourced, with a vs-RTH-open / vs-prior-close toggle.",
   },
   {
     tab: "forwardbuild",
@@ -3176,10 +3165,7 @@ export default function ScannerPage() {
         <option value="tpo">TPO Structures</option>
         <option value="ibstats">IB Stats</option>
         <option value="statprompter">Stat Prompter</option>
-        <option value="semis">Semi Strength</option>
-        <option value="dodmovers">DoD Movers</option>
         <option value="forwardbuild">Forward Build</option>
-        <option value="logicorder">Logic &amp; Order</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3212,22 +3198,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "statprompter" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
           background: tab === "statprompter" ? `${LIGHT_BLUE}22` : "transparent",
         }}>Stat Prompter</button>
-        <button onClick={() => setTab("semis")} style={tabStyle(tab === "semis")}>Semi Strength</button>
-        <button onClick={() => setTab("dodmovers")} style={{
-          ...tabStyle(tab === "dodmovers"),
-          border: `1px solid ${tab === "dodmovers" ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
-          background: tab === "dodmovers" ? `${HOME_THEME.cyan}22` : "transparent",
-        }}>DoD Movers</button>
         <button onClick={() => setTab("forwardbuild")} style={{
           ...tabStyle(tab === "forwardbuild"),
           border: `1px solid ${tab === "forwardbuild" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
           background: tab === "forwardbuild" ? `${HOME_THEME.orange}22` : "transparent",
         }}>Forward Build</button>
-        <button onClick={() => setTab("logicorder")} style={{
-          ...tabStyle(tab === "logicorder"),
-          border: `1px solid ${tab === "logicorder" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
-          background: tab === "logicorder" ? `${HOME_THEME.green}22` : "transparent",
-        }}>Logic & Order</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -3238,10 +3213,7 @@ export default function ScannerPage() {
       {tab === "tpo" && <TpoStructuresScanner />}
       {tab === "ibstats" && <IbStatsTab />}
       {tab === "statprompter" && <StatPrompterTab />}
-      {tab === "semis" && <SemisTab />}
-      {tab === "dodmovers" && <DodMoversTab />}
       {tab === "forwardbuild" && <ForwardBuildStructure />}
-      {tab === "logicorder" && <LogicOrderPanel />}
     </PageShell>
   );
 }

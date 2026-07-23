@@ -1,12 +1,5 @@
-"use client";
-
-import { PageShell } from "@/components/shared/PageCard";
-import { LogicOrderPanel } from "@/components/dashboard/LogicOrderPanel";
+import { redirect } from "next/navigation";
 
 export default function LogicOrderPage() {
-  return (
-    <PageShell>
-      <LogicOrderPanel />
-    </PageShell>
-  );
+  redirect("/scanner");
 }
