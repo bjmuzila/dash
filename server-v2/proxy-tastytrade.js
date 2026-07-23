@@ -3124,6 +3124,14 @@ class TastytradeProxy {
    * comes from the same cached fetchChain() the subscriber uses, so this never
    * makes a live network call; it only reads the in-memory feed maps.
    */
+  /** Current LIVE in-memory spot for a strike-growth root (updated on every
+   *  underlying Quote mid / Trade — see _onEvent). 0 if the feed has no value
+   *  yet. Lets the Forward Build endpoint show a live spot instead of the
+   *  last-swept DB value, which lags by up to a sweep. */
+  getStrikeGrowthSpot(root) {
+    return Number(this.strikeGrowthSpot.get(String(root).toUpperCase())) || 0;
+  }
+
   async getStrikeGrowthSnapshot(root) {
     const up = String(root).toUpperCase();
     const chain = await fetchChain(up).catch(() => null);

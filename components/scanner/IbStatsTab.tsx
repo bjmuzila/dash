@@ -427,7 +427,7 @@ function LiveToday({ sym, win, ds, days, hist }: {
       {/* Only three cards: Live Read, IB Read (4 families), Probability Engine (10:30 locked gauges). */}
       <LiveGauges live={live} days={days} dowName={dowName} win={win} />
 
-      <RuleClusterBoard live={live} days={days} dowName={dowName} win={win} />
+      <RuleClusterBoard live={live} days={days} dowName={dowName} win={win} sym={sym} />
 
       <IbProbabilityEngine
         rules={engineRules}
@@ -968,7 +968,7 @@ function Last5Dots({ arr }: { arr: boolean[] }) {
   );
 }
 
-function RuleClusterBoard({ live, days, dowName, win }: { live: any; days: SlimDay[]; dowName: string; win: Win }) {
+function RuleClusterBoard({ live, days, dowName, win, sym }: { live: any; days: SlimDay[]; dowName: string; win: Win; sym: string }) {
   const L = winLabel(win);
   const provisional = !live.ibComplete;
   const scored = scoreWithHistory(buildRules(live, dowName, win), days);
@@ -992,7 +992,35 @@ function RuleClusterBoard({ live, days, dowName, win }: { live: any; days: SlimD
     return { members, netSide, avg };
   };
 
-  const recent = days.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).slice(-5);
+  // LAST 5 SESSIONS tape — live, auto-updating. The static export (ds.days) stops
+  // whenever it was last regenerated, so pull the newest realized sessions from the
+  // daily-results feed (/api/ib-results, written at 16:30 ET every trading day) and
+  // fall back to the static dataset only if the API is unavailable.
+  type TapeDay = { date: string; firstTouchSide: "H" | "L" | null; neitherBroke?: boolean; bothBroke?: boolean; singleBreak?: boolean };
+  const [apiRecent, setApiRecent] = useState<TapeDay[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/ib-results?symbol=${sym}&limit=5`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!alive || !j?.rows?.length) return;
+        // API returns newest-first; the tape reads oldest → newest, left → right.
+        setApiRecent(
+          j.rows.slice().reverse().map((r: any) => ({
+            date: r.date,
+            firstTouchSide: r.first_touch_side ?? null,
+            neitherBroke: !!r.neither_broke,
+            bothBroke: !!r.both_broke,
+            singleBreak: !!r.single_break,
+          }))
+        );
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [sym]);
+
+  const fallbackRecent = days.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).slice(-5);
+  const recent: TapeDay[] = apiRecent && apiRecent.length ? apiRecent : fallbackRecent;
 
   return (
     <Card

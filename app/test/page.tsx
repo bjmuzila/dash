@@ -4,9 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
-import { ObookView } from "@/components/shared/ObookView";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
-import { GexRegimeCard } from "@/components/dashboard/GexRegimeCard";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
@@ -1998,18 +1996,6 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
       "Per-ticker isolation — one root's feed hiccup won't blank the others",
     ],
   },
-  {
-    key: "obook",
-    label: "Order Book",
-    accent: HOME_THEME.cyan,
-    blurb: "Order-book tenor-split read for any ticker — front month vs intermediate term.",
-    points: [
-      "Type a ticker to pull its classified tape (falls back to a QQQ sample)",
-      "Combined C/P, delta-flow, and per-tenor bull/bear from signed premium",
-      "Front-month dip-buying vs longer-dated hedging, side-by-side",
-      "Net directional flow charted across the expiry curve",
-    ],
-  },
 ];
 
 function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: TestTab) => void }) {
@@ -2095,28 +2081,14 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "gexlevels" | "obook" | "squeeze" | "regime";
-
-// SPY / QQQ "market condition" cards — WAVE (net premium) + 0-DTE GEX structure,
-// mirroring the SPX regime tile. Built entirely from the per-symbol flow tape and
-// /api/chains greeks (see components/dashboard/GexRegimeCard).
-function RegimeTab() {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: 24 }}>
-      <GexRegimeCard symbol="SPY" subtitle="SPDR S&P 500 ETF · live WAVE + 0-DTE gamma" />
-      <GexRegimeCard symbol="QQQ" subtitle="Invesco QQQ Trust · live WAVE + 0-DTE gamma" />
-    </div>
-  );
-}
+type TestTab = "overview" | "flow" | "gexlevels" | "squeeze";
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
     { key: "overview", label: "Overview" },
     { key: "squeeze", label: "Squeeze" },
     { key: "gexlevels", label: "GEX Levels" },
-    { key: "regime", label: "Condition" },
     { key: "flow", label: "Flow Inventory" },
-    { key: "obook", label: "Order Book" },
   ];
   return (
     <>
@@ -2215,10 +2187,6 @@ export default function TestPage() {
         <SqueezeBoard />
       ) : tab === "gexlevels" ? (
         <GexLevelsTab />
-      ) : tab === "regime" ? (
-        <RegimeTab />
-      ) : tab === "obook" ? (
-        <ObookView />
       ) : (
         <FlowInventoryTab />
       )}

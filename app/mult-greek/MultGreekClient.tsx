@@ -17,6 +17,10 @@ const BASE_TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = string;
 const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 
+// Columns are now the N closest expirations (all NET GEX) instead of the four
+// greeks. Front expiry (from the picker) + the next 3 = 4 closest.
+const MAX_EXP_COLS = 4;
+
 // EM/2xEM row badge, rasterized as an inline SVG data URI rather than live DOM
 // text. html2canvas is unreliable rasterizing text this small (7px) — it was
 // rendering fine live but vanishing from every screenshot/Discord capture
@@ -36,15 +40,6 @@ function emBadgeDataUri(label: "EM" | "2× EM"): string {
 // Softer than pure #ffffff — the bright white value text was harsh on the dark
 // metric-tinted cells. Used for neutral numeric values / signs.
 const SOFT_WHITE = "#c3ccda";
-
-const NET_COLS  = ["gex", "dex", "chex", "vex"] as const;
-type NetCol = typeof NET_COLS[number];
-
-const COL_LABELS: Record<NetCol, string> = {
-  gex: "NET GEX", dex: "NET DEX", chex: "NET CHEX", vex: "NET VEX",
-};
-
-const GRID_COLS = "64px 1fr 1fr 1fr 1fr";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -70,18 +65,17 @@ interface StrikeRow {
 interface ComputedRow {
   strike: number;
   isATM: boolean;
-  gex: number;
-  dex: number;
-  chex: number;
-  vex: number;
+  // NET GEX per expiry column, keyed by expiry date.
+  gex: Record<string, number>;
 }
 
 interface ComputedResult {
   rows: ComputedRow[];
-  maxAbs: Record<NetCol, number>;
-  top3: Record<NetCol, Record<number, number>>;
+  cols: string[];                                 // expiry dates, front → back
+  maxAbs: Record<string, number>;                 // per-column |max| for shading
+  top3: Record<string, Record<number, number>>;   // per-column top-3 strike ranks
   atmStrike: number;
-  mvcStrike: number | null;
+  mvcStrike: Record<string, number | null>;       // per-column peak |GEX| strike
 }
 
 interface Expiry {
@@ -92,8 +86,8 @@ interface Expiry {
 
 /** Frozen full-chain snapshot shape written by
  *  server-v2/mult-greek-snapshot-recorder.js — one shared expiry, raw TT chain
- *  `items` + underlyingPrice per ticker. Same inputs buildStrikes() already
- *  parses for the live path, so the delayed render reuses all the same code. */
+ *  `items` + underlyingPrice per ticker. The delayed view can only render the
+ *  single captured expiry as one column. */
 export interface MultGreekSnapshot {
   expiry: string;
   tickers: Partial<Record<Ticker, { items: unknown[]; underlyingPrice: number }>>;
@@ -177,6 +171,12 @@ function metricBg(value: number, maxValue: number, topRank: number, intensity: n
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
+// Compact column-header label for an expiry: "0DTE" over "MM-DD".
+function colLabel(date: string): { dte: string; md: string } {
+  const dt = daysTo(date);
+  return { dte: `${dt}DTE`, md: date.slice(5) };
+}
+
 // ── Build strikes from chain JSON ─────────────────────────────────────────────
 
 function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeRow[] {
@@ -214,100 +214,91 @@ function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>)
   return Object.values(map).sort((a, b) => a.strike - b.strike);
 }
 
+// Net GEX for one strike row given its call/put live greeks.
+function strikeGex(sr: StrikeRow | undefined, liveData: Record<string, LiveEntry>, spot: number, volOnly: boolean): number {
+  if (!sr) return 0;
+  const cd = liveData[sr.callSym ?? ""] || {};
+  const pd = liveData[sr.putSym  ?? ""] || {};
+  const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
+  const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
+  return (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
+}
+
+// Compute one panel's rows: union of strikes across the column expiries, with a
+// NET GEX value per column, plus per-column shading maxima / top-3 / peak.
 function computeRows(
-  strikes: StrikeRow[],
+  strikesByExp: Record<string, StrikeRow[]>,
+  cols: string[],
   liveData: Record<string, LiveEntry>,
   spot: number,
   contractMode: "oivol" | "vol",
 ): ComputedResult {
-  let rows = strikes.slice().sort((a, b) => b.strike - a.strike);
-  let atmStrike = 0;
-  if (spot > 0 && rows.length) {
-    let atmIdx = 0, minDist = Infinity;
-    rows.forEach((r, i) => {
-      const d = Math.abs(r.strike - spot);
-      if (d < minDist) { minDist = d; atmIdx = i; }
-    });
-    atmStrike = rows[atmIdx].strike;
-  }
-
-  const out: ComputedRow[] = rows.map(r => {
-    const cd = liveData[r.callSym ?? ""] || {};
-    const pd = liveData[r.putSym  ?? ""] || {};
-    const volOnly = contractMode === "vol";
-    const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
-    const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
-    return {
-      strike: r.strike,
-      isATM: r.strike === atmStrike,
-      gex:  (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100,
-      dex:  (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100,
-      chex: (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100,
-      vex:  ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100,
-    };
-  });
-
-  const maxAbs = { gex: 1, dex: 1, chex: 1, vex: 1 } as Record<NetCol, number>;
-  out.forEach(r => {
-    NET_COLS.forEach(c => { if (Math.abs(r[c]) > maxAbs[c]) maxAbs[c] = Math.abs(r[c]); });
-  });
-
-  const top3 = {} as Record<NetCol, Record<number, number>>;
-  NET_COLS.forEach(c => {
-    top3[c] = {};
-    [...out].sort((a, b) => Math.abs(b[c]) - Math.abs(a[c]))
-      .slice(0, 3)
-      .forEach((row, idx) => { top3[c][row.strike] = idx + 1; });
-  });
-
-  // MVC = strike with the highest ABSOLUTE net GEX. Gets the gold star.
-  let mvcStrike: number | null = null;
-  let mvcAbs = 0;
-  out.forEach(r => {
-    const a = Math.abs(r.gex);
-    if (a > mvcAbs) { mvcAbs = a; mvcStrike = r.strike; }
-  });
-
-  return { rows: out, maxAbs, top3, atmStrike, mvcStrike };
-}
-
-function computeTotals(
-  strikes: StrikeRow[],
-  liveData: Record<string, LiveEntry>,
-  spot: number,
-  contractMode: "oivol" | "vol",
-): Record<NetCol, number> {
-  const totals = { gex: 0, dex: 0, chex: 0, vex: 0 } as Record<NetCol, number>;
   const volOnly = contractMode === "vol";
 
-  strikes.forEach(r => {
-    const cd = liveData[r.callSym ?? ""] || {};
-    const pd = liveData[r.putSym  ?? ""] || {};
-    const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
-    const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
-    totals.gex  += (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
-    totals.dex  += (Math.abs(cd.delta ?? 0) * cc - Math.abs(pd.delta ?? 0) * pc) * spot * 100;
-    totals.chex += (-(cd.theta ?? 0) * cc + (pd.theta ?? 0) * pc) * spot * 100;
-    totals.vex  += ((cd.vega ?? 0) * cc - (pd.vega ?? 0) * pc) * spot * 100;
+  // Per-expiry strike lookup + union of every strike across the columns.
+  const rowByExp: Record<string, Map<number, StrikeRow>> = {};
+  const strikeSet = new Set<number>();
+  cols.forEach(e => {
+    const m = new Map<number, StrikeRow>();
+    (strikesByExp[e] || []).forEach(r => { m.set(r.strike, r); strikeSet.add(r.strike); });
+    rowByExp[e] = m;
   });
-  return totals;
+  const allStrikes = [...strikeSet].sort((a, b) => b - a); // desc
+
+  let atmStrike = 0;
+  if (spot > 0 && allStrikes.length) {
+    let minDist = Infinity;
+    allStrikes.forEach(s => {
+      const d = Math.abs(s - spot);
+      if (d < minDist) { minDist = d; atmStrike = s; }
+    });
+  }
+
+  const out: ComputedRow[] = allStrikes.map(strike => {
+    const gex: Record<string, number> = {};
+    cols.forEach(e => { gex[e] = strikeGex(rowByExp[e].get(strike), liveData, spot, volOnly); });
+    return { strike, isATM: strike === atmStrike, gex };
+  });
+
+  const maxAbs: Record<string, number> = {};
+  const top3: Record<string, Record<number, number>> = {};
+  const mvcStrike: Record<string, number | null> = {};
+  cols.forEach(e => {
+    let mx = 1;
+    out.forEach(r => { const a = Math.abs(r.gex[e]); if (a > mx) mx = a; });
+    maxAbs[e] = mx;
+
+    const ranks: Record<number, number> = {};
+    [...out].sort((a, b) => Math.abs(b.gex[e]) - Math.abs(a.gex[e]))
+      .slice(0, 3)
+      .forEach((row, idx) => { ranks[row.strike] = idx + 1; });
+    top3[e] = ranks;
+
+    // Core Bullseye per column = strike with the highest ABSOLUTE net GEX.
+    let peak: number | null = null, peakAbs = 0;
+    out.forEach(r => { const a = Math.abs(r.gex[e]); if (a > peakAbs) { peakAbs = a; peak = r.strike; } });
+    mvcStrike[e] = peak;
+  });
+
+  return { rows: out, cols, maxAbs, top3, atmStrike, mvcStrike };
 }
 
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 function TickerPanel({
-  ticker, strikes, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow, expiry,
+  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
 }: {
   ticker: Ticker;
-  strikes: StrikeRow[];
+  /** Per-expiry strike rows for this ticker. */
+  strikesByExp: Record<string, StrikeRow[]>;
+  /** Column expiries (front → back), each rendered as a NET GEX column. */
+  cols: Expiry[];
   liveData: Record<string, LiveEntry>;
   spot: number;
   contractMode: "oivol" | "vol";
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
-  /** Active expiry (for the hover card header). */
-  expiry: string | null;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
@@ -315,9 +306,13 @@ function TickerPanel({
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
+  const colDates = useMemo(() => cols.map(c => c.date), [cols]);
+  const frontExpiry = cols[0]?.date ?? null;
+  const gridCols = `64px ${cols.map(() => "1fr").join(" ")}`.trim() || "64px";
+
   // Cursor-anchored hover card (same as the options-chain matrix): pops after a
   // short hover-intent delay so passing over rows doesn't flash cards. Suppressed
-  // during screenshot capture.
+  // during screenshot capture. Book stats are shown for the FRONT expiry.
   const [hoverCell, setHoverCell] = useState<{ strike: number; x: number; y: number } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const HOVER_DELAY_MS = 700;
@@ -331,8 +326,9 @@ function TickerPanel({
   }, []);
   useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
 
-  const computedFull = strikes.length
-    ? computeRows(strikes, liveData, spot, contractMode)
+  const hasData = cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
+  const computedFull = hasData
+    ? computeRows(strikesByExp, colDates, liveData, spot, contractMode)
     : null;
 
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
@@ -361,20 +357,10 @@ function TickerPanel({
       })()
     : null;
 
-  const totals = strikes.length && spot > 0
-    ? computeTotals(strikes, liveData, spot, contractMode)
+  // Per-column NET GEX totals.
+  const totals = computed
+    ? Object.fromEntries(computed.cols.map(e => [e, computed.rows.reduce((s, r) => s + (r.gex[e] || 0), 0)]))
     : null;
-
-  // Highest |GEX| strike on each side of spot → 📍 pin (possible pin/explosive level).
-  let pinAbove: number | null = null, pinBelow: number | null = null;
-  if (computed) {
-    let aAbs = 0, bAbs = 0;
-    computed.rows.forEach(r => {
-      const a = Math.abs(r.gex);
-      if (r.strike > computed.atmStrike && a > aAbs) { aAbs = a; pinAbove = r.strike; }
-      else if (r.strike < computed.atmStrike && a > bAbs) { bAbs = a; pinBelow = r.strike; }
-    });
-  }
 
   // Auto-scroll to ATM
   useEffect(() => {
@@ -397,16 +383,14 @@ function TickerPanel({
 
   // During capture (rows trimmed to a compact window), collapse to hug the
   // trimmed content's actual height instead of staying pinned to fill the
-  // full column height — otherwise the capture is a small table sitting atop
-  // a tall blank void. See the isCapturing note in MultGreekClient above.
+  // full column height. See the isCapturing note in MultGreekClient above.
   const isCapturing = captureWindow != null;
 
   // Per-side book stats (Volume / OI / Net Prem) for the hovered strike, keyed
-  // off the same live symbols the greeks are computed from. Net Prem = mark ×
-  // volume × 100, mark = mid of bid/ask (mirrors the options-chain hover card).
+  // off the FRONT expiry's live symbols. Net Prem = mark × volume × 100.
   const hoverData = (() => {
-    if (!hoverCell) return null;
-    const sr = strikes.find(s => s.strike === hoverCell.strike);
+    if (!hoverCell || !frontExpiry) return null;
+    const sr = (strikesByExp[frontExpiry] || []).find(s => s.strike === hoverCell.strike);
     if (!sr) return null;
     const side = (sym: string | null) => {
       const d = (sym && liveData[sym]) || {};
@@ -419,9 +403,6 @@ function TickerPanel({
   })();
 
   return (
-    // "budget" variant = classicCardAccentStyle, the exact radial-glow-over-
-    // panelBg background this panel already used inline — sourced from the
-    // shared Card primitive instead of a hand-rolled duplicate now.
     <Card
       variant="budget"
       padding={0}
@@ -434,32 +415,34 @@ function TickerPanel({
         <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8" }}>
           {spot > 0 && (
-            <>
-              <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
-            </>
+            <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
           )}
           {spot === 0 && <span style={{ color: "#475569" }}>--</span>}
         </div>
       </div>
 
-      {/* Column headers */}
-      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>STRIKE</div>
-        {NET_COLS.map(c => (
-          <div key={c} style={{ padding: "5px 4px", textAlign: "center", color: HT.cyan, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            {COL_LABELS[c]}
-          </div>
-        ))}
+      {/* Column headers — STRIKE + one NET GEX column per expiry */}
+      <div style={{ display: "grid", gridTemplateColumns: gridCols, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
+        {cols.map(c => {
+          const lbl = colLabel(c.date);
+          return (
+            <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
+              <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
+              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>GEX · {lbl.md}</div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Totals row */}
-      <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
-        {NET_COLS.map(c => {
-          const v = totals?.[c] ?? 0;
+        {cols.map(c => {
+          const v = totals?.[c.date] ?? 0;
           const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
-            <div key={c} style={{
+            <div key={c.date} style={{
               padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               textAlign: "center",
@@ -482,13 +465,8 @@ function TickerPanel({
             No strikes in range
           </div>
         ) : computed.rows.map(r => {
-          // ATM is marked by the white border alone — no gold tint on the row
-          // or strike text.
           const strikeColor = "#94a3b8";
           const rowBg = "transparent";
-          // Plain `border` (not `outline`) — html2canvas does not render CSS
-          // outline at all, so the ATM box vanished from every screenshot/
-          // Discord capture even though it showed fine live.
           const atmOutline = r.isATM
             ? { border: "2px solid rgba(255,255,255,.55)", position: "relative" as const, zIndex: 1 }
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
@@ -505,7 +483,7 @@ function TickerPanel({
               data-strike={r.strike}
               onMouseEnter={isCapturing ? undefined : (e) => armHover({ strike: r.strike, x: e.clientX, y: e.clientY })}
               onMouseLeave={isCapturing ? undefined : cancelHover}
-              style={{ display: "grid", gridTemplateColumns: GRID_COLS, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
+              style={{ display: "grid", gridTemplateColumns: gridCols, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
             >
               {(is1x || is2x) && (
                 <img
@@ -521,19 +499,16 @@ function TickerPanel({
               }}>
                 {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
               </div>
-              {NET_COLS.map(c => {
-                const val: number | null = r[c];
-                const topRank = (computed.top3[c]?.[r.strike]) || 0;
-                const scaleMax = computed.maxAbs[c];
+              {computed.cols.map(e => {
+                const val = r.gex[e];
+                const topRank = (computed.top3[e]?.[r.strike]) || 0;
+                const scaleMax = computed.maxAbs[e];
                 const weight = topRank === 1 ? 900 : topRank ? 800 : 700;
-                const border = topRank === 1
-                  ? `outline:1px solid ${(val ?? 0) >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"};outline-offset:-1px`
-                  : "";
                 const formatted = val == null ? { sign: "", value: "--" } : fmtMoney(val);
                 const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
-                const isGexPeak = c === "gex" && r.strike === computed.mvcStrike;
+                const isPeak = r.strike === computed.mvcStrike[e];
                 return (
-                  <div key={c} className={isGexPeak ? "mvc-peak-cell" : undefined} style={{
+                  <div key={e} className={isPeak ? "mvc-peak-cell" : undefined} style={{
                     padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE,
@@ -541,7 +516,7 @@ function TickerPanel({
                     fontWeight: weight,
                     position: "relative",
                     ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
-                    ...(isGexPeak ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
+                    ...(isPeak ? { outline: "3px solid #ffffff", outlineOffset: "-3px", zIndex: 2 } : {}),
                   }}>
                     {topRank === 1 && (
                       <span style={{
@@ -549,27 +524,15 @@ function TickerPanel({
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
-                    {c === "gex" && r.strike === computed.mvcStrike && (
-                      <span title="CB - Core Bullseye — highest |net GEX|" style={{
+                    {isPeak && (
+                      <span title="CB - Core Bullseye — highest |net GEX| for this expiry" style={{
                         position: "absolute", top: 1, right: 2, fontSize: 12, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", pointerEvents: "none",
                       }}>★</span>
                     )}
-                    {c === "gex" && (r.strike === pinAbove || r.strike === pinBelow) && (
-                      <span title="Possible pin or explosive level" style={{
-                        position: "absolute", top: 1, left: 2, lineHeight: 1, pointerEvents: "none",
-                        display: "inline-flex",
-                      }}>
-                        <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
-                          <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
-                          <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
-                        </svg>
-                      </span>
-                    )}
                     <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                   </div>
                 );
-                void border;
               })}
             </div>
           );
@@ -580,7 +543,7 @@ function TickerPanel({
         <StrikeHoverCard
           ticker={ticker}
           strike={hoverCell.strike}
-          expiration={expiry}
+          expiration={frontExpiry}
           calls={hoverData.calls}
           puts={hoverData.puts}
           x={hoverCell.x}
@@ -599,8 +562,8 @@ export function MultGreekClient({
   snapshotTs = null,
 }: {
   /** Unpaid signed-in viewer: render from a frozen SPX/SPY/QQQ snapshot, never
-   *  hit the live /api/chains loop. A lightweight poll picks up the recorder's
-   *  next ~30m tick (server-v2/mult-greek-snapshot-recorder.js). */
+   *  hit the live /api/chains loop. The delayed snapshot only carries ONE
+   *  expiry, so static mode shows a single NET GEX column. */
   isStatic?: boolean;
   initialSnapshot?: MultGreekSnapshot | null;
   /** epoch ms the current snapshot was captured, for the "delayed" banner. */
@@ -647,8 +610,8 @@ export function MultGreekClient({
     setEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
   }, []);
 
-  // Per-ticker state (keyed by ticker symbol — the 4th slot is dynamic).
-  const [strikes, setStrikes]   = useState<Record<string, StrikeRow[]>>({});
+  // Per-ticker, per-expiry strikes: ticker → expiry → StrikeRow[].
+  const [strikes, setStrikes]   = useState<Record<string, Record<string, StrikeRow[]>>>({});
   const [spots, setSpots]       = useState<Record<string, number>>({});
   // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
   const [emByTicker, setEmByTicker] = useState<Record<string, { close: number; em: number } | null>>({});
@@ -656,11 +619,20 @@ export function MultGreekClient({
 
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
+  const expirationsRef = useRef<Expiry[]>([]);
+  useEffect(() => { expirationsRef.current = expirations; }, [expirations]);
 
-  // Fetch weekly EM for each ticker. Refreshes when the active expiry or the
-  // ticker set changes so the bands stay in sync with each (cache-busted)
-  // chain reload. Not gated on isStatic — this is the weekly EM band
-  // (DB-backed, not the live GEX feed), fine to keep fresh either way.
+  // The up-to-4 closest expiries shown as columns: the picked front expiry +
+  // the next MAX_EXP_COLS-1, taken from the sorted expirations list.
+  const colExpiries = useMemo<Expiry[]>(() => {
+    if (!expirations.length) return [];
+    const front = activeExpiry ?? selectedExpiry;
+    let idx = expirations.findIndex(e => e.date === front);
+    if (idx < 0) idx = 0;
+    return expirations.slice(idx, idx + MAX_EXP_COLS);
+  }, [expirations, activeExpiry, selectedExpiry]);
+
+  // Fetch weekly EM for each ticker.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -683,15 +655,10 @@ export function MultGreekClient({
     return () => { cancelled = true; };
   }, [activeExpiry, TICKERS]);
 
-  // Fetch expirations (from cache or API). Skipped entirely in static mode —
-  // the snapshot already carries its one expiry, no live search needed.
+  // Fetch expirations (from cache or API). Skipped entirely in static mode.
   useEffect(() => {
     if (isStatic) return;
     const loadExpirations = async () => {
-      // Primary: /api/expirations (TT format: { data: { items: [...] } }).
-      // Fallback: derive expirations from the chain itself — the expirations
-      // endpoint can return empty when the proxy's TT session is cold while the
-      // market is closed; the chain endpoint stays populated (0DTE prewarmed).
       const collect = (items: Record<string, unknown>[]): Expiry[] => {
         const seen = new Set<string>();
         const list: Expiry[] = [];
@@ -728,16 +695,21 @@ export function MultGreekClient({
     loadExpirations().catch(() => {});
   }, [isStatic]);
 
-  // Fetch chain for all tickers
+  // Fetch chain for all tickers, then split each ticker's chain into the up-to-4
+  // closest expiries (front + next 3) that form the NET GEX columns.
   const loadAll = useCallback(async (expDate: string, bustCache = false) => {
     if (isStatic) return; // static viewers never hit the live loop
     loadTokenRef.current += 1;
     const token = loadTokenRef.current;
     setStatus({ state: "loading", msg: "LOADING..." });
 
+    // Column expiry window: the picked front + the next MAX_EXP_COLS-1.
+    const exps = expirationsRef.current;
+    let idx = exps.findIndex(e => e.date === expDate);
+    if (idx < 0) idx = 0;
+    const colDates = (exps.length ? exps.slice(idx, idx + MAX_EXP_COLS).map(e => e.date) : [expDate]);
+
     const bust = bustCache ? `&noCache=1` : "";
-    // No `expiration` param: pull the full chain (every expiration) in one shot
-    // per ticker, then filter to `expDate` for the displayed columns.
     const results = await Promise.allSettled(
       TICKERS.map(ticker =>
         fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&range=all${bust}`)
@@ -750,9 +722,8 @@ export function MultGreekClient({
 
     if (token !== loadTokenRef.current) return;
 
-    const newStrikes: Record<string, StrikeRow[]> = {};
+    const newStrikes: Record<string, Record<string, StrikeRow[]>> = {};
     const newSpots: Record<string, number> = {};
-    const allSymbols = new Set<string>();
     let successCount = 0;
     const errStatuses: number[] = [];
 
@@ -766,15 +737,18 @@ export function MultGreekClient({
       }
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
       if (!items.length) continue;
-      const target = (items as { "expiration-date"?: string }[]).filter(i =>
-        String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10)
-      );
-      const parsed = buildStrikes(target.length ? target : items as unknown[], liveDataRef.current);
-      parsed.forEach(row => {
-        if (row.callSym) allSymbols.add(row.callSym);
-        if (row.putSym) allSymbols.add(row.putSym);
+
+      const byExp: Record<string, StrikeRow[]> = {};
+      colDates.forEach(cd => {
+        const target = (items as { "expiration-date"?: string }[]).filter(i =>
+          String(i["expiration-date"] ?? "").slice(0, 10) === cd.slice(0, 10)
+        );
+        if (!target.length) return;
+        const parsed = buildStrikes(target, liveDataRef.current);
+        if (parsed.length) byExp[cd] = parsed;
       });
-      if (parsed.length) { newStrikes[ticker] = parsed; successCount++; }
+
+      if (Object.keys(byExp).length) { newStrikes[ticker] = byExp; successCount++; }
       const rawSpot = parseFloat(String((json.data as Record<string, unknown> | undefined)?.underlyingPrice ?? 0));
       if (isFinite(rawSpot) && rawSpot > 0) newSpots[ticker] = rawSpot;
     }
@@ -811,7 +785,7 @@ export function MultGreekClient({
   // Auto-load when expirations are ready
   useEffect(() => {
     if (isStatic) return;
-    if (selectedExpiry && BASE_TICKERS.every(t => (strikes[t]?.length ?? 0) === 0)) {
+    if (selectedExpiry && BASE_TICKERS.every(t => Object.keys(strikes[t] ?? {}).length === 0)) {
       loadAll(selectedExpiry);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -826,8 +800,8 @@ export function MultGreekClient({
   }, [customTicker]);
 
   // Safety net: if expirations never resolved (cold proxy / market closed),
-  // still auto-load the prewarmed 0DTE SPX/SPY/QQQ chains by deriving the
-  // nearest expiration from the chain response itself.
+  // still auto-load the prewarmed 0DTE chains by deriving the nearest
+  // expiration from the chain response itself.
   useEffect(() => {
     if (isStatic) return;
     const t = setTimeout(async () => {
@@ -849,10 +823,7 @@ export function MultGreekClient({
     await loadAll(exp, true);
   }, [isStatic, loadAll]);
 
-  // Auto-refresh: TT REST per-strike volume accumulates through the session and
-  // resets stale at the open, so the one-shot load lands volume=0 for SPY/QQQ
-  // (SPX is the only live-streamed underlying). Re-pull (cache-busted) every 15s
-  // while the market is open so volume fills in for all three tickers.
+  // Auto-refresh every 15s while the market is open so per-strike volume fills in.
   useEffect(() => {
     if (isStatic) return;
     const id = setInterval(() => {
@@ -862,21 +833,21 @@ export function MultGreekClient({
     return () => clearInterval(id);
   }, [isStatic, loadAll]);
 
-  // ── Static (delayed) mode: seed from the frozen snapshot, then poll for the
-  // recorder's next ~30m tick instead of the live /api/chains loop. ──
+  // ── Static (delayed) mode: seed from the frozen snapshot (single expiry),
+  // then poll for the recorder's next ~30m tick. ──
   const [lastSnapshotTs, setLastSnapshotTs] = useState<number | null>(snapshotTs);
   useEffect(() => {
     if (!isStatic) return;
 
     const applySnapshot = (snap: MultGreekSnapshot | null | undefined) => {
       if (!snap || !snap.expiry) return;
-      const newStrikes: Record<string, StrikeRow[]> = {};
+      const newStrikes: Record<string, Record<string, StrikeRow[]>> = {};
       const newSpots: Record<string, number> = {};
       TICKERS.forEach((ticker) => {
         const t = snap.tickers?.[ticker];
         if (!t || !Array.isArray(t.items) || !t.items.length) return;
         const parsed = buildStrikes(t.items, liveDataRef.current);
-        if (parsed.length) newStrikes[ticker] = parsed;
+        if (parsed.length) newStrikes[ticker] = { [snap.expiry]: parsed };
         if (t.underlyingPrice > 0) newSpots[ticker] = t.underlyingPrice;
       });
       setStrikes(prev => ({ ...prev, ...newStrikes }));
@@ -900,7 +871,7 @@ export function MultGreekClient({
         if (json.snapshot) { applySnapshot(json.snapshot); setLastSnapshotTs(Number(json.ts) || null); }
       } catch { /* keep showing the last-known frozen snapshot */ }
     };
-    const id = setInterval(poll, 60_000); // cheap — recorder only updates every ~30m anyway
+    const id = setInterval(poll, 60_000);
     return () => { cancelled = true; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStatic]);
@@ -913,40 +884,17 @@ export function MultGreekClient({
 
   const pageRef = useRef<HTMLDivElement>(null);
 
-  // Screenshot mode: trims each panel to ±CAPTURE_WINDOW strikes around ATM so
-  // snaps/Discord shots are centered + compact. Set before capture, cleared after.
   const CAPTURE_WINDOW = 20; // 41 strikes (ATM ± 20)
   const [captureWindow, setCaptureWindow] = useState<number | null>(null);
   const beginCapture = useCallback(() => {
     setCaptureWindow(CAPTURE_WINDOW);
-    // Wait two frames, then a short buffer — the trimmed rows + the flex-to-
-    // block collapse below both need to fully reflow/repaint (backdrop-filter
-    // blur compositing can lag a frame or two) before html2canvas measures
-    // anything, or it captures a stale in-between layout.
     return new Promise<void>(res => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(res, 50))));
   }, []);
   const endCapture = useCallback(() => setCaptureWindow(null), []);
 
-  // While a capture is in flight (captureWindow set), the panel rows are
-  // trimmed to a compact window — but the surrounding containers (this shell,
-  // the panels row, each Card, each scroll body) were still pinned to
-  // flex:1/height:100% to fill the viewport. That left a big blank void below
-  // the trimmed rows both live (a jarring shrink-then-blank flash) and in the
-  // exported PNG (html2canvas measures the forced full-viewport height, not
-  // the actual compact content). Collapse everything to hug its content
-  // height only during capture.
   const isCapturing = captureWindow != null;
 
   return (
-    // display:block (not flex) during capture: a flex column's auto height
-    // should equal its children's content height too, but block stacking is
-    // completely unambiguous — no flex-basis/min-height/backdrop-filter edge
-    // case can make it measure taller than its actual visible content.
-    // width:fit-content during capture: the shell otherwise stays pinned to the
-    // full viewport width while the panels collapse to content width, so the
-    // exported PNG kept a huge black void to the right (captureElement crops to
-    // el.scrollWidth = shell width). Hugging the widest child (the panels row)
-    // makes the toolbar + crop match the actual content width.
     <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", width: isCapturing ? "fit-content" : "100%", minWidth: isCapturing ? "min-content" : undefined, overflow: isCapturing ? "visible" : "hidden" }}>
 
       {isStatic && (
@@ -1002,7 +950,7 @@ export function MultGreekClient({
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: isStatic ? HT.cyan : (statusColors[status.state] ?? HT.muted), flexShrink: 0, display: "inline-block" }} />
         <span style={{ fontSize: 10, fontWeight: 800, color: isStatic ? HT.cyan : (statusColors[status.state] ?? HT.text), letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}>{status.msg}</span>
 
-        {/* Expiry picker — static mode only ever has the one captured expiry */}
+        {/* Front-expiry picker — the shown columns are this + the next 3 closest */}
         <DockExpiryPicker
           expirations={expirations.map((e) => e.date)}
           value={selectedExpiry}
@@ -1058,7 +1006,7 @@ export function MultGreekClient({
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         )}
         <BoxSnapBtn targetRef={pageRef} label="📷" fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
-        <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek Exposure — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>
       </div>
 
@@ -1069,17 +1017,13 @@ export function MultGreekClient({
           .mg-panels.mg-embed > div { flex: 1 1 0 !important; width: auto !important; min-height: 0 !important; }
         `}</style>
       )}
-      {/* alignItems defaults to "stretch" in a flex row, which forces every
-          panel to match whichever one is tallest. During capture each Card is
-          sized to hug its own (trimmed) content — without flex-start here,
-          the row would stretch the shorter panels back out to match the
-          tallest one, reintroducing the blank void this was meant to fix. */}
       <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}
             ticker={ticker}
-            strikes={strikes[ticker] ?? []}
+            strikesByExp={strikes[ticker] ?? {}}
+            cols={colExpiries}
             liveData={liveDataRef.current}
             spot={spots[ticker] ?? 0}
             contractMode={contractMode}
@@ -1087,7 +1031,6 @@ export function MultGreekClient({
             emLevels={emByTicker[ticker] ?? null}
             showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
-            expiry={activeExpiry}
           />
         ))}
       </div>

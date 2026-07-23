@@ -23,6 +23,7 @@ import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import ForwardBuildStructure from "@/components/scanner/ForwardBuildStructure";
+import GexChangeTop from "@/components/scanner/GexChangeTop";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "forwardbuild";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "forwardbuild" | "gexchangetop";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -138,6 +139,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "Full roster · 0/1/2-DTE structure",
     what: "Groups every active ticker into a collapsible card showing its front 0DTE / 1DTE / 2DTE GEX walls on a shared strike ladder, with each strike's day-over-day Δ and the call/put wall migration across the three days.",
     tells: "Where each ticker's gamma is stacking and which strikes are building vs. leaving day to day — so you can see where the GEX flow (and often price) is drifting before it becomes today's 0DTE.",
+  },
+  {
+    tab: "gexchangetop",
+    title: "GEX Change Top",
+    accent: HOME_THEME.orange,
+    scope: "Stocks · hourly ★ very-strong picks",
+    what: "A recorded, going-forward log of the top 5 ★ Very strong strikes by combined score — captured automatically at the top of every RTH hour off the GEX Change Scanner (60m window, |Δ| ≥ $500k AND |% vs open| ≥ 30%).",
+    tells: "Which strikes were building hardest each hour, hour by hour, without leaving a browser tab open — scroll back through the day to see how the strongest names rotated.",
   },
 ];
 
@@ -3166,6 +3175,7 @@ export default function ScannerPage() {
         <option value="ibstats">IB Stats</option>
         <option value="statprompter">Stat Prompter</option>
         <option value="forwardbuild">Forward Build</option>
+        <option value="gexchangetop">GEX Change Top</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3203,6 +3213,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "forwardbuild" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
           background: tab === "forwardbuild" ? `${HOME_THEME.orange}22` : "transparent",
         }}>Forward Build</button>
+        <button onClick={() => setTab("gexchangetop")} style={{
+          ...tabStyle(tab === "gexchangetop"),
+          border: `1px solid ${tab === "gexchangetop" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
+          background: tab === "gexchangetop" ? `${HOME_THEME.orange}22` : "transparent",
+        }}>GEX Change Top</button>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
@@ -3214,6 +3229,7 @@ export default function ScannerPage() {
       {tab === "ibstats" && <IbStatsTab />}
       {tab === "statprompter" && <StatPrompterTab />}
       {tab === "forwardbuild" && <ForwardBuildStructure />}
+      {tab === "gexchangetop" && <GexChangeTop />}
     </PageShell>
   );
 }

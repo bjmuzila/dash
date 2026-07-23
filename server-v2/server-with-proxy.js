@@ -57,6 +57,7 @@ const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
+const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
   ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
@@ -2071,6 +2072,26 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // Hourly "very strong" GEX-change top 5 — recorded history for the viewer tab.
+      //   GET /proxy/gex-change-top?date=YYYY-MM-DD  → { ok, date, hours:[{hour,ts,rows[]}] }
+      if (pathname === '/proxy/gex-change-top' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const date = u.searchParams.get('date') || undefined;
+            const out = await getGexChangeTopHistory({ date });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual capture fire: POST /proxy/gex-change-top-run
+      if (pathname === '/proxy/gex-change-top-run' && req.method === 'POST') {
+        runGexChangeTop({ force: true })
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
       // GET /proxy/scanner-tickers — the configured ticker universe (SCANNER_TICKERS),
       // used to populate the Options Positioning ticker picker on the client.
       if (pathname === '/proxy/scanner-tickers' && req.method === 'GET') {
@@ -2803,6 +2824,11 @@ async function main() {
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
     // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();
+    // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
+    // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
+    // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.
+    // Feeds /proxy/gex-change-top + the scanner "GEX Change Top" tab.
+    startGexChangeTopRecorder();
     // NDX/SPY/QQQ 0DTE call/put wall recorder: writes one row per ticker every
     // 60s so the Walls & Flows tab's 5/15/30/60m windows persist server-side
     // instead of depending on a browser tab staying open. NDX runs 24/7;

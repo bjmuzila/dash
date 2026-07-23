@@ -2,6 +2,11 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 7/23/2026
+* Streamlined the IB Stats page down to the three cards that matter — the Live Read, the IB Read (4 families), and the 10:30 Probability Engine gauges — and cleared out the rest of the clutter.
+* The "Last 5 Sessions" strip on the IB Read card now refreshes on its own every trading day instead of getting stuck on old dates.
+* Cleaned up the look of the cards across the dashboard — the faint gray glow at the top of each card is gone, so card backgrounds are now a clean, solid color.
+
 ## Tuesday 7/21/2026
 * Added an **IB tab** to the home page calendar tab group, so you can pull up the full Initial Balance board straight from the home screen without opening the ES-candles chart.
 

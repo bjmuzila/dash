@@ -591,7 +591,13 @@ async function getForwardBuildStructure(opts = {}) {
     }
     if (!dtes.length) continue;
     dtes.sort((a, b) => a.dte - b.dte);
-    tickers.push({ symbol, spot: s.spot, dtes });
+    // Prefer the LIVE in-memory spot (updated on every underlying Quote/Trade)
+    // over the last-swept DB spot, which lags by up to a sweep (≤5 min). The GEX
+    // structure/walls are still from the last sweep — only the spot marker is
+    // live. Falls back to the DB spot when the feed has no live value (e.g. this
+    // process just restarted, or after hours).
+    const liveSpot = _proxy?.getStrikeGrowthSpot ? Number(_proxy.getStrikeGrowthSpot(symbol)) : 0;
+    tickers.push({ symbol, spot: liveSpot > 0 ? liveSpot : s.spot, dtes });
   }
 
   tickers.sort((a, b) => (order.get(a.symbol) ?? 1e9) - (order.get(b.symbol) ?? 1e9));
