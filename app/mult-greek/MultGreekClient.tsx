@@ -177,6 +177,16 @@ function colLabel(date: string): { dte: string; md: string } {
   return { dte: `${dt}DTE`, md: date.slice(5) };
 }
 
+// Pick a ticker's up-to-MAX_EXP_COLS column expiries: its own closest expiries
+// at or after the anchor date. Each ticker uses ITS OWN calendar — e.g. TSLA
+// (weeklies only) starts at its nearest Friday, not SPX's daily Thursday.
+function pickCols(list: Expiry[], anchorDate: string): Expiry[] {
+  if (!list.length) return [];
+  const anchorDt = anchorDate ? daysTo(anchorDate) : -Infinity;
+  const fromAnchor = list.filter(e => e.daysTo >= anchorDt);
+  return (fromAnchor.length ? fromAnchor : list).slice(0, MAX_EXP_COLS);
+}
+
 // ── Build strikes from chain JSON ─────────────────────────────────────────────
 
 function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeRow[] {
@@ -639,22 +649,30 @@ export function MultGreekClient({
   const [spots, setSpots]       = useState<Record<string, number>>({});
   // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
   const [emByTicker, setEmByTicker] = useState<Record<string, { close: number; em: number } | null>>({});
+  // Each ticker's OWN expiration calendar (for its column dates). SPX is also
+  // mirrored into `expirations` above, which anchors the toolbar picker.
+  const [expByTicker, setExpByTicker] = useState<Record<string, Expiry[]>>({});
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
 
   const loadTokenRef = useRef(0);
   const activeExpiryRef = useRef<string | null>(null);
   const expirationsRef = useRef<Expiry[]>([]);
   useEffect(() => { expirationsRef.current = expirations; }, [expirations]);
+  const expByTickerRef = useRef<Record<string, Expiry[]>>({});
+  useEffect(() => { expByTickerRef.current = expByTicker; }, [expByTicker]);
 
-  // The up-to-4 closest expiries shown as columns: the picked front expiry +
-  // the next MAX_EXP_COLS-1, taken from the sorted expirations list.
-  const colExpiries = useMemo<Expiry[]>(() => {
-    if (!expirations.length) return [];
-    const front = activeExpiry ?? selectedExpiry;
-    let idx = expirations.findIndex(e => e.date === front);
-    if (idx < 0) idx = 0;
-    return expirations.slice(idx, idx + MAX_EXP_COLS);
-  }, [expirations, activeExpiry, selectedExpiry]);
+  // Per-ticker column expiries — each panel shows ITS OWN closest expiries at or
+  // after the picked front (SPX-anchored) date. Falls back to the SPX list until
+  // a ticker's own calendar has loaded (and for the single-expiry static mode).
+  const colsByTicker = useMemo<Record<string, Expiry[]>>(() => {
+    const anchor = activeExpiry ?? selectedExpiry;
+    const out: Record<string, Expiry[]> = {};
+    TICKERS.forEach(t => {
+      const list = (expByTicker[t]?.length ? expByTicker[t] : expirations);
+      out[t] = pickCols(list, anchor);
+    });
+    return out;
+  }, [expByTicker, expirations, activeExpiry, selectedExpiry, TICKERS]);
 
   // Fetch weekly EM for each ticker.
   useEffect(() => {
@@ -679,45 +697,57 @@ export function MultGreekClient({
     return () => { cancelled = true; };
   }, [activeExpiry, TICKERS]);
 
-  // Fetch expirations (from cache or API). Skipped entirely in static mode.
+  // Fetch each ticker's own expiration calendar (cache or API). SPX also anchors
+  // the toolbar picker. Skipped in static mode (snapshot carries one expiry).
   useEffect(() => {
     if (isStatic) return;
-    const loadExpirations = async () => {
-      const collect = (items: Record<string, unknown>[]): Expiry[] => {
-        const seen = new Set<string>();
-        const list: Expiry[] = [];
-        items.forEach((item) => {
-          const d = String(item["expiration-date"] ?? "");
-          if (!d || seen.has(d)) return;
-          seen.add(d);
-          const dt = daysTo(d);
-          if (dt < 0) return;
-          const expType = String(item["expiration-type"] ?? "").toLowerCase();
-          const keep = dt <= 7 || expType === "weekly" || expType === "monthly" || new Date(d + "T12:00:00").getDay() === 5;
-          if (!keep) return;
-          list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}` });
-        });
-        return list.sort((a, b) => a.daysTo - b.daysTo);
-      };
+    let cancelled = false;
 
+    const collect = (items: Record<string, unknown>[]): Expiry[] => {
+      const seen = new Set<string>();
+      const list: Expiry[] = [];
+      items.forEach((item) => {
+        const d = String(item["expiration-date"] ?? "");
+        if (!d || seen.has(d)) return;
+        seen.add(d);
+        const dt = daysTo(d);
+        if (dt < 0) return;
+        const expType = String(item["expiration-type"] ?? "").toLowerCase();
+        const keep = dt <= 7 || expType === "weekly" || expType === "monthly" || new Date(d + "T12:00:00").getDay() === 5;
+        if (!keep) return;
+        list.push({ date: d, daysTo: dt, label: `${dt}DTE  ${d.slice(5)}` });
+      });
+      return list.sort((a, b) => a.daysTo - b.daysTo);
+    };
+
+    const loadFor = async (ticker: string): Promise<Expiry[]> => {
       let list: Expiry[] = [];
-      const json = await fetch("/api/expirations?ticker=SPX").then(r => r.json()).catch(() => null);
+      const json = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`).then(r => r.json()).catch(() => null);
       if (json?.data?.items?.length) list = collect(json.data.items);
-
       if (!list.length) {
-        const cj = await fetch("/api/chains?ticker=SPX&range=all").then(r => r.json()).catch(() => null);
+        const cj = await fetch(`/api/chains?ticker=${encodeURIComponent(ticker)}&range=all`).then(r => r.json()).catch(() => null);
         const items = (cj?.data?.items ?? []) as Record<string, unknown>[];
         if (items.length) list = collect(items);
       }
-
-      if (!list.length) return;
-      setExpirations(list);
-      const dte0 = list.find(e => e.daysTo === 0) ?? list[0];
-      if (dte0) { setSelectedExpiry(dte0.date); }
+      return list;
     };
 
-    loadExpirations().catch(() => {});
-  }, [isStatic]);
+    (async () => {
+      const entries = await Promise.all(TICKERS.map(async (t) => [t, await loadFor(t)] as const));
+      if (cancelled) return;
+      const map: Record<string, Expiry[]> = {};
+      entries.forEach(([t, l]) => { if (l.length) map[t] = l; });
+      setExpByTicker(prev => ({ ...prev, ...map }));
+
+      const spx = map["SPX"] ?? [];
+      if (spx.length) {
+        setExpirations(spx);
+        setSelectedExpiry(prev => prev || (spx.find(e => e.daysTo === 0) ?? spx[0]).date);
+      }
+    })().catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [isStatic, TICKERS]);
 
   // Fetch chain for all tickers, then split each ticker's chain into the up-to-4
   // closest expiries (front + next 3) that form the NET GEX columns.
@@ -727,11 +757,15 @@ export function MultGreekClient({
     const token = loadTokenRef.current;
     setStatus({ state: "loading", msg: "LOADING..." });
 
-    // Column expiry window: the picked front + the next MAX_EXP_COLS-1.
-    const exps = expirationsRef.current;
-    let idx = exps.findIndex(e => e.date === expDate);
-    if (idx < 0) idx = 0;
-    const colDates = (exps.length ? exps.slice(idx, idx + MAX_EXP_COLS).map(e => e.date) : [expDate]);
+    // Per-ticker column expiries: each ticker's OWN closest expiries at/after the
+    // picked front date. Falls back to the SPX list until a ticker's calendar
+    // has loaded.
+    const colDatesByTicker: Record<string, string[]> = {};
+    TICKERS.forEach(t => {
+      const list = (expByTickerRef.current[t]?.length ? expByTickerRef.current[t] : expirationsRef.current);
+      const cds = pickCols(list, expDate).map(e => e.date);
+      colDatesByTicker[t] = cds.length ? cds : [expDate];
+    });
 
     const bust = bustCache ? `&noCache=1` : "";
     const results = await Promise.allSettled(
@@ -763,7 +797,7 @@ export function MultGreekClient({
       }
       const items = (json.data as Record<string, unknown> | undefined)?.items as unknown[] ?? [];
       const byExp: Record<string, StrikeRow[]> = {};
-      colDates.forEach(cd => {
+      (colDatesByTicker[ticker] ?? []).forEach(cd => {
         const target = (items as { "expiration-date"?: string }[]).filter(i =>
           String(i["expiration-date"] ?? "").slice(0, 10) === cd.slice(0, 10)
         );
@@ -783,7 +817,7 @@ export function MultGreekClient({
     // empty → that column just shows "--" for it, which is correct.
     const gaps: { ticker: Ticker; date: string }[] = [];
     Object.keys(newStrikes).forEach(ticker => {
-      colDates.forEach(cd => {
+      (colDatesByTicker[ticker] ?? []).forEach(cd => {
         if (!(newStrikes[ticker][cd]?.length)) gaps.push({ ticker, date: cd });
       });
     });
@@ -849,13 +883,16 @@ export function MultGreekClient({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStatic, selectedExpiry]);
 
-  // Reload when the user changes the custom 4th ticker so its chain fills in.
+  // Reload whenever any ticker's own expiration calendar (re)loads — covers the
+  // initial fill and switching the custom 4th ticker — so each panel's chain is
+  // pulled for ITS own column dates, not a stale/SPX-aligned set.
   useEffect(() => {
     if (isStatic) return;
-    const exp = activeExpiryRef.current;
+    if (!Object.keys(expByTicker).length) return;
+    const exp = activeExpiryRef.current || selectedExpiry;
     if (exp) loadAll(exp, true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customTicker]);
+  }, [expByTicker]);
 
   // Safety net: if expirations never resolved (cold proxy / market closed),
   // still auto-load the prewarmed 0DTE chains by deriving the nearest
@@ -1104,7 +1141,7 @@ export function MultGreekClient({
             key={ticker}
             ticker={ticker}
             strikesByExp={strikes[ticker] ?? {}}
-            cols={colExpiries}
+            cols={colsByTicker[ticker] ?? []}
             liveData={liveDataRef.current}
             spot={spots[ticker] ?? 0}
             contractMode={contractMode}

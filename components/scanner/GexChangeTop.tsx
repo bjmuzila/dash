@@ -18,11 +18,11 @@ import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 
 type Row = {
-  hour_et: number; rank: number; symbol: string; expiry: string; strike: number;
+  slot: string; rank: number; symbol: string; expiry: string; strike: number;
   spot: number | null; latest_chg: number | null; pct_open: number | null;
   z_score: number | null; score: number | null; window_min: number;
 };
-type HourBucket = { hour: number; ts: string; rows: Row[] };
+type SlotBucket = { slot: string; ts: string; rows: Row[] };
 
 const fmtGex = (v: number | null): string => {
   if (v == null) return "—";
@@ -33,10 +33,13 @@ const fmtGex = (v: number | null): string => {
 const fmtSigned = (v: number | null): string => (v == null ? "—" : (v >= 0 ? "+" : "") + fmtGex(v).replace("-", ""));
 const fmtStrike = (v: number): string => (Number.isInteger(v) ? v.toLocaleString("en-US") : String(v));
 const fmtSpot = (v: number | null): string => (v == null ? "—" : v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2));
-const hourLabel = (h: number): string => {
+// "HH:MM" (24h ET) → "H:MM AM/PM ET"
+const slotLabel = (slot: string): string => {
+  const [hStr, mStr] = slot.split(":");
+  const h = Number(hStr);
   const ampm = h >= 12 ? "PM" : "AM";
   const hr = h % 12 === 0 ? 12 : h % 12;
-  return `${hr}:00 ${ampm} ET`;
+  return `${hr}:${mStr ?? "00"} ${ampm} ET`;
 };
 
 const th: CSSProperties = { textAlign: "right", padding: "6px 10px", fontSize: 12, color: HOME_THEME.subtext ?? "rgba(255,255,255,0.6)", fontWeight: 700, whiteSpace: "nowrap", borderBottom: `1px solid rgba(255,255,255,0.1)` };
@@ -45,7 +48,7 @@ const td: CSSProperties = { textAlign: "right", padding: "7px 10px", fontSize: 1
 const tdL: CSSProperties = { ...td, textAlign: "left" };
 
 export default function GexChangeTop() {
-  const [hours, setHours] = useState<HourBucket[]>([]);
+  const [slots, setSlots] = useState<SlotBucket[]>([]);
   const [date, setDate] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -57,8 +60,8 @@ export default function GexChangeTop() {
     fetch(u.toString(), { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
-        if (!j?.ok) { setErr(j?.error || "load failed"); setHours([]); return; }
-        setHours(j.hours || []);
+        if (!j?.ok) { setErr(j?.error || "load failed"); setSlots([]); return; }
+        setSlots(j.slots || []);
         setDate(j.date || "");
       })
       .catch((e) => setErr(String(e?.message || e)))
@@ -75,7 +78,7 @@ export default function GexChangeTop() {
     <Card
       variant="budget"
       title={<span style={{ fontSize: 17 }}>GEX Change · Hourly Top 5</span>}
-      subtitle={`★ Very strong picks (|Δ| ≥ $500k & |% vs open| ≥ 30%), ranked by score · captured at the top of each RTH hour${loading ? " · refreshing…" : ""}`}
+      subtitle={`★ Very strong picks (|Δ| ≥ $500k & |% vs open| ≥ 30%), ranked by score · captured every 30 min during RTH${loading ? " · refreshing…" : ""}`}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <input
@@ -91,16 +94,16 @@ export default function GexChangeTop() {
 
       {err && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "8px 0" }}>Error: {err}</div>}
 
-      {!err && hours.length === 0 && (
+      {!err && slots.length === 0 && (
         <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, padding: "16px 4px" }}>
-          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder captures the top 5 at the top of each RTH hour going forward."}
+          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
         </div>
       )}
 
-      {hours.map((hb) => (
-        <div key={hb.hour} style={{ marginBottom: 20 }}>
+      {slots.map((hb) => (
+        <div key={hb.slot} style={{ marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
-            <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{hourLabel(hb.hour)}</span>
+            <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
             <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12 }}>{hb.rows.length} pick{hb.rows.length === 1 ? "" : "s"}</span>
           </div>
           <div style={{ overflowX: "auto" }}>

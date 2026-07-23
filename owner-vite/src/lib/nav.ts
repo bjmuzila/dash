@@ -32,6 +32,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: OWNER_THEME.orange,
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
+      { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
       { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄", key: "EstimatedMove" },
       { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },

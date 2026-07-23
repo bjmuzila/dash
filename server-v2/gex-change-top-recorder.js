@@ -2,16 +2,20 @@
 /**
  * server-v2/gex-change-top-recorder.js
  *
- * HOURLY "very strong" GEX-change leaderboard recorder.
+ * INTERVAL "very strong" GEX-change leaderboard recorder (default every 30 min).
  *
- * Once per hour at the top of the hour during RTH, runs the same scoring the
+ * On each RTH interval boundary (:00 / :30 by default), runs the same scoring the
  * GEX Change Scanner tab uses (/proxy/strike-growth/scanner) over the
  * strike_growth table with a 60-minute change window, keeps ONLY the rows that
  * qualify as "★ Very strong" (|Δ GEX| >= $500k AND |% vs open| >= 30%), ranks
  * them by the combined score (0.6·|Δ| + 0.4·|%|, normalized 0..100), and stores
- * the top 5 into gex_change_top — one hour bucket per row group. This builds a
- * persistent, going-forward history of the strongest strikes each hour so you
- * can review what was building without a browser tab staying open.
+ * the top 5 into gex_change_top — one time-slot bucket per row group. This builds
+ * a persistent, going-forward history of the strongest strikes so you can review
+ * what was building without a browser tab staying open.
+ *
+ * Cadence is env-tunable: GEX_CHANGE_TOP_INTERVAL_MIN (default 30; must divide 60
+ * evenly — 5,10,15,20,30,60). Buckets are "HH:MM" ET slots so two captures in the
+ * same hour never collide.
  *
  * Source of truth for scoring/thresholds mirrors app/scanner/page.tsx +
  * server-with-proxy.js '/proxy/strike-growth/scanner'. Reuses the shared PG pool
@@ -25,7 +29,9 @@
 const sg = require('./strike-growth-recorder'); // shared getPool() over the same DB
 
 // ── Tunables (env-overridable) ────────────────────────────────────────────────
-const WINDOW_MIN  = Number(process.env.GEX_CHANGE_TOP_WINDOW    || 60);      // change window (min)
+let INTERVAL_MIN  = Number(process.env.GEX_CHANGE_TOP_INTERVAL_MIN || 30);    // capture cadence (min)
+if (!(INTERVAL_MIN > 0) || 60 % INTERVAL_MIN !== 0) INTERVAL_MIN = 30;        // must divide 60 evenly
+const WINDOW_MIN  = Number(process.env.GEX_CHANGE_TOP_WINDOW    || 60);       // change window (min)
 const MIN_DOLLAR  = Number(process.env.GEX_CHANGE_TOP_MIN_DOLLAR || 500_000); // "very strong" $ floor
 const MIN_PCT     = Number(process.env.GEX_CHANGE_TOP_MIN_PCT    || 30);      // "very strong" % floor (vs open)
 const MIN_OTM     = Number(process.env.GEX_CHANGE_TOP_MIN_OTM    || 0.05);    // OTM-distance floor (frac)
@@ -55,6 +61,12 @@ function etParts(d = new Date()) {
 function etDateStr(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
 }
+// The "HH:MM" slot this instant belongs to (minute floored to INTERVAL_MIN).
+function etSlot(d = new Date()) {
+  const { hour, minute } = etParts(d);
+  const slotMin = Math.floor(minute / INTERVAL_MIN) * INTERVAL_MIN;
+  return `${String(hour).padStart(2, '0')}:${String(slotMin).padStart(2, '0')}`;
+}
 function isRTH() {
   const { hour, minute, weekday } = etParts();
   if (weekday === 'Sat' || weekday === 'Sun') return false;
@@ -73,7 +85,7 @@ async function ensureSchema() {
     await p.query(`
       CREATE TABLE IF NOT EXISTS gex_change_top (
         date        TEXT        NOT NULL,
-        hour_et     SMALLINT    NOT NULL,
+        slot        TEXT        NOT NULL,   -- "HH:MM" ET capture slot
         ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         rank        SMALLINT    NOT NULL,
         symbol      TEXT        NOT NULL,
@@ -85,9 +97,9 @@ async function ensureSchema() {
         z_score     REAL,
         score       REAL,
         window_min  SMALLINT    NOT NULL DEFAULT 60,
-        PRIMARY KEY (date, hour_et, symbol, expiry, strike)
+        PRIMARY KEY (date, slot, symbol, expiry, strike)
       );
-      CREATE INDEX IF NOT EXISTS idx_gct_date_hour ON gex_change_top(date, hour_et);
+      CREATE INDEX IF NOT EXISTS idx_gct_date_slot ON gex_change_top(date, slot);
     `);
     ensured = true;
     return true;
@@ -156,7 +168,7 @@ async function runOnce({ force = false } = {}) {
   if (!(await ensureSchema())) return { skipped: 'no schema' };
 
   const date = etDateStr();
-  const { hour } = etParts();
+  const slot = etSlot();
   const now = new Date();
 
   let rows;
@@ -167,23 +179,23 @@ async function runOnce({ force = false } = {}) {
     return { skipped: 'scan error', error: e.message };
   }
 
-  // Replace this hour's bucket so a re-fire keeps exactly the latest top-N.
+  // Replace this slot's bucket so a re-fire keeps exactly the latest top-N.
   const client = await p.connect();
   let written = 0;
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM gex_change_top WHERE date = $1 AND hour_et = $2', [date, hour]);
+    await client.query('DELETE FROM gex_change_top WHERE date = $1 AND slot = $2', [date, slot]);
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       await client.query(
         `INSERT INTO gex_change_top
-           (date, hour_et, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min)
+           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT (date, hour_et, symbol, expiry, strike) DO UPDATE SET
+         ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
            rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
            latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
            z_score = EXCLUDED.z_score, score = EXCLUDED.score`,
-        [date, hour, now, i + 1, r.symbol, r.expiry, r.strike, r.spot,
+        [date, slot, now, i + 1, r.symbol, r.expiry, r.strike, r.spot,
          r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN],
       );
       written++;
@@ -197,49 +209,49 @@ async function runOnce({ force = false } = {}) {
     client.release();
   }
 
-  console.log(`[gex-change-top] ${date} h${hour}: recorded ${written} very-strong pick(s) @ ${now.toISOString()}`);
-  return { ok: true, date, hour, written };
+  console.log(`[gex-change-top] ${date} ${slot}: recorded ${written} very-strong pick(s) @ ${now.toISOString()}`);
+  return { ok: true, date, slot, written };
 }
 
 // ── Read (feeds /proxy/gex-change-top + the viewer tab) ───────────────────────
-async function getHistory({ date, limitHours = 8 } = {}) {
+async function getHistory({ date, limitSlots = 20 } = {}) {
   const p = sg.getPool();
-  if (!p || !(await ensureSchema())) return { ok: false, error: 'no DB', hours: [] };
+  if (!p || !(await ensureSchema())) return { ok: false, error: 'no DB', slots: [] };
   const d = date || etDateStr();
   const { rows } = await p.query(
-    `SELECT date, hour_et, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts
+    `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts
        FROM gex_change_top WHERE date = $1
-      ORDER BY hour_et DESC, rank ASC`,
+      ORDER BY slot DESC, rank ASC`,
     [d],
   );
-  // Group into hour buckets (most-recent hour first).
-  const byHour = new Map();
+  // Group into time-slot buckets (most-recent slot first).
+  const bySlot = new Map();
   for (const r of rows) {
-    if (!byHour.has(r.hour_et)) byHour.set(r.hour_et, { hour: r.hour_et, ts: r.ts, rows: [] });
-    byHour.get(r.hour_et).rows.push(r);
+    if (!bySlot.has(r.slot)) bySlot.set(r.slot, { slot: r.slot, ts: r.ts, rows: [] });
+    bySlot.get(r.slot).rows.push(r);
   }
-  const hours = [...byHour.values()].slice(0, limitHours);
-  return { ok: true, date: d, hours };
+  const slots = [...bySlot.values()].slice(0, limitSlots);
+  return { ok: true, date: d, slots };
 }
 
-// ── Scheduler: fire at the top of every hour during RTH ───────────────────────
+// ── Scheduler: fire on every INTERVAL_MIN boundary during RTH ─────────────────
 let _timer = null;
 function startGexChangeTopRecorder() {
   if (!process.env.DATABASE_URL) {
     console.log('[gex-change-top] no DATABASE_URL — recorder idle.');
     return;
   }
-  const HOUR = 60 * 60 * 1000;
+  const STEP = INTERVAL_MIN * 60 * 1000;
   const now = Date.now();
-  const msToTopOfHour = HOUR - (now % HOUR); // wall-clock top of hour (UTC :00 == ET :00)
+  const msToBoundary = STEP - (now % STEP); // wall-clock :00/:30/... (UTC minute == ET minute)
   setTimeout(() => {
     runOnce().catch((e) => console.warn('[gex-change-top] tick error:', e.message));
     _timer = setInterval(() => {
       runOnce().catch((e) => console.warn('[gex-change-top] tick error:', e.message));
-    }, HOUR);
+    }, STEP);
     if (_timer.unref) _timer.unref();
-  }, msToTopOfHour);
-  console.log(`[gex-change-top] recorder started — top-of-hour, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), first fire in ${Math.round(msToTopOfHour / 60000)}m`);
+  }, msToBoundary);
+  console.log(`[gex-change-top] recorder started — every ${INTERVAL_MIN}m, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), first fire in ${Math.round(msToBoundary / 60000)}m`);
 }
 
 module.exports = { startGexChangeTopRecorder, runOnce, getHistory, ensureSchema };

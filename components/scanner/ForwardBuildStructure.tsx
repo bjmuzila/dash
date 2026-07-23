@@ -69,29 +69,29 @@ function CardSpark({ pts }: { pts: number[] }) {
 // One DTE column's ladder, Logic & Order GexStructure style. `rows` is the
 // shared ladder (union of strikes across the 3 columns, with spot markers);
 // `col` maps strike→this DTE's row; maxAbs scales bars across the whole ticker.
-function LadderColumn({ info, rows, col, maxAbs, spot }: {
-  info: Dte; rows: Array<{ spot: true } | { strike: number }>;
+function LadderColumn({ dte, info, rows, col, maxAbs, spot }: {
+  dte: number; info: Dte | null; rows: Array<{ spot: true } | { strike: number }>;
   col: Map<number, StrikeRow>; maxAbs: number; spot: number;
 }) {
   const cell: CSSProperties = {
-    display: "grid", gridTemplateColumns: "60px 1fr 74px 66px", alignItems: "center",
-    gap: 8, padding: "4px 7px", borderRadius: 4,
+    display: "grid", gridTemplateColumns: "44px 1fr 56px 48px", alignItems: "center",
+    gap: 6, padding: "1px 5px", borderRadius: 3,
   };
   return (
-    <div style={{ background: HOME_THEME.panel, padding: "12px 14px 14px" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 9 }}>
-        <span style={{ fontWeight: 800, fontSize: 14, color: dteColor(info.dte) }}>{DTE_LABEL(info.dte)}</span>
-        <span style={{ color: DIM, fontSize: 12, fontFamily: "var(--font-mono, monospace)" }}>{info.expiry.slice(5)}</span>
-        <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: info.netTotal >= 0 ? GREEN : RED }}>
-          {fmtSigned(info.netTotal)}
+    <div style={{ background: HOME_THEME.panel, padding: "8px 10px 9px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
+        <span style={{ fontWeight: 800, fontSize: 11.5, color: dteColor(dte) }}>{DTE_LABEL(dte)}</span>
+        <span style={{ color: DIM, fontSize: 9.5, fontFamily: "var(--font-mono, monospace)" }}>{info ? info.expiry.slice(5) : ""}</span>
+        <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: info ? (info.netTotal >= 0 ? GREEN : RED) : DIM }}>
+          {info ? fmtSigned(info.netTotal) : "no data"}
         </span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
         {rows.map((r, i) => {
           if ("spot" in r) {
             return (
               <div key={`s${i}`} style={{ ...cell, background: "rgba(255,255,255,0.06)", outline: `1px solid ${SPOT}66` }}>
-                <span style={{ fontSize: 13.5, fontWeight: 700, color: SPOT, fontFamily: "var(--font-mono, monospace)" }}>{fmtSpot(spot)}<span style={{ fontSize: 10, marginLeft: 3 }}>◄</span></span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: SPOT, fontFamily: "var(--font-mono, monospace)" }}>{fmtSpot(spot)}<span style={{ fontSize: 8, marginLeft: 2 }}>◄</span></span>
                 <div /><div /><div />
               </div>
             );
@@ -103,17 +103,17 @@ function LadderColumn({ info, rows, col, maxAbs, spot }: {
           const arrow = s?.delta == null ? "" : s.delta > 0 ? "▲ " : s.delta < 0 ? "▼ " : "";
           return (
             <div key={r.strike} style={cell}>
-              <span style={{ fontSize: 13.5, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>{fmtStrike(r.strike)}</span>
-              <div style={{ position: "relative", height: 14, background: "rgba(255,255,255,0.04)", borderRadius: 3, overflow: "hidden" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>{fmtStrike(r.strike)}</span>
+              <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
                 <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
                 {s && (
                   <div style={{ position: "absolute", top: 1, bottom: 1, [pos ? "left" : "right"]: "50%", width: `${Math.max(2, frac * 50)}%`, background: pos ? GREEN : RED, borderRadius: 2 } as CSSProperties} />
                 )}
               </div>
-              <span style={{ fontSize: 12.5, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: s ? (pos ? GREEN : RED) : DIM }}>
+              <span style={{ fontSize: 10, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: s ? (pos ? GREEN : RED) : DIM }}>
                 {s ? fmtSigned(s.net) : "—"}
               </span>
-              <span style={{ fontSize: 12, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: dTone }}>
+              <span style={{ fontSize: 9.5, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: dTone }}>
                 {s && s.delta != null ? `${arrow}${fmtGex(Math.abs(s.delta))}` : "—"}
               </span>
             </div>
@@ -143,25 +143,23 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
   const maxAbs = useMemo(() => {
     let m = 0; t.dtes.forEach((d) => d.strikes.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); })); return m;
   }, [t]);
-  const dtesShown = [0, 1, 2].filter((d) => byDte.has(d));
-  const wall = (side: "callWall" | "putWall") =>
-    dtesShown.map((d) => t.dtes.find((x) => x.dte === d)?.[side]?.strike).filter((x) => x != null) as number[];
-  const cw = wall("callWall"), pw = wall("putWall");
+  const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike).filter((x) => x != null) as number[];
+  const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike).filter((x) => x != null) as number[];
 
   return (
-    <div style={{ marginTop: 14, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 12, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
-        <span style={{ fontSize: 19, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.03em" }}>{t.symbol}</span>
-        <span style={{ fontSize: 13.5, fontFamily: "var(--font-mono, monospace)", color: SPOT }}>spot {fmtSpot(t.spot)}</span>
-        <span style={{ marginLeft: "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 16, lineHeight: 1 }} onClick={onClose}>✕</span>
+    <div style={{ marginTop: 10, maxWidth: 620, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+        <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.03em" }}>{t.symbol}</span>
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: SPOT }}>spot {fmtSpot(t.spot)}</span>
+        <span style={{ marginLeft: "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 15, lineHeight: 1 }} onClick={onClose}>✕</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${dtesShown.length}, 1fr)`, gap: 1, background: HOME_THEME.border }}>
-        {dtesShown.map((d) => (
-          <LadderColumn key={d} info={t.dtes.find((x) => x.dte === d)!} rows={ladder} col={byDte.get(d)!} maxAbs={maxAbs} spot={t.spot} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: HOME_THEME.border }}>
+        {[0, 1, 2].map((d) => (
+          <LadderColumn key={d} dte={d} info={t.dtes.find((x) => x.dte === d) ?? null} rows={ladder} col={byDte.get(d) ?? new Map()} maxAbs={maxAbs} spot={t.spot} />
         ))}
       </div>
       {(cw.length > 1 || pw.length > 1) && (
-        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", padding: "10px 16px", borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11.5, color: HOME_THEME.text }}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", padding: "7px 12px", borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 10.5, color: HOME_THEME.text }}>
           {cw.length > 1 && <span><b>Call wall:</b> <span style={{ color: GREEN, fontFamily: "var(--font-mono, monospace)" }}>{cw.map(fmtStrike).join(" → ")}</span></span>}
           {pw.length > 1 && <span><b>Put wall:</b> <span style={{ color: RED, fontFamily: "var(--font-mono, monospace)" }}>{pw.map(fmtStrike).join(" → ")}</span></span>}
         </div>
