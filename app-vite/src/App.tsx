@@ -17,13 +17,8 @@ const Em           = lazy(() => import('@/app/em/page'))
 const Flow         = lazy(() => import('@/app/flow/page'))
 const EsCandles    = lazy(() => import('@/app/es-candles/page'))
 const Scanner      = lazy(() => import('@/app/scanner/page'))
-const ForwardBuild = lazy(() => import('@/app/forward-build/page'))
 const Ict          = lazy(() => import('@/app/ict/page'))
 const Trading      = lazy(() => import('@/app/trading/page'))
-// Greeks removed: app/greeks/page.tsx was deleted upstream in v7.19.2 (66206f66d,
-// part of a broader owner-pages cleanup) — superseded by /mult-greek. This dead
-// import broke every app-vite prod build until the Dockerfile actually ran `vite
-// build` for the first time (2026-07-23); previously nothing caught it.
 const Confidence   = lazy(() => import('@/app/confidence-score/page'))
 const Fails        = lazy(() => import('@/app/fails/page'))
 const Premarket    = lazy(() => import('@/app/premarket/page'))
@@ -51,7 +46,6 @@ export default function App() {
               <Route path="/flow" element={S(<Flow />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
-              <Route path="/forward-build" element={S(<ForwardBuild />)} />
               <Route path="/ict" element={S(<Ict />)} />
               <Route path="/trading" element={S(<Trading />)} />
               <Route path="/confidence-score" element={S(<Confidence />)} />

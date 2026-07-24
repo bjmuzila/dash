@@ -130,7 +130,10 @@ function computeGexRows(items, spot) {
 }
 
 async function fetchJson(url) {
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(url, {
+    cache: 'no-store',
+    headers: process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {},
+  });
   if (!res.ok) throw new Error(`${url} ${res.status}`);
   return res.json();
 }

@@ -51,9 +51,9 @@ ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
 RUN npm run build
 
 # Build the customer SPA (app-vite) and place its bundle where serveSpaShell
-# reads from (public/app/). Without this copy, /app keeps serving whatever
-# stale files were already committed to public/app — app-vite source edits
-# (app/**/page.tsx via the '@' alias) never reach the live SPA otherwise.
+# reads from (public/app/). Without this, /app + the /home→/app/home redirect
+# serve whatever stale files were committed to public/app — app-vite source
+# edits (app/**/page.tsx via the '@' alias) never reach the live SPA otherwise.
 RUN cd app-vite && npm install --no-audit --no-fund && npm run build
 RUN rm -rf public/app && cp -r app-vite/dist public/app
 

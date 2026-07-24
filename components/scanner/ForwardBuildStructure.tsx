@@ -231,12 +231,17 @@ export default function ForwardBuildStructure() {
   };
   useEffect(() => { load(); }, []);
 
-  // Auto-refresh: silently re-pull every 30s so spot/walls stay live without
+  // Auto-refresh: silently re-pull every 60s so spot/walls stay live without
   // clicking Refresh. Unlike load(), this does NOT toggle loading or reset the
-  // open panel (sel) — it only swaps in fresh data. Pauses while the tab is hidden.
+  // open panel (sel) — it only swaps in fresh data. Pauses while the tab is hidden,
+  // and SKIPS if a previous fetch is still in flight so a slow response can't pile
+  // up overlapping heavy queries (that stacked pending requests and hammered the DB).
+  const refreshing = useRef(false);
   useEffect(() => {
     const id = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
+      if (refreshing.current) return;
+      refreshing.current = true;
       fetch("/proxy/forward-build-structure?limit=400", { cache: "no-store" })
         .then((r) => r.json())
         .then((j) => {
@@ -244,8 +249,9 @@ export default function ForwardBuildStructure() {
           setTickers(Array.isArray(j.tickers) ? j.tickers : []);
           setAsOf(j.asOf || "");
         })
-        .catch(() => {});
-    }, 30_000);
+        .catch(() => {})
+        .finally(() => { refreshing.current = false; });
+    }, 60_000);
     return () => clearInterval(id);
   }, []);
 

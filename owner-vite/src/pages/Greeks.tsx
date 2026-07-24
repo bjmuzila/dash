@@ -715,6 +715,31 @@ export default function Greeks() {
     return () => clearInterval(t);
   }, [doRefresh, dataOn]);
 
+  // Seed `history` from today's persisted greeks_ts rows on mount, so the chart
+  // and Zero-Line Crossings panel show today's flips immediately instead of
+  // starting blank and only accumulating from whenever DATA is toggled ON.
+  // (/api/insights/greeks-intraday used to be a 501 stub — this page's history
+  // was pure in-memory and reset to [] on every reload/navigation, so a flip
+  // that already fired an alert server-side never showed up here.)
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/insights/greeks-intraday", { cache: "no-store" })
+      .then(res => res.ok ? res.json() : null)
+      .then(j => {
+        if (cancelled || !mountedRef.current || !Array.isArray(j?.data)) return;
+        const seeded = j.data
+          .map((r: Record<string, number | null>) => pointFromTotals(
+            { totalGEXOiVol: (r.gex ?? 0) * 1e9, totalDeltaOiVol: (r.dex ?? 0) * 1e9, totalCHEXOiVol: (r.chex ?? 0) * 1e6, totalVEXOiVol: (r.vex ?? 0) * 1e6 },
+            r.spot,
+            r.ts,
+          ))
+          .filter((p): p is GreekPoint => !!p);
+        if (seeded.length) setHistory(prev => prev.length ? prev : seeded);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   // ── Greeks feed: single /ws/gex WebSocket ────────────────────────────────────
   // Reads the gex/snapshot frames (totals) + spot frames; ignores the flow tape.
   // Gated by the DATA toggle: ON connects, OFF closes the socket (page keeps

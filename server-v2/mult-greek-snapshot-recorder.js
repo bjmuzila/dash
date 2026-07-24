@@ -76,7 +76,7 @@ function pickExpiry(items) {
 }
 
 async function fetchJson(url) {
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(url, { cache: 'no-store', headers: internalHeaders() });
   if (!res.ok) throw new Error(`${url} ${res.status}`);
   return res.json();
 }

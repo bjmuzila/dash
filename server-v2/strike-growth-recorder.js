@@ -555,12 +555,22 @@ async function getForwardBuildStructure(opts = {}) {
   if (!symbols.length) return { asOf: null, tickers: [] };
   const order = new Map(symbols.map((s, i) => [s, i]));
 
+  // Only the 2 most recent sessions are needed (today's net + the prior session
+  // for the day-over-day Δ). Scanning the whole 9-day window was the "Forward Build
+  // takes forever" load (9 calendar days × full roster × every-few-min snapshots =
+  // ~17M rows). The `recent` CTE picks the last 2 dates present (index-only on the
+  // date-led index); the main scan then hits just those 2 dates via idx_strike_growth_fb.
   const { rows: raw } = await p.query(
-    `SELECT DISTINCT ON (symbol, expiry, strike, date)
+    `WITH recent AS (
+       SELECT DISTINCT date FROM strike_growth
+       WHERE date >= (CURRENT_DATE - INTERVAL '9 days')
+       ORDER BY date DESC LIMIT 2
+     )
+     SELECT DISTINCT ON (symbol, expiry, strike, date)
        to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry,
        gex_now, gex_open, spot
      FROM strike_growth
-     WHERE date >= (CURRENT_DATE - INTERVAL '9 days') AND symbol = ANY($1)
+     WHERE date IN (SELECT date FROM recent) AND symbol = ANY($1)
      ORDER BY symbol, expiry, strike, date, ts DESC`,
     [symbols]
   );

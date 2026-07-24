@@ -298,7 +298,7 @@ export default function HomeGaugeRail({
   const gauges: GaugeDef[] = [
     { label: "Gamma (Net GEX)", value: gex, t: signedT(gex, gexScale), midT: 0.5, kind: "signed", color: gex == null ? CYAN : gex >= 0 ? POS : NEG, fmt: fmtB },
     { label: "Delta (DEX)", value: dex, t: signedT(dex, dexScale), midT: 0.5, kind: "signed", color: dex == null ? CYAN : dex >= 0 ? POS : NEG, fmt: fmtDex },
-    { label: "Gamma % 0DTE (Vol)", value: gammaPctVol, t: gammaPctVol == null ? null : clamp(gammaPctVol / 100, 0, 1), midT: 0, kind: "pct", color: POS, fmt: fmtPct },
+    { label: "Gamma % 0DTE (Vol)", value: gammaPctVol, t: gammaPctVol == null ? null : clamp(gammaPctVol / 100, 0, 1), midT: 0, kind: "pct", color: gammaPctVol == null ? CYAN : gammaPctVol >= 50 ? POS : NEG, fmt: fmtPct },
     { label: "CPG Ratio", value: cpg, t: cpg == null ? null : clamp(cpg / 2, 0, 1), midT: 0.5, kind: "signed", color: cpg == null ? CYAN : cpg >= 1 ? POS : NEG, fmt: fmtRatio },
     { label: "0DTE GEX Δ 15m", value: gexChg, t: signedT(gexChg, chgScale), midT: 0.5, kind: "signed", color: gexChg == null ? CYAN : gexChg >= 0 ? POS : NEG, fmt: fmtB },
     { label: "IB Direction", value: ibDirection, t: ibDirection == null ? null : clamp(ibDirection / 100, 0, 1), midT: 0.5, kind: "signed", color: ibDirection == null ? CYAN : ibDirection >= 50 ? POS : NEG, fmt: fmtIb },
