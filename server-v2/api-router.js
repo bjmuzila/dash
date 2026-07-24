@@ -65,6 +65,11 @@ catch (e) { console.warn('[api-router] _lib-confidence.cjs not loaded:', e.messa
 let libIb = null;
 try { libIb = require('./_lib-ibdaily.cjs'); }
 catch (e) { console.warn('[api-router] _lib-ibdaily.cjs not loaded:', e.message); }
+// Full confidence model, extracted to a bundleable module (lib/confidence-compute.ts):
+//   esbuild lib/confidence-compute.ts --bundle --platform=node --format=cjs --external:pg --outfile=server-v2/_lib-confidence-route.cjs
+let libConfRoute = null;
+try { libConfRoute = require('./_lib-confidence-route.cjs'); }
+catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e.message); }
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -1224,6 +1229,21 @@ if (libDb) {
         } catch (err) {
           send(res, 500, { error: 'Calibration error', detail: String(err) });
         }
+      },
+    });
+  }
+
+  // /api/confidence — full confidence model. Logic lives in lib/confidence-compute.ts
+  // (extracted verbatim from the route) → bundled to _lib-confidence-route.cjs.
+  if (libConfRoute) {
+    register('/api/confidence', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const r = await libConfRoute.computeConfidence(sp);
+          send(res, r.status ?? 200, r.body, { 'Cache-Control': 'no-store', ...(r.headers || {}) });
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
       },
     });
   }
