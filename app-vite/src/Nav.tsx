@@ -14,7 +14,6 @@ const LINKS: { label: string; to: string }[] = [
   { label: 'Flow', to: '/flow' },
   { label: 'ES Candles', to: '/es-candles' },
   { label: 'Scanner', to: '/scanner' },
-  { label: 'Forward Build', to: '/forward-build' },
   { label: 'ICT', to: '/ict' },
   { label: 'Confidence', to: '/confidence-score' },
   { label: 'Fails', to: '/fails' },
