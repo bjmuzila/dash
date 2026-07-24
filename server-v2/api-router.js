@@ -1,0 +1,153 @@
+'use strict';
+/**
+ * server-v2/api-router.js — in-process replacement for app/api/* Next routes.
+ *
+ * WHY THIS EXISTS
+ *   server-with-proxy.js is already a plain Node http server that handles
+ *   /proxy/* and /ws itself and only delegates the *fallthrough* (pages + every
+ *   app/api/* route) to an embedded Next handler. This module lets us move
+ *   app/api/* handlers OUT of Next and into that same Node server, one route at
+ *   a time, deleting each app/api/<route>/route.ts only after its in-process
+ *   version is verified live. Until a route is registered here, it keeps being
+ *   served by Next exactly as before — so this file is safe to ship inert.
+ *
+ * AUTH — READ THIS BEFORE ADDING A ROUTE
+ *   Today app/api/* is gated by middleware.ts, which runs ONLY when a request
+ *   reaches the Next handler. A route handled here returns BEFORE that
+ *   fallthrough, so middleware never runs for it. Therefore every route MUST
+ *   declare an `auth` level and this router enforces it via the SAME session
+ *   check middleware/proxy-auth use (ws-auth.verifyWsRequest). Levels:
+ *     'public'     — no session required (mirror a middleware PUBLIC_PATTERN)
+ *     'subscriber' — active/trialing subscriber OR owner (the paywall)
+ *     'owner'      — owner only (OWNER_USER_ID)
+ *   Omitting `auth` is a hard error — we never default-open a paywalled route.
+ *
+ * MOUNTING (done later, in server-with-proxy.js, guarded by a kill-switch):
+ *   const { handleApiRoute } = require('./api-router');
+ *   // ...inside createServer callback, immediately BEFORE `handle(req, res)`:
+ *   if (process.env.API_ROUTER === '1' &&
+ *       await handleApiRoute(req, res, apiCtx)) return;
+ *   handle(req, res);
+ *   // apiCtx injects the server's own helpers (see REQUIRED CTX below) so this
+ *   // module stays decoupled from the 161KB entrypoint and independently testable.
+ *
+ * REQUIRED CTX (injected at mount time):
+ *   ctx.sendJson(res, code, obj, req?, opts?)  — server's JSON responder
+ *   ctx.verifyWsRequest(req)                   — from ./ws-auth
+ *   ctx.ownerUserId                            — (process.env.OWNER_USER_ID||'').trim()
+ *   ctx.port                                   — server PORT (for internal /proxy hops)
+ *   ctx.internalToken                          — process.env.INTERNAL_API_TOKEN
+ *   ctx.internalFetch(pathname, init?)         — fetch against http://127.0.0.1:PORT
+ *                                                with x-internal-token attached
+ */
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+async function enforceAuth(level, req, ctx) {
+  if (level === 'public') return { ok: true };
+  let access;
+  try {
+    access = await ctx.verifyWsRequest(req); // { ok, userId?, reason }
+  } catch {
+    return { ok: false, code: 401, reason: 'verify-error' };
+  }
+  if (!access.ok) return { ok: false, code: 401, reason: access.reason || 'unauthorized' };
+  if (level === 'owner') {
+    if (!ctx.ownerUserId || access.userId !== ctx.ownerUserId) {
+      return { ok: false, code: 403, reason: 'owner-only' };
+    }
+  }
+  // 'subscriber' — verifyWsRequest already required active/trialing or owner.
+  return { ok: true, userId: access.userId };
+}
+
+// ---------------------------------------------------------------------------
+// Route registry — add one entry per ported app/api/* route.
+// Key = exact pathname. Value = { auth, methods?, handler }.
+// handler(req, res, ctx, access) — must send a response; return value ignored.
+// ---------------------------------------------------------------------------
+
+const ROUTES = new Map();
+
+function register(pathname, def) {
+  if (!def || !def.auth || !def.handler) {
+    throw new Error(`api-router: route ${pathname} needs { auth, handler }`);
+  }
+  ROUTES.set(pathname, def);
+}
+
+// ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
+// Ports app/api/insights/gex/route.ts verbatim in behavior: forward to the
+// in-process /proxy/gex, reshape to the Exposure-tab payload. Subscriber-gated
+// (its data source /proxy/gex is subscriber-gated; middleware paywalled it too).
+// Still does the internal /proxy hop for a zero-behavior-change first cut; the
+// hop can be dropped later by calling the builder directly. Next is out of THIS
+// route's path once registered + its route.ts deleted.
+register('/api/insights/gex', {
+  auth: 'subscriber',
+  methods: ['GET'],
+  async handler(req, res, ctx) {
+    try {
+      const r = await ctx.internalFetch('/proxy/gex', { cache: 'no-store' });
+      if (!r.ok) return ctx.sendJson(res, r.status, { error: `proxy ${r.status}` }, req);
+      const p = await r.json();
+      const totals = p?.totals ?? null;
+      const callGexB = totals ? Number(totals.totalGEX ?? 0) / 1e9 : null;
+      const data = {
+        spot: p?.spot ?? null,
+        totals,
+        updatedAt: p?.updatedAt ?? Date.now(),
+        net_gex_billions: totals ? Number(totals.totalGEX ?? 0) / 1e9 : null,
+        net_gex_oivol_billions: totals ? Number(totals.totalGEXOiVol ?? totals.totalGEX ?? 0) / 1e9 : null,
+        call_gex_billions: callGexB,
+        put_gex_billions: null,
+        call_wall_spx: p?.callWall ?? null,
+        put_wall_spx: p?.putWall ?? null,
+        gamma_flip_spx: p?.gexFlip ?? null,
+        spx_spot: p?.spot ?? null,
+      };
+      ctx.sendJson(res, 200, { data }, req, {
+        cacheControl: 'no-store, no-cache, must-revalidate, max-age=0',
+      });
+    } catch (err) {
+      ctx.sendJson(res, 502, { error: String(err?.message || err) }, req);
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Dispatcher — return true if handled (skip Next), false to fall through.
+// ---------------------------------------------------------------------------
+
+async function handleApiRoute(req, res, ctx) {
+  let pathname;
+  try { ({ pathname } = new URL(req.url || '/', 'http://localhost')); }
+  catch { return false; }
+  if (!pathname || !pathname.startsWith('/api/')) return false;
+
+  const def = ROUTES.get(pathname);
+  if (!def) return false; // not ported yet → let Next handle it
+
+  const method = req.method || 'GET';
+  if (def.methods && !def.methods.includes(method)) {
+    ctx.sendJson(res, 405, { error: 'method-not-allowed' }, req);
+    return true;
+  }
+
+  const verdict = await enforceAuth(def.auth, req, ctx);
+  if (!verdict.ok) {
+    ctx.sendJson(res, verdict.code, { error: verdict.reason }, req);
+    return true;
+  }
+
+  try {
+    await def.handler(req, res, ctx, verdict);
+  } catch (err) {
+    ctx.sendJson(res, 500, { error: String(err?.message || err) }, req);
+  }
+  return true;
+}
+
+module.exports = { handleApiRoute, register, _routes: ROUTES };

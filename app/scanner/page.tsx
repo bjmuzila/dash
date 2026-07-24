@@ -23,6 +23,7 @@ import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
+import Link from "next/link";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -3061,6 +3062,18 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "gexchangetop" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
           background: tab === "gexchangetop" ? `${HOME_THEME.orange}22` : "transparent",
         }}>GEX Change Top</button>
+        {/* Forward Build moved to its own route (/forward-build). This tab-styled
+            link navigates there instead of rendering inline. */}
+        <Link href="/forward-build" prefetch={false} style={{
+          ...tabStyle(false),
+          textDecoration: "none",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          border: `1px solid ${HOME_THEME.orange}`,
+          background: `${HOME_THEME.orange}22`,
+          color: HOME_THEME.text,
+        }}>Forward Build <span style={{ fontSize: 11, opacity: 0.8 }}>↗</span></Link>
       </div>
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}

@@ -69,6 +69,11 @@ const {
   setAlertEnabled: setSignalAlertEnabled,
 } = require('./signals-engine');
 const { checkProxyAccess } = require('./proxy-auth');
+const { verifyWsRequest } = require('./ws-auth');
+// In-process replacement for app/api/* Next routes. Handles only routes it has
+// registered; everything else falls through to Next. Gated by API_ROUTER=1 at
+// the mount point below so it is a no-op until deliberately enabled.
+const { handleApiRoute } = require('./api-router');
 const { initObservability, captureError } = require('./observability');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -1166,6 +1171,22 @@ async function main() {
 
   // Forward-declared so the request handler can reference the live proxy.
   let proxy = null;
+
+  // Injected deps for the in-process API router (api-router.js). Stateless, so
+  // built once. internalFetch mirrors what the old app/api/* thin routes did:
+  // hop to this same server's /proxy/* with the internal-token bypass attached.
+  const apiCtx = {
+    sendJson,
+    verifyWsRequest,
+    ownerUserId: (process.env.OWNER_USER_ID || '').trim(),
+    port: PORT,
+    internalToken: process.env.INTERNAL_API_TOKEN,
+    internalFetch: (pathname, init = {}) => {
+      const headers = { ...(init.headers || {}) };
+      if (process.env.INTERNAL_API_TOKEN) headers['x-internal-token'] = process.env.INTERNAL_API_TOKEN;
+      return fetch(`http://127.0.0.1:${PORT}${pathname}`, { ...init, headers });
+    },
+  };
 
   const server = createServer(async (req, res) => {
     applySecurityHeaders(req, res);
@@ -2696,6 +2717,18 @@ async function main() {
       captureError(err, { route: req.url, method: req.method });
       sendJson(res, 500, { error: String(err?.message || err) });
       return;
+    }
+    // In-process API routes (api-router.js) run just before the Next fallthrough.
+    // Only registered routes are handled here; unregistered /api/* still falls
+    // through to Next. Kill-switch: unset/0 → 100% Next (no behavior change).
+    if (process.env.API_ROUTER === '1') {
+      try {
+        if (await handleApiRoute(req, res, apiCtx)) return;
+      } catch (err) {
+        captureError(err, { route: req.url, method: req.method, at: 'api-router' });
+        sendJson(res, 500, { error: String(err?.message || err) }, req);
+        return;
+      }
     }
     // Next's handler parses the URL itself when not provided one.
     handle(req, res);
