@@ -1247,6 +1247,284 @@ if (libDb) {
       },
     });
   }
+
+  // ── Snapshot recorder/reader pairs (subscriber; recorders POST via internal token) ──
+
+  // /api/snapshots/greeks
+  register('/api/snapshots/greeks', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const now = new Date();
+          const gexB = Number(body.gex ?? 0), dexB = Number(body.dex ?? 0), chexM = Number(body.chex ?? 0), vexM = Number(body.vex ?? 0);
+          await libDb.insertGreeksTs({
+            timestamp: body.timestamp ?? now.getTime(), date: body.date ?? etDateStr(now),
+            time: body.time ?? now.toTimeString().split(' ')[0], ticker: body.ticker ?? 'SPXW',
+            price: Number(body.price ?? 0),
+            gexRaw: gexB * 1e9, dexRaw: dexB * 1e9, chexRaw: chexM * 1e6, vexRaw: vexM * 1e6,
+            gex: gexB, dex: dexB, chex: chexM, vex: vexM,
+            buyScore: Number(body.buyScore ?? 0), sellScore: Number(body.sellScore ?? 0),
+          });
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        send(res, 200, { rows: await libDb.getGreeksTs(sp.get('date') ?? undefined, Math.min(Number(sp.get('limit') ?? 1000), 5000)) });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/snapshots/premium
+  register('/api/snapshots/premium', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const now = new Date();
+          await libDb.insertPremiumFlow({
+            timestamp: body.timestamp ?? now.getTime(), date: body.date ?? etDateStr(now),
+            time: body.time ?? now.toTimeString().split(' ')[0],
+            callPremium: body.callPremium ?? 0, putPremium: body.putPremium ?? 0,
+            netPremium: body.netPremium ?? 0, spxPrice: body.spxPrice ?? 0,
+          });
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        send(res, 200, { rows: await libDb.getPremiumFlow(sp.get('date') ?? undefined, Math.min(Number(sp.get('limit') ?? 500), 2000)) });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/snapshots/ib
+  register('/api/snapshots/ib', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const b = await readJson(req);
+          if (!b?.date) return send(res, 400, { error: 'date required' });
+          await libDb.upsertIbLevels({
+            date: String(b.date), symbol: String(b.symbol ?? '/ES'), timestamp: Number(b.timestamp ?? Date.now()),
+            locked: Number(b.locked ?? 0), high: Number(b.high ?? 0), low: Number(b.low ?? 0), mid: Number(b.mid ?? 0),
+            range: Number(b.range ?? 0), rangePct: Number(b.rangePct ?? 0), openPrice: Number(b.openPrice ?? 0),
+            lowFirst: b.lowFirst == null ? null : Number(b.lowFirst), barCount: Number(b.barCount ?? 0),
+          });
+          const row = await libDb.getIbLevels(String(b.date));
+          return send(res, 200, { ok: true, locked: row?.locked ?? 0, row });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const date = new URL(req.url || '/', 'http://localhost').searchParams.get('date') ?? '';
+        if (!date) return send(res, 200, { row: null });
+        send(res, 200, { row: await libDb.getIbLevels(date) });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/snapshots/bzila
+  register('/api/snapshots/bzila', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const now = new Date();
+          const id = await libDb.insertBzilaSnapshot({
+            timestamp: body.timestamp ?? now.getTime(), date: body.date ?? etDateStr(now),
+            time: body.time ?? now.toTimeString().split(' ')[0], ticker: body.ticker ?? 'SPX',
+            session: body.session ?? 'rth', orders: Array.isArray(body.orders) ? body.orders : [], stats: body.stats ?? {},
+          });
+          return send(res, 200, { ok: true, id });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const date = sp.get('date') ?? undefined, session = sp.get('session') ?? undefined;
+        if (sp.get('latest') === '1') return send(res, 200, { snap: await libDb.getLatestBzilaSnapshot(date, session) });
+        const rows = await libDb.getBzilaSnapshots(date, Math.min(Number(sp.get('limit') ?? 200), 1000));
+        const parsed = rows.map((r) => ({
+          ...r,
+          orders: typeof r.orders === 'string' ? JSON.parse(r.orders) : r.orders,
+          stats: typeof r.stats === 'string' ? JSON.parse(r.stats) : r.stats,
+        }));
+        send(res, 200, { rows: parsed });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/snapshots/mvc
+  register('/api/snapshots/mvc', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const now = new Date();
+          const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          const id = await libDb.insertMvcSnapshot({
+            timestamp: body.timestamp ?? now.getTime(), date: body.date ?? etDateStr(now),
+            day: body.day ?? days[now.getDay()], time: body.time ?? now.toTimeString().split(' ')[0],
+            strikeOIVol: body.strikeOIVol ?? null, mvcValueOIVol: body.mvcValueOIVol ?? 0, pctOI_Vol: body.pctOI_Vol ?? null,
+            volumeOIVol: body.volumeOIVol ?? 0, totalNetGEX_OI: body.totalNetGEX_OI ?? 0,
+            strikeVolOnly: body.strikeVolOnly ?? null, mvcValueVolOnly: body.mvcValueVolOnly ?? 0, pctVol_Only: body.pctVol_Only ?? null,
+            volumeVolOnly: body.volumeVolOnly ?? 0, totalNetGEX_Vol: body.totalNetGEX_Vol ?? 0,
+            spxPrice: body.spxPrice ?? 0, esPrice: body.esPrice ?? 0,
+            netDEXStrike: body.netDEXStrike ?? null, totalNetDEX_OI: body.totalNetDEX_OI ?? null, totalNetDEX_Vol: body.totalNetDEX_Vol ?? null,
+            totalAbsNetGEX: body.totalAbsNetGEX ?? 0, gexFlip: body.gexFlip ?? null,
+            triggerType: body.triggerType ?? 'manual', expiration: body.expiration ?? '—',
+          });
+          return send(res, 200, { ok: true, id });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const days = Number(sp.get('days') ?? 0);
+        const since = days > 0 ? Date.now() - days * 86_400_000 : undefined;
+        send(res, 200, { rows: await libDb.getMvcSnapshots(sp.get('date') ?? undefined, Math.min(Number(sp.get('limit') ?? 200), 1000), since) });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/snapshots/candles
+  register('/api/snapshots/candles', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      const isNq = (sym) => !!sym && /nq/i.test(sym);
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const candles = Array.isArray(body) ? body : [body];
+          for (const c of candles) {
+            const upsert = isNq(c.symbol) ? libDb.upsertNqCandle : libDb.upsertEsCandle;
+            await upsert({
+              timestamp: Number(c.timestamp), date: String(c.date), slotKey: String(c.slotKey),
+              time: String(c.time ?? ''), symbol: String(c.symbol ?? '/ES'),
+              intervalMinutes: Number(c.intervalMinutes ?? 5), source: String(c.source ?? 'dxlink'),
+              open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
+              volume: Number(c.volume), avgVolume: Number(c.avgVolume ?? 0),
+            });
+          }
+          return send(res, 200, { ok: true, count: candles.length });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const date = sp.get('date') ?? undefined;
+        const daysBack = sp.get('daysBack') ? Number(sp.get('daysBack')) : undefined;
+        const limit = Math.min(Number(sp.get('limit') ?? 2000), 50000);
+        const interval = Number(sp.get('interval') ?? 5) === 1 ? 1 : 5;
+        const rows = isNq(sp.get('symbol'))
+          ? await libDb.getNqCandles(date, daysBack, limit)
+          : await libDb.getEsCandles(date, daysBack, limit, interval);
+        send(res, 200, { rows });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/snapshots/playbook
+  register('/api/snapshots/playbook', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const now = new Date();
+          const id = await libDb.insertPlaybookFeed({
+            timestamp: Number(body.timestamp ?? now.getTime()), date: body.date ?? etDateStr(now),
+            time: body.time ?? now.toTimeString().split(' ')[0], text: String(body.text ?? ''),
+            color: body.color ? String(body.color) : null, source: body.source ? String(body.source) : 'insights-exposure',
+            expiry: body.expiry ? String(body.expiry) : null, regime_key: body.regimeKey ? String(body.regimeKey) : null,
+            spot: body.spot == null ? null : Number(body.spot), gex: body.gex == null ? null : Number(body.gex),
+            dex: body.dex == null ? null : Number(body.dex), chex: body.chex == null ? null : Number(body.chex),
+            vex: body.vex == null ? null : Number(body.vex),
+          });
+          return send(res, 200, { ok: true, id });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        send(res, 200, { rows: await libDb.getPlaybookFeed(sp.get('date') ?? undefined, Math.min(Number(sp.get('limit') ?? 200), 2000)) });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/cache/expirations
+  register('/api/cache/expirations', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const expirations = Array.isArray(body.expirations) ? body.expirations : [];
+          await libDb.upsertExpirationCache(body.ticker ?? 'SPX', expirations, body.raw ?? body);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const ticker = new URL(req.url || '/', 'http://localhost').searchParams.get('ticker') ?? 'SPX';
+        const data = await libDb.getCachedExpirations(ticker);
+        send(res, 200, { data, hit: data !== null });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/waitlist/count — public signup count (no emails exposed).
+  register('/api/waitlist/count', {
+    auth: 'public', methods: ['GET'],
+    async handler(req, res) {
+      try { send(res, 200, { ok: true, count: await libDb.countWaitlist() }); }
+      catch (err) { send(res, 500, { ok: false, error: 'Server error.' }); }
+    },
+  });
+
+  // /api/feedback — POST any signed-in user; GET/PATCH owner-only.
+  register('/api/feedback', {
+    auth: 'user', methods: ['GET', 'POST', 'PATCH'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (req.method === 'POST') {
+        try {
+          if (!userId) return send(res, 401, { error: 'Sign in to send feedback' });
+          const body = await readJson(req);
+          const message = String(body?.message ?? '').trim();
+          if (!message) return send(res, 400, { error: 'Message is required' });
+          if (message.length > 5000) return send(res, 400, { error: 'Message too long' });
+          let email = null;
+          try { const u = await libDb.getUserById(userId); email = u?.email ?? null; } catch { /* email optional */ }
+          const row = await libDb.addFeedback({
+            clerk_user_id: userId, email,
+            category: body?.category ? String(body.category) : 'note',
+            message, page: body?.page ? String(body.page) : null,
+          });
+          return send(res, 200, { ok: true, feedback: row });
+        } catch (err) { return send(res, 500, { error: 'Feedback save failed', detail: String(err) }); }
+      }
+      // GET / PATCH — owner only (mirrors the route's ownerGate).
+      if (!ctx.ownerUserId || userId !== ctx.ownerUserId) return send(res, 403, { error: 'Forbidden' });
+      if (req.method === 'PATCH') {
+        try {
+          const body = await readJson(req);
+          const id = Number(body?.id ?? 0);
+          const status = body?.status === 'open' ? 'open' : 'resolved';
+          if (!id) return send(res, 400, { error: 'id required' });
+          await libDb.setFeedbackStatus(id, status);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: 'Feedback update failed', detail: String(err) }); }
+      }
+      try {
+        const status = new URL(req.url || '/', 'http://localhost').searchParams.get('status') || undefined;
+        const items = await libDb.listFeedback({ status });
+        const openCount = (await libDb.listFeedback({ status: 'open', limit: 1000 })).length;
+        send(res, 200, { items, openCount });
+      } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
+    },
+  });
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };
