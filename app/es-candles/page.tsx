@@ -2192,9 +2192,29 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             }
             if (sessMax > 0) {
               const cfg = bubbleCfgRef.current;
-              // scaleSqrt DOMAIN: [0, max |GEX| in the dataset]. RANGE: [minSize,
-              // maxSize] px. sqrt so bubble AREA (not radius) tracks |GEX|.
-              const domainMax = sessMax;
+              // scaleSqrt DOMAIN: [0, max |GEX| KNOWN AS OF THAT BUCKET]. RANGE:
+              // [minSize, maxSize] px. sqrt so bubble AREA (not radius) tracks |GEX|.
+              //
+              // EXPANDING WINDOW, not session-wide: a bucket is normalized against
+              // the max seen up to and including itself, so a divisor can never grow
+              // after the fact and an already-printed bubble can never shrink. A
+              // strong 10:00 wall stays exactly as fat at 15:50 as it was at 10:00;
+              // a bigger wall later just clamps (ratio caps at 1) from its own bucket
+              // forward. Floored at 15% of sessMax so the first few buckets of the
+              // day — where acc is tiny — don't all render at maxSize.
+              const runMax = new Map<number, number>();
+              {
+                let acc = 0;
+                for (const m of mins) {
+                  if (etMinutesOfDay(m.slotTs) < BUBBLE_SCALE_CUTOFF_MIN) {
+                    for (const c of m.cells) {
+                      const a = Math.abs(valOf(c));
+                      if (a > acc) acc = a;
+                    }
+                  }
+                  runMax.set(m.slotTs, Math.max(acc, sessMax * 0.15));
+                }
+              }
               const sizeSpan = cfg.maxSize - cfg.minSize;
               // Brightness gradient: intensity 0..1 → the SMALLEST strike's opacity
               // = max(0.1, 1 - intensity). 0% ⇒ min 1.0 (flat, no gradient); 90% ⇒
@@ -2209,16 +2229,23 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               // column and render as unbroken bright tubes, while everything else
               // stays faint. Show Top Strikes = how many rows draw; Highlight = how
               // many of those are the "walls" (big, white-hot, glowing).
-              const peak = new Map<number, number>();
+              // Ranked by peak |GEX| AS OF each bucket (expanding, same reasoning as
+              // runMax above) rather than over the whole session: a strike that was
+              // top-N at 10:00 keeps its 10:00 trail forever, even if it's long since
+              // fallen out of the current top-N. The newest column still shows only
+              // what's top-N right now, so the live read is unchanged.
+              const peakSoFar = new Map<number, number>();
+              const shownAt = new Map<number, Set<number>>();
+              const wallAt = new Map<number, Set<number>>();
               for (const m of mins) {
                 for (const c of m.cells) {
                   const a = Math.abs(valOf(c));
-                  if (a > 0 && a > (peak.get(c.strike) ?? 0)) peak.set(c.strike, a);
+                  if (a > 0 && a > (peakSoFar.get(c.strike) ?? 0)) peakSoFar.set(c.strike, a);
                 }
+                const ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
+                shownAt.set(m.slotTs, new Set(ranked.slice(0, Math.max(0, cfg.topStrikes))));
+                wallAt.set(m.slotTs, new Set(ranked.slice(0, Math.max(0, cfg.highlight))));
               }
-              const rankedStrikes = [...peak.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-              const shownStrikes = new Set(rankedStrikes.slice(0, Math.max(0, cfg.topStrikes)));
-              const wallStrikes = new Set(rankedStrikes.slice(0, Math.max(0, cfg.highlight)));
 
               ctx.save();
               for (const m of mins) {
@@ -2228,8 +2255,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 const x = xAt(Math.floor(m.slotTs / bucketMs) * bucketMs);
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
+                // Per-bucket scale + row filter — both frozen at print time.
+                const domainMax = runMax.get(m.slotTs) || sessMax;
+                const shownStrikes = shownAt.get(m.slotTs);
+                const wallStrikes = wallAt.get(m.slotTs);
+                if (!shownStrikes || !wallStrikes) continue;
                 for (const cell of m.cells) {
-                  if (!shownStrikes.has(cell.strike)) continue; // global row filter
+                  if (!shownStrikes.has(cell.strike)) continue; // as-of-bucket row filter
                   const v = valOf(cell);
                   if (!v) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);

@@ -266,6 +266,20 @@ export default function ForwardBuildStructure() {
     border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text,
   };
   const net = (t: Ticker, d: number) => t.dtes.find((x) => x.dte === d)?.netTotal;
+  // Top mover per expiry: the strike whose wall grew most (build) and shrank most
+  // (fade) vs yesterday. "Growing" = |net| increasing (net & Δ share a sign).
+  const flowOf = (t: Ticker, d: number): { build: StrikeRow | null; fade: StrikeRow | null } | null => {
+    const e = t.dtes.find((x) => x.dte === d);
+    if (!e) return null;
+    let build: StrikeRow | null = null, fade: StrikeRow | null = null;
+    for (const s of e.strikes) {
+      if (s.delta == null) continue;
+      const g = s.net * s.delta;
+      if (g > 0) { if (!build || Math.abs(s.delta) > Math.abs(build.delta as number)) build = s; }
+      else if (g < 0) { if (!fade || Math.abs(s.delta) > Math.abs(fade.delta as number)) fade = s; }
+    }
+    return { build, fade };
+  };
 
   return (
     <>
@@ -295,9 +309,6 @@ export default function ForwardBuildStructure() {
         <div className="fb-grid">
           {view.map((t) => {
             const chips = [0, 1, 2].map((d) => ({ d, v: net(t, d) })).filter((x) => x.v != null) as { d: number; v: number }[];
-            const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike ?? null);
-            const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike ?? null);
-            const hasWalls = cw.filter((x) => x != null).length + pw.filter((x) => x != null).length > 1;
             const isOpen = sel === t.symbol;
             return (
               <Fragment key={t.symbol}>
@@ -307,39 +318,49 @@ export default function ForwardBuildStructure() {
                   <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "0.03em", color: "#cfe0ff" }}>{t.symbol}</span>
                   <span style={{ fontSize: 14, fontFamily: "var(--font-mono, monospace)", color: SPOT, background: "rgba(233,185,73,0.08)", border: `1px solid ${SPOT}44`, borderRadius: 5, padding: "3px 7px" }}>{fmtSpot(t.spot)}</span>
                 </div>
-                <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
-                  {chips.map(({ d, v }) => (
-                    <span key={d} style={{ flex: 1, textAlign: "center", fontSize: 14, fontFamily: "var(--font-mono, monospace)", padding: "6px 3px", borderRadius: 5, border: `1px solid ${HOME_THEME.border}` }}>
-                      <span style={{ display: "block", color: DIM, fontSize: 11, marginBottom: 3 }}>{d}D</span>
-                      <span style={{ color: v >= 0 ? GREEN : RED }}>{fmtSigned(v)}</span>
-                    </span>
-                  ))}
+                {/* Flow-first: the day-over-day movers are the hero. Per expiry, the
+                    strike whose wall grew most (▲ green) and shrank most (▼ red). */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  {[0, 1, 2].map((d) => {
+                    const has = t.dtes.some((x) => x.dte === d);
+                    const f = flowOf(t, d);
+                    return (
+                      <div key={d} style={{ flex: 1, border: `1px solid ${HOME_THEME.border}`, borderRadius: 7, padding: "6px 4px", background: "rgba(255,255,255,0.02)" }}>
+                        <div style={{ fontSize: 9.5, color: DIM, textAlign: "center", letterSpacing: "0.04em", marginBottom: 5 }}>{d}D</div>
+                        {has ? (
+                          <>
+                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 13, fontWeight: 800, color: GREEN, lineHeight: 1.15 }}>
+                              {f?.build ? `▲ ${fmtStrike(f.build.strike)}` : "▲ —"}
+                            </div>
+                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 9, color: GREEN, opacity: 0.85, marginBottom: 5 }}>
+                              {f?.build ? `+${fmtGex(Math.abs(f.build.delta as number))}` : " "}
+                            </div>
+                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 13, fontWeight: 800, color: RED, lineHeight: 1.15 }}>
+                              {f?.fade ? `▼ ${fmtStrike(f.fade.strike)}` : "▼ —"}
+                            </div>
+                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 9, color: RED, opacity: 0.85 }}>
+                              {f?.fade ? `-${fmtGex(Math.abs(f.fade.delta as number))}` : " "}
+                            </div>
+                          </>
+                        ) : <div style={{ textAlign: "center", color: DIM, fontSize: 11, padding: "8px 0" }}>—</div>}
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8 }}>
-                  {hasWalls ? (
-                    <table style={{ borderCollapse: "collapse", fontSize: 12.5, fontFamily: "var(--font-mono, monospace)" }}>
-                      <tbody>
-                        <tr>
-                          <th style={{ textAlign: "left", fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", color: DIM, padding: "1px 8px 1px 0" }}></th>
-                          {[0, 1, 2].map((d) => (
-                            <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", color: DIM, padding: "1px 6px" }}>{d}D</th>
-                          ))}
-                        </tr>
-                        <tr>
-                          <td style={{ textAlign: "left", color: GREEN, padding: "1px 8px 1px 0" }}>calls</td>
-                          {cw.map((s, i) => (
-                            <td key={i} style={{ textAlign: "right", color: s != null ? GREEN : DIM, padding: "1px 6px" }}>{s != null ? fmtStrike(s) : "—"}</td>
-                          ))}
-                        </tr>
-                        <tr>
-                          <td style={{ textAlign: "left", color: RED, padding: "1px 8px 1px 0" }}>puts</td>
-                          {pw.map((s, i) => (
-                            <td key={i} style={{ textAlign: "right", color: s != null ? RED : DIM, padding: "1px 6px" }}>{s != null ? fmtStrike(s) : "—"}</td>
-                          ))}
-                        </tr>
-                      </tbody>
-                    </table>
-                  ) : <span style={{ fontSize: 11.5, color: DIM }}>walls forming…</span>}
+                {/* Walls, demoted to a compact secondary row: put · call per expiry. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, paddingTop: 6, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <span style={{ fontSize: 9, color: DIM, letterSpacing: "0.03em", flexShrink: 0 }}>walls</span>
+                  {[0, 1, 2].map((d) => {
+                    const cwS = t.dtes.find((x) => x.dte === d)?.callWall?.strike ?? null;
+                    const pwS = t.dtes.find((x) => x.dte === d)?.putWall?.strike ?? null;
+                    return (
+                      <div key={d} style={{ flex: 1, textAlign: "center", fontSize: 9.5, fontFamily: "var(--font-mono, monospace)" }}>
+                        <span style={{ color: "rgba(255,92,102,0.7)" }}>{pwS != null ? fmtStrike(pwS) : "—"}</span>
+                        <span style={{ color: DIM, opacity: 0.6 }}> · </span>
+                        <span style={{ color: "rgba(38,222,129,0.7)" }}>{cwS != null ? fmtStrike(cwS) : "—"}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
               {isOpen && (

@@ -629,7 +629,7 @@ function TickerPanel({
                         : { strike: r.strike, expiry: e, x: ev.clientX, y: ev.clientY });
                     }}
                     style={{
-                    padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
+                    padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),

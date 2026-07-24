@@ -152,6 +152,16 @@ export default function GexChart({
   // Viewport — matches vanilla ovViewport: { count, start }
   // count is set on first draw based on detected strike step (target ~$300 range)
   const vpRef      = useRef({ start: null as number | null, count: 121 });
+  const densifiedRef = useRef<DensifyResult>({ rows: [], step: 5 });
+  const densifyKeyRef = useRef<string>("");
+  const getDensified = useCallback((): DensifyResult => {
+    const key = `${chain.length}:${chain[0]?.strike}:${chain[chain.length - 1]?.strike}:${spotPrice}`;
+    if (key !== densifyKeyRef.current) {
+      densifiedRef.current = densify(chain, spotPrice);
+      densifyKeyRef.current = key;
+    }
+    return densifiedRef.current;
+  }, [chain, spotPrice]);
   // Y scale — matches vanilla ovYScale (1 = auto, >1 = zoomed in, <1 = zoomed out)
   const yScaleRef  = useRef(1);
   // Drag
@@ -196,7 +206,7 @@ export default function GexChart({
       ctx.clearRect(0, 0, W, H);
     }
 
-    const { rows: allRows, step: detectedStep } = densify(chain, spotPrice);
+    const { rows: allRows, step: detectedStep } = getDensified();
     if (!allRows.length) {
       ctx.fillStyle = "#2a4060";
       ctx.font = "bold 13px Arial";
@@ -660,7 +670,7 @@ export default function GexChart({
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
     ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg]);
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg, getDensified]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
@@ -690,7 +700,7 @@ export default function GexChart({
   // Reset viewport only when expiry changes (not on every live WS chain update)
   useEffect(() => {
     if (!chain.length) return;
-    const { rows, step } = densify(chain, spotPrice);
+    const { rows, step } = getDensified();
     const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
     vpRef.current    = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
@@ -704,7 +714,7 @@ export default function GexChart({
     e.preventDefault();
     const el = containerRef.current;
     if (!el) return;
-    const { rows } = densify(chain, spotPrice);
+    const { rows } = getDensified();
     if (!rows.length) return;
     const vp     = vpRef.current;
     const factor = e.deltaY > 0 ? 1.16 : 0.86;
@@ -716,7 +726,7 @@ export default function GexChart({
     vp.count = next;
     vp.start = clamp(Math.round(anchor - frac * next), 0, Math.max(0, rows.length - next));
     draw();
-  }, [chain, spotPrice, draw]);
+  }, [chain, spotPrice, draw, getDensified]);
 
   // Bind wheel natively with { passive: false } so preventDefault() is honored.
   useEffect(() => {
@@ -746,7 +756,7 @@ export default function GexChart({
 
   // ── Pointer move: pan, y-scale, or tooltip ──
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    const { rows } = densify(chain, spotPrice);
+    const { rows } = getDensified();
     const vp   = vpRef.current;
 
     if (dragRef.current) {
@@ -775,8 +785,9 @@ export default function GexChart({
     const visible = rows.slice(vp.start ?? 0, (vp.start ?? 0) + vp.count);
     const g2  = (rect.width - PAD_L - PAD_R) / visible.length;
     const idx = clamp(Math.floor((mx - PAD_L) / g2), 0, visible.length - 1);
-    if (visible[idx]) setTooltip({ x: mx, y: my, row: visible[idx] });
-  }, [chain, spotPrice, draw]);
+    const picked = visible[idx];
+    if (picked && picked.strike !== tooltip?.row.strike) setTooltip({ x: mx, y: my, row: picked });
+  }, [chain, spotPrice, draw, getDensified, tooltip?.row.strike]);
 
   const onPointerUp = useCallback(() => {
     dragRef.current = null;
@@ -790,7 +801,7 @@ export default function GexChart({
     if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const { rows } = densify(chain, spotPrice);
+    const { rows } = getDensified();
     if (!rows.length) return;
     const vp   = vpRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -801,16 +812,16 @@ export default function GexChart({
     const idx = clamp(Math.floor((mx - PAD_L) / g2), 0, visible.length - 1);
     const picked = visible[idx];
     if (picked) onStrikeClick(picked, { x: e.clientX, y: e.clientY });
-  }, [onStrikeClick, chain, spotPrice]);
+  }, [onStrikeClick, chain, spotPrice, getDensified]);
 
   // ── Double-click: re-center on ATM + reset y-scale ──
   const onDblClick = useCallback(() => {
-    const { rows, step } = densify(chain, spotPrice);
+    const { rows, step } = getDensified();
     const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
     vpRef.current     = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
     draw();
-  }, [chain, spotPrice, draw]);
+  }, [chain, spotPrice, draw, getDensified]);
 
   return (
     <div

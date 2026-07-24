@@ -358,6 +358,61 @@ const PROMPTS: Prompt[] = [
     },
   },
   {
+    id: "confirm-vs-diverge-low",
+    cat: "Cross-index",
+    title: "ES breaks IB low — does NQ confirm or diverge?",
+    ask: "Mirror of the IB-high version, for the down side. Split every ES IB-low break by what NQ did, and compare ES's own break quality across the cohorts.",
+    run: ({ paired, today }) => {
+      const pop = paired.filter(({ e }) => side(e) === "L");
+      const coh = {
+        "NQ confirmed FIRST": pop.filter(({ e, n }) => side(n) === "L" && n.fcb!.breakMin < e.fcb!.breakMin),
+        "NQ confirmed AFTER": pop.filter(({ e, n }) => side(n) === "L" && n.fcb!.breakMin >= e.fcb!.breakMin),
+        "NQ DIVERGED (broke high)": pop.filter(({ n }) => side(n) === "H"),
+        "NQ never broke": pop.filter(({ n }) => side(n) == null),
+      };
+      const tE = today?.ES ?? null, tN = today?.NQ ?? null;
+      const todayCoh =
+        tE?.breakSide === "L"
+          ? tN?.breakSide === "L"
+            ? tN.breakMin != null && tE.breakMin != null && tN.breakMin < tE.breakMin
+              ? "NQ confirmed FIRST"
+              : "NQ confirmed AFTER"
+            : tN?.breakSide === "H"
+              ? "NQ DIVERGED (broke high)"
+              : "NQ never broke"
+          : null;
+      const rows: Row[] = Object.entries(coh).map(([label, xs]) => ({
+        label,
+        today: label === todayCoh,
+        n: xs.length,
+        k: xs.filter(({ e }) => e.fcb!.hit["1"]).length,
+        extra: {
+          "of all": pctS(xs.length, pop.length),
+          failed: pctS(xs.filter(({ e }) => e.fcb!.failed).length, xs.length),
+          "→ mid": pctS(xs.filter(({ e }) => e.fcb!.fadeMid).length, xs.length),
+          "→ IB high": pctS(xs.filter(({ e }) => e.fcb!.fadeOpp).length, xs.length),
+          "med ext": (med(xs.map(({ e }) => e.fcb!.rExt)) ?? 0).toFixed(2),
+          "closed bot25": pctS(xs.filter(({ e }) => e.closeZone === "bot25").length, xs.length),
+        },
+        emphasis: label.startsWith("NQ DIVERGED"),
+      }));
+      const cf = [...coh["NQ confirmed FIRST"], ...coh["NQ confirmed AFTER"]];
+      const dv = coh["NQ DIVERGED (broke high)"];
+      const cfHit = cf.filter(({ e }) => e.fcb!.hit["1"]).length;
+      const dvHit = dv.filter(({ e }) => e.fcb!.hit["1"]).length;
+      const delta = (100 * cfHit) / (cf.length || 1) - (100 * dvHit) / (dv.length || 1);
+      return {
+        headline: `${pop.length} ES IB-low breaks. "hit" column = reached 1.0× the IB width.`,
+        cols: ["of all", "failed", "→ mid", "→ IB high", "med ext", "closed bot25"],
+        rows,
+        verdict:
+          dv.length < 30
+            ? `Divergence cohort n=${dv.length} — too thin to trade off.`
+            : `Confirmed: ${pctS(cfHit, cf.length)} reach 1×. Diverged: ${pctS(dvHit, dv.length)}. Confirmation is worth ${delta.toFixed(1)} pts of 1×-hit rate.`,
+      };
+    },
+  },
+  {
     id: "nq-leads-does-es-follow",
     cat: "Cross-index",
     title: "NQ breaks IB high FIRST — does ES follow?",
@@ -419,6 +474,71 @@ const PROMPTS: Prompt[] = [
                 aloneHit,
                 alone.length,
               )} when it runs alone — ${delta.toFixed(1)} pts. ES closed top25 in ${pctS(esTop, led.length)} of NQ-led days.`,
+      };
+    },
+  },
+  {
+    id: "nq-leads-does-es-follow-low",
+    cat: "Cross-index",
+    title: "NQ breaks IB low FIRST — does ES follow?",
+    ask: "Mirror of the IB-high version, for the down side. Population is every NQ IB-low break; cohorts are what ES did.",
+    run: ({ paired, today }) => {
+      const pop = paired.filter(({ n }) => side(n) === "L");
+      const coh = {
+        "ES followed (NQ led)": pop.filter(({ e, n }) => side(e) === "L" && e.fcb!.breakMin > n.fcb!.breakMin),
+        "ES broke first": pop.filter(({ e, n }) => side(e) === "L" && e.fcb!.breakMin <= n.fcb!.breakMin),
+        "ES DIVERGED (broke high)": pop.filter(({ e }) => side(e) === "H"),
+        "ES never broke": pop.filter(({ e }) => side(e) == null),
+      };
+      const tE = today?.ES ?? null, tN = today?.NQ ?? null;
+      const todayCoh =
+        tN?.breakSide === "L"
+          ? tE?.breakSide === "L"
+            ? tE.breakMin != null && tN.breakMin != null && tE.breakMin > tN.breakMin
+              ? "ES followed (NQ led)"
+              : "ES broke first"
+            : tE?.breakSide === "H"
+              ? "ES DIVERGED (broke high)"
+              : "ES never broke"
+          : null;
+      const rows: Row[] = Object.entries(coh).map(([label, xs]) => ({
+        label,
+        today: label === todayCoh,
+        n: xs.length,
+        k: xs.filter(({ n }) => n.fcb!.hit["1"]).length,
+        extra: {
+          "of all": pctS(xs.length, pop.length),
+          "med ES lag": (() => {
+            const l = med(xs.filter(({ e }) => side(e) === "L").map(({ e, n }) => e.fcb!.breakMin - n.fcb!.breakMin));
+            return l == null ? "—" : `${l.toFixed(0)}m`;
+          })(),
+          failed: pctS(xs.filter(({ n }) => n.fcb!.failed).length, xs.length),
+          "→ mid": pctS(xs.filter(({ n }) => n.fcb!.fadeMid).length, xs.length),
+          "→ IB high": pctS(xs.filter(({ n }) => n.fcb!.fadeOpp).length, xs.length),
+          "med ext": (med(xs.map(({ n }) => n.fcb!.rExt)) ?? 0).toFixed(2),
+          "ES closed bot25": pctS(xs.filter(({ e }) => e.closeZone === "bot25").length, xs.length),
+        },
+        emphasis: label.startsWith("ES followed"),
+      }));
+      const led = coh["ES followed (NQ led)"];
+      const alone = [...coh["ES DIVERGED (broke high)"], ...coh["ES never broke"]];
+      const ledHit = led.filter(({ n }) => n.fcb!.hit["1"]).length;
+      const aloneHit = alone.filter(({ n }) => n.fcb!.hit["1"]).length;
+      const delta = (100 * ledHit) / (led.length || 1) - (100 * aloneHit) / (alone.length || 1);
+      const esBot = led.filter(({ e }) => e.closeZone === "bot25").length;
+      return {
+        headline: `${pop.length} NQ IB-low breaks. "hit" column = NQ reached 1.0× the IB width.`,
+        cols: ["of all", "med ES lag", "failed", "→ mid", "→ IB high", "med ext", "ES closed bot25"],
+        rows,
+        verdict:
+          led.length < 30
+            ? `NQ-led cohort n=${led.length} — too thin to trade off.`
+            : `NQ leads and ES follows ${pctS(led.length, pop.length)} of the time (median lag ${
+                med(led.map(({ e, n }) => e.fcb!.breakMin - n.fcb!.breakMin))?.toFixed(0) ?? "—"
+              }m). NQ hits 1× ${pctS(ledHit, led.length)} when ES follows vs ${pctS(
+                aloneHit,
+                alone.length,
+              )} when it runs alone — ${delta.toFixed(1)} pts. ES closed bot25 in ${pctS(esBot, led.length)} of NQ-led days.`,
       };
     },
   },
@@ -506,6 +626,35 @@ const PROMPTS: Prompt[] = [
           { label: "ES's own high break failed anyway", n: pop.length, k: pop.filter(({ e }) => e.fcb!.failed).length },
         ],
         caveat: "Only the FIRST close-break of each session is timestamped in the export, so 'after' is provable only when NQ's low was its first break.",
+      };
+    },
+  },
+  {
+    id: "es-low-nq-high",
+    cat: "Cross-index",
+    title: "ES breaks IB low, NQ doesn't — does NQ go hit its IB HIGH?",
+    ask: "Mirror of the IB-high version, for the down side. Conditional on ES confirming its low and NQ never confirming its own, how often does NQ roll to the other extreme?",
+    run: ({ paired, today }) => {
+      const pop = paired.filter(({ e, n }) => side(e) === "L" && side(n) !== "L");
+      const broke = pop.filter(({ n }) => side(n) === "H");
+      const wick = pop.filter(({ n }) => side(n) !== "H" && n.touchedH);
+      const never = pop.filter(({ n }) => side(n) !== "H" && !n.touchedH);
+      const after = broke.filter(({ e, n }) => n.fcb!.breakMin > e.fcb!.breakMin);
+      const before = broke.filter(({ e, n }) => n.fcb!.breakMin < e.fcb!.breakMin);
+      const eS = today?.ES?.breakSide ?? null, nS = today?.NQ?.breakSide ?? null;
+      const tQual = eS === "L" && nS !== "L";
+      return {
+        headline: `${pop.length} sessions where ES confirmed its IB low and NQ never confirmed its own.`,
+        cols: ["share"],
+        rows: [
+          { label: "NQ CLOSE-BROKE its IB high", today: tQual && nS === "H", n: pop.length, k: broke.length, extra: { share: pctS(broke.length, pop.length) }, emphasis: true },
+          { label: "NQ only wicked the high", n: pop.length, k: wick.length, extra: { share: pctS(wick.length, pop.length) } },
+          { label: "NQ never reached the high", n: pop.length, k: never.length, extra: { share: pctS(never.length, pop.length) } },
+          { label: "— of high-breaks: came AFTER ES's low break", n: broke.length, k: after.length },
+          { label: "— of high-breaks: NQ was already long first", n: broke.length, k: before.length },
+          { label: "ES's own low break failed anyway", n: pop.length, k: pop.filter(({ e }) => e.fcb!.failed).length },
+        ],
+        caveat: "Only the FIRST close-break of each session is timestamped in the export, so 'after' is provable only when NQ's high was its first break.",
       };
     },
   },

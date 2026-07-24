@@ -266,7 +266,7 @@ export default function GexChangeTop() {
                   <img
                     src="/cb-edge-logo.png"
                     alt="CB Edge"
-                    style={{ position: "absolute", right: 10, bottom: 8, height: 16, width: "auto", opacity: 0.85, pointerEvents: "none" }}
+                    style={{ position: "absolute", right: 10, bottom: 8, height: 32, width: "auto", opacity: 0.85, pointerEvents: "none" }}
                   />
                 </div>
               );
