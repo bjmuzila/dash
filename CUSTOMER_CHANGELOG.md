@@ -3,6 +3,9 @@
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
 ## Friday 7/24/2026
+* Rebuilt the Multi-Greek page: each ticker now shows its own 4 closest expirations of Net GEX side by side (instead of the DEX/CHEX/VEX columns), and uses that ticker's real expiration dates — so TSLA starts at its nearest Friday instead of a blank day.
+* Added Call Wall, Put Wall and Core Bullseye (CB/CW/PW) levels to each ticker's header and highlighted them on the ladder, with toggles to show or hide the ladder markers.
+* Clicking any strike now opens a single popup with that strike's call/put volume, open interest and premium, plus its Net GEX change over the last 15 min, 30 min and since the open — and it closes when you click anywhere off it.
 * Cleaned up the Option Chain Replay popup — removed the small print at the bottom and moved the CB Edge logo to the bottom-left corner.
 * Fixed the blank rows in Option Chain Replay — it now captures more strikes at each snapshot, so the replay shows a fuller strike ladder instead of gaps.
 
