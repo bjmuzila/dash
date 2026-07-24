@@ -125,6 +125,15 @@ function readJson(req, maxBytes = 1_000_000) {
   });
 }
 
+// POST write-gate for cron-facing routes — mirrors the per-route tokenOk() in
+// the Next handlers: the shared INTERNAL_API_TOKEN header. No token configured
+// (dev) → allow. Used for routes whose GET is subscriber but POST is cron-only.
+function tokenOk(req, ctx) {
+  const expected = ctx.internalToken;
+  if (!expected) return true;
+  return req.headers['x-internal-token'] === expected;
+}
+
 // Cache-Control presets, matching lib/cacheHeaders.ts exactly.
 const CACHE_30 = 'public, max-age=30';                                   // quotes/gex/chains TTL
 const NO_STORE = 'no-store, no-cache, must-revalidate, max-age=0';
@@ -479,6 +488,143 @@ if (libDb) {
           links: prefs?.links ?? [],
         });
       } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // ── Cron-facing reader/writer pairs: GET=subscriber, POST=internal-token ─────
+
+  // /api/es-gap — ES overnight gap row. GET reads; POST post/fill from cron.
+  register('/api/es-gap', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx) {
+      if (req.method === 'POST') {
+        try {
+          if (!tokenOk(req, ctx)) return send(res, 401, { error: 'unauthorized' });
+          const body = await readJson(req);
+          const action = String(body.action || '');
+          if (action === 'post') {
+            const date = String(body.date || '');
+            const prior_close = Number(body.prior_close);
+            const open_0930 = Number(body.open_0930);
+            if (!date || !isFinite(prior_close) || !isFinite(open_0930))
+              return send(res, 400, { error: 'missing date/prior_close/open_0930' });
+            const gap_pts = open_0930 - prior_close;
+            const gap_dir = gap_pts > 0 ? 'up' : gap_pts < 0 ? 'down' : 'flat';
+            await libDb.postEsGap({
+              date, symbol: body.symbol ? String(body.symbol) : '/ES',
+              prior_close, open_0930, gap_pts, gap_dir,
+              open_ts: Number(body.open_ts) || Date.now(),
+            });
+            const row = await libDb.getEsGap(date);
+            return send(res, 201, { ok: true, gap: row });
+          }
+          if (action === 'fill') {
+            const date = String(body.date || '');
+            if (!date) return send(res, 400, { error: 'missing date' });
+            await libDb.updateEsGapFill({
+              date,
+              pct_filled: Number(body.pct_filled) || 0,
+              extreme_after: Number(body.extreme_after),
+              filled: !!body.filled,
+              fill_ts: body.fill_ts != null ? Number(body.fill_ts) : null,
+            });
+            const row = await libDb.getEsGap(date);
+            return send(res, 200, { ok: true, gap: row });
+          }
+          return send(res, 400, { error: `unknown action '${action}'` });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const date = new URL(req.url || '/', 'http://localhost').searchParams.get('date') || etDateStr();
+        const row = await libDb.getEsGap(date);
+        send(res, 200, { date, gap: row });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/premarket-summary — Analytics Premarket card. GET latest; POST cron.
+  register('/api/premarket-summary', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx) {
+      if (req.method === 'POST') {
+        try {
+          if (!tokenOk(req, ctx)) return send(res, 403, { error: 'Forbidden' });
+          const body = await readJson(req);
+          const date = String(body?.date || etDateStr());
+          const bullets = Array.isArray(body?.bullets)
+            ? body.bullets.filter((b) => typeof b === 'string').slice(0, 5) : [];
+          if (!bullets.length) return send(res, 400, { error: 'bullets required' });
+          await libDb.upsertPremarketSummary(date, bullets);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const date = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
+        const row = date ? await libDb.getPremarketSummary(date) : await libDb.getLatestPremarketSummary();
+        send(res, 200, { summary: row || null });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/traders-dashboard/overview — shared daily overview. GET latest; POST cron.
+  register('/api/traders-dashboard/overview', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx) {
+      if (req.method === 'POST') {
+        try {
+          if (!tokenOk(req, ctx)) return send(res, 403, { error: 'Forbidden' });
+          const body = await readJson(req);
+          const date = String(body?.date || etDateStr());
+          const summary = String(body?.summary || '').trim();
+          const drivers = Array.isArray(body?.drivers) ? body.drivers : [];
+          const movers = Array.isArray(body?.movers) ? body.movers : [];
+          if (!summary) return send(res, 400, { error: 'summary required' });
+          await libDb.upsertTdOverview(date, summary, drivers, movers);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const date = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
+        const row = date ? await libDb.getTdOverview(date) : await libDb.getLatestTdOverview();
+        send(res, 200, { overview: row || null });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/ticker-event — analytics. GET aggregated counts; POST logs click/render
+  // (subscriber both ways; user_id optional, best-effort — never breaks the UI).
+  register('/api/ticker-event', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const source = body.source == null ? null : String(body.source);
+          const raw = Array.isArray(body.events) ? body.events : [{ ticker: body.ticker, event: body.event }];
+          const VALID = new Set(['click', 'render']);
+          const seen = new Set(), events = [];
+          for (const e of raw) {
+            const ticker = e.ticker == null ? '' : String(e.ticker).trim().toUpperCase();
+            const event = e.event == null ? '' : String(e.event);
+            if (!ticker || !VALID.has(event)) continue;
+            const k = `${ticker}|${event}`;
+            if (seen.has(k)) continue;
+            seen.add(k); events.push({ ticker, event });
+          }
+          if (!events.length) return send(res, 200, { ok: true, logged: 0 });
+          const userId = access.userId ?? null;
+          await Promise.all(events.map((e) =>
+            libDb.insertTickerEvent({ ticker: e.ticker, event: e.event, source, user_id: userId }).catch(() => {})));
+          return send(res, 200, { ok: true, logged: events.length });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const sinceDays = Number(sp.get('sinceDays') ?? 0) || undefined;
+        const source = sp.get('source') || undefined;
+        const rows = await libDb.getTickerEventCounts(sinceDays, source);
+        send(res, 200, { rows });
+      } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });
 }

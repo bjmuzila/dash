@@ -607,6 +607,31 @@ export default function BudgetPage() {
   }, [register, recurring, month, allBanks, categories, categoryStats, computed]);
   const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
 
+  // ── Balance reconciliation ────────────────────────────────────────────────
+  // Between the last two manually-entered bank balances, pay comes in and bills
+  // go out on their own. Expected balance = prior balance + everything that
+  // SHOULD have moved (logged rows + scheduled recurring pay/bills in the
+  // window). Drift = actual entered balance − expected. Non-zero drift = money
+  // that hit (or missed) the account without a matching record.
+  const reconcile = useMemo(() => {
+    if (!dailyBalance || !prevDailyBalance || prevAllBanks === null) return null;
+    const from = prevDailyBalance.day; // exclusive
+    const to = dailyBalance.day;       // inclusive
+    if (!(to > from)) return null;
+    let moneyIn = 0, moneyOut = 0;
+    for (const g of computed.groups) {
+      if (g.date <= from || g.date > to) continue;
+      for (const r of g.rows) {
+        if (r.is_beginning) continue;
+        if (r.amount > 0) moneyIn += r.amount;
+        else moneyOut += -r.amount;
+      }
+    }
+    const expected = prevAllBanks + moneyIn - moneyOut;
+    const drift = allBanks - expected; // + more cash than expected, − missing cash
+    return { from, to, days: daysBetween(from, to), prevBalance: prevAllBanks, moneyIn, moneyOut, expected, actual: allBanks, drift };
+  }, [dailyBalance, prevDailyBalance, prevAllBanks, allBanks, computed.groups]);
+
   // Bzila net for the selected month (all three streams). Shown as its own tile
   // — deliberately NOT rolled into the Income / Net Profit tiles, which stay
   // personal-only.
@@ -859,7 +884,7 @@ export default function BudgetPage() {
           <SafeToSpendCard intel={intel} currency={currency} />
           <SpendPaceCard intel={intel} currency={currency} />
           <CategoryDonutCard slices={intel.slices} currency={currency} />
-          <WeekPulseCard intel={intel} currency={currency} />
+          <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
         {/* Cash flow (D/W/M) + calendar / projection */}
@@ -1716,37 +1741,61 @@ function CategoryDonutCard({ slices, currency }: { slices: Intel["slices"]; curr
   );
 }
 
-/** 7-Day Pulse: daily net bars for the last week + spend vs the week before. */
-function WeekPulseCard({ intel, currency }: { intel: Intel; currency: string }) {
-  const maxAbs = Math.max(1, ...intel.week.map((d) => Math.abs(d.net)));
-  const deltaPct = intel.prevWkOut > 0 ? ((intel.wkOut - intel.prevWkOut) / intel.prevWkOut) * 100 : null;
-  const worse = (deltaPct ?? 0) > 0;
+/**
+ * Balance Check: reconciles the last two manually-entered bank balances.
+ * Shows money in / money out over the window, the expected balance, the actual
+ * entered balance, and flags any difference (money that moved without a record).
+ */
+type Reconcile = {
+  from: string; to: string; days: number; prevBalance: number;
+  moneyIn: number; moneyOut: number; expected: number; actual: number; drift: number;
+};
+function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency: string }) {
+  if (!data) {
+    return (
+      <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+        <IntelHeader title="Balance Check" />
+        <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", gap: 6, color: HOME_THEME.muted, opacity: 0.7, fontSize: 13, minHeight: 120 }}>
+          <div style={{ fontSize: 26 }}>⚖️</div>
+          <div>Enter a bank balance on two different days and this card flags any gap between what should have left the account and what actually did.</div>
+        </div>
+      </div>
+    );
+  }
+  const off = Math.abs(data.drift) >= 1; // ignore sub-dollar rounding
+  const flagColor = !off ? HOME_THEME.green : SOFT_RED;
+  const fmtDay = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const Row = ({ label, value, color, sign, strong, top }: { label: string; value: number; color?: string; sign?: boolean; strong?: boolean; top?: boolean }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, fontVariantNumeric: "tabular-nums", padding: "5px 0", borderTop: top ? `1px solid ${HAIRLINE}` : undefined }}>
+      <span style={{ opacity: 0.7, fontWeight: strong ? 800 : 600 }}>{label}</span>
+      <span style={{ fontWeight: strong ? 900 : 700, color: color || HOME_THEME.text }}>
+        {sign ? (value >= 0 ? "+" : "−") : ""}{fmtMoney(sign ? Math.abs(value) : value, currency)}
+      </span>
+    </div>
+  );
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader
-        title="7-Day Pulse"
-        right={deltaPct !== null ? (
-          <span style={{ fontSize: 12, fontWeight: 900, padding: "3px 10px", borderRadius: 999, color: worse ? SOFT_RED : HOME_THEME.green, background: bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(worse ? SOFT_RED : HOME_THEME.green, 0.4)}` }}>
-            {worse ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(0)}% vs prior wk
+        title="Balance Check"
+        right={
+          <span style={{ fontSize: 12, fontWeight: 900, padding: "3px 10px", borderRadius: 999, color: flagColor, background: bRgba(flagColor, 0.12), border: `1px solid ${bRgba(flagColor, 0.4)}` }}>
+            {off ? "⚑ Off" : "✓ Reconciles"}
           </span>
-        ) : undefined}
+        }
       />
-      <div style={{ fontSize: 22, fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(intel.wkOut, currency)}<span style={{ fontSize: 12, fontWeight: 700, opacity: 0.55 }}> spent last 7 days</span></div>
-      <div style={{ marginTop: 12, flex: 1, display: "flex", alignItems: "center", gap: 6, minHeight: 74 }}>
-        {intel.week.map((d, i) => {
-          const h = (Math.abs(d.net) / maxAbs) * 30;
-          const up = d.net >= 0;
-          const c = up ? HOME_THEME.green : SOFT_RED;
-          return (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }} title={`${d.date}: ${fmtMoney(d.net, currency)}`}>
-              <div style={{ width: "100%", maxWidth: 22, height: 64, position: "relative" }}>
-                <div style={{ position: "absolute", left: 0, right: 0, top: 31, height: 2, background: "rgba(255,255,255,0.10)", borderRadius: 1 }} />
-                <div style={{ position: "absolute", left: "15%", right: "15%", ...(up ? { bottom: 33, height: Math.max(h, d.net !== 0 ? 3 : 0) } : { top: 33, height: Math.max(h, d.net !== 0 ? 3 : 0) }), background: `linear-gradient(${up ? 180 : 0}deg, ${c}, ${bRgba(c, 0.4)})`, borderRadius: 3, boxShadow: d.net !== 0 ? `0 0 10px ${bRgba(c, 0.35)}` : "none" }} />
-              </div>
-              <span style={{ fontSize: 10, fontWeight: 800, opacity: i === 6 ? 1 : 0.45, color: i === 6 ? LIGHT_BLUE : HOME_THEME.text }}>{weekday(d.date)[0]}</span>
-            </div>
-          );
-        })}
+      <div style={{ fontSize: 30, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: flagColor, textShadow: `0 0 26px ${bRgba(flagColor, 0.5)}` }}>
+        {data.drift >= 0 ? "+" : "−"}{fmtMoney(Math.abs(data.drift), currency)}
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.6, marginTop: 2 }}>
+        {off ? `unaccounted over ${data.days} day${data.days === 1 ? "" : "s"}` : `matches over ${data.days} day${data.days === 1 ? "" : "s"}`} · {fmtDay(data.from)} → {fmtDay(data.to)}
+      </div>
+      <div style={{ marginTop: 10, flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+        <Row label={`Balance ${fmtDay(data.from)}`} value={data.prevBalance} />
+        <Row label="Money in" value={data.moneyIn} color={HOME_THEME.green} sign />
+        <Row label="Money out" value={-data.moneyOut} color={SOFT_RED} sign />
+        <Row label="Expected now" value={data.expected} strong top />
+        <Row label={`Actual now (${fmtDay(data.to)})`} value={data.actual} strong />
+        <Row label="Difference" value={data.drift} color={flagColor} strong sign top />
       </div>
     </div>
   );
