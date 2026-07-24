@@ -68,11 +68,16 @@ function CardSpark({ pts }: { pts: number[] }) {
 
 // One DTE column's ladder, Logic & Order GexStructure style. `rows` is the
 // shared ladder (union of strikes across the 3 columns, with spot markers);
-// `col` maps strike→this DTE's row; maxAbs scales bars across the whole ticker.
-function LadderColumn({ dte, info, rows, col, maxAbs, spot }: {
+// `col` maps strike→this DTE's row. Bars scale to THIS column's own max net GEX
+// (per-profile): the biggest wall in each expiry fills the bar. Scaling across the
+// whole ticker instead flattened 1DTE/2DTE to slivers next to 0DTE's huge walls.
+function LadderColumn({ dte, info, rows, col, spot }: {
   dte: number; info: Dte | null; rows: Array<{ spot: true } | { strike: number }>;
-  col: Map<number, StrikeRow>; maxAbs: number; spot: number;
+  col: Map<number, StrikeRow>; spot: number;
 }) {
+  const colMax = useMemo(() => {
+    let m = 0; col.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); }); return m;
+  }, [col]);
   const cell: CSSProperties = {
     display: "grid", gridTemplateColumns: "44px 1fr 56px 48px", alignItems: "center",
     gap: 6, padding: "1px 5px", borderRadius: 3,
@@ -95,9 +100,6 @@ function LadderColumn({ dte, info, rows, col, maxAbs, spot }: {
       <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
         {rows.map((r, i) => {
           if ("spot" in r) {
-            // At-the-money marker: a thin white line across the ladder (no row/bar),
-            // sitting between the two strikes that straddle spot. Price label rides
-            // on the left edge.
             return (
               <div key={`s${i}`} style={{ position: "relative", height: 8 }}>
                 <div style={{ position: "absolute", left: 0, right: 0, top: 3, height: 2, background: "#fff", boxShadow: "0 0 5px rgba(255,255,255,0.4)", borderRadius: 1 }} />
@@ -107,7 +109,7 @@ function LadderColumn({ dte, info, rows, col, maxAbs, spot }: {
           }
           const s = col.get(r.strike) ?? null;
           const pos = !!s && s.net >= 0;
-          const frac = s && maxAbs > 0 ? Math.abs(s.net) / maxAbs : 0;
+          const frac = s && colMax > 0 ? Math.abs(s.net) / colMax : 0;
           const dTone = s?.delta == null ? HOME_THEME.text : s.delta > 0 ? GREEN : s.delta < 0 ? RED : HOME_THEME.text;
           const arrow = s?.delta == null ? "" : s.delta > 0 ? "▲ " : s.delta < 0 ? "▼ " : "";
           return (
@@ -149,9 +151,6 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
     if (!placed) rows.push({ spot: true });
     return rows;
   }, [t]);
-  const maxAbs = useMemo(() => {
-    let m = 0; t.dtes.forEach((d) => d.strikes.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); })); return m;
-  }, [t]);
   const cw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.callWall?.strike ?? null);
   const pw = [0, 1, 2].map((d) => t.dtes.find((x) => x.dte === d)?.putWall?.strike ?? null);
   const hasWalls = cw.filter((x) => x != null).length + pw.filter((x) => x != null).length > 1;
@@ -165,7 +164,7 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: HOME_THEME.border }}>
         {[0, 1, 2].map((d) => (
-          <LadderColumn key={d} dte={d} info={t.dtes.find((x) => x.dte === d) ?? null} rows={ladder} col={byDte.get(d) ?? new Map()} maxAbs={maxAbs} spot={t.spot} />
+          <LadderColumn key={d} dte={d} info={t.dtes.find((x) => x.dte === d) ?? null} rows={ladder} col={byDte.get(d) ?? new Map()} spot={t.spot} />
         ))}
       </div>
       {hasWalls && (

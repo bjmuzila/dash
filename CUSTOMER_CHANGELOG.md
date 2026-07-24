@@ -2,6 +2,9 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 7/24/2026
+* Added a new **EOD GEX (excluding 0DTE)** chart to the GEX Levels page — one bar per session showing where net gamma settled across all expirations except same-day options, right alongside the existing end-of-day GEX chart.
+
 ## Thursday 7/23/2026
 * Streamlined the IB Stats page down to the three cards that matter — the Live Read, the IB Read (4 families), and the 10:30 Probability Engine gauges — and cleared out the rest of the clutter.
 * The "Last 5 Sessions" strip on the IB Read card now refreshes on its own every trading day instead of getting stuck on old dates.

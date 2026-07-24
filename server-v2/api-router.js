@@ -74,6 +74,13 @@ async function enforceAuth(level, req, ctx) {
   } catch {
     return { ok: false, code: 401, reason: 'verify-error' };
   }
+  // 'user' = any valid session (paid OR unpaid). verifyWsRequest returns a userId
+  // for a valid session even when it's unpaid (ok:false, reason 'inactive'); only
+  // a missing/invalid cookie yields no userId. Mirrors middleware PAID_EXEMPT.
+  if (level === 'user') {
+    if (!access.userId) return { ok: false, code: 401, reason: access.reason || 'no-session' };
+    return { ok: true, userId: access.userId };
+  }
   if (!access.ok) return { ok: false, code: 401, reason: access.reason || 'unauthorized' };
   if (level === 'owner') {
     if (!ctx.ownerUserId || access.userId !== ctx.ownerUserId) {
@@ -624,6 +631,78 @@ if (libDb) {
         const source = sp.get('source') || undefined;
         const rows = await libDb.getTickerEventCounts(sinceDays, source);
         send(res, 200, { rows });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // ── Delayed-mode snapshots (PAID_EXEMPT → 'user'), GET read / POST cron ──────
+
+  // /api/home-snapshot — frozen /home feed for unpaid signed-in users.
+  register('/api/home-snapshot', {
+    auth: 'user', methods: ['GET', 'POST'],
+    async handler(req, res, ctx) {
+      if (req.method === 'POST') {
+        if (!tokenOk(req, ctx)) return send(res, 403, { error: 'forbidden' });
+        try {
+          const body = await readJson(req);
+          const ts = Number(body.ts) || Date.now();
+          await libDb.insertHomeStaticSnapshot(body.snapshot ?? body, ts);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const row = await libDb.getLatestHomeStaticSnapshot();
+        send(res, 200, { ts: row?.ts ?? null, snapshot: row?.payload ?? null });
+      } catch (err) { send(res, 500, { error: 'Database error', detail: String(err) }); }
+    },
+  });
+
+  // /api/mult-greek-snapshot — frozen /mult-greek feed for unpaid signed-in users.
+  register('/api/mult-greek-snapshot', {
+    auth: 'user', methods: ['GET', 'POST'],
+    async handler(req, res, ctx) {
+      if (req.method === 'POST') {
+        if (!tokenOk(req, ctx)) return send(res, 403, { error: 'forbidden' });
+        try {
+          const body = await readJson(req);
+          const ts = Number(body.ts) || Date.now();
+          await libDb.insertMultGreekStaticSnapshot(body.snapshot ?? body, ts);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const row = await libDb.getLatestMultGreekStaticSnapshot();
+        send(res, 200, { ts: row?.ts ?? null, snapshot: row?.payload ?? null });
+      } catch (err) { send(res, 500, { error: 'Database error', detail: String(err) }); }
+    },
+  });
+
+  // /api/db/health — Postgres SELECT 1 probe (subscriber; 503 on failure).
+  register('/api/db/health', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const t0 = Date.now();
+      try {
+        await libDb.pgQuery('SELECT 1');
+        send(res, 200, { ok: true, latencyMs: Date.now() - t0, ts: Date.now() });
+      } catch (err) {
+        send(res, 503, { ok: false, latencyMs: Date.now() - t0, error: String(err?.message ?? err), ts: Date.now() });
+      }
+    },
+  });
+
+  // /api/page-visits — owner-only visit log (exposes client IPs / PII).
+  register('/api/page-visits', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const limit = Math.min(Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit') ?? 100), 5000);
+        const rows = await libDb.getRecentPageVisits(limit);
+        const visits = rows.map((r) => ({
+          id: r.id, pageKey: r.page_key ?? null, pageLabel: r.page_label ?? null,
+          path: r.path ?? null, userId: r.user_id ?? null, ip: r.ip ?? null, createdAt: r.created_at ?? null,
+        }));
+        send(res, 200, { visits });
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });

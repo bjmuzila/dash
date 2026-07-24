@@ -14,6 +14,7 @@ import IbStatsTab from "@/components/scanner/IbStatsTab";
 // TPO / profile / VSA, which is precisely what the toolbar is for.
 import EsCandlesPage from "@/app/es-candles/page";
 import HomeGaugeRail from "@/components/dashboard/HomeGaugeRail";
+import { useIbDirection } from "@/hooks/useIbDirection";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
@@ -955,6 +956,10 @@ export function HomeClient({
     return { cpg, gammaPctVol };
   }, [chainRows]);
 
+  // Live IB direction % (pHigh — HIGH-breaks-first probability, ES≈SPX). Enabled
+  // only in live mode so delayed-mode users don't open the ES candle feed.
+  const ibDirection = useIbDirection(!isStatic);
+
   // SPY / QQQ 0DTE per-strike net GEX for the two right-hand columns. Only
   // fetched in heatmap view — the chain embed doesn't render these columns, so
   // there's no reason to poll two extra chains behind it.
@@ -1552,8 +1557,7 @@ export function HomeClient({
                 Replaced the NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN
                 readout, which still lives on the left Levels strip above the chart. */}
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16 }}>
-              {/* ibDirection intentionally unset — needs the IB stats engine; renders "--" until wired */}
-              <HomeGaugeRail gammaPctVol={gaugeMetrics.gammaPctVol} cpg={gaugeMetrics.cpg} />
+              <HomeGaugeRail gammaPctVol={gaugeMetrics.gammaPctVol} cpg={gaugeMetrics.cpg} ibDirection={ibDirection} />
             </div>
 
             <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>

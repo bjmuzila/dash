@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-24 — /test GEX Levels: added "SPX EOD GEX (ex-0DTE) by session" bar chart (`app/test/page.tsx`)
+
+Added a second left-column card on the GEX Levels tab that plots end-of-day net GEX excluding 0DTE, reusing `EodGexBarChart`/`EodGexPanel` (now parametrized by a `field` prop: `"totalGex" | "totalGexEx0dte"`) driven off `eod_gex.total_gex_ex0dte` (written by `server-v2/eod-gex-recorder.js`, already surfaced via `getEodGex`'s `SELECT *` in `/api/eod-gex`). Sessions with a null ex-0DTE value are filtered so only settled bars render; registered new `eodGexEx0dte` LEFT_CARD_KEYS entry. No backend change; esbuild parse clean, not full prod-build verified.
+
 ## 2026-07-23 — IB Stats page: trimmed to 3 cards + live-updating LAST 5 SESSIONS tape (`components/scanner/IbStatsTab.tsx`, `components/insights/IbProbabilityEngine.tsx`)
 
 `LiveToday` now renders only Live Read (`LiveGauges`), IB Read · 4 families (`RuleClusterBoard`), and the Probability Engine — dropping `IbLevelCanvas`, `RuleBoard`, the "Today" levels card, the owner historical-stats block + `IbDailyResults`; added `showLive`/`showStages` props to `IbProbabilityEngine` (passed `false`) so it shows only the 10:30-locked gauges. Fixed the stale LAST 5 SESSIONS tape in `RuleClusterBoard` by sourcing it from the live `/api/ib-results?symbol=&limit=5` feed (reversed to oldest→newest) instead of the static `ds.days` export, with the export as fallback. esbuild parse clean; not full prod-build verified.
