@@ -23,6 +23,7 @@ import { Card as ThemeCard } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { avg, med, clock, type IbDataset, type SlimDay } from "@/lib/ibStats";
+import IbDailyResults from "@/components/scanner/IbDailyResults";
 import { IbProbabilityEngine, type EngineRule, type EngineEnv } from "@/components/insights/IbProbabilityEngine";
 
 const LAST_UPDATED = "7/11/2026";
@@ -1380,6 +1381,7 @@ export default function IbStatsTab() {
 
   const [sym, setSym] = useState<Sym>("ES");
   const [win, setWin] = useState<Win>(60);
+  const [showStats, setShowStats] = useState(false);
   // cache key is symbol + window — each combination is its own exported file
   const [sets, setSets] = useState<Record<string, IbDataset>>({});
   const [errs, setErrs] = useState<Record<string, string>>({});
@@ -1562,6 +1564,299 @@ export default function IbStatsTab() {
           }}
         />
 
+        {isOwner && (
+          <button
+            onClick={() => setShowStats((v) => !v)}
+            style={{
+              alignSelf: "flex-start", padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 800, cursor: "pointer",
+              border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: HOME_THEME.text,
+            }}
+          >
+            {showStats ? "Hide historical stats ▲ (owner)" : `Show historical stats (${N} sessions) ▼ (owner)`}
+          </button>
+        )}
+
+        {isOwner && showStats && (<>
+        <Card accent="blue" title={`${winLabel(win)} Stats — ${ds.symbol} ${ds.barMinutes}m RTH`} subtitle={`${winRange(win)} ET · last updated ${LAST_UPDATED}`}>
+          <div style={statGrid}>
+            <Stat k="Sessions" v={String(N)} sub={`${yearsSpan.toFixed(1)} years of data`} />
+            <Stat k="Date range" v={`${ds.from} → ${ds.to}`} sub={`${ds.barMinutes}m bars, RTH`} />
+            <Stat k={`Avg ${winLabel(win)} width`} v={`${f2(avg(widths))} pts`} />
+            <Stat k={`Median ${winLabel(win)} width`} v={`${f2(med(widths))} pts`} />
+            <Stat k="Range as % of day range" v={`${f2((avg(days.map((d) => d.width / d.dayRange)) ?? 0) * 100)}%`} />
+          </div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.55 }}>
+            {winLabel(win)} = {winRange(win)} ET high/low. A <b>break</b> means a bar <b>close</b> outside the range — wick-only touches
+            are tracked separately as the trap set. Extensions, MFE and MAE are quoted in multiples of range width, measured from the
+            broken level. Every rule below is identical across windows, so the tabs above are directly comparable: the shorter the
+            window, the earlier the entry and the higher the both-sides-broke tax.
+          </div>
+        </Card>
+
+        <Card accent="green" title="★ Rule Ranking — highest hit rate first" subtitle="Rules with ≥8 sample days only">
+          <Tbl head={["Rule", "Sample (days)", "Hit", "Hit rate", "Verdict"]}
+            footNote="Sample size is the first thing to check — a 90% hit rate on 9 days is nothing. A rule at 50±5% is a coin flip.">
+            {ranked.map(([l, n, w]) => <Row key={l} label={l} n={n} hits={w} detail={verdict(n, (100 * w) / n)} />)}
+          </Tbl>
+        </Card>
+
+        <Card accent="cyan" title="0 · Baseline — IB break behavior" subtitle="The benchmark every rule must beat">
+          <Tbl head={["Outcome", "Days", "Hit", "Rate", "Note"]}>
+            <Row label="IB high broken (any wick)" n={N} hits={days.filter((d) => d.touchedH).length} />
+            <Row label="IB low broken (any wick)" n={N} hits={days.filter((d) => d.touchedL).length} />
+            <Row label="SINGLE break only (one side)" n={N} hits={days.filter((d) => d.singleBreak).length} detail="the 'single break' edge" />
+            <Row label="BOTH sides broken (rotation)" n={N} hits={days.filter((d) => d.bothBroke).length} />
+            <Row label="NEITHER side broken (contained)" n={N} hits={days.filter((d) => d.neitherBroke).length} />
+            <Row label="Break confirmed by a bar CLOSE" n={N} hits={fcb.length} />
+          </Tbl>
+        </Card>
+
+        <Card accent="purple" title="0b · Time of IB Break" subtitle="When the first break actually happens">
+          <div style={statGrid}>
+            <Stat k="Avg · first TOUCH" v={clock(avg(touchMins))} sub={`${f2((avg(touchMins) ?? 0) - 570)} min after IB open`} />
+            <Stat k="Avg · CLOSE break" v={clock(avg(closeMins))} sub={`${f2((avg(closeMins) ?? 0) - 570)} min after IB open`} />
+            <Stat k="Median · CLOSE break" v={clock(med(closeMins))} sub={`n = ${closeMins.length} days`} />
+            <Stat k="Avg · HIGH breaks" v={clock(avg(cbH))} sub={`n = ${cbH.length}`} />
+            <Stat k="Avg · LOW breaks" v={clock(avg(cbL))} sub={`n = ${cbL.length}`} />
+            <Stat k="Earliest / Latest" v={closeMins.length ? `${clock(Math.min(...closeMins))} – ${clock(Math.max(...closeMins))}` : "—"} />
+          </div>
+          <Tbl head={["Break has occurred…", "Break days", "Count", "Cumulative %", "Note"]}
+            footNote="The steepest part of this curve is your attention window — that's when to be at the screen.">
+            {timeBuckets.map(([m, l]) => (
+              <Row key={l} label={l} n={closeMins.length} hits={closeMins.filter((x) => x <= m).length} detail="cumulative" />
+            ))}
+          </Tbl>
+        </Card>
+
+        <Card accent="blue" title="0c · Day of the Week" subtitle="Same rules, sliced by weekday — where the trend days and the chop days actually live">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {["Day", "Sessions", "Avg IB width", "Single break", "Both sides (rotation)", "Never broke", "Break ≥1× ext", "Fail rate", "Avg break time", "High breaks first"]
+                  .map((h, i) => <th key={h} style={i === 0 ? thL : th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {byDow.map(({ name, g, gb }) => {
+                const sb = rateNum(g.filter((d) => d.singleBreak).length, g.length);
+                const bb = rateNum(g.filter((d) => d.bothBroke).length, g.length);
+                const ext = rateNum(gb.filter((d) => B(d).hit["1"]).length, gb.length);
+                return (
+                  <tr key={name}>
+                    <td style={tdL}>{name}</td>
+                    <td style={td}>{g.length}</td>
+                    <td style={td}>{f2(avg(g.map((d) => d.width)))}</td>
+                    <td style={{ ...td, color: rateColor(sb), fontWeight: 800 }}>{sb == null ? "—" : `${sb.toFixed(1)}%`}</td>
+                    <td style={{ ...td, color: rateColor(bb), fontWeight: 800 }}>{bb == null ? "—" : `${bb.toFixed(1)}%`}</td>
+                    <td style={td}>{pct(g.filter((d) => d.neitherBroke).length, g.length)}</td>
+                    <td style={{ ...td, color: rateColor(ext), fontWeight: 800 }}>{ext == null ? "—" : `${ext.toFixed(1)}%`}</td>
+                    <td style={td}>{pct(gb.filter((d) => B(d).failed).length, gb.length)}</td>
+                    <td style={td}>{clock(avg(gb.map((d) => B(d).breakMin)))}</td>
+                    <td style={td}>{pct(g.filter((d) => d.firstTouchSide === "H").length, g.filter((d) => d.firstTouchSide).length)}</td>
+                  </tr>
+                );
+              })}
+              <tr>
+                <td style={{ ...tdL, fontWeight: 800 }}>ALL DAYS</td>
+                <td style={{ ...td, fontWeight: 800 }}>{N}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{f2(avg(widths))}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.singleBreak).length, N)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.bothBroke).length, N)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.neitherBroke).length, N)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(fcb.filter((d) => B(d).hit["1"]).length, fcb.length)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(fcb.filter((d) => B(d).failed).length, fcb.length)}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{clock(avg(closeMins))}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{pct(days.filter((d) => d.firstTouchSide === "H").length, days.filter((d) => d.firstTouchSide).length)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={note}>
+            Read each weekday against the ALL DAYS row, not against 50%. A day only matters if it deviates from the sample&rsquo;s own baseline
+            by more than a few points — with ~450 sessions per weekday, a 3–4 point gap is still inside the noise band.
+          </div>
+        </Card>
+
+        <Card accent="cyan" title="1 · Midpoint Close Bias" subtitle="IB closes above mid → high breaks first. Below mid → low breaks first.">
+          <Tbl head={["Signal", "Days", "Correct", "Hit rate", "Detail"]}>
+            <Row label="All midpoint-bias days" n={wb.length} hits={wb.filter((d) => d.firstTouchSide === d.bias).length} />
+            <Row indent label="Bias LONG (close > mid)" n={wbL.length} hits={wbL.filter((d) => d.firstTouchSide === "H").length} detail="predicted high breaks first" />
+            <Row indent label="Bias SHORT (close < mid)" n={wbS.length} hits={wbS.filter((d) => d.firstTouchSide === "L").length} detail="predicted low breaks first" />
+            <Row label="…and that side EVER breaks" n={wb.length} hits={wb.filter((d) => (d.bias === "H" ? d.touchedH : d.touchedL)).length} detail="looser test — breaks at any point" />
+          </Tbl>
+        </Card>
+
+        <Card accent="green" title="2 · Formation Order + Midpoint" subtitle="Low forms first + close above mid → long. High first + close below mid → short.">
+          <Tbl head={["Setup", "Days", "Correct", "Hit rate", "Detail"]}
+            footNote="Compare CONFLUENT against the raw midpoint bias in Rule 1 — the delta is the entire value of the formation-order filter.">
+            <Row label="CONFLUENT (order agrees with bias)" n={conf.length} hits={conf.filter((d) => d.firstTouchSide === d.bias).length} detail="the A+ filter" />
+            <Row indent label="Long (low first, close > mid)" n={confL.length} hits={confL.filter((d) => d.firstTouchSide === "H").length} />
+            <Row indent label="Short (high first, close < mid)" n={confS.length} hits={confS.filter((d) => d.firstTouchSide === "L").length} />
+            <Row label="DISCORDANT (order fights bias)" n={disc.length} hits={disc.filter((d) => d.firstTouchSide === d.bias).length} detail="skip these" />
+          </Tbl>
+        </Card>
+
+        <Card accent="orange" title="3 · Single Break Continuation" subtitle="The claimed 70–85% edge, tested on close-confirmed breaks">
+          <Tbl head={["Test", "Days", "Hit", "Rate", "Detail"]}>
+            <Row label="Opposite IB side NEVER breaks" n={fcb.length} hits={sbWin} detail="true single-break day after entry" />
+            <Row label="Break extends ≥ 0.5× IB width" n={fcb.length} hits={fcb.filter((d) => B(d).hit["0.5"]).length} />
+            <Row label="Break extends ≥ 1.0× IB width" n={fcb.length} hits={fcb.filter((d) => B(d).hit["1"]).length} />
+            <Row label="Never trades back to the IB midpoint" n={fcb.length} hits={fcb.filter((d) => d.noMidReturn).length} detail="strictest version" />
+          </Tbl>
+        </Card>
+
+        <Card accent="red" title="4 · IB Width → Day Type" subtitle="Narrow → trend/break. Wide → rotation, fade the breaks.">
+          <div style={statGrid}>
+            <Stat k="NARROW = width <" v="0.5× ATR14  or  0.75× avgIB20" sub={`≈ under ${f2(Math.min(0.5 * avgAtr, 0.75 * avgAvgIb))} pts at current vol`} />
+            <Stat k="WIDE = width >" v="1.5× ATR14  or  1.25× avgIB20" sub={`≈ over ${f2(Math.min(1.5 * avgAtr, 1.25 * avgAvgIb))} pts at current vol`} />
+            <Stat k="NORMAL" v="everything between" sub="the default state" />
+            <Stat k="Sample averages" v={`ATR14 ${f2(avgAtr)} · avgIB20 ${f2(avgAvgIb)}`} sub="RTH daily range / 20d mean IB" />
+          </div>
+          <Tbl head={["Bucket", "Days", "Single-break", "Rate", "Both sides broke / ≥1× ext"]}>
+            <Row label="NARROW IB" n={narrow.length} hits={narrow.filter((d) => d.singleBreak).length}
+              detail={`both: ${pct(narrow.filter((d) => d.bothBroke).length, narrow.length)} · ≥1× ext: ${extRate(narrow)}`} />
+            <Row label="NORMAL IB" n={normal.length} hits={normal.filter((d) => d.singleBreak).length}
+              detail={`both: ${pct(normal.filter((d) => d.bothBroke).length, normal.length)} · ≥1× ext: ${extRate(normal)}`} />
+            <Row label="WIDE IB" n={wide.length} hits={wide.filter((d) => d.bothBroke).length}
+              detail={`hit col = BOTH-sides rate · ≥1× ext: ${extRate(wide)}`} />
+          </Tbl>
+          <div style={{ height: 14 }} />
+          <Tbl head={["Bucket", "Actual IB widths in sample", "Mean", "Days", "Share of sessions"]}
+            footNote="Use the ×ATR / ×avgIB rule live — the point ranges are just what those adaptive thresholds worked out to across this sample, so they overlap as vol regimes shift.">
+            {([["NARROW", narrow, HOME_THEME.green], ["NORMAL", normal, HOME_THEME.orange], ["WIDE", wide, HOME_THEME.red]] as [string, SlimDay[], string][]).map(([l, a, c]) => (
+              <tr key={l}>
+                <td style={{ ...tdL, color: c, fontWeight: 800 }}>{l}</td>
+                <td style={td}>{wRange(a)}</td>
+                <td style={td}>{a.length ? `${f2(avg(a.map((d) => d.width)))} pts` : "—"}</td>
+                <td style={td}>{a.length}</td>
+                <td style={td}>{pct(a.length, wd.length)}</td>
+              </tr>
+            ))}
+          </Tbl>
+        </Card>
+
+        <Card accent="green" title="5 · Breakout Entry — close beyond IB + volume" subtitle="Volume filter = break-bar volume > average IB bar volume">
+          <Tbl head={["Entry filter", "Days", "≥1× IB ext", "Rate", "Avg MFE / MAE (× IB width)"]}
+            footNote="MAE is your stop-distance requirement — it's the heat the average winner still made you sit through.">
+            <Row label="Close break + VOLUME surge" n={volYes.length} hits={volYes.filter((d) => B(d).hit["1"]).length}
+              detail={`MFE ${f2(avg(volYes.map((d) => B(d).rExt)))}× / MAE ${f2(avg(volYes.map((d) => B(d).rAdv)))}×`} />
+            <Row label="Close break, NO volume surge" n={volNo.length} hits={volNo.filter((d) => B(d).hit["1"]).length}
+              detail={`MFE ${f2(avg(volNo.map((d) => B(d).rExt)))}× / MAE ${f2(avg(volNo.map((d) => B(d).rAdv)))}×`} />
+            <Row label="WICK-only touch (no close outside)" n={wickOnly.length} hits={0} detail="the traps — no entry taken" />
+          </Tbl>
+        </Card>
+
+        <Card accent="red" title="6 · Failed Breakout Fade" subtitle="Break closes outside, then closes back inside within 30 min">
+          <Tbl head={["Outcome", "Days", "Hit", "Rate", "Detail"]}
+            footNote={`Avg excursion before the fail: <b>${f2(avg(failed.map((d) => B(d).peakBeforeFail)))} pts</b> — that is roughly the stop a breakout entry has to survive.`}>
+            <Row label="Break FAILS (closes back inside ≤30m)" n={fcb.length} hits={failed.length} detail="base rate of the trap" />
+            <Row indent label="then reaches the IB MIDPOINT" n={failed.length} hits={failed.filter((d) => B(d).fadeMid).length} detail="target 1" />
+            <Row indent label="then reaches the OPPOSITE IB extreme" n={failed.length} hits={failed.filter((d) => B(d).fadeOpp).length} detail="target 2 — the money target" />
+          </Tbl>
+        </Card>
+
+        <Card accent="purple" title="7 · 15m FVG inside the IB" subtitle="15m fair-value gap, rebuilt from the raw bars">
+          <Tbl head={["FVG", "Days", "Reaches IB extreme in FVG dir", "Rate", "Reaches midpoint"]}>
+            <Row label="BULLISH FVG in IB" n={fvB.length} hits={fvB.filter(hitExt).length} detail={`mid: ${pct(fvB.filter((d) => d.fvgHitMid).length, fvB.length)}`} />
+            <Row label="BEARISH FVG in IB" n={fvS.length} hits={fvS.filter(hitExt).length} detail={`mid: ${pct(fvS.filter((d) => d.fvgHitMid).length, fvS.length)}`} />
+            <Row label="FVG direction = first-touch side" n={fv.length} hits={fv.filter((d) => d.firstTouchSide === (d.fvg === "bull" ? "H" : "L")).length} detail="directional predictive power" />
+            <Row label="NO FVG in IB (control) → single break" n={N - fv.length} hits={days.filter((d) => !d.fvg && d.singleBreak).length} detail="control group" />
+          </Tbl>
+        </Card>
+
+        <Card accent="cyan" title="8 · Retest Continuation" subtitle="Returns to within 2 ticks of the broken level, close holds outside">
+          <Tbl head={["Path", "Days", "Continues to new extreme", "Rate", "Avg MFE (× IB width)"]}
+            footNote="If retest MFE ≥ no-retest MFE, waiting costs nothing and improves the entry. If it's materially lower, the best days never retest — take the break.">
+            <Row label="Break → clean RETEST → continue" n={rt.length} hits={rt.filter((d) => B(d).retestCont).length} detail={`${f2(avg(rt.map((d) => B(d).rExt)))}×`} />
+            <Row label="Break → NO retest (runs away)" n={noRt.length} hits={noRt.filter((d) => B(d).hit["1"]).length} detail={`${f2(avg(noRt.map((d) => B(d).rExt)))}× (hit = ≥1× ext)`} />
+          </Tbl>
+        </Card>
+
+        <Card accent="green" title="B · 0.25 Fib Pullback → Continuation" subtitle="Two readings of &quot;the 0.25 level&quot; — they are very different trades">
+          <Tbl head={["Test", "Days", "Hit", "Rate", "Detail"]}
+            footNote={`Variant A avg MFE measured <i>from the 0.25 entry</i>: <b>${f2(avg(fA.map((d) => B(d).fibA.mfe ?? 0)))}× IB width</b>. Watch the "no pullback" row — if the runaway days carry the fattest MFE, waiting for 0.25 filters you out of the best sessions.`}>
+            {sectionRow("Variant A — 0.25 of the IB RANGE, measured back into the IB (high break → IBH − 0.25×width). A deep pullback that re-enters the IB.")}
+            <Row label="Pullback REACHES the 0.25 level" n={fcb.length} hits={fA.length} detail="how often you even get filled" />
+            <Row indent label="then CONTINUES to a new extreme" n={fA.length} hits={fA.filter((d) => B(d).fibA.cont).length} detail="the actual edge" />
+            <Row indent label="instead runs through the IB MIDPOINT" n={fA.length} hits={fA.filter((d) => B(d).fibA.fail).length} detail="trade dies" />
+            <Row label="NO pullback — price never comes back" n={fcb.length} hits={fAno.length} detail={`these run: avg MFE ${f2(avg(fAno.map((d) => B(d).rExt)))}× IB`} />
+            {sectionRow("Variant B — 0.25 retrace of the post-break IMPULSE (break level → running extreme). A shallow pullback that stays outside the IB.")}
+            <Row label="Pullback REACHES the 0.25 impulse retrace" n={fcb.length} hits={fB.length} detail="requires impulse > 0.25× IB first" />
+            <Row indent label="then CONTINUES to a new extreme" n={fB.length} hits={fB.filter((d) => B(d).fibB.cont).length} detail="the actual edge" />
+          </Tbl>
+        </Card>
+
+        <Card accent="orange" title="9 · Extension Targets" subtitle="Scale-out probabilities, measured from the broken level">
+          <Tbl head={["Target", "Breaks", "Reached", "Hit rate", "Sizing"]}
+            footNote={`Avg MFE on all close-breaks: <b>${f2(avg(fcb.map((d) => B(d).rExt)))}× IB width</b> · avg MAE (heat taken): <b>${f2(avg(fcb.map((d) => B(d).rAdv)))}× IB width</b>.`}>
+            {[0.5, 1, 1.5, 2].map((t) => (
+              <Row key={t} label={`${t}× IB width from break`} n={fcb.length} hits={fcb.filter((d) => B(d).hit[String(t)]).length}
+                detail={`avg IB ${f2(avg(widths))} pts → target ≈ ${f2(t * (avg(widths) ?? 0))} pts`} />
+            ))}
+          </Tbl>
+        </Card>
+
+        <Card accent="green" title="10 · Close Location in IB Range" subtitle="Top 25% + low first → strong long. Bottom 25% + high first → strong short.">
+          <Tbl head={["Zone", "Days", "Breaks as predicted", "Rate", "Detail"]}>
+            <Row label="TOP 25% close" n={top.length} hits={top.filter((d) => d.firstTouchSide === "H").length} detail="plain zone" />
+            <Row indent label="+ LOW formed first (STRONG LONG)" n={topStrong.length} hits={topStrong.filter((d) => d.firstTouchSide === "H").length}
+              detail={`single-break: ${pct(topStrong.filter((d) => d.singleBreak).length, topStrong.length)}`} />
+            <Row label="BOTTOM 25% close" n={bot.length} hits={bot.filter((d) => d.firstTouchSide === "L").length} detail="plain zone" />
+            <Row indent label="+ HIGH formed first (STRONG SHORT)" n={botStrong.length} hits={botStrong.filter((d) => d.firstTouchSide === "L").length}
+              detail={`single-break: ${pct(botStrong.filter((d) => d.singleBreak).length, botStrong.length)}`} />
+            <Row label="MIDDLE 50% close (no edge expected)" n={midz.length} hits={midz.filter((d) => d.firstTouchSide === d.bias).length} detail="bias hit-rate — expect a coin flip" />
+          </Tbl>
+        </Card>
+
+        <Card accent="purple" title="11 · Open Type + IB Width" subtitle="OAR = open outside the prior RTH range · HIR/LIR = open inside it">
+          <Tbl head={["Open type", "Days", "Hit", "Rate", "What 'hit' means"]}
+            footNote="OAR-H / OAR-L = opened above / below the prior RTH range. HIR / LIR = opened inside the prior range, in the upper / lower half.">
+            {openTypes.flatMap((ot) => {
+              const g = wd.filter((d) => d.openType === ot);
+              if (!g.length) return [];
+              const gn = g.filter((d) => d.widthBucket === "narrow");
+              const gw = g.filter((d) => d.widthBucket === "wide");
+              const out = [<Row key={ot} label={`${ot} — all`} n={g.length} hits={g.filter((d) => d.singleBreak).length} detail="single-break rate" />];
+              if (gn.length) out.push(<Row key={ot + "n"} indent label={`${ot} + NARROW IB`} n={gn.length} hits={gn.filter((d) => d.singleBreak).length} detail="breakout thesis" />);
+              if (gw.length) out.push(<Row key={ot + "w"} indent label={`${ot} + WIDE IB`} n={gw.length} hits={gw.filter((d) => d.bothBroke).length} detail="both-sides broke = rotation thesis" />);
+              return out;
+            })}
+          </Tbl>
+        </Card>
+
+        <Card accent="cyan" title="12 · ORB + IB Alignment" subtitle="09:30–09:45 opening range breaks the same way as the IB midpoint bias">
+          <Tbl head={["Setup", "Days", "Bias side breaks first", "Rate", "Single-break rate"]}
+            footNote="Aligned should beat conflicted on BOTH columns for this filter to earn its keep.">
+            <Row label="ALIGNED (ORB dir = IB bias)" n={align.length} hits={align.filter((d) => d.firstTouchSide === d.bias).length}
+              detail={pct(align.filter((d) => d.singleBreak).length, align.length)} />
+            <Row label="CONFLICTED (ORB vs IB bias)" n={oppose.length} hits={oppose.filter((d) => d.firstTouchSide === d.bias).length}
+              detail={pct(oppose.filter((d) => d.singleBreak).length, oppose.length)} />
+          </Tbl>
+        </Card>
+
+        <Card accent="orange" title="13 · Time Filter — when the break happens" subtitle="Hit = extension ≥ 1× IB width">
+          <Tbl head={["Break window", "Breaks", "≥1× ext", "Rate", "Detail"]}
+            footNote="Late breaks have less session left — expect decaying extension rates. If they don't decay, the break is time-agnostic.">
+            {tf.map(([a, b, l]) => {
+              const g = fcb.filter((d) => B(d).breakMin >= a && B(d).breakMin < b);
+              return <Row key={l} label={l} n={g.length} hits={g.filter((d) => B(d).hit["1"]).length}
+                detail={`avg MFE ${f2(avg(g.map((d) => B(d).rExt)))}× · fail rate ${pct(g.filter((d) => B(d).failed).length, g.length)}`} />;
+            })}
+            <Row label="ALL breaks before noon" n={byNoon.length} hits={byNoon.filter((d) => B(d).hit["1"]).length} detail="the killzone cut" />
+          </Tbl>
+        </Card>
+
+        <Card accent="red" title="14 · Contained Day (rare)" subtitle="Price still entirely inside the IB at 14:00 ET">
+          <Tbl head={["Outcome", "Days", "Hit", "Rate", "Detail"]}>
+            <Row label="Contained at 14:00" n={N} hits={cont.length} detail="base rate of the setup" />
+            <Row indent label="STAYS inside through the close (fade works)" n={cont.length} hits={cont.filter((d) => !d.containedBrokeLate).length} detail="fade the extremes" />
+            <Row indent label="BREAKS out late (fade gets run over)" n={cont.length} hits={cont.filter((d) => d.containedBrokeLate).length} detail="the tail risk" />
+          </Tbl>
+        </Card>
+        </>)}
+
+        {/* Daily Results — EOD 16:30 ET scoreboard, one row per session, every
+            rule graded. Collapsed by default; owner-gated like the history above. */}
+        {isOwner && <IbDailyResults sym={sym} />}
       </div>
     </div>
   );

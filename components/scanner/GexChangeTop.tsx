@@ -118,10 +118,15 @@ export default function GexChangeTop() {
     }
   }, [date, shooting]);
 
-  // Capture a SINGLE pick card to PNG. `node` is the card element; buttons inside
-  // it are marked data-noshot so the camera control never appears in the image.
-  const shotCard = useCallback(async (node: HTMLElement | null, name: string) => {
-    if (!node) return;
+  // Per-card capture state so the 📷 gives feedback: idle → busy → "copied"/"saved".
+  const [cardState, setCardState] = useState<Record<string, "busy" | "copied" | "saved">>({});
+
+  // Capture a SINGLE pick card to PNG. `node` is the card element; controls inside
+  // it are marked data-noshot so they never appear in the image.
+  const shotCard = useCallback(async (node: HTMLElement | null, id: string, name: string) => {
+    if (!node || cardState[id] === "busy") return;
+    setCardState((s) => ({ ...s, [id]: "busy" }));
+    let result: "copied" | "saved" = "saved";
     try {
       const html2canvas = (await import("html2canvas")).default;
       const canvas = await html2canvas(node, {
@@ -130,6 +135,7 @@ export default function GexChangeTop() {
         ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
       });
       // Try clipboard first, fall back to a download.
+      let copied = false;
       if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
         try {
           await new Promise<void>((resolve, reject) =>
@@ -138,15 +144,23 @@ export default function GexChangeTop() {
               navigator.clipboard.write([new ClipboardItem({ "image/png": b })]).then(resolve, reject);
             }, "image/png"),
           );
-          return;
+          copied = true;
         } catch { /* clipboard blocked → download */ }
       }
-      const a = document.createElement("a");
-      a.download = `${name}.png`;
-      a.href = canvas.toDataURL("image/png");
-      a.click();
-    } catch { /* give up silently */ }
-  }, []);
+      if (!copied) {
+        const a = document.createElement("a");
+        a.download = `${name}.png`;
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      }
+      result = copied ? "copied" : "saved";
+    } catch {
+      setCardState((s) => { const n = { ...s }; delete n[id]; return n; });
+      return;
+    }
+    setCardState((s) => ({ ...s, [id]: result }));
+    setTimeout(() => setCardState((s) => { const n = { ...s }; delete n[id]; return n; }), 1800);
+  }, [cardState]);
 
   return (
    <div ref={cardRef}>
@@ -201,6 +215,8 @@ export default function GexChangeTop() {
               const up = (r.latest_chg ?? 0) >= 0;
               const col = up ? HOME_THEME.green : HOME_THEME.red;
               const otmPct = r.spot && r.spot > 0 ? (Math.abs(r.strike - r.spot) / r.spot) * 100 : null;
+              const cid = `${r.symbol}-${r.strike}-${hb.slot}`;
+              const st = cardState[cid];
               return (
                 <div
                   key={`${r.symbol}-${r.expiry}-${r.strike}`}
@@ -214,15 +230,19 @@ export default function GexChangeTop() {
                 >
                   <button
                     data-noshot="1"
-                    onClick={(e) => shotCard((e.currentTarget as HTMLElement).closest("[data-card]") as HTMLElement, `${r.symbol}-${r.strike}-${hb.slot.replace(":", "")}`)}
+                    onClick={(e) => shotCard((e.currentTarget as HTMLElement).closest("[data-card]") as HTMLElement, cid, `${r.symbol}-${r.strike}-${hb.slot.replace(":", "")}`)}
+                    disabled={st === "busy"}
                     title="Screenshot / copy this card"
                     style={{
-                      position: "absolute", top: 8, right: 8, cursor: "pointer",
-                      border: "none", background: "transparent", fontSize: 14, lineHeight: 1,
-                      color: "rgba(255,255,255,0.45)", padding: 2,
+                      position: "absolute", top: 6, right: 6, cursor: st === "busy" ? "default" : "pointer",
+                      border: st ? `1px solid ${st === "busy" ? "rgba(255,255,255,0.2)" : HOME_THEME.green}` : "1px solid transparent",
+                      borderRadius: 6, background: st && st !== "busy" ? "rgba(0,0,0,0.35)" : "transparent",
+                      fontSize: 12, lineHeight: 1, fontWeight: 700, padding: "3px 6px",
+                      color: st === "busy" ? "rgba(255,255,255,0.5)" : st ? HOME_THEME.green : "rgba(255,255,255,0.45)",
+                      display: "inline-flex", alignItems: "center", gap: 4,
                     }}
                   >
-                    📷
+                    {st === "busy" ? "…" : st === "copied" ? "✓ Copied" : st === "saved" ? "✓ Saved" : "📷"}
                   </button>
                   <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4, paddingRight: 18 }}>
                     <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>
@@ -241,7 +261,13 @@ export default function GexChangeTop() {
                     </span>
                     <span style={{ color: HOME_THEME.cyan }}>score {r.score == null ? "—" : r.score.toFixed(0)}</span>
                   </div>
-                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: "#FFD166" }}>★ Very strong</div>
+                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: "#FFD166", paddingRight: 78 }}>★ Very strong</div>
+                  {/* Brand mark — kept in the screenshot (not data-noshot). */}
+                  <img
+                    src="/cb-edge-logo.png"
+                    alt="CB Edge"
+                    style={{ position: "absolute", right: 10, bottom: 8, height: 16, width: "auto", opacity: 0.85, pointerEvents: "none" }}
+                  />
                 </div>
               );
             })}

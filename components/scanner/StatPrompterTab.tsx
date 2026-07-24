@@ -52,6 +52,8 @@ type Row = {
   emphasis?: boolean;
   /** true when this row's condition matches today's live IB session */
   today?: boolean;
+  /** true when k is a cumulative-completion count (denominator is a subset, so 100% is structural — skip the bias flag) */
+  cumulative?: boolean;
 };
 /** A stacked composition bar. ONLY valid when the segments are mutually
  *  exclusive and sum to 100 — a stacked bar is a claim about a partition, and
@@ -1485,6 +1487,7 @@ const PROMPTS: Prompt[] = [
           label: `both sides taken by ${hhmm(b.min + 30)}`,
           n: rc.both,
           k: cum, // CUMULATIVE share of the two-sided days completed by this clock time
+          cumulative: true,
           extra: { "in this 30m": pctS(b.n, rc.both) },
         };
       });
@@ -1628,7 +1631,7 @@ function ResultTable({ res }: { res: Result }) {
               // gets the THIN badge and an implausible rate gets the bias flag, so
               // the warning survives even though the count doesn't show.
               const thin = r.n > 0 && r.n < 30;
-              const suspicious = r.k != null && r.n >= 30 && (100 * r.k) / r.n > 85;
+              const suspicious = r.k != null && r.n >= 30 && !r.cumulative && (100 * r.k) / r.n > 85;
               return (
                 <tr key={i} style={{ background: r.today ? `${LIGHT_BLUE}1C` : r.emphasis ? `${LIGHT_BLUE}0F` : "transparent" }}>
                   <td style={{ ...td, color: HOME_THEME.text, fontWeight: r.today || r.emphasis ? 700 : 500 }}>

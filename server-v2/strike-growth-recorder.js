@@ -62,6 +62,12 @@ const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
 // Fast-lane cadence for the small "hot" watchlist — swept far more often than the
 // full roster so a handful of names stay near-live.
 const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
+// REST spot backstop: how often to refresh EVERY roster ticker's live spot via
+// TT /market-data/by-type. The dxLink feed only carries an underlying quote for
+// roots it has actively subscribed, so other tickers showed a stale last-swept
+// DB spot. This poll keeps all Forward Build spots current (RTH + ext hours).
+// Set to 0 to disable.
+const SPOT_REFRESH_MINS = Number(process.env.STRIKE_GROWTH_SPOT_REFRESH_MINS || 15);
 // How many strikes to WRITE to strike_growth per side, per expiry — ranked by
 // combined net GEX (gex_now+gex_open), not distance from spot. Keeps the table
 // to the strikes that actually matter (real call/put walls) instead of a
@@ -686,6 +692,24 @@ async function runSweep(opts = {}) {
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 let _timer = null;
+let _spotTimer = null;
+
+// REST spot backstop: fetch fresh underlying marks for the whole active roster
+// and push them into the proxy's live strikeGrowthSpot map (which overlayLiveSpot
+// reads). Runs on its own cadence, independent of the RTH-gated sweeps, so spots
+// stay current for every ticker — not just the ones the dxLink feed subscribes.
+async function refreshRosterSpots() {
+  if (!_proxy?.refreshStrikeGrowthSpots) return;
+  try {
+    if (!(await ensureSchema())) return;
+    const symbols = await getActiveSymbols(getPool());
+    if (!symbols.length) return;
+    const n = await _proxy.refreshStrikeGrowthSpots(symbols);
+    if (n) console.log(`[strike-growth] REST spot backstop: refreshed ${n}/${symbols.length} spots`);
+  } catch (e) {
+    console.warn('[strike-growth] spot backstop error:', String(e?.message || e).slice(0, 160));
+  }
+}
 // Run sweeps aligned-ish to the cadence: poll each minute, fire when the ET
 // minute is a multiple of SWEEP_MINS and we're inside RTH, de-duped per minute.
 let _lastSweepKey = null;
@@ -741,7 +765,20 @@ function startStrikeGrowthRecorder(_port, proxy) {
   };
   _timer = setInterval(() => { void tick(); }, 60_000);
   _timer.unref?.();
-  return () => { if (_timer) clearInterval(_timer); };
+
+  // REST spot backstop poller (every SPOT_REFRESH_MINS; 0 disables). First run is
+  // delayed ~20s so the TT session is authenticated before the first REST call.
+  if (SPOT_REFRESH_MINS > 0 && _proxy?.refreshStrikeGrowthSpots) {
+    console.log(`[strike-growth] REST spot backstop enabled — every ${SPOT_REFRESH_MINS}m for the full roster`);
+    setTimeout(() => { void refreshRosterSpots(); }, 20_000).unref?.();
+    _spotTimer = setInterval(() => { void refreshRosterSpots(); }, SPOT_REFRESH_MINS * 60_000);
+    _spotTimer.unref?.();
+  }
+
+  return () => {
+    if (_timer) clearInterval(_timer);
+    if (_spotTimer) clearInterval(_spotTimer);
+  };
 }
 
 module.exports = {

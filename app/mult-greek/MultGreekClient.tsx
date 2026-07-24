@@ -7,7 +7,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
-import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -367,6 +367,22 @@ function TickerPanel({
 
   // Click card: a specific (strike, expiry) cell's GEX change over 15m/30m/open.
   const [clickCell, setClickCell] = useState<{ strike: number; expiry: string; x: number; y: number } | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Any click off the popout closes it — except clicks inside the card itself or
+  // on a GEX cell (cells manage their own open/move/toggle). The card portals to
+  // <body>, so a document-level listener is the reliable catch-all.
+  useEffect(() => {
+    if (!clickCell) return;
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (cardRef.current && t && cardRef.current.contains(t)) return;
+      if (t && t.closest("[data-gexcell]")) return;
+      setClickCell(null);
+    };
+    const id = window.setTimeout(() => document.addEventListener("click", onDocClick), 0);
+    return () => { window.clearTimeout(id); document.removeEventListener("click", onDocClick); };
+  }, [clickCell]);
 
   // Server-recorded baselines for the clicked cell (mult-greek-gex-recorder).
   // Preferred over the client ring — instant 15m/30m/open with no warm-up. Falls
@@ -511,13 +527,13 @@ function TickerPanel({
 
       {/* Column headers — STRIKE + one NET GEX column per expiry */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
+        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
         {cols.map(c => {
           const lbl = colLabel(c.date);
           return (
             <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
-              <div style={{ color: HT.cyan, fontSize: 9, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
-              <div style={{ color: HT.muted, fontSize: 7, fontWeight: 700 }}>GEX · {lbl.md}</div>
+              <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
+              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>GEX · {lbl.md}</div>
             </div>
           );
         })}
@@ -525,13 +541,13 @@ function TickerPanel({
 
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "4px 4px", fontSize: 9, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
+        <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {cols.map(c => {
           const v = totals?.[c.date] ?? 0;
           const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c.date} style={{
-              padding: "4px 4px", fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
+              padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
@@ -543,7 +559,7 @@ function TickerPanel({
       </div>
 
       {/* Body */}
-      <div ref={bodyRef} onClick={() => setClickCell(null)} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
+      <div ref={bodyRef} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
         {!computed ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 12, color: "#475569", }}>
             Select an expiry and click GO
@@ -579,7 +595,7 @@ function TickerPanel({
                 />
               )}
               <div style={{
-                padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
+                padding: "4px 4px", fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
               }}>
@@ -605,7 +621,7 @@ function TickerPanel({
                 const isCB = lvl?.t === "CB";
                 const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
                 return (
-                  <div key={e} className={isCB ? "mvc-peak-cell" : undefined}
+                  <div key={e} data-gexcell="1" className={isCB ? "mvc-peak-cell" : undefined}
                     onClick={isCapturing ? undefined : (ev) => {
                       ev.stopPropagation();
                       setClickCell(prev => (prev && prev.strike === r.strike && prev.expiry === e)
@@ -613,7 +629,7 @@ function TickerPanel({
                         : { strike: r.strike, expiry: e, x: ev.clientX, y: ev.clientY });
                     }}
                     style={{
-                    padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
+                    padding: "4px 4px", fontSize: 12, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
@@ -704,6 +720,7 @@ function TickerPanel({
         if (typeof document === "undefined") return null;
         return createPortal(
           <div
+            ref={cardRef}
             onClick={(e) => e.stopPropagation()}
             style={{
               position: "fixed", left, top, width: W, zIndex: 4000, padding: 12,
@@ -1332,17 +1349,8 @@ export function MultGreekClient({
 
         <DockGap />
 
-        {/* Intensity slider — matches the home GEX heatmap slider */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", flexShrink: 0 }}>
-          <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
-          <input
-            type="range" min={0.5} max={5} step={0.01}
-            value={intensity}
-            onChange={(e) => setIntensity(Number(e.target.value))}
-            style={{ width: 80, height: 3, accentColor: "#219EBC" }}
-          />
-          <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
-        </div>
+        {/* Intensity slider */}
+        <DockSlider label="Intensity" value={intensity} min={0.5} max={3} step={0.01} onChange={setIntensity} width={80} format={(v) => `${v.toFixed(2)}x`} />
 
         {/* Refresh / Snap / Discord */}
         <DockSpacer />

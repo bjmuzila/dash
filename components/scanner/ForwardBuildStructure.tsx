@@ -47,7 +47,7 @@ const fmtSigned = (v: number): string => (v >= 0 ? "+" : "") + fmtGex(v);
 const fmtStrike = (v: number): string =>
   Number.isInteger(v) ? v.toLocaleString("en-US") : String(v);
 const fmtSpot = (v: number): string =>
-  v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2);
+  v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const DTE_LABEL = (d: number) => (d === 0 ? "0DTE" : `${d}DTE`);
 const dteColor = (d: number) => (d === 0 ? SPOT : d === 1 ? HOME_THEME.cyan : HOME_THEME.purple);
@@ -86,13 +86,22 @@ function LadderColumn({ dte, info, rows, col, maxAbs, spot }: {
           {info ? fmtSigned(info.netTotal) : "no data"}
         </span>
       </div>
+      <div style={{ ...cell, padding: "0 5px 3px", borderBottom: `1px solid ${HOME_THEME.border}`, marginBottom: 4 }}>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: DIM }}>Strike</span>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.03em", textAlign: "center", color: DIM }}>put ◄ · ► call</span>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Net GEX</span>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Δ DoD</span>
+      </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
         {rows.map((r, i) => {
           if ("spot" in r) {
+            // At-the-money marker: a thin white line across the ladder (no row/bar),
+            // sitting between the two strikes that straddle spot. Price label rides
+            // on the left edge.
             return (
-              <div key={`s${i}`} style={{ ...cell, background: "rgba(255,255,255,0.06)", outline: `1px solid ${SPOT}66` }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: SPOT, fontFamily: "var(--font-mono, monospace)" }}>{fmtSpot(spot)}<span style={{ fontSize: 8, marginLeft: 2 }}>◄</span></span>
-                <div /><div /><div />
+              <div key={`s${i}`} style={{ position: "relative", height: 8 }}>
+                <div style={{ position: "absolute", left: 0, right: 0, top: 3, height: 2, background: "#fff", boxShadow: "0 0 5px rgba(255,255,255,0.4)", borderRadius: 1 }} />
+                <span style={{ position: "absolute", left: 0, top: -2, fontSize: 8.5, fontWeight: 800, color: "#fff", fontFamily: "var(--font-mono, monospace)", background: HOME_THEME.panel, paddingRight: 4 }}>{fmtSpot(spot)}</span>
               </div>
             );
           }
@@ -148,7 +157,7 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
   const hasWalls = cw.filter((x) => x != null).length + pw.filter((x) => x != null).length > 1;
 
   return (
-    <div style={{ marginTop: 10, maxWidth: 620, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 10, overflow: "hidden" }}>
+    <div style={{ marginTop: 10, maxWidth: 820, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 10, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
         <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.03em" }}>{t.symbol}</span>
         <span style={{ fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: SPOT }}>spot {fmtSpot(t.spot)}</span>

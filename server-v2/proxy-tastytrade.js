@@ -3132,6 +3132,36 @@ class TastytradeProxy {
     return Number(this.strikeGrowthSpot.get(String(root).toUpperCase())) || 0;
   }
 
+  /** Directly set a live strike-growth spot (used by the REST backstop poller). */
+  setStrikeGrowthSpot(root, px) {
+    const p = Number(px);
+    if (p > 0) this.strikeGrowthSpot.set(String(root).toUpperCase(), p);
+  }
+
+  /**
+   * REST backstop: refresh live spots for a set of roots via /market-data/by-type
+   * (mark→last fallback). The dxLink feed only carries an underlying quote for the
+   * roots it has actually subscribed, so tickers without a live underlying sub
+   * showed the last-swept DB spot (lags a full sweep). This keeps EVERY roster
+   * spot current — indices/equities/futures, RTH and extended hours. Called on a
+   * timer by the strike-growth recorder. Returns how many spots were updated.
+   */
+  async refreshStrikeGrowthSpots(symbols) {
+    const roots = [...new Set((symbols || [])
+      .map((s) => chainTicker(String(s || '').toUpperCase()))
+      .filter(Boolean))];
+    if (!roots.length) return 0;
+    let quotes;
+    try { quotes = await fetchUnderlyingQuotes(roots); }
+    catch (e) { console.warn('[strike-growth] REST spot refresh failed:', String(e?.message || e).slice(0, 160)); return 0; }
+    let n = 0;
+    for (const [sym, q] of quotes) {
+      const px = Number(q?.mark) || Number(q?.last) || 0;
+      if (px > 0) { this.strikeGrowthSpot.set(chainTicker(String(sym).toUpperCase()), px); n++; }
+    }
+    return n;
+  }
+
   async getStrikeGrowthSnapshot(root) {
     const up = String(root).toUpperCase();
     const chain = await fetchChain(up).catch(() => null);
