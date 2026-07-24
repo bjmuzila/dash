@@ -70,6 +70,11 @@ catch (e) { console.warn('[api-router] _lib-ibdaily.cjs not loaded:', e.message)
 let libConfRoute = null;
 try { libConfRoute = require('./_lib-confidence-route.cjs'); }
 catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e.message); }
+// Pure broker-CSV parser/matcher (lib/journal/csv.ts — zero imports):
+//   esbuild lib/journal/csv.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-journal-csv.cjs
+let libJournalCsv = null;
+try { libJournalCsv = require('./_lib-journal-csv.cjs'); }
+catch (e) { console.warn('[api-router] _lib-journal-csv.cjs not loaded:', e.message); }
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -1525,6 +1530,166 @@ if (libDb) {
       } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
     },
   });
+
+  // ── Journal /trading (per-user; needs the bundled CSV parser) ────────────────
+  if (libJournalCsv) {
+    const loadTrades = async (uid) => {
+      const key = (o, c) => `${o}|${c}`;
+      const fills = await libDb.getTradingFills(uid);
+      const derived = libJournalCsv.matchRoundTrips(fills);
+      const overrides = await libDb.getTradeOverrides(uid);
+      if (!overrides.size) return derived;
+      const out = [];
+      for (const t of derived) {
+        const o = overrides.get(key(t.open_ext_id, t.close_ext_id));
+        if (!o) { out.push(t); continue; }
+        if (o.deleted) continue;
+        out.push({
+          symbol: o.symbol, underlying: o.underlying, asset_type: o.asset_type,
+          direction: o.direction, open_ts: o.open_ts, close_ts: o.close_ts,
+          date: o.date, qty: o.qty, entry: o.entry, exit: o.exit, fees: o.fees, pnl: o.pnl,
+          account: o.account, open_ext_id: t.open_ext_id, close_ext_id: t.close_ext_id,
+        });
+      }
+      return out.sort((a, b) => a.close_ts - b.close_ts);
+    };
+
+    // /api/journal/trades — GET derived trades; PATCH edit; DELETE hide (override rows).
+    register('/api/journal/trades', {
+      auth: 'user', methods: ['GET', 'PATCH', 'DELETE'],
+      async handler(req, res, ctx, access) {
+        const userId = access.userId;
+        if (req.method === 'PATCH') {
+          try {
+            if (!userId) return send(res, 401, { error: 'unauthorized' });
+            const body = await readJson(req).catch(() => ({}));
+            const openExtId = String(body.openExtId ?? '').trim();
+            const closeExtId = String(body.closeExtId ?? '').trim();
+            if (!openExtId || !closeExtId) return send(res, 400, { error: 'openExtId and closeExtId are required' });
+            const trades = await loadTrades(userId);
+            const match = trades.find((t) => t.open_ext_id === openExtId && t.close_ext_id === closeExtId);
+            if (!match) return send(res, 404, { error: 'trade not found' });
+            const symbol = String(body.symbol ?? match.symbol).trim().toUpperCase() || match.symbol;
+            const account = String(body.account ?? match.account ?? '').trim();
+            const direction = body.direction === 'short' ? 'short' : body.direction === 'long' ? 'long' : match.direction;
+            const openTs = Number.isFinite(Number(body.openTs)) ? Number(body.openTs) : match.open_ts;
+            const closeTs = Number.isFinite(Number(body.closeTs)) ? Number(body.closeTs) : match.close_ts;
+            const qty = Number.isFinite(Number(body.qty)) && Number(body.qty) > 0 ? Number(body.qty) : match.qty;
+            const entry = Number.isFinite(Number(body.entry)) ? Number(body.entry) : match.entry;
+            const exit = Number.isFinite(Number(body.exit)) ? Number(body.exit) : match.exit;
+            const fees = Number.isFinite(Number(body.fees)) ? Number(body.fees) : match.fees;
+            const cls = libJournalCsv.classify(symbol);
+            const gross = (direction === 'long' ? exit - entry : entry - exit) * qty * cls.multiplier;
+            const pnl = gross - fees;
+            const override = {
+              open_ext_id: openExtId, close_ext_id: closeExtId,
+              symbol, underlying: cls.underlying, asset_type: cls.asset_type, direction,
+              open_ts: openTs, close_ts: closeTs, date: libJournalCsv.sessionDate(closeTs),
+              qty, entry, exit, fees, pnl, account, deleted: false,
+            };
+            await libDb.upsertTradeOverride(userId, override);
+            return send(res, 200, { ok: true, trade: { ...override, open_ext_id: openExtId, close_ext_id: closeExtId } });
+          } catch (err) { return send(res, 500, { error: String(err) }); }
+        }
+        if (req.method === 'DELETE') {
+          try {
+            if (!userId) return send(res, 401, { error: 'unauthorized' });
+            const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+            const openExtId = String(sp.get('openExtId') ?? '').trim();
+            const closeExtId = String(sp.get('closeExtId') ?? '').trim();
+            if (!openExtId || !closeExtId) return send(res, 400, { error: 'openExtId and closeExtId are required' });
+            const trades = await loadTrades(userId);
+            const match = trades.find((t) => t.open_ext_id === openExtId && t.close_ext_id === closeExtId);
+            if (!match) return send(res, 404, { error: 'trade not found' });
+            await libDb.upsertTradeOverride(userId, {
+              open_ext_id: openExtId, close_ext_id: closeExtId,
+              symbol: match.symbol, underlying: match.underlying, asset_type: match.asset_type,
+              direction: match.direction, open_ts: match.open_ts, close_ts: match.close_ts, date: match.date,
+              qty: match.qty, entry: match.entry, exit: match.exit, fees: match.fees, pnl: match.pnl,
+              account: match.account, deleted: true,
+            });
+            return send(res, 200, { ok: true });
+          } catch (err) { return send(res, 500, { error: String(err) }); }
+        }
+        try {
+          if (!userId) return send(res, 401, { trades: [], accounts: [] });
+          const trades = await loadTrades(userId);
+          send(res, 200, { trades, accounts: libJournalCsv.deriveAccountStats(trades) });
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+
+    // /api/journal/import — broker CSV preview/commit for /trading.
+    register('/api/journal/import', {
+      auth: 'user', methods: ['POST'],
+      async handler(req, res, ctx, access) {
+        const userId = access.userId;
+        const MAX_CSV_BYTES = 8 * 1024 * 1024;
+        const crossSourceWarning = (existingFills, dates, incomingSource) => {
+          const touched = new Set(dates);
+          const otherSources = new Set();
+          for (const f of existingFills) {
+            if (touched.has(f.date) && f.source && f.source !== incomingSource) otherSources.add(f.source);
+          }
+          if (!otherSources.size) return [];
+          return [
+            `${dates.length === 1 ? 'This date' : 'Some of these dates'} already ha${dates.length === 1 ? 's' : 've'} fills imported from a different source ` +
+            `(${[...otherSources].join(', ')}). If that's the SAME trading activity re-exported from a different tool ` +
+            `(e.g. a raw fills export vs. an already-matched trades export), importing both will double-count every trade. ` +
+            `Only proceed if this file covers different trades or a different account than what's already there.`,
+          ];
+        };
+        const warningsFor = (unknownRoots, skipped, fills) => {
+          const w = [];
+          if (unknownRoots.length) {
+            w.push(`Unknown futures contract${unknownRoots.length > 1 ? 's' : ''}: ${unknownRoots.join(', ')}. ` +
+              `No point value on file, so P&L for these is computed at 1×/point and will be wrong. ` +
+              `Add the root to FUTURES_MULT in lib/journal/csv.ts before relying on it.`);
+          }
+          if (skipped) w.push(`${skipped} row${skipped > 1 ? 's' : ''} skipped (summary lines, cash movements, or missing price/qty/time).`);
+          if (fills.every((f) => f.fees === 0)) w.push('No commission column found — commissions will read $0 and net P&L is gross.');
+          return w;
+        };
+        try {
+          if (!userId) return send(res, 401, { error: 'unauthorized' });
+          const body = await readJson(req).catch(() => ({}));
+          const csv = String(body.csv ?? '');
+          if (!csv.trim()) return send(res, 400, { error: 'csv required' });
+          if (csv.length > MAX_CSV_BYTES) return send(res, 413, { error: 'file too large (max 8MB)' });
+          const broker = body.broker ? String(body.broker) : undefined;
+          const map = body.map ?? undefined;
+          const commit = body.commit === true;
+          const parsed = libJournalCsv.importCsv(csv, broker, map);
+          if (!parsed.fills.length) {
+            return send(res, 422, { error: 'No executions found in that file.', broker: parsed.broker, header: parsed.header, skipped: parsed.skipped });
+          }
+          if (!commit) {
+            const existingFills = await libDb.getTradingFills(userId);
+            const crossSource = crossSourceWarning(existingFills, parsed.days.map((d) => d.date), parsed.broker);
+            return send(res, 200, {
+              ok: true, preview: true, broker: parsed.broker, header: parsed.header,
+              counts: { fills: parsed.fills.length, trades: parsed.trades.length, days: parsed.days.length },
+              days: parsed.days, trades: parsed.trades.slice(0, 50), skipped: parsed.skipped,
+              warnings: [...warningsFor(parsed.unknownRoots, parsed.skipped, parsed.fills), ...crossSource],
+            });
+          }
+          const inserted = await libDb.insertTradingFills(userId, parsed.fills);
+          const all = await libDb.getTradingFills(userId);
+          const trades = libJournalCsv.matchRoundTrips(all);
+          const days = libJournalCsv.deriveDays(trades);
+          const touched = new Set(parsed.days.map((d) => d.date));
+          const affected = days.filter((d) => touched.has(d.date));
+          const rows = [];
+          for (const d of affected) { const row = await libDb.upsertTradingJournalDay(userId, d); if (row) rows.push(row); }
+          return send(res, 200, {
+            ok: true, preview: false, broker: parsed.broker,
+            inserted, duplicates: parsed.fills.length - inserted, days: rows,
+            warnings: warningsFor(parsed.unknownRoots, parsed.skipped, parsed.fills),
+          });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };
