@@ -1640,7 +1640,7 @@ function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }
   const neg = intel.safePerDay < 0;
   const pct = Math.min(100, Math.max(0, (intel.todayDay / intel.daysInMonth) * 100));
   return (
-    <div style={{ ...card(), padding: 16, background: "#000000", border: `1px solid ${bRgba(LIGHT_BLUE, 0.6)}`, boxShadow: `${EDGE_LIGHT}, 0 0 36px -6px ${bRgba(LIGHT_BLUE, 0.55)}, 0 24px 60px -16px rgba(0,0,0,0.75)`, display: "flex", flexDirection: "column" }}>
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Safe to Spend" />
       <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
         {fmtMoney(intel.safePerDay, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> /day</span>

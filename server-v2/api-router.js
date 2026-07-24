@@ -163,6 +163,17 @@ function mondayOf(ds) {
   d.setUTCDate(d.getUTCDate() - (dow === 0 ? 6 : dow - 1));
   return d.toISOString().slice(0, 10);
 }
+function etHour(d = new Date()) {
+  return Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', hour12: false,
+  }).format(d));
+}
+// Client IP from proxy headers (Cloudflare / VPS). Node lowercases header keys.
+function clientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) { const first = String(xff).split(',')[0]?.trim(); if (first) return first; }
+  return req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || null;
+}
 
 // ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
 // Ports app/api/insights/gex/route.ts verbatim in behavior: forward to the
@@ -704,6 +715,127 @@ if (libDb) {
         }));
         send(res, 200, { visits });
       } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/strategy — Analytics StrategyBuilder. GET latest/history; POST cron.
+  register('/api/strategy', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx) {
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      if (req.method === 'POST') {
+        try {
+          if (!tokenOk(req, ctx)) return send(res, 403, { error: 'Forbidden' });
+          const body = await readJson(req);
+          const date = String(body?.date || etDateStr());
+          const plan = body?.plan;
+          if (!plan || typeof plan !== 'object') return send(res, 400, { error: 'plan object required' });
+          const hour = Number.isFinite(Number(body?.hour)) && body?.hour != null ? Number(body.hour) : etHour();
+          await libDb.upsertDailyStrategy(date, plan);
+          await libDb.insertDailyStrategyHistory(date, hour, plan);
+          return send(res, 200, { ok: true, date, hour });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const date = sp.get('date');
+        if (sp.get('history') === '1') {
+          const rows = await libDb.getDailyStrategyHistory(date || etDateStr());
+          return send(res, 200, { history: rows.map((r) => ({ ...r, plan: typeof r.plan === 'string' ? JSON.parse(r.plan) : r.plan })) });
+        }
+        const row = date ? await libDb.getDailyStrategy(date) : await libDb.getLatestDailyStrategy();
+        if (!row) return send(res, 200, { strategy: null });
+        const plan = typeof row.plan === 'string' ? JSON.parse(row.plan) : row.plan;
+        send(res, 200, { strategy: { ...row, plan } });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/page-status — page-load beacon. POST upsert + visit log; GET status list.
+  register('/api/page-status', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const isLoaded = Boolean(body.isLoaded ?? body.is_loaded);
+          await libDb.upsertPageLoadStatus({
+            page_key: String(body.pageKey ?? body.page_key ?? ''),
+            page_label: body.pageLabel == null ? null : String(body.pageLabel),
+            path: body.path == null ? null : String(body.path),
+            is_loaded: isLoaded,
+            last_loaded_at: body.lastLoadedAt == null ? null : String(body.lastLoadedAt),
+            last_unloaded_at: body.lastUnloadedAt == null ? null : String(body.lastUnloadedAt),
+          });
+          if (isLoaded) {
+            try {
+              await libDb.insertPageVisit({
+                page_key: String(body.pageKey ?? body.page_key ?? ''),
+                page_label: body.pageLabel == null ? null : String(body.pageLabel),
+                path: body.path == null ? null : String(body.path),
+                user_id: access.userId ?? null,
+                ip: clientIp(req),
+              });
+            } catch { /* non-fatal */ }
+          }
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: String(err) }); }
+      }
+      try {
+        const limit = Math.min(Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit') ?? 200), 1000);
+        const rows = await libDb.getPageLoadStatus(limit);
+        send(res, 200, { rows });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/bzila-note — Traders Dashboard note. GET any signed-in; POST/DELETE owner.
+  register('/api/bzila-note', {
+    auth: 'user', methods: ['GET', 'POST', 'DELETE'],
+    async handler(req, res, ctx, access) {
+      if (req.method === 'GET') {
+        try {
+          const row = await libDb.getBzilaNote();
+          send(res, 200, { content: row?.content ?? '', updated_at: row?.updated_at ?? null });
+        } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+        return;
+      }
+      if (!ctx.ownerUserId || access.userId !== ctx.ownerUserId) return send(res, 403, { error: 'Forbidden' });
+      if (req.method === 'DELETE') {
+        try { await libDb.upsertBzilaNote(''); send(res, 200, { ok: true }); }
+        catch (err) { send(res, 500, { error: 'Delete failed', detail: String(err) }); }
+        return;
+      }
+      try {
+        const body = await readJson(req);
+        await libDb.upsertBzilaNote(String(body?.content ?? '').slice(0, 8000));
+        send(res, 200, { ok: true });
+      } catch (err) { send(res, 500, { error: 'Save failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/far-cb-tickers — Far CB Watch roster. GET list; POST add (needs email).
+  register('/api/far-cb-tickers', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (req.method === 'POST') {
+        try {
+          if (!userId) return send(res, 401, { error: 'Sign in to add a ticker' });
+          const body = await readJson(req);
+          const symbol = String(body?.symbol ?? '').trim();
+          if (!symbol) return send(res, 400, { error: 'Ticker is required' });
+          let email = null;
+          try { const u = await libDb.getUserById(userId); email = u?.email ?? null; } catch { /* email optional */ }
+          const result = await libDb.addFarCbTicker({ symbol, added_by_id: userId, added_by_email: email });
+          if (!result.ok) return send(res, 400, { error: result.error });
+          return send(res, 200, { ok: true, ticker: result.row });
+        } catch (err) { return send(res, 500, { error: 'Add ticker failed', detail: String(err) }); }
+      }
+      try {
+        if (!userId) return send(res, 401, { error: 'Sign in required' });
+        const rows = await libDb.listFarCbTickers();
+        send(res, 200, { ok: true, rows });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
     },
   });
 }

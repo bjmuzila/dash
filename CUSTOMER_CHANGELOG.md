@@ -3,7 +3,8 @@
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
 ## Friday 7/24/2026
-* Added a new **EOD GEX (excluding 0DTE)** chart to the GEX Levels page — one bar per session showing where net gamma settled across all expirations except same-day options, right alongside the existing end-of-day GEX chart.
+* Cleaned up the Option Chain Replay popup — removed the small print at the bottom and moved the CB Edge logo to the bottom-left corner.
+* Fixed the blank rows in Option Chain Replay — it now captures more strikes at each snapshot, so the replay shows a fuller strike ladder instead of gaps.
 
 ## Thursday 7/23/2026
 * Streamlined the IB Stats page down to the three cards that matter — the Live Read, the IB Read (4 families), and the 10:30 Probability Engine gauges — and cleared out the rest of the clutter.
