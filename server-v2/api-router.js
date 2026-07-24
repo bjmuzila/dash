@@ -42,6 +42,20 @@
  */
 
 // ---------------------------------------------------------------------------
+// Bundled DB layer (lib/db.ts → server-v2/_lib-db.cjs, esbuild --format=cjs).
+// lib/db.ts imports only `pg`, so it bundles to a self-contained CommonJS file
+// server-v2 can require directly — reusing every query verbatim (no rewrites,
+// no drift). Loaded DEFENSIVELY: if the bundle is absent (local dev, or a build
+// that didn't produce it) libDb stays null, the DB routes below are simply not
+// registered, and they FALL THROUGH to Next unchanged. A missing bundle can
+// never crash boot. Regenerate after editing lib/db.ts:
+//   esbuild lib/db.ts --bundle --platform=node --format=cjs --external:pg \
+//     --outfile=server-v2/_lib-db.cjs
+let libDb = null;
+try { libDb = require('./_lib-db.cjs'); }
+catch (e) { console.warn('[api-router] _lib-db.cjs not loaded — DB routes stay on Next:', e.message); }
+
+// ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
 
@@ -243,6 +257,32 @@ async function handleApiRoute(req, res, ctx) {
     ctx.sendJson(res, 500, { error: String(err?.message || err) }, req);
   }
   return true;
+}
+
+// ── REAL-DB routes (batch 2) — only registered when the bundle loaded ────────
+// Each calls the bundled lib/db.ts function exactly as its route.ts did. If
+// libDb is null these blocks are skipped → the routes fall through to Next.
+if (libDb) {
+  // /api/eod-gex?date&symbol&limit → getEodGex → { count, rows }
+  register('/api/eod-gex', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const date = sp.get('date') ?? '';
+        const symbol = sp.get('symbol') ?? '';
+        const limit = Math.min(Number(sp.get('limit') ?? 200), 1000);
+        const rows = await libDb.getEodGex({
+          date: date || undefined,
+          symbol: symbol || undefined,
+          limit,
+        });
+        send(res, 200, { count: rows.length, rows });
+      } catch (err) {
+        send(res, 500, { error: 'Database error', detail: String(err) });
+      }
+    },
+  });
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };
