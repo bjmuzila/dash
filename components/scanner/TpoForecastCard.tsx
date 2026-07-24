@@ -52,8 +52,8 @@ export default function TpoForecastCard({ instr }: { instr: "ESU" | "NQU" }) {
     return line(
       fc.status === "accumulating"
         ? `Accumulating history — ${fc.nHistory}/${fc.need ?? 40} sessions.`
-        : "Waiting on the Initial Balance (first hour) to complete.",
-      fc.status === "accumulating" ? "IB → day base rate" : "lights up at 10:30 ET",
+        : "Waiting on today's open to print.",
+      fc.status === "accumulating" ? "open → day base rate" : "lights up at open",
     );
   }
 
@@ -64,6 +64,6 @@ export default function TpoForecastCard({ instr }: { instr: "ESU" | "NQU" }) {
       {" · "}POC <b style={{ color: LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>{fc.predicted_poc.toFixed(2)}</b>
       {fc.spot != null && <> {" · "}spot <b style={{ fontVariantNumeric: "tabular-nums" }}>{fc.spot.toFixed(2)}</b></>}
     </span>,
-    `${fc.symbol} · IB → day · conf ${fc.confidence}`,
+    `${fc.symbol} · open → day · conf ${fc.confidence}`,
   );
 }

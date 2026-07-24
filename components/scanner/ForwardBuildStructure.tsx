@@ -118,8 +118,11 @@ function LadderColumn({ dte, info, rows, col, spot }: {
           const build = !!s && s.delta != null && s.net * s.delta > 0;
           const fade = !!s && s.delta != null && s.net * s.delta < 0;
           const frac = s && s.delta != null && colMaxD > 0 ? Math.abs(s.delta) / colMaxD : 0;
-          const dTone = s?.delta == null ? HOME_THEME.text : s.delta > 0 ? GREEN : s.delta < 0 ? RED : HOME_THEME.text;
-          const arrow = s?.delta == null ? "" : s.delta > 0 ? "▲ " : s.delta < 0 ? "▼ " : "";
+          // Δ arrow/color mean BUILDING vs FADING (wall growth), matching the bar —
+          // NOT the raw net sign. A put wall building has net going more negative,
+          // so raw Δ would show ▼ even though the wall grew; that mismatch confused.
+          const dTone = build ? GREEN : fade ? RED : HOME_THEME.text;
+          const arrow = build ? "▲ " : fade ? "▼ " : "";
           return (
             <div key={r.strike} style={cell}>
               <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>{fmtStrike(r.strike)}</span>

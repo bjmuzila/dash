@@ -21,7 +21,6 @@ const GRID_LO = -100, GRID_HI = 100;            // offset (pts) vs IB mid
 const GRID_N = (GRID_HI - GRID_LO) / BIN + 1;
 const K = 25;
 const LIVE_MIN = 40;                            // history rows needed to light up
-const IB_CLOSE_MIN = 630;                       // 10:30 ET — IB complete
 
 function etDateStr(d = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -29,14 +28,6 @@ function etDateStr(d = new Date()): string {
   }).formatToParts(d).filter((p) => p.type !== "literal")
     .reduce((a, p) => ({ ...a, [p.type]: p.value }), {} as Record<string, string>);
   return `${parts.year}-${parts.month}-${parts.day}`;
-}
-function etNowMin(): number {
-  const p = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(new Date());
-  const h = Number(p.find((x) => x.type === "hour")?.value);
-  const m = Number(p.find((x) => x.type === "minute")?.value);
-  return h * 60 + m;
 }
 
 interface ProfRow {
@@ -112,22 +103,23 @@ export async function GET(req: NextRequest) {
         note: "Recorder table not created yet — deploys with the nightly recorder." });
     }
 
-    // today's session so far (need IB complete)
+    // today's session so far (based on today's open — no IB wait)
     const rows = await getEsCandles(today, undefined, 2000);
     const bars = rthBarsForDate(rows as unknown as EsCandle[], today);
     const todaySess: TpoSession | null = bars.length >= 3 ? buildTpoSession(bars, today, BIN) : null;
-    const ibDone = etNowMin() >= IB_CLOSE_MIN && todaySess?.ibHigh != null && todaySess?.ibLow != null;
 
     if (hist.length < LIVE_MIN) {
       return NextResponse.json({ ok: false, status: "accumulating", nHistory: hist.length, need: LIVE_MIN,
         note: "The forecast lights up once the recorder (or a one-time backfill) has enough sessions." });
     }
-    if (!todaySess || !ibDone) {
+    if (!todaySess) {
       return NextResponse.json({ ok: false, status: "pre_ib", nHistory: hist.length,
-        note: "Waiting on the Initial Balance (first two 30-min periods) to complete." });
+        note: "Waiting on today's open to print." });
     }
 
-    const ibMid = (todaySess.ibHigh! + todaySess.ibLow!) / 2;
+    const ibMid = todaySess.ibHigh != null && todaySess.ibLow != null
+      ? (todaySess.ibHigh + todaySess.ibLow) / 2
+      : todaySess.open;
 
     // features for every history row + today (trailing 20-session medians)
     const feat: number[][] = [];
@@ -142,7 +134,8 @@ export async function GET(req: NextRequest) {
     const trailRngT = median(winT.map((x) => (x.day_high ?? 0) - (x.day_low ?? 0))) || 1;
     const todayRow: ProfRow = {
       date: today, poc: todaySess.poc, vah: todaySess.vah, val: todaySess.val,
-      ib_high: todaySess.ibHigh, ib_low: todaySess.ibLow, ib_mid: ibMid, ib_range: todaySess.ibRange,
+      ib_high: todaySess.ibHigh, ib_low: todaySess.ibLow, ib_mid: ibMid,
+      ib_range: todaySess.ibRange ?? trailIbT,
       day_open: todaySess.open, day_close: null, day_high: null, day_low: null, profile_json: [],
     };
     const qf = features(todayRow, hist[hist.length - 1], trailIbT, trailRngT);
