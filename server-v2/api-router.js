@@ -111,9 +111,42 @@ function send(res, status, body, headers = {}) {
   res.statusCode = status;
   res.end(text);
 }
+// Read + JSON-parse a request body (bounded). Mirrors `await req.json()` in the
+// old Next POST handlers. Rejects on oversize / invalid JSON.
+function readJson(req, maxBytes = 1_000_000) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > maxBytes) { req.destroy(); reject(new Error('body too large')); }
+    });
+    req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); } });
+    req.on('error', reject);
+  });
+}
+
 // Cache-Control presets, matching lib/cacheHeaders.ts exactly.
 const CACHE_30 = 'public, max-age=30';                                   // quotes/gex/chains TTL
 const NO_STORE = 'no-store, no-cache, must-revalidate, max-age=0';
+
+// ET date helpers — mirror the per-route helpers in the original Next routes.
+function etDateStr(d = new Date()) {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d).filter((x) => x.type !== 'literal')
+    .reduce((a, x) => ({ ...a, [x.type]: x.value }), {});
+  return `${p.year}-${p.month}-${p.day}`;
+}
+function todayET() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    .toISOString().slice(0, 10);
+}
+function mondayOf(ds) {
+  const d = new Date(`${ds}T12:00:00Z`);
+  const dow = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+  return d.toISOString().slice(0, 10);
+}
 
 // ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
 // Ports app/api/insights/gex/route.ts verbatim in behavior: forward to the
@@ -281,6 +314,171 @@ if (libDb) {
       } catch (err) {
         send(res, 500, { error: 'Database error', detail: String(err) });
       }
+    },
+  });
+
+  // /api/momentum-bias?date|since|all|limit → { date, since, signals, summary }
+  register('/api/momentum-bias', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const since = sp.get('since') || undefined;
+      const all = sp.get('all') === '1';
+      const limit = Math.min(1000, Math.max(1, Number(sp.get('limit')) || 200));
+      const date = all || since ? undefined : (sp.get('date') || etDateStr());
+      try {
+        const [signals, summary] = await Promise.all([
+          libDb.getMomentumBiasSignals({ date, sinceDate: since, limit }),
+          libDb.getMomentumBiasSummary({ date, sinceDate: since }),
+        ]);
+        send(res, 200, { date: date ?? null, since: since ?? null, signals, summary },
+          { 'Cache-Control': 'no-store' });
+      } catch (e) {
+        send(res, 500, { error: e.message, signals: [], summary: [] });
+      }
+    },
+  });
+
+  // /api/ref-levels?symbol=ES → PDH/PDL (day) + PWH/PWL (week) from ref_levels
+  register('/api/ref-levels', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const symbol = (new URL(req.url || '/', 'http://localhost').searchParams.get('symbol') || 'ES').toUpperCase();
+        const today = todayET();
+        const thisMon = mondayOf(today);
+        const day = await libDb.queryOne(
+          `SELECT high, low, key FROM ref_levels WHERE symbol = ? AND kind = 'day' AND key < ? ORDER BY key DESC LIMIT 1`,
+          [symbol, today]
+        );
+        const week = await libDb.queryOne(
+          `SELECT high, low, key FROM ref_levels WHERE symbol = ? AND kind = 'week' AND key < ? ORDER BY key DESC LIMIT 1`,
+          [symbol, thisMon]
+        );
+        send(res, 200, {
+          symbol,
+          pdh: day?.high ?? null, pdl: day?.low ?? null, pdDate: day?.key ?? null,
+          pwh: week?.high ?? null, pwl: week?.low ?? null, pwWeek: week?.key ?? null,
+        }, { 'Cache-Control': 'no-store' });
+      } catch (err) {
+        send(res, 500, { error: String(err) });
+      }
+    },
+  });
+
+  // ── User-scoped prefs (GET load / POST save), keyed on the AUTHED userId ─────
+  // The old routes read the userId from @/lib/supabase/server getServerUserId();
+  // here we use access.userId (verifyWsRequest already resolved + gated it), so
+  // the supabase import is dropped. All subscriber-gated (middleware already
+  // required a paid session for these — none are in PAID_EXEMPT).
+
+  // /api/positioning-tickers — /test Positioning tab, exactly 4 tickers.
+  register('/api/positioning-tickers', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const seen = new Set(), tickers = [];
+          for (const it of (Array.isArray(body?.tickers) ? body.tickers : [])) {
+            const sym = String(it ?? '').trim().toUpperCase().slice(0, 12);
+            if (!sym || seen.has(sym) || !/^[A-Z0-9/.^-]+$/.test(sym)) continue;
+            seen.add(sym); tickers.push(sym);
+            if (tickers.length >= 4) break;
+          }
+          if (tickers.length !== 4) return send(res, 400, { error: 'Exactly 4 distinct tickers required' });
+          await libDb.upsertPositioningTickers(userId, tickers);
+          return send(res, 200, { ok: true, tickers });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const tickers = await libDb.getPositioningTickers(userId);
+        send(res, 200, { tickers }, { 'Cache-Control': 'private, max-age=30' });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/quote-symbols — toolbar Quotes dropdown, up to 40 { sym, label }.
+  register('/api/quote-symbols', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const seen = new Set(), symbols = [];
+          for (const it of (Array.isArray(body?.symbols) ? body.symbols : [])) {
+            if (!it || typeof it !== 'object') continue;
+            const sym = String(it.sym ?? '').trim().toUpperCase().slice(0, 12);
+            if (!sym || seen.has(sym) || !/^[A-Z0-9/.^-]+$/.test(sym)) continue;
+            seen.add(sym);
+            const label = String(it.label ?? sym).trim().slice(0, 12);
+            symbols.push({ sym, label: label || sym });
+            if (symbols.length >= 40) break;
+          }
+          await libDb.upsertQuoteSymbols(userId, symbols);
+          return send(res, 200, { ok: true, symbols });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const symbols = await libDb.getQuoteSymbols(userId);
+        send(res, 200, { symbols }, { 'Cache-Control': 'private, max-age=30' });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/ict-prefs — per-user /ict glossary hidden-card ids.
+  register('/api/ict-prefs', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const hiddenCards = Array.isArray(body.hiddenCards)
+            ? body.hiddenCards.map((x) => String(x)).slice(0, 200) : [];
+          await libDb.upsertIctCardPrefs(userId, hiddenCards);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const hiddenCards = await libDb.getIctCardPrefs(userId);
+        send(res, 200, { hiddenCards });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/traders-dashboard — per-user schedule/tasks/links/weather-zip.
+  register('/api/traders-dashboard', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const fields = {};
+          if ('zip' in body) fields.zip = body.zip ? String(body.zip).trim().slice(0, 10) : null;
+          if (Array.isArray(body.schedule)) fields.schedule = body.schedule;
+          if (Array.isArray(body.tasks)) fields.tasks = body.tasks;
+          if (Array.isArray(body.links)) fields.links = body.links;
+          await libDb.upsertTdPrefs(userId, fields);
+          return send(res, 200, { ok: true });
+        } catch (err) { return send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      }
+      try {
+        const prefs = await libDb.getTdPrefs(userId);
+        send(res, 200, {
+          zip: prefs?.zip ?? null,
+          schedule: prefs?.schedule ?? [],
+          tasks: prefs?.tasks ?? [],
+          links: prefs?.links ?? [],
+        });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
     },
   });
 }

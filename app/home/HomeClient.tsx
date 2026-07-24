@@ -13,7 +13,7 @@ import IbStatsTab from "@/components/scanner/IbStatsTab";
 // trimmed EsCandlesFullPanel embed — that panel has no dock, and no bubbles /
 // TPO / profile / VSA, which is precisely what the toolbar is for.
 import EsCandlesPage from "@/app/es-candles/page";
-import SignalsFeed from "@/components/dashboard/SignalsFeed";
+import HomeGaugeRail from "@/components/dashboard/HomeGaugeRail";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
@@ -936,6 +936,25 @@ export function HomeClient({
     });
   }, [gexChainRows, wsChainRows]);
 
+  // Home gauge rail metrics (fed to <HomeGaugeRail/> that replaced SignalsFeed).
+  //  · cpg          = total call $-gamma / total put $-gamma (OI+Vol basis); 1.0 balanced.
+  //  · gammaPctVol  = call share of VOL-ONLY gamma, 0–100; >50 = call-side gamma dominant.
+  // GEX / DEX / 0DTE GEX Δ15m are wired live inside the component off /ws/gex.
+  const gaugeMetrics = useMemo(() => {
+    let callDollarGamma = 0, putDollarGamma = 0; // OI+Vol basis
+    let callVolGamma = 0, putVolGamma = 0;        // vol-only basis
+    for (const r of chainRows) {
+      callDollarGamma += (r.callGamma ?? 0) * ((r.callOI ?? 0) + (r.callVolume ?? 0));
+      putDollarGamma  += (r.putGamma ?? 0) * ((r.putOI ?? 0) + (r.putVolume ?? 0));
+      callVolGamma += (r.callGamma ?? 0) * (r.callVolume ?? 0);
+      putVolGamma  += (r.putGamma ?? 0) * (r.putVolume ?? 0);
+    }
+    const cpg = putDollarGamma > 0 ? callDollarGamma / putDollarGamma : null;
+    const totVol = callVolGamma + putVolGamma;
+    const gammaPctVol = totVol > 0 ? (callVolGamma / totVol) * 100 : null;
+    return { cpg, gammaPctVol };
+  }, [chainRows]);
+
   // SPY / QQQ 0DTE per-strike net GEX for the two right-hand columns. Only
   // fetched in heatmap view — the chain embed doesn't render these columns, so
   // there's no reason to poll two extra chains behind it.
@@ -1533,7 +1552,8 @@ export function HomeClient({
                 Replaced the NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN
                 readout, which still lives on the left Levels strip above the chart. */}
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16 }}>
-              <SignalsFeed />
+              {/* ibDirection intentionally unset — needs the IB stats engine; renders "--" until wired */}
+              <HomeGaugeRail gammaPctVol={gaugeMetrics.gammaPctVol} cpg={gaugeMetrics.cpg} />
             </div>
 
             <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
