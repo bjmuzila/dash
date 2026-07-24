@@ -17,6 +17,7 @@ const Em           = lazy(() => import('@/app/em/page'))
 const Flow         = lazy(() => import('@/app/flow/page'))
 const EsCandles    = lazy(() => import('@/app/es-candles/page'))
 const Scanner      = lazy(() => import('@/app/scanner/page'))
+const ForwardBuild = lazy(() => import('@/app/forward-build/page'))
 const Ict          = lazy(() => import('@/app/ict/page'))
 const Trading      = lazy(() => import('@/app/trading/page'))
 // Greeks removed: app/greeks/page.tsx was deleted upstream in v7.19.2 (66206f66d,
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="/flow" element={S(<Flow />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
+              <Route path="/forward-build" element={S(<ForwardBuild />)} />
               <Route path="/ict" element={S(<Ict />)} />
               <Route path="/trading" element={S(<Trading />)} />
               <Route path="/confidence-score" element={S(<Confidence />)} />

@@ -307,7 +307,7 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "ES breaks IB high — does NQ confirm or diverge?",
     ask: "Split every ES IB-high break by what NQ did, and compare ES's own break quality across the cohorts. This is the one that tells you whether NQ disagreeing is a real reason to fade ES, or just the baseline fade rate.",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const pop = paired.filter(({ e }) => side(e) === "H");
       const coh = {
         "NQ confirmed FIRST": pop.filter(({ e, n }) => side(n) === "H" && n.fcb!.breakMin < e.fcb!.breakMin),
@@ -315,8 +315,20 @@ const PROMPTS: Prompt[] = [
         "NQ DIVERGED (broke low)": pop.filter(({ n }) => side(n) === "L"),
         "NQ never broke": pop.filter(({ n }) => side(n) == null),
       };
+      const tE = today?.ES ?? null, tN = today?.NQ ?? null;
+      const todayCoh =
+        tE?.breakSide === "H"
+          ? tN?.breakSide === "H"
+            ? tN.breakMin != null && tE.breakMin != null && tN.breakMin < tE.breakMin
+              ? "NQ confirmed FIRST"
+              : "NQ confirmed AFTER"
+            : tN?.breakSide === "L"
+              ? "NQ DIVERGED (broke low)"
+              : "NQ never broke"
+          : null;
       const rows: Row[] = Object.entries(coh).map(([label, xs]) => ({
         label,
+        today: label === todayCoh,
         n: xs.length,
         k: xs.filter(({ e }) => e.fcb!.hit["1"]).length,
         extra: {
@@ -350,7 +362,7 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "NQ breaks IB high FIRST — does ES follow?",
     ask: "Mirror of the above with NQ as the leader. Population is every NQ IB-high break; cohorts are what ES did. Grades NQ's own break quality, so the 'ES never broke' cohort still has numbers. Tells you whether NQ leading is a reason to buy ES, or whether NQ just runs alone.",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const pop = paired.filter(({ n }) => side(n) === "H");
       const coh = {
         "ES followed (NQ led)": pop.filter(({ e, n }) => side(e) === "H" && e.fcb!.breakMin > n.fcb!.breakMin),
@@ -358,8 +370,20 @@ const PROMPTS: Prompt[] = [
         "ES DIVERGED (broke low)": pop.filter(({ e }) => side(e) === "L"),
         "ES never broke": pop.filter(({ e }) => side(e) == null),
       };
+      const tE = today?.ES ?? null, tN = today?.NQ ?? null;
+      const todayCoh =
+        tN?.breakSide === "H"
+          ? tE?.breakSide === "H"
+            ? tE.breakMin != null && tN.breakMin != null && tE.breakMin > tN.breakMin
+              ? "ES followed (NQ led)"
+              : "ES broke first"
+            : tE?.breakSide === "L"
+              ? "ES DIVERGED (broke low)"
+              : "ES never broke"
+          : null;
       const rows: Row[] = Object.entries(coh).map(([label, xs]) => ({
         label,
+        today: label === todayCoh,
         n: xs.length,
         k: xs.filter(({ n }) => n.fcb!.hit["1"]).length,
         extra: {
@@ -403,21 +427,23 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "How often do ES and NQ break OPPOSITE sides?",
     ask: "The base rate for the whole divergence idea. If it's rare, every stat below it is thin.",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const both = paired.filter(({ e, n }) => brk(e) && brk(n));
       const agree = both.filter(({ e, n }) => side(e) === side(n));
       const div = both.filter(({ e, n }) => side(e) !== side(n));
       const one = paired.filter(({ e, n }) => !!brk(e) !== !!brk(n));
       const none = paired.filter(({ e, n }) => !brk(e) && !brk(n));
       const T = paired.length;
+      const eS = today?.ES?.breakSide ?? null, nS = today?.NQ?.breakSide ?? null;
+      const tBoth = eS != null && nS != null;
       return {
         headline: `${T} paired sessions.`,
         cols: ["share"],
         rows: [
-          { label: "Both broke, SAME side", n: T, k: agree.length, extra: { share: pctS(agree.length, T) } },
-          { label: "Both broke, OPPOSITE sides", n: T, k: div.length, extra: { share: pctS(div.length, T) }, emphasis: true },
-          { label: "Only one broke", n: T, k: one.length, extra: { share: pctS(one.length, T) } },
-          { label: "Neither broke", n: T, k: none.length, extra: { share: pctS(none.length, T) } },
+          { label: "Both broke, SAME side", today: tBoth && eS === nS, n: T, k: agree.length, extra: { share: pctS(agree.length, T) } },
+          { label: "Both broke, OPPOSITE sides", today: tBoth && eS !== nS, n: T, k: div.length, extra: { share: pctS(div.length, T) }, emphasis: true },
+          { label: "Only one broke", today: (eS != null) !== (nS != null), n: T, k: one.length, extra: { share: pctS(one.length, T) } },
+          { label: "Neither broke", today: eS == null && nS == null, n: T, k: none.length, extra: { share: pctS(none.length, T) } },
         ],
         verdict: `Divergence happens ${pctS(div.length, T)} of sessions — n=${div.length}. That's the ceiling on every cross-index sample.`,
       };
@@ -428,18 +454,24 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "On divergent days, does EITHER break resolve?",
     ask: "ES says up, NQ says down. Does the day pick a side by the close, or is divergence simply a chop tell?",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const div = paired.filter(({ e, n }) => brk(e) && brk(n) && side(e) !== side(n));
       const esLed = div.filter(({ e, n }) => closeSide(e) === side(e) && closeSide(n) === side(e));
       const nqLed = div.filter(({ e, n }) => closeSide(n) === side(n) && closeSide(e) === side(n));
       const neither = div.filter((x) => !esLed.includes(x) && !nqLed.includes(x));
+      const eS = today?.ES?.breakSide ?? null, nS = today?.NQ?.breakSide ?? null;
+      const tcs = (t: TodayFull | null) => (t?.closeZone === "top25" ? "H" : t?.closeZone === "bot25" ? "L" : null);
+      const eC = tcs(today?.ES ?? null), nC = tcs(today?.NQ ?? null);
+      const tDiv = eS != null && nS != null && eS !== nS;
+      const tEsLed = tDiv && eC === eS && nC === eS;
+      const tNqLed = tDiv && nC === nS && eC === nS;
       return {
         headline: `${div.length} divergent sessions. "Led" = BOTH indices closed in the direction of that index's break.`,
         cols: ["share"],
         rows: [
-          { label: "ES led (day closed with ES)", n: div.length, k: esLed.length, extra: { share: pctS(esLed.length, div.length) } },
-          { label: "NQ led (day closed with NQ)", n: div.length, k: nqLed.length, extra: { share: pctS(nqLed.length, div.length) } },
-          { label: "Neither — closed mid", n: div.length, k: neither.length, extra: { share: pctS(neither.length, div.length) }, emphasis: true },
+          { label: "ES led (day closed with ES)", today: tEsLed, n: div.length, k: esLed.length, extra: { share: pctS(esLed.length, div.length) } },
+          { label: "NQ led (day closed with NQ)", today: tNqLed, n: div.length, k: nqLed.length, extra: { share: pctS(nqLed.length, div.length) } },
+          { label: "Neither — closed mid", today: tDiv && !tEsLed && !tNqLed, n: div.length, k: neither.length, extra: { share: pctS(neither.length, div.length) }, emphasis: true },
           { label: "ES break failed", n: div.length, k: div.filter(({ e }) => e.fcb!.failed).length },
           { label: "NQ break failed", n: div.length, k: div.filter(({ n }) => n.fcb!.failed).length },
         ],
@@ -453,18 +485,20 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "ES breaks IB high, NQ doesn't — does NQ go hit its IB LOW?",
     ask: "Today's exact shape. Conditional on ES confirming its high and NQ never confirming its own, how often does NQ roll to the other extreme?",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const pop = paired.filter(({ e, n }) => side(e) === "H" && side(n) !== "H");
       const broke = pop.filter(({ n }) => side(n) === "L");
       const wick = pop.filter(({ n }) => side(n) !== "L" && n.touchedL);
       const never = pop.filter(({ n }) => side(n) !== "L" && !n.touchedL);
       const after = broke.filter(({ e, n }) => n.fcb!.breakMin > e.fcb!.breakMin);
       const before = broke.filter(({ e, n }) => n.fcb!.breakMin < e.fcb!.breakMin);
+      const eS = today?.ES?.breakSide ?? null, nS = today?.NQ?.breakSide ?? null;
+      const tQual = eS === "H" && nS !== "H";
       return {
         headline: `${pop.length} sessions where ES confirmed its IB high and NQ never confirmed its own.`,
         cols: ["share"],
         rows: [
-          { label: "NQ CLOSE-BROKE its IB low", n: pop.length, k: broke.length, extra: { share: pctS(broke.length, pop.length) }, emphasis: true },
+          { label: "NQ CLOSE-BROKE its IB low", today: tQual && nS === "L", n: pop.length, k: broke.length, extra: { share: pctS(broke.length, pop.length) }, emphasis: true },
           { label: "NQ only wicked the low", n: pop.length, k: wick.length, extra: { share: pctS(wick.length, pop.length) } },
           { label: "NQ never reached the low", n: pop.length, k: never.length, extra: { share: pctS(never.length, pop.length) } },
           { label: "— of low-breaks: came AFTER ES's high break", n: broke.length, k: after.length },
@@ -480,7 +514,7 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "Follow the first breaker — does the leader drag the laggard?",
     ask: "On days both indices break the SAME side, whoever prints first is the mechanical leader. Is that worth anything?",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const agree = paired.filter(({ e, n }) => brk(e) && brk(n) && side(e) === side(n));
       const esF = agree.filter(({ e, n }) => e.fcb!.breakMin < n.fcb!.breakMin);
       const nqF = agree.filter(({ e, n }) => n.fcb!.breakMin < e.fcb!.breakMin);
@@ -490,13 +524,16 @@ const PROMPTS: Prompt[] = [
         const f = e.fcb!.breakMin <= n.fcb!.breakMin ? side(e) : side(n);
         return closeSide(e) === f || closeSide(n) === f;
       });
+      const eS = today?.ES?.breakSide ?? null, nS = today?.NQ?.breakSide ?? null;
+      const eM = today?.ES?.breakMin ?? null, nM = today?.NQ?.breakMin ?? null;
+      const tAgree = eS != null && eS === nS && eM != null && nM != null;
       return {
         headline: `${agree.length} agreeing sessions. Median gap between the two breaks: ${med(gaps) ?? "—"} min.`,
         cols: ["share"],
         rows: [
-          { label: "ES broke first", n: agree.length, k: esF.length, extra: { share: pctS(esF.length, agree.length) } },
-          { label: "NQ broke first", n: agree.length, k: nqF.length, extra: { share: pctS(nqF.length, agree.length) } },
-          { label: "Same bar", n: agree.length, k: tie.length, extra: { share: pctS(tie.length, agree.length) } },
+          { label: "ES broke first", today: tAgree && eM! < nM!, n: agree.length, k: esF.length, extra: { share: pctS(esF.length, agree.length) } },
+          { label: "NQ broke first", today: tAgree && nM! < eM!, n: agree.length, k: nqF.length, extra: { share: pctS(nqF.length, agree.length) } },
+          { label: "Same bar", today: tAgree && eM! === nM!, n: agree.length, k: tie.length, extra: { share: pctS(tie.length, agree.length) } },
           { label: "Day closed WITH the first breaker", n: agree.length, k: follow.length, extra: { share: pctS(follow.length, agree.length) }, emphasis: true },
         ],
         verdict: `Neither index is a structural leader (near 50/50). The leader is whoever moves first that day.`,
@@ -508,9 +545,11 @@ const PROMPTS: Prompt[] = [
     cat: "Cross-index",
     title: "One index breaks, the other stays inside — who's right?",
     ask: "A lone break with no confirmation. Does the breaker follow through, or get dragged back by the index that never left the box?",
-    run: ({ paired }) => {
+    run: ({ paired, today }) => {
       const esOnly = paired.filter(({ e, n }) => brk(e) && !brk(n));
       const nqOnly = paired.filter(({ e, n }) => !brk(e) && brk(n));
+      const eB = (today?.ES?.breakSide ?? null) != null;
+      const nB = (today?.NQ?.breakSide ?? null) != null;
       const stat = (xs: typeof esOnly, pick: (x: { e: SlimDay; n: SlimDay }) => SlimDay) => ({
         n: xs.length,
         k: xs.filter((x) => worked(pick(x))).length,
@@ -526,8 +565,8 @@ const PROMPTS: Prompt[] = [
         headline: `Lone breaks — the other index never confirmed. "hit" = that index's own close agreed with its break.`,
         cols: ["failed", "hit 1×", "med ext"],
         rows: [
-          { label: "ES broke alone (NQ inside)", ...a },
-          { label: "NQ broke alone (ES inside)", ...b },
+          { label: "ES broke alone (NQ inside)", today: eB && !nB, ...a },
+          { label: "NQ broke alone (ES inside)", today: !eB && nB, ...b },
         ],
       };
     },

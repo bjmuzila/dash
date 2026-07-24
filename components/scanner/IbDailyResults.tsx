@@ -124,13 +124,31 @@ export default function IbDailyResults({ sym }: { sym: "ES" | "NQ" }) {
               const bull = biased.filter((r) => r.bias === "H").length;
               const bullPct = biased.length ? (100 * bull) / biased.length : null;
               const bearPct = bullPct == null ? null : 100 - bullPct;
+              // What those SAME biased days actually did: which IB side broke first (H = bullish, L = bearish).
+              const resolved = biased.filter((r) => r.break_side === "H" || r.break_side === "L");
+              const aBull = resolved.filter((r) => r.break_side === "H").length;
+              const aBullPct = resolved.length ? (100 * aBull) / resolved.length : null;
+              const aBearPct = aBullPct == null ? null : 100 - aBullPct;
+              const biasHit = resolved.filter((r) => r.break_side === r.bias).length;
+              const hitPct = resolved.length ? (100 * biasHit) / resolved.length : null;
+              const hitCol = hitPct == null ? HOME_THEME.text : hitPct >= 60 ? HOME_THEME.green : hitPct <= 40 ? HOME_THEME.red : HOME_THEME.orange;
               return (
+                <>
                 <div style={{ fontSize: 14, marginTop: 6 }}>
                   <span style={{ color: HOME_THEME.text, opacity: 0.85 }}>Bias @ 10:30 (last {biased.length}): </span>
                   <span style={{ color: HOME_THEME.green, fontWeight: 800 }}>{bullPct == null ? "—" : `${bullPct.toFixed(0)}% Bullish`}</span>
                   <span style={{ color: HOME_THEME.text, opacity: 0.6 }}> / </span>
                   <span style={{ color: HOME_THEME.red, fontWeight: 800 }}>{bearPct == null ? "—" : `${bearPct.toFixed(0)}% Bearish`}</span>
                 </div>
+                <div style={{ fontSize: 14, marginTop: 3 }}>
+                  <span style={{ color: HOME_THEME.text, opacity: 0.85 }}>Actual — broke first ({resolved.length} resolved): </span>
+                  <span style={{ color: HOME_THEME.green, fontWeight: 800 }}>{aBullPct == null ? "—" : `${aBullPct.toFixed(0)}% Bullish`}</span>
+                  <span style={{ color: HOME_THEME.text, opacity: 0.6 }}> / </span>
+                  <span style={{ color: HOME_THEME.red, fontWeight: 800 }}>{aBearPct == null ? "—" : `${aBearPct.toFixed(0)}% Bearish`}</span>
+                  <span style={{ color: HOME_THEME.text, opacity: 0.6 }}> · bias correct </span>
+                  <span style={{ color: hitCol, fontWeight: 800 }}>{hitPct == null ? "—" : `${hitPct.toFixed(0)}%`}</span>
+                </div>
+                </>
               );
             })()}
           </div>

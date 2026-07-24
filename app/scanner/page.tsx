@@ -22,7 +22,6 @@ import StatPrompterTab from "@/components/scanner/StatPrompterTab";
 import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
-import ForwardBuildStructure from "@/components/scanner/ForwardBuildStructure";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -60,7 +59,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "forwardbuild" | "gexchangetop";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "gexchangetop";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -131,14 +130,6 @@ const SCAN_META: ScanMeta[] = [
     scope: "ES + NQ · paired IB sessions",
     what: "A library of canned questions over the ES and NQ Initial Balance book — cross-index divergence (ES breaks high while NQ breaks low), confirm-vs-diverge break quality, follow-the-first-breaker, width/open-type/ORB/FVG context, break timing, and trend-day filters. Click one and it runs on the real history.",
     tells: "The base rate for whatever shape today just printed, in one click — with n, a 95% confidence interval, a THIN badge under n=30, and a bias flag on anything above 85%.",
-  },
-  {
-    tab: "forwardbuild",
-    title: "Forward Build",
-    accent: HOME_THEME.orange,
-    scope: "Full roster · 0/1/2-DTE structure",
-    what: "Groups every active ticker into a collapsible card showing its front 0DTE / 1DTE / 2DTE GEX walls on a shared strike ladder, with each strike's day-over-day Δ and the call/put wall migration across the three days.",
-    tells: "Where each ticker's gamma is stacking and which strikes are building vs. leaving day to day — so you can see where the GEX flow (and often price) is drifting before it becomes today's 0DTE.",
   },
   {
     tab: "gexchangetop",
@@ -3032,7 +3023,6 @@ export default function ScannerPage() {
         <option value="tpo">TPO Structures</option>
         <option value="ibstats">IB Stats</option>
         <option value="statprompter">Stat Prompter</option>
-        <option value="forwardbuild">Forward Build</option>
         <option value="gexchangetop">GEX Change Top</option>
       </select>
 
@@ -3066,11 +3056,6 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "statprompter" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
           background: tab === "statprompter" ? `${LIGHT_BLUE}22` : "transparent",
         }}>Stat Prompter</button>
-        <button onClick={() => setTab("forwardbuild")} style={{
-          ...tabStyle(tab === "forwardbuild"),
-          border: `1px solid ${tab === "forwardbuild" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "forwardbuild" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>Forward Build</button>
         <button onClick={() => setTab("gexchangetop")} style={{
           ...tabStyle(tab === "gexchangetop"),
           border: `1px solid ${tab === "gexchangetop" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
@@ -3086,7 +3071,6 @@ export default function ScannerPage() {
       {tab === "tpo" && <TpoStructuresScanner />}
       {tab === "ibstats" && <IbStatsTab />}
       {tab === "statprompter" && <StatPrompterTab />}
-      {tab === "forwardbuild" && <ForwardBuildStructure />}
       {tab === "gexchangetop" && <GexChangeTop />}
     </PageShell>
   );
