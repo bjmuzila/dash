@@ -191,6 +191,14 @@ async function ensureSchema() {
   // Supports the 15/30/60-min lateral lookbacks (per symbol+expiry+strike, by ts).
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
                  ON strike_growth (date, symbol, expiry, strike, ts DESC);`);
+  // Forward Build: getForwardBuildStructure does
+  //   DISTINCT ON (symbol, expiry, strike, date) ... ORDER BY symbol, expiry, strike, date, ts DESC
+  // The two indexes above lead with `date`, so the planner couldn't satisfy that
+  // ordering and fell back to a full 9-day roster scan + a huge in-memory sort
+  // (the "Forward Build takes forever" load). This index matches the DISTINCT ON
+  // ordering exactly, so it becomes an ordered index scan with no sort.
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_fb
+                 ON strike_growth (symbol, expiry, strike, date, ts DESC);`);
 
   // Day-over-day: TWO rows per (date,symbol) — bucket '0DTE' (expiry = its own
   // session date) and 'SWING' (all later expiries, summed per strike) — each the
