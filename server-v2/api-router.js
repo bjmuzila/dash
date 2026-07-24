@@ -46,6 +46,13 @@
 // ---------------------------------------------------------------------------
 
 async function enforceAuth(level, req, ctx) {
+  // Internal server-to-server bypass — mirrors middleware.ts (hasInternalToken →
+  // next()) and proxy-auth. Cron/internal callers carry the shared secret and
+  // must reach every /api/* route without a user session, exactly as before.
+  const tok = req.headers['x-internal-token'];
+  if (tok && ctx.internalToken && tok === ctx.internalToken) {
+    return { ok: true, who: 'internal' };
+  }
   if (level === 'public') return { ok: true };
   let access;
   try {
@@ -77,6 +84,22 @@ function register(pathname, def) {
   }
   ROUTES.set(pathname, def);
 }
+
+// Minimal responder — mirrors what the old NextResponse.json routes emitted
+// (Content-Type: application/json + whatever Cache-Control the route set). It
+// intentionally does NOT add CORS (the Next /api/* routes didn't either; these
+// are same-origin). Security headers were already applied on `res` upstream in
+// server-with-proxy.js, and setHeader here preserves them.
+function send(res, status, body, headers = {}) {
+  const text = typeof body === 'string' ? body : JSON.stringify(body);
+  res.setHeader('Content-Type', 'application/json');
+  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+  res.statusCode = status;
+  res.end(text);
+}
+// Cache-Control presets, matching lib/cacheHeaders.ts exactly.
+const CACHE_30 = 'public, max-age=30';                                   // quotes/gex/chains TTL
+const NO_STORE = 'no-store, no-cache, must-revalidate, max-age=0';
 
 // ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
 // Ports app/api/insights/gex/route.ts verbatim in behavior: forward to the
@@ -113,6 +136,78 @@ register('/api/insights/gex', {
       });
     } catch (err) {
       ctx.sendJson(res, 502, { error: String(err?.message || err) }, req);
+    }
+  },
+});
+
+// ── THIN /proxy forwarders (batch 1) ─────────────────────────────────────────
+// Each mirrors its app/api/*/route.ts 1:1 — same proxy path, same reshape, same
+// Cache-Control, subscriber-gated (none are in middleware's PAID_EXEMPT list).
+// Pass-through routes forward the proxy's raw body + status unchanged.
+
+// /api/chains?ticker=SPX&expiration=YYYY-MM-DD → /proxy/api/tt/chains/:ticker
+register('/api/chains', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const ticker = (sp.get('ticker') || 'SPX').trim();
+    sp.delete('ticker');
+    const qs = sp.toString();
+    const r = await ctx.internalFetch(
+      `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${qs ? `?${qs}` : ''}`,
+      { cache: 'no-store' }
+    );
+    send(res, r.status, await r.text(), { 'Cache-Control': CACHE_30 });
+  },
+});
+
+// /api/expirations?ticker=SPX → /proxy/api/tt/expirations/:ticker
+register('/api/expirations', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const ticker = (new URL(req.url || '/', 'http://localhost').searchParams.get('ticker') || 'SPX').trim();
+    const r = await ctx.internalFetch(
+      `/proxy/api/tt/expirations/${encodeURIComponent(ticker)}`, { cache: 'no-store' });
+    send(res, r.status, await r.text(), { 'Cache-Control': CACHE_30 });
+  },
+});
+
+// /api/tt-quotes?symbols=A,B,C → /proxy/quotes?symbols=
+register('/api/tt-quotes', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const symbols = (new URL(req.url || '/', 'http://localhost').searchParams.get('symbols') || '').trim();
+    const r = await ctx.internalFetch(
+      `/proxy/quotes?symbols=${encodeURIComponent(symbols)}`, { cache: 'no-store' });
+    send(res, r.status, await r.text(), { 'Cache-Control': CACHE_30 });
+  },
+});
+
+// /api/mult-greek-gex-change?... → /proxy/mult-greek-gex-change (pass-through, no-store)
+register('/api/mult-greek-gex-change', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
+    const r = await ctx.internalFetch(
+      `/proxy/mult-greek-gex-change${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
+    send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/gex/expirations → /proxy/expirations, reshaped to { expiry, expirations }
+register('/api/gex/expirations', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    try {
+      const r = await ctx.internalFetch('/proxy/expirations', { cache: 'no-store' });
+      if (!r.ok) return send(res, 502, { error: `proxy returned ${r.status}`, expirations: [] });
+      const v2 = await r.json();
+      send(res, 200, {
+        expiry: v2.expiry ?? null,
+        expirations: Array.isArray(v2.expirations) ? v2.expirations : [],
+      });
+    } catch (err) {
+      send(res, 502, { error: String(err?.message || err), expirations: [] });
     }
   },
 });
