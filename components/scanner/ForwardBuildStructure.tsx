@@ -75,8 +75,12 @@ function LadderColumn({ dte, info, rows, col, spot }: {
   dte: number; info: Dte | null; rows: Array<{ spot: true } | { strike: number }>;
   col: Map<number, StrikeRow>; spot: number;
 }) {
-  const colMax = useMemo(() => {
-    let m = 0; col.forEach((s) => { if (Math.abs(s.net) > m) m = Math.abs(s.net); }); return m;
+  // Bars encode the DAY-OVER-DAY FLOW, not the static net: length = |Δ| scaled to
+  // this column's biggest move; a wall "building" (|net| grew vs yesterday) points
+  // right/green, "fading" (|net| shrank) points left/red. That's the whole point —
+  // see which walls are gaining/losing GEX day to day, i.e. where gamma is flowing.
+  const colMaxD = useMemo(() => {
+    let m = 0; col.forEach((s) => { if (s.delta != null && Math.abs(s.delta) > m) m = Math.abs(s.delta); }); return m;
   }, [col]);
   const cell: CSSProperties = {
     display: "grid", gridTemplateColumns: "44px 1fr 56px 48px", alignItems: "center",
@@ -93,7 +97,7 @@ function LadderColumn({ dte, info, rows, col, spot }: {
       </div>
       <div style={{ ...cell, padding: "0 5px 3px", borderBottom: `1px solid ${HOME_THEME.border}`, marginBottom: 4 }}>
         <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: DIM }}>Strike</span>
-        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.03em", textAlign: "center", color: DIM }}>put ◄ · ► call</span>
+        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.03em", textAlign: "center", color: DIM }}>◄ fading · building ►</span>
         <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Net GEX</span>
         <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Δ DoD</span>
       </div>
@@ -109,7 +113,11 @@ function LadderColumn({ dte, info, rows, col, spot }: {
           }
           const s = col.get(r.strike) ?? null;
           const pos = !!s && s.net >= 0;
-          const frac = s && colMax > 0 ? Math.abs(s.net) / colMax : 0;
+          // Wall building = |net| grew vs yesterday (net & Δ share a sign); fading =
+          // |net| shrank. Bar length = |Δ| scaled to this column's biggest move.
+          const build = !!s && s.delta != null && s.net * s.delta > 0;
+          const fade = !!s && s.delta != null && s.net * s.delta < 0;
+          const frac = s && s.delta != null && colMaxD > 0 ? Math.abs(s.delta) / colMaxD : 0;
           const dTone = s?.delta == null ? HOME_THEME.text : s.delta > 0 ? GREEN : s.delta < 0 ? RED : HOME_THEME.text;
           const arrow = s?.delta == null ? "" : s.delta > 0 ? "▲ " : s.delta < 0 ? "▼ " : "";
           return (
@@ -117,8 +125,8 @@ function LadderColumn({ dte, info, rows, col, spot }: {
               <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>{fmtStrike(r.strike)}</span>
               <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
                 <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
-                {s && (
-                  <div style={{ position: "absolute", top: 1, bottom: 1, [pos ? "left" : "right"]: "50%", width: `${Math.max(2, frac * 50)}%`, background: pos ? GREEN : RED, borderRadius: 2 } as CSSProperties} />
+                {(build || fade) && (
+                  <div style={{ position: "absolute", top: 1, bottom: 1, [build ? "left" : "right"]: "50%", width: `${Math.max(2, frac * 50)}%`, background: build ? GREEN : RED, borderRadius: 2 } as CSSProperties} />
                 )}
               </div>
               <span style={{ fontSize: 10, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: s ? (pos ? GREEN : RED) : DIM }}>
