@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { useMobileNav } from "@/components/shared/MobileNavContext";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -90,6 +91,7 @@ const isTradingDay = (d: Date) => {
 
 export default function TradersDashboardPage() {
   const { userId, isOwnerClaim } = useAuth();
+  const { isMobile } = useMobileNav();
   // Cosmetic owner gate — mirrors the pattern used by the Discord share button
   // (DataBox.tsx) and NavMenu's hasFullAccess: prefer the JWT is_owner claim,
   // but also accept the NEXT_PUBLIC_OWNER_USER_ID env match since the claim
@@ -315,7 +317,7 @@ export default function TradersDashboardPage() {
           </div>
         </Card>
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)", gap: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0,1.7fr) minmax(0,1fr)", gap: 20 }}>
           {/* LEFT COLUMN */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
@@ -345,7 +347,7 @@ export default function TradersDashboardPage() {
                 )}
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 24 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ ...sectionLabel, marginBottom: 10 }}>📉 Overnight Futures (Live)</div>
                   <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>

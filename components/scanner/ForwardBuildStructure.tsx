@@ -220,6 +220,24 @@ export default function ForwardBuildStructure() {
   };
   useEffect(() => { load(); }, []);
 
+  // Auto-refresh: silently re-pull every 30s so spot/walls stay live without
+  // clicking Refresh. Unlike load(), this does NOT toggle loading or reset the
+  // open panel (sel) — it only swaps in fresh data. Pauses while the tab is hidden.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetch("/proxy/forward-build-structure?limit=400", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((j) => {
+          if (!j.ok) return;
+          setTickers(Array.isArray(j.tickers) ? j.tickers : []);
+          setAsOf(j.asOf || "");
+        })
+        .catch(() => {});
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   const view = useMemo(() => {
     const needle = q.trim().toUpperCase();
     return needle ? tickers.filter((t) => t.symbol.includes(needle)) : tickers;

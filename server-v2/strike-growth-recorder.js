@@ -574,14 +574,15 @@ async function getForwardBuildStructure(opts = {}) {
   for (const r of raw) {
     const expiry = String(r.expiry || '');
     if (!/^\d{4}-\d{2}-\d{2}/.test(expiry)) continue;
-    const dte = Math.round(
-      (new Date(`${expiry.slice(0, 10)}T00:00:00Z`).getTime() - asOfMs) / 86400000
-    );
-    if (dte < 0 || dte > 2) continue;
+    // Drop already-expired expiries; the front 3 UPCOMING expiries become the
+    // 0/1/2-DTE columns by RANK (see slotOf below). Calendar-day DTE broke on
+    // Fridays/holidays — Monday is +3 calendar days, so the old `dte<=2` filter
+    // emptied the 1/2-DTE columns every Friday.
+    if (expiry.slice(0, 10) < asOf) continue;
     if (!bySym.has(r.symbol)) bySym.set(r.symbol, { spot: 0, exps: new Map() });
     const s = bySym.get(r.symbol);
     if (Number(r.spot) > 0) s.spot = Number(r.spot);
-    if (!s.exps.has(expiry)) s.exps.set(expiry, { dte, strikes: new Map() });
+    if (!s.exps.has(expiry)) s.exps.set(expiry, { strikes: new Map() });
     const e = s.exps.get(expiry);
     const sk = Number(r.strike);
     if (!e.strikes.has(sk)) e.strikes.set(sk, []);
@@ -591,7 +592,13 @@ async function getForwardBuildStructure(opts = {}) {
   const tickers = [];
   for (const [symbol, s] of bySym) {
     const dtes = [];
+    // Rank this symbol's UPCOMING expiries: nearest = slot 0 (0DTE), next = 1, … .
+    // Only the front 3 fill the columns. Robust across weekends/holidays where the
+    // next expiry is >1 calendar day out (Fri→Mon = 3 days).
+    const slotOf = new Map([...s.exps.keys()].sort().map((exp, i) => [exp, i]));
     for (const [expiry, e] of s.exps) {
+      const slot = slotOf.get(expiry);
+      if (slot == null || slot > 2) continue;
       const strikes = [];
       for (const [strike, pts] of e.strikes) {
         pts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -615,7 +622,7 @@ async function getForwardBuildStructure(opts = {}) {
       const callWall = calls.length ? calls.reduce((m, r) => (r.net > m.net ? r : m)) : null;
       const putWall = puts.length ? puts.reduce((m, r) => (r.net < m.net ? r : m)) : null;
       dtes.push({
-        dte: e.dte, expiry, netTotal, strikes,
+        dte: slot, expiry, netTotal, strikes,
         callWall: callWall ? { strike: callWall.strike, net: callWall.net } : null,
         putWall: putWall ? { strike: putWall.strike, net: putWall.net } : null,
       });

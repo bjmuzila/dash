@@ -611,11 +611,12 @@ export default function BudgetPage() {
 
   // ── Balance reconciliation (weekly) ───────────────────────────────────────
   // Anchor on the balance from ~a week back (weekAgoBalance), falling back to the
-  // immediately prior entry. Pay comes in and bills go out on their own between
-  // the two manually-entered balances. Expected balance = anchor balance +
-  // everything that SHOULD have moved (logged rows + scheduled recurring
-  // pay/bills in the window). Drift = actual entered balance − expected.
-  // Non-zero drift = money that hit (or missed) the account without a record.
+  // immediately prior entry. Only count CLEARED money — real register rows,
+  // i.e. bills you've hit "Pay" on in Upcoming Pay (recurring:false). Upcoming
+  // bills still scheduled (synthetic recurring:true) haven't left the bank yet,
+  // so they're skipped and don't throw the number off. Expected = anchor +
+  // cleared in − cleared out; drift = actual entered balance − expected. A
+  // negative drift means money left that wasn't logged (go hit Pay on it).
   const reconcile = useMemo(() => {
     const anchor = weekAgoBalance ?? prevDailyBalance;
     if (!dailyBalance || !anchor) return null;
@@ -623,18 +624,19 @@ export default function BudgetPage() {
     const from = anchor.day; // exclusive
     const to = dailyBalance.day; // inclusive
     if (!(to > from)) return null;
-    let moneyIn = 0, moneyOut = 0;
+    let moneyIn = 0, moneyOut = 0, uncleared = 0;
     for (const g of computed.groups) {
       if (g.date <= from || g.date > to) continue;
       for (const r of g.rows) {
         if (r.is_beginning) continue;
+        if (r.recurring) { if (r.amount < 0) uncleared += -r.amount; continue; } // scheduled bill, not paid yet
         if (r.amount > 0) moneyIn += r.amount;
         else moneyOut += -r.amount;
       }
     }
     const expected = anchorTotal + moneyIn - moneyOut;
     const drift = allBanks - expected; // + more cash than expected, − missing cash
-    return { from, to, days: daysBetween(from, to), prevBalance: anchorTotal, moneyIn, moneyOut, expected, actual: allBanks, drift };
+    return { from, to, days: daysBetween(from, to), prevBalance: anchorTotal, moneyIn, moneyOut, uncleared, expected, actual: allBanks, drift };
   }, [dailyBalance, prevDailyBalance, weekAgoBalance, allBanks, computed.groups]);
 
   // Bzila net for the selected month (all three streams). Shown as its own tile
@@ -1753,7 +1755,7 @@ function CategoryDonutCard({ slices, currency }: { slices: Intel["slices"]; curr
  */
 type Reconcile = {
   from: string; to: string; days: number; prevBalance: number;
-  moneyIn: number; moneyOut: number; expected: number; actual: number; drift: number;
+  moneyIn: number; moneyOut: number; uncleared: number; expected: number; actual: number; drift: number;
 };
 function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency: string }) {
   if (!data) {
@@ -1801,6 +1803,12 @@ function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency
         <Row label="Expected now" value={data.expected} strong top />
         <Row label={`Actual now (${fmtDay(data.to)})`} value={data.actual} strong />
         <Row label="Difference" value={data.drift} color={flagColor} strong sign top />
+        {data.uncleared > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontVariantNumeric: "tabular-nums", opacity: 0.55, paddingTop: 4 }}>
+            <span>Not yet paid (still in bank)</span>
+            <span>{fmtMoney(data.uncleared, currency)}</span>
+          </div>
+        )}
       </div>
     </div>
   );
