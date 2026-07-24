@@ -55,6 +55,17 @@ let libDb = null;
 try { libDb = require('./_lib-db.cjs'); }
 catch (e) { console.warn('[api-router] _lib-db.cjs not loaded — DB routes stay on Next:', e.message); }
 
+// Additional pure (Next-free) compute libs, bundled the same way:
+//   esbuild lib/confidenceScore.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-confidence.cjs
+//   esbuild lib/ibDaily.ts        --bundle --platform=node --format=cjs --outfile=server-v2/_lib-ibdaily.cjs
+// Each loaded defensively; routes needing them only register when present.
+let libConf = null;
+try { libConf = require('./_lib-confidence.cjs'); }
+catch (e) { console.warn('[api-router] _lib-confidence.cjs not loaded:', e.message); }
+let libIb = null;
+try { libIb = require('./_lib-ibdaily.cjs'); }
+catch (e) { console.warn('[api-router] _lib-ibdaily.cjs not loaded:', e.message); }
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
@@ -1022,6 +1033,200 @@ if (libDb) {
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });
+
+  // /api/ib-results — EOD IB results. GET reads; POST records ES+NQ (cron).
+  if (libIb) {
+    register('/api/ib-results', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res, ctx) {
+        const toRthBars = (rows) => rows.map((r) => {
+          const [h, m] = String(r.time || '').split(':').map(Number);
+          return {
+            min: (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0),
+            o: Number(r.open), h: Number(r.high), l: Number(r.low), c: Number(r.close), v: Number(r.volume ?? 0),
+          };
+        }).filter((b) => b.min >= 570 && b.min < 960 && Number.isFinite(b.c) && b.h >= b.l)
+          .sort((a, b) => a.min - b.min);
+        const b01 = (v) => (v == null ? null : v ? 1 : 0);
+        const SYMBOLS = [
+          { symbol: 'ES', table: 'es_candles', get: libDb.getEsCandles },
+          { symbol: 'NQ', table: 'nq_candles', get: libDb.getNqCandles },
+        ];
+        const recordSymbol = async (symbol, table, get, date) => {
+          const bars = toRthBars(await get(date, undefined, 2000));
+          if (bars.length < 3) return false;
+          const trailing = await libDb.getIbTrailingStats(table, date, 70);
+          const priorDate = trailing.length ? trailing[trailing.length - 1].date : null;
+          let priorRth = null;
+          if (priorDate) {
+            const prior = toRthBars(await get(priorDate, undefined, 2000));
+            if (prior.length) priorRth = { high: Math.max(...prior.map((b) => b.h)), low: Math.min(...prior.map((b) => b.l)) };
+          }
+          const ibBars = bars.filter((b) => b.min < 630);
+          const width = ibBars.length ? Math.max(...ibBars.map((b) => b.h)) - Math.min(...ibBars.map((b) => b.l)) : 0;
+          const rec = libIb.computeIbDaily(bars, priorRth, libIb.classifyWidth(width, trailing));
+          if (!rec) return false;
+          await libDb.upsertIbDailyResult({
+            date, symbol,
+            ib_high: rec.ibHigh, ib_low: rec.ibLow, ib_mid: rec.ibMid, ib_width: rec.ibWidth,
+            width_bucket: rec.widthBucket, bias: rec.bias, first_formed: rec.first,
+            close_zone: rec.closeZone, open_type: rec.openType, orb_dir: rec.orbDir, fvg: rec.fvg,
+            break_side: rec.breakSide, break_min: rec.breakMin,
+            failed: b01(rec.failed), retest: b01(rec.retest), retest_cont: b01(rec.retestCont),
+            vol_surge: b01(rec.volSurge),
+            single_break: b01(rec.singleBreak), both_broke: b01(rec.bothBroke), neither_broke: b01(rec.neitherBroke),
+            contained_at2: b01(rec.containedAt2), contained_broke_late: b01(rec.containedBrokeLate),
+            ext_05: b01(rec.ext05), ext_10: b01(rec.ext10), ext_15: b01(rec.ext15), ext_20: b01(rec.ext20),
+            first_touch_side: rec.firstTouchSide, first_touch_min: rec.firstTouchMin,
+            day_high: rec.dayHigh, day_low: rec.dayLow, day_close: rec.dayClose,
+            rules: rec.rules, computed_at: Date.now(),
+          });
+          return true;
+        };
+        if (req.method === 'POST') {
+          if (!tokenOk(req, ctx)) return send(res, 401, { error: 'unauthorized' });
+          try {
+            const body = await readJson(req).catch(() => ({}));
+            if (body?.action !== 'record') return send(res, 400, { error: 'unknown action' });
+            const date = typeof body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : etDateStr();
+            const saved = [];
+            for (const { symbol, table, get } of SYMBOLS) {
+              try { if (await recordSymbol(symbol, table, get, date)) saved.push(symbol); }
+              catch (e) { console.warn(`[ib-results] ${symbol} ${date} —`, e?.message || e); }
+            }
+            return send(res, 200, { date, saved });
+          } catch (e) { return send(res, 500, { error: String(e?.message || e) }); }
+        }
+        try {
+          const u = new URL(req.url || '/', 'http://localhost');
+          const symbol = (u.searchParams.get('symbol') || 'ES').toUpperCase() === 'NQ' ? 'NQ' : 'ES';
+          const limit = Math.min(365, Math.max(1, Number(u.searchParams.get('limit') || 90)));
+          send(res, 200, { symbol, rows: await libDb.getIbDailyResults(symbol, limit) });
+        } catch (e) { send(res, 500, { error: String(e?.message || e) }); }
+      },
+    });
+  }
+
+  // /api/confidence/calibration — reliability tables from the graded confidence log.
+  if (libConf) {
+    register('/api/confidence/calibration', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        const HIT_PTS = 8, PIVOT_PTS = 10, CHOP_BAND = 15, MAX_DAYS = 250;
+        const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+        const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+        const pickLevel = (r) => {
+          const level = num(r.strikeOIVol) ?? num(r.strikeVolOnly) ?? num(r.spxPrice) ?? 0;
+          const strikeGex = num(r.mvcValueOIVol) ?? num(r.mvcValueVolOnly) ?? num(r.totalNetGEX_OI) ?? 0;
+          const netTotal = num(r.totalNetGEX_OI) ?? num(r.totalNetGEX_Vol) ?? 0;
+          const netDex = num(r.totalNetDEX_OI) ?? num(r.totalNetDEX_Vol) ?? num(r.netDEXStrike) ?? 0;
+          const storedAbs = num(r.totalAbsNetGEX);
+          const totalAbsNetGEX = storedAbs != null && storedAbs > Math.abs(strikeGex) * 1.0001 ? storedAbs : Math.abs(netTotal);
+          return {
+            level, netGex: strikeGex, netDex,
+            spx: (() => { const v = num(r.spxPrice); return v != null && v > 1000 ? v : level; })(),
+            totalAbsNetGEX, gexFlip: num(r.gexFlip),
+          };
+        };
+        const classifyDay = (level, spx) => {
+          if (!spx.length || !Number.isFinite(level)) return { outcome: 'miss', touched: false };
+          let ti = -1;
+          for (let i = 0; i < spx.length; i++) { if (Math.abs(spx[i] - level) <= HIT_PTS) { ti = i; break; } }
+          if (ti === -1) return { outcome: 'miss', touched: false };
+          const fromBelow = spx[ti] <= level;
+          let maxAway = 0, maxBand = 0;
+          for (let i = ti; i < spx.length; i++) {
+            const d = spx[i] - level;
+            maxBand = Math.max(maxBand, Math.abs(d));
+            maxAway = Math.max(maxAway, fromBelow ? level - spx[i] : spx[i] - level);
+          }
+          let outcome = 'hit';
+          if (maxAway >= PIVOT_PTS) outcome = 'pivot';
+          else if (maxBand <= CHOP_BAND) outcome = 'chop';
+          return { outcome, touched: true };
+        };
+        const brier = (p, actual) => (p - actual) ** 2;
+        const bucketOf = (p) => (p < 0.2 ? '0–20%' : p < 0.4 ? '20–40%' : p < 0.6 ? '40–60%' : p < 0.8 ? '60–80%' : '80–100%');
+        const reliability = (pairs) => {
+          const order = ['0–20%', '20–40%', '40–60%', '60–80%', '80–100%'];
+          const map = new Map();
+          for (const b of order) map.set(b, { bucket: b, n: 0, predSum: 0, actualSum: 0 });
+          let brierSum = 0;
+          for (const { p, actual } of pairs) {
+            const b = map.get(bucketOf(p));
+            b.n++; b.predSum += p; b.actualSum += actual;
+            brierSum += brier(p, actual);
+          }
+          const rows = order.map((b) => map.get(b)).filter((b) => b.n > 0).map((b) => ({
+            bucket: b.bucket, n: b.n,
+            predicted: Math.round((b.predSum / b.n) * 100),
+            actual: Math.round((b.actualSum / b.n) * 100),
+          }));
+          return { rows, sample: pairs.length, brier: pairs.length ? Math.round((brierSum / pairs.length) * 1000) / 1000 : null };
+        };
+        try {
+          const refresh = new URL(req.url || '/', 'http://localhost').searchParams.get('refresh') === '1';
+          if (refresh) {
+            const days = await libDb.queryAll(`SELECT DISTINCT date FROM mvc_snapshots WHERE date < ? ORDER BY date DESC LIMIT ?`, [todayET(), MAX_DAYS]);
+            for (const { date } of days) {
+              const rows = await libDb.queryAll(`SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`, [date]);
+              if (!rows.length) continue;
+              const last = rows[rows.length - 1];
+              const cur = pickLevel(last);
+              const spx = rows.map((r) => num(r.spxPrice)).filter((v) => v != null && v > 1000);
+              const refPrice = cur.spx || spx[spx.length - 1] || cur.level || 0;
+              const intradayRange = spx.length > 1 ? (Math.max(...spx) - Math.min(...spx)) / 2 : 0;
+              const proxScale = Math.max(intradayRange, refPrice * 0.003);
+              const emSize = Math.max(intradayRange > 0 ? intradayRange : refPrice * 0.004, refPrice * 0.006);
+              const ctx = {
+                level: cur.level, price: cur.spx, emSize, intradayRange: proxScale,
+                totalAbsNetGEX: cur.totalAbsNetGEX, netGexAtLevel: cur.netGex, netDexAtLevel: cur.netDex,
+                gexFlip: cur.gexFlip, sessionProgress: 1,
+              };
+              const score = libConf.scoreConfidence(ctx, null);
+              const { outcome, touched } = classifyDay(cur.level, spx);
+              const held = touched ? (outcome === 'pivot' || outcome === 'chop' ? 1 : 0) : null;
+              const broke = touched ? (outcome === 'hit' ? 1 : 0) : null;
+              await libDb.upsertConfidenceLog({
+                date, level: cur.level, regime: score.factors.gammaRegime,
+                reach: score.hit, pivot: score.pivot, chop: score.chop, break: score.break,
+                netWallBias: score.netWallBias, scored_at: Date.now(),
+                touched: touched ? 1 : 0, actual_outcome: outcome, held, broke, graded_at: Date.now(),
+              });
+            }
+          }
+          const log = await libDb.getGradedConfidenceLog();
+          const reachPairs = log.filter((r) => r.touched != null).map((r) => ({ p: clamp(r.reach / 100, 0, 1), actual: r.touched }));
+          const touched = log.filter((r) => r.touched === 1);
+          const rejectPairs = touched.filter((r) => r.held != null).map((r) => ({ p: clamp(r.pivot / 100, 0, 1), actual: r.held }));
+          const breakPairs = touched.filter((r) => r.broke != null).map((r) => ({ p: clamp(r.break / 100, 0, 1), actual: r.broke }));
+          const reach = reliability(reachPairs);
+          const reject = reliability(rejectPairs);
+          const brk = reliability(breakPairs);
+          let biasRight = 0, biasN = 0;
+          for (const r of touched) {
+            if (r.held == null || r.netWallBias == null) continue;
+            if (Math.abs(r.netWallBias) < 1) continue;
+            biasN++;
+            const predHold = r.netWallBias > 0;
+            if ((predHold && r.held === 1) || (!predHold && r.held === 0)) biasRight++;
+          }
+          send(res, 200, {
+            gradedDays: log.length, touchedDays: touched.length,
+            reach, reject, break: brk,
+            netWallBias: { sample: biasN, accuracy: biasN ? Math.round((biasRight / biasN) * 100) : null },
+            thresholds: { hitPts: HIT_PTS, pivotPts: PIVOT_PTS, chopBand: CHOP_BAND },
+            heldRule: 'held = pivot OR chop; broke = clean break-through',
+            note: log.length < 20
+              ? 'Low sample — treat as indicative only. Reliability stabilizes past ~30–50 graded days.'
+              : 'Compare predicted vs actual per bucket: close = well-calibrated. Brier < 0.25 beats a coin flip.',
+          });
+        } catch (err) {
+          send(res, 500, { error: 'Calibration error', detail: String(err) });
+        }
+      },
+    });
+  }
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };
