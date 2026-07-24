@@ -46,6 +46,14 @@ async function ownerGate(): Promise<{ ok: true } | { ok: false; status: number }
   return { ok: true };
 }
 
+// Shift a "YYYY-MM-DD" day by delta days.
+function shiftDay(iso: string, delta: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + delta);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
 // month is "YYYY-MM"; returns inclusive [first, last] day strings "YYYY-MM-DD".
 function monthRange(month: string): { from: string; to: string } {
   const [y, m] = month.split("-").map(Number);
@@ -89,7 +97,10 @@ export async function GET(req: NextRequest) {
       getLatestDailyBalance(profile.id),
     ]);
     const prevDailyBalance = dailyBalance ? await getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
-    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, propRows, dailyBalance, prevDailyBalance });
+    // Weekly reconciliation anchor: most recent balance at least ~7 days before
+    // the latest entry (day <= latest − 7). Falls back to prev if none exists.
+    const weekAgoBalance = dailyBalance ? await getDailyBalanceBefore(profile.id, shiftDay(dailyBalance.day, -6)) : null;
+    return NextResponse.json({ profile, categories, entries, month, register, recurring, amazonRows, propRows, dailyBalance, prevDailyBalance, weekAgoBalance });
   } catch (err) {
     return NextResponse.json({ error: "Budget load failed", detail: String(err) }, { status: 500 });
   }

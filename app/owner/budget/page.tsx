@@ -150,6 +150,7 @@ export default function BudgetPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
   const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
+  const [weekAgoBalance, setWeekAgoBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "bzila" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
@@ -198,6 +199,7 @@ export default function BudgetPage() {
     setCategories(data.categories || []);
     setDailyBalance(data.dailyBalance || null);
     setPrevDailyBalance(data.prevDailyBalance || null);
+    setWeekAgoBalance(data.weekAgoBalance || null);
     setLoading(false);
   };
 
@@ -607,16 +609,19 @@ export default function BudgetPage() {
   }, [register, recurring, month, allBanks, categories, categoryStats, computed]);
   const prevAllBanks = prevDailyBalance ? prevDailyBalance.coastal + prevDailyBalance.truist + prevDailyBalance.secu : null;
 
-  // ── Balance reconciliation ────────────────────────────────────────────────
-  // Between the last two manually-entered bank balances, pay comes in and bills
-  // go out on their own. Expected balance = prior balance + everything that
-  // SHOULD have moved (logged rows + scheduled recurring pay/bills in the
-  // window). Drift = actual entered balance − expected. Non-zero drift = money
-  // that hit (or missed) the account without a matching record.
+  // ── Balance reconciliation (weekly) ───────────────────────────────────────
+  // Anchor on the balance from ~a week back (weekAgoBalance), falling back to the
+  // immediately prior entry. Pay comes in and bills go out on their own between
+  // the two manually-entered balances. Expected balance = anchor balance +
+  // everything that SHOULD have moved (logged rows + scheduled recurring
+  // pay/bills in the window). Drift = actual entered balance − expected.
+  // Non-zero drift = money that hit (or missed) the account without a record.
   const reconcile = useMemo(() => {
-    if (!dailyBalance || !prevDailyBalance || prevAllBanks === null) return null;
-    const from = prevDailyBalance.day; // exclusive
-    const to = dailyBalance.day;       // inclusive
+    const anchor = weekAgoBalance ?? prevDailyBalance;
+    if (!dailyBalance || !anchor) return null;
+    const anchorTotal = anchor.coastal + anchor.truist + anchor.secu;
+    const from = anchor.day; // exclusive
+    const to = dailyBalance.day; // inclusive
     if (!(to > from)) return null;
     let moneyIn = 0, moneyOut = 0;
     for (const g of computed.groups) {
@@ -627,10 +632,10 @@ export default function BudgetPage() {
         else moneyOut += -r.amount;
       }
     }
-    const expected = prevAllBanks + moneyIn - moneyOut;
+    const expected = anchorTotal + moneyIn - moneyOut;
     const drift = allBanks - expected; // + more cash than expected, − missing cash
-    return { from, to, days: daysBetween(from, to), prevBalance: prevAllBanks, moneyIn, moneyOut, expected, actual: allBanks, drift };
-  }, [dailyBalance, prevDailyBalance, prevAllBanks, allBanks, computed.groups]);
+    return { from, to, days: daysBetween(from, to), prevBalance: anchorTotal, moneyIn, moneyOut, expected, actual: allBanks, drift };
+  }, [dailyBalance, prevDailyBalance, weekAgoBalance, allBanks, computed.groups]);
 
   // Bzila net for the selected month (all three streams). Shown as its own tile
   // — deliberately NOT rolled into the Income / Net Profit tiles, which stay
@@ -1754,10 +1759,10 @@ function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency
   if (!data) {
     return (
       <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-        <IntelHeader title="Balance Check" />
+        <IntelHeader title="Weekly Balance Check" />
         <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", gap: 6, color: HOME_THEME.muted, opacity: 0.7, fontSize: 13, minHeight: 120 }}>
           <div style={{ fontSize: 26 }}>⚖️</div>
-          <div>Enter a bank balance on two different days and this card flags any gap between what should have left the account and what actually did.</div>
+          <div>Log a bank balance about a week apart and this card flags any gap between what should have left the account and what actually did.</div>
         </div>
       </div>
     );
@@ -1776,7 +1781,7 @@ function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader
-        title="Balance Check"
+        title="Weekly Balance Check"
         right={
           <span style={{ fontSize: 12, fontWeight: 900, padding: "3px 10px", borderRadius: 999, color: flagColor, background: bRgba(flagColor, 0.12), border: `1px solid ${bRgba(flagColor, 0.4)}` }}>
             {off ? "⚑ Off" : "✓ Reconciles"}

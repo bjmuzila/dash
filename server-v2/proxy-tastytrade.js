@@ -3139,27 +3139,46 @@ class TastytradeProxy {
   }
 
   /**
-   * REST backstop: refresh live spots for a set of roots via /market-data/by-type
-   * (mark→last fallback). The dxLink feed only carries an underlying quote for the
-   * roots it has actually subscribed, so tickers without a live underlying sub
-   * showed the last-swept DB spot (lags a full sweep). This keeps EVERY roster
-   * spot current — indices/equities/futures, RTH and extended hours. Called on a
-   * timer by the strike-growth recorder. Returns how many spots were updated.
+   * REST backstop: refresh live spots for the whole roster straight from
+   * TastyTrade /market-data/by-type — NOT via fetchUnderlyingQuotes. Two reasons:
+   *   1. Premarket/postmarket, TT often has no `mark` and `last` sits at the prior
+   *      close until the name actually prints in extended hours, so spot looked
+   *      frozen. The bid/ask MID is live pre/post-market, so we prefer
+   *      mark → (bid+ask)/2 → last → prev-close (same order as fetchUnderlyingSpot
+   *      + the extended-hours mid at line ~1523).
+   *   2. Keeps the strike-growth spot independent of the options DATA_SOURCE.
+   * The dxLink feed still overrides this for roots it streams live (fresher).
+   * Batched + chunked (TT by-type URL/param cap). Returns spots updated.
    */
   async refreshStrikeGrowthSpots(symbols) {
+    const n = firstFiniteNumber;
     const roots = [...new Set((symbols || [])
       .map((s) => chainTicker(String(s || '').toUpperCase()))
       .filter(Boolean))];
     if (!roots.length) return 0;
-    let quotes;
-    try { quotes = await fetchUnderlyingQuotes(roots); }
-    catch (e) { console.warn('[strike-growth] REST spot refresh failed:', String(e?.message || e).slice(0, 160)); return 0; }
-    let n = 0;
-    for (const [sym, q] of quotes) {
-      const px = Number(q?.mark) || Number(q?.last) || 0;
-      if (px > 0) { this.strikeGrowthSpot.set(chainTicker(String(sym).toUpperCase()), px); n++; }
-    }
-    return n;
+    const eq = [], idx = [];
+    for (const r of roots) { (INDEX_ROOTS.has(r) ? idx : eq).push(r); }
+    let updated = 0;
+    const CHUNK = 90; // stay under TT's by-type URL/param cap
+    const runBatch = async (param, vals) => {
+      for (let i = 0; i < vals.length; i += CHUNK) {
+        const chunk = vals.slice(i, i + CHUNK);
+        const qs = chunk.map((v) => `${param}[]=${encodeURIComponent(v)}`).join('&');
+        let json;
+        try { json = await ttGet(`/market-data/by-type?${qs}`); }
+        catch (e) { console.warn('[strike-growth] spot batch failed:', String(e?.message || e).slice(0, 120)); continue; }
+        for (const it of (json?.data?.items || [])) {
+          const sym = chainTicker(String(it.symbol || '').toUpperCase());
+          const bid = n(it.bid), ask = n(it.ask);
+          const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+          const px = n(it.mark) || mid || n(it.last) || n(it['prev-close']) || 0;
+          if (sym && px > 0) { this.strikeGrowthSpot.set(sym, px); updated++; }
+        }
+      }
+    };
+    await runBatch('equity', eq);
+    await runBatch('index', idx);
+    return updated;
   }
 
   async getStrikeGrowthSnapshot(root) {

@@ -286,6 +286,54 @@ register('/api/gex/expirations', {
   },
 });
 
+// /api/calendar-quote — deterministic daily trading quote (no deps).
+const CAL_QUOTES = [
+  "The market can stay irrational longer than you can stay solvent. — John Maynard Keynes",
+  "Risk comes from not knowing what you're doing. — Warren Buffett",
+  "In investing, what is comfortable is rarely profitable. — Robert Arnott",
+  "The four most dangerous words in investing are: this time it's different. — John Templeton",
+  "Be fearful when others are greedy and greedy when others are fearful. — Warren Buffett",
+  "The trend is your friend until the end when it bends. — Ed Seykota",
+  "Markets are never wrong, opinions often are. — Jesse Livermore",
+  "It's not whether you're right or wrong, but how much you make when right and lose when wrong. — Stanley Druckenmiller",
+  "The goal of a successful trader is to make the best trades. Money is secondary. — Alexander Elder",
+  "Amateurs think about how much money they can make. Professionals think about how much they could lose. — Jack Schwager",
+  "Do not anticipate and move without market confirmation — being a little late is your insurance. — Richard Wyckoff",
+  "Plan the trade and trade the plan. — Trading maxim",
+  "Cut your losses short and let your winners run. — David Ricardo",
+  "The stock market is a device for transferring money from the impatient to the patient. — Warren Buffett",
+  "Patience is the key. Wait for the trade to come to you. — Linda Raschke",
+  "Every battle is won before it is fought. — Sun Tzu",
+  "Losses are part of the game. The market doesn't owe you anything. — Trading maxim",
+  "Know what you own, and know why you own it. — Peter Lynch",
+  "The elements of good trading are: cutting losses, cutting losses, and cutting losses. — Ed Seykota",
+  "Bulls make money, bears make money, pigs get slaughtered. — Wall Street adage",
+  "Time in the market beats timing the market. — Investing adage",
+  "The market is a pendulum that forever swings between unsustainable optimism and unjustified pessimism. — Benjamin Graham",
+  "Don't fight the tape. — Wall Street adage",
+  "Discipline is the bridge between goals and accomplishment. — Jim Rohn",
+  "An investment in knowledge pays the best interest. — Benjamin Franklin",
+];
+function pickCalQuote() {
+  const dayNum = Math.floor(Date.parse(etDateStr() + 'T00:00:00Z') / 86_400_000);
+  return CAL_QUOTES[((dayNum % CAL_QUOTES.length) + CAL_QUOTES.length) % CAL_QUOTES.length];
+}
+register('/api/calendar-quote', {
+  auth: 'subscriber', methods: ['GET', 'POST'],
+  async handler(req, res) { send(res, 200, { quote: pickCalQuote() }); },
+});
+
+// /api/flow — legacy static empty flow payload (unchanged behavior).
+register('/api/flow', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    send(res, 200, {
+      timestamp: Date.now(), entries: [],
+      summary: { totalCallPremium: 0, totalPutPremium: 0, ratio: 1, dominantSide: 'neutral' },
+    });
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Dispatcher — return true if handled (skip Next), false to fall through.
 // ---------------------------------------------------------------------------
@@ -836,6 +884,142 @@ if (libDb) {
         const rows = await libDb.listFarCbTickers();
         send(res, 200, { ok: true, rows });
       } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/journal — per-user trading journal CRUD ('user' — signed-in, own data).
+  register('/api/journal', {
+    auth: 'user', methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      const parse = (body) => {
+        const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+        const date = String(body.date ?? '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+        return {
+          date,
+          net_pnl: num(body.netPnl ?? body.net_pnl),
+          trades: Math.max(0, num(body.trades)),
+          win_rate: Math.min(100, Math.max(0, num(body.winRate ?? body.win_rate))),
+          avg_win: num(body.avgWin ?? body.avg_win),
+          avg_loss: num(body.avgLoss ?? body.avg_loss),
+          profit_factor: num(body.profitFactor ?? body.profit_factor),
+          commissions: num(body.commissions),
+          notes: body.notes ? String(body.notes).slice(0, 4000) : null,
+          kind: String(body.kind ?? 'manual') === 'verified' ? 'verified' : 'manual',
+        };
+      };
+      try {
+        if (req.method === 'POST') {
+          const entry = parse(await readJson(req).catch(() => ({})));
+          if (!entry) return send(res, 400, { error: 'valid date (YYYY-MM-DD) required' });
+          return send(res, 200, { ok: true, row: await libDb.insertTradingJournal(userId, entry) });
+        }
+        if (req.method === 'PATCH') {
+          const body = await readJson(req).catch(() => ({}));
+          const id = Number(body.id);
+          if (!Number.isFinite(id)) return send(res, 400, { error: 'id required' });
+          const entry = parse(body);
+          if (!entry) return send(res, 400, { error: 'valid date (YYYY-MM-DD) required' });
+          const row = await libDb.updateTradingJournal(userId, id, entry);
+          if (!row) return send(res, 404, { error: 'not found' });
+          return send(res, 200, { ok: true, row });
+        }
+        if (req.method === 'DELETE') {
+          const id = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('id'));
+          if (!Number.isFinite(id)) return send(res, 400, { error: 'id required' });
+          await libDb.deleteTradingJournal(userId, id);
+          return send(res, 200, { ok: true });
+        }
+        send(res, 200, { rows: await libDb.getTradingJournals(userId) });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/budget/year — owner-only register rows for a calendar year.
+  register('/api/budget/year', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const year = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('year')) || new Date().getFullYear();
+        await libDb.adoptDefaultBudgetProfile('owner');
+        const profile = await libDb.getOrCreateBudgetProfile('owner');
+        const rows = await libDb.listRegister(profile.id, `${year}-01-01`, `${year}-12-31`);
+        send(res, 200, { year, rows });
+      } catch (err) { send(res, 500, { error: 'Year load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/auth-status — owner-only user/session stats card.
+  register('/api/auth-status', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      let userCount = null, activeSessions = null, recent = [], statsError = null;
+      try {
+        userCount = await libDb.countUsers();
+        activeSessions = await libDb.countActiveSessions();
+        const rows = await libDb.listRecentUsers(5);
+        recent = rows.map((u) => ({ id: u.id, email: u.email ?? null, name: null, createdAt: u.created_at ? new Date(u.created_at).getTime() : null }));
+      } catch (err) { statsError = String(err?.message ?? err); }
+      send(res, 200, { configured: true, provider: 'custom', environment: 'live', mismatch: false, stats: { userCount, activeSessions, recent }, statsError });
+    },
+  });
+
+  // /api/db/tables — list public tables (+ optional today-row counts).
+  register('/api/db/tables', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const DATE_COL_PRIORITY = ['date', 'day', 'entry_date', 'work_date'];
+      try {
+        const date = new URL(req.url || '/', 'http://localhost').searchParams.get('today') ?? '';
+        const rows = await libDb.queryAll(
+          `SELECT t.table_name AS name, COALESCE(s.n_live_tup, 0)::int AS approx_rows
+             FROM information_schema.tables t
+             LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name AND s.schemaname = 'public'
+            WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+            ORDER BY t.table_name ASC`);
+        if (!date) return send(res, 200, { tables: rows });
+        const colRows = await libDb.queryAll(
+          `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`);
+        const byTable = new Map();
+        for (const r of colRows) { const l = byTable.get(r.table_name) ?? []; l.push(r.column_name); byTable.set(r.table_name, l); }
+        const counts = {};
+        await Promise.all([...byTable.entries()].map(async ([table, cols]) => {
+          let expr;
+          if (table === 'trades') expr = `date(timestamp)`;
+          else {
+            const dc = DATE_COL_PRIORITY.find((c) => cols.includes(c));
+            if (dc) expr = `"${dc}"`;
+            else if (cols.includes('created_at')) expr = `created_at::date`;
+            else if (cols.includes('timestamp')) expr = `date(timestamp)`;
+          }
+          if (!expr) { counts[table] = null; return; }
+          try {
+            const row = await libDb.queryOne(`SELECT COUNT(*) AS c FROM "${table}" WHERE ${expr} = ?`, [date]);
+            counts[table] = Number(row?.c ?? 0);
+          } catch { counts[table] = null; }
+        }));
+        send(res, 200, { tables: rows.map((r) => ({ ...r, today_rows: counts[r.name] ?? null })) });
+      } catch (err) { send(res, 500, { error: 'Database error', detail: String(err) }); }
+    },
+  });
+
+  // /api/em/ticker-em-stats — per-ticker EM recent/mid averages.
+  register('/api/em/ticker-em-stats', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const ticker = (new URL(req.url || '/', 'http://localhost').searchParams.get('ticker') || '').trim().toUpperCase();
+        if (!ticker) return send(res, 400, { error: 'ticker required' });
+        const rows = await libDb.queryAll(
+          `SELECT em, week_start FROM em_tracker WHERE ticker = $1 AND em IS NOT NULL AND em > 0
+           ORDER BY week_start DESC NULLS LAST LIMIT 12`, [ticker]);
+        if (!rows.length) return send(res, 200, { ticker, recentAvg: null, midAvg: null, sampleSize: 0 });
+        const ems = rows.map((r) => Number(r.em)).filter((n) => Number.isFinite(n) && n > 0);
+        const recentSlice = ems.slice(0, 4);
+        const avg = (xs) => xs.reduce((s, v) => s + v, 0) / xs.length;
+        send(res, 200, { ticker, recentAvg: recentSlice.length ? avg(recentSlice) : null, midAvg: ems.length ? avg(ems) : null, sampleSize: ems.length });
+      } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });
 }
