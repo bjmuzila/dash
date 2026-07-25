@@ -182,12 +182,29 @@ function thisMonday(): string {
   d.setDate(d.getDate() - dow);
   return d.toISOString().slice(0, 10);
 }
-function weekLabelFromDate(iso: string): string {
-  // week_start arrives from Postgres as a full timestamp ("2026-07-20T00:00:00.000Z"),
-  // so appending "T00:00:00" produced an Invalid Date and rendered "NaN/NaN".
+/**
+ * Normalize any week date to that week's MONDAY (the canonical week_start key).
+ * week_start arrives from Postgres as a full timestamp ("2026-07-20T00:00:00.000Z"),
+ * so slice to YYYY-MM-DD before parsing or Date() returns Invalid Date.
+ */
+function mondayOfWeek(iso: string): string {
   const ymd = String(iso || "").slice(0, 10);
   const d = new Date(ymd + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return ymd || "—";
+  if (Number.isNaN(d.getTime())) return ymd;
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Mon=0
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * Label a week by its FRIDAY — the expiration the EM band is written against.
+ * The DB keys weeks by Monday (week_start); display always shows the Friday.
+ */
+function weekLabelFromDate(iso: string): string {
+  const mon = mondayOfWeek(iso);
+  const d = new Date(mon + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return String(iso || "").slice(0, 10) || "—";
+  d.setDate(d.getDate() + 4); // Mon -> Fri
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
@@ -682,7 +699,7 @@ export default function EmTrackerAdmin() {
                         }
                         return (
                           <div key={r.id} style={{ display: "contents" }}>
-                            <span style={{ color: "#fff", fontWeight: 700 }}>{r.week_label}</span>
+                            <span style={{ color: "#fff", fontWeight: 700 }}>{r.week_start ? weekLabelFromDate(r.week_start) : r.week_label}</span>
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.cyan }}>{fmt(r.em)}</span>
                             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.muted }}>
                               {down != null ? fmt(down) : "—"} <span style={{ color: "#5a657a" }}>→</span> {up != null ? fmt(up) : "—"}
