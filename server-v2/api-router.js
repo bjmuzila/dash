@@ -138,6 +138,34 @@ function register(pathname, def) {
   ROUTES.set(pathname, def);
 }
 
+// Dynamic-segment routes (e.g. /api/snapshots/[id]). The dispatcher tries exact
+// ROUTES first, then these patterns; a match injects ctx.params.<key>. Patterns
+// use ':key' for a single path segment. Kept separate so the common exact-match
+// path stays a plain Map.get and never scans regexes.
+const DYNAMIC_ROUTES = [];
+function registerDynamic(pattern, def) {
+  if (!def || !def.auth || !def.handler) {
+    throw new Error(`api-router: dynamic route ${pattern} needs { auth, handler }`);
+  }
+  const keys = [];
+  const rx = new RegExp('^' + pattern.replace(/:[^/]+/g, (m) => {
+    keys.push(m.slice(1));
+    return '([^/]+)';
+  }) + '$');
+  DYNAMIC_ROUTES.push({ rx, keys, def });
+}
+function matchDynamic(pathname) {
+  for (const { rx, keys, def } of DYNAMIC_ROUTES) {
+    const m = rx.exec(pathname);
+    if (m) {
+      const params = {};
+      keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
+      return { def, params };
+    }
+  }
+  return null;
+}
+
 // Minimal responder — mirrors what the old NextResponse.json routes emitted
 // (Content-Type: application/json + whatever Cache-Control the route set). It
 // intentionally does NOT add CORS (the Next /api/* routes didn't either; these
@@ -171,6 +199,21 @@ function tokenOk(req, ctx) {
   const expected = ctx.internalToken;
   if (!expected) return true;
   return req.headers['x-internal-token'] === expected;
+}
+
+// Faithful port of lib/proxyForward.ts forwardGet(): in-process GET to a
+// /proxy/* path (internal token attached by ctx.internalFetch), JSON-parse the
+// body (non-JSON → { raw }), re-emit with no-store; fetch failure → 502.
+async function forwardGet(ctx, proxyPath) {
+  try {
+    const r = await ctx.internalFetch(proxyPath, { cache: 'no-store' });
+    const text = await r.text();
+    let body;
+    try { body = JSON.parse(text); } catch { body = { raw: text }; }
+    return { status: r.status, body };
+  } catch (err) {
+    return { status: 502, body: { error: String(err?.message || err) } };
+  }
 }
 
 // Cache-Control presets, matching lib/cacheHeaders.ts exactly.
@@ -712,8 +755,14 @@ async function handleApiRoute(req, res, ctx) {
   catch { return false; }
   if (!pathname || !pathname.startsWith('/api/')) return false;
 
-  const def = ROUTES.get(pathname);
-  if (!def) return false; // not ported yet → let Next handle it
+  let def = ROUTES.get(pathname);
+  let params = null;
+  if (!def) {
+    const dyn = matchDynamic(pathname);
+    if (!dyn) return false; // not ported yet → let Next handle it
+    def = dyn.def;
+    params = dyn.params;
+  }
 
   const method = req.method || 'GET';
   if (def.methods && !def.methods.includes(method)) {
@@ -727,13 +776,505 @@ async function handleApiRoute(req, res, ctx) {
     return true;
   }
 
+  // Per-request ctx with params for dynamic routes (never mutate the shared ctx).
+  const reqCtx = params ? Object.assign(Object.create(ctx), { params }) : ctx;
+
   try {
-    await def.handler(req, res, ctx, verdict);
+    await def.handler(req, res, reqCtx, verdict);
   } catch (err) {
     ctx.sendJson(res, 500, { error: String(err?.message || err) }, req);
   }
   return true;
 }
+
+// /api/market-scanner — multi-ticker regime/scoring scan (Yahoo series + live
+// SPX GEX via in-process /proxy/gex). Pure compute, no DB. Ported verbatim from
+// app/api/market-scanner/route.ts.
+register('/api/market-scanner', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const YAHOO_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9',
+      Origin: 'https://finance.yahoo.com', Referer: 'https://finance.yahoo.com/',
+    };
+    const emptySeries = () => ({ closes: [], timestamps: [], last: null, prevClose: null, change: null, pct: null });
+    async function fetchYahoo(sym, range = '1y') {
+      try {
+        const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=${range}&includePrePost=false`;
+        const r = await fetch(url, { headers: YAHOO_HEADERS, cache: 'no-store' });
+        if (!r.ok) return emptySeries();
+        const data = await r.json();
+        const result = data?.chart?.result?.[0];
+        if (!result) return emptySeries();
+        const meta = result.meta ?? {};
+        const raw = result.indicators?.quote?.[0]?.close ?? [];
+        const closes = raw.filter((v) => typeof v === 'number' && isFinite(v));
+        const timestamps = Array.isArray(result.timestamp) ? result.timestamp : [];
+        const last = meta.regularMarketPrice ?? (closes.length ? closes[closes.length - 1] : null);
+        const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? (closes.length > 1 ? closes[closes.length - 2] : null);
+        const change = last != null && prevClose != null ? last - prevClose : null;
+        const pct = change != null && prevClose ? (change / prevClose) * 100 : null;
+        return { closes, timestamps, last, prevClose, change, pct };
+      } catch { return emptySeries(); }
+    }
+    const ivRank = (current, series) => {
+      if (!series.length || current == null) return null;
+      const lo = Math.min(...series), hi = Math.max(...series);
+      if (hi === lo) return 50;
+      return Math.round(((current - lo) / (hi - lo)) * 100);
+    };
+    const realizedVol = (closes, period = 20) => {
+      if (closes.length < period + 1) return null;
+      const slice = closes.slice(-(period + 1)); const rets = [];
+      for (let i = 1; i < slice.length; i++) rets.push(Math.log(slice[i] / slice[i - 1]));
+      const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+      const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / rets.length;
+      return Math.round(Math.sqrt(variance * 252) * 100 * 10) / 10;
+    };
+    const trendSlope = (closes, period = 20) => {
+      if (closes.length < 2) return 0;
+      const s = closes.slice(-period); const n = s.length;
+      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+      for (let i = 0; i < n; i++) { sumX += i; sumY += s[i]; sumXY += i * s[i]; sumX2 += i * i; }
+      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      return (slope / (s[0] || 1)) * 100;
+    };
+    const momentum = (closes) => {
+      if (closes.length < 20) return 'neutral';
+      const avg5 = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
+      const avg20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const slope = trendSlope(closes, 20); const diff = (avg5 - avg20) / avg20;
+      if (Math.abs(slope) > 0.1 && Math.abs(diff) > 0.005) return 'strong';
+      if (Math.abs(diff) < 0.002 && Math.abs(slope) < 0.05) return 'weakening';
+      return 'neutral';
+    };
+    const extensionLevel = (closes) => {
+      if (closes.length < 20) return 'neutral';
+      const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const last = closes[closes.length - 1]; const pct = (last - ma20) / ma20;
+      if (Math.abs(pct) > 0.04) return 'extended';
+      if (Math.abs(pct) < 0.01) return 'contracted';
+      return 'neutral';
+    };
+    const pcrLookup = (ivr, trend) => {
+      const base = 1.0 + (ivr - 50) * 0.005;
+      if (trend === 'up') return Math.round((base - 0.1) * 100) / 100;
+      if (trend === 'down') return Math.round((base + 0.1) * 100) / 100;
+      return Math.round(base * 100) / 100;
+    };
+    const emptyGex = {
+      gexFlip: null, gexPer1pct: null, maxGexStrike: null, gexExpiringPct: null, gexExpiringDate: null,
+      callWall: null, putWall: null, callsOI: null, putsOI: null, pcrOI: null, callSpec: null,
+    };
+    async function fetchGexSnap() {
+      try {
+        const r = await ctx.internalFetch('/proxy/gex', { cache: 'no-store' });
+        if (!r.ok) return emptyGex;
+        const v = await r.json();
+        const chain = v.gexRows ?? [];
+        let callsOI = 0, putsOI = 0, callsVol = 0, putsVol = 0;
+        chain.forEach((row) => {
+          callsOI += row.callOI ?? 0; putsOI += row.putOI ?? 0;
+          callsVol += row.callVolume ?? 0; putsVol += row.putVolume ?? 0;
+        });
+        const totalOI = callsOI + putsOI, totalVol = callsVol + putsVol;
+        const pcrOI = putsOI > 0 && callsOI > 0 ? Math.round((putsOI / callsOI) * 100) / 100 : null;
+        const callSpec = totalVol > 0 ? Math.round((callsVol / totalVol) * 100) : totalOI > 0 ? Math.round((callsOI / totalOI) * 100) : null;
+        let maxGexStrike = null, maxGex = -Infinity;
+        chain.forEach((row) => { const g = Math.abs(row.netGEX ?? 0); if (g > maxGex) { maxGex = g; maxGexStrike = row.strike; } });
+        const spot = v.spot ?? null;
+        const gexPer1pct = v.totalNetGex != null && spot && spot > 0 ? Math.round((v.totalNetGex / (spot * 0.01)) / 1e9 * 100) / 100 : null;
+        return {
+          gexFlip: v.gexFlip ?? null, gexPer1pct, maxGexStrike, gexExpiringPct: null,
+          gexExpiringDate: v.expiry ?? null, callWall: v.callWall ?? null, putWall: v.putWall ?? null,
+          callsOI: callsOI || null, putsOI: putsOI || null, pcrOI, callSpec,
+        };
+      } catch { return emptyGex; }
+    }
+    function computeAnalytics(sym, spot, closes, ivr, rv20, iv1dChange, gex) {
+      const slope = trendSlope(closes, 20), mom = momentum(closes), ext = extensionLevel(closes);
+      const ivrN = ivr ?? 50;
+      const trend = slope > 0.08 ? 'up' : slope < -0.08 ? 'down' : 'sideways';
+      let alignment = 'neutral';
+      if (gex.gexFlip != null) {
+        const aboveFlip = spot > gex.gexFlip;
+        if (trend === 'up' && aboveFlip) alignment = 'aligned';
+        else if (trend === 'down' && !aboveFlip) alignment = 'aligned';
+        else if (trend !== 'sideways') alignment = 'conflicting';
+      }
+      let regime;
+      if (trend === 'sideways') regime = 'RANGE BOUND';
+      else if (ivrN > 60) regime = 'TRENDING HIGH VOL';
+      else regime = 'TRENDING LOW VOL';
+      let marketStructure;
+      if (ext === 'extended' && alignment === 'conflicting') marketStructure = 'MEAN REVERSION FAVORED';
+      else if (ivrN > 65 && mom === 'strong') marketStructure = 'VOLATILITY EXPANSION RISK';
+      else if (trend !== 'sideways' && alignment === 'aligned') marketStructure = 'TREND CONTINUATION LIKELY';
+      else marketStructure = 'MIXED / WATCH';
+      let direction;
+      if (ext === 'extended' && mom === 'weakening') direction = 'NEUTRAL';
+      else if (trend === 'up') direction = 'LONG';
+      else if (trend === 'down') direction = 'SHORT';
+      else direction = 'NEUTRAL';
+      let strategy;
+      if (ivrN > 55 && alignment === 'conflicting') strategy = 'VOL PREMIUM';
+      else if (ext === 'extended' && mom === 'weakening') strategy = 'MEAN REVERSION';
+      else if (trend !== 'sideways' && mom === 'strong' && ivrN < 50) strategy = 'DIRECTIONAL';
+      else if (trend === 'sideways' && ivrN < 35) strategy = 'PASS';
+      else strategy = 'MEAN REVERSION';
+      if (sym === 'VIX') {
+        direction = 'NEUTRAL';
+        strategy = ivrN > 50 ? 'VOL PREMIUM' : 'PASS';
+        if (trend === 'up') regime = 'VOLATILITY EXPANSION';
+        else if (trend === 'down') regime = 'VOL COMPRESSION';
+      }
+      const THESIS = {
+        'VOL PREMIUM': 'Sell premium, fade extensions, collect decay',
+        'MEAN REVERSION': 'Fade extensions, target MA mean reversion',
+        'DIRECTIONAL': 'Long breakouts, buy dips to MA',
+        'PASS': 'Long with defined risk, reduced size; tighten stops',
+      };
+      const thesis = THESIS[strategy] ?? 'Monitor; conflicting signals';
+      let score = 5;
+      if (trend !== 'sideways') score += 1;
+      if (mom === 'strong') score += 1;
+      if (alignment === 'aligned') score += 1;
+      if (alignment === 'conflicting') score -= 1;
+      if (ext === 'extended') score -= 1;
+      if (ivrN > 60) score += 1;
+      if (strategy === 'PASS') score = Math.min(score, 2);
+      if (sym === 'VIX') score = Math.round(ivrN / 10);
+      score = Math.max(0, Math.min(10, score));
+      const rating = strategy === 'PASS' ? 'PASS' : score >= 6 ? 'HIGH' : 'LOW';
+      const approxIV = ivrN * 0.8 + 10;
+      const em1d = spot ? Math.round((spot * (approxIV / 100) * Math.sqrt(1 / 365)) * 10) / 10 : null;
+      const em1w = spot ? Math.round((spot * (approxIV / 100) * Math.sqrt(7 / 365)) * 10) / 10 : null;
+      const em30d = spot ? Math.round((spot * (approxIV / 100) * Math.sqrt(30 / 365)) * 10) / 10 : null;
+      const pcIvRatio = pcrLookup(ivrN, trend);
+      const pcIvSpread = Math.round((pcIvRatio - 1) * 100) / 1000;
+      const pcrVol = pcrLookup(ivrN, trend) * (trend === 'up' ? 0.85 : 1.1);
+      return {
+        score, rating, direction, strategy, thesis, regime, marketStructure,
+        em1d, em1w, em30d, trend, momentum: mom, extension: ext, alignment,
+        pcIvRatio, pcIvSpread, pcrVol: Math.round(pcrVol * 100) / 100, pcrDelta30d: null,
+      };
+    }
+    function buildTicker(sym, series, ivr, rv20, iv1dChange, gex, now) {
+      const spot = series.last;
+      if (!spot || series.closes.length < 5) {
+        return {
+          symbol: sym, spot, change1d: series.change, pct1d: series.pct,
+          score: 0, rating: 'PASS', direction: 'NEUTRAL', strategy: 'PASS', thesis: 'Data unavailable',
+          regime: 'UNKNOWN', marketStructure: 'UNKNOWN', ivRank: ivr, iv1dChange, callSpec: gex.callSpec,
+          em1d: null, em1w: null, em30d: null, trend: 'sideways', momentum: 'neutral', extension: 'neutral',
+          realizedVol20d: rv20, alignment: 'neutral', gexFlip: gex.gexFlip, gexPer1pct: gex.gexPer1pct,
+          maxGexStrike: gex.maxGexStrike, gexExpiringPct: gex.gexExpiringPct, gexExpiringDate: gex.gexExpiringDate,
+          pcIvRatio: null, pcIvSpread: null, callsOI: gex.callsOI, putsOI: gex.putsOI,
+          pcrOI: gex.pcrOI, pcrVol: null, pcrDelta30d: null, updatedAt: now,
+        };
+      }
+      const computed = computeAnalytics(sym, spot, series.closes, ivr, rv20, iv1dChange, gex);
+      return {
+        symbol: sym, spot, change1d: series.change, pct1d: series.pct, ivRank: ivr, iv1dChange,
+        realizedVol20d: rv20, callSpec: gex.callSpec, gexFlip: gex.gexFlip, gexPer1pct: gex.gexPer1pct,
+        maxGexStrike: gex.maxGexStrike, gexExpiringPct: gex.gexExpiringPct, gexExpiringDate: gex.gexExpiringDate,
+        callsOI: gex.callsOI, putsOI: gex.putsOI, pcrOI: gex.pcrOI, ...computed, updatedAt: now,
+      };
+    }
+    try {
+      const [spxS, spyS, qqqS, vixS, vxnS, vvixS] = await Promise.all([
+        fetchYahoo('^GSPC'), fetchYahoo('SPY'), fetchYahoo('QQQ'), fetchYahoo('^VIX'),
+        fetchYahoo('^VXN').catch(() => emptySeries()), fetchYahoo('^VVIX').catch(() => emptySeries()),
+      ]);
+      const gexSnap = await fetchGexSnap();
+      const vixCurrent = vixS.last ?? 20, vxnCurrent = vxnS.last ?? vixCurrent, vvixCurrent = vvixS.last ?? 80;
+      const spxIvr = ivRank(vixCurrent, vixS.closes);
+      const spyIvr = ivRank(vixCurrent, vixS.closes);
+      const qqqIvr = ivRank(vxnCurrent, vxnS.closes.length > 50 ? vxnS.closes : vixS.closes);
+      const vixIvr = ivRank(vvixCurrent, vvixS.closes.length > 50 ? vvixS.closes : vixS.closes);
+      const spxRv = realizedVol(spxS.closes), spyRv = realizedVol(spyS.closes), qqqRv = realizedVol(qqqS.closes), vixRv = realizedVol(vixS.closes);
+      const now = new Date().toISOString();
+      const results = [
+        buildTicker('SPX', spxS, spxIvr, spxRv, vixS.change, gexSnap, now),
+        buildTicker('SPY', spyS, spyIvr, spyRv, vixS.change, emptyGex, now),
+        buildTicker('QQQ', qqqS, qqqIvr, qqqRv, vxnS.change, emptyGex, now),
+        buildTicker('VIX', vixS, vixIvr, vixRv, vvixS.change, emptyGex, now),
+      ];
+      send(res, 200, { tickers: results, updatedAt: now }, { 'Cache-Control': NO_STORE });
+    } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
+  },
+});
+
+// /api/prev-closes, /api/gex-top3, /api/estimated-move — legacy 501 stubs
+// (GET+POST "not implemented"), ported verbatim. Kept subscriber to match the
+// original /api/* paywall.
+for (const p of ['/api/prev-closes', '/api/gex-top3', '/api/estimated-move']) {
+  register(p, {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) { send(res, 501, { error: 'not implemented' }); },
+  });
+}
+
+// /api/render-metrics — 410 tombstone (hosting moved to VPS → /api/hetzner-metrics).
+// Public so any stale client gets the clear 410 rather than a 401.
+register('/api/render-metrics', {
+  auth: 'public', methods: ['GET'],
+  async handler(req, res) {
+    send(res, 410, { ok: false, error: 'render-metrics removed — use /api/hetzner-metrics' });
+  },
+});
+
+// /api/gex — thin adapter over in-process /proxy/gex, reshaped to the dashboard
+// chain payload. Ported verbatim from app/api/gex/route.ts.
+register('/api/gex', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const expiry = new URL(req.url || '/', 'http://localhost').searchParams.get('expiry') || '';
+    try {
+      const r = await ctx.internalFetch('/proxy/gex', { cache: 'no-store' });
+      if (!r.ok) { send(res, 502, { error: `proxy /proxy/gex returned ${r.status}`, chain: [] }); return; }
+      const v2 = await r.json();
+      send(res, 200, {
+        chain: Array.isArray(v2.gexRows) ? v2.gexRows : [],
+        spotPrice: Number(v2.spot ?? 0),
+        expiration: v2.expiry ?? expiry ?? null,
+        expirations: v2.expirations ?? undefined,
+        callWall: v2.callWall ?? null,
+        putWall: v2.putWall ?? null,
+        gexFlip: v2.gexFlip ?? null,
+        totalNetGex: v2.totalNetGex ?? null,
+        totals: v2.totals ?? null,
+        prevClose: v2.prevClose ?? null,
+        prevCloseDate: v2.prevCloseDate ?? null,
+        updatedAt: v2.updatedAt ?? null,
+        symbol: v2.symbol ?? null,
+      }, { 'Cache-Control': CACHE_30 });
+    } catch (err) { send(res, 502, { error: String(err?.message || err), chain: [] }); }
+  },
+});
+
+// /api/premarket-movers — top-5 up/down across the trading watchlist via
+// in-process /proxy/quotes (extended-hours aware). Ported verbatim from
+// app/api/premarket-movers/route.ts.
+register('/api/premarket-movers', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const WATCHLIST = [
+      'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'SPCX', 'TSLA',
+      'AAPU', 'ASTS', 'AVGO', 'BYND', 'CMG', 'COIN', 'CWVX', 'ETHA', 'FBL', 'FIG',
+      'GME', 'HIMZ', 'HOOD', 'IBIT', 'LLYX', 'MSFU', 'NFLX', 'NOK', 'NVDX', 'OSCR',
+      'PLTR', 'PONY', 'QBTS', 'QUBT', 'RGTI', 'RIVN', 'SLV', 'SMCI', 'SOFI', 'SOUN',
+      'SOXL', 'TQQQ', 'TSLL', 'UUUU',
+      'ABNB', 'AFRM', 'ARM', 'BA', 'BABA', 'CCJ', 'CHWY', 'COST', 'CRCL', 'CRM',
+      'CRWD', 'CRWV', 'DJT', 'FDX', 'GS', 'HIMS', 'INTC', 'IREN', 'IWM', 'LAC',
+      'LLY', 'MA', 'MARA', 'MCD', 'MRK', 'MRNA', 'MU', 'NIO', 'NKE', 'NNE',
+      'NXE', 'OKLO', 'OPEN', 'OXY', 'PDD', 'PFE', 'PTON', 'RBLX', 'RIOT', 'RKLB',
+      'ROKU', 'SE', 'SMH', 'SNDK', 'SNOW', 'TGT', 'TSM', 'TTD', 'U', 'UNH',
+      'UPS', 'UPST', 'V', 'XPEV', 'XYZ',
+    ];
+    const isExtendedHours = () => {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+      const h = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+      const m = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+      const mins = h * 60 + m;
+      return mins < 570 || mins >= 960;
+    };
+    try {
+      const r = await ctx.internalFetch(`/proxy/quotes?symbols=${encodeURIComponent(WATCHLIST.join(','))}`, { cache: 'no-store' });
+      if (!r.ok) { send(res, 502, { error: `quotes proxy returned ${r.status}` }); return; }
+      const j = await r.json();
+      const items = j?.data?.items ?? [];
+      const extended = isExtendedHours();
+      const ranked = items.map((q) => {
+        const current = q.mark || q.last || 0;
+        const base = q.prevClose || q.close || 0;
+        if (!current || !base) return null;
+        const change = current - base;
+        const pct = (change / base) * 100;
+        return { symbol: q.symbol, name: q.symbol, price: current, change, pct, preMarketPrice: extended ? current : null, preMarketPct: extended ? pct : null, volume: null };
+      }).filter((m) => m !== null).sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0));
+      const up = ranked.slice(0, 5);
+      const down = ranked.slice(-5).reverse();
+      const seen = new Set();
+      const movers = [...up, ...down].filter((m) => (seen.has(m.symbol) ? false : seen.add(m.symbol)));
+      send(res, 200, { movers, up, down, updatedAt: Date.now() }, { 'Cache-Control': NO_STORE });
+    } catch (err) { send(res, 500, { error: 'Fetch failed', detail: String(err) }); }
+  },
+});
+
+// /api/owner/theta-stats — owner-only theta-terminal container metrics via the
+// docker-socket-proxy sidecar. Ported verbatim from app/api/owner/theta-stats/
+// route.ts; enforceAuth 'owner' replaces the getServerUserId/OWNER_USER_ID gate
+// (still fails closed).
+register('/api/owner/theta-stats', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res) {
+    const DOCKER_PROXY_URL = (process.env.DOCKER_PROXY_URL || 'http://docker-proxy:2375').trim();
+    const CONTAINER = 'theta-terminal';
+    const cpuPercent = (s) => {
+      const cpuDelta = s.cpu_stats.cpu_usage.total_usage - s.precpu_stats.cpu_usage.total_usage;
+      const sysDelta = (s.cpu_stats.system_cpu_usage ?? 0) - (s.precpu_stats.system_cpu_usage ?? 0);
+      const cpus = s.cpu_stats.online_cpus || s.cpu_stats.cpu_usage.percpu_usage?.length || 1;
+      if (sysDelta <= 0 || cpuDelta < 0) return null;
+      return (cpuDelta / sysDelta) * cpus * 100;
+    };
+    try {
+      const [statsRes, inspectRes] = await Promise.all([
+        fetch(`${DOCKER_PROXY_URL}/containers/${CONTAINER}/stats?stream=false`, { cache: 'no-store' }),
+        fetch(`${DOCKER_PROXY_URL}/containers/${CONTAINER}/json`, { cache: 'no-store' }),
+      ]);
+      if (!statsRes.ok || !inspectRes.ok) { send(res, 502, { ok: false, error: `docker-proxy returned ${statsRes.status}/${inspectRes.status}` }); return; }
+      const stats = await statsRes.json();
+      const inspect = await inspectRes.json();
+      const memUsageRaw = stats.memory_stats.usage ?? 0;
+      const cache = stats.memory_stats.stats?.cache ?? stats.memory_stats.stats?.inactive_file ?? 0;
+      const memUsage = Math.max(memUsageRaw - cache, 0);
+      const memLimit = stats.memory_stats.limit ?? 0;
+      send(res, 200, {
+        ok: true, container: CONTAINER, cpuPercent: cpuPercent(stats),
+        memUsageBytes: memUsage, memLimitBytes: memLimit,
+        memPercent: memLimit > 0 ? (memUsage / memLimit) * 100 : null,
+        pids: stats.pids_stats?.current ?? null,
+        status: inspect.State?.Status ?? 'unknown',
+        health: inspect.State?.Health?.Status ?? null,
+        restarting: inspect.State?.Restarting ?? false,
+        oomKilled: inspect.State?.OOMKilled ?? false,
+        startedAt: inspect.State?.StartedAt ?? null,
+        fetchedAt: new Date().toISOString(),
+      });
+    } catch (err) { send(res, 500, { ok: false, error: 'theta-stats fetch failed', detail: String(err) }); }
+  },
+});
+
+// /api/debug-gex — legacy 501 stub (GET+POST). Ported verbatim.
+register('/api/debug-gex', {
+  auth: 'subscriber', methods: ['GET', 'POST'],
+  async handler(req, res) { send(res, 501, { error: 'not implemented' }); },
+});
+
+// /api/dxlink/candles?symbol&interval — weekly OHLC forwarder to the proxy's
+// TT history endpoint. Ported verbatim from app/api/dxlink/candles/route.ts.
+register('/api/dxlink/candles', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const symbol = (sp.get('symbol') || '').trim();
+    if (!symbol) {
+      const r = await forwardGet(ctx, '/proxy/api/tt/market-data/history/');
+      send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+      return;
+    }
+    const interval = sp.get('interval') || '1Week';
+    const r = await forwardGet(ctx, `/proxy/api/tt/market-data/history/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`);
+    send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/quotes-batch — batch day-change quotes + optional sparkline (Yahoo v8).
+// Pure fetch, no DB. Ported verbatim from app/api/quotes-batch/route.ts.
+register('/api/quotes-batch', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    const toYahoo = (sym) => {
+      const s = sym.trim().toUpperCase();
+      if (s === 'SPX' || s === '$SPX') return '^GSPC';
+      if (s === 'VIX') return '^VIX';
+      if (s === 'NDX') return '^NDX';
+      if (s === 'RUT') return '^RUT';
+      if (s.startsWith('/ES')) return 'ES=F';
+      if (s.startsWith('/NQ')) return 'NQ=F';
+      if (s.startsWith('/')) return s.slice(1) + '=F';
+      return s;
+    };
+    const nyOffsetMinutes = (d) => {
+      const s = d.toLocaleString('en-US', { timeZone: 'America/New_York', timeZoneName: 'shortOffset' });
+      const m = s.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+      if (!m) return -300;
+      const h = parseInt(m[1], 10); const mm = m[2] ? parseInt(m[2], 10) : 0;
+      return h * 60 + (h < 0 ? -mm : mm);
+    };
+    const YH_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9',
+      Origin: 'https://finance.yahoo.com', Referer: 'https://finance.yahoo.com/',
+    };
+    async function fetchSpark(yahooSym) {
+      const now = new Date(); const off = nyOffsetMinutes(now);
+      const etMs = now.getTime() + off * 60_000; const etDate = new Date(etMs);
+      const etMin = etDate.getUTCHours() * 60 + etDate.getUTCMinutes();
+      const OPEN = 9 * 60 + 30, CLOSE = 16 * 60;
+      const session = etMin >= OPEN && etMin < CLOSE ? 'REG' : 'EXT';
+      const etMidnightUtcMs = Date.UTC(etDate.getUTCFullYear(), etDate.getUTCMonth(), etDate.getUTCDate()) - off * 60_000;
+      const at = (mins) => Math.floor((etMidnightUtcMs + mins * 60_000) / 1000);
+      const preStart = at(20 * 60) - 86_400; const rthStart = at(OPEN);
+      try {
+        const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=5m&range=2d&includePrePost=true`;
+        const r = await fetch(url, { headers: YH_HEADERS, cache: 'no-store' });
+        if (!r.ok) return { sparkPre: [], sparkRth: [], session };
+        const data = await r.json();
+        const result = data?.chart?.result?.[0];
+        const ts = result?.timestamp ?? [];
+        const closes = result?.indicators?.quote?.[0]?.close ?? [];
+        const sparkPre = [], sparkRth = [];
+        for (let i = 0; i < closes.length; i++) {
+          const c = closes[i], t = ts[i];
+          if (typeof c !== 'number' || !Number.isFinite(c) || typeof t !== 'number') continue;
+          if (t >= preStart && t < rthStart) sparkPre.push(c);
+          else if (t >= rthStart) sparkRth.push(c);
+        }
+        const ds = (arr, max = 24) => {
+          if (arr.length <= max) return arr;
+          const step = arr.length / max; const out = [];
+          for (let i = 0; i < max; i++) out.push(arr[Math.floor(i * step)]);
+          out.push(arr[arr.length - 1]); return out;
+        };
+        return { sparkPre: ds(sparkPre), sparkRth: ds(sparkRth), session };
+      } catch { return { sparkPre: [], sparkRth: [], session }; }
+    }
+    async function fetchOne(yahooSym, withSpark = false) {
+      try {
+        const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=5d&includePrePost=true`;
+        const r = await fetch(url, { headers: YH_HEADERS, cache: 'no-store' });
+        if (!r.ok) return { price: null, prevClose: null, change: null, pct: null };
+        const data = await r.json();
+        const result = data?.chart?.result?.[0];
+        const meta = result?.meta;
+        if (!meta) return { price: null, prevClose: null, change: null, pct: null };
+        const closes = result?.indicators?.quote?.[0]?.close;
+        const validCloses = Array.isArray(closes) ? closes.filter((v) => typeof v === 'number' && Number.isFinite(v)) : [];
+        const lastClose = validCloses.length ? validCloses[validCloses.length - 1] : null;
+        const seriesPrevClose = validCloses.length >= 2 ? validCloses[validCloses.length - 2] : null;
+        const price =
+          (meta.marketState === 'PRE' && typeof meta.preMarketPrice === 'number' ? meta.preMarketPrice : null) ??
+          ((meta.marketState === 'POST' || meta.marketState === 'POSTPOST') && typeof meta.postMarketPrice === 'number' ? meta.postMarketPrice : null) ??
+          meta.regularMarketPrice ?? lastClose ?? null;
+        const prevClose = seriesPrevClose ?? meta.regularMarketPreviousClose ?? meta.previousClose ?? meta.chartPreviousClose ?? null;
+        const change = price != null && prevClose != null ? price - prevClose : null;
+        const pct = change != null && prevClose ? (change / prevClose) * 100 : null;
+        const sp = withSpark ? await fetchSpark(yahooSym) : undefined;
+        return { price, prevClose, change, pct, sparkPre: sp?.sparkPre, sparkRth: sp?.sparkRth, session: sp?.session };
+      } catch { return { price: null, prevClose: null, change: null, pct: null }; }
+    }
+    const url0 = new URL(req.url || '/', 'http://localhost');
+    const symbols = url0.searchParams.get('symbols') || '';
+    const withSpark = url0.searchParams.get('spark') === '1';
+    if (!symbols) { send(res, 200, { data: { items: [] } }); return; }
+    const syms = symbols.split(',').map((s) => s.trim()).filter(Boolean);
+    const pairs = syms.map((sym) => ({ sym, yahoo: toYahoo(sym) }));
+    const uniqueYahoo = [...new Set(pairs.map((p) => p.yahoo))];
+    const fetched = await Promise.all(uniqueYahoo.map((y) => fetchOne(y, withSpark).then((q) => [y, q])));
+    const byYahoo = new Map(fetched);
+    const items = pairs.map(({ sym, yahoo }) => {
+      const q = byYahoo.get(yahoo) ?? { price: null, prevClose: null, change: null, pct: null };
+      return {
+        symbol: sym, last: q.price, 'prev-close': q.prevClose, change: q.change, 'percent-change': q.pct,
+        ...(withSpark ? { sparkPre: q.sparkPre ?? [], sparkRth: q.sparkRth ?? [], session: q.session ?? 'REG' } : {}),
+      };
+    });
+    send(res, 200, { data: { items } }, { 'Cache-Control': NO_STORE });
+  },
+});
 
 // ── REAL-DB routes (batch 2) — only registered when the bundle loaded ────────
 // Each calls the bundled lib/db.ts function exactly as its route.ts did. If
@@ -2065,6 +2606,588 @@ if (libDb) {
       },
     });
   }
+
+  // /api/snapshots/option-strike-gex-history — heatmap/point/rolling reads of the
+  // append-only option_strike_gex_history table + POST recorder. Ported verbatim
+  // from app/api/snapshots/option-strike-gex-history/route.ts (module-level 30s
+  // heatmap cache preserved). GET is subscriber; POST recorder uses internal token
+  // (enforceAuth 'subscriber' honors the x-internal-token bypass first).
+  {
+    const HEATMAP_TTL_MS = 30_000;
+    const heatmapCache = new Map(); // module-level within this route's closure
+    register('/api/snapshots/option-strike-gex-history', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        if (req.method === 'POST') {
+          try {
+            const body = await readJson(req);
+            const rows = Array.isArray(body) ? body : Array.isArray(body?.rows) ? body.rows : [body];
+            const normalized = rows.map((row) => ({
+              timestamp: Number(row.timestamp ?? Date.now()),
+              date: String(row.date ?? todayET()),
+              expiry: String(row.expiry ?? ''),
+              spot: Number(row.spot ?? 0),
+              strike: Number(row.strike ?? 0),
+              net_gex: Number(row.net_gex ?? 0),
+              net_vol_gex: row.net_vol_gex == null ? undefined : Number(row.net_vol_gex),
+            })).filter((row) => row.expiry && row.strike > 0 && Number.isFinite(row.net_gex));
+            await libDb.insertOptionStrikeGexRows(normalized);
+            send(res, 200, { ok: true, count: normalized.length });
+          } catch (err) { send(res, 200, { error: String(err) }); }
+          return;
+        }
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const date = sp.get('date') ?? todayET();
+          const expiry = sp.get('expiry') ?? '';
+          const mode = sp.get('mode') ?? 'rolling';
+          if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }
+
+          if (mode === 'heatmap') {
+            const winParam = sp.get('minutes');
+            const winMin = winParam == null ? 1440 : Math.max(0, Math.min(2880, Number(winParam)));
+            const anyExpiry = sp.get('anyExpiry') === '1';
+            const cacheKey = `${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}`;
+            const cached = heatmapCache.get(cacheKey);
+            if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) { send(res, 200, cached.payload); return; }
+            const slots = winMin > 0
+              ? anyExpiry
+                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000)
+                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry)
+              : await libDb.getOptionStrikeGexSlots(date, expiry);
+            const bySlot = new Map();
+            const spotBySlot = new Map();
+            for (const r of slots) {
+              if (!(r.strike > 0) || !Number.isFinite(r.net_gex)) continue;
+              let arr = bySlot.get(r.slot_ts);
+              if (!arr) { arr = []; bySlot.set(r.slot_ts, arr); }
+              const netVol = Number(r.net_vol_gex ?? 0);
+              arr.push({ strike: r.strike, net: r.net_gex + (Number.isFinite(netVol) ? netVol : 0), netVol });
+              const spot = Number(r.spot ?? 0);
+              if (spot > 0 && !spotBySlot.has(r.slot_ts)) spotBySlot.set(r.slot_ts, spot);
+            }
+            const columns = [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([slotTs, cells]) => {
+              const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
+              const max = absVals.length ? Math.max(...absVals) : 1;
+              const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
+              return { slotTs, cells, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
+            });
+            const payload = { mode: 'heatmap', columns };
+            heatmapCache.set(cacheKey, { at: Date.now(), payload });
+            send(res, 200, payload);
+            return;
+          }
+
+          if (mode === 'point') {
+            const ages = (sp.get('ages') ?? '5,15,30').split(',')
+              .map((a) => Math.max(1, Math.min(240, Number(a.trim())))).filter((a) => Number.isFinite(a));
+            const now = Date.now();
+            const tolerant = sp.get('tolerant') === '1';
+            const asOf = tolerant ? libDb.getOptionStrikeNetGexAsOfOrNearest : libDb.getOptionStrikeNetGexAsOf;
+            const [openRows, ...ageRowSets] = await Promise.all([
+              libDb.getOptionStrikeNetGexAtOpen(date, expiry),
+              ...ages.map((m) => asOf(date, expiry, now - m * 60 * 1000)),
+            ]);
+            const baselines = {};
+            const put = (strike, key, v) => { (baselines[strike] ??= {})[key] = v; };
+            const oiVol = (r) => r.net_gex + (Number.isFinite(r.net_vol_gex) ? r.net_vol_gex : 0);
+            for (const r of openRows) put(r.strike, 'open', oiVol(r));
+            ages.forEach((m, i) => { for (const r of ageRowSets[i]) put(r.strike, String(m), oiVol(r)); });
+            send(res, 200, { mode: 'point', ages, baselines });
+            return;
+          }
+
+          const minutes = Math.max(1, Math.min(240, Number(sp.get('minutes') ?? 30)));
+          const sinceTimestamp = Date.now() - minutes * 60 * 1000;
+          const rows = await libDb.getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp);
+          send(res, 200, { rows, minutes });
+        } catch (err) { send(res, 200, { error: String(err), rows: [] }); }
+      },
+    });
+  }
+
+  // /api/public-stats — UNGATED landing-page graded-performance strip. Ported
+  // verbatim from app/api/public-stats/route.ts. ISR (revalidate=86400) replaced
+  // by a module-level 24h TTL cache so anonymous traffic never hits PG per view;
+  // never 500s (empty strip on error).
+  {
+    const PS_TTL_MS = 86_400_000;
+    let psCache = null; // { at, payload }
+    const MIN_N = 30, MIN_PERIODS = 30, MIN_EM_WEEKS = 4, MIN_EM_TICKERS = 30;
+    const emZones = async () => {
+      const pool = await libDb.getDb();
+      const { rows } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE result = 'hit')::int            AS hits,
+          COUNT(*) FILTER (WHERE result IN ('hit','miss'))::int  AS evaluated,
+          COUNT(DISTINCT week_start) FILTER (WHERE result IN ('hit','miss'))::int AS weeks,
+          COUNT(DISTINCT ticker) FILTER (WHERE result IN ('hit','miss'))::int     AS tickers,
+          MIN(week_start) FILTER (WHERE result IN ('hit','miss')) AS since
+        FROM em_tracker`);
+      const r = rows[0];
+      const n = Number(r?.evaluated ?? 0);
+      if (n < MIN_N || Number(r?.weeks ?? 0) < MIN_EM_WEEKS || Number(r?.tickers ?? 0) < MIN_EM_TICKERS) return null;
+      return {
+        key: 'em', label: 'Weekly EM bands contained price',
+        sublabel: `${Number(r.tickers)} tickers over ${Number(r.weeks)} weeks — a 1-SD band should land near 68%`,
+        pct: Math.round((Number(r.hits) / n) * 1000) / 10, n, since: r?.since ?? null,
+      };
+    };
+    const ictSetups = async () => {
+      const pool = await libDb.getDb();
+      const { rows } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE outcome = 'win')::int             AS wins,
+          COUNT(*) FILTER (WHERE outcome IN ('win','loss'))::int   AS graded,
+          COUNT(DISTINCT date) FILTER (WHERE outcome IN ('win','loss'))::int AS sessions,
+          MIN(date) FILTER (WHERE outcome IN ('win','loss'))       AS since
+        FROM ict_setups`);
+      const r = rows[0];
+      const n = Number(r?.graded ?? 0);
+      if (n < MIN_N || Number(r?.sessions ?? 0) < MIN_PERIODS) return null;
+      return {
+        key: 'ict', label: 'ICT setups resolved in-direction',
+        sublabel: `Auto-graded on follow-through, ${Number(r.sessions ?? 0)} sessions — chop excluded`,
+        pct: Math.round((Number(r.wins) / n) * 1000) / 10, n, since: r?.since ?? null,
+      };
+    };
+    const cbReach = async () => {
+      const pool = await libDb.getDb();
+      const { rows } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE touched = 1)::int AS touched,
+          COUNT(*)::int                            AS graded,
+          MIN(date)                                AS since
+        FROM confidence_log
+        WHERE graded_at IS NOT NULL AND touched IS NOT NULL`);
+      const r = rows[0];
+      const n = Number(r?.graded ?? 0);
+      if (n < MIN_N) return null;
+      return {
+        key: 'cb', label: 'CB levels reached intraday',
+        sublabel: "Called pre-close, graded on the next session's actual print",
+        pct: Math.round((Number(r.touched) / n) * 1000) / 10, n, since: r?.since ?? null,
+      };
+    };
+    register('/api/public-stats', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        if (psCache && Date.now() - psCache.at < PS_TTL_MS) { send(res, 200, psCache.payload); return; }
+        try {
+          const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach()]);
+          const stats = settled.map((s) => (s.status === 'fulfilled' ? s.value : null)).filter((s) => s != null).sort((a, b) => b.n - a.n);
+          const payload = { stats, computedAt: new Date().toISOString() };
+          psCache = { at: Date.now(), payload };
+          send(res, 200, payload);
+        } catch { send(res, 200, { stats: [], computedAt: new Date().toISOString() }); }
+      },
+    });
+  }
+
+  // /api/levels — per-ticker weekly levels (ticker_levels). GET subscriber read
+  // with alias resolution; POST NULL-aware upsert with the Saturday-9am-ET em
+  // freeze (trusted internal token may always rewrite). Ported verbatim from
+  // app/api/levels/route.ts.
+  {
+    let levelsEnsured = false;
+    const lastSaturday9amET = (now = new Date()) => {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now);
+      const get = (t) => parts.find((p) => p.type === t)?.value;
+      const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const dow = dowMap[get('weekday') || 'Sun'];
+      const hour = Number(get('hour')), minute = Number(get('minute'));
+      const minsSinceSat9 = ((dow - 6) * 24 * 60) + hour * 60 + minute - 9 * 60;
+      const offsetMin = minsSinceSat9 >= 0 ? minsSinceSat9 : minsSinceSat9 + 7 * 24 * 60;
+      return new Date(now.getTime() - offsetMin * 60 * 1000);
+    };
+    const ensureLevels = async (pool) => {
+      if (levelsEnsured) return;
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS ticker_levels (
+          id SERIAL PRIMARY KEY, ticker TEXT NOT NULL UNIQUE, label TEXT, close TEXT,
+          em TEXT, up TEXT, down TEXT, buy_near TEXT, buy_far TEXT, sell_near TEXT,
+          sell_far TEXT, pivot TEXT, exp_label TEXT,
+          updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, em_updated_at TIMESTAMPTZ
+        )`);
+      await pool.query(`ALTER TABLE ticker_levels ADD COLUMN IF NOT EXISTS em_updated_at TIMESTAMPTZ`);
+      levelsEnsured = true;
+    };
+    register('/api/levels', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res, ctx) {
+        try {
+          const pool = await libDb.getDb();
+          await ensureLevels(pool);
+          if (req.method === 'POST') {
+            const body = await readJson(req);
+            const ticker = String(body.ticker || '').trim().toUpperCase();
+            if (!ticker) { send(res, 400, { error: 'Missing ticker' }); return; }
+            const token = req.headers['x-internal-token'] || '';
+            const trusted = !!ctx.internalToken && token === ctx.internalToken;
+            const weekStart = lastSaturday9amET();
+            await pool.query(
+              `INSERT INTO ticker_levels
+                (ticker, label, close, em, up, down, buy_near, buy_far, sell_near, sell_far, pivot, exp_label, em_updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+                       CASE WHEN $4::text IS NOT NULL THEN CURRENT_TIMESTAMP ELSE NULL END)
+               ON CONFLICT(ticker) DO UPDATE SET
+                 label     = CASE WHEN EXCLUDED.label     IS NOT NULL THEN EXCLUDED.label     ELSE ticker_levels.label     END,
+                 buy_near  = CASE WHEN EXCLUDED.buy_near  IS NOT NULL THEN EXCLUDED.buy_near  ELSE ticker_levels.buy_near  END,
+                 buy_far   = CASE WHEN EXCLUDED.buy_far   IS NOT NULL THEN EXCLUDED.buy_far   ELSE ticker_levels.buy_far   END,
+                 sell_near = CASE WHEN EXCLUDED.sell_near IS NOT NULL THEN EXCLUDED.sell_near ELSE ticker_levels.sell_near END,
+                 sell_far  = CASE WHEN EXCLUDED.sell_far  IS NOT NULL THEN EXCLUDED.sell_far  ELSE ticker_levels.sell_far  END,
+                 pivot     = CASE WHEN EXCLUDED.pivot     IS NOT NULL THEN EXCLUDED.pivot     ELSE ticker_levels.pivot     END,
+                 exp_label = CASE WHEN EXCLUDED.exp_label IS NOT NULL THEN EXCLUDED.exp_label ELSE ticker_levels.exp_label END,
+                 updated_at = CURRENT_TIMESTAMP,
+                 em = CASE WHEN EXCLUDED.em IS NOT NULL
+                             AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                           THEN EXCLUDED.em ELSE ticker_levels.em END,
+                 close = CASE WHEN EXCLUDED.close IS NOT NULL
+                             AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                           THEN EXCLUDED.close ELSE ticker_levels.close END,
+                 up = CASE WHEN EXCLUDED.up IS NOT NULL
+                             AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                           THEN EXCLUDED.up ELSE ticker_levels.up END,
+                 down = CASE WHEN EXCLUDED.down IS NOT NULL
+                             AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                           THEN EXCLUDED.down ELSE ticker_levels.down END,
+                 em_updated_at = CASE WHEN EXCLUDED.em IS NOT NULL
+                             AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
+                           THEN CURRENT_TIMESTAMP ELSE ticker_levels.em_updated_at END`,
+              [ticker, body.label ?? null, body.close ?? null, body.em ?? null, body.up ?? null, body.down ?? null,
+               body.buy_near ?? null, body.buy_far ?? null, body.sell_near ?? null, body.sell_far ?? null,
+               body.pivot ?? null, body.exp_label ?? null, trusted, weekStart]
+            );
+            send(res, 200, { ok: true, ticker });
+            return;
+          }
+          const raw = (new URL(req.url || '/', 'http://localhost').searchParams.get('ticker') || '').trim().toUpperCase();
+          if (!raw) {
+            const all = await pool.query('SELECT * FROM ticker_levels ORDER BY ticker ASC');
+            send(res, 200, all.rows);
+            return;
+          }
+          const cleaned = raw.replace(/[$]/g, '').replace(/^\//, '');
+          const ALIAS = {
+            ES: 'ESU', ESM: 'ESU', ESU6: 'ESU', ESU26: 'ESU', '/ES': 'ESU',
+            NQ: 'NQU', NQM: 'NQU', NQU6: 'NQU', NQU26: 'NQU', '/NQ': 'NQU',
+          };
+          const candidates = [ALIAS[raw], ALIAS[cleaned], raw, cleaned].filter(Boolean);
+          const result = await pool.query('SELECT * FROM ticker_levels WHERE ticker = ANY($1) LIMIT 1', [candidates]);
+          if (!result.rows.length) { send(res, 200, null); return; }
+          send(res, 200, result.rows[0]);
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/em-zones?ticker — on-demand Buy/Sell zones via the proxy engine, cached
+  // into ticker_levels (NULL-aware upsert). Ported verbatim from
+  // app/api/em-zones/route.ts. Subscriber.
+  register('/api/em-zones', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res, ctx) {
+      const ticker = (new URL(req.url || '/', 'http://localhost').searchParams.get('ticker') || '').trim().toUpperCase();
+      if (!ticker) { send(res, 400, { error: 'ticker required' }); return; }
+      let zone = null;
+      try {
+        const r = await ctx.internalFetch(`/proxy/api/tt/em-zones?ticker=${encodeURIComponent(ticker)}`, { cache: 'no-store' });
+        const json = await r.json();
+        if (!r.ok || !json?.data) { send(res, 502, { error: json?.error || 'zone compute failed' }); return; }
+        zone = json.data;
+      } catch (err) { send(res, 502, { error: String(err?.message || err) }); return; }
+      try {
+        const pool = await libDb.getDb();
+        const t = (zone.ticker || ticker).toUpperCase();
+        await pool.query(
+          `INSERT INTO ticker_levels (ticker, label, pivot, buy_near, buy_far, sell_near, sell_far)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT(ticker) DO UPDATE SET
+             label     = CASE WHEN EXCLUDED.label     IS NOT NULL THEN EXCLUDED.label     ELSE ticker_levels.label     END,
+             pivot     = CASE WHEN EXCLUDED.pivot     IS NOT NULL THEN EXCLUDED.pivot     ELSE ticker_levels.pivot     END,
+             buy_near  = CASE WHEN EXCLUDED.buy_near  IS NOT NULL THEN EXCLUDED.buy_near  ELSE ticker_levels.buy_near  END,
+             buy_far   = CASE WHEN EXCLUDED.buy_far   IS NOT NULL THEN EXCLUDED.buy_far   ELSE ticker_levels.buy_far   END,
+             sell_near = CASE WHEN EXCLUDED.sell_near IS NOT NULL THEN EXCLUDED.sell_near ELSE ticker_levels.sell_near END,
+             sell_far  = CASE WHEN EXCLUDED.sell_far  IS NOT NULL THEN EXCLUDED.sell_far  ELSE ticker_levels.sell_far  END,
+             updated_at = CURRENT_TIMESTAMP`,
+          [t, zone.label ?? t, zone.pivot ?? null, zone.buy_near ?? null, zone.buy_far ?? null, zone.sell_near ?? null, zone.sell_far ?? null]
+        );
+      } catch (err) { /* best-effort cache */ }
+      send(res, 200, zone);
+    },
+  });
+
+  // /api/flow/calls — options-flow recorder + reader. POST inserts, GET reads by
+  // date. Ported verbatim from app/api/flow/calls/route.ts. Subscriber (POST via
+  // token bypass).
+  register('/api/flow/calls', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'POST') {
+        try {
+          const body = await readJson(req);
+          const calls = Array.isArray(body) ? body : [body];
+          await libDb.insertFlowCalls(calls);
+          send(res, 200, { ok: true, count: calls.length });
+        } catch (e) { send(res, 500, { error: String(e) }); }
+        return;
+      }
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const date = sp.get('date') ?? new Date().toISOString().slice(0, 10);
+        const limit = Number(sp.get('limit') ?? 500);
+        const rows = await libDb.getFlowCalls(date, limit);
+        send(res, 200, rows);
+      } catch (e) { send(res, 500, { error: String(e) }); }
+    },
+  });
+
+  // /api/db — generic table browser (information_schema validated). Ported
+  // verbatim from app/api/db/route.ts. Subscriber to match middleware's /api/*
+  // paywall (the /database PAGE is owner-gated separately). AUDIT: consider
+  // tightening to owner since it can read any table.
+  register('/api/db', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const ORDER_COL_PRIORITY = ['id', 'created_at', 'ts', 'timestamp', 'updated_at'];
+      const DATE_COL_PRIORITY = ['date', 'day', 'entry_date', 'work_date'];
+      const tableExists = async (table) => {
+        const row = await libDb.queryOne(
+          `SELECT true AS ok FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = ?`, [table]);
+        return !!row?.ok;
+      };
+      const getColumns = async (table) => {
+        const rows = await libDb.queryAll(
+          `SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ? ORDER BY ordinal_position`, [table]);
+        return rows.map((r) => r.column_name);
+      };
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const table = sp.get('table') ?? 'mvc_snapshots';
+        const limit = Math.min(Number(sp.get('limit') ?? 200), 1000);
+        const date = sp.get('date') ?? '';
+        const countOnly = sp.get('countOnly') === 'true';
+        if (!(await tableExists(table))) { send(res, 400, { error: 'Table not allowed' }); return; }
+        if (table === 'trades') {
+          if (countOnly) {
+            const row = date
+              ? await libDb.queryOne(`SELECT COUNT(*) AS c FROM trades WHERE date(timestamp) = ?`, [date])
+              : await libDb.queryOne(`SELECT COUNT(*) AS c FROM trades`);
+            send(res, 200, { table, count: Number(row?.c ?? 0) }); return;
+          }
+          const rows = date
+            ? await libDb.queryAll(`SELECT * FROM trades WHERE date(timestamp) = ? ORDER BY timestamp DESC LIMIT ?`, [date, limit])
+            : await libDb.getRecentTrades(limit);
+          send(res, 200, { table, count: rows.length, rows }); return;
+        }
+        const cols = await getColumns(table);
+        const orderCol = ORDER_COL_PRIORITY.find((c) => cols.includes(c));
+        const dateCol = DATE_COL_PRIORITY.find((c) => cols.includes(c))
+          ?? (cols.includes('created_at') ? 'created_at::date' : undefined);
+        if (countOnly) {
+          let row;
+          if (date && dateCol) row = await libDb.queryOne(`SELECT COUNT(*) AS c FROM "${table}" WHERE ${dateCol} = ?`, [date]);
+          else row = await libDb.queryOne(`SELECT COUNT(*) AS c FROM "${table}"`);
+          send(res, 200, { table, count: Number(row?.c ?? 0) }); return;
+        }
+        const orderSql = orderCol ? ` ORDER BY "${orderCol}" DESC` : '';
+        let rows;
+        if (date && dateCol) rows = await libDb.queryAll(`SELECT * FROM "${table}" WHERE ${dateCol} = ?${orderSql} LIMIT ?`, [date, limit]);
+        else rows = await libDb.queryAll(`SELECT * FROM "${table}"${orderSql} LIMIT ?`, [limit]);
+        if (table === 'flow_calls') {
+          rows = rows.filter((r) => {
+            const size = typeof r === 'object' && r !== null && 'size' in r ? r.size : 0;
+            return typeof size === 'number' && size >= 100;
+          });
+        }
+        send(res, 200, { table, count: rows.length, rows });
+      } catch (err) { send(res, 500, { error: 'Database error', detail: String(err) }); }
+    },
+  });
+
+  // /api/debug — DB health dump (tables + row counts + latest snapshots). Ported
+  // verbatim from app/api/debug/route.ts. Subscriber to match /api/* paywall.
+  register('/api/debug', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const pool = await libDb.getDb();
+        await pool.query('CREATE TABLE IF NOT EXISTS _debug_ping (ts BIGINT)');
+        await pool.query('INSERT INTO _debug_ping (ts) VALUES ($1)', [Date.now()]);
+        const tablesResult = await pool.query(`SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`);
+        const tableNames = tablesResult.rows.map((r) => r.name);
+        const counts = {};
+        for (const t of tableNames) {
+          try { const r = await pool.query(`SELECT COUNT(*) FROM "${t}"`); counts[t] = Number(r.rows[0]?.count ?? 0); }
+          catch { counts[t] = -1; }
+        }
+        let latestBzila = null;
+        try { const r = await pool.query(`SELECT id, timestamp, date, time, session FROM bzila_snapshots ORDER BY timestamp DESC LIMIT 1`); if (r.rows[0]) latestBzila = r.rows[0]; }
+        catch (e) { latestBzila = { error: String(e) }; }
+        let latestGreeks = null;
+        try { const r = await pool.query(`SELECT id, timestamp, date, time FROM greeks_ts ORDER BY timestamp DESC LIMIT 1`); if (r.rows[0]) latestGreeks = r.rows[0]; }
+        catch (e) { latestGreeks = { error: String(e) }; }
+        send(res, 200, { database: 'postgresql', tables: tableNames, counts, latestBzila, latestGreeks });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // /api/es-stats — ES per-expiration stat card (raw pg, ensureTable in GET).
+  // Ported verbatim from app/api/es-stats/route.ts. GET subscriber; POST recorder
+  // (token bypass). ensureTable guarded by a module-level flag inside the closure.
+  {
+    let esStatsEnsured = false;
+    register('/api/es-stats', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        try {
+          const pool = await libDb.getDb();
+          if (req.method === 'POST') {
+            const body = await readJson(req);
+            const { expiration } = body;
+            if (!expiration) { send(res, 400, { error: 'Missing expiration' }); return; }
+            await pool.query(
+              `INSERT INTO es_stats (expiration, no_long, up, mid, down, no_short)
+               VALUES ($1,$2,$3,$4,$5,$6)
+               ON CONFLICT(expiration) DO UPDATE SET
+                 no_long  = CASE WHEN EXCLUDED.no_long  IS NOT NULL THEN EXCLUDED.no_long  ELSE es_stats.no_long  END,
+                 up       = CASE WHEN EXCLUDED.up        IS NOT NULL THEN EXCLUDED.up       ELSE es_stats.up       END,
+                 mid      = CASE WHEN EXCLUDED.mid       IS NOT NULL THEN EXCLUDED.mid      ELSE es_stats.mid      END,
+                 down     = CASE WHEN EXCLUDED.down      IS NOT NULL THEN EXCLUDED.down     ELSE es_stats.down     END,
+                 no_short = CASE WHEN EXCLUDED.no_short  IS NOT NULL THEN EXCLUDED.no_short ELSE es_stats.no_short END,
+                 updated_at = CURRENT_TIMESTAMP`,
+              [expiration, body.no_long ?? null, body.up ?? null, body.mid ?? null, body.down ?? null, body.no_short ?? null]
+            );
+            send(res, 200, { ok: true, expiration });
+            return;
+          }
+          if (!esStatsEnsured) {
+            await pool.query(`
+              CREATE TABLE IF NOT EXISTS es_stats (
+                id SERIAL PRIMARY KEY, expiration TEXT NOT NULL UNIQUE,
+                no_long TEXT, up TEXT, mid TEXT, down TEXT, no_short TEXT,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+              )
+            `);
+            esStatsEnsured = true;
+          }
+          let result = await pool.query("SELECT * FROM es_stats WHERE expiration = 'WEEKLY' LIMIT 1");
+          if (!result.rows.length) result = await pool.query('SELECT * FROM es_stats ORDER BY id DESC LIMIT 1');
+          if (!result.rows.length) { send(res, 200, null); return; }
+          send(res, 200, result.rows[0]);
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/snapshots — EM/Zones snapshots (em_snapshots JSONB). GET/POST/DELETE,
+  // subscriber. Ported verbatim from app/api/snapshots/route.ts.
+  {
+    let snapsEnsured = false;
+    const ensureSnaps = async (pool) => {
+      if (snapsEnsured) return;
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS em_snapshots (
+          id SERIAL PRIMARY KEY,
+          view TEXT NOT NULL DEFAULT 'estimated',
+          period TEXT, ts BIGINT NOT NULL, date TEXT, time TEXT,
+          target_date_label TEXT, payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_em_snapshots_view_ts ON em_snapshots(view, ts DESC)`);
+      snapsEnsured = true;
+    };
+    const rowToSnapshot = (r) => {
+      const payload = r.payload || {};
+      return {
+        id: r.id, timestamp: Number(r.ts), date: r.date, time: r.time, period: r.period,
+        view: r.view, targetDateLabel: r.target_date_label ?? undefined, ...payload,
+      };
+    };
+    register('/api/snapshots', {
+      auth: 'subscriber', methods: ['GET', 'POST', 'DELETE'],
+      async handler(req, res) {
+        try {
+          const pool = await libDb.getDb();
+          await ensureSnaps(pool);
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          if (req.method === 'GET') {
+            const view = (sp.get('view') || '').trim();
+            const period = (sp.get('period') || '').trim();
+            let r;
+            if (view) r = await pool.query('SELECT * FROM em_snapshots WHERE view = $1 ORDER BY ts DESC', [view]);
+            else if (period) r = await pool.query('SELECT * FROM em_snapshots WHERE period = $1 ORDER BY ts DESC', [period]);
+            else r = await pool.query('SELECT * FROM em_snapshots ORDER BY ts DESC');
+            send(res, 200, r.rows.map(rowToSnapshot), { 'Cache-Control': 'public, max-age=60' });
+            return;
+          }
+          if (req.method === 'DELETE') {
+            const id = Number(sp.get('id'));
+            if (!Number.isFinite(id)) { send(res, 400, { error: 'Missing id' }); return; }
+            await pool.query('DELETE FROM em_snapshots WHERE id = $1', [id]);
+            send(res, 200, { ok: true, id });
+            return;
+          }
+          // POST
+          const body = await readJson(req);
+          const view = String(body.view || 'estimated');
+          const now = new Date();
+          const ts = Number(body.timestamp) || now.getTime();
+          const date = body.date || now.toLocaleDateString('en-US');
+          const time = body.time || now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const period = body.period ?? null;
+          const targetDateLabel = body.targetDateLabel ?? null;
+          const rest = { ...body };
+          for (const k of ['id', 'timestamp', 'date', 'time', 'period', 'view', 'targetDateLabel']) delete rest[k];
+          const payload = { period, targetDateLabel, ...rest };
+          const r = await pool.query(
+            `INSERT INTO em_snapshots (view, period, ts, date, time, target_date_label, payload)
+             VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+            [view, period, ts, date, time, targetDateLabel, JSON.stringify(payload)]
+          );
+          send(res, 201, rowToSnapshot(r.rows[0]));
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/clerk-status — deprecated alias of /api/auth-status (owner). Reuses the
+  // exact registered auth-status handler so behavior can never drift.
+  {
+    const asDef = ROUTES.get('/api/auth-status');
+    if (asDef) register('/api/clerk-status', asDef);
+  }
+
+  // /api/snapshots/[id] — single snapshot read + delete. Dynamic segment via
+  // registerDynamic; ctx.params.id holds the id. Ported from
+  // app/api/snapshots/[id]/route.ts (getDb → raw pg, $1 placeholders).
+  registerDynamic('/api/snapshots/:id', {
+    auth: 'subscriber', methods: ['GET', 'DELETE'],
+    async handler(req, res, ctx) {
+      const id = ctx.params?.id ?? '';
+      try {
+        const pool = await libDb.getDb();
+        if (req.method === 'DELETE') {
+          const nid = parseInt(id, 10);
+          const tryDelete = async (table) => {
+            try { const r = await pool.query(`DELETE FROM ${table} WHERE id = $1`, [nid]); return r.rowCount ?? 0; }
+            catch { return 0; }
+          };
+          const deleted = (await tryDelete('em_snapshots')) || (await tryDelete('snapshots'));
+          if (!deleted) { send(res, 404, { error: 'Not found' }); return; }
+          send(res, 200, { id, message: 'Deleted' });
+          return;
+        }
+        const result = await pool.query('SELECT * FROM snapshots WHERE id = $1', [parseInt(id, 10)]);
+        if (!result.rows.length) { send(res, 404, { error: 'Not found' }); return; }
+        const row = result.rows[0];
+        send(res, 200, { ...row, expirations: row.expirations ? JSON.parse(row.expirations) : [] });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };
