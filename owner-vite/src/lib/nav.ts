@@ -40,6 +40,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Newsletter", href: "/owner/newsletter", glyph: "🗞︎", key: "Newsletter" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
       { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
+      { label: "Charts UI", href: "/owner/charts-ui", glyph: "▦", key: "ChartsUI" },
     ],
   },
   {

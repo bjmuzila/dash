@@ -1,0 +1,121 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   Charts UI — Tailwind, UTILITIES ONLY.
+
+   The Bklit chart components are shadcn-flavoured and carry Tailwind class
+   names internally (tooltips, legends, axis labels, loading states). owner-vite
+   is otherwise inline-styled, so we import Tailwind's theme + utilities layers
+   and deliberately SKIP preflight — no global reset touches the existing pages.
+
+   This file is imported from src/pages/ChartsUI.tsx, which is lazy-loaded, so
+   none of it ships in the initial bundle.
+
+   Every design token is scoped to .charts-ui-root. Nothing leaks.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* The chart source lives outside this folder — tell Tailwind to scan it. */
+@source "../../components/charts";
+@source "./demos";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── Tokens, scoped ────────────────────────────────────────────────────────
+   Bklit + shadcn variables mapped onto OWNER_THEME (src/lib/theme.ts) so the
+   charts come out in CB Edge colours rather than shadcn defaults.
+   Declared on .charts-ui-root, NOT :root — the rest of owner-vite is unaffected.
+   The shadcn CLI appends any new component variables below; keep them inside
+   this block.                                                                */
+.charts-ui-root {
+  --radius: 0.75rem;
+
+  /* shadcn surface tokens → owner panel language */
+  --background: #05060a;
+  --foreground: #ffffff;
+  --card: #0d1119;
+  --card-foreground: #ffffff;
+  --popover: #0d1119;
+  --popover-foreground: #ffffff;
+  --primary: #219ebc;
+  --primary-foreground: #05060a;
+  --secondary: #16181f;
+  --secondary-foreground: #ffffff;
+  --muted: #16181f;
+  --muted-foreground: rgba(255, 255, 255, 0.62);
+  --accent: #16181f;
+  --accent-foreground: #ffffff;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.18);
+  --ring: #7dd3fc;
+
+  /* OWNER_THEME palette, in chart-series order */
+  --chart-1: #219ebc; /* cyan */
+  --chart-2: #8ecae6; /* green (light blue) */
+  --chart-3: #ffb703; /* gold */
+  --chart-4: #fb8501; /* orange */
+  --chart-5: #ef4444; /* red */
+
+  /* Bklit-specific chart tokens */
+  --chart-background: #0d1119;
+  --chart-foreground: #ffffff;
+  --chart-foreground-muted: rgba(255, 255, 255, 0.55);
+  --chart-grid: rgba(255, 255, 255, 0.1);
+  --chart-label: rgba(255, 255, 255, 0.65);
+  --chart-line-primary: #7dd3fc;
+  --chart-line-secondary: #fb8501;
+  --chart-line-tertiary: #8ecae6;
+
+  /* Sequential ramp (heatmap / choropleth) off the cyan accent */
+  --chart-scale-01: rgba(33, 158, 188, 0.18);
+  --chart-scale-02: rgba(33, 158, 188, 0.38);
+  --chart-scale-03: rgba(33, 158, 188, 0.58);
+  --chart-scale-04: rgba(33, 158, 188, 0.8);
+  --chart-scale-05: #7dd3fc;
+
+  color: var(--foreground);
+}
+
+/* Map the scoped variables onto Tailwind's colour utilities. `inline` keeps the
+   var() reference in the generated CSS, so `bg-popover` resolves against
+   whatever .charts-ui-root has set rather than baking a value at build time. */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+/* Charts size themselves off the container; keep them from overflowing cards. */
+.charts-ui-root svg {
+  max-width: 100%;
+}

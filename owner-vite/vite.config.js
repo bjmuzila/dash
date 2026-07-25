@@ -1,5 +1,10 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+const __dirname_ = path.dirname(fileURLToPath(import.meta.url))
 
 // owner-vite — standalone Vite recreation of the /owner backend section.
 // Mirrors home3-vite: the app talks to the Next backend over the SAME relative
@@ -36,7 +41,13 @@ export default defineConfig(({ mode }) => {
 
   const httpTarget = { target: BACKEND, changeOrigin: true, secure: false, configure: auth }
   return {
-    plugins: [react()],
+    // tailwindcss(): utilities ONLY — src/pages/charts-ui/charts-ui.css imports
+    // tailwindcss/theme.css + tailwindcss/utilities.css and deliberately skips
+    // preflight, so no global reset lands on the existing inline-styled pages.
+    // That stylesheet is imported from the lazy ChartsUI chunk, so it is not in
+    // the initial payload either.
+    plugins: [react(), tailwindcss()],
+    resolve: { alias: { '@': path.resolve(__dirname_, 'src') } },
     // Served at the ROOT of its own subdomain (owner.cbedge.net) → assets live at
     // /assets/*. Relative API paths (/api, /ws, /proxy) stay root-absolute and are
     // reverse-proxied to the dashboard backend by the owner.cbedge.net nginx.
