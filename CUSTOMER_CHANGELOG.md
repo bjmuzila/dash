@@ -2,6 +2,9 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Saturday 7/25/2026
+* Fixed the free feature pages (Initial Balance, GEX, TPO, Estimated Moves and Confidence Score) — the real delayed results now actually load instead of showing "results populate at the end of each trading day."
+
 ## Friday 7/24/2026
 * Fixed the Multi-Greek strike popup so its 15-minute, 30-minute and since-open GEX change actually loads instead of getting stuck on "building…"
 * Made the Multi-Greek strike ladder text match the Option Chain page's size for a more consistent look.

@@ -324,9 +324,13 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
       {/* What's New (customer-facing changelog) — visible to everyone */}
       <div style={{ height: 1, background: HOME_THEME.border, margin: "6px 4px" }} />
       <div style={{ padding: "2px 2px 2px" }}>
-        <Link
+        {/* Plain <a>, NOT next/link: /whats-new is a top-level Next server page
+            (reads CUSTOMER_CHANGELOG.md from disk), so it can't live inside the
+            Vite SPA. Under the SPA's basename="/app", a next/link href="/whats-new"
+            resolved to /app/whats-new — no Vite route → catch-all → Traders
+            Dashboard. A native anchor does a real navigation to the Next page. */}
+        <a
           href="/whats-new"
-          prefetch={false}
           onClick={closeMenu}
           style={{
             width: "100%",
@@ -349,7 +353,7 @@ export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
         >
           <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>✦</span>
           <span>What&apos;s New</span>
-        </Link>
+        </a>
       </div>
 
       {/* footer: legal only (socials + Clerk avatar removed) */}

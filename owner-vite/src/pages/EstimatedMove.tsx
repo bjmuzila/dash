@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EmTrackerAdmin from "../components/EmTrackerAdmin";
+import CondorTrackerAdmin from "../components/CondorTrackerAdmin";
 import LevelsPublish from "../components/LevelsPublish";
 import { HOME_THEME as HT, homeShellStyle } from "../lib/theme";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "../components/DockToolbar";
@@ -10,7 +11,7 @@ async function getHtml2Canvas() {
   return (mod as any).default ?? mod;
 }
 
-type DashboardView = "estimated" | "zones" | "tracker";
+type DashboardView = "estimated" | "zones" | "tracker" | "condors";
 
 interface EMRow {
   ticker: string;
@@ -1242,8 +1243,14 @@ export default function EstimatedMove() {
 
   const currentSymbols = SYMBOLS;
   const filteredSnapshots = snapshots.filter((snap) => (snap.view ?? "estimated") === activeView);
-  const viewTitle = activeView === "estimated" ? "Estimated Moves" : activeView === "tracker" ? "EM Tracker" : "No Short No Long Zones";
-  const subTitle = activeView === "estimated" ? "Weekly" : activeView === "tracker" ? "Win / Loss Record" : "Last Week OHLC";
+  const viewTitle = activeView === "estimated" ? "Estimated Moves"
+    : activeView === "tracker" ? "EM Tracker"
+    : activeView === "condors" ? "Iron Condors"
+    : "No Short No Long Zones";
+  const subTitle = activeView === "estimated" ? "Weekly"
+    : activeView === "tracker" ? "Win / Loss Record"
+    : activeView === "condors" ? "Weekly Condor Record"
+    : "Last Week OHLC";
 
   return (
     <div style={{ ...homeShellStyle, flex: 1, minHeight: 0, overflow: "hidden", height: "100%" }}>
@@ -1254,6 +1261,7 @@ export default function EstimatedMove() {
               { label: "Estimated Moves", value: "estimated" },
               { label: "No Short No Long Zones", value: "zones" },
               { label: "EM Tracker", value: "tracker" },
+              { label: "Iron Condors", value: "condors" },
             ]}
             active={activeView}
             onChange={(v) => setActiveView(v as typeof activeView)}
@@ -1263,7 +1271,7 @@ export default function EstimatedMove() {
           <span style={{ fontSize: 14, fontWeight: 700, color: HT.cyan, letterSpacing: ".12em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{viewTitle}</span>
           <span style={{ fontSize: 12, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase", fontWeight: 700 }}>{subTitle}</span>
           <span style={{ fontSize: 12, color: HT.text, letterSpacing: ".12em", textTransform: "uppercase" }}>
-            {activeView === "estimated" ? targetDateLabel : activeView === "tracker" ? "" : "Last Completed Week"}
+            {activeView === "estimated" ? targetDateLabel : activeView === "zones" ? "Last Completed Week" : ""}
           </span>
 
           {activeView === "estimated" && levelsSource && (
@@ -1321,10 +1329,16 @@ export default function EstimatedMove() {
       </Dock>
       </div>
 
-      {activeView === "tracker" ? (
+      {activeView === "tracker" || activeView === "condors" ? (
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 18, display: "flex", flexDirection: "column", gap: 18 }}>
-          <LevelsPublish />
-          <EmTrackerAdmin />
+          {activeView === "tracker" ? (
+            <>
+              <LevelsPublish />
+              <EmTrackerAdmin />
+            </>
+          ) : (
+            <CondorTrackerAdmin />
+          )}
         </div>
       ) : (
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>

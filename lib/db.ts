@@ -533,6 +533,50 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_em_tracker_ticker_week_start
       ON em_tracker(ticker, week_start);
 
+    -- Weekly iron condor written against that week's Estimated Move band.
+    -- One row per (ticker, week_start), same key as em_tracker so the two join
+    -- 1:1 and the condor can be settled from the EM row's realized weekly OHLC.
+    --
+    --   Bull put spread  (lower): SELL put_short  / BUY put_long   (long < short)
+    --   Bear call spread (upper): SELL call_short / BUY call_long   (long > short)
+    --
+    -- Strikes are seeded Monday from the EM band (short put ≈ ref−EM, short call
+    -- ≈ ref+EM, snapped to the ticker's strike increment) and are editable.
+    -- Credits are in strike points per 1 condor; multiplier converts to dollars.
+    -- result/outcome/pnl are filled by the evaluator once the weekly close is in.
+    CREATE TABLE IF NOT EXISTS em_condors (
+      id SERIAL PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      week_label TEXT NOT NULL,
+      week_start DATE NOT NULL,
+      ref_price REAL,        -- Monday underlying reference the band was built off
+      em REAL,               -- EM used for the band (points)
+      put_long REAL,         -- bought put   (lower wing)
+      put_short REAL,        -- sold put
+      call_short REAL,       -- sold call
+      call_long REAL,        -- bought call  (upper wing)
+      put_credit REAL,       -- credit taken on the bull put spread
+      call_credit REAL,      -- credit taken on the bear call spread
+      net_credit REAL,       -- total credit for the condor (points)
+      contracts INTEGER DEFAULT 1,
+      multiplier REAL DEFAULT 100,
+      settle_price REAL,     -- price used to settle (weekly close)
+      intrinsic REAL,        -- points owed back at expiration
+      pnl REAL,              -- dollars, net of credit, × contracts × multiplier
+      result TEXT,           -- 'win' | 'loss' | NULL (not settled)
+      outcome TEXT,          -- 'max_win' | 'partial_win' | 'partial_loss' | 'max_loss'
+      breached_side TEXT,    -- 'put' | 'call' | NULL — which short expired ITM
+      touched_side TEXT,     -- 'put' | 'call' | 'both' | NULL — short tagged intraweek
+      result_source TEXT,    -- 'auto' | 'manual' | 'seed'
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_condors_ticker ON em_condors(ticker);
+    CREATE INDEX IF NOT EXISTS idx_em_condors_week ON em_condors(week_start);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condors_ticker_week_start
+      ON em_condors(ticker, week_start);
+
     -- EOD GEX snapshot: one row per (date, symbol), upserted at 3:55–4:05 ET.
     -- total_gex  signed net GEX (same value as the dashboard header)
     -- spot       underlying price at compute time
@@ -2311,6 +2355,248 @@ export async function clearEmTracker(source?: string): Promise<number> {
   const res = source
     ? await pool.query(`DELETE FROM em_tracker WHERE result_source = $1`, [source])
     : await pool.query(`DELETE FROM em_tracker`);
+  return res.rowCount ?? 0;
+}
+
+// ── EM Iron Condors (weekly condor written against the EM band) ────────────
+
+export interface EmCondorRow {
+  id?: number;
+  ticker: string;
+  week_label: string;
+  week_start: string;
+  ref_price?: number | null;
+  em?: number | null;
+  put_long?: number | null;
+  put_short?: number | null;
+  call_short?: number | null;
+  call_long?: number | null;
+  put_credit?: number | null;
+  call_credit?: number | null;
+  net_credit?: number | null;
+  contracts?: number | null;
+  multiplier?: number | null;
+  settle_price?: number | null;
+  intrinsic?: number | null;
+  pnl?: number | null;
+  result?: "win" | "loss" | null;
+  outcome?: "max_win" | "partial_win" | "partial_loss" | "max_loss" | null;
+  breached_side?: "put" | "call" | null;
+  touched_side?: "put" | "call" | "both" | null;
+  result_source?: "auto" | "manual" | "seed" | null;
+  note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** The EM row's realized weekly candle, carried alongside a condor so the UI can
+ *  show what actually happened without a second round-trip. */
+export interface EmCondorJoined extends EmCondorRow {
+  wk_high?: number | null;
+  wk_low?: number | null;
+  wk_close?: number | null;
+  em_result?: "hit" | "miss" | null;
+}
+
+const CONDOR_COLS = [
+  "ticker", "week_label", "week_start", "ref_price", "em",
+  "put_long", "put_short", "call_short", "call_long",
+  "put_credit", "call_credit", "net_credit", "contracts", "multiplier",
+  "settle_price", "intrinsic", "pnl", "result", "outcome",
+  "breached_side", "touched_side", "result_source", "note",
+] as const;
+
+/**
+ * Insert or update one weekly condor, keyed on (ticker, week_start).
+ *
+ * NULL incoming values never clobber an existing non-null value, so a seed pass
+ * can fill strikes without wiping credits you typed by hand, and a later manual
+ * edit only changes the fields it sends. Pass `clear` to force specific columns
+ * back to NULL (used by "re-open" / re-score).
+ */
+export async function upsertEmCondor(r: EmCondorRow, clear: string[] = []): Promise<void> {
+  const pool = await getDb();
+  const values: unknown[] = [
+    r.ticker.toUpperCase(), r.week_label, r.week_start,
+    r.ref_price ?? null, r.em ?? null,
+    r.put_long ?? null, r.put_short ?? null, r.call_short ?? null, r.call_long ?? null,
+    r.put_credit ?? null, r.call_credit ?? null, r.net_credit ?? null,
+    r.contracts ?? null, r.multiplier ?? null,
+    r.settle_price ?? null, r.intrinsic ?? null, r.pnl ?? null,
+    r.result ?? null, r.outcome ?? null,
+    r.breached_side ?? null, r.touched_side ?? null, r.result_source ?? null, r.note ?? null,
+  ];
+  const placeholders = CONDOR_COLS.map((_, i) => `$${i + 1}`).join(",");
+  const updates = CONDOR_COLS
+    .filter((c) => c !== "ticker" && c !== "week_start")
+    .map((c) => (clear.includes(c)
+      ? `${c} = EXCLUDED.${c}`
+      : `${c} = COALESCE(EXCLUDED.${c}, em_condors.${c})`))
+    .join(",\n       ");
+
+  await pool.query(
+    `INSERT INTO em_condors (${CONDOR_COLS.join(", ")})
+     VALUES (${placeholders})
+     ON CONFLICT(ticker, week_start) DO UPDATE SET
+       ${updates},
+       updated_at = CURRENT_TIMESTAMP`,
+    values
+  );
+}
+
+/** All condors (optionally one ticker / one week), newest week first, joined to
+ *  the EM row's realized weekly candle. */
+export async function getEmCondors(opts: { ticker?: string; week_start?: string } = {}): Promise<EmCondorJoined[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.ticker) { params.push(opts.ticker.toUpperCase()); where.push(`c.ticker = $${params.length}`); }
+  if (opts.week_start) { params.push(opts.week_start); where.push(`c.week_start = $${params.length}`); }
+  const sql = `
+    SELECT c.*, e.h AS wk_high, e.l AS wk_low, e.c AS wk_close, e.result AS em_result
+      FROM em_condors c
+      LEFT JOIN em_tracker e
+        ON e.ticker = c.ticker AND e.week_start = c.week_start
+     ${where.length ? "WHERE " + where.join(" AND ") : ""}
+     ORDER BY c.week_start DESC, c.ticker ASC`;
+  const res = await pgQuery(sql, params);
+  return res.rows as EmCondorJoined[];
+}
+
+/** Condors that have strikes + a weekly close available but no result yet —
+ *  the candidates for auto-settlement. */
+export async function getEmCondorsUnsettled(week_start?: string): Promise<EmCondorJoined[]> {
+  const params: unknown[] = [];
+  let weekClause = "";
+  if (week_start) { params.push(week_start); weekClause = `AND c.week_start = $${params.length}`; }
+  const res = await pgQuery(
+    `SELECT c.*, e.h AS wk_high, e.l AS wk_low, e.c AS wk_close, e.result AS em_result
+       FROM em_condors c
+       LEFT JOIN em_tracker e
+         ON e.ticker = c.ticker AND e.week_start = c.week_start
+      WHERE c.result IS NULL
+        AND c.put_short IS NOT NULL AND c.put_long IS NOT NULL
+        AND c.call_short IS NOT NULL AND c.call_long IS NOT NULL
+        AND e.c IS NOT NULL
+        ${weekClause}
+      ORDER BY c.week_start ASC, c.ticker ASC`,
+    params
+  );
+  return res.rows as EmCondorJoined[];
+}
+
+/** EM rows for a week that can seed a condor (band present). */
+export async function getEmBandsForWeek(week_start: string): Promise<EmTrackerRow[]> {
+  return queryAll<EmTrackerRow>(
+    `SELECT * FROM em_tracker
+      WHERE week_start = ? AND (up IS NOT NULL OR (ref_close IS NOT NULL AND em IS NOT NULL))
+      ORDER BY ticker ASC`,
+    [week_start]
+  );
+}
+
+/** Write a settlement onto one condor. */
+export async function setEmCondorSettlement(
+  id: number,
+  s: {
+    settle_price?: number | null;
+    intrinsic?: number | null;
+    pnl?: number | null;
+    result: "win" | "loss";
+    outcome?: string | null;
+    breached_side?: string | null;
+    touched_side?: string | null;
+    source?: "auto" | "manual";
+  }
+): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE em_condors SET
+       settle_price  = COALESCE($2, settle_price),
+       intrinsic     = COALESCE($3, intrinsic),
+       pnl           = COALESCE($4, pnl),
+       result        = $5,
+       outcome       = COALESCE($6, outcome),
+       breached_side = $7,
+       touched_side  = COALESCE($8, touched_side),
+       result_source = $9,
+       updated_at    = CURRENT_TIMESTAMP
+     WHERE id = $1`,
+    [id, s.settle_price ?? null, s.intrinsic ?? null, s.pnl ?? null, s.result,
+     s.outcome ?? null, s.breached_side ?? null, s.touched_side ?? null, s.source ?? "auto"]
+  );
+}
+
+/** Drop a condor's settlement so it can be re-scored. */
+export async function reopenEmCondor(id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE em_condors SET
+       result = NULL, outcome = NULL, pnl = NULL, intrinsic = NULL,
+       settle_price = NULL, breached_side = NULL, result_source = NULL,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1`,
+    [id]
+  );
+}
+
+/** Per-ticker condor record: win rate and realized dollars. */
+export interface EmCondorSummary {
+  ticker: string;
+  wins: number;
+  losses: number;
+  settled: number;
+  total: number;
+  win_rate: number | null;   // 0..1
+  pnl: number;               // realized dollars
+  avg_pnl: number | null;    // per settled condor
+  max_wins: number;          // expired fully worthless
+  max_losses: number;        // blew all the way through a wing
+}
+
+export async function getEmCondorSummary(): Promise<EmCondorSummary[]> {
+  const res = await pgQuery(`
+    SELECT
+      ticker,
+      COUNT(*) FILTER (WHERE result = 'win')::int  AS wins,
+      COUNT(*) FILTER (WHERE result = 'loss')::int AS losses,
+      COUNT(*) FILTER (WHERE result IS NOT NULL)::int AS settled,
+      COUNT(*)::int AS total,
+      COALESCE(SUM(pnl) FILTER (WHERE result IS NOT NULL), 0) AS pnl,
+      COUNT(*) FILTER (WHERE outcome = 'max_win')::int  AS max_wins,
+      COUNT(*) FILTER (WHERE outcome = 'max_loss')::int AS max_losses
+    FROM em_condors
+    GROUP BY ticker
+    ORDER BY ticker ASC
+  `);
+  return res.rows.map((r) => {
+    const settled = Number(r.settled ?? 0);
+    const pnl = Number(r.pnl ?? 0);
+    return {
+      ticker: r.ticker,
+      wins: Number(r.wins ?? 0),
+      losses: Number(r.losses ?? 0),
+      settled,
+      total: Number(r.total ?? 0),
+      win_rate: settled > 0 ? Number(r.wins) / settled : null,
+      pnl,
+      avg_pnl: settled > 0 ? pnl / settled : null,
+      max_wins: Number(r.max_wins ?? 0),
+      max_losses: Number(r.max_losses ?? 0),
+    };
+  });
+}
+
+export async function deleteEmCondor(id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM em_condors WHERE id = $1`, [id]);
+}
+
+/** Wipe condors — all, or just one week. Returns rows removed. */
+export async function clearEmCondors(week_start?: string): Promise<number> {
+  const pool = await getDb();
+  const res = week_start
+    ? await pool.query(`DELETE FROM em_condors WHERE week_start = $1`, [week_start])
+    : await pool.query(`DELETE FROM em_condors`);
   return res.rowCount ?? 0;
 }
 

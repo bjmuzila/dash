@@ -220,8 +220,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/scanner",           label: "Scanner",       emoji: "🔍" },
   { href: "/ict",               label: "ICT",           emoji: "🎯" },
   { href: "/test",              label: "Test Lab",      emoji: "⚗️" },
-  { href: "/owner",             label: "Owner",         emoji: "🛡️", ownerOnly: true, extHref: "https://owner.cbedge.net" },
-  { href: "/whats-new",         label: "What's New",    emoji: "✨" },
+  // Owner (owner.cbedge.net) and What's New moved out of the toolbar into the
+  // UserMenu avatar dropdown (see UserMenu.tsx) — kept out of NAV_ITEMS so they
+  // no longer render as toolbar emojis.
   // Journal is LIVE. The route is /trading (app/trading/page.tsx) — there is no
   // /journal page; that href was a placeholder while the tile was coming-soon.
   { href: "/trading",           label: "Journal",       emoji: "📓" },

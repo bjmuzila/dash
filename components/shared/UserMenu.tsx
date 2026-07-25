@@ -27,6 +27,10 @@ type DiscordStatus = { connected: boolean; username?: string | null; avatarUrl?:
 export default function UserMenu() {
   const { user, displayName, isPaid, isOwnerClaim, signOut } = useAuth();
   const canUseDiscord = isPaid || isOwnerClaim;
+  // Owner gate for the Owner-hub link (mirrors GlobalToolbar/GexDock): the claim
+  // OR the build-time owner id match. Middleware still hard-blocks owner routes.
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = isOwnerClaim || (!!ownerId && user?.id === ownerId);
   const [open, setOpen] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [discord, setDiscord] = useState<DiscordStatus>({ connected: false });
@@ -193,6 +197,53 @@ export default function UserMenu() {
                 </a>
               )}
             </>
+          )}
+
+          <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
+
+          {/* Moved here from the universal toolbar. Native <a>, NOT next/link:
+              inside the Vite SPA (basename="/app") a next/link href="/whats-new"
+              resolves to /app/whats-new (no route → catch-all → Traders Dash), so
+              a real navigation to the top-level Next page is required. Owner is an
+              absolute external URL and is owner-gated. */}
+          <a
+            href="/whats-new"
+            onClick={() => setOpen(false)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "8px 10px",
+              borderRadius: 6,
+              color: HOME_THEME.text,
+              fontSize: 14,
+              fontWeight: 500,
+              textDecoration: "none",
+            }}
+          >
+            <span aria-hidden>✨</span>
+            <span>What&apos;s New</span>
+          </a>
+
+          {isOwner && (
+            <a
+              href="https://owner.cbedge.net"
+              onClick={() => setOpen(false)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 10px",
+                borderRadius: 6,
+                color: HOME_THEME.text,
+                fontSize: 14,
+                fontWeight: 500,
+                textDecoration: "none",
+              }}
+            >
+              <span aria-hidden>🛡️</span>
+              <span>Owner ↗</span>
+            </a>
           )}
 
           <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
