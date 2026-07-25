@@ -51,6 +51,10 @@
 // never crash boot. Regenerate after editing lib/db.ts:
 //   esbuild lib/db.ts --bundle --platform=node --format=cjs --external:pg \
 //     --outfile=server-v2/_lib-db.cjs
+const fs = require('fs');
+const nodePath = require('path');
+const nodeCrypto = require('crypto');
+
 let libDb = null;
 try { libDb = require('./_lib-db.cjs'); }
 catch (e) { console.warn('[api-router] _lib-db.cjs not loaded — DB routes stay on Next:', e.message); }
@@ -86,6 +90,17 @@ catch (e) { console.warn('[api-router] _lib-tpo-forecast.cjs not loaded:', e.mes
 let libObook = null;
 try { libObook = require('./_lib-obook.cjs'); }
 catch (e) { console.warn('[api-router] _lib-obook.cjs not loaded:', e.message); }
+// ICT concept detectors (analyzeICT), pure lib/calculations/ictConcepts.ts (no
+// imports): esbuild lib/calculations/ictConcepts.ts --bundle --platform=node \
+//   --format=cjs --outfile=server-v2/_lib-ict.cjs
+let libIct = null;
+try { libIct = require('./_lib-ict.cjs'); }
+catch (e) { console.warn('[api-router] _lib-ict.cjs not loaded — ict-setups stays on Next:', e.message); }
+// server-v2 levels-engine (CommonJS, already on disk) — required directly for
+// the em-tracker routes' evaluate/commit paths.
+let levelsEngine = null;
+try { levelsEngine = require('./levels-engine.js'); }
+catch (e) { console.warn('[api-router] levels-engine.js not loaded:', e.message); }
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -1054,6 +1069,902 @@ register('/api/gex', {
   },
 });
 
+// /api/calendar — economic calendar (ForexFactory + factba Trump events, with a
+// saved-events.json fallback). GET-only, subscriber. Ported verbatim from
+// app/api/calendar/route.ts (module-level Trump cache preserved).
+{
+  const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+  const SAVED_EVENTS_PATH = nodePath.join(process.cwd(), 'app/api/econ-calendar/events.json');
+  const TRUMP_EXCLUDE = ['executive time', 'pool call', 'in-town pool'];
+  const TRUMP_CACHE_TTL = 30 * 60 * 1000;
+  let trumpCache = { body: [], ts: 0 };
+  const fetchForexFactoryEvents = async () => {
+    const res = await fetch(FF_URL, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', Accept: 'application/json', Referer: 'https://www.forexfactory.com/' } });
+    if (!res.ok) {
+      const detail = await res.text().then((t) => t.slice(0, 200)).catch(() => '');
+      throw new Error(`ForexFactory ${res.status}${detail ? `: ${detail}` : ''}`);
+    }
+    const raw = await res.json();
+    return Array.isArray(raw) ? raw : [];
+  };
+  const fetchSavedEvents = () => {
+    const raw = JSON.parse(fs.readFileSync(SAVED_EVENTS_PATH, 'utf-8'));
+    if (!Array.isArray(raw)) return [];
+    return raw.map((ev) => ({
+      title: ev.title ?? ev.name ?? '', country: ev.country ?? 'USD',
+      date: `${ev.date}T${ev.time || '00:00'}:00-04:00`, impact: ev.impact ?? 'High',
+      forecast: ev.forecast ?? '', previous: ev.previous ?? ev.period ?? '', actual: ev.actual ?? '',
+    }));
+  };
+  const toET = (iso) => {
+    const d = new Date(iso);
+    const etDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
+    const etTime = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true }).format(d);
+    const et24 = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+    return { date: etDate, time: et24, time_formatted: etTime };
+  };
+  const fetchTrumpEvents = async () => {
+    if (trumpCache.body.length && Date.now() - trumpCache.ts < TRUMP_CACHE_TTL) return trumpCache.body;
+    try {
+      const res = await fetch('https://media-cdn.factba.se/rss/json/trump/calendar-full.json', { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' });
+      if (!res.ok) return [];
+      const raw = await res.json();
+      const items = Array.isArray(raw) ? raw : (raw.events ?? []);
+      const mapped = [];
+      const seenDateHour = new Set();
+      for (const ev of items) {
+        const name = String(ev.details || ev.type || ev.daily_text || '').toLowerCase();
+        if (!ev.date || TRUMP_EXCLUDE.some((x) => name.includes(x))) continue;
+        const rawTime = ev.time ?? '';
+        if (!rawTime) continue;
+        const title = ev.details || ev.type || ev.daily_text || 'President Event';
+        const date = ev.date;
+        const hour = rawTime.split(':')[0];
+        const hourKey = `${date}-${hour}`;
+        if (seenDateHour.has(hourKey)) continue;
+        seenDateHour.add(hourKey);
+        let time_formatted = rawTime;
+        if (rawTime.includes(':')) {
+          const [h, m] = rawTime.split(':').map(Number);
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const h12 = h % 12 || 12;
+          time_formatted = `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+        }
+        mapped.push({ date, time: rawTime, time_formatted, title, country: 'USD', impact: 'President', forecast: '', previous: '', actual: '' });
+      }
+      trumpCache = { body: mapped, ts: Date.now() };
+      return mapped;
+    } catch { return []; }
+  };
+  register('/api/calendar', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const [econResult, trumpEvents] = await Promise.allSettled([fetchForexFactoryEvents(), fetchTrumpEvents()]);
+        let raw = [], source = 'forexfactory', warning;
+        if (econResult.status === 'fulfilled' && econResult.value.length > 0) raw = econResult.value;
+        else { warning = econResult.status === 'rejected' ? econResult.reason?.message : 'ForexFactory returned no events'; raw = fetchSavedEvents(); source = 'saved'; }
+        const econEvents = raw.map((ev) => {
+          const { date, time, time_formatted } = toET(ev.date);
+          return { date, time, time_formatted, title: ev.title, country: ev.country, impact: ev.impact, forecast: ev.forecast, previous: ev.previous, actual: ev.actual ?? '' };
+        });
+        const events = [...econEvents, ...(trumpEvents.status === 'fulfilled' ? trumpEvents.value : [])]
+          .sort((a, b) => (a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time)));
+        send(res, 200, { events, source, warning }, { 'Cache-Control': 's-maxage=1800, stale-while-revalidate=3600' });
+      } catch (err) { send(res, 200, { error: err instanceof Error ? err.message : String(err), events: [] }); }
+    },
+  });
+}
+
+// /api/econ-calendar — GET reads the saved events.json, POST overwrites it.
+// Subscriber (matches the original /api/* paywall; POST also reachable via the
+// internal-token bypass). Ported verbatim from app/api/econ-calendar/route.ts.
+{
+  const EVENTS_PATH = nodePath.join(process.cwd(), 'app/api/econ-calendar/events.json');
+  const readEvents = () => { try { return JSON.parse(fs.readFileSync(EVENTS_PATH, 'utf-8')); } catch { return []; } };
+  register('/api/econ-calendar', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      if (req.method === 'GET') { send(res, 200, readEvents(), { 'Cache-Control': 'no-store' }); return; }
+      try {
+        const body = await readJson(req);
+        const events = Array.isArray(body) ? body : body.events;
+        if (!Array.isArray(events)) { send(res, 400, { error: 'Expected array or { events: [] }' }); return; }
+        fs.writeFileSync(EVENTS_PATH, JSON.stringify(events, null, 2), 'utf-8');
+        send(res, 200, { ok: true, count: events.length });
+      } catch (err) { send(res, 500, { error: err instanceof Error ? err.message : String(err) }); }
+    },
+  });
+}
+
+// /api/whats-new — owner-only DELETE to strike one bullet from
+// CUSTOMER_CHANGELOG.md. Ported verbatim from app/api/whats-new/route.ts;
+// ownerGate replaced by enforceAuth 'owner'.
+{
+  const CHANGELOG_PATH = nodePath.join(process.cwd(), 'CUSTOMER_CHANGELOG.md');
+  register('/api/whats-new', {
+    auth: 'owner', methods: ['DELETE'],
+    async handler(req, res) {
+      try {
+        const { date, item } = await readJson(req);
+        if (!date || !item) { send(res, 400, { error: 'date and item are required' }); return; }
+        const raw = (await fs.promises.readFile(CHANGELOG_PATH, 'utf8')).replace(/^﻿/, '').replace(/\r\n/g, '\n');
+        const lines = raw.split('\n');
+        let inSection = false, removed = false;
+        const out = [];
+        for (const line of lines) {
+          const trimmed = line.trim();
+          const headingMatch = trimmed.match(/^##\s+(.*)$/);
+          if (headingMatch) { inSection = headingMatch[1].trim() === date; out.push(line); continue; }
+          const itemMatch = trimmed.match(/^[-*]\s+(.*)$/);
+          if (inSection && !removed && itemMatch && itemMatch[1].trim() === item.trim()) { removed = true; continue; }
+          out.push(line);
+        }
+        if (!removed) { send(res, 404, { error: 'Item not found' }); return; }
+        await fs.promises.writeFile(CHANGELOG_PATH, out.join('\n'), 'utf8');
+        send(res, 200, { ok: true });
+      } catch (err) { send(res, 500, { error: 'Delete failed', detail: String(err) }); }
+    },
+  });
+}
+
+// /api/discord-share — owner-only push to the Discord webhook. Accepts JSON
+// { content } or a raw multipart body (forwarded as-is). Ported verbatim from
+// app/api/discord-share/route.ts; getServerUserId gate → 'user' + in-handler
+// owner check (preserves the "any signed-in when OWNER_USER_ID unset" fallback).
+register('/api/discord-share', {
+  auth: 'user', methods: ['POST'],
+  async handler(req, res, ctx, verdict) {
+    try {
+      const id = (verdict?.userId || '').trim();
+      const allowed = id !== '' && (ctx.ownerUserId ? id === ctx.ownerUserId : true);
+      if (!allowed) { send(res, 403, { ok: false, error: 'Forbidden' }); return; }
+      const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+      if (!webhookUrl) { send(res, 500, { ok: false, error: 'DISCORD_WEBHOOK_URL is not configured' }); return; }
+      const ct = req.headers['content-type'] || '';
+      let body, headers = {};
+      if (ct.includes('application/json')) {
+        const json = await readJson(req).catch(() => ({}));
+        const content = typeof json?.content === 'string' ? json.content : '';
+        if (!content.trim()) { send(res, 400, { ok: false, error: 'Empty content' }); return; }
+        body = JSON.stringify({ content: content.slice(0, 1990) });
+        headers['content-type'] = 'application/json';
+      } else {
+        // Forward the raw multipart body untouched, preserving the content-type.
+        body = await new Promise((resolve, reject) => {
+          const chunks = [];
+          req.on('data', (c) => chunks.push(c));
+          req.on('end', () => resolve(Buffer.concat(chunks)));
+          req.on('error', reject);
+        });
+        if (ct) headers['content-type'] = ct;
+      }
+      const r = await fetch(webhookUrl, { method: 'POST', headers, body, signal: AbortSignal.timeout(15000) });
+      if (!r.ok) { const detail = await r.text().then((t) => t.slice(0, 500)).catch(() => ''); throw new Error(`Discord webhook returned ${r.status}${detail ? `: ${detail}` : ''}`); }
+      send(res, 200, { ok: true });
+    } catch (err) { console.error('[discord-share] failed:', err); send(res, 500, { ok: false, error: String(err) }); }
+  },
+});
+
+// /api/tastytrade — TT OAuth → dxfeed streamer creds (module-cached session).
+// GET health / POST returns tokens. Subscriber. Ported verbatim from
+// app/api/tastytrade/route.ts.
+{
+  const TT_BASE = process.env.TT_BASE_URL ?? 'https://api.tastytrade.com';
+  let cachedSession = null;
+  const getSession = async () => {
+    if (cachedSession && Date.now() < cachedSession.expiresAt) return cachedSession;
+    const clientSecret = process.env.TT_CLIENT_SECRET;
+    const refreshToken = process.env.TT_REFRESH_TOKEN;
+    if (!clientSecret || !refreshToken) throw new Error('TT_CLIENT_SECRET or TT_REFRESH_TOKEN not configured');
+    const tokenRes = await fetch(`${TT_BASE}/oauth/token`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshToken, client_secret: clientSecret }),
+    });
+    if (!tokenRes.ok) { const text = await tokenRes.text(); throw new Error(`TT OAuth failed (${tokenRes.status}): ${text}`); }
+    const tokenData = await tokenRes.json();
+    const sessionToken = tokenData?.['session-token'] ?? tokenData?.data?.['session-token'] ?? tokenData?.access_token;
+    if (!sessionToken) throw new Error(`No session token in response: ${JSON.stringify(tokenData)}`);
+    const streamerRes = await fetch(`${TT_BASE}/quote-streamer-tokens`, { headers: { Authorization: sessionToken } });
+    if (!streamerRes.ok) throw new Error(`Failed to fetch streamer token (${streamerRes.status})`);
+    const streamerData = await streamerRes.json();
+    const streamerToken = streamerData?.data?.token;
+    const dxfeedUrl = streamerData?.data?.['websocket-url'] ?? process.env.DXFEED_WS_URL;
+    cachedSession = { sessionToken, streamerToken, dxfeedUrl, expiresAt: Date.now() + 50 * 60 * 1000 };
+    return cachedSession;
+  };
+  register('/api/tastytrade', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res) {
+      try {
+        const session = await getSession();
+        if (req.method === 'POST') { send(res, 200, { session_token: session.sessionToken, streamer_token: session.streamerToken, dxfeed_url: session.dxfeedUrl }); return; }
+        send(res, 200, { status: 'ok', base: TT_BASE, dxfeed_url: session.dxfeedUrl, expires_in_ms: session.expiresAt - Date.now() });
+      } catch (err) {
+        if (req.method === 'GET') { send(res, 500, { status: 'error', error: String(err) }); return; }
+        send(res, 500, { error: String(err) });
+      }
+    },
+  });
+}
+
+// /api/social-media/daily-input — bundled pre-market read (spot/walls/flip/net
+// GEX from /proxy/gex, EM from ATM straddle, ES overnight from candles). GET,
+// subscriber. Ported verbatim from app/api/social-media/daily-input/route.ts;
+// proxyBase fetches → ctx.internalFetch (internal token auto-attached).
+register('/api/social-media/daily-input', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const GEX_LADDER_HALF = 20;
+    const rowNetGex = (o, basis) => {
+      const oi = Number(o.netGEX ?? o.netGex ?? 0);
+      const vol = Number(o.netVolGEX ?? o.netVolGex ?? 0);
+      if (basis === 'vol') return Number.isFinite(vol) ? vol : 0;
+      return (Number.isFinite(oi) ? oi : 0) + (Number.isFinite(vol) ? vol : 0);
+    };
+    const flipFromGexRows = (gexRows, spot, basis = 'oivol') => {
+      if (!Array.isArray(gexRows)) return null;
+      const sorted = gexRows.map((r) => { const o = r ?? {}; return { strike: Number(o.strike ?? 0), netGEX: rowNetGex(o, basis) }; }).filter((r) => r.strike > 0 && Number.isFinite(r.netGEX)).sort((a, b) => a.strike - b.strike);
+      if (!sorted.length) return null;
+      const crossings = [];
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i].netGEX, b = sorted[i + 1].netGEX;
+        if (a === 0) { crossings.push(sorted[i].strike); continue; }
+        if (b === 0) { crossings.push(sorted[i + 1].strike); continue; }
+        if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+          const sA = sorted[i].strike, sB = sorted[i + 1].strike;
+          const zero = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+          if (Number.isFinite(zero)) crossings.push(Math.round(zero * 10) / 10);
+        }
+      }
+      if (!crossings.length) return null;
+      const best = spot > 0 ? crossings.reduce((bst, c) => (Math.abs(c - spot) < Math.abs(bst - spot) ? c : bst)) : crossings[0];
+      return Number.isFinite(best) && best > 0 ? best : null;
+    };
+    const buildGexLadder = (gexRows, spot, basis = 'oivol') => {
+      if (!Array.isArray(gexRows) || !(spot > 0)) return [];
+      const rows = gexRows.map((r) => { const o = r ?? {}; return { strike: Number(o.strike ?? 0), netGEX: rowNetGex(o, basis) }; }).filter((r) => r.strike > 0 && Number.isFinite(r.netGEX));
+      if (!rows.length) return [];
+      rows.sort((a, b) => a.strike - b.strike);
+      let atm = 0;
+      for (let i = 1; i < rows.length; i++) if (Math.abs(rows[i].strike - spot) < Math.abs(rows[atm].strike - spot)) atm = i;
+      const start = Math.max(0, atm - GEX_LADDER_HALF);
+      const end = Math.min(rows.length, atm + GEX_LADDER_HALF + 1);
+      return rows.slice(start, end).sort((a, b) => b.strike - a.strike).map((r) => ({ strike: r.strike, netGex: r.netGEX / 1e6 }));
+    };
+    const daysTo = (exp) => Math.ceil((new Date(exp + 'T16:00:00').getTime() - Date.now()) / 86_400_000);
+    const legMid = (o) => { if (o.bid > 0 && o.ask > 0) return (o.bid + o.ask) / 2; if (o.mark > 0) return o.mark; if (o.last > 0) return o.last; return 0; };
+    const flattenChain = (json) => {
+      const root = json ?? {};
+      const data = root.data ?? root;
+      const items = Array.isArray(data.items) ? data.items : [];
+      const legs = [];
+      for (const grp of items) {
+        const expiration = String(grp['expiration-date'] ?? grp.expirationDate ?? grp.expiration ?? '');
+        const strikes = Array.isArray(grp.strikes) ? grp.strikes : [];
+        for (const row of strikes) {
+          const strike = Number(row['strike-price'] ?? row.strikePrice ?? row.strike ?? 0);
+          if (!(strike > 0)) continue;
+          for (const side of ['call', 'put']) {
+            const leg = row[side];
+            if (!leg) continue;
+            legs.push({
+              strike, type: side.toUpperCase(),
+              bid: Number(leg.bid ?? leg['bid-price'] ?? 0), ask: Number(leg.ask ?? leg['ask-price'] ?? 0),
+              mark: Number(leg.mark ?? leg['mark-price'] ?? leg['mid-price'] ?? 0), last: Number(leg.last ?? leg['last-price'] ?? 0),
+              iv: Number(leg.iv ?? leg['implied-volatility'] ?? leg.volatility ?? 0),
+              dte: Number(leg.dte ?? leg.daysToExpiration ?? (expiration ? daysTo(expiration) : 0)),
+              gamma: Math.abs(Number(leg.gamma ?? 0)), oi: Number(leg['open-interest'] ?? leg.openInterest ?? leg.oi ?? 0),
+              volume: Number(leg.volume ?? 0), expiration,
+            });
+          }
+        }
+      }
+      const underlying = Number(data.underlyingPrice ?? data.underlying_price ?? root.underlyingPrice ?? 0);
+      return { legs, underlying };
+    };
+    const computeExpiryGex = (legs, spot, basis = 'oivol') => {
+      if (!legs.length || !(spot > 0)) return null;
+      const byStrike = new Map();
+      for (const l of legs) { if (!(l.strike > 0)) continue; const e = byStrike.get(l.strike) ?? {}; if (l.type === 'CALL') e.call = l; else e.put = l; byStrike.set(l.strike, e); }
+      const wt = (leg) => basis === 'vol' ? (leg?.volume ?? 0) : (leg?.oi ?? 0) + (leg?.volume ?? 0);
+      const rows = [];
+      for (const [strike, s] of byStrike) {
+        const callGEX = Math.abs(s.call?.gamma ?? 0) * wt(s.call) * spot * spot;
+        const putGEX = -(Math.abs(s.put?.gamma ?? 0) * wt(s.put) * spot * spot);
+        rows.push({ strike, netGEX: callGEX + putGEX });
+      }
+      if (!rows.length) return null;
+      rows.sort((a, b) => a.strike - b.strike);
+      let cum = 0, prevCum = 0, prevStrike = null, flip = null;
+      for (const r of rows) {
+        prevCum = cum; cum += r.netGEX;
+        if (prevStrike !== null && prevCum < 0 && cum >= 0) { const range = cum - prevCum; flip = Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike; break; }
+        prevStrike = r.strike;
+      }
+      const above = rows.filter((r) => r.strike > spot && r.netGEX > 0);
+      const below = rows.filter((r) => r.strike < spot && r.netGEX < 0);
+      const callWall = above.length ? above.reduce((b, r) => (r.netGEX > b.netGEX ? r : b)).strike : null;
+      const putWall = below.length ? below.reduce((b, r) => (r.netGEX < b.netGEX ? r : b)).strike : null;
+      const total = rows.reduce((s, r) => s + r.netGEX, 0);
+      let atm = 0;
+      for (let i = 1; i < rows.length; i++) if (Math.abs(rows[i].strike - spot) < Math.abs(rows[atm].strike - spot)) atm = i;
+      const ladder = rows.slice(Math.max(0, atm - GEX_LADDER_HALF), Math.min(rows.length, atm + GEX_LADDER_HALF + 1)).sort((a, b) => b.strike - a.strike).map((r) => ({ strike: r.strike, netGex: r.netGEX / 1e6 }));
+      return { ladder, callWall, putWall, gammaFlip: flip, netGex: Number.isFinite(total) && total !== 0 ? total / 1e9 : null };
+    };
+    const dteToDateLabel = (dte) => { const d = new Date(); d.setDate(d.getDate() + Math.max(0, dte)); return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }); };
+    const resolveExpiry = async (dte) => {
+      try {
+        const r = await ctx.internalFetch(`/proxy/api/tt/expirations/SPX`, { cache: 'no-store' });
+        if (!r.ok) return '';
+        const json = await r.json();
+        const data = json?.data ?? json;
+        const raw = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+        const dates = raw.map((d) => { const o = d ?? {}; return String(o['expiration-date'] ?? o.expirationDate ?? o.expiration ?? o.date ?? (typeof d === 'string' ? d : '') ?? ''); }).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s)).sort();
+        if (!dates.length) return '';
+        return dte === 0 ? dates[0] : (dates[1] ?? dates[0]);
+      } catch { return ''; }
+    };
+    const fetchExpiryChain = async (expiration) => {
+      try {
+        const q = expiration ? `?expiration=${encodeURIComponent(expiration)}` : '';
+        const r = await ctx.internalFetch(`/proxy/api/tt/chains/SPX${q}`, { cache: 'no-store' });
+        if (!r.ok) return { legs: [], underlying: 0 };
+        const { legs, underlying } = flattenChain(await r.json());
+        const filtered = expiration ? legs.filter((l) => l.expiration === expiration) : legs;
+        return { legs: filtered.length ? filtered : legs, underlying };
+      } catch { return { legs: [], underlying: 0 }; }
+    };
+    const computeExpectedMove = async (spot) => {
+      try {
+        const r = await ctx.internalFetch(`/proxy/api/tt/chains/SPX`, { cache: 'no-store' });
+        if (!r.ok) return { em: null, expiry: null };
+        const { legs, underlying } = flattenChain(await r.json());
+        if (!legs.length) return { em: null, expiry: null };
+        const center = underlying > 0 ? underlying : spot;
+        if (!(center > 0)) return { em: null, expiry: null };
+        const byDte = new Map();
+        for (const l of legs) { const d = Math.max(0, l.dte); if (!byDte.has(d)) byDte.set(d, []); byDte.get(d).push(l); }
+        const dtes = [...byDte.keys()].sort((a, b) => a - b);
+        if (!dtes.length) return { em: null, expiry: null };
+        for (const dte of dtes) {
+          const pool = byDte.get(dte);
+          const strikes = [...new Set(pool.map((l) => l.strike))].sort((a, b) => Math.abs(a - center) - Math.abs(b - center)).slice(0, 8);
+          for (const k of strikes) {
+            const c = pool.find((l) => l.strike === k && l.type === 'CALL');
+            const p = pool.find((l) => l.strike === k && l.type === 'PUT');
+            if (!c || !p) continue;
+            const avgIV = (Number(c.iv || 0) + Number(p.iv || 0)) / 2;
+            const effDte = c.dte || p.dte || dte;
+            let em = 0;
+            if (avgIV > 0 && effDte > 0) em = 0.84 * avgIV * center * Math.sqrt(effDte / 365);
+            else { const cMid = legMid(c), pMid = legMid(p); if (cMid > 0 && pMid > 0) em = (cMid + pMid) * 0.85; }
+            if (Number.isFinite(em) && em > 0) { const emPct = em / center; if (emPct < 0.002 || emPct > 0.25) continue; return { em, expiry: dteToDateLabel(dte) }; }
+          }
+        }
+        return { em: null, expiry: null };
+      } catch { return { em: null, expiry: null }; }
+    };
+    const computeEsOvernight = async () => {
+      try {
+        const r = await ctx.internalFetch(`/api/snapshots/candles?daysBack=2&limit=2000`, { cache: 'no-store' });
+        if (!r.ok) return { high: null, low: null };
+        const json = await r.json();
+        const rows = Array.isArray(json.rows) ? json.rows : [];
+        if (!rows.length) return { high: null, low: null };
+        const overnight = rows.filter((row) => { const slot = String(row.slotKey ?? ''); const hhmm = slot.slice(11, 16); if (!hhmm) return false; return hhmm >= '16:00' || hhmm < '09:30'; });
+        const pool = overnight.length ? overnight : rows;
+        const highs = [], lows = [];
+        for (const row of pool) { const hi = Number(row.high), lo = Number(row.low); if (Number.isFinite(hi) && hi > 0) highs.push(hi); if (Number.isFinite(lo) && lo > 0) lows.push(lo); }
+        if (!highs.length || !lows.length) return { high: null, low: null };
+        return { high: Math.max(...highs), low: Math.min(...lows) };
+      } catch { return { high: null, low: null }; }
+    };
+
+    const params = new URL(req.url || '/', 'http://localhost').searchParams;
+    const dte = params.get('dte') === '1' ? 1 : 0;
+    const basis = params.get('gexBasis') === 'vol' ? 'vol' : 'oivol';
+    const out = { spxSpot: null, gammaFlip: null, callWall: null, putWall: null, expectedMove: null, expectedMoveExpiry: null, netGex: null, esOvernightHigh: null, esOvernightLow: null, spxPrevClose: null, emUpper: null, emLower: null, gexLadder: [], updatedAt: Date.now() };
+    let spotForEm = 0;
+    try {
+      const r = await ctx.internalFetch(`/proxy/gex`, { cache: 'no-store' });
+      if (r.ok) {
+        const p = await r.json();
+        const spot = Number(p.spot ?? 0);
+        out.spxSpot = spot > 0 ? spot : null;
+        spotForEm = spot;
+        const prevClose = Number(p.prevClose ?? 0);
+        out.spxPrevClose = prevClose > 0 ? prevClose : null;
+        out.callWall = p.callWall != null ? Number(p.callWall) || null : null;
+        out.putWall = p.putWall != null ? Number(p.putWall) || null : null;
+        out.gammaFlip = flipFromGexRows(p.gexRows, spot, basis) ?? (p.gexFlip != null ? Number(p.gexFlip) || null : null);
+        let totalGex;
+        if (basis === 'vol' && Array.isArray(p.gexRows)) totalGex = p.gexRows.reduce((s, r) => s + rowNetGex(r ?? {}, 'vol'), 0);
+        else { const totals = p.totals; totalGex = totals ? Number(totals.totalGEXOiVol ?? totals.totalGEX ?? 0) : Number(p.totalNetGex ?? 0); }
+        out.netGex = Number.isFinite(totalGex) && totalGex !== 0 ? totalGex / 1e9 : null;
+        out.gexLadder = buildGexLadder(p.gexRows, spot, basis);
+        if (basis === 'vol' && Array.isArray(p.gexRows) && spot > 0) {
+          const vrows = p.gexRows.map((r) => ({ strike: Number(r.strike ?? 0), netGEX: rowNetGex(r, 'vol') })).filter((r) => r.strike > 0 && Number.isFinite(r.netGEX));
+          const above = vrows.filter((r) => r.strike > spot && r.netGEX > 0);
+          const below = vrows.filter((r) => r.strike < spot && r.netGEX < 0);
+          out.callWall = above.length ? above.reduce((b, r) => (r.netGEX > b.netGEX ? r : b)).strike : out.callWall;
+          out.putWall = below.length ? below.reduce((b, r) => (r.netGEX < b.netGEX ? r : b)).strike : out.putWall;
+        }
+      }
+    } catch { /* leave nulls */ }
+    if (dte === 1) {
+      try {
+        const expiry = await resolveExpiry(1);
+        if (expiry) {
+          const { legs, underlying } = await fetchExpiryChain(expiry);
+          const spotForGex = out.spxSpot ?? (underlying > 0 ? underlying : spotForEm);
+          const gx = computeExpiryGex(legs, spotForGex, basis);
+          if (gx) {
+            out.gexLadder = gx.ladder;
+            if (gx.callWall != null) out.callWall = gx.callWall;
+            if (gx.putWall != null) out.putWall = gx.putWall;
+            if (gx.gammaFlip != null) out.gammaFlip = gx.gammaFlip;
+            if (gx.netGex != null) out.netGex = gx.netGex;
+          }
+        }
+      } catch { /* keep front-expiry values */ }
+    }
+    const [em, es] = await Promise.all([computeExpectedMove(spotForEm), computeEsOvernight()]);
+    out.expectedMove = em.em;
+    out.expectedMoveExpiry = em.expiry;
+    out.esOvernightHigh = es.high;
+    out.esOvernightLow = es.low;
+    if (out.spxPrevClose != null && out.expectedMove != null) { out.emUpper = out.spxPrevClose + out.expectedMove; out.emLower = out.spxPrevClose - out.expectedMove; }
+    send(res, 200, { data: out }, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/social-media/trigger-map — bull/base/bear trigger map via Anthropic.
+// POST, subscriber. Ported verbatim from app/api/social-media/trigger-map.
+register('/api/social-media/trigger-map', {
+  auth: 'subscriber', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM_PROMPT = `You are the desk analyst for CB Edge, an SPX gamma-exposure (GEX) and options-flow desk. From a pre-market dealer-positioning read you produce a "trigger map": three scenarios for the session — a bull case, a base case, and a bear case — that a trader can react to off the levels.
+
+VOICE & RULES
+- Sharp, trader-to-trader. The reader knows gamma, dealer hedging, call/put walls, gamma flip and expected move. Do not explain basics.
+- Concrete and level-driven. Each case must reference the actual numbers given (spot, flip, walls, EM range) and describe a TRIGGER condition (e.g. "accepts above the flip on volume", "loses the put wall on two 5-min closes") plus what dealer positioning implies if it happens.
+- Conditional, never promissory. No certainties, no explicit buy/sell advice, no price targets stated as facts.
+- The three odds percentages must be whole numbers that sum to exactly 100, and should reflect the regime and where spot sits relative to the flip/walls.
+- Keep each description to 1-2 sentences, under ~200 characters.
+
+OUTPUT FORMAT
+Return ONLY a single JSON object — no markdown, no code fences, no commentary — with exactly these keys:
+{
+  "bull": { "odds": number, "desc": string },
+  "base": { "odds": number, "desc": string },
+  "bear": { "odds": number, "desc": string }
+}
+
+Output a SINGLE object with bull/base/bear as keys. Do NOT wrap them in an array and do NOT separate them with "},{". There is exactly one top-level object and one closing brace.`;
+    const num = (v, digits = 2) => { if (v == null || !Number.isFinite(v)) return 'n/a'; return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits }); };
+    const formatUserMessage = (d) => [
+      `CB Edge — SPX pre-market GEX read${d.date ? ` for ${d.date}` : ''}.`, ``,
+      `SPX spot: ${num(d.spxSpot)}`, `Gamma flip: ${num(d.gammaFlip)}`, `Call wall (resistance): ${num(d.callWall)}`,
+      `Put wall (support): ${num(d.putWall)}`, `Control node (peak gamma magnet): ${num(d.controlNode)}`,
+      `Expected move: ±${num(d.expectedMove)}`, `Expected-move range: ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper)`,
+      `Net GEX: ${d.netGex == null ? 'n/a' : `${d.netGex >= 0 ? '+' : ''}${num(d.netGex, 2)}B`}`,
+      `Gamma regime: ${d.gammaRegime || 'n/a'}`, `Bias: ${d.bias || 'neutral'}`, ``,
+      `Produce the bull / base / bear trigger map from this read. Return the JSON object only.`,
+    ].join('\n');
+    const clampCase = (o) => { if (!o || typeof o !== 'object') return null; const odds = Number(o.odds); const desc = typeof o.desc === 'string' ? o.desc : ''; if (!desc) return null; return { odds: Number.isFinite(odds) ? Math.round(odds) : 0, desc }; };
+    const balancedObjectAt = (text, from) => {
+      let depth = 0, inStr = false, esc = false;
+      for (let i = from; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true; else if (ch === '{') depth++; else if (ch === '}' && --depth === 0) return text.slice(from, i + 1);
+      }
+      return null;
+    };
+    const recoverByKey = (text) => {
+      const out = {};
+      for (const key of ['bull', 'base', 'bear']) {
+        const k = text.indexOf(`"${key}"`);
+        if (k === -1) return null;
+        const brace = text.indexOf('{', k);
+        if (brace === -1) return null;
+        const objStr = balancedObjectAt(text, brace);
+        if (!objStr) return null;
+        try { const c = clampCase(JSON.parse(objStr)); if (!c) return null; out[key] = c; } catch { return null; }
+      }
+      const { bull, base, bear } = out;
+      if (!bull || !base || !bear) return null;
+      const sum = bull.odds + base.odds + bear.odds;
+      if (sum > 0 && sum !== 100) { bull.odds = Math.round((bull.odds / sum) * 100); base.odds = Math.round((base.odds / sum) * 100); bear.odds = 100 - bull.odds - base.odds; }
+      return { bull, base, bear };
+    };
+    const extractJson = (raw) => {
+      let text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      const start = text.indexOf('{');
+      if (start === -1) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          if (--depth === 0) {
+            try {
+              const obj = JSON.parse(text.slice(start, i + 1));
+              const bull = clampCase(obj.bull), base = clampCase(obj.base), bear = clampCase(obj.bear);
+              if (!bull || !base || !bear) return recoverByKey(text);
+              const sum = bull.odds + base.odds + bear.odds;
+              if (sum > 0 && sum !== 100) { bull.odds = Math.round((bull.odds / sum) * 100); base.odds = Math.round((base.odds / sum) * 100); bear.odds = 100 - bull.odds - base.odds; }
+              return { bull, base, bear };
+            } catch { return recoverByKey(text); }
+          }
+        }
+      }
+      return null;
+    };
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { send(res, 503, { error: 'ANTHROPIC_API_KEY not configured' }); return; }
+    let input;
+    try { input = await readJson(req); } catch { send(res, 400, { error: 'invalid JSON body' }); return; }
+    let r;
+    try {
+      r = await fetch(ANTHROPIC_URL, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 800, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: formatUserMessage(input) }] }), cache: 'no-store', signal: AbortSignal.timeout(25000),
+      });
+    } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+    if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 500) }); return; }
+    const payload = await r.json();
+    const text = (payload.content ?? []).filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim();
+    const parsed = extractJson(text);
+    if (!parsed) { send(res, 502, { error: 'model returned unparseable output', raw: text.slice(0, 800) }); return; }
+    send(res, 200, { data: parsed }, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/social-media/day-post — slot-aware X post generator (premarket/midday/
+// eod/custom + optional trade idea). POST, subscriber. Ported verbatim.
+register('/api/social-media/day-post', {
+  auth: 'subscriber', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM_PROMPT = `You are the social-media voice of CB Edge (cbedge.net), an SPX gamma-exposure (GEX) and options-flow desk. You write single X posts at different points of the trading day that turn the live dealer-positioning read into tight, useful market commentary while promoting CB Edge.
+
+VOICE
+- Sharp and trader-to-trader. The audience already knows gamma, dealer hedging, call/put walls and expected move. Do not explain basics.
+- No hype. No "🚀 to the moon", no clickbait, no emoji spam. At most one tasteful emoji, usually zero.
+- Concrete and level-driven. Quote the actual numbers provided (spot, flip, walls, EM, net GEX). Frame them as structure, not predictions.
+- Confident but never promissory. Describe what positioning implies, not what WILL happen.
+- The attached image (if noted) is from the live CB Edge dashboard — it is fine to reference it ("chart below", "flow tape below") and to note this data streams live on cbedge.net.
+
+POST TYPES
+- premarket: the morning read — structure into the open, key levels, regime, what to watch.
+- midday: how the session is actually trading vs the morning levels — holds, breaks, pins.
+- eod: wrap the session — what the levels did, how the regime played out, tee up tomorrow.
+- custom: follow the user's notes for angle and content.
+
+TRADE IDEA (when provided)
+- Fold the contract (e.g. $TSLA 420C 7/17) into the post as a LEVELS-BASED watch — "on the radar", "watching", conditional on the structure. NEVER say buy/sell/enter, no targets-as-promises, no PT guarantees.
+- When a contract price is given, include it in the post (e.g. "$TSLA 420C 7/17 @ $3.10").
+
+HARD RULES
+- Output ONE tweet only, at or under 280 characters INCLUDING cashtags, hashtags, link, and newlines. Be ruthless about length.
+- Do NOT write one solid paragraph. Break the tweet into 2-4 short lines with "\\n" (blank line between thoughts is fine): lead line, level/positioning line(s), then hashtags + link on the final line.
+- Lead with the primary cashtag ($SPX, or the trade-idea ticker when one is given).
+- Include 1-3 relevant hashtags (#SPX #0DTE #gamma #options #trading) where natural — do not stuff.
+- End the tweet with the link: https://www.cbedge.net/
+- Do NOT include any disclaimer. No "not financial advice", no "educational only", no "idea, not advice".
+- Use the provided bias as the directional lean, kept conditional on the levels.
+
+OUTPUT FORMAT
+Return ONLY a single JSON object, no markdown, no code fences, no commentary:
+{
+  "xPost": string
+}`;
+    const SLOT_LABEL = { premarket: 'PREMARKET ANALYSIS', midday: 'MIDDAY UPDATE', eod: 'END-OF-DAY SUMMARY', custom: 'CUSTOM POST' };
+    const VISUAL_LABEL = {
+      gex: 'live NET GEX profile chart', flow: 'live options-flow tape', chain: 'live options chain',
+      greeks: 'multi-expiry greeks dashboard',
+      candles: 'ES 5-minute candle chart with the GEX levels overlaid — good for walking through how the session traded the levels',
+    };
+    const num = (v, digits = 2) => { if (v == null || !Number.isFinite(v)) return 'n/a'; return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits }); };
+    const formatUserMessage = (d) => {
+      const slot = d.slot && d.slot in SLOT_LABEL ? d.slot : 'premarket';
+      const lines = [
+        `Post type: ${SLOT_LABEL[slot]}`,
+        d.visual && VISUAL_LABEL[d.visual] ? `Attached image: a ${VISUAL_LABEL[d.visual]} screenshot from the CB Edge dashboard.` : `Attached image: none.`, ``,
+        `SPX spot: ${num(d.spxSpot)}`, `SPX prior-day close: ${num(d.spxPrevClose)}`, `Gamma flip: ${num(d.gammaFlip)}`,
+        `Call wall: ${num(d.callWall)}`, `Put wall: ${num(d.putWall)}`, `Expected move: ±${num(d.expectedMove)}`,
+        `EM range (off prior close): ${num(d.emLower)} to ${num(d.emUpper)}`,
+        `Net GEX: ${d.netGex == null ? 'n/a' : `${d.netGex >= 0 ? '+' : ''}${num(d.netGex, 2)}B`}`,
+        `Gamma regime: ${d.gammaRegime || 'n/a'}`, `Bias: ${d.bias || 'neutral'}`,
+      ];
+      const t = d.tradeIdea;
+      if (t && (t.ticker || t.strike)) {
+        const right = (t.right || 'C').toUpperCase() === 'P' ? 'P' : 'C';
+        lines.push(``, `TRADE IDEA to fold in: $${(t.ticker || 'SPX').toUpperCase()} ${t.strike || '?'}${right}${t.expiration ? ` exp ${t.expiration}` : ''}${t.price ? ` @ $${t.price}` : ''}${t.note ? ` — ${t.note}` : ''}`);
+      }
+      if (d.notes) lines.push(``, `User notes / angle: ${d.notes}`);
+      lines.push(``, `Write the single ${SLOT_LABEL[slot].toLowerCase()} tweet from this. Return the JSON object only.`);
+      return lines.join('\n');
+    };
+    const extractJson = (raw) => {
+      let text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      const start = text.indexOf('{');
+      if (start === -1) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) { try { const obj = JSON.parse(text.slice(start, i + 1)); const xPost = typeof obj.xPost === 'string' ? obj.xPost : ''; return xPost ? { xPost } : null; } catch { return null; } } }
+      }
+      return null;
+    };
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { send(res, 503, { error: 'ANTHROPIC_API_KEY not configured' }); return; }
+    let input;
+    try { input = await readJson(req); } catch { send(res, 400, { error: 'invalid JSON body' }); return; }
+    let r;
+    try {
+      r = await fetch(ANTHROPIC_URL, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 800, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: formatUserMessage(input) }] }), cache: 'no-store',
+      });
+    } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+    if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 500) }); return; }
+    const payload = await r.json();
+    const text = (payload.content ?? []).filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim();
+    const parsed = extractJson(text);
+    if (!parsed) { send(res, 502, { error: 'model returned unparseable output', raw: text.slice(0, 800) }); return; }
+    send(res, 200, { data: parsed }, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/social-media/generate — pre-market GEX read → single tweet via Anthropic.
+// POST, subscriber. Ported verbatim from app/api/social-media/generate/route.ts.
+register('/api/social-media/generate', {
+  auth: 'subscriber', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM_PROMPT = `You are the social-media voice of CB Edge, an SPX gamma-exposure (GEX) and options-flow desk. You write a single pre-market tweet that turns the morning dealer-positioning read into tight, useful market commentary.
+
+VOICE
+- Sharp and trader-to-trader. You are talking to people who already know what gamma, dealer hedging, call/put walls and expected move are. Do not explain the basics.
+- No hype. No "🚀 to the moon", no clickbait, no emoji spam. At most one tasteful emoji, and usually zero.
+- Concrete and level-driven. Reference the actual numbers you are given (spot, flip, walls, expected move, net GEX). Frame them as structure, not predictions.
+- Confident but never promissory. Describe what the positioning implies, not what WILL happen.
+
+HARD RULES
+- Output ONE tweet only, at or under 280 characters INCLUDING the ticker, hashtags, and link. Be ruthless about length.
+- Lead with the $SPX cashtag.
+- Include 1-3 relevant hashtags (e.g. #SPX #0DTE #gamma #options #trading) where they fit naturally — do not stuff.
+- End the tweet with the link: https://www.cbedge.net/
+- Do NOT include any disclaimer line. No "not financial advice", no "educational only".
+- Use the bias provided as the directional lean, but keep it conditional on the levels.
+
+OUTPUT FORMAT
+Return ONLY a single JSON object, no markdown, no code fences, no commentary, with exactly this key:
+{
+  "xPost": string   // one standalone tweet, <=280 chars total, leads with $SPX, includes hashtags and ends with https://www.cbedge.net/
+}`;
+    const num = (v, digits = 2) => { if (v == null || !Number.isFinite(v)) return 'n/a'; return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits }); };
+    const formatUserMessage = (d) => [
+      `CB Edge — SPX pre-market GEX read${d.date ? ` for ${d.date}` : ''}.`, ``,
+      `SPX spot: ${num(d.spxSpot)}`, `SPX prior-day close: ${num(d.spxPrevClose)}`,
+      `Gamma flip: ${num(d.gammaFlip)}`, `Call wall: ${num(d.callWall)}`, `Put wall: ${num(d.putWall)}`,
+      `Expected move (ATM straddle): ±${num(d.expectedMove)}${d.expectedMoveExpiry ? ` (exp ${d.expectedMoveExpiry})` : ''}`,
+      `Expected-move range (off the prior close): ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper) — these are the EM levels; cite them as the expected range, anchored to the ${num(d.spxPrevClose)} prior close.`,
+      `Net GEX: ${d.netGex == null ? 'n/a' : `${d.netGex >= 0 ? '+' : ''}${num(d.netGex, 2)}B`}`,
+      `ES overnight high: ${num(d.esOvernightHigh)}`, `ES overnight low: ${num(d.esOvernightLow)}`,
+      `Gamma regime: ${d.gammaRegime || 'n/a'}`, `Bias: ${d.bias || 'neutral'}`, ``,
+      `Write the single pre-market tweet from this read. Return the JSON object only.`,
+    ].join('\n');
+    const extractJson = (raw) => {
+      let text = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      const start = text.indexOf('{');
+      if (start === -1) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            try {
+              const obj = JSON.parse(text.slice(start, i + 1));
+              const xPost = typeof obj.xPost === 'string' ? obj.xPost : '';
+              const discordDrop = typeof obj.discordDrop === 'string' ? obj.discordDrop : '';
+              const xThread = Array.isArray(obj.xThread) ? obj.xThread.filter((t) => typeof t === 'string') : [];
+              if (!xPost && !discordDrop && !xThread.length) return null;
+              return { xPost, xThread, discordDrop };
+            } catch { return null; }
+          }
+        }
+      }
+      return null;
+    };
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { send(res, 503, { error: 'ANTHROPIC_API_KEY not configured' }); return; }
+    let input;
+    try { input = await readJson(req); } catch { send(res, 400, { error: 'invalid JSON body' }); return; }
+    const userMessage = formatUserMessage(input);
+    let r;
+    try {
+      r = await fetch(ANTHROPIC_URL, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 1500, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userMessage }] }), cache: 'no-store',
+      });
+    } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+    if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 500) }); return; }
+    const payload = await r.json();
+    const text = (payload.content ?? []).filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim();
+    const parsed = extractJson(text);
+    if (!parsed) { send(res, 502, { error: 'model returned unparseable output', raw: text.slice(0, 800) }); return; }
+    send(res, 200, { data: parsed }, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/tpo-extract — read TPO/Market-Profile levels off a chart screenshot via
+// Claude vision. POST, subscriber. Ported verbatim from app/api/tpo-extract.
+register('/api/tpo-extract', {
+  auth: 'subscriber', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM_PROMPT = `You extract price levels from a futures TPO / Market Profile chart screenshot. Each vertical letter/volume profile is one trading session, laid out left-to-right, with its date on the x-axis below it.
+
+Each profile is labeled with some of these markers next to horizontal price levels:
+- H = session high
+- L = session low
+- P = POC / point of control (usually orange, with a horizontal ray)
+- M = profile mid
+- VAH / VAL = value-area high / low, when drawn
+Prices are futures quotes with .00/.25/.50/.75 tick precision.
+
+RULES
+- Read EVERY distinct profile in the image, in left-to-right order — one output row each.
+- For each, report only the values you can actually read. If a marker is not present or is unreadable, use null — never guess a digit.
+- date: read the x-axis tick nearest that profile. Return it exactly as shown (e.g. "07/09"). If you truly cannot tell, use null.
+- Do not invent VAH/VAL if the chart doesn't draw them.
+- If two labels overlap and you are unsure which profile a value belongs to, put your best read and add a short note.
+
+OUTPUT
+Return ONLY a JSON object, no markdown, no code fences, exactly:
+{ "rows": [ { "date": string|null, "high": number|null, "low": number|null, "poc": number|null, "vah": number|null, "val": number|null, "mid": number|null, "note": string|null } ] }`;
+    const parseDataUrl = (dataUrl) => {
+      const m = /^data:(image\/(png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+      if (!m) return null;
+      const mediaType = m[1] === 'image/jpg' ? 'image/jpeg' : m[1];
+      return { mediaType, data: m[3] };
+    };
+    const extractJson = (text) => {
+      const start = text.indexOf('{');
+      if (start < 0) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            try {
+              const obj = JSON.parse(text.slice(start, i + 1));
+              if (!Array.isArray(obj.rows)) return null;
+              const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+              const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+              const rows = obj.rows.map((r) => { const o = r ?? {}; return { date: str(o.date), high: num(o.high), low: num(o.low), poc: num(o.poc), vah: num(o.vah), val: num(o.val), mid: num(o.mid), note: str(o.note) }; });
+              return { rows };
+            } catch { return null; }
+          }
+        }
+      }
+      return null;
+    };
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { send(res, 503, { error: 'ANTHROPIC_API_KEY not configured' }); return; }
+    let body;
+    try { body = await readJson(req); } catch { send(res, 400, { error: 'invalid JSON body' }); return; }
+    const img = typeof body.image === 'string' ? parseDataUrl(body.image) : null;
+    if (!img) { send(res, 400, { error: 'body.image must be a base64 data URL (png/jpeg/webp)' }); return; }
+    const hint = `Extract the TPO levels from this chart.` + (body.symbol ? ` Instrument: ${body.symbol}.` : '') + (body.year ? ` If a date shows only MM/DD, assume year ${body.year}.` : '');
+    let r;
+    try {
+      r = await fetch(ANTHROPIC_URL, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 4000, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } }, { type: 'text', text: hint }] }] }),
+        cache: 'no-store',
+      });
+    } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+    if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 500) }); return; }
+    const payload = await r.json();
+    const text = (payload.content ?? []).filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim();
+    const parsed = extractJson(text);
+    if (!parsed) { send(res, 502, { error: 'model returned unparseable output', raw: text.slice(0, 800) }); return; }
+    send(res, 200, { rows: parsed.rows }, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/budget/parse-screenshot — owner-only transaction OCR via Claude vision.
+// Ported verbatim from app/api/budget/parse-screenshot/route.ts (getServerUserId
+// gate → enforceAuth 'owner').
+register('/api/budget/parse-screenshot', {
+  auth: 'owner', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-haiku-4-5-20251001';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM = `You extract bank or credit-card transactions from a screenshot image.
+Return ONLY a JSON array, no prose, no code fences. Each element:
+{"date":"YYYY-MM-DD","description":string,"amount":number,"direction":"in"|"out"}
+Rules:
+- amount is ALWAYS a positive number: no sign, no currency symbol, no thousands separators.
+- direction is "out" for purchases, payments, debits, withdrawals, fees; "in" for deposits, credits, payroll, refunds, transfers received.
+- If a row shows no year, assume ${new Date().getFullYear()}.
+- Keep description short and human (merchant or payee); strip long reference/auth numbers.
+- Skip running-balance columns, section headers, and totals. If you can read no transactions, return [].`;
+    const extractRows = (text) => {
+      if (!text) return [];
+      const start = text.indexOf('[');
+      const end = text.lastIndexOf(']');
+      if (start === -1 || end === -1 || end < start) return [];
+      try {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (!Array.isArray(parsed)) return [];
+        return parsed.map((r) => ({ date: String(r?.date ?? '').slice(0, 10), description: String(r?.description ?? '').slice(0, 80), amount: Math.abs(Number(r?.amount ?? 0)), direction: r?.direction === 'in' ? 'in' : 'out' }))
+          .filter((r) => r.date && r.description && Number.isFinite(r.amount) && r.amount > 0);
+      } catch { return []; }
+    };
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) { send(res, 500, { error: "Screenshot import isn't configured (missing ANTHROPIC_API_KEY)." }); return; }
+      const { imageBase64, mediaType } = await readJson(req);
+      if (!imageBase64) { send(res, 400, { error: 'No image provided.' }); return; }
+      const r = await fetch(ANTHROPIC_URL, {
+        method: 'POST', headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 2000, system: SYSTEM, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: String(mediaType || 'image/png'), data: String(imageBase64) } }, { type: 'text', text: 'Extract every transaction you can read from this screenshot. Return only the JSON array.' }] }] }),
+      });
+      if (!r.ok) { const detail = await r.text(); send(res, 502, { error: 'Vision request failed', detail }); return; }
+      const data = await r.json();
+      const text = data?.content?.[0]?.text ?? '';
+      send(res, 200, { rows: extractRows(text) });
+    } catch (err) { send(res, 500, { error: 'Parse failed', detail: String(err) }); }
+  },
+});
+
+// /api/strike-summary — 1-2 sentence GEX blurb per strike via Anthropic (Haiku).
+// POST, subscriber. Ported verbatim from app/api/strike-summary/route.ts.
+register('/api/strike-summary', {
+  auth: 'subscriber', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-haiku-4-5-20251001';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM = `You are CB Edge, an SPX GEX desk. Write exactly 1-2 sentences about this strike level. Format: "[strike] is a [CB/support/resistance/flip] level. [What price should do here based on net GEX — reach/pivot/pin/amplify]." Be blunt and specific. Use the actual numbers. No disclaimers, no fluff. Example tone: "7540 CB level here. Market should reach or pivot if net GEX stays positive."`;
+    try {
+      const { strike, spotPrice, oiVolGex, volGex, otmSide, otmPrice } = await readJson(req);
+      const user = `Strike: ${strike} | SPX Spot: ${spotPrice}\nOI+Vol GEX: ${oiVolGex} | Vol GEX: ${volGex}\nOTM ${otmSide} contract: ${otmPrice ?? 'N/A'}`;
+      const r = await fetch(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY ?? '', 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: MODEL, max_tokens: 120, system: SYSTEM, messages: [{ role: 'user', content: user }] }),
+      });
+      if (!r.ok) { send(res, 200, { summary: null }); return; }
+      const data = await r.json();
+      const summary = data?.content?.[0]?.text?.trim() ?? null;
+      send(res, 200, { summary });
+    } catch { send(res, 200, { summary: null }); }
+  },
+});
+
 // /api/premarket-movers — top-5 up/down across the trading watchlist via
 // in-process /proxy/quotes (extended-hours aware). Ported verbatim from
 // app/api/premarket-movers/route.ts.
@@ -1275,6 +2186,209 @@ register('/api/quotes-batch', {
     send(res, 200, { data: { items } }, { 'Cache-Control': NO_STORE });
   },
 });
+
+// /api/scanner/market-quality — Market Quality Terminal (5-pillar global score
+// from Yahoo daily closes). Pure compute, GET-only, subscriber. Ported verbatim
+// from app/api/scanner/market-quality/route.ts.
+{
+  const SECTORS = ['XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLC', 'XLU', 'XLRE', 'XLY', 'XLB', 'XLP'];
+  const SECTOR_NAMES = {
+    XLK: 'Technology', XLF: 'Financials', XLE: 'Energy', XLV: 'Health Care',
+    XLI: 'Industrials', XLC: 'Comm Services', XLU: 'Utilities', XLRE: 'Real Estate',
+    XLY: 'Cons. Discretionary', XLB: 'Materials', XLP: 'Cons. Staples',
+  };
+  const FOMC_DATES_2026 = ['2026-01-28', '2026-03-18', '2026-04-29', '2026-06-17', '2026-07-29', '2026-09-16', '2026-10-28', '2026-12-09'];
+  const FED_STANCE = { stance: 'Hold', range: '3.50-3.75%' };
+  const GEOPOLITICAL = null;
+  const yahooUrl = (sym, range) => `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=${range}&includePrePost=false`;
+  const fetchSeries = async (sym, range = '1y') => {
+    const empty = { closes: [], last: null };
+    try {
+      const res = await fetch(yahooUrl(sym, range), { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9', Origin: 'https://finance.yahoo.com', Referer: 'https://finance.yahoo.com/' }, cache: 'no-store' });
+      if (!res.ok) return empty;
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      const meta = result?.meta;
+      if (!meta) return empty;
+      const raw = result?.indicators?.quote?.[0]?.close;
+      const closes = Array.isArray(raw) ? raw.filter((v) => typeof v === 'number' && Number.isFinite(v)) : [];
+      const last = meta.regularMarketPrice ?? (closes.length ? closes[closes.length - 1] : null);
+      return { closes, last };
+    } catch { return empty; }
+  };
+  const sma = (closes, period) => { if (closes.length < period) return null; const slice = closes.slice(-period); return slice.reduce((a, b) => a + b, 0) / slice.length; };
+  const pctChangeN = (closes, n) => { if (closes.length < n + 1) return null; const then = closes[closes.length - 1 - n]; const now = closes[closes.length - 1]; if (!then) return null; return ((now - then) / then) * 100; };
+  const rsi14 = (closes) => {
+    const period = 14;
+    if (closes.length < period + 1) return null;
+    const slice = closes.slice(-(period + 1));
+    let gains = 0, losses = 0;
+    for (let i = 1; i < slice.length; i++) { const diff = slice[i] - slice[i - 1]; if (diff >= 0) gains += diff; else losses -= diff; }
+    const avgGain = gains / period, avgLoss = losses / period;
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - 100 / (1 + rs);
+  };
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const round1 = (v) => Math.round(v * 10) / 10;
+  const round2 = (v) => Math.round(v * 100) / 100;
+  const etDateStr2 = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  register('/api/scanner/market-quality', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const symbols = ['SPY', 'QQQ', '^VIX', 'TLT', 'UUP', '^TNX', 'DX-Y.NYB', ...SECTORS];
+      const seriesList = await Promise.all(symbols.map((s) => fetchSeries(s, '1y')));
+      const bySym = {};
+      symbols.forEach((s, i) => { bySym[s] = seriesList[i]; });
+      const spy = bySym['SPY'], qqq = bySym['QQQ'], vix = bySym['^VIX'], tlt = bySym['TLT'], uup = bySym['UUP'];
+      const tnx = bySym['^TNX'], dxy = bySym['DX-Y.NYB'];
+      const haveCore = spy.last != null && vix.last != null;
+      if (!haveCore) { send(res, 503, { error: 'quote fetch failed' }); return; }
+      const vixSpot = vix.last;
+      const vix5dChg = pctChangeN(vix.closes, 5) ?? 0;
+      let ivPercentile = null;
+      if (vix.closes.length > 20) { const hist = vix.closes; const below = hist.filter((v) => v < vixSpot).length; ivPercentile = (below / hist.length) * 100; }
+      const levelScore = clamp(100 - (vixSpot - 10) * 4, 0, 100);
+      const trendScoreVix = clamp(50 - vix5dChg * 3, 0, 100);
+      const pctileScore = clamp(100 - (ivPercentile ?? 50), 0, 100);
+      const volatilityScore = Math.round(0.4 * levelScore + 0.3 * trendScoreVix + 0.3 * pctileScore);
+      const vixTrendLabel = vix5dChg > 3 ? 'Rising' : vix5dChg < -3 ? 'Falling' : vix5dChg < -0.5 ? 'Cooling' : 'Flat';
+      const vixLevelLabel = vixSpot >= 30 ? 'Very High' : vixSpot >= 22 ? 'High' : vixSpot >= 15 ? 'Normal' : 'Low';
+      const iv1yLabel = ivPercentile == null ? '—' : ivPercentile >= 75 ? 'Elevated' : ivPercentile >= 40 ? 'Normal' : 'Low';
+      const putCallProxy = round2(clamp(0.65 + (vixSpot - 14) * 0.024, 0.5, 1.6));
+      const putCallLabel = putCallProxy >= 1.1 ? 'Fear elevated' : putCallProxy >= 0.85 ? 'Neutral' : 'Complacent';
+      const spySma20 = sma(spy.closes, 20), spySma50 = sma(spy.closes, 50), spySma200 = sma(spy.closes, 200);
+      const qqqSma50 = sma(qqq.closes, 50);
+      const spyLast = spy.last;
+      const qqqLast = qqq.last;
+      const spy20Pts = spySma20 != null ? (spyLast > spySma20 ? 10 : -10) : 0;
+      const spy50Pts = spySma50 != null ? (spyLast > spySma50 ? 15 : -15) : 0;
+      const spy200Pts = spySma200 != null ? (spyLast > spySma200 ? 20 : -20) : 0;
+      const qqq50Pts = qqqSma50 != null && qqqLast != null ? (qqqLast > qqqSma50 ? 15 : -15) : 0;
+      const rsi = rsi14(spy.closes);
+      const rsiPts = rsi != null ? clamp((rsi - 50) * 1.0, -20, 20) : 0;
+      const trendScore = Math.round(clamp(50 + spy20Pts + spy50Pts + spy200Pts + qqq50Pts + rsiPts, 0, 100));
+      const spyBull50 = spySma50 != null && spyLast > spySma50;
+      const spyBull200 = spySma200 != null && spyLast > spySma200;
+      const trendRegime = spyBull200 && spyBull50 ? 'Bullish' : !spyBull200 && !spyBull50 ? 'Bearish' : 'Mixed';
+      const sectorSeries = SECTORS.map((sym) => ({ sym, s: bySym[sym] }));
+      const sectorBreadth = sectorSeries.map(({ sym, s }) => { const sma50 = sma(s.closes, 50); const above = sma50 != null && s.last != null ? s.last > sma50 : null; return { sym, above }; });
+      const validBreadth = sectorBreadth.filter((r) => r.above != null);
+      const aboveCount = validBreadth.filter((r) => r.above).length;
+      const breadthScore = validBreadth.length ? Math.round((aboveCount / validBreadth.length) * 100) : 50;
+      const participationLabel = validBreadth.length === 0 ? 'N/A' : aboveCount >= validBreadth.length * 0.75 ? 'Broad' : aboveCount <= validBreadth.length * 0.25 ? 'Narrow' : 'Mixed';
+      const above200 = sectorSeries.map(({ s }) => { const sma200s = sma(s.closes, 200); return sma200s != null && s.last != null ? s.last > sma200s : null; }).filter((v) => v != null);
+      const above20 = sectorSeries.map(({ s }) => { const sma20s = sma(s.closes, 20); return sma20s != null && s.last != null ? s.last > sma20s : null; }).filter((v) => v != null);
+      const pct200 = above200.length ? Math.round((above200.filter(Boolean).length / above200.length) * 100) : null;
+      const pct20 = above20.length ? Math.round((above20.filter(Boolean).length / above20.length) * 100) : null;
+      const sector1d = sectorSeries.map(({ s }) => pctChangeN(s.closes, 1)).filter((v) => v != null);
+      const advancers = sector1d.filter((v) => v > 0).length;
+      const decliners = sector1d.filter((v) => v < 0).length;
+      const adRatio = decliners > 0 ? round1(advancers / decliners) : advancers > 0 ? Infinity : null;
+      const adLabel = adRatio == null ? '—' : adRatio >= 1.5 ? 'Positive' : adRatio >= 0.8 ? 'Mixed' : 'Negative';
+      const adDisplay = adRatio == null ? '—' : adRatio === Infinity ? `${advancers}:0` : `${advancers}:${decliners}`;
+      const sector5d = sectorSeries.map(({ sym, s }) => ({ sym, chg5d: pctChangeN(s.closes, 5) }));
+      const validMom = sector5d.filter((r) => r.chg5d != null);
+      const positiveCount = validMom.filter((r) => r.chg5d > 0).length;
+      const ratioScore = validMom.length ? (positiveCount / validMom.length) * 100 : 50;
+      const spy5dChg = pctChangeN(spy.closes, 5) ?? 0;
+      const spy5dScore = clamp(50 + spy5dChg * 10, 0, 100);
+      const momentumScore = Math.round(0.5 * ratioScore + 0.5 * spy5dScore);
+      const sortedMom = [...validMom].sort((a, b) => b.chg5d - a.chg5d);
+      const leader = sortedMom[0] ?? null;
+      const laggard = sortedMom[sortedMom.length - 1] ?? null;
+      const spread = leader && laggard ? leader.chg5d - laggard.chg5d : null;
+      const rotationLabel = spread == null ? 'N/A' : spread < 1.5 ? 'Uniform' : spread < 4 ? 'Rotating' : 'Sharp Rotation';
+      const tlt20d = pctChangeN(tlt.closes, 20) ?? 0;
+      const uup20d = pctChangeN(uup.closes, 20) ?? 0;
+      const uup5d = pctChangeN(uup.closes, 5);
+      const macroScore = Math.round(clamp(50 + tlt20d * 5 - uup20d * 5, 0, 100));
+      const bondTrendLabel = tlt20d > 0.5 ? 'Rising' : tlt20d < -0.5 ? 'Falling' : 'Flat';
+      const dollarTrendLabel = uup20d > 0.5 ? 'Strengthening' : uup20d < -0.5 ? 'Weakening' : 'Flat';
+      const tenYieldVal = tnx.last != null ? round2(tnx.last / 10) : null;
+      const tenYield5dChg = pctChangeN(tnx.closes, 5);
+      const tenYieldTrend = tenYield5dChg == null ? 'Flat' : tenYield5dChg > 1 ? 'Rising' : tenYield5dChg < -1 ? 'Falling' : 'Flat';
+      const dxyVal = dxy.last != null ? round2(dxy.last) : null;
+      const dxy20dChg = pctChangeN(dxy.closes, 20);
+      const dxyTrend = dxy20dChg == null ? 'Flat' : dxy20dChg > 0.5 ? 'Strengthening' : dxy20dChg < -0.5 ? 'Weakening' : 'Flat';
+      const todayEt = etDateStr2();
+      const isFomcToday = FOMC_DATES_2026.includes(todayEt);
+      const nextFomc = FOMC_DATES_2026.find((d) => d >= todayEt) ?? null;
+      const daysToFomc = nextFomc ? Math.round((new Date(`${nextFomc}T00:00:00`).getTime() - new Date(`${todayEt}T00:00:00`).getTime()) / 86_400_000) : null;
+      const fomcBannerLabel = isFomcToday ? 'FOMC DECISION TODAY' : daysToFomc != null && daysToFomc <= 3 ? `FOMC DECISION IN ${daysToFomc}D` : null;
+      const spyCloses = spy.closes;
+      const spyPrior20 = spyCloses.slice(-21, -1);
+      const priorHigh = spyPrior20.length ? Math.max(...spyPrior20) : null;
+      const breakoutsWorking = priorHigh != null && spyLast != null ? spyLast > priorHigh : null;
+      const leaderStillLeading = leader ? leader.chg5d > 0 : null;
+      const laggardStillLagging = laggard ? laggard.chg5d < 0 : null;
+      const leadersHolding = leaderStillLeading != null && laggardStillLagging != null ? leaderStillLeading && laggardStillLagging : null;
+      const nSpy = spyCloses.length;
+      const pullbacksBought = nSpy >= 3 ? (spyCloses[nSpy - 3] > spyCloses[nSpy - 2] && spyCloses[nSpy - 1] > spyCloses[nSpy - 2]) : null;
+      const execYesCount = [breakoutsWorking, leadersHolding, pullbacksBought].filter((v) => v === true).length;
+      const execNoCount = [breakoutsWorking, leadersHolding, pullbacksBought].filter((v) => v === false).length;
+      const execTotal = execYesCount + execNoCount;
+      const executionScore = execTotal ? Math.round((execYesCount / execTotal) * 100) : 50;
+      const followThroughLabel = executionScore >= 66 ? 'Strong' : executionScore >= 33 ? 'Weak' : 'None';
+      const followThroughSub = executionScore >= 66 ? 'Confirmed' : executionScore >= 33 ? 'Low conviction' : 'Failing';
+      const executionWindow = {
+        score: executionScore,
+        items: [
+          { label: 'Breakouts working?', value: breakoutsWorking == null ? '—' : breakoutsWorking ? 'Yes' : 'No', sub: breakoutsWorking == null ? '' : breakoutsWorking ? 'Confirming' : 'Failing', tone: breakoutsWorking },
+          { label: 'Leaders holding?', value: leadersHolding == null ? '—' : leadersHolding ? 'Yes' : 'No', sub: leadersHolding == null ? '' : leadersHolding ? 'Holding' : 'Fading', tone: leadersHolding },
+          { label: 'Pullbacks bought?', value: pullbacksBought == null ? '—' : pullbacksBought ? 'Yes' : 'No', sub: pullbacksBought == null ? '' : pullbacksBought ? 'Support' : 'No bounce', tone: pullbacksBought },
+          { label: 'Follow-through?', value: followThroughLabel, sub: followThroughSub, tone: executionScore >= 66 ? true : executionScore >= 33 ? null : false },
+        ],
+      };
+      const weights = { volatility: 0.25, trend: 0.20, breadth: 0.20, momentum: 0.25, macro: 0.10 };
+      const weighted = {
+        volatility: volatilityScore * weights.volatility, trend: trendScore * weights.trend, breadth: breadthScore * weights.breadth,
+        momentum: momentumScore * weights.momentum, macro: macroScore * weights.macro,
+      };
+      const globalScoreRaw = weighted.volatility + weighted.trend + weighted.breadth + weighted.momentum + weighted.macro;
+      const globalScore = Math.round(globalScoreRaw);
+      let banner;
+      if (globalScore >= 75) banner = { label: 'FAVORABLE', tone: 'green', sizing: 'Full position sizing', sizeLabel: 'FULL', sizeNote: 'Press risk' };
+      else if (globalScore >= 60) banner = { label: 'CONSTRUCTIVE', tone: 'cyan', sizing: 'Normal position sizing', sizeLabel: 'NORMAL', sizeNote: 'Standard sizing' };
+      else if (globalScore >= 40) banner = { label: 'CAUTION', tone: 'orange', sizing: 'Half position sizing', sizeLabel: 'HALF', sizeNote: 'Selective, reduced size' };
+      else if (globalScore >= 25) banner = { label: 'DEFENSIVE', tone: 'orange', sizing: 'Quarter position sizing', sizeLabel: 'QUARTER', sizeNote: 'Defensive only' };
+      else banner = { label: 'RISK OFF', tone: 'red', sizing: 'Minimal / no new sizing', sizeLabel: 'MINIMAL', sizeNote: 'Preserve capital' };
+      const decision = globalScore >= 60 ? 'YES' : globalScore >= 40 ? 'CAUTION' : 'NO';
+      const sectorBars = sector5d.map((r) => ({ symbol: r.sym, name: SECTOR_NAMES[r.sym], chg5d: r.chg5d != null ? round1(r.chg5d) : null })).filter((r) => r.chg5d != null).sort((a, b) => b.chg5d - a.chg5d);
+      const headline = decision === 'YES' ? 'FAVORABLE FOR TRADING.' : decision === 'CAUTION' ? 'TRADE SELECTIVELY.' : 'AVOID TRADING.';
+      const body = [
+        `The current environment scores ${globalScore}/100${globalScore >= 35 && globalScore < 45 ? ', near the 40-point threshold for active sizing' : ''}.`,
+        `VIX at ${round1(vixSpot)}${ivPercentile != null ? ` (${Math.round(ivPercentile)}th percentile — ${vixTrendLabel.toLowerCase()})` : ''}, ${volatilityScore >= 60 ? 'constructive' : volatilityScore >= 40 ? 'mixed' : 'concerning'}.`,
+        `Market regime: ${trendRegime}.`,
+        `Breadth is ${participationLabel.toLowerCase()} with ${aboveCount}/${validBreadth.length} sectors above their 50d SMA${pct200 != null ? ` (${pct200}% above 200d, ${pct20 != null ? pct20 : '—'}% above 20d)` : ''}.`,
+        rsi != null ? `RSI-14 at ${round1(rsi)} signals ${rsi >= 70 ? 'overbought momentum' : rsi <= 30 ? 'oversold conditions' : 'moderate momentum'}.` : '',
+        leader && laggard ? `Sector rotation is ${rotationLabel} with ${leader.sym} +${round1(leader.chg5d)}% leading and ${laggard.sym} ${round1(laggard.chg5d)}% lagging.` : '',
+        `Bonds ${bondTrendLabel.toLowerCase()}, Dollar ${dollarTrendLabel.toLowerCase()}${uup5d != null ? ` (${uup5d >= 0 ? '+' : ''}${round1(uup5d)}% 5D)` : ''}.`,
+        fomcBannerLabel ? `FOMC rate decision ${isFomcToday ? 'is today' : `in ${daysToFomc}d`} — Fed stance: ${FED_STANCE.stance} at ${FED_STANCE.range}, injecting event risk.` : '',
+      ].filter(Boolean).join(' ');
+      const suggestedAction = decision === 'YES'
+        ? `Suggested action: Conditions support ${banner.sizing.toLowerCase()}. Standard risk management still applies.`
+        : decision === 'CAUTION'
+        ? `Suggested action: Be selective — favor high-conviction setups only, ${banner.sizing.toLowerCase()}, tighten stops into any event risk.`
+        : `Suggested action: Sit on hands. Wait for breadth to improve above 50% on the 50-day MA, VIX to settle, and a confirmed regime shift before re-engaging. Capital preservation is the priority.`;
+      const assessment = `${headline} ${body} ${suggestedAction}`;
+      send(res, 200, {
+        data: {
+          asOf: new Date().toISOString(), globalScore, decision, banner,
+          event: { fomc: { isToday: isFomcToday, label: fomcBannerLabel, nextDate: nextFomc, daysAway: daysToFomc }, fedStance: FED_STANCE, geopolitical: GEOPOLITICAL },
+          pillars: {
+            volatility: { score: volatilityScore, weight: weights.volatility, weighted: round1(weighted.volatility), vixLevel: round1(vixSpot), vixLevelLabel, vixTrend: vixTrendLabel, ivPercentile: ivPercentile != null ? Math.round(ivPercentile) : null, iv1yLabel, putCall: putCallProxy, putCallLabel },
+            trend: { score: trendScore, weight: weights.trend, weighted: round1(weighted.trend), regime: trendRegime, spyVs20: spySma20 != null ? spyLast > spySma20 : null, spyVs50: spySma50 != null ? spyLast > spySma50 : null, spyVs200: spySma200 != null ? spyLast > spySma200 : null, qqqVs50: qqqSma50 != null && qqqLast != null ? qqqLast > qqqSma50 : null, rsi14: rsi != null ? round1(rsi) : null },
+            breadth: { score: breadthScore, weight: weights.breadth, weighted: round1(weighted.breadth), aboveCount, total: validBreadth.length, pct200, pct20, participation: participationLabel, nyseAd: { display: adDisplay, label: adLabel }, sectors: sectorBreadth.map((r) => ({ symbol: r.sym, above: r.above })) },
+            momentum: { score: momentumScore, weight: weights.momentum, weighted: round1(weighted.momentum), positiveCount, total: validMom.length, spread: spread != null ? round1(spread) : null, leader: leader ? { symbol: leader.sym, chg5d: round1(leader.chg5d) } : null, laggard: laggard ? { symbol: laggard.sym, chg5d: round1(laggard.chg5d) } : null, rotation: rotationLabel },
+            macro: { score: macroScore, weight: weights.macro, weighted: round1(weighted.macro), tltLast: tlt.last != null ? round1(tlt.last) : null, tltTrend: bondTrendLabel, uupTrend: dollarTrendLabel, uup5d: uup5d != null ? round1(uup5d) : null, tenYield: tenYieldVal, tenYieldTrend, dxy: dxyVal, dxyTrend },
+          },
+          executionWindow, sectorBars, headline, body, suggestedAction, assessment, source: 'yahoo',
+        },
+      }, { 'Cache-Control': NO_STORE });
+    },
+  });
+}
 
 // ── REAL-DB routes (batch 2) — only registered when the bundle loaded ────────
 // Each calls the bundled lib/db.ts function exactly as its route.ts did. If
@@ -2876,6 +3990,1641 @@ if (libDb) {
           const result = await pool.query('SELECT * FROM ticker_levels WHERE ticker = ANY($1) LIMIT 1', [candidates]);
           if (!result.rows.length) { send(res, 200, null); return; }
           send(res, 200, result.rows[0]);
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/backtests?test=... — owner-only research panels (read-only SELECTs +
+  // one live-chain fetch). Ported verbatim from app/api/backtests/route.ts:
+  // queryAll->libDb.queryAll, getServerUserId gate->enforceAuth 'owner',
+  // proxyBase chain fetch->ctx.internalFetch.
+  {
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+    const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+    const pct = (n, d) => (d ? Math.round((100 * n) / d) : 0);
+    const round = (v, d = 1) => { const p = 10 ** d; return Math.round(v * p) / p; };
+
+    const cbSize = async (tol) => {
+      const rows = await libDb.queryAll(
+        `SELECT c.date, c.level, MAX(ABS(m."mvcValueOIVol")) AS raw_size, MAX(m."pctOI_Vol") AS pct,
+                c.touched, c.held, c.broke
+         FROM confidence_log c
+         JOIN mvc_snapshots m ON m.date = c.date AND ABS(m."strikeOIVol" - c.level) <= ?
+         WHERE c.graded_at IS NOT NULL AND c.level > 0
+         GROUP BY c.date, c.level, c.touched, c.held, c.broke
+         ORDER BY c.date`, [tol]);
+      const toB = (v) => (Math.abs(v) > 1e5 ? Math.abs(v) / 1e9 : Math.abs(v));
+      const data = rows.map((r) => ({
+        date: r.date, level: Math.round(num(r.level)), size: round(toB(num(r.raw_size)), 1),
+        pct: r.pct == null ? null : Math.round(num(r.pct)),
+        touched: !!r.touched, held: !!r.held, broke: !!r.broke,
+        outcome: r.touched ? (r.held ? 'held' : r.broke ? 'broke' : '-') : '-',
+      }));
+      const detail = data.map((d) => ({ date: d.date, level: d.level, 'size $B': d.size, 'pct %': d.pct ?? '-', touched: d.touched ? 'yes' : 'no', outcome: d.outcome }));
+      const buckets = [];
+      if (data.length >= 3) {
+        const sorted = [...data].sort((a, b) => a.size - b.size);
+        const t1 = sorted[Math.floor(sorted.length / 3)].size;
+        const t2 = sorted[Math.floor((2 * sorted.length) / 3)].size;
+        const grp = (d) => (d.size <= t1 ? 0 : d.size <= t2 ? 1 : 2);
+        const labels = [`small (≤${round(t1, 1)}B)`, 'mid', `large (>${round(t2, 1)}B)`];
+        for (let b = 0; b < 3; b++) {
+          const g = data.filter((d) => grp(d) === b);
+          const tt = g.filter((d) => d.touched);
+          buckets.push({ bucket: labels[b], n: g.length, 'touched %': pct(tt.length, g.length), 'held % (of touched)': tt.length ? pct(tt.filter((d) => d.held).length, tt.length) : '-' });
+        }
+      }
+      const touched = data.filter((d) => d.touched), missed = data.filter((d) => !d.touched);
+      return { detail, buckets, note: `${data.length} levels · avg size touched ${round(mean(touched.map((d) => d.size)), 1)}B vs missed ${round(mean(missed.map((d) => d.size)), 1)}B. Bigger CB ⇒ more likely reached; hold stays high regardless of size.` };
+    };
+
+    const confidence = async () => {
+      const rows = await libDb.queryAll(
+        `SELECT date, level, regime, reach, pivot, chop, "break" AS brk,
+                touched, held, broke, actual_outcome
+         FROM confidence_log WHERE graded_at IS NOT NULL ORDER BY date`);
+      const scale = Math.max(...rows.map((r) => num(r.reach)), 0) > 1.5 ? 100 : 1;
+      const P = (v) => num(v) / scale;
+      const detail = rows.map((r) => ({
+        date: r.date, level: Math.round(num(r.level)), regime: r.regime ?? '-',
+        'reach %': Math.round(100 * P(r.reach)), touched: r.touched ? 'yes' : 'no',
+        'hold pred %': Math.round(100 * (P(r.pivot) + P(r.chop))),
+        result: r.touched ? (r.held ? 'held' : 'broke') : '-', outcome: r.actual_outcome ?? '-',
+      }));
+      const touched = rows.filter((r) => r.touched);
+      const cal = [{ metric: 'REACH (all days)', 'predicted %': Math.round(100 * mean(rows.map((r) => P(r.reach)))), 'actual %': pct(touched.length, rows.length) }];
+      if (touched.length) {
+        cal.push({ metric: 'HOLD (of touched)', 'predicted %': Math.round(100 * mean(touched.map((r) => P(r.pivot) + P(r.chop)))), 'actual %': pct(touched.filter((r) => r.held).length, touched.length) });
+        cal.push({ metric: 'BREAK (of touched)', 'predicted %': Math.round(100 * mean(touched.map((r) => P(r.brk)))), 'actual %': pct(touched.filter((r) => r.broke).length, touched.length) });
+      }
+      const rb = [[0, 0.4, 'low <40%'], [0.4, 0.7, 'mid 40-70%'], [0.7, 1.01, 'high >70%']];
+      const reachBuckets = rb.map(([lo, hi, lbl]) => {
+        const g = rows.filter((r) => P(r.reach) >= lo && P(r.reach) < hi);
+        return { bucket: lbl, n: g.length, 'actual reached %': g.length ? pct(g.filter((r) => r.touched).length, g.length) : '-' };
+      });
+      return { detail, calibration: cal, reachBuckets, note: `${rows.length} graded days, ${touched.length} touched. Reach score discriminates well; hold is under-predicted (walls hold more than scored), break is over-predicted.` };
+    };
+
+    const dexPreflip = async (greek, hitAbs, lookMin, minPRange, edges) => {
+      const col = greek === 'gex' ? 'gex' : 'dex';
+      const rows = await libDb.queryAll(
+        `SELECT date, timestamp AS ts, ${col} AS val FROM greeks_ts
+         WHERE ticker='SPXW' AND ${col} IS NOT NULL AND "time" >= '09:30' AND "time" < '16:00'
+         ORDER BY date, timestamp ASC`);
+      const BUCKET_MS = 5 * 60_000;
+      const rng = (a) => Math.max(...a) - Math.min(...a);
+      const byDate = new Map();
+      for (const r of rows) { if (!byDate.has(r.date)) byDate.set(r.date, []); byDate.get(r.date).push({ ts: Number(r.ts), val: num(r.val) }); }
+      const etMins = (ms) => { const s = new Date(ms).toLocaleString('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }); return Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5)); };
+      const etHour = (ms) => Math.floor(etMins(ms) / 60);
+      const inEdges = (ms) => { const m = etMins(ms); return (m >= 570 && m < 690) || (m >= 840 && m < 960); };
+      const bucketsFor = (day) => {
+        const m = new Map();
+        for (const r of day) { const k = Math.floor(r.ts / BUCKET_MS); if (!m.has(k)) m.set(k, []); m.get(k).push(r.val); }
+        return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => ({ ts: k * BUCKET_MS, avg: mean(v), range: rng(v), lo: Math.min(...v), hi: Math.max(...v) }));
+      };
+      const alertsFor = (bk, mult) => {
+        const out = [];
+        for (let i = 3; i < bk.length; i++) {
+          const b = bk[i], prior = bk.slice(i - 3, i);
+          const priAvgRange = mean(prior.map((p) => p.range)) || 1e-9;
+          const priWinRange = rng(prior.flatMap((p) => [p.lo, p.hi])) || 1e-9;
+          const priWinAvg = mean(prior.map((p) => p.avg));
+          if (priAvgRange < minPRange) continue;
+          if (!(b.range >= mult * priAvgRange && Math.abs(b.avg - priWinAvg) < priWinRange)) continue;
+          const fwd = bk.filter((x) => x.ts > b.ts && x.ts <= b.ts + lookMin * 60_000);
+          let hit = false, flip = false;
+          for (const f of fwd) {
+            if (Math.abs(f.avg - b.avg) >= hitAbs) hit = true;
+            if (Math.sign(f.avg) && Math.sign(b.avg) && Math.sign(f.avg) !== Math.sign(b.avg)) flip = true;
+          }
+          out.push({ ts: b.ts, hit: hit || flip, flip });
+        }
+        return out;
+      };
+      const summary = [], hourly = [];
+      for (const mult of [2, 3]) {
+        let total = 0, hits = 0, flips = 0;
+        const byHour = new Map();
+        for (const day of byDate.values()) {
+          let a = alertsFor(bucketsFor(day), mult);
+          if (edges) a = a.filter((x) => inEdges(x.ts));
+          total += a.length; hits += a.filter((x) => x.hit).length; flips += a.filter((x) => x.flip).length;
+          for (const x of a) { const hr = etHour(x.ts); const e = byHour.get(hr) ?? { n: 0, h: 0 }; e.n++; if (x.hit) e.h++; byHour.set(hr, e); }
+        }
+        summary.push({ threshold: `${mult}×`, alerts: total, hits, 'hit %': pct(hits, total), flips });
+        for (const hr of [...byHour.keys()].sort((a, b) => a - b)) {
+          const e = byHour.get(hr);
+          hourly.push({ threshold: `${mult}×`, 'ET hour': `${String(hr).padStart(2, '0')}:00`, alerts: e.n, hits: e.h, 'hit %': pct(e.h, e.n) });
+        }
+      }
+      return { summary, hourly, note: `${greek.toUpperCase()} · ${byDate.size} RTH days · hit = |Δ| ≥ $${hitAbs}B or flip within ${lookMin}m${edges ? ' · edges only (open/close)' : ''}.` };
+    };
+
+    const gammaWall = async (tol, near, minRange) => {
+      const rows = await libDb.queryAll(
+        `WITH snap AS (
+           SELECT date, timestamp AS ts, spot, strike, net_gex FROM option_strike_gex_history
+           WHERE spot > 0 AND net_gex IS NOT NULL AND EXTRACT(DOW FROM date::date) BETWEEN 1 AND 5
+         ),
+         spots AS (SELECT DISTINCT date, ts, spot FROM snap),
+         day AS (SELECT date, MIN(ts) open_ts, MAX(ts) close_ts, MIN(spot) lo, MAX(spot) hi FROM spots GROUP BY date),
+         open_spot  AS (SELECT s.date, MIN(s.spot) spot FROM spots s JOIN day d ON s.date=d.date AND s.ts=d.open_ts  GROUP BY s.date),
+         close_spot AS (SELECT s.date, MIN(s.spot) spot FROM spots s JOIN day d ON s.date=d.date AND s.ts=d.close_ts GROUP BY s.date),
+         open_strikes AS (
+           SELECT sn.date, sn.strike, SUM(sn.net_gex) g FROM snap sn
+           JOIN day d ON sn.date=d.date AND sn.ts=d.open_ts JOIN open_spot o ON o.date=sn.date
+           WHERE ABS(sn.strike - o.spot) <= ? GROUP BY sn.date, sn.strike
+         ),
+         wall AS (SELECT DISTINCT ON (date) date, strike wall FROM open_strikes ORDER BY date, g DESC)
+         SELECT d.date, w.wall, o.spot open_spot, c.spot close_spot, d.lo, d.hi
+         FROM day d JOIN wall w ON w.date=d.date JOIN open_spot o ON o.date=d.date JOIN close_spot c ON c.date=d.date
+         WHERE d.open_ts < d.close_ts AND (d.hi - d.lo) >= ? ORDER BY d.date`, [near, minRange]);
+      let days = 0, pulled = 0, sumO = 0, sumC = 0, approached = 0, rejected = 0;
+      const detail = rows.map((r) => {
+        const wall = num(r.wall), sO = num(r.open_spot), sC = num(r.close_spot), hi = num(r.hi), lo = num(r.lo);
+        const openD = Math.abs(sO - wall), closeD = Math.abs(sC - wall);
+        if (closeD < openD) pulled++;
+        days++; sumO += openD; sumC += closeD;
+        let side = 'at-spot', app = false, rej = false;
+        if (wall > sO + tol) { side = 'resist'; app = hi >= wall - tol; if (app) rej = sC <= wall + tol; }
+        else if (wall < sO - tol) { side = 'support'; app = lo <= wall + tol; if (app) rej = sC >= wall - tol; }
+        if (app) { approached++; if (rej) rejected++; }
+        return { date: r.date, wall: Math.round(wall), open: Math.round(sO), close: Math.round(sC), 'openΔ': Math.round(openD), 'closeΔ': Math.round(closeD), side, approached: app ? 'yes' : '-', result: app ? (rej ? 'REJECT' : 'broke') : '-' };
+      });
+      return {
+        detail,
+        summary: [
+          { metric: 'Avg dist to wall — open', value: `${round(sumO / (days || 1), 1)} pt` },
+          { metric: 'Avg dist to wall — close', value: `${round(sumC / (days || 1), 1)} pt` },
+          { metric: 'Pulled toward wall by close', value: `${pulled}/${days} (${pct(pulled, days)}%)` },
+          { metric: 'Approached wall', value: `${approached}/${days}` },
+          { metric: 'Rejected (of approached)', value: approached ? `${rejected}/${approached} (${pct(rejected, approached)}%)` : '-' },
+        ],
+        note: `${days} sessions. Pin holds only if close-distance < open-distance and pulled% > 50. Wall = largest positive net-GEX strike near spot at open.`,
+      };
+    };
+
+    const normalizedGex = async (ctx, ticker, expiration) => {
+      const r0 = await ctx.internalFetch(`/proxy/api/tt/chains/${encodeURIComponent(ticker)}?expiration=${encodeURIComponent(expiration)}&range=all`, { cache: 'no-store' });
+      if (!r0.ok) throw new Error(`chain fetch failed: HTTP ${r0.status}`);
+      const json = await r0.json();
+      const data = json?.data ?? {};
+      const spot = num(data.underlyingPrice);
+      if (!spot) throw new Error(`no live spot for ${ticker} — check ticker`);
+      const allGroups = data.items ?? [];
+      const groups = allGroups.filter((g) => String(g['expiration-date'] ?? '').slice(0, 10) === expiration.slice(0, 10));
+      const target = groups.length ? groups : allGroups;
+      if (!target.length) throw new Error(`no chain data for ${ticker} ${expiration} — check the expiration date`);
+      const S = spot;
+      const rows = [];
+      for (const g of target) {
+        for (const item of (g.strikes ?? [])) {
+          const strike = num(item['strike-price']);
+          if (!strike) continue;
+          const c = item.call, p = item.put;
+          const cnt = (o) => (o ? (num(o['open-interest'] ?? o.openInterest) + num(o.volume)) : 0);
+          const cc = cnt(c), pc = cnt(p);
+          if (!cc && !pc) continue;
+          const gex = (num(c?.gamma) * cc - num(p?.gamma) * pc) * S * S * 0.01 * 100;
+          rows.push({ strike, gex });
+        }
+      }
+      if (!rows.length) throw new Error(`no strikes with OI/volume for ${ticker} ${expiration}`);
+      const totalAbs = rows.reduce((s, r) => s + Math.abs(r.gex), 0);
+      const detail = rows.map((r) => ({ strike: r.strike, 'net GEX': Math.round(r.gex), 'normalized %': totalAbs > 0 ? round((Math.abs(r.gex) / totalAbs) * 100, 2) : 0 })).sort((a, b) => b.strike - a.strike);
+      return { detail, note: `${ticker.toUpperCase()} · ${expiration} · spot ${round(spot, 2)} · ${detail.length} strikes. Normalized GEX (%) = |strike net GEX| / Σ|net GEX| × 100.` };
+    };
+
+    const gexDexCross = async (horizonMin, hit, band, days, gapMin) => {
+      const cut = Date.now() - days * 86_400_000;
+      const Hm = horizonMin * 60_000, GAP = gapMin * 60_000, TOL = 180_000;
+      const etd = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const et = (ms) => new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+      const pxRows = await libDb.queryAll(
+        `SELECT timestamp AS t, MAX(spot) spot FROM option_strike_gex_history
+         WHERE spot IS NOT NULL AND timestamp > ? GROUP BY timestamp ORDER BY timestamp`, [cut]);
+      const P = pxRows.map((r) => ({ t: Number(r.t), spot: num(r.spot) }));
+      if (P.length < 2) throw new Error('no SPX price path in window');
+      const flipFrom = (rows, spot) => {
+        if (rows.length < 40) return null;
+        if (!(rows[0].strike < spot && rows[rows.length - 1].strike > spot)) return null;
+        let cum = 0, best = null, bd = 1e9, pS = null, pC = 0;
+        for (const r of rows) {
+          const nc = cum + r.v;
+          if (pS != null && ((pC <= 0 && nc > 0) || (pC >= 0 && nc < 0)) && nc - pC !== 0) {
+            const k = pS + (r.strike - pS) * (0 - pC) / (nc - pC);
+            const d = Math.abs(k - spot);
+            if (d < bd && d <= band) { bd = d; best = k; }
+          }
+          pS = r.strike; pC = nc; cum = nc;
+        }
+        return best;
+      };
+      const nearestSpot = (t) => {
+        let lo = 0, hi = P.length - 1;
+        if (t < P[0].t - TOL || t > P[hi].t + TOL) return null;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (P[m].t < t) lo = m + 1; else hi = m; }
+        let best = P[lo];
+        for (const j of [lo - 1, lo]) if (j >= 0 && j < P.length && Math.abs(P[j].t - t) < Math.abs(best.t - t)) best = P[j];
+        return Math.abs(best.t - t) <= TOL ? best.spot : null;
+      };
+      const exc = (t0, spot0, dir) => {
+        const st = P.findIndex((p) => p.t > t0);
+        if (st < 0) return null;
+        let mu = 0, md = 0, cnt = 0;
+        for (let i = st; i < P.length; i++) { const p = P[i]; if (p.t > t0 + Hm) break; const dd = p.spot - spot0; if (dd > mu) mu = dd; if (dd < md) md = dd; cnt++; }
+        if (!cnt) return null;
+        return { mfe: dir > 0 ? mu : -md, mae: dir > 0 ? -md : mu };
+      };
+      const crossesOf = (series) => {
+        const byD = new Map();
+        for (const r of series) { const d = etd(r.t); if (!byD.has(d)) byD.set(d, []); byD.get(d).push(r); }
+        const out = [];
+        for (const rows of byD.values()) {
+          rows.sort((a, b) => a.t - b.t);
+          let lt = -1e15, ld = 0;
+          for (let i = 1; i < rows.length; i++) {
+            const a = rows[i - 1], b = rows[i];
+            if (a.spot === b.spot) continue;
+            const pa = a.spot - a.flip, pb = b.spot - b.flip;
+            if (!pa || !pb) continue;
+            if ((pa < 0 && pb > 0) || (pa > 0 && pb < 0)) {
+              const dir = pb > 0 ? 1 : -1;
+              if (dir === ld && b.t - lt < GAP) continue;
+              lt = b.t; ld = dir;
+              const e = exc(b.t, b.spot, dir);
+              if (!e) continue;
+              out.push({ d: etd(b.t), time: et(b.t), dir, spot0: round(b.spot, 2), flip: round(b.flip, 2), mfe: round(e.mfe, 1), mae: round(e.mae, 1) });
+            }
+          }
+        }
+        return out;
+      };
+      const buildSeries = async (sql, reSourceSpot) => {
+        const rows = await libDb.queryAll(sql, [cut]);
+        const map = new Map();
+        for (const r of rows) { const k = Math.round(Number(r.t)); if (!map.has(k)) map.set(k, { spot: num(r.spot), rows: [] }); map.get(k).rows.push({ strike: num(r.strike), v: num(r.v) }); }
+        const ser = [];
+        for (const [k, o] of map) {
+          const f = flipFrom(o.rows, o.spot);
+          if (f == null) continue;
+          const sp = reSourceSpot ? nearestSpot(k) : o.spot;
+          if (sp == null) continue;
+          ser.push({ t: k, spot: sp, flip: f });
+        }
+        return ser.sort((a, b) => a.t - b.t);
+      };
+      const gexCr = crossesOf(await buildSeries(
+        `SELECT timestamp AS t, strike, SUM(net_gex) v, MAX(spot) spot FROM option_strike_gex_history
+         WHERE timestamp > ? GROUP BY timestamp, strike ORDER BY timestamp, strike`, false));
+      const dexCr = crossesOf(await buildSeries(
+        `SELECT EXTRACT(EPOCH FROM ts) * 1000 AS t, strike, SUM(delta_net) v, MAX(spot) spot FROM greek_snapshots
+         WHERE symbol='SPX' AND expiry = date AND delta_net IS NOT NULL AND EXTRACT(EPOCH FROM ts) * 1000 > ?
+         GROUP BY ts, strike ORDER BY ts, strike`, true));
+      const stat = (label, cr) => {
+        const up = cr.filter((x) => x.dir > 0), dn = cr.filter((x) => x.dir < 0);
+        const hc = (g) => (g.length ? pct(g.filter((x) => x.mfe >= hit).length, g.length) : 0);
+        const hf = (g) => (g.length ? pct(g.filter((x) => x.mae >= hit).length, g.length) : 0);
+        return {
+          signal: label, n: cr.length,
+          'cont hit %': hc(cr), 'cont MFE': round(mean(cr.map((x) => x.mfe)), 2), 'cont MAE': round(mean(cr.map((x) => x.mae)), 2),
+          'fade hit %': hf(cr), 'fade MFE': round(mean(cr.map((x) => x.mae)), 2), 'fade MAE': round(mean(cr.map((x) => x.mfe)), 2),
+          'up hit %': hc(up), 'dn hit %': hc(dn),
+        };
+      };
+      const detail = [...gexCr.map((x) => ({ signal: 'GEX', ...x })), ...dexCr.map((x) => ({ signal: 'DEX', ...x }))]
+        .sort((a, b) => (a.d === b.d ? (a.time < b.time ? -1 : 1) : a.d < b.d ? -1 : 1))
+        .map((x) => ({ signal: x.signal, date: x.d, time: x.time, dir: x.dir > 0 ? 'UP' : 'DN', spot: x.spot0, flip: x.flip, MFE: x.mfe, MAE: x.mae }));
+      const from = etd(P[0].t), to = etd(P[P.length - 1].t);
+      return {
+        summary: [stat('GEX flip (0γ)', gexCr), stat('DEX flip (0Δ)', dexCr)],
+        detail,
+        note: `${from}→${to} · GEX ${gexCr.length} crosses, DEX ${dexCr.length} · horizon ${horizonMin}m · "hit" = favorable ≥ ${hit}pt · flip band ±${band}pt. "cont" = trade the cross (continuation), "fade" = reverse (MFE/MAE swap). Small sample — directional only.`,
+      };
+    };
+
+    register('/api/backtests', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res, ctx) {
+        const q = new URL(req.url || '/', 'http://localhost').searchParams;
+        const test = q.get('test');
+        const n = (k, d) => { const v = Number(q.get(k)); return Number.isFinite(v) ? v : d; };
+        try {
+          let body;
+          if (test === 'cb-size') body = await cbSize(n('tol', 10));
+          else if (test === 'confidence') body = await confidence();
+          else if (test === 'dex-preflip') body = await dexPreflip((q.get('greek') === 'gex' ? 'gex' : 'dex'), n('hitAbs', 50), n('lookMin', 20), n('minPRange', 5), q.get('edges') === '1');
+          else if (test === 'gamma-wall') body = await gammaWall(n('tol', 5), n('near', 150), n('minRange', 5));
+          else if (test === 'normalized-gex') body = await normalizedGex(ctx, (q.get('ticker') || 'SPX').trim().toUpperCase(), (q.get('expiration') || '').trim());
+          else if (test === 'gex-dex-cross') body = await gexDexCross(n('horizon', 30), n('hit', 5), n('band', 60), n('days', 30), n('gap', 5));
+          else { send(res, 400, { error: 'unknown test' }); return; }
+          send(res, 200, { ok: true, test, ...body });
+        } catch (e) { send(res, 500, { ok: false, error: e.message }); }
+      },
+    });
+  }
+
+  // /api/budget — owner-only budget/register/recurring/amazon/prop manager.
+  // GET loads a month; POST dispatches ~18 actions. Ported verbatim from
+  // app/api/budget/route.ts; ownerGate replaced by enforceAuth 'owner'. All data
+  // under the single stable "owner" profile.
+  {
+    const BUDGET_PROFILE_KEY = 'owner';
+    const monthRange = (month) => {
+      const [y, m] = month.split('-').map(Number);
+      const pad = (n) => String(n).padStart(2, '0');
+      const last = new Date(y, m, 0).getDate();
+      return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(last)}` };
+    };
+    const currentMonth = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; };
+    const normBank = (v) => (v === 'coastal' || v === 'truist' ? v : 'secu');
+    const normFreq = (v) => (v === 'weekly' || v === 'biweekly' ? v : 'monthly');
+    register('/api/budget', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        try {
+          const D = libDb;
+          if (req.method === 'GET') {
+            const month = new URL(req.url || '/', 'http://localhost').searchParams.get('month') || currentMonth();
+            const { from, to } = monthRange(month);
+            const year = month.slice(0, 4);
+            await D.adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
+            const profile = await D.getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
+            const [categories, entries, register2, recurring, amazonRows, propRows, dailyBalance] = await Promise.all([
+              D.listBudgetCategories(profile.id),
+              D.listBudgetEntries(profile.id, 500),
+              D.listRegister(profile.id, from, to),
+              D.listRecurring(profile.id),
+              D.listAmazonRows(profile.id, from, to),
+              D.listPropRows(profile.id, `${year}-01-01`, `${year}-12-31`),
+              D.getLatestDailyBalance(profile.id),
+            ]);
+            const prevDailyBalance = dailyBalance ? await D.getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
+            send(res, 200, { profile, categories, entries, month, register: register2, recurring, amazonRows, propRows, dailyBalance, prevDailyBalance });
+            return;
+          }
+          const body = await readJson(req);
+          const action = String(body?.action ?? '');
+          await D.adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
+          const profile = await D.getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
+          if (action === 'category') {
+            const category = await D.upsertBudgetCategory({
+              profile_id: profile.id, name: String(body?.name ?? '').trim(), amount: Number(body?.amount ?? 0),
+              period: String(body?.period ?? 'monthly'), color: body?.color ? String(body.color) : null,
+            });
+            send(res, 200, { ok: true, category }); return;
+          }
+          if (action === 'categoryDelete') { await D.deleteBudgetCategory(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
+          if (action === 'dailyBalance') {
+            const row = await D.upsertDailyBalance({
+              profile_id: profile.id, day: String(body?.day ?? '').trim() || currentMonth() + '-01',
+              coastal: Number(body?.coastal ?? 0), truist: Number(body?.truist ?? 0), secu: Number(body?.secu ?? 0),
+            });
+            send(res, 200, { ok: true, dailyBalance: row }); return;
+          }
+          if (action === 'assignCategory') {
+            const catId = body?.categoryId == null ? null : Number(body.categoryId);
+            await D.setRegisterCategory(profile.id, Number(body?.id ?? 0), catId);
+            send(res, 200, { ok: true }); return;
+          }
+          if (action === 'entry') {
+            const entry = await D.insertBudgetEntry({
+              profile_id: profile.id, category_id: body?.categoryId ? Number(body.categoryId) : null,
+              type: body?.type === 'income' ? 'income' : 'expense', amount: Number(body?.amount ?? 0),
+              title: String(body?.title ?? '').trim(), notes: body?.notes ? String(body.notes) : null,
+              occurred_at: String(body?.occurredAt ?? new Date().toISOString()),
+            });
+            send(res, 200, { ok: true, entry }); return;
+          }
+          if (action === 'registerRow') {
+            const row = await D.insertRegisterRow({
+              profile_id: profile.id, entry_date: String(body?.date ?? '').trim(),
+              sort_order: Number(body?.sortOrder ?? Date.now() % 100000), label: String(body?.label ?? '').trim(),
+              bank: normBank(body?.bank), amount: Number(body?.amount ?? 0),
+              recurring_tag: body?.recurringTag ? String(body.recurringTag) : null,
+            });
+            send(res, 200, { ok: true, row }); return;
+          }
+          if (action === 'registerRowsBulk') {
+            const rows = Array.isArray(body?.rows) ? body.rows : [];
+            let inserted = 0;
+            for (const r of rows) {
+              const entry_date = String(r?.date ?? '').trim();
+              const label = String(r?.label ?? '').trim();
+              const amount = Number(r?.amount ?? 0);
+              if (!entry_date || !label || !Number.isFinite(amount) || amount === 0) continue;
+              await D.insertRegisterRow({ profile_id: profile.id, entry_date, sort_order: (Date.now() % 100000) + inserted, label, bank: normBank(r?.bank), amount });
+              inserted++;
+            }
+            send(res, 200, { ok: true, inserted }); return;
+          }
+          if (action === 'updateRow') {
+            await D.updateRegisterRow(profile.id, Number(body?.id ?? 0), {
+              entry_date: body?.date != null ? String(body.date) : undefined,
+              label: body?.label != null ? String(body.label) : undefined,
+              bank: body?.bank != null ? normBank(body.bank) : undefined,
+              amount: body?.amount != null ? Number(body.amount) : undefined,
+            });
+            send(res, 200, { ok: true }); return;
+          }
+          if (action === 'deleteRow') { await D.deleteRegisterRow(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
+          if (action === 'setBeginning') {
+            const month = String(body?.month ?? currentMonth());
+            const { from, to } = monthRange(month);
+            await D.deleteRegisterByTag(profile.id, from, to, '__beginning__');
+            const balances = body?.balances ?? {};
+            for (const bank of ['coastal', 'truist', 'secu']) {
+              await D.insertRegisterRow({ profile_id: profile.id, entry_date: from, sort_order: -1, label: 'BEGINNING', bank, amount: Number(balances[bank] ?? 0), is_beginning: 1, recurring_tag: '__beginning__' });
+            }
+            send(res, 200, { ok: true }); return;
+          }
+          if (action === 'recurringAdd') {
+            const row = await D.insertRecurring({
+              profile_id: profile.id, label: String(body?.label ?? '').trim().toUpperCase(), bank: normBank(body?.bank),
+              amount: Number(body?.amount ?? 0), frequency: normFreq(body?.frequency), anchor_date: String(body?.anchorDate ?? '').trim(),
+            });
+            send(res, 200, { ok: true, row }); return;
+          }
+          if (action === 'recurringUpdate') {
+            await D.updateRecurring(profile.id, Number(body?.id ?? 0), {
+              label: body?.label != null ? String(body.label).toUpperCase() : undefined,
+              bank: body?.bank != null ? normBank(body.bank) : undefined,
+              amount: body?.amount != null ? Number(body.amount) : undefined,
+              frequency: body?.frequency != null ? normFreq(body.frequency) : undefined,
+              anchor_date: body?.anchorDate != null ? String(body.anchorDate) : undefined,
+              active: body?.active != null ? (body.active ? 1 : 0) : undefined,
+            });
+            send(res, 200, { ok: true }); return;
+          }
+          if (action === 'recurringDelete') { await D.deleteRecurring(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
+          if (action === 'amazon') {
+            const row = await D.insertAmazonRow({ profile_id: profile.id, work_date: String(body?.date ?? '').trim(), pay: Number(body?.pay ?? 0), gas: Number(body?.gas ?? 0) });
+            send(res, 200, { ok: true, amazon: row }); return;
+          }
+          if (action === 'deleteAmazon') { await D.deleteAmazonRow(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
+          if (action === 'propAdd') {
+            const row = await D.insertPropRow({
+              profile_id: profile.id, entry_date: String(body?.date ?? '').trim(), source: body?.source ? String(body.source) : 'prop',
+              firm: body?.firm ? String(body.firm) : 'TPT', accounts: Number(body?.accounts ?? 0), cost: Number(body?.cost ?? 0),
+              payout: Number(body?.payout ?? 0), note: body?.note ? String(body.note) : null,
+            });
+            send(res, 200, { ok: true, prop: row }); return;
+          }
+          if (action === 'propUpdate') {
+            await D.updatePropRow(profile.id, Number(body?.id ?? 0), {
+              entry_date: body?.date != null ? String(body.date) : undefined,
+              source: body?.source != null ? String(body.source) : undefined,
+              firm: body?.firm != null ? String(body.firm) : undefined,
+              accounts: body?.accounts != null ? Number(body.accounts) : undefined,
+              cost: body?.cost != null ? Number(body.cost) : undefined,
+              payout: body?.payout != null ? Number(body.payout) : undefined,
+              note: body?.note !== undefined ? (body.note ? String(body.note) : null) : undefined,
+            });
+            send(res, 200, { ok: true }); return;
+          }
+          if (action === 'propDelete') { await D.deletePropRow(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
+          send(res, 400, { error: 'Unknown action' });
+        } catch (err) { send(res, 500, { error: req.method === 'GET' ? 'Budget load failed' : 'Budget save failed', detail: String(err) }); }
+      },
+    });
+  }
+
+  // /api/watch — owner options-watchlist tracker. GET (list / ?history=id /
+  // ?quote=...) + POST {action: add|remove|refresh}. Live data via in-process
+  // /proxy/probe-rest. Ported verbatim from app/api/watch/route.ts. Owner-only.
+  {
+    const RANGE_MS = { '1d': 24 * 3600_000, '3d': 3 * 24 * 3600_000, '1w': 7 * 24 * 3600_000, '1m': 30 * 24 * 3600_000 };
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) && n !== 0 ? n : null; };
+    const fetchProbe = async (ctx, ticker, expiry, side, strike) => {
+      const path = `/proxy/probe-rest?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(expiry)}&type=${side}&strike=${encodeURIComponent(strike)}`;
+      try { const r = await ctx.internalFetch(path, { cache: 'no-store' }); return await r.json(); }
+      catch { return null; }
+    };
+    const sideExposure = (j) => {
+      if (!j?.found || !j.result) return { gamma: null, pos: 0, spot: null };
+      const g = j.result.feeds?.Greeks ?? {};
+      const su = j.result.feeds?.Summary ?? {};
+      const tr = j.result.feeds?.Trade ?? {};
+      const ex = j.result.exposures ?? {};
+      const oi = num(su.openInterest) ?? num(ex.oi) ?? 0;
+      const vol = num(tr.volume) ?? num(ex.volume) ?? 0;
+      return { gamma: num(g.bsGamma), pos: oi + vol, spot: num(ex.spot) };
+    };
+    const probe = async (ctx, row) => {
+      const oppSide = row.side === 'C' ? 'P' : 'C';
+      const [j, oppJ] = await Promise.all([
+        fetchProbe(ctx, row.ticker, row.expiration, row.side, row.strike),
+        fetchProbe(ctx, row.ticker, row.expiration, oppSide, row.strike),
+      ]);
+      if (!j?.found || !j.result) return null;
+      const q = j.result.feeds?.Quote ?? {};
+      const tr = j.result.feeds?.Trade ?? {};
+      const su = j.result.feeds?.Summary ?? {};
+      const g = j.result.feeds?.Greeks ?? {};
+      const ex = j.result.exposures ?? {};
+      const mark = num(q.mark) ?? num(q.mid);
+      const volume = num(tr.volume) ?? num(ex.volume);
+      const netPrem = mark != null && volume != null ? mark * volume * 100 : null;
+      const watched = sideExposure(j);
+      const opp = sideExposure(oppJ);
+      const call = row.side === 'C' ? watched : opp;
+      const put = row.side === 'C' ? opp : watched;
+      const spot = watched.spot ?? opp.spot;
+      let netGex = null;
+      if (spot != null && spot > 0) {
+        const callGex = Math.abs(call.gamma ?? 0) * call.pos * spot * spot;
+        const putGex = -Math.abs(put.gamma ?? 0) * put.pos * spot * spot;
+        netGex = callGex + putGex;
+      }
+      return {
+        watch_id: row.id, ts: Date.now(), spot: num(ex.spot), bid: num(q.bid), ask: num(q.ask), mark,
+        last: num(tr.last), iv: num(g.bsIv) ?? num(g.iv), delta: num(g.bsDelta), gamma: num(g.bsGamma),
+        theta: num(g.bsTheta), vega: num(g.bsVega), open_interest: num(su.openInterest) ?? num(ex.oi),
+        volume, net_prem: netPrem, prev_close: num(su.prevClose), net_gex: netGex,
+      };
+    };
+    register('/api/watch', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res, ctx) {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        if (req.method === 'GET') {
+          try {
+            const quoteTicker = sp.get('quote');
+            if (quoteTicker) {
+              const expiry = String(sp.get('expiry') || '').trim();
+              const side = String(sp.get('side') || 'C').toUpperCase() === 'P' ? 'P' : 'C';
+              const strike = Number(sp.get('strike'));
+              if (!expiry || !Number.isFinite(strike)) { send(res, 400, { error: 'expiry and strike required' }); return; }
+              const j = await fetchProbe(ctx, quoteTicker.trim().toUpperCase(), expiry, side, strike);
+              if (!j?.found || !j.result) { send(res, 200, { found: false }); return; }
+              const q = j.result.feeds?.Quote ?? {};
+              const tr = j.result.feeds?.Trade ?? {};
+              send(res, 200, { found: true, bid: num(q.bid), ask: num(q.ask), mark: num(q.mark) ?? num(q.mid), last: num(tr.last) });
+              return;
+            }
+            const historyId = sp.get('history');
+            if (historyId) {
+              const range = sp.get('range') || '';
+              const windowMs = RANGE_MS[range];
+              const history = windowMs
+                ? await libDb.getWatchHistorySince(Number(historyId), Date.now() - windowMs)
+                : await libDb.getWatchHistory(Number(historyId));
+              send(res, 200, { history });
+              return;
+            }
+            const [options, latest] = await Promise.all([libDb.getWatchOptions(), libDb.getLatestWatchSnapshots()]);
+            const byId = new Map(latest.map((s) => [s.watch_id, s]));
+            const rows = options.map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
+            send(res, 200, { rows });
+          } catch (err) { send(res, 500, { error: String(err) }); }
+          return;
+        }
+        // POST
+        try {
+          const body = await readJson(req).catch(() => ({}));
+          const action = String(body.action || '');
+          if (action === 'add') {
+            const ticker = String(body.ticker || '').trim().toUpperCase();
+            const expiration = String(body.expiry || body.expiration || '').trim();
+            const strike = Number(body.strike);
+            const side = String(body.side || '').trim().toUpperCase() === 'C' ? 'C' : 'P';
+            const note = body.note ? String(body.note).slice(0, 240) : null;
+            const entryPrice = Number(body.addedPrice ?? body.entryPrice);
+            const hasEntry = Number.isFinite(entryPrice) && entryPrice > 0;
+            if (!ticker || !expiration || !Number.isFinite(strike)) { send(res, 400, { error: 'ticker, expiry and strike required' }); return; }
+            const created = await libDb.insertWatchOption({ ticker, expiration, strike, side, note });
+            if (created) {
+              if (hasEntry) { await libDb.setWatchAddedPrice(created.id, entryPrice); created.added_price = entryPrice; }
+              const snap = await probe(ctx, created);
+              if (snap) {
+                await libDb.insertWatchSnapshot(snap);
+                if (snap.mark != null && !hasEntry) { await libDb.setWatchAddedPrice(created.id, snap.mark); created.added_price = snap.mark; }
+              }
+            }
+            send(res, 200, { ok: true, created });
+            return;
+          }
+          if (action === 'remove') {
+            const id = Number(body.id);
+            if (!Number.isFinite(id)) { send(res, 400, { error: 'id required' }); return; }
+            await libDb.deleteWatchOption(id);
+            send(res, 200, { ok: true });
+            return;
+          }
+          if (action === 'refresh') {
+            const options = await libDb.getWatchOptions();
+            let recorded = 0;
+            await Promise.all(options.map(async (o) => { const snap = await probe(ctx, o); if (snap) { await libDb.insertWatchSnapshot(snap); recorded++; } }));
+            const latest = await libDb.getLatestWatchSnapshots();
+            const byId = new Map(latest.map((s) => [s.watch_id, s]));
+            const rows = options.map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
+            send(res, 200, { ok: true, recorded, rows });
+            return;
+          }
+          send(res, 400, { error: 'unknown action' });
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/social-media/day-list — auto-generated Day Posts copy list (day_posts
+  // table, written by the day-post-writer cron). GET. Subscriber. Ported verbatim.
+  register('/api/social-media/day-list', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      const todayET2 = () => {
+        const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+        const m = {}; p.forEach((x) => { m[x.type] = x.value; });
+        return `${m.year}-${m.month}-${m.day}`;
+      };
+      try {
+        const pool = libDb.getPool();
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS day_posts (
+            date TEXT NOT NULL, slot TEXT NOT NULL, tweet TEXT NOT NULL, data JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (date, slot)
+          )`);
+        const date = new URL(req.url || '/', 'http://localhost').searchParams.get('date') || todayET2();
+        const { rows } = await pool.query(
+          `SELECT date, slot, tweet, created_at FROM day_posts WHERE date=$1
+           ORDER BY CASE slot WHEN 'premarket' THEN 0 WHEN 'midday' THEN 1 WHEN 'eod' THEN 2 ELSE 3 END`, [date]);
+        send(res, 200, { date, rows }, { 'Cache-Control': NO_STORE });
+      } catch (err) { send(res, 500, { error: String(err) }); }
+    },
+  });
+
+  // ── Owner admin routes (all fail-closed owner-gated in the originals via
+  // getServerUserId+OWNER_USER_ID → enforceAuth 'owner'). All libDb-backed. ──
+
+  // /api/admin/customer-activity — engagement feed (page_visits ⋈ users/subs).
+  register('/api/admin/customer-activity', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const [activity, authRows] = await Promise.all([libDb.getCustomerActivity(), libDb.listUsersWithLastLogin()]);
+        const authUsers = new Map(authRows.map((r) => [r.id, r]));
+        const rows = await Promise.all(activity.map(async (a) => {
+          const au = authUsers.get(a.user_id);
+          let paid = false;
+          try { const sub = await libDb.getSubscription(a.user_id); paid = !!sub?.status && libDb.PAID_STATUSES.has(sub.status); } catch { /* unpaid */ }
+          return { userId: a.user_id, email: au?.email ?? null, lastLogin: au?.last_login_at ?? null, lastSeen: a.last_seen, firstSeen: a.first_seen, totalLoads: a.total_loads, distinctPages: a.distinct_pages, sessionCount: a.session_count, approxActiveSec: Math.round(a.approx_active_sec), topPath: a.top_path, paid };
+        }));
+        send(res, 200, { ok: true, rows: rows.filter((r) => r.email) });
+      } catch (err) { send(res, 500, { error: 'Activity load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/admin/far-cb-tickers — who added which Far CB Watch tickers.
+  register('/api/admin/far-cb-tickers', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try { const rows = await libDb.listFarCbTickers(); send(res, 200, { ok: true, rows }); }
+      catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/admin/sales-expenses — business expense CRUD.
+  {
+    const CADENCES = new Set(['monthly', 'yearly', 'once']);
+    register('/api/admin/sales-expenses', {
+      auth: 'owner', methods: ['GET', 'POST', 'DELETE'],
+      async handler(req, res) {
+        try {
+          if (req.method === 'GET') { const rows = await libDb.listSalesExpenses(); send(res, 200, { ok: true, count: rows.length, expenses: rows }); return; }
+          if (req.method === 'DELETE') {
+            const id = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('id'));
+            if (!Number.isFinite(id)) { send(res, 400, { error: 'id query param required' }); return; }
+            const { removed } = await libDb.removeSalesExpense(id);
+            send(res, 200, { ok: true, removed, id });
+            return;
+          }
+          const body = await readJson(req).catch(() => ({}));
+          const name = String(body?.name ?? '').trim();
+          const category = String(body?.category ?? 'other').trim() || 'other';
+          const amountCents = Math.round(Number(body?.amountCents));
+          const cadence = String(body?.cadence ?? 'monthly').trim();
+          if (!name) { send(res, 400, { error: 'name required' }); return; }
+          if (!Number.isFinite(amountCents) || amountCents <= 0) { send(res, 400, { error: 'amountCents must be a positive number' }); return; }
+          if (!CADENCES.has(cadence)) { send(res, 400, { error: 'cadence must be monthly, yearly, or once' }); return; }
+          const expense = await libDb.addSalesExpense(name, category, amountCents, cadence);
+          send(res, 200, { ok: true, expense });
+        } catch (err) { send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      },
+    });
+  }
+
+  // /api/admin/unsubscribes — global suppression-list CRUD.
+  {
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    register('/api/admin/unsubscribes', {
+      auth: 'owner', methods: ['GET', 'POST', 'DELETE'],
+      async handler(req, res) {
+        try {
+          if (req.method === 'GET') { const rows = await libDb.listUnsubscribes(); send(res, 200, { ok: true, count: rows.length, unsubscribes: rows }); return; }
+          if (req.method === 'DELETE') {
+            const email = (new URL(req.url || '/', 'http://localhost').searchParams.get('email') || '').trim().toLowerCase();
+            if (!email) { send(res, 400, { error: 'email query param required' }); return; }
+            const { removed } = await libDb.removeUnsubscribe(email);
+            send(res, 200, { ok: true, removed, email });
+            return;
+          }
+          const body = await readJson(req).catch(() => ({}));
+          const email = String(body?.email ?? '').trim().toLowerCase();
+          if (!EMAIL_RE.test(email)) { send(res, 400, { error: 'Valid email required' }); return; }
+          const { added } = await libDb.addUnsubscribe(email, 'manual');
+          send(res, 200, { ok: true, added, email });
+        } catch (err) { send(res, 500, { error: 'Save failed', detail: String(err) }); }
+      },
+    });
+  }
+
+  // /api/admin/discord-connections — linked-Discord accounts. discordAvatarUrl
+  // inlined from lib/discord.ts.
+  {
+    const discordAvatarUrl = (discordId, avatar) => {
+      if (!avatar) return null;
+      const ext = avatar.startsWith('a_') ? 'gif' : 'png';
+      return `https://cdn.discordapp.com/avatars/${discordId}/${avatar}.${ext}?size=64`;
+    };
+    register('/api/admin/discord-connections', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const rows = await libDb.listDiscordConnections();
+          send(res, 200, { ok: true, rows: rows.map((r) => ({ email: r.email, discord_username: r.discord_username, avatar_url: discordAvatarUrl(r.discord_id, r.discord_avatar), connected_at: r.discord_connected_at, is_owner: r.is_owner })) });
+        } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+      },
+    });
+  }
+
+  // /api/unsubscribe — public RFC-8058 one-click / confirmation-page unsubscribe.
+  // verifyUnsubscribe (HMAC) inlined from lib/unsubscribe.ts. Ported verbatim.
+  {
+    const SECRET = (process.env.UNSUBSCRIBE_SECRET || process.env.WAITLIST_ADMIN_SECRET || '').trim();
+    const norm = (email) => email.trim().toLowerCase();
+    const unsubscribeToken = (email) => { if (!SECRET) return ''; return nodeCrypto.createHmac('sha256', SECRET).update(norm(email)).digest('hex').slice(0, 32); };
+    const verifyUnsubscribe = (email, token) => {
+      if (!SECRET || !token) return false;
+      const expected = unsubscribeToken(email);
+      if (expected.length !== token.length) return false;
+      return nodeCrypto.timingSafeEqual(Buffer.from(expected), Buffer.from(token));
+    };
+    register('/api/unsubscribe', {
+      auth: 'public', methods: ['POST'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          let email = (sp.get('e') || '').trim().toLowerCase();
+          let token = (sp.get('t') || '').trim();
+          if (!email || !token) {
+            const body = await readJson(req).catch(() => ({}));
+            email = String(body?.email ?? email).trim().toLowerCase();
+            token = String(body?.token ?? token).trim();
+          }
+          if (!email || !token) { send(res, 400, { ok: false, error: 'Missing email or token.' }); return; }
+          if (!verifyUnsubscribe(email, token)) { send(res, 403, { ok: false, error: 'Invalid or expired link.' }); return; }
+          await libDb.addUnsubscribe(email, 'link');
+          await libDb.unsubscribeWaitlistEmail(email);
+          send(res, 200, { ok: true, message: "You've been unsubscribed." });
+        } catch (err) { send(res, 500, { ok: false, error: 'Server error.' }); }
+      },
+    });
+  }
+
+  // /api/waitlist — public launch-notify signups (POST) + secret-gated admin
+  // export (GET ?secret=). Google-Sheets mirror inlined via require('googleapis')
+  // (best-effort no-op when unconfigured/unavailable). Ported verbatim.
+  {
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const DISPOSABLE_DOMAINS = new Set([
+      'mailinator.com', 'guerrillamail.com', '10minutemail.com', 'tempmail.com', 'temp-mail.org',
+      'throwawaymail.com', 'yopmail.com', 'trashmail.com', 'getnada.com', 'sharklasers.com',
+      'dispostable.com', 'maildrop.cc', 'fakeinbox.com', 'mintemail.com', 'mohmal.com', 'emailondeck.com',
+    ]);
+    const normalizeEmail = (raw) => {
+      const e = raw.trim().toLowerCase();
+      const [local, domain] = e.split('@');
+      if (!domain) return e;
+      if (domain === 'gmail.com' || domain === 'googlemail.com') { const base = local.split('+')[0].replace(/\./g, ''); return `${base}@gmail.com`; }
+      return `${local.split('+')[0]}@${domain}`;
+    };
+    // Inlined lib/google-sheets.ts appendWaitlistRowToSheet (best-effort).
+    const SHEET_ID = process.env.WAITLIST_SHEET_ID;
+    const SA_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    const SA_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    const SHEET_RANGE = process.env.WAITLIST_SHEET_RANGE || 'Sheet1!A:E';
+    let _sheets = null, _headerEnsured = false;
+    const sheetsConfigured = () => Boolean(SHEET_ID && SA_EMAIL && SA_KEY);
+    const getSheets = () => {
+      if (_sheets) return _sheets;
+      const { google } = require('googleapis');
+      const auth = new google.auth.JWT({ email: SA_EMAIL, key: SA_KEY, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+      _sheets = google.sheets({ version: 'v4', auth });
+      return _sheets;
+    };
+    const ensureHeader = async (sheets) => {
+      if (_headerEnsured) return;
+      _headerEnsured = true;
+      try {
+        const tab = SHEET_RANGE.split('!')[0];
+        const r = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${tab}!A1:E1` });
+        const hasHeader = (r.data.values?.[0]?.length ?? 0) > 0;
+        if (!hasHeader) await sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `${tab}!A1:E1`, valueInputOption: 'RAW', requestBody: { values: [['Email', 'Source', 'Referrer', 'User Agent', 'Signed Up']] } });
+      } catch { /* best-effort */ }
+    };
+    const appendWaitlistRowToSheet = async (row) => {
+      if (!sheetsConfigured()) { console.warn('[sheets] Google Sheets export not configured — skipping.'); return; }
+      const sheets = getSheets();
+      await ensureHeader(sheets);
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID, range: SHEET_RANGE, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: [[row.email, row.source ?? 'landing', row.referrer ?? '', row.user_agent ?? '', new Date().toISOString()]] },
+      });
+    };
+    register('/api/waitlist', {
+      auth: 'public', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        if (req.method === 'GET') {
+          const secret = new URL(req.url || '/', 'http://localhost').searchParams.get('secret');
+          if (!process.env.WAITLIST_ADMIN_SECRET || secret !== process.env.WAITLIST_ADMIN_SECRET) { send(res, 401, { ok: false, error: 'Unauthorized.' }); return; }
+          try { const rows = await libDb.listWaitlist(); send(res, 200, { ok: true, count: rows.length, rows }); }
+          catch (err) { send(res, 500, { ok: false, error: 'Server error.' }); }
+          return;
+        }
+        try {
+          const body = await readJson(req).catch(() => ({}));
+          const rawEmail = String(body?.email ?? '').trim().toLowerCase();
+          const email = normalizeEmail(rawEmail);
+          if (!email || !EMAIL_RE.test(email) || email.length > 254) { send(res, 400, { ok: false, error: 'Invalid email.' }); return; }
+          const domain = email.split('@')[1];
+          if (DISPOSABLE_DOMAINS.has(domain)) { send(res, 400, { ok: false, error: 'Please use a permanent email address.' }); return; }
+          const source = typeof body?.source === 'string' ? body.source : 'landing';
+          const referrer = req.headers['referer'] || null;
+          const user_agent = req.headers['user-agent'] || null;
+          const { added } = await libDb.addWaitlistEmail({ email, source, referrer, user_agent });
+          if (added) appendWaitlistRowToSheet({ email, source, referrer, user_agent }).catch((err) => console.error('[waitlist] sheet append failed:', err?.message || err));
+          send(res, 200, { ok: true, added, message: added ? "You're on the list." : "You're already on the list." });
+        } catch (err) { send(res, 500, { ok: false, error: 'Server error.' }); }
+      },
+    });
+  }
+
+  // /api/em-tracker family — per-ticker weekly EM hit/miss record. No explicit
+  // auth in the originals (middleware /api/* = subscriber), so all gate
+  // 'subscriber' (cron writes pass via the internal-token bypass). computeResult
+  // inlined from lib/em-tracker/computeResult.ts; evaluate/commit-history use the
+  // CJS server-v2 levels-engine (required at module top). Ported verbatim.
+  {
+    const computeResult = (r) => {
+      const em = Number(r.em);
+      if (!Number.isFinite(em) || em <= 0) return null;
+      const ref = r.ref_close != null ? Number(r.ref_close) : null;
+      const up = r.up != null ? Number(r.up) : (ref != null ? ref + em : null);
+      const down = r.down != null ? Number(r.down) : (ref != null ? ref - em : null);
+      if (up == null || down == null) return null;
+      const h = r.h != null ? Number(r.h) : null;
+      const l = r.l != null ? Number(r.l) : null;
+      if (h == null || l == null) return null;
+      return h <= up && l >= down ? 'hit' : 'miss';
+    };
+    register('/api/em-tracker', {
+      auth: 'subscriber', methods: ['GET', 'POST', 'DELETE'],
+      async handler(req, res) {
+        try {
+          await libDb.getDb();
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          if (req.method === 'GET') {
+            const view = sp.get('view');
+            const ticker = (sp.get('ticker') || '').trim().toUpperCase();
+            const weekStart = (sp.get('week_start') || '').trim();
+            const status = (sp.get('status') || '').trim();
+            if (weekStart && status === 'pending') { send(res, 200, { rows: await libDb.getEmTrackerPendingForWeek(weekStart) }); return; }
+            if (view === 'summary') { send(res, 200, { summary: await libDb.getEmTrackerSummary() }); return; }
+            if (ticker) { send(res, 200, { rows: await libDb.getEmTrackerRows(ticker) }); return; }
+            const [summary, rows] = await Promise.all([libDb.getEmTrackerSummary(), libDb.getEmTrackerRows()]);
+            send(res, 200, { summary, rows });
+            return;
+          }
+          if (req.method === 'DELETE') {
+            const all = sp.get('all');
+            const source = sp.get('source');
+            if (all === '1' || source) { const removed = await libDb.clearEmTracker(source || undefined); send(res, 200, { ok: true, removed }); return; }
+            const id = Number(sp.get('id'));
+            if (!id) { send(res, 400, { error: 'Missing id (or pass ?all=1 / ?source=)' }); return; }
+            await libDb.deleteEmTrackerRow(id);
+            send(res, 200, { ok: true });
+            return;
+          }
+          // POST
+          const body = await readJson(req);
+          if (body.id != null && (body.result === 'hit' || body.result === 'miss')) {
+            await libDb.setEmTrackerResult(Number(body.id), body.result, 'manual');
+            send(res, 200, { ok: true });
+            return;
+          }
+          const incoming = Array.isArray(body.rows) ? body.rows : body.ticker ? [body] : [];
+          if (!incoming.length) { send(res, 400, { error: 'Nothing to save' }); return; }
+          let saved = 0;
+          for (const raw of incoming) {
+            if (!raw.ticker || !raw.week_label || raw.em == null) continue;
+            const row = { ...raw, ticker: String(raw.ticker).toUpperCase(), em: Number(raw.em), result_source: raw.result_source ?? (Array.isArray(body.rows) ? 'import' : 'manual') };
+            if (row.result == null) { const computed = computeResult(row); if (computed) row.result = computed; }
+            await libDb.upsertEmTrackerRow(row);
+            saved++;
+          }
+          send(res, 200, { ok: true, saved });
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+
+    // evaluate + commit-history need the CJS levels-engine — only register when
+    // it loaded (else fall through to Next).
+    if (levelsEngine) {
+      register('/api/em-tracker/evaluate', {
+        auth: 'subscriber', methods: ['POST'],
+        async handler(req, res, ctx) {
+          try {
+            await libDb.getDb();
+            let ohlc = [];
+            try { const body = await readJson(req); if (Array.isArray(body?.ohlc)) ohlc = body.ohlc; } catch { /* no body */ }
+            if (ohlc.length) {
+              for (const k of ohlc) { if (!k.ticker || !k.week_label) continue; await libDb.updateEmTrackerOhlc(k.ticker, k.week_label, { o: k.o, h: k.h, l: k.l, c: k.c }); }
+              const pending = await libDb.getEmTrackerUnevaluated();
+              let hits = 0, misses = 0;
+              for (const row of pending) { const result = computeResult(row); if (!result) continue; await libDb.setEmTrackerResult(row.id, result, 'auto'); if (result === 'hit') hits++; else misses++; }
+              send(res, 200, { ok: true, evaluated: hits + misses, hits, misses, mode: 'ohlc-backfill' });
+              return;
+            }
+            const base = `http://localhost:${ctx.port || process.env.PORT || 3001}`;
+            const out = await levelsEngine.evaluateCompletedWeek(base);
+            send(res, 200, { ok: true, ...out, mode: 'weekly' });
+          } catch (err) { send(res, 500, { error: String(err) }); }
+        },
+      });
+
+      register('/api/em-tracker/commit-history', {
+        auth: 'subscriber', methods: ['POST'],
+        async handler(req, res, ctx) {
+          try {
+            const body = await readJson(req);
+            const weeks = Array.isArray(body?.weeks) ? body.weeks : [];
+            if (!weeks.length) { send(res, 400, { error: 'No weeks supplied' }); return; }
+            await libDb.getDb();
+            const bands = weeks.flatMap((w) => (w.rows || [])
+              .filter((r) => r.ticker && Number.isFinite(Number(r.up)) && Number.isFinite(Number(r.down)))
+              .map((r) => ({ ticker: String(r.ticker).toUpperCase(), week_start: w.week_start, week_label: w.week_label, up: Number(r.up), down: Number(r.down), em: r.em != null ? Number(r.em) : undefined, ref_close: r.ref_close != null ? Number(r.ref_close) : undefined })));
+            if (!bands.length) { send(res, 400, { error: 'No valid bands' }); return; }
+            const base = `http://localhost:${ctx.port || process.env.PORT || 3000}`;
+            const out = await levelsEngine.evaluateHistoricalWeeks(base, bands);
+            send(res, 200, { ok: true, weeks: weeks.length, bands: bands.length, ...out });
+          } catch (err) { send(res, 500, { error: String(err) }); }
+        },
+      });
+    }
+
+    // em-tracker/history + discord-preview — read-only fs reference data.
+    register('/api/em-tracker/history', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const file = nodePath.join(process.cwd(), 'data', 'em-tracker-history.json');
+          const json = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+          send(res, 200, json);
+        } catch { send(res, 200, { tallies: {}, total_weeks: 0 }); }
+      },
+    });
+    register('/api/em-tracker/discord-preview', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const file = nodePath.join(process.cwd(), 'data', 'em-discord-preview.json');
+          const json = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+          send(res, 200, json);
+        } catch { send(res, 200, { weeks: [], note: 'No preview yet — run scripts/import-em-from-discord.mjs' }); }
+      },
+    });
+    // em-tracker/import-sheet — retired 410 stub.
+    register('/api/em-tracker/import-sheet', {
+      auth: 'subscriber', methods: ['POST'],
+      async handler(req, res) { send(res, 410, { error: 'Endpoint retired — use /api/em-tracker/evaluate' }); },
+    });
+  }
+
+  // /api/ict-setups — ICT setup recorder. GET recap (subscriber), POST scan/grade
+  // (token-gated inside, cron-driven). analyzeICT via the _lib-ict.cjs bundle;
+  // db reads/writes via libDb. Ported verbatim from app/api/ict-setups/route.ts.
+  if (libIct) {
+    const etDateStr2 = (d = new Date()) => {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d).filter((p) => p.type !== 'literal').reduce((a, p) => ({ ...a, [p.type]: p.value }), {});
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    };
+    const fetchCandles = async (date) => {
+      const rows = await libDb.getEsCandles(date, undefined, 2000);
+      return rows.map((c) => ({ timestamp: Number(c.timestamp), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume ?? 0), date: String(c.date ?? date) }))
+        .filter((c) => Number.isFinite(c.timestamp) && c.high >= c.low)
+        .sort((a, b) => a.timestamp - b.timestamp);
+    };
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const keyFor = (d) => `${d.kind}:${d.dir}:${d.trigger_ts}:${Math.round(d.price)}`;
+    const extractSetups = (candles) => {
+      const a = libIct.analyzeICT(candles);
+      const out = [];
+      const lastClose = candles.length ? candles[candles.length - 1].close : 0;
+      const byTs = new Map(candles.map((c) => [c.timestamp, c]));
+      const atr = (() => {
+        const n = Math.min(14, candles.length - 1);
+        if (n <= 0) return 2;
+        let sum = 0;
+        for (let i = candles.length - n; i < candles.length; i++) { const c = candles[i], p = candles[i - 1]; sum += Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close)); }
+        return Math.max(1, sum / n);
+      })();
+      const buf = Math.max(1, atr * 0.15);
+      const structuralStop = (dir, entry, ts) => {
+        if (dir === 'bull') { const lows = a.pivots.filter((p) => p.type === 'low' && p.confirmTs <= ts && p.price < entry).map((p) => p.price); const lvl = lows.length ? Math.max(...lows) : entry - atr; return lvl - buf; }
+        const highs = a.pivots.filter((p) => p.type === 'high' && p.confirmTs <= ts && p.price > entry).map((p) => p.price); const lvl = highs.length ? Math.min(...highs) : entry + atr; return lvl + buf;
+      };
+      const pushEvent = (kind, label, dir, ts, level, note) => {
+        const bar = byTs.get(ts);
+        const entry = bar ? bar.close : level;
+        const invalidation = structuralStop(dir, entry, ts);
+        const inval = dir === 'bull' ? Math.min(invalidation, entry - buf) : Math.max(invalidation, entry + buf);
+        out.push({ kind, label, dir, trigger_ts: ts, price: round2(entry), note, target: null, invalidation: inval });
+      };
+      for (const s of a.structure) pushEvent(s.kind.toLowerCase(), s.kind, s.dir, s.ts, s.price, `${s.kind} ${s.dir} @ ${round2(s.price)}`);
+      for (const d of a.displacement) pushEvent('displacement', 'Displacement', d.dir, d.endTs, d.endPrice, `displacement ${d.dir} ×${round2(d.bodyRatio)} ATR`);
+      for (const p of a.liquidity) {
+        if (!p.swept) continue;
+        const sweepBar = candles.find((c) => c.timestamp > p.confirmTs && (p.side === 'BSL' ? c.high > p.price : c.low < p.price));
+        if (!sweepBar) continue;
+        const dir = p.side === 'BSL' ? 'bear' : 'bull';
+        const kind = p.count >= 2 ? 'eqhl' : 'liquidity';
+        const label = p.count >= 2 ? `EQ${p.side === 'BSL' ? 'H' : 'L'} swept` : `${p.side} swept`;
+        pushEvent(kind, label, dir, sweepBar.timestamp, p.price, `${p.side}${p.count > 1 ? ` ×${p.count}` : ''} swept @ ${round2(p.price)}`);
+      }
+      const signalGroups = [
+        { sigs: a.inducement, label: 'Inducement' }, { sigs: a.turtleSoup, label: 'Turtle Soup' }, { sigs: a.judas, label: 'Judas Swing' },
+        { sigs: a.breakers, label: 'Breaker' }, { sigs: a.cisd, label: 'CISD' }, { sigs: a.model2022, label: '2022 Model' },
+      ];
+      for (const { sigs, label } of signalGroups) for (const s of sigs) pushEvent(s.kind, label, s.dir, s.ts, s.price, s.note ?? `${label} ${s.dir}`);
+      for (const f of a.fvgs) {
+        const ts = f.inverted && f.invertedTs ? f.invertedTs : f.ts;
+        const mid = (f.top + f.bottom) / 2;
+        pushEvent(f.inverted ? 'ifvg' : 'fvg', f.inverted ? 'IFVG' : 'FVG', f.activeDir, ts, mid, `${f.inverted ? 'IFVG' : 'FVG'} ${f.activeDir} ${round2(f.bottom)}–${round2(f.top)}`);
+      }
+      for (const o of a.orderBlocks) {
+        if (!o.valid) continue;
+        const retest = candles.find((c) => c.timestamp > o.confirmTs && c.low <= o.top && c.high >= o.bottom);
+        if (!retest) continue;
+        const edge = o.dir === 'bull' ? o.bottom : o.top;
+        pushEvent('ob', 'Order Block', o.dir, retest.timestamp, edge, `OB ${o.dir} ${round2(o.bottom)}–${round2(o.top)} (retest)`);
+      }
+      if (a.range) {
+        const lo = Math.min(a.range.ote.from, a.range.ote.to);
+        const hi = Math.max(a.range.ote.from, a.range.ote.to);
+        const entry = candles.find((c) => c.low <= hi && c.high >= lo);
+        if (entry) pushEvent('ote', 'OTE entry', a.range.dir, entry.timestamp, (lo + hi) / 2, `OTE ${round2(lo)}–${round2(hi)} (${a.range.dir})`);
+      }
+      void lastClose;
+      const seen = new Set();
+      return out.filter((d) => {
+        if (!Number.isFinite(d.price) || !Number.isFinite(d.trigger_ts)) return false;
+        const k = keyFor(d);
+        return seen.has(k) ? false : (seen.add(k), true);
+      });
+    };
+    const gradeSetup = (row, candles, sessionClosed) => {
+      const dir = row.dir;
+      const after = candles.filter((c) => c.timestamp > row.trigger_ts);
+      const entry = row.price ?? 0;
+      const inval = row.invalidation;
+      if (dir === 'neutral' || inval == null || !after.length) return { outcome: 'pending', mfe: row.mfe, mae: row.mae, r_multiple: row.r_multiple ?? null, resolved_ts: null, resolved_price: null };
+      const risk = Math.abs(entry - inval) || 1;
+      let mfe = 0, mae = 0;
+      for (const c of after) {
+        const fav = dir === 'bull' ? c.high - entry : entry - c.low;
+        const adv = dir === 'bull' ? entry - c.low : c.high - entry;
+        if (fav > mfe) mfe = fav;
+        if (adv > mae) mae = adv;
+        const hitStop = dir === 'bull' ? c.low <= inval : c.high >= inval;
+        if (hitStop) { const maxR = round2(mfe / risk); return { outcome: maxR >= 1 ? 'win' : 'loss', mfe, mae, r_multiple: maxR, resolved_ts: c.timestamp, resolved_price: inval }; }
+      }
+      const maxR = round2(mfe / risk);
+      if (sessionClosed) return { outcome: maxR >= 1 ? 'win' : 'chop', mfe, mae, r_multiple: maxR, resolved_ts: after[after.length - 1].timestamp, resolved_price: after[after.length - 1].close };
+      return { outcome: 'pending', mfe, mae, r_multiple: maxR, resolved_ts: null, resolved_price: null };
+    };
+    register('/api/ict-setups', {
+      auth: 'subscriber', methods: ['GET', 'POST'],
+      async handler(req, res, ctx) {
+        if (req.method === 'GET') {
+          try {
+            const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+            const date = sp.get('date') || etDateStr2();
+            const all = sp.get('all') === '1';
+            const sinceDays = sp.get('since') ? Number(sp.get('since')) : null;
+            const sinceDate = sinceDays && sinceDays > 0 ? etDateStr2(new Date(Date.now() - sinceDays * 86_400_000)) : null;
+            const summaryOpts = all ? (sinceDate ? { sinceDate } : {}) : { date };
+            const [setups, summary] = await Promise.all([
+              libDb.getIctSetups({ date: all ? undefined : date, sinceDate: all ? sinceDate ?? undefined : undefined, limit: 2000 }),
+              libDb.getIctSetupSummary(summaryOpts),
+            ]);
+            send(res, 200, { date, sinceDate, setups, summary });
+          } catch (err) { send(res, 500, { error: String(err) }); }
+          return;
+        }
+        // POST — token-gated (cron), mirrors the original tokenOk check.
+        try {
+          if (!tokenOk(req, ctx)) { send(res, 401, { error: 'unauthorized' }); return; }
+          const body = await readJson(req).catch(() => ({}));
+          const action = String(body.action || 'scan');
+          const date = String(body.date || etDateStr2());
+          const candles = await fetchCandles(date);
+          if (!candles.length) { send(res, 200, { ok: true, date, detected: 0, recorded: 0, graded: 0, note: 'no candles' }); return; }
+          const lastSlot = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(candles[candles.length - 1].timestamp));
+          const sessionClosed = lastSlot >= '15:55';
+          let recorded = 0, detected = 0;
+          if (action === 'scan') {
+            const setups = extractSetups(candles);
+            detected = setups.length;
+            for (const d of setups) {
+              const { inserted } = await libDb.insertIctSetup({
+                setup_key: keyFor(d), date, kind: d.kind, label: d.label, dir: d.dir, trigger_ts: d.trigger_ts,
+                price: round2(d.price), note: d.note, target: d.target != null ? round2(d.target) : null,
+                invalidation: d.invalidation != null ? round2(d.invalidation) : null,
+              });
+              if (inserted) recorded++;
+            }
+          }
+          const pending = await libDb.getPendingIctSetups(date);
+          let graded = 0;
+          for (const row of pending) {
+            const g = gradeSetup(row, candles, sessionClosed);
+            await libDb.updateIctSetupGrade({ setup_key: row.setup_key, outcome: g.outcome, mfe: round2(g.mfe), mae: round2(g.mae), r_multiple: g.r_multiple, resolved_ts: g.resolved_ts, resolved_price: g.resolved_price });
+            if (g.outcome !== 'pending') graded++;
+          }
+          send(res, 200, { ok: true, date, detected, recorded, graded, sessionClosed });
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/confidence/checkpoints — per-day MVC (CB) checkpoint tracking. Owner
+  // results board. Inlined from lib/confidenceCheckpoints.ts (checkpointDates +
+  // computeCheckpointData; the unstable_cache path there is unused by this route)
+  // using libDb.queryAll. Ported verbatim from app/api/confidence/checkpoints.
+  {
+    const HIT_PTS = 8;
+    const TIERS = [5, 10, 15];
+    const CHECKPOINTS = [
+      { key: '0945', label: '9:45', min: 9 * 60 + 45 },
+      { key: '1030', label: '10:30', min: 10 * 60 + 30 },
+      { key: '1200', label: '12:00', min: 12 * 60 },
+    ];
+    const MATCH_WINDOW = 20;
+    const cnum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+    const strikeOf = (r) => cnum(r.strikeOIVol) ?? cnum(r.strikeVolOnly) ?? null;
+    const rowMinutesET = (r) => {
+      const t = String(r.time ?? '');
+      const mm = /^(\d{1,2}):(\d{2})/.exec(t);
+      if (mm) return Number(mm[1]) * 60 + Number(mm[2]);
+      const ms = Number(r.timestamp) || 0;
+      if (!ms) return null;
+      const hhmm = new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+      const p = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+      return p ? Number(p[1]) * 60 + Number(p[2]) : null;
+    };
+    const computeCheckpointData = async (dates) => {
+      const days = [];
+      for (const date of dates) {
+        const rows = await libDb.queryAll(`SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`, [date]);
+        const timed = rows.map((r) => { const rawSpx = cnum(r.spxPrice); const spx = rawSpx != null && rawSpx > 1000 ? rawSpx : null; return { min: rowMinutesET(r), strike: strikeOf(r), spx }; }).filter((x) => x.min != null);
+        if (!timed.length) continue;
+        if (!timed.some((t) => t.spx != null)) continue;
+        const resolved = CHECKPOINTS.map((cp) => {
+          let best = null, bestGap = Infinity, bestSpx = null, bestSpxGap = Infinity;
+          for (const t of timed) {
+            const gap = Math.abs(t.min - cp.min);
+            if (gap < bestGap) { bestGap = gap; best = t; }
+            if (t.spx != null && gap < bestSpxGap) { bestSpxGap = gap; bestSpx = t; }
+          }
+          const matched = best != null && bestGap <= MATCH_WINDOW;
+          const spxMatched = bestSpx != null && bestSpxGap <= MATCH_WINDOW;
+          return { cp, matched, strike: matched ? best.strike : null, spxAt: spxMatched ? bestSpx.spx : (matched ? best.spx : null) };
+        });
+        const checkpoints = resolved.map((r, idx) => {
+          const { cp, matched, strike, spxAt } = r;
+          const distAt = strike != null && spxAt != null ? Math.abs(spxAt - strike) : null;
+          let changed = false;
+          for (let j = idx + 1; j < resolved.length; j++) { const nxt = resolved[j]; if (nxt.matched && nxt.strike != null && strike != null && nxt.strike !== strike) { changed = true; break; } }
+          let closest = null;
+          if (strike != null) { for (const t of timed) { if (t.min < cp.min - MATCH_WINDOW) continue; if (t.spx == null || t.spx <= 0) continue; const d = Math.abs(t.spx - strike); if (closest == null || d < closest) closest = d; } }
+          if (closest != null && strike != null && closest > strike * 0.5) closest = null;
+          const tiers = {};
+          for (const t of TIERS) tiers[t] = closest != null ? closest <= t : null;
+          return { key: cp.key, label: cp.label, strike, spxAt, distAt, closest, hit: closest != null && closest <= HIT_PTS, matched, tiers, changed };
+        });
+        days.push({ date, checkpoints });
+      }
+      const summary = CHECKPOINTS.map((cp) => {
+        const cells = days.map((d) => d.checkpoints.find((c) => c.key === cp.key)).filter((c) => !!c && c.matched && c.strike != null);
+        const hits = cells.filter((c) => c.hit).length;
+        const dists = cells.map((c) => c.closest).filter((v) => v != null);
+        const avgClosest = dists.length ? dists.reduce((s, v) => s + v, 0) / dists.length : null;
+        const tierStats = {};
+        for (const t of TIERS) { const h = cells.filter((c) => c.tiers?.[t]).length; tierStats[t] = { hits: h, rate: cells.length ? h / cells.length : null }; }
+        return { key: cp.key, label: cp.label, samples: cells.length, hits, hitRate: cells.length ? hits / cells.length : null, avgClosest, tiers: tierStats };
+      });
+      return { days, summary, hitPts: HIT_PTS, tiers: [...TIERS] };
+    };
+    const checkpointDates = async (limit) => {
+      const rows = await libDb.queryAll(`SELECT DISTINCT date FROM mvc_snapshots ORDER BY date DESC LIMIT ?`, [limit]);
+      return rows.map((d) => d.date);
+    };
+    register('/api/confidence/checkpoints', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const all = sp.get('all') === '1';
+          const since = Number(sp.get('since')) || 20;
+          const dates = await checkpointDates(all ? 365 : since);
+          const data = await computeCheckpointData(dates);
+          send(res, 200, data);
+        } catch (e) { send(res, 500, { error: String(e) }); }
+      },
+    });
+  }
+
+  // /api/bzila-alerts — owner-authored toolbar broadcasts. GET (paid/owner see
+  // latest 5; others empty), POST/PATCH/DELETE owner-only. Ported verbatim from
+  // app/api/bzila-alerts/route.ts; getServerSession replaced by ctx.verifyWsRequest
+  // (GET auth 'public' then in-handler paid/owner check to match empty-list-for-all).
+  register('/api/bzila-alerts', {
+    auth: 'public', methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    async handler(req, res, ctx) {
+      if (req.method === 'GET') {
+        let access = { ok: false };
+        try { access = await ctx.verifyWsRequest(req); } catch { access = { ok: false }; }
+        if (!access.ok || !access.userId) { send(res, 200, { alerts: [] }); return; }
+        try {
+          const [alerts, counts, mine] = await Promise.all([
+            libDb.getBzilaAlerts(5), libDb.getBzilaAlertCounts(), libDb.getUserBzilaReactions(access.userId),
+          ]);
+          const countMap = new Map(counts.map((c) => [c.alert_id, c]));
+          const merged = alerts.map((a) => ({ ...a, up: countMap.get(a.id)?.up ?? 0, down: countMap.get(a.id)?.down ?? 0, mine: mine[a.id] ?? '' }));
+          send(res, 200, { alerts: merged });
+        } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+        return;
+      }
+      // Writes are owner-only — verify here since the route is auth:'public'.
+      let access = { ok: false };
+      try { access = await ctx.verifyWsRequest(req); } catch { access = { ok: false }; }
+      const internal = req.headers['x-internal-token'] && ctx.internalToken && req.headers['x-internal-token'] === ctx.internalToken;
+      const isOwner = internal || (access.userId && ctx.ownerUserId && access.userId === ctx.ownerUserId);
+      if (!isOwner) { send(res, 403, { error: 'Forbidden' }); return; }
+      try {
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          const title = String(b?.title ?? '').slice(0, 120);
+          const body = String(b?.body ?? '').trim().slice(0, 2000);
+          if (!body) { send(res, 400, { error: 'Empty body' }); return; }
+          const id = await libDb.insertBzilaAlert(title, body);
+          send(res, 200, { ok: true, id });
+          return;
+        }
+        if (req.method === 'PATCH') {
+          const b = await readJson(req);
+          const id = Number(b?.id);
+          const title = String(b?.title ?? '').slice(0, 120);
+          const body = String(b?.body ?? '').trim().slice(0, 2000);
+          if (!id || !body) { send(res, 400, { error: 'Bad request' }); return; }
+          await libDb.updateBzilaAlert(id, title, body);
+          send(res, 200, { ok: true });
+          return;
+        }
+        // DELETE
+        const url = new URL(req.url || '/', 'http://localhost');
+        let id = Number(url.searchParams.get('id'));
+        if (!id) { const b = await readJson(req).catch(() => ({})); id = Number(b?.id); }
+        if (!id) { send(res, 400, { error: 'Bad request' }); return; }
+        await libDb.deleteBzilaAlert(id);
+        send(res, 200, { ok: true });
+      } catch (err) { send(res, 500, { error: 'Write failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/bzila-alerts/react — toggle 👍/👎 (paid/owner). Ported verbatim; email
+  // sourced via getUserById since verifyWsRequest doesn't return it.
+  register('/api/bzila-alerts/react', {
+    auth: 'subscriber', methods: ['POST'],
+    async handler(req, res, ctx, verdict) {
+      try {
+        const b = await readJson(req);
+        const alertId = Number(b?.alertId);
+        const reaction = b?.reaction === 'up' ? 'up' : b?.reaction === 'down' ? 'down' : null;
+        if (!alertId || !reaction) { send(res, 400, { error: 'Bad request' }); return; }
+        const userId = verdict?.userId;
+        const user = userId ? await libDb.getUserById(userId) : null;
+        const email = user?.email ?? null;
+        const mine = await libDb.reactBzilaAlert(alertId, userId, email, reaction);
+        const counts = await libDb.getBzilaAlertCounts();
+        const c = counts.find((x) => x.alert_id === alertId);
+        send(res, 200, { ok: true, mine, up: c?.up ?? 0, down: c?.down ?? 0 });
+      } catch (err) { send(res, 500, { error: 'React failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/bzila-alerts/report — owner-only reaction analytics. Ported verbatim.
+  register('/api/bzila-alerts/report', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try { const alerts = await libDb.getBzilaAlertReport(50); send(res, 200, { alerts }); }
+      catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/pinescript?ticker[&all=1][&symbols=...][&format=json] — generate a
+  // ready-to-paste Pine v6 indicator from the latest ticker_levels row(s).
+  // GET-only, subscriber. Ported verbatim from app/api/pinescript/route.ts.
+  {
+    const PS_ALIAS = {
+      ES: 'ESU', ESM: 'ESU', ESU6: 'ESU', ESU26: 'ESU', '/ES': 'ESU',
+      NQ: 'NQU', NQM: 'NQU', NQU6: 'NQU', NQU26: 'NQU', '/NQ': 'NQU',
+    };
+    const PS_CORE = ['SPX', 'NDX', 'ESU', 'NQU', 'SPY', 'QQQ', 'IWM'];
+    const parseWatchlist = (raw) => {
+      const out = new Set();
+      for (const tok of raw.split(/[,\s]+/)) {
+        let s = tok.trim().toUpperCase();
+        if (!s || s.startsWith('#')) continue;
+        if (s.includes(':')) s = s.split(':')[1];
+        s = s.replace(/[$]/g, '').replace(/^\//, '');
+        if (/^ES/.test(s) || s === 'ES1!') s = 'ESU';
+        else if (/^NQ/.test(s) || s === 'NQ1!') s = 'NQU';
+        else s = PS_ALIAS[s] || s;
+        if (s) out.add(s);
+      }
+      return out;
+    };
+    const num = (v) => {
+      if (v == null) return NaN;
+      const n = parseFloat(String(v).replace(/[$,\s]/g, ''));
+      return Number.isFinite(n) ? n : NaN;
+    };
+    const pineNum = (v) => { const n = num(v); return Number.isFinite(n) ? String(n) : 'na'; };
+    const buildPine = (row) => {
+      const sym = (row.label || row.ticker || 'TICKER').toUpperCase();
+      const stamp = row.em_updated_at
+        ? new Date(row.em_updated_at).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
+        : new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+      const exp = row.exp_label ? ` (${row.exp_label})` : '';
+      return `//@version=6
+// ${sym} Estimated Moves & Levels${exp}
+// Auto-generated ${stamp} — values frozen; regenerate after a fresh EM publish.
+indicator("${sym} EM & Levels", overlay=true, max_lines_count=100, max_labels_count=100)
+
+// ── Baked-in values (plain constants — hidden from the Inputs panel) ──
+emUp     = ${pineNum(row.up)}
+emDown   = ${pineNum(row.down)}
+emClose  = ${pineNum(row.close)}
+pivot    = ${pineNum(row.pivot)}
+buyNear  = ${pineNum(row.buy_near)}
+buyFar   = ${pineNum(row.buy_far)}
+sellNear = ${pineNum(row.sell_near)}
+sellFar  = ${pineNum(row.sell_far)}
+
+// ── Display options ──────────────────────────────────────────────
+showClose = input.bool(true,  "Show reference close", group="Display")
+showZones = input.bool(true,  "Show buy/sell zones",  group="Display")
+showLabel = input.bool(true,  "Show price labels",    group="Display")
+labelOff  = input.int(20, "Label offset (bars)", minval=0, maxval=200, group="Display", tooltip="Pushes price labels right toward the price axis.")
+extend    = input.string("Both", "Line extension", options=["Right","Both","None"], group="Display")
+
+ext = extend == "Both" ? extend.both : extend == "None" ? extend.none : extend.right
+
+// ── Colors ───────────────────────────────────────────────────────
+cUp    = color.new(#2962ff, 0)   // EM blue
+cDown  = color.new(#2962ff, 0)   // EM blue
+cClose = color.new(#b0b0b0, 0)   // light grey
+cPivot = color.new(#b0b0b0, 0)   // light grey
+cBuy   = color.new(#b0b0b0, 0)   // light grey
+cSell  = color.new(#b0b0b0, 0)   // light grey
+
+// ── Draw once per chart (on the last bar) ────────────────────────
+// Helpers take a show flag and always return a typed line/label (na when
+// hidden) — so call-site assignments are never bare untyped na.
+f_line(bool show, float price, color col, string style) =>
+    line out = na
+    if show and not na(price)
+        out := line.new(bar_index - 1, price, bar_index, price, xloc=xloc.bar_index, extend=ext, color=col, style=line.style_solid, width=2)
+    out
+
+f_tag(bool show, float price, string txt, color col) =>
+    label out = na
+    if show and showLabel and not na(price)
+        out := label.new(bar_index + labelOff, price, txt + "  " + str.tostring(price, format.mintick), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col, 100), textcolor=col, size=size.small, textalign=text.align_right)
+    out
+
+// A shaded zone box spanning two prices, extending right from the last bar.
+f_box(bool show, float a, float b, color col) =>
+    box out = na
+    if show and not na(a) and not na(b)
+        out := box.new(bar_index, math.max(a, b), bar_index + 30, math.min(a, b), border_color=color.new(col, 100), bgcolor=color.new(col, 82), extend=ext == extend.none ? extend.none : extend.right)
+    out
+
+var line lUp = na
+var line lDown = na
+var line lClose = na
+var line lPivot = na
+var box bBuy = na
+var box bSell = na
+var label tUp = na
+var label tDown = na
+var label tClose = na
+var label tPivot = na
+
+if barstate.islast
+    line.delete(lUp),  line.delete(lDown), line.delete(lClose), line.delete(lPivot)
+    box.delete(bBuy),  box.delete(bSell)
+    label.delete(tUp), label.delete(tDown),label.delete(tClose),label.delete(tPivot)
+
+    lUp    := f_line(true,      emUp,     cUp,    line.style_solid)
+    lDown  := f_line(true,      emDown,   cDown,  line.style_solid)
+    lClose := f_line(showClose, emClose,  cClose, line.style_solid)
+    lPivot := f_line(showZones, pivot,    cPivot, line.style_solid)
+    bBuy   := f_box(showZones,  buyNear,  buyFar,  cBuy)
+    bSell  := f_box(showZones,  sellNear, sellFar, cSell)
+
+    tUp    := f_tag(true,      emUp,    "EM Up",   cUp)
+    tDown  := f_tag(true,      emDown,  "EM Down", cDown)
+    tClose := f_tag(showClose, emClose, "Close",   cClose)
+    tPivot := f_tag(showZones, pivot,   "Pivot",   cPivot)
+
+`;
+    };
+    const buildPineAll = (rows, filter) => {
+      const byTicker = new Map(rows.map((r) => [String(r.label || r.ticker).toUpperCase(), r]));
+      const keys = filter ? [...byTicker.keys()].filter((t) => filter.has(t)) : [...byTicker.keys()];
+      const rest = keys.filter((t) => !PS_CORE.includes(t)).sort();
+      const order = [...PS_CORE.filter((t) => byTicker.has(t) && (!filter || filter.has(t))), ...rest];
+      if (!order.length) return '// no matching levels found';
+      const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+      const pushes = [];
+      order.forEach((t, i) => {
+        const r = byTicker.get(t);
+        pushes.push([
+          `array.set(NAMES,${i},"${t}")`,
+          `array.set(UP,${i},${pineNum(r.up)})`,
+          `array.set(DN,${i},${pineNum(r.down)})`,
+          `array.set(CL,${i},${pineNum(r.close)})`,
+          `array.set(PV,${i},${pineNum(r.pivot)})`,
+          `array.set(BN,${i},${pineNum(r.buy_near)})`,
+          `array.set(BF,${i},${pineNum(r.buy_far)})`,
+          `array.set(SN,${i},${pineNum(r.sell_near)})`,
+          `array.set(SF,${i},${pineNum(r.sell_far)})`,
+        ].join('\n    '));
+      });
+      const n = order.length;
+      const dropdownOpts = ['Auto', ...order].map((o) => `"${o}"`).join(', ');
+      return `//@version=6
+// Core EM & Levels (combined) — ${order.join(', ')}
+// Auto-generated ${stamp} — values frozen; regenerate after a fresh EM publish.
+// "Show ticker"=Auto draws the set whose name matches the chart symbol.
+indicator("Core EM & Levels", overlay=true, max_lines_count=60, max_labels_count=60)
+
+sel       = input.string("Auto", "Show ticker", options=[${dropdownOpts}], group="Display")
+showClose = input.bool(true,  "Show reference close",group="Display")
+showZones = input.bool(true,  "Show buy/sell zones", group="Display")
+showLabel = input.bool(true,  "Show price labels",   group="Display")
+labelOff  = input.int(20, "Label offset (bars)", minval=0, maxval=200, group="Display", tooltip="Pushes price labels right toward the price axis.")
+extOpt    = input.string("Both", "Line extension", options=["Right","Both","None"], group="Display")
+ext = extOpt == "Both" ? extend.both : extOpt == "None" ? extend.none : extend.right
+
+// ── Per-ticker levels packed into arrays (values hidden from Inputs) ──
+var NAMES = array.new_string(${n})
+var UP = array.new_float(${n})
+var DN = array.new_float(${n})
+var CL = array.new_float(${n})
+var PV = array.new_float(${n})
+var BN = array.new_float(${n})
+var BF = array.new_float(${n})
+var SN = array.new_float(${n})
+var SF = array.new_float(${n})
+if barstate.isfirst
+    ${pushes.join('\n    ')}
+
+// Resolve index: explicit dropdown, else Auto-match the chart symbol.
+f_idx() =>
+    int idx = -1
+    sym = str.upper(syminfo.ticker)
+    if sel != "Auto"
+        for i = 0 to ${n - 1}
+            if array.get(NAMES, i) == sel
+                idx := i
+    else
+        // Exact match first (chart symbol == ticker name).
+        for i = 0 to ${n - 1}
+            if idx < 0 and array.get(NAMES, i) == sym
+                idx := i
+        // Fallback: prefer the LONGEST name contained in the symbol, so e.g.
+        // an NVDA chart can't get hijacked by short names like "V" or "MA".
+        if idx < 0
+            int best = -1
+            for i = 0 to ${n - 1}
+                nm = array.get(NAMES, i)
+                if str.contains(sym, nm) and str.length(nm) > best
+                    best := str.length(nm)
+                    idx := i
+    idx
+idx = f_idx()
+
+emUp    = idx >= 0 ? array.get(UP, idx) : na
+emDown  = idx >= 0 ? array.get(DN, idx) : na
+emClose = idx >= 0 ? array.get(CL, idx) : na
+pivot   = idx >= 0 ? array.get(PV, idx) : na
+buyNear = idx >= 0 ? array.get(BN, idx) : na
+buyFar  = idx >= 0 ? array.get(BF, idx) : na
+sellNear= idx >= 0 ? array.get(SN, idx) : na
+sellFar = idx >= 0 ? array.get(SF, idx) : na
+
+// ── Colors ───────────────────────────────────────────────────────
+cUp=color.new(#2962ff,0), cDown=color.new(#2962ff,0), cClose=color.new(#b0b0b0,0)
+cPivot=color.new(#b0b0b0,0), cBuy=color.new(#b0b0b0,0), cSell=color.new(#b0b0b0,0)
+
+f_line(bool show, float p, color col, string style) =>
+    line out = na
+    if show and not na(p)
+        out := line.new(bar_index-1, p, bar_index, p, xloc=xloc.bar_index, extend=ext, color=col, style=line.style_solid, width=2)
+    out
+f_tag(bool show, float p, string txt, color col) =>
+    label out = na
+    if show and showLabel and not na(p)
+        out := label.new(bar_index + labelOff, p, txt+"  "+str.tostring(p,format.mintick), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col,100), textcolor=col, size=size.small, textalign=text.align_right)
+    out
+f_box(bool show, float a, float b, color col) =>
+    box out = na
+    if show and not na(a) and not na(b)
+        out := box.new(bar_index, math.max(a,b), bar_index+30, math.min(a,b), border_color=color.new(col,100), bgcolor=color.new(col,82), extend=ext == extend.none ? extend.none : extend.right)
+    out
+
+var line lUp = na
+var line lDown = na
+var line lClose = na
+var line lPivot = na
+var box bBuy = na
+var box bSell = na
+var label tUp = na
+var label tDown = na
+var label tClose = na
+var label tPivot = na
+
+if barstate.islast
+    line.delete(lUp),line.delete(lDown),line.delete(lClose),line.delete(lPivot)
+    box.delete(bBuy),box.delete(bSell)
+    label.delete(tUp),label.delete(tDown),label.delete(tClose),label.delete(tPivot)
+
+    lUp    := f_line(true,      emUp,     cUp,    line.style_solid)
+    lDown  := f_line(true,      emDown,   cDown,  line.style_solid)
+    lClose := f_line(showClose, emClose,  cClose, line.style_solid)
+    lPivot := f_line(showZones, pivot,    cPivot, line.style_solid)
+    bBuy   := f_box(showZones,  buyNear,  buyFar,  cBuy)
+    bSell  := f_box(showZones,  sellNear, sellFar, cSell)
+
+    tUp    := f_tag(true,      emUp,    "EM Up",   cUp)
+    tDown  := f_tag(true,      emDown,  "EM Down", cDown)
+    tClose := f_tag(showClose, emClose, "Close",   cClose)
+    tPivot := f_tag(showZones, pivot,   "Pivot",   cPivot)
+
+`;
+    };
+    register('/api/pinescript', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const raw = (sp.get('ticker') || '').trim().toUpperCase();
+          const wantAll = sp.get('all') === '1' || raw === 'ALL';
+          const asJson = sp.get('format') === 'json';
+          const pool = await libDb.getDb();
+          if (wantAll) {
+            const result = await pool.query('SELECT * FROM ticker_levels ORDER BY ticker ASC');
+            if (!result.rows.length) { send(res, 404, { error: 'no levels found' }); return; }
+            const symbolsRaw = sp.get('symbols') || '';
+            const filter = symbolsRaw.trim() ? parseWatchlist(symbolsRaw) : undefined;
+            const pine = buildPineAll(result.rows, filter);
+            if (asJson) { send(res, 200, { ticker: 'ALL', pine }); return; }
+            send(res, 200, pine, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'inline; filename="core-em-levels.pine"', 'Cache-Control': 'no-store' });
+            return;
+          }
+          if (!raw) { send(res, 400, { error: 'ticker required' }); return; }
+          const cleaned = raw.replace(/[$]/g, '').replace(/^\//, '');
+          const candidates = [PS_ALIAS[raw], PS_ALIAS[cleaned], raw, cleaned].filter(Boolean);
+          const result = await pool.query('SELECT * FROM ticker_levels WHERE ticker = ANY($1) LIMIT 1', [candidates]);
+          if (!result.rows.length) { send(res, 404, { error: `no levels found for ${raw}` }); return; }
+          const pine = buildPine(result.rows[0]);
+          if (asJson) { send(res, 200, { ticker: raw, pine }); return; }
+          send(res, 200, pine, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': `inline; filename="${raw}-em-levels.pine"`, 'Cache-Control': 'no-store' });
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });

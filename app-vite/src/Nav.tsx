@@ -15,6 +15,7 @@ const LINKS: { label: string; to: string }[] = [
   { label: 'ES Candles', to: '/es-candles' },
   { label: 'Scanner', to: '/scanner' },
   { label: 'ICT', to: '/ict' },
+  { label: 'Test Lab', to: '/test' },
   { label: 'Confidence', to: '/confidence-score' },
   { label: 'Fails', to: '/fails' },
   { label: 'Premarket', to: '/premarket' },
