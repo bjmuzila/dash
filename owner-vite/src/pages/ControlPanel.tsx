@@ -12,14 +12,6 @@ import {
   homeShellStyle,
   homeSecondaryButtonStyle,
 } from "../lib/theme";
-import {
-  HeatmapCells,
-  HeatmapChart,
-  HeatmapInteractionBoundary,
-  HeatmapInteractionProvider,
-  HeatmapLegend,
-  HeatmapTooltip,
-} from "../components/HeatmapChart";
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
 // Mobile detection so the fixed-column grids below can collapse instead of
@@ -843,32 +835,6 @@ function hourlyHeatmap(visits: PageVisit[]): { grid: number[][]; max: number } {
 }
 
 /**
- * Convert the { grid, max } hour×weekday matrix into HeatmapChart's
- * column-based shape — one column per hour (0-23), 7 weekday bins per column
- * — so the real page-visit counts drive the animated HeatmapChart cells
- * instead of the old hand-rolled div grid. Counts are quantized 0-4 against
- * `max` for HeatmapChart's five level colors; `date` is synthesized (most
- * recent occurrence of that weekday, ET) purely so the tooltip has something
- * to show — the real signal is the weekday/hour label + count.
- */
-function heatmapToColumns(grid: number[][], max: number) {
-  const now = new Date();
-  const todayDow = (now.getDay() + 6) % 7; // 0 = Mon
-  const dateForWeekday = (di: number) => {
-    const back = (todayDow - di + 7) % 7;
-    return new Date(now.getTime() - back * 86400000);
-  };
-  return Array.from({ length: 24 }, (_, hour) => ({
-    bin: hour,
-    bins: HEATMAP_WEEKDAYS.map((_, di) => {
-      const count = grid[di][hour];
-      const level = count <= 0 ? 0 : Math.min(4, 1 + Math.floor((count / max) * 3.999));
-      return { bin: di, count: level, date: dateForWeekday(di) };
-    }),
-  }));
-}
-
-/**
  * Bucket signups (Clerk recent users, by createdAt ms) into the last `days`
  * calendar days (ET), oldest → newest. Same shape as dailyVisitSeries so the
  * rolling-7-day cumulative-users chart can share its rendering.
@@ -1324,50 +1290,27 @@ function OverviewSection({ metrics }: {
             {heatmap.grid.flat().reduce((a, b) => a + b, 0)} visits · last 5000
           </span>
         </div>
-        <HeatmapInteractionProvider>
-          <HeatmapInteractionBoundary>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "32px 1fr", gap: 6 }}>
-                <div />
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)" }}>
-                  {Array.from({ length: 24 }, (_, h) => (
-                    <div key={"h" + h} style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7, textAlign: "center" }}>
-                      {h % 6 === 0 ? h : ""}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "32px 1fr", gap: 6 }}>
-                <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-                  {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
-                    <div key={d} style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>{d}</div>
-                  ))}
-                </div>
-                <HeatmapChart
-                  className="w-full"
-                  data={heatmapToColumns(heatmap.grid, heatmap.max)}
-                  layout="fluid"
-                  weekStartDay={1}
-                  margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
-                  levelColors={{
-                    empty: `${HOME_THEME.border ?? "#5b9bd5"}22`,
-                    l1: `${HOME_THEME.cyan}33`,
-                    l2: `${HOME_THEME.cyan}66`,
-                    l3: `${HOME_THEME.cyan}A6`,
-                    l4: HOME_THEME.cyan,
-                  }}
-                >
-                  <HeatmapCells inactiveOpacity={0.3} inactiveScale={1} />
-                  <HeatmapTooltip
-                    instant
-                    formatLabel={(count) => `level ${count}`}
+        <div style={{ display: "grid", gridTemplateColumns: "32px repeat(24, 1fr)", gap: 2 }}>
+          <div />
+          {Array.from({ length: 24 }, (_, h) => (
+            <div key={"h" + h} style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
+          ))}
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, di) => (
+            <Fragment key={d}>
+              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: "30px" }}>{d}</div>
+              {heatmap.grid[di].map((count, h) => {
+                const v = count > 0 ? 0.06 + (count / heatmap.max) * 0.85 : 0.03;
+                return (
+                  <div
+                    key={d + h}
+                    title={`${d} ${h}:00 ET · ${count} visit${count === 1 ? "" : "s"}`}
+                    style={{ height: 30, borderRadius: 2, background: `rgba(91,155,213,${v.toFixed(2)})` }}
                   />
-                </HeatmapChart>
-              </div>
-              <HeatmapLegend align="end" />
-            </div>
-          </HeatmapInteractionBoundary>
-        </HeatmapInteractionProvider>
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
       </div>
 
       {/* Infra · ops */}
