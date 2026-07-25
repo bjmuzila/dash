@@ -806,7 +806,7 @@ async function handleApiRoute(req, res, ctx) {
 // SPX GEX via in-process /proxy/gex). Pure compute, no DB. Ported verbatim from
 // app/api/market-scanner/route.ts.
 register('/api/market-scanner', {
-  auth: 'subscriber', methods: ['GET'],
+  auth: 'owner', methods: ['GET'],
   async handler(req, res, ctx) {
     const YAHOO_HEADERS = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -1293,7 +1293,7 @@ register('/api/discord-share', {
 // subscriber. Ported verbatim from app/api/social-media/daily-input/route.ts;
 // proxyBase fetches → ctx.internalFetch (internal token auto-attached).
 register('/api/social-media/daily-input', {
-  auth: 'subscriber', methods: ['GET'],
+  auth: 'owner', methods: ['GET'],
   async handler(req, res, ctx) {
     const GEX_LADDER_HALF = 20;
     const rowNetGex = (o, basis) => {
@@ -1522,7 +1522,7 @@ register('/api/social-media/daily-input', {
 // /api/social-media/trigger-map — bull/base/bear trigger map via Anthropic.
 // POST, subscriber. Ported verbatim from app/api/social-media/trigger-map.
 register('/api/social-media/trigger-map', {
-  auth: 'subscriber', methods: ['POST'],
+  auth: 'owner', methods: ['POST'],
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
@@ -1629,7 +1629,7 @@ Output a SINGLE object with bull/base/bear as keys. Do NOT wrap them in an array
 // /api/social-media/day-post — slot-aware X post generator (premarket/midday/
 // eod/custom + optional trade idea). POST, subscriber. Ported verbatim.
 register('/api/social-media/day-post', {
-  auth: 'subscriber', methods: ['POST'],
+  auth: 'owner', methods: ['POST'],
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
@@ -1730,7 +1730,7 @@ Return ONLY a single JSON object, no markdown, no code fences, no commentary:
 // /api/social-media/generate — pre-market GEX read → single tweet via Anthropic.
 // POST, subscriber. Ported verbatim from app/api/social-media/generate/route.ts.
 register('/api/social-media/generate', {
-  auth: 'subscriber', methods: ['POST'],
+  auth: 'owner', methods: ['POST'],
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
@@ -1817,7 +1817,7 @@ Return ONLY a single JSON object, no markdown, no code fences, no commentary, wi
 // /api/tpo-extract — read TPO/Market-Profile levels off a chart screenshot via
 // Claude vision. POST, subscriber. Ported verbatim from app/api/tpo-extract.
 register('/api/tpo-extract', {
-  auth: 'subscriber', methods: ['POST'],
+  auth: 'owner', methods: ['POST'],
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
@@ -4632,7 +4632,7 @@ if (libDb) {
   // /api/social-media/day-list — auto-generated Day Posts copy list (day_posts
   // table, written by the day-post-writer cron). GET. Subscriber. Ported verbatim.
   register('/api/social-media/day-list', {
-    auth: 'subscriber', methods: ['GET'],
+    auth: 'owner', methods: ['GET'],
     async handler(req, res) {
       const todayET2 = () => {
         const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -4890,7 +4890,7 @@ if (libDb) {
       return h <= up && l >= down ? 'hit' : 'miss';
     };
     register('/api/em-tracker', {
-      auth: 'subscriber', methods: ['GET', 'POST', 'DELETE'],
+      auth: 'owner', methods: ['GET', 'POST', 'DELETE'],
       async handler(req, res) {
         try {
           await libDb.getDb();
@@ -4943,7 +4943,7 @@ if (libDb) {
     // it loaded (else fall through to Next).
     if (levelsEngine) {
       register('/api/em-tracker/evaluate', {
-        auth: 'subscriber', methods: ['POST'],
+        auth: 'owner', methods: ['POST'],
         async handler(req, res, ctx) {
           try {
             await libDb.getDb();
@@ -4965,7 +4965,7 @@ if (libDb) {
       });
 
       register('/api/em-tracker/commit-history', {
-        auth: 'subscriber', methods: ['POST'],
+        auth: 'owner', methods: ['POST'],
         async handler(req, res, ctx) {
           try {
             const body = await readJson(req);
@@ -4986,7 +4986,7 @@ if (libDb) {
 
     // em-tracker/history + discord-preview — read-only fs reference data.
     register('/api/em-tracker/history', {
-      auth: 'subscriber', methods: ['GET'],
+      auth: 'owner', methods: ['GET'],
       async handler(req, res) {
         try {
           const file = nodePath.join(process.cwd(), 'data', 'em-tracker-history.json');
@@ -4996,7 +4996,7 @@ if (libDb) {
       },
     });
     register('/api/em-tracker/discord-preview', {
-      auth: 'subscriber', methods: ['GET'],
+      auth: 'owner', methods: ['GET'],
       async handler(req, res) {
         try {
           const file = nodePath.join(process.cwd(), 'data', 'em-discord-preview.json');
@@ -5007,7 +5007,7 @@ if (libDb) {
     });
     // em-tracker/import-sheet — retired 410 stub.
     register('/api/em-tracker/import-sheet', {
-      auth: 'subscriber', methods: ['POST'],
+      auth: 'owner', methods: ['POST'],
       async handler(req, res) { send(res, 410, { error: 'Endpoint retired — use /api/em-tracker/evaluate' }); },
     });
   }
@@ -5696,7 +5696,7 @@ if barstate.islast
   // paywall (the /database PAGE is owner-gated separately). AUDIT: consider
   // tightening to owner since it can read any table.
   register('/api/db', {
-    auth: 'subscriber', methods: ['GET'],
+    auth: 'owner', methods: ['GET'],
     async handler(req, res) {
       const ORDER_COL_PRIORITY = ['id', 'created_at', 'ts', 'timestamp', 'updated_at'];
       const DATE_COL_PRIORITY = ['date', 'day', 'entry_date', 'work_date'];
@@ -5759,7 +5759,7 @@ if barstate.islast
   // /api/debug — DB health dump (tables + row counts + latest snapshots). Ported
   // verbatim from app/api/debug/route.ts. Subscriber to match /api/* paywall.
   register('/api/debug', {
-    auth: 'subscriber', methods: ['GET'],
+    auth: 'owner', methods: ['GET'],
     async handler(req, res) {
       try {
         const pool = await libDb.getDb();
