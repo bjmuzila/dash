@@ -49,11 +49,11 @@ ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
 RUN npm run build
-
-# Build the customer SPA (app-vite) and place its bundle where serveSpaShell
-# reads from (public/app/). Without this, /app + the /home→/app/home redirect
-# serve whatever stale files were committed to public/app — app-vite source
-# edits (app/**/page.tsx via the '@' alias) never reach the live SPA otherwise.
+# Build the Vite SPA (app-vite) fresh every deploy and replace public/app with
+# it. WITHOUT this step, public/app serves whatever stale Vite bundle happens to
+# be committed — new routes added to app-vite/src/App.tsx (e.g. /test,
+# /forward-build) silently never appear and fall through the SPA catch-all to
+# /traders-dashboard. This step is the permanent fix; do not remove it.
 RUN cd app-vite && npm install --no-audit --no-fund && npm run build
 RUN rm -rf public/app && cp -r app-vite/dist public/app
 

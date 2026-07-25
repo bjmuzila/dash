@@ -25,6 +25,7 @@ const Fails        = lazy(() => import('@/app/fails/page'))
 const Premarket    = lazy(() => import('@/app/premarket/page'))
 const EconCalendar = lazy(() => import('@/app/economic-calendar/page'))
 const TestLab      = lazy(() => import('@/app/test/page'))
+const ForwardBuild = lazy(() => import('@/app/forward-build/page'))
 
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 
@@ -48,6 +49,7 @@ export default function App() {
               <Route path="/flow" element={S(<Flow />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
+              <Route path="/forward-build" element={S(<ForwardBuild />)} />
               <Route path="/ict" element={S(<Ict />)} />
               <Route path="/test" element={S(<TestLab />)} />
               <Route path="/trading" element={S(<Trading />)} />
