@@ -19,7 +19,7 @@ import {
   HeatmapInteractionProvider,
   HeatmapLegend,
   HeatmapTooltip,
-} from "@bklitui/ui/charts";
+} from "../components/HeatmapChart";
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
 // Mobile detection so the fixed-column grids below can collapse instead of

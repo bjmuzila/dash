@@ -1,58 +1,107 @@
-import { Suspense, lazy, useMemo, type ComponentType } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState, type ComponentType } from "react";
 import { PageShell, Card } from "../components/PageCard";
 import { OWNER_THEME, TYPE, ownerRgba } from "../lib/theme";
-import { CATALOG, GROUPS, findEntry, type CatalogEntry } from "./charts-ui/catalog";
-import { ChartErrorBoundary } from "./charts-ui/ErrorBoundary";
-import "./charts-ui/charts-ui.css";
+import {
+  AreaExample,
+  BarExample,
+  CandlestickExample,
+  ChoroplethExample,
+  ComposedExample,
+  FunnelExample,
+  GaugeExample,
+  HeatmapExample,
+  LineExample,
+  LiveLineExample,
+  PieExample,
+  PnlExample,
+  RadarExample,
+  RingExample,
+  SankeyExample,
+  ScatterExample,
+  SunburstExample,
+} from "./charts-ui/examples";
 
 /**
- * /owner/charts-ui — Bklit UI test bench.
+ * /owner/charts-ui — chart type reference.
  *
- * Every component from bklit.com/docs/components rendered against seeded sample
- * data, in CB Edge colours. This is a look-at-it page: nothing here touches app
- * state or the backend. Use it to decide what's worth pulling into a real page.
+ * Seventeen chart forms drawn as static inline SVG so we can see what each one
+ * looks like in owner colours before committing to building a real one. No data
+ * fetching, no chart library, no dependencies — every example is hand-drawn in
+ * src/pages/charts-ui/examples.tsx off fixed sample numbers in data.ts.
  *
- * The Bklit source is vendored into src/components/charts by the shadcn CLI —
- * see scripts/add-charts.mjs (`npm run charts:add`). Demos are lazy-loaded, so a
- * component that isn't installed only breaks its own tab.
+ * These are pictures, not components. When a shape earns a spot on a real page,
+ * build it there with live data and take the styling cues from here.
  */
 
-const demoModules = import.meta.glob("./charts-ui/demos/*.tsx") as Record<
-  string,
-  () => Promise<{ default: ComponentType }>
->;
+type Item = {
+  key: string;
+  title: string;
+  group: string;
+  use: string;
+  Example: ComponentType;
+};
 
-const installedFiles = new Set(
-  Object.keys(import.meta.glob("../components/charts/*.{ts,tsx}")).map((p) =>
-    p.replace("../components/charts/", "").replace(/\.tsx?$/, ""),
-  ),
-);
+const ITEMS: Item[] = [
+  { key: "line", title: "Line", group: "Time series", Example: LineExample,
+    use: "One or more continuous series over time. The default for anything trending." },
+  { key: "area", title: "Area", group: "Time series", Example: AreaExample,
+    use: "Same as a line but emphasises magnitude. Good for cumulative or stacked totals." },
+  { key: "composed", title: "Composed", group: "Time series", Example: ComposedExample,
+    use: "Bars and lines on one x-axis — volume under price, count against a rate." },
+  { key: "scatter", title: "Scatter", group: "Time series", Example: ScatterExample,
+    use: "Discrete observations rather than a continuous path. Shows clustering and outliers." },
+  { key: "live", title: "Live line", group: "Time series", Example: LiveLineExample,
+    use: "Streaming value with a sliding window and a pinned last price. Quotes, spot, P&L ticker." },
+  { key: "pnl", title: "Profit / loss", group: "Time series", Example: PnlExample,
+    use: "Signed series split at zero, green above and red below. Daily P&L, net delta." },
+  { key: "candlestick", title: "Candlestick", group: "Time series", Example: CandlestickExample,
+    use: "OHLC bars. The only honest way to show price action at a glance." },
 
-function isInstalled(entry: CatalogEntry) {
-  return entry.items.every((item) => installedFiles.has(item.replace("@bklit/", "")));
-}
+  { key: "bar", title: "Bar", group: "Categorical", Example: BarExample,
+    use: "Comparing discrete buckets. Grouped for two measures, stacked for composition." },
+  { key: "funnel", title: "Funnel", group: "Categorical", Example: FunnelExample,
+    use: "Stage-to-stage drop-off where order matters. Signup flow, trade lifecycle." },
+  { key: "heatmap", title: "Heatmap", group: "Categorical", Example: HeatmapExample,
+    use: "Intensity across two dimensions. Activity by day-of-week and hour, GEX by strike and expiry." },
+
+  { key: "pie", title: "Pie", group: "Radial", Example: PieExample,
+    use: "Parts of a whole, five slices at most. Beyond that a bar chart reads better." },
+  { key: "ring", title: "Ring", group: "Radial", Example: RingExample,
+    use: "Several progress-toward-target values sharing a centre readout." },
+  { key: "gauge", title: "Gauge", group: "Radial", Example: GaugeExample,
+    use: "A single number against a range. Utilisation, capacity, percent of target." },
+  { key: "radar", title: "Radar", group: "Radial", Example: RadarExample,
+    use: "Comparing a few entities across the same handful of metrics. Regime fingerprints." },
+  { key: "sunburst", title: "Sunburst", group: "Radial", Example: SunburstExample,
+    use: "Hierarchy where the rings sum to the whole. Revenue by segment then product." },
+
+  { key: "sankey", title: "Sankey", group: "Flow & geo", Example: SankeyExample,
+    use: "Weighted flow between stages. Where traffic — or capital — actually goes." },
+  { key: "choropleth", title: "Choropleth", group: "Flow & geo", Example: ChoroplethExample,
+    use: "A value per region. Tile-grid form shown here; a real map works the same way." },
+];
+
+const GROUPS = ["Time series", "Categorical", "Radial", "Flow & geo"];
 
 export default function ChartsUI() {
-  const [params, setParams] = useSearchParams();
-  const slug = params.get("c") || CATALOG[0].slug;
-  const entry = findEntry(slug) ?? CATALOG[0];
-
-  const installedCount = useMemo(() => CATALOG.filter(isInstalled).length, []);
-  const loader = demoModules[`./charts-ui/demos/${entry.slug}.tsx`];
-  const Demo = useMemo(() => (loader ? lazy(loader) : null), [loader]);
-
-  const select = (next: string) => setParams({ c: next }, { replace: true });
+  const [wide, setWide] = useState(false);
 
   return (
     <PageShell>
       <Card
         variant="classic"
-        padding={20}
-        style={{ display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}
+        padding={22}
+        style={{ display: "flex", flexDirection: "column", gap: 20, minHeight: 0, overflowY: "auto" }}
       >
-        {/* header */}
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <header
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            gap: 16,
+            flexWrap: "wrap",
+          }}
+        >
           <div>
             <div
               style={{
@@ -63,133 +112,115 @@ export default function ChartsUI() {
                 color: OWNER_THEME.lightBlue,
               }}
             >
-              Component bench
+              Reference
             </div>
             <div style={{ fontSize: TYPE.display, fontWeight: 800, lineHeight: 1.1, marginTop: 4 }}>
-              Charts UI
+              Chart types
             </div>
-            <div style={{ fontSize: TYPE.label, opacity: 0.7, marginTop: 6 }}>
-              Bklit UI rendered in owner colours · {installedCount}/{CATALOG.length} installed
+            <div style={{ fontSize: TYPE.label, opacity: 0.65, marginTop: 6, maxWidth: 620 }}>
+              Seventeen forms drawn in owner colours with fixed sample data. Static pictures — no
+              library, no data, nothing to install. Use it to pick a shape before building the real
+              thing.
             </div>
           </div>
 
-          <a
-            href={entry.docs}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={() => setWide((w) => !w)}
             style={{
               border: `1px solid ${OWNER_THEME.border}`,
               borderRadius: 10,
+              background: "transparent",
+              color: OWNER_THEME.lightBlue,
               padding: "6px 12px",
               fontSize: TYPE.label,
-              color: OWNER_THEME.lightBlue,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              whiteSpace: "nowrap",
             }}
           >
-            Docs ↗
-          </a>
-        </div>
+            {wide ? "Grid view" : "Wide view"}
+          </button>
+        </header>
 
-        {/* picker */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {GROUPS.map((group) => (
-            <div key={group} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span
-                style={{
-                  fontSize: TYPE.micro,
-                  fontWeight: 800,
-                  letterSpacing: "0.14em",
-                  textTransform: "uppercase",
-                  opacity: 0.45,
-                  minWidth: 92,
-                }}
-              >
-                {group}
-              </span>
-              {CATALOG.filter((c) => c.group === group).map((c) => {
-                const active = c.slug === entry.slug;
-                return (
-                  <button
-                    key={c.slug}
-                    type="button"
-                    onClick={() => select(c.slug)}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 7,
-                      border: `1px solid ${active ? ownerRgba(OWNER_THEME.cyan, 0.55) : OWNER_THEME.border}`,
-                      background: active ? ownerRgba(OWNER_THEME.cyan, 0.14) : "transparent",
-                      color: active ? "#fff" : "rgba(255,255,255,0.72)",
-                      borderRadius: 999,
-                      padding: "4px 11px",
-                      fontSize: TYPE.label,
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                      transition: "background 0.14s ease, border-color 0.14s ease",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: 999,
-                        background: isInstalled(c) ? OWNER_THEME.green : "rgba(255,255,255,0.18)",
-                      }}
-                    />
-                    {c.title}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-
-        {/* install hint */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {entry.items.map((i) => (
-            <code
-              key={i}
+        {GROUPS.map((group) => (
+          <section key={group} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div
               style={{
                 fontSize: TYPE.micro,
-                fontFamily: "var(--font-mono)",
-                background: "rgba(0,0,0,0.3)",
-                border: `1px solid ${OWNER_THEME.border}`,
-                borderRadius: 7,
-                padding: "3px 8px",
-                opacity: 0.75,
+                fontWeight: 800,
+                letterSpacing: "0.16em",
+                textTransform: "uppercase",
+                opacity: 0.45,
+                borderBottom: `1px solid ${OWNER_THEME.border}`,
+                paddingBottom: 7,
               }}
             >
-              npx shadcn@latest add {i}
-            </code>
-          ))}
-        </div>
+              {group}
+            </div>
 
-        {/* the demo — everything Bklit renders lives under .charts-ui-root */}
-        <div className="charts-ui-root dark" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-          <div style={{ fontSize: TYPE.label, opacity: 0.7, marginBottom: 14 }}>{entry.description}</div>
-          <ChartErrorBoundary items={entry.items} resetKey={entry.slug}>
-            <Suspense
-              fallback={
-                <div
-                  style={{
-                    height: 260,
-                    borderRadius: 14,
-                    border: `1px solid ${OWNER_THEME.border}`,
-                    background: "rgba(0,0,0,0.2)",
-                  }}
-                />
-              }
+            <div
+              style={{
+                display: "grid",
+                gap: 14,
+                gridTemplateColumns: wide
+                  ? "1fr"
+                  : "repeat(auto-fit, minmax(360px, 1fr))",
+              }}
             >
-              {Demo ? (
-                <Demo />
-              ) : (
-                <div style={{ opacity: 0.6, fontSize: TYPE.label }}>
-                  No demo file at src/pages/charts-ui/demos/{entry.slug}.tsx
-                </div>
-              )}
-            </Suspense>
-          </ChartErrorBoundary>
-        </div>
+              {ITEMS.filter((i) => i.group === group).map((item) => (
+                <ChartTile key={item.key} item={item} />
+              ))}
+            </div>
+          </section>
+        ))}
+
+        <footer style={{ fontSize: TYPE.micro, opacity: 0.4, paddingTop: 4 }}>
+          Drawn in src/pages/charts-ui/examples.tsx · sample numbers in data.ts
+        </footer>
       </Card>
     </PageShell>
+  );
+}
+
+function ChartTile({ item }: { item: Item }) {
+  const { Example } = item;
+  return (
+    <figure
+      style={{
+        margin: 0,
+        border: `1px solid ${OWNER_THEME.border}`,
+        borderRadius: 14,
+        background: "rgba(0,0,0,0.24)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <figcaption
+        style={{
+          padding: "11px 14px",
+          borderBottom: `1px solid ${OWNER_THEME.border}`,
+          background: ownerRgba(OWNER_THEME.cyan, 0.05),
+        }}
+      >
+        <div
+          style={{
+            fontSize: TYPE.label,
+            fontWeight: 800,
+            letterSpacing: "0.10em",
+            textTransform: "uppercase",
+          }}
+        >
+          {item.title}
+        </div>
+        <div style={{ fontSize: TYPE.micro, opacity: 0.6, marginTop: 3, lineHeight: 1.45 }}>
+          {item.use}
+        </div>
+      </figcaption>
+      <div style={{ padding: "14px 16px 16px" }}>
+        <Example />
+      </div>
+    </figure>
   );
 }
