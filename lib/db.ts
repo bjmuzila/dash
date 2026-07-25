@@ -577,6 +577,65 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condors_ticker_week_start
       ON em_condors(ticker, week_start);
 
+    -- Day-by-day valuation of a condor across its week. One row per
+    -- (condor, ET session). Written on demand by /api/em-condors/marks, which
+    -- prices all four legs off ThetaData's per-contract EOD history.
+    --   mark     = (put_short − put_long) + (call_short − call_long)  [debit to close]
+    --   open_pnl = (net_credit − mark) × multiplier × contracts
+    --   cushion  = underlying close → nearer SHORT strike (+ inside, − beyond)
+    -- legs_priced < 4 means the mark is NULL: a partial condor is a different
+    -- position, not an estimate of this one. Futures rows carry underlying and
+    -- cushion only (no Theta options feed).
+    CREATE TABLE IF NOT EXISTS em_condor_marks (
+      id SERIAL PRIMARY KEY,
+      condor_id INTEGER NOT NULL REFERENCES em_condors(id) ON DELETE CASCADE,
+      d DATE NOT NULL,
+      underlying REAL,
+      under_high REAL,
+      under_low REAL,
+      put_long_px REAL,
+      put_short_px REAL,
+      call_short_px REAL,
+      call_long_px REAL,
+      mark REAL,
+      open_pnl REAL,
+      pct_max REAL,
+      cushion REAL,
+      legs_priced INTEGER DEFAULT 0,
+      source TEXT DEFAULT 'theta',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_condor_marks_condor ON em_condor_marks(condor_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condor_marks_condor_day
+      ON em_condor_marks(condor_id, d);
+
+    -- Intraday condor ticks, written at the top of each RTH hour by
+    -- server-v2/condor-mark-recorder.js. Same value columns as em_condor_marks
+    -- but priced from the LIVE chain NBBO mid instead of an EOD close, keyed by
+    -- epoch-ms so a week holds ~35 points instead of 5. em_condor_marks stays
+    -- the authoritative daily series; these are the shape between the dots.
+    CREATE TABLE IF NOT EXISTS em_condor_ticks (
+      id SERIAL PRIMARY KEY,
+      condor_id INTEGER NOT NULL REFERENCES em_condors(id) ON DELETE CASCADE,
+      ts BIGINT NOT NULL,
+      underlying REAL,
+      put_long_px REAL,
+      put_short_px REAL,
+      call_short_px REAL,
+      call_long_px REAL,
+      mark REAL,
+      open_pnl REAL,
+      pct_max REAL,
+      cushion REAL,
+      legs_priced INTEGER DEFAULT 0,
+      source TEXT DEFAULT 'theta',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_condor_ticks_condor_ts ON em_condor_ticks(condor_id, ts);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condor_ticks_condor_ts
+      ON em_condor_ticks(condor_id, ts);
+
     -- EOD GEX snapshot: one row per (date, symbol), upserted at 3:55–4:05 ET.
     -- total_gex  signed net GEX (same value as the dashboard header)
     -- spot       underlying price at compute time
@@ -2584,6 +2643,162 @@ export async function getEmCondorSummary(): Promise<EmCondorSummary[]> {
       max_losses: Number(r.max_losses ?? 0),
     };
   });
+}
+
+// ── Condor day-by-day marks ────────────────────────────────────────────────
+
+export interface EmCondorMark {
+  id?: number;
+  condor_id: number;
+  d: string;                    // ET session date, YYYY-MM-DD
+  underlying?: number | null;
+  under_high?: number | null;
+  under_low?: number | null;
+  put_long_px?: number | null;
+  put_short_px?: number | null;
+  call_short_px?: number | null;
+  call_long_px?: number | null;
+  mark?: number | null;         // debit to close, points
+  open_pnl?: number | null;     // dollars
+  pct_max?: number | null;      // open_pnl / max profit, 0..1
+  cushion?: number | null;      // to nearer short strike
+  legs_priced?: number | null;  // 0..4
+  source?: string | null;
+}
+
+/** Upsert a batch of daily marks for one condor. Re-pricing a day overwrites it
+ *  (a later run sees a settled close where the first saw an intraday snapshot). */
+export async function upsertEmCondorMarks(condor_id: number, marks: EmCondorMark[]): Promise<number> {
+  if (!marks.length) return 0;
+  const pool = await getDb();
+  let n = 0;
+  for (const m of marks) {
+    await pool.query(
+      `INSERT INTO em_condor_marks
+         (condor_id, d, underlying, under_high, under_low,
+          put_long_px, put_short_px, call_short_px, call_long_px,
+          mark, open_pnl, pct_max, cushion, legs_priced, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT(condor_id, d) DO UPDATE SET
+         underlying    = COALESCE(EXCLUDED.underlying,    em_condor_marks.underlying),
+         under_high    = COALESCE(EXCLUDED.under_high,    em_condor_marks.under_high),
+         under_low     = COALESCE(EXCLUDED.under_low,     em_condor_marks.under_low),
+         put_long_px   = COALESCE(EXCLUDED.put_long_px,   em_condor_marks.put_long_px),
+         put_short_px  = COALESCE(EXCLUDED.put_short_px,  em_condor_marks.put_short_px),
+         call_short_px = COALESCE(EXCLUDED.call_short_px, em_condor_marks.call_short_px),
+         call_long_px  = COALESCE(EXCLUDED.call_long_px,  em_condor_marks.call_long_px),
+         mark          = COALESCE(EXCLUDED.mark,          em_condor_marks.mark),
+         open_pnl      = COALESCE(EXCLUDED.open_pnl,      em_condor_marks.open_pnl),
+         pct_max       = COALESCE(EXCLUDED.pct_max,       em_condor_marks.pct_max),
+         cushion       = COALESCE(EXCLUDED.cushion,       em_condor_marks.cushion),
+         legs_priced   = GREATEST(EXCLUDED.legs_priced,   em_condor_marks.legs_priced),
+         source        = COALESCE(EXCLUDED.source,        em_condor_marks.source),
+         updated_at    = CURRENT_TIMESTAMP`,
+      [
+        condor_id, m.d, m.underlying ?? null, m.under_high ?? null, m.under_low ?? null,
+        m.put_long_px ?? null, m.put_short_px ?? null, m.call_short_px ?? null, m.call_long_px ?? null,
+        m.mark ?? null, m.open_pnl ?? null, m.pct_max ?? null, m.cushion ?? null,
+        m.legs_priced ?? 0, m.source ?? "theta",
+      ]
+    );
+    n++;
+  }
+  return n;
+}
+
+/** Marks for a whole week (or one condor), oldest session first. */
+export async function getEmCondorMarks(opts: { week_start?: string; condor_id?: number } = {}): Promise<EmCondorMark[]> {
+  const params: unknown[] = [];
+  const where: string[] = [];
+  if (opts.condor_id) { params.push(opts.condor_id); where.push(`m.condor_id = $${params.length}`); }
+  if (opts.week_start) { params.push(opts.week_start); where.push(`c.week_start = $${params.length}`); }
+  const res = await pgQuery(
+    `SELECT m.* FROM em_condor_marks m
+       JOIN em_condors c ON c.id = m.condor_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY m.condor_id ASC, m.d ASC`,
+    params
+  );
+  // DATE comes back from pg as a Date pinned to LOCAL midnight. toISOString()
+  // would roll it to the previous day on any positive-offset host, so read the
+  // local parts instead of round-tripping through UTC.
+  const ymd = (v: unknown): string => {
+    if (typeof v === "string") return v.slice(0, 10);
+    const dt = v instanceof Date ? v : new Date(String(v));
+    if (Number.isNaN(dt.getTime())) return String(v).slice(0, 10);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+  };
+  return res.rows.map((r) => ({ ...r, d: ymd(r.d) })) as EmCondorMark[];
+}
+
+// ── Condor intraday ticks (hourly writer) ──────────────────────────────────
+
+export interface EmCondorTick {
+  id?: number;
+  condor_id: number;
+  ts: number;                   // epoch ms
+  underlying?: number | null;
+  put_long_px?: number | null;
+  put_short_px?: number | null;
+  call_short_px?: number | null;
+  call_long_px?: number | null;
+  mark?: number | null;
+  open_pnl?: number | null;
+  pct_max?: number | null;
+  cushion?: number | null;
+  legs_priced?: number | null;
+  source?: string | null;
+}
+
+/** Append a batch of intraday ticks. Re-running the same minute is a no-op. */
+export async function insertEmCondorTicks(ticks: EmCondorTick[]): Promise<number> {
+  if (!ticks.length) return 0;
+  const pool = await getDb();
+  let n = 0;
+  for (const t of ticks) {
+    const res = await pool.query(
+      `INSERT INTO em_condor_ticks
+         (condor_id, ts, underlying, put_long_px, put_short_px, call_short_px, call_long_px,
+          mark, open_pnl, pct_max, cushion, legs_priced, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT(condor_id, ts) DO NOTHING`,
+      [
+        t.condor_id, Math.round(Number(t.ts)), t.underlying ?? null,
+        t.put_long_px ?? null, t.put_short_px ?? null, t.call_short_px ?? null, t.call_long_px ?? null,
+        t.mark ?? null, t.open_pnl ?? null, t.pct_max ?? null, t.cushion ?? null,
+        t.legs_priced ?? 0, t.source ?? "theta",
+      ]
+    );
+    n += res.rowCount ?? 0;
+  }
+  return n;
+}
+
+/** Ticks for a week (or one condor), oldest first. */
+export async function getEmCondorTicks(opts: { week_start?: string; condor_id?: number } = {}): Promise<EmCondorTick[]> {
+  const params: unknown[] = [];
+  const where: string[] = [];
+  if (opts.condor_id) { params.push(opts.condor_id); where.push(`t.condor_id = $${params.length}`); }
+  if (opts.week_start) { params.push(opts.week_start); where.push(`c.week_start = $${params.length}`); }
+  const res = await pgQuery(
+    `SELECT t.* FROM em_condor_ticks t
+       JOIN em_condors c ON c.id = t.condor_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY t.condor_id ASC, t.ts ASC`,
+    params
+  );
+  // BIGINT arrives as a string from pg — coerce or every client-side compare lies.
+  return res.rows.map((r) => ({ ...r, ts: Number(r.ts) })) as EmCondorTick[];
+}
+
+/** Drop ticks older than `days`. Called by the recorder after each EOD run so
+ *  the table stays bounded without a separate maintenance job. */
+export async function pruneEmCondorTicks(days = 120): Promise<number> {
+  const pool = await getDb();
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const res = await pool.query(`DELETE FROM em_condor_ticks WHERE ts < $1`, [cutoff]);
+  return res.rowCount ?? 0;
 }
 
 export async function deleteEmCondor(id: number): Promise<void> {

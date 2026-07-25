@@ -54,6 +54,44 @@ interface CondorSummary {
   max_losses: number;
 }
 
+/** One ET session of condor valuation, from /api/em-condors/marks. */
+interface MarkRow {
+  condor_id: number;
+  d: string;
+  underlying: number | null;
+  under_high: number | null;
+  under_low: number | null;
+  put_long_px: number | null;
+  put_short_px: number | null;
+  call_short_px: number | null;
+  call_long_px: number | null;
+  mark: number | null;
+  open_pnl: number | null;
+  pct_max: number | null;
+  cushion: number | null;
+  legs_priced: number | null;
+}
+
+/** One intraday snapshot, from /api/em-condors/ticks (hourly writer). */
+interface TickRow {
+  condor_id: number;
+  ts: number;
+  underlying: number | null;
+  mark: number | null;
+  open_pnl: number | null;
+  pct_max: number | null;
+  cushion: number | null;
+  legs_priced: number | null;
+}
+
+/** Marks and ticks plot identically — normalize both to this before charting. */
+interface CurvePoint {
+  open_pnl: number | null;
+  pct_max: number | null;
+  cushion: number | null;
+  at: number;
+}
+
 type NumField =
   | "put_long" | "put_short" | "call_short" | "call_long"
   | "put_credit" | "call_credit" | "contracts";
@@ -176,6 +214,40 @@ function econOf(r: Partial<CondorRow>): Econ | null {
   };
 }
 
+// ─── Sparkline ──────────────────────────────────────────────────────────────
+
+/**
+ * Mon→Fri mini-chart. Plots open P&L when the legs priced, otherwise falls back
+ * to cushion so a futures/unpriced condor still shows the week's shape. The zero
+ * line is drawn whenever the series straddles it, because "is this trade green
+ * or red" is the whole question the sparkline answers.
+ */
+function Spark({ values, w = 118, h = 24 }: { values: (number | null)[]; w?: number; h?: number }) {
+  const pts = values.map((v, i) => ({ i, v })).filter((p) => p.v != null && Number.isFinite(p.v)) as { i: number; v: number }[];
+  if (pts.length < 2) {
+    return <span style={{ fontSize: 9, color: HOME_THEME.muted }}>{pts.length ? "1 session" : "no marks"}</span>;
+  }
+  const n = values.length;
+  const lo = Math.min(...pts.map((p) => p.v), 0);
+  const hi = Math.max(...pts.map((p) => p.v), 0);
+  const span = hi - lo || 1;
+  const x = (i: number) => (n === 1 ? 0 : (i / (n - 1)) * (w - 2)) + 1;
+  const y = (v: number) => h - 2 - ((v - lo) / span) * (h - 4);
+  const d = pts.map((p, k) => `${k ? "L" : "M"}${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1];
+  const stroke = last.v >= 0 ? HOME_THEME.green : HOME_THEME.red;
+  const zeroY = y(0);
+  return (
+    <svg width={w} height={h} style={{ display: "block", overflow: "visible" }}>
+      {lo < 0 && hi > 0 && (
+        <line x1={1} x2={w - 1} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeWidth={1} strokeDasharray="2 2" />
+      )}
+      <path d={d} fill="none" stroke={stroke} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(last.i)} cy={y(last.v)} r={2.2} fill={stroke} />
+    </svg>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function CondorTrackerAdmin() {
@@ -194,6 +266,12 @@ export default function CondorTrackerAdmin() {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<Set<string>>(new Set());
 
+  // day-by-day marks for the selected week, keyed by condor id
+  const [marks, setMarks] = useState<Record<number, MarkRow[]>>({});
+  const [ticks, setTicks] = useState<Record<number, TickRow[]>>({});
+  const [marksBusy, setMarksBusy] = useState(false);
+  const [openDays, setOpenDays] = useState<number | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -207,7 +285,37 @@ export default function CondorTrackerAdmin() {
     }
   }, []);
 
+  const groupMarks = useCallback((list: MarkRow[]) => {
+    const by: Record<number, MarkRow[]> = {};
+    for (const m of list) (by[m.condor_id] = by[m.condor_id] || []).push(m);
+    for (const k of Object.keys(by)) by[Number(k)].sort((a, b) => (a.d < b.d ? -1 : 1));
+    return by;
+  }, []);
+
+  const loadMarks = useCallback(async (wk: string) => {
+    try {
+      const d = await fetch(`/api/em-condors/marks?week_start=${wk}`).then((r) => r.json());
+      setMarks(groupMarks(d.marks || []));
+    } catch {
+      // A missing marks table on an older DB shouldn't blank the whole tab.
+      setMarks({});
+    }
+  }, [groupMarks]);
+
+  const loadTicks = useCallback(async (wk: string) => {
+    try {
+      const d = await fetch(`/api/em-condors/ticks?week_start=${wk}`).then((r) => r.json());
+      const by: Record<number, TickRow[]> = {};
+      for (const t of (d.ticks || []) as TickRow[]) (by[t.condor_id] = by[t.condor_id] || []).push(t);
+      for (const k of Object.keys(by)) by[Number(k)].sort((a, b) => a.ts - b.ts);
+      setTicks(by);
+    } catch {
+      setTicks({});
+    }
+  }, []);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadMarks(week); loadTicks(week); }, [week, loadMarks, loadTicks]);
 
   // ── derived ───────────────────────────────────────────────────────────────
 
@@ -351,6 +459,51 @@ export default function CondorTrackerAdmin() {
     finally { setBusy(false); }
   }
 
+  /** Price every condor in the selected week off Theta's per-contract EOD
+   *  history and store one row per session. On-demand: 4 leg calls per condor,
+   *  so it takes a few seconds for a full board. */
+  async function refreshMarks() {
+    setMarksBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/em-condors/marks", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ week_start: week }),
+      }).then((r) => r.json());
+      if (r.ok) {
+        setMarks(groupMarks(r.marks || []));
+        await loadTicks(week);
+        const errs: string[] = r.errors || [];
+        setMsg(
+          `Marks for ${weekLabel(week)}: ${r.priced}/${r.condors} condor(s) fully priced, ${r.rows} session row(s).` +
+          (errs.length ? ` ${errs.length} leg issue(s) — ${errs.slice(0, 3).join(" · ")}${errs.length > 3 ? " …" : ""}` : "") +
+          (r.note ? ` ${r.note}` : "")
+        );
+      } else setMsg("Marks failed: " + (r.error || "unknown"));
+    } catch (e) { setMsg("Marks failed: " + String(e)); }
+    finally { setMarksBusy(false); }
+  }
+
+  /** Take one live tick right now instead of waiting for the top of the hour. */
+  async function snapshotNow() {
+    setMarksBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/em-condors/ticks", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ week_start: week }),
+      }).then((r) => r.json());
+      if (r.ok) {
+        await loadTicks(week);
+        const errs: string[] = r.errors || [];
+        setMsg(
+          `Live snapshot: ${r.priced ?? 0}/${r.condors ?? 0} condor(s) priced, ${r.written ?? 0} tick(s) written.` +
+          (errs.length ? ` ${errs.length} leg issue(s) — ${errs.slice(0, 3).join(" · ")}` : "") +
+          (r.note ? ` ${r.note}` : "")
+        );
+      } else setMsg("Snapshot failed: " + (r.error || "unknown"));
+    } catch (e) { setMsg("Snapshot failed: " + String(e)); }
+    finally { setMarksBusy(false); }
+  }
+
   async function settleWeek(all: boolean) {
     setBusy(true); setMsg(null);
     try {
@@ -429,6 +582,16 @@ export default function CondorTrackerAdmin() {
               {totals.open > 0 && <>&nbsp;·&nbsp;<span style={{ color: HOME_THEME.orange }}>{totals.open} open</span></>}
             </span>
           )}
+          <button onClick={refreshMarks} disabled={marksBusy || busy}
+            style={{ ...homeButtonStyle, borderColor: `${HOME_THEME.orange}44`, color: HOME_THEME.orange, opacity: marksBusy || busy ? 0.5 : 1 }}
+            title="Price all four legs of every condor in the selected week, day by day, from ThetaData">
+            {marksBusy ? "Pricing…" : "Refresh Marks"}
+          </button>
+          <button onClick={snapshotNow} disabled={marksBusy || busy}
+            style={{ ...homeSecondaryButtonStyle, opacity: marksBusy || busy ? 0.5 : 1 }}
+            title="Take one live NBBO snapshot of the open condors right now (the recorder does this hourly, 10:00–16:00 ET)">
+            Snapshot Now
+          </button>
           <button onClick={() => settleWeek(false)} disabled={busy} style={{ ...homeButtonStyle, opacity: busy ? 0.5 : 1 }} title="Settle this week's condors against the realized weekly close (run the EM Tracker evaluator first)">
             {busy ? "…" : "Settle Week"}
           </button>
@@ -483,13 +646,14 @@ export default function CondorTrackerAdmin() {
 
         {weekRows.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "68px 172px 172px 150px 60px 1fr 150px", gap: 8, padding: "4px 2px", ...lbl }}>
+            <div style={{ display: "grid", gridTemplateColumns: "82px 164px 164px 136px 48px 1fr 128px 146px", gap: 8, padding: "4px 2px", ...lbl }}>
               <span>Ticker</span>
               <span>Bull Put — long / short</span>
               <span>Bear Call — short / long</span>
               <span>Credit put / call</span>
               <span style={{ textAlign: "right" }}>Qty</span>
               <span>Risk &amp; breakevens</span>
+              <span>Week Mon→Fri</span>
               <span style={{ textAlign: "right" }}>Result</span>
             </div>
 
@@ -502,12 +666,27 @@ export default function CondorTrackerAdmin() {
               const bad = probs.length > 0;
               const tone = bad ? HOME_THEME.red : isDirty ? HOME_THEME.orange : null;
               const num = (v: number | null | undefined) => (v == null || !Number.isFinite(Number(v)) ? "" : String(v));
+              const mk = marks[r.id] ?? [];
+              const tk = ticks[r.id] ?? [];
+              // Hourly ticks give the finer curve for a live week; the EOD marks
+              // are the fallback and the only thing a past week will have.
+              const intraday = tk.length >= 2;
+              const curve: CurvePoint[] = intraday
+                ? tk.map((t) => ({ open_pnl: t.open_pnl, pct_max: t.pct_max, cushion: t.cushion, at: t.ts }))
+                : mk.map((m) => ({ open_pnl: m.open_pnl, pct_max: m.pct_max, cushion: m.cushion, at: Date.parse(m.d + "T16:00:00") }));
+              // Prefer the P&L curve; fall back to cushion when no leg priced
+              // (futures, or a week Theta has no option history for).
+              const hasPnl = curve.some((c) => c.open_pnl != null);
+              const series = curve.map((c) => (hasPnl ? c.open_pnl : c.cushion));
+              const last = [...curve].reverse().find((c) => (hasPnl ? c.open_pnl != null : c.cushion != null)) ?? null;
+              const daysOpen = openDays === r.id;
               const val = (f: NumField) => draft[`${r.ticker}-${f}`] ?? num(raw[f] as number | null);
 
               return (
-                <div key={r.id}
+                <div key={r.id}>
+                <div
                   style={{
-                    display: "grid", gridTemplateColumns: "68px 172px 172px 150px 60px 1fr 150px", gap: 8,
+                    display: "grid", gridTemplateColumns: "82px 164px 164px 136px 48px 1fr 128px 146px", gap: 8,
                     alignItems: "center", padding: "6px 2px", borderTop: `1px solid rgba(255,255,255,0.05)`,
                     background: bad ? `${HOME_THEME.red}10` : isDirty ? `${HOME_THEME.orange}0d` : "transparent",
                     borderRadius: 6,
@@ -515,6 +694,11 @@ export default function CondorTrackerAdmin() {
                   title={bad ? probs.join("; ") : undefined}
                 >
                   <span style={{ fontSize: 13, fontWeight: 800, color: bad ? HOME_THEME.red : "#fff" }}>
+                    <button
+                      onClick={() => setOpenDays(daysOpen ? null : r.id)}
+                      title={mk.length ? "Show the day-by-day marks" : "No marks yet — hit Refresh Marks"}
+                      style={{ background: "none", border: "none", cursor: "pointer", padding: 0, marginRight: 4, color: mk.length ? HOME_THEME.orange : HOME_THEME.muted, fontSize: 10, display: "inline-block", transform: daysOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}
+                    >▸</button>
                     {r.ticker}
                     {r.em != null && (
                       <span style={{ display: "block", fontSize: 9, fontWeight: 600, color: HOME_THEME.muted }}>
@@ -574,6 +758,25 @@ export default function CondorTrackerAdmin() {
                     ) : "enter all four strikes"}
                   </span>
 
+                  {/* week curve */}
+                  <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                    <Spark values={series} />
+                    <span style={{ fontSize: 9, color: HOME_THEME.muted }}>
+                      {intraday && (
+                        <span title={`${tk.length} intraday ticks · last ${new Date(tk[tk.length - 1].ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+                          style={{ color: HOME_THEME.orange, marginRight: 4 }}>●</span>
+                      )}
+                      {last == null ? "—" : hasPnl ? (
+                        <>
+                          <b style={{ color: pnlColor(last.open_pnl) }}>{money(last.open_pnl)}</b>
+                          {last.pct_max != null && <> · {(last.pct_max * 100).toFixed(0)}% max</>}
+                        </>
+                      ) : (
+                        <>cushion <b style={{ color: pnlColor(last.cushion) }}>{fmt(last.cushion, 1)}</b></>
+                      )}
+                    </span>
+                  </span>
+
                   {/* result */}
                   <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
                     {settled ? (
@@ -606,6 +809,53 @@ export default function CondorTrackerAdmin() {
                       </>
                     )}
                   </span>
+                </div>
+
+                {daysOpen && (
+                  <div style={{ margin: "2px 0 8px 20px", padding: "10px 12px", background: "rgba(0,0,0,0.22)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8 }}>
+                    {mk.length === 0 ? (
+                      <div style={{ fontSize: 11, color: HOME_THEME.muted }}>
+                        No marks stored for {r.ticker} this week — hit <b>Refresh Marks</b> to price the legs.
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: "84px 88px 78px 168px 78px 90px 68px", gap: 6, fontSize: 11, alignItems: "center" }}>
+                          {["Session", "Underlying", "Cushion", "Legs  PL/PS — CS/CL", "Mark", "Open P&L", "% Max"].map((h, i) => (
+                            <span key={h} style={{ ...lbl, textAlign: i >= 1 && i !== 3 ? "right" : "left" }}>{h}</span>
+                          ))}
+                          {mk.map((m) => (
+                            <div key={m.d} style={{ display: "contents" }}>
+                              <span style={{ color: "#fff", fontWeight: 700 }}>
+                                {new Date(m.d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" })}
+                                <span style={{ color: HOME_THEME.muted, fontWeight: 500 }}> {m.d.slice(5)}</span>
+                              </span>
+                              <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: "#fff" }}>{fmt(m.underlying)}</span>
+                              <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: m.cushion == null ? HOME_THEME.muted : m.cushion >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                                {m.cushion == null ? "—" : (m.cushion >= 0 ? "+" : "") + fmt(m.cushion, 1)}
+                              </span>
+                              <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.muted, fontSize: 10 }}>
+                                {(m.legs_priced ?? 0) === 0 ? "not priced" : (
+                                  <>{fmt(m.put_long_px)}/{fmt(m.put_short_px)} <span style={{ color: "#5a657a" }}>—</span> {fmt(m.call_short_px)}/{fmt(m.call_long_px)}</>
+                                )}
+                              </span>
+                              <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: HOME_THEME.cyan }}>{fmt(m.mark)}</span>
+                              <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontWeight: 700, color: pnlColor(m.open_pnl) }}>{money(m.open_pnl)}</span>
+                              <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: m.pct_max == null ? HOME_THEME.muted : pnlColor(m.pct_max) }}>
+                                {m.pct_max == null ? "—" : (m.pct_max * 100).toFixed(0) + "%"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 9, color: HOME_THEME.muted, marginTop: 8, lineHeight: 1.5 }}>
+                          Mark = what it costs to close (short legs − long legs, EOD closes). Open P&amp;L = (credit −
+                          mark) × 100 × contracts, so it needs a credit entered. % Max = share of the full credit
+                          already captured. A session with fewer than four legs priced shows no mark — a partial
+                          condor is a different position, not an estimate of this one.
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 </div>
               );
             })}

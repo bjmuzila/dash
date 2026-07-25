@@ -2904,6 +2904,12 @@ async function main() {
     // In-process weekly EM Tracker evaluator: every Sat ~09:00 ET scores last
     // week's close vs the EM band (win = closed inside) and POSTs to /api/em-tracker.
     require('./em-tracker-auto-eval').startEmTrackerAutoEval(PORT);
+    // In-process condor price tracker: hourly (10:00-16:00 ET) it snapshots the
+    // live NBBO mid on all four legs of every OPEN condor in the current week
+    // into em_condor_ticks; at 16:15 ET it re-prices the week off Theta's EOD
+    // history into em_condor_marks (the series the Iron Condors tab reads) and
+    // prunes ticks older than 120 days. Weekdays only; every fire is idempotent.
+    require('./condor-mark-recorder').startCondorMarkRecorder(PORT);
     // Morning budget briefing: daily 08:00 ET, emails the owner a written
     // summary + screenshots of /owner/budget (Overview + Prop). Force a send
     // any time via POST /proxy/budget-email-run.
