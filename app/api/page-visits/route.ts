@@ -26,6 +26,11 @@ export async function GET(req: NextRequest) {
       path: r.path ?? null,
       userId: r.user_id ?? null,
       ip: r.ip ?? null,
+      // Cloudflare geo. Null on rows logged before the managed transform was
+      // enabled, and on anything that reached the origin without crossing the edge.
+      country: r.country ?? null,
+      region: r.region ?? null,
+      city: r.city ?? null,
       createdAt: r.created_at ?? null,
     }));
     return NextResponse.json({ visits });

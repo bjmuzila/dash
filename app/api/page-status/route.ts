@@ -19,6 +19,29 @@ function clientIp(req: NextRequest): string | null {
   );
 }
 
+// Visitor geo from Cloudflare's "Add visitor location headers" managed transform
+// (Rules → Transform Rules → Managed Transforms). Everything here stays NULL
+// until that toggle is on, and for requests that never crossed the edge (local
+// dev, container health checks) — so treat it as best-effort, never required.
+//
+// cf-ipcountry has two sentinels worth knowing: "XX" (Cloudflare couldn't place
+// the IP) and "T1" (Tor exit node). Both are stored verbatim; the owner map
+// groups them under "Unknown" rather than pretending they're real countries.
+function trimmed(v: string | null, max: number): string | null {
+  if (!v) return null;
+  const s = v.trim().slice(0, max);
+  return s.length ? s : null;
+}
+
+function clientGeo(req: NextRequest): { country: string | null; region: string | null; city: string | null } {
+  const country = trimmed(req.headers.get("cf-ipcountry"), 2);
+  return {
+    country: country ? country.toUpperCase() : null,
+    region: trimmed(req.headers.get("cf-region"), 80),
+    city: trimmed(req.headers.get("cf-ipcity"), 80),
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -40,12 +63,16 @@ export async function POST(req: NextRequest) {
       try {
         let userId: string | null = null;
         try { userId = await getServerUserId(); } catch { /* unauthenticated */ }
+        const geo = clientGeo(req);
         await insertPageVisit({
           page_key: String(body.pageKey ?? body.page_key ?? ""),
           page_label: body.pageLabel == null ? null : String(body.pageLabel),
           path: body.path == null ? null : String(body.path),
           user_id: userId,
           ip: clientIp(req),
+          country: geo.country,
+          region: geo.region,
+          city: geo.city,
         });
       } catch { /* non-fatal */ }
     }

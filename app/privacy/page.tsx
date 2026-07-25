@@ -56,6 +56,14 @@ export default function PrivacyPage() {
           the Service. For signed-in users, this activity is associated with your account identifier.
         </li>
         <li>
+          <strong>Approximate location.</strong> Our content delivery provider (Cloudflare) derives an
+          approximate location from your IP address, and we log the country, region, and city it reports
+          alongside the page-activity data described above. This is coarse, IP-derived location only &mdash; we
+          do not collect GPS or precise device location, and the Service does not request access to your
+          device&rsquo;s location services. We use it to understand where our traffic comes from and to
+          prioritize the markets and hours we support.
+        </li>
+        <li>
           <strong>Cookies and similar technologies.</strong> We and our providers use cookies and similar
           technologies for authentication, session management, security, and basic analytics. You can control
           cookies through your browser settings, though some features may not work without them.
@@ -157,8 +165,9 @@ export default function PrivacyPage() {
       <p>
         The categories of personal information we collect are described in Section 1 and include identifiers
         (such as name, email address, IP address, and account identifier), commercial information (subscription
-        and payment-related data processed by our payment provider), and internet activity information (such as
-        pages viewed and usage data). To exercise any of these rights, contact us at{" "}
+        and payment-related data processed by our payment provider), internet activity information (such as
+        pages viewed and usage data), and coarse geolocation data (country, region, and city derived from your
+        IP address). To exercise any of these rights, contact us at{" "}
         <a href="mailto:support@cbedge.net">support@cbedge.net</a>. We may need to verify your identity before
         responding, and you may use an authorized agent where permitted by law.
       </p>

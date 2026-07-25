@@ -210,9 +210,7 @@ export default function UserMenu() {
             href="/whats-new"
             onClick={() => setOpen(false)}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
+              display: "block",
               padding: "8px 10px",
               borderRadius: 6,
               color: HOME_THEME.text,
@@ -221,8 +219,7 @@ export default function UserMenu() {
               textDecoration: "none",
             }}
           >
-            <span aria-hidden>✨</span>
-            <span>What&apos;s New</span>
+            What&apos;s New
           </a>
 
           {isOwner && (
@@ -230,9 +227,7 @@ export default function UserMenu() {
               href="https://owner.cbedge.net"
               onClick={() => setOpen(false)}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
+                display: "block",
                 padding: "8px 10px",
                 borderRadius: 6,
                 color: HOME_THEME.text,
@@ -241,8 +236,7 @@ export default function UserMenu() {
                 textDecoration: "none",
               }}
             >
-              <span aria-hidden>🛡️</span>
-              <span>Owner ↗</span>
+              Owner ↗
             </a>
           )}
 

@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback, Fragment } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useRefreshButton } from "../hooks/useRefreshButton";
+import { VisitorMap } from "../components/VisitorMap";
 import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
@@ -168,6 +169,8 @@ interface AuthStatus {
 }
 
 // One logged page load (from /api/page-visits). Owner-only; includes client IP.
+// country/region/city come from Cloudflare's visitor-location headers and stay
+// null on rows logged before that managed transform was switched on.
 interface PageVisit {
   id?: number;
   pageKey: string | null;
@@ -175,6 +178,9 @@ interface PageVisit {
   path: string | null;
   userId: string | null;
   ip: string | null;
+  country?: string | null;
+  region?: string | null;
+  city?: string | null;
   createdAt: string | null;
 }
 
@@ -1270,6 +1276,11 @@ function OverviewSection({ metrics }: {
           <BarList rows={rowsToday.map((r) => ({ label: r.label, n: r.rows }))} max={rowsMax} mono />
         </div>
       </div>
+
+      {/* Visitor choropleth — same page_visits rows, bucketed by cf-ipcountry.
+          Renders an all-grey world until the Cloudflare "Add visitor location
+          headers" managed transform is enabled (rows before that have no geo). */}
+      <VisitorMap rows={visits} />
 
       {/* Hourly heatmap — real page_visits rows, bucketed by hour × weekday (ET). */}
       <div style={cardStyle}>

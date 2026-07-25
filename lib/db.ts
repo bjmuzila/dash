@@ -241,6 +241,12 @@ async function ensureAllTables(pool: Pool): Promise<void> {
 
     -- One row per page load: full visit history with client IP + (optional) user.
     -- Owner-only data (IP is PII). Pruned to the newest rows on insert.
+    --
+    -- country/region/city come from Cloudflare's "Add visitor location headers"
+    -- managed transform (cf-ipcountry / cf-region / cf-ipcity). They are NULL
+    -- until that transform is enabled on the zone, and NULL for any request that
+    -- didn't traverse the edge (local dev, direct-to-origin health checks), so
+    -- every consumer must treat them as optional.
     CREATE TABLE IF NOT EXISTS page_visits (
       id SERIAL PRIMARY KEY,
       page_key TEXT,
@@ -248,9 +254,18 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       path TEXT,
       user_id TEXT,
       ip TEXT,
+      country TEXT,
+      region TEXT,
+      city TEXT,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    -- Added after the table shipped: existing rows keep NULL geo (they predate
+    -- the managed transform), which the map renders as "Unknown".
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS country TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS region TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS city TEXT;
     CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_page_visits_country ON page_visits(country);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
 
     -- One row per ticker interaction (scanner + anywhere tickers are shown).
@@ -3614,6 +3629,10 @@ export interface PageVisitRecord {
   path?: string | null;
   user_id?: string | null;
   ip?: string | null;
+  /** ISO 3166-1 alpha-2, from Cloudflare's cf-ipcountry. Null pre-transform. */
+  country?: string | null;
+  region?: string | null;
+  city?: string | null;
   created_at?: string | null;
 }
 
@@ -3621,13 +3640,16 @@ export interface PageVisitRecord {
 const PAGE_VISITS_KEEP = 5000;
 
 export async function insertPageVisit(
-  r: Pick<PageVisitRecord, "page_key" | "page_label" | "path" | "user_id" | "ip">
+  r: Pick<PageVisitRecord, "page_key" | "page_label" | "path" | "user_id" | "ip" | "country" | "region" | "city">
 ): Promise<void> {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null]
+    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null,
+      r.country ?? null, r.region ?? null, r.city ?? null,
+    ]
   );
   // Opportunistic prune: drop anything older than the newest PAGE_VISITS_KEEP rows.
   await pool.query(

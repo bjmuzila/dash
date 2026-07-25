@@ -227,7 +227,9 @@ const NAV_ITEMS: NavItem[] = [
   // /journal page; that href was a placeholder while the tile was coming-soon.
   { href: "/trading",           label: "Journal",       emoji: "📓" },
   { href: "/order-flow",        label: "Order Flow",    emoji: "🧾", comingSoon: true },
-  { href: "/lookup",            label: "Lookup",        emoji: "❓", comingSoon: true },
+  // Lookup was a coming-soon placeholder that never got a page; replaced by
+  // /options (app/options/page.tsx), which is live and being built out.
+  { href: "/options",           label: "Options",       emoji: "🎛️" },
 ];
 
 // Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).
