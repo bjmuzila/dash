@@ -13,14 +13,15 @@ import DelayedLiveView from "@/components/explore/DelayedLiveView";
 // data view, then drives to /pricing?from=<slug> (the single conversion hub).
 // Signed-out friendly.
 
-// ISR: refresh every 15 min so the delayed-live blocks (DelayedLiveView, GEX
-// snapshot) stay reasonably fresh. The confidence-score tracker's own data
-// layer is still cached per ET day, so this doesn't over-hit it.
-export const revalidate = 900;
-
-export function generateStaticParams() {
-  return EXPLORE_SLUGS.map((slug) => ({ slug }));
-}
+// Render at REQUEST time — do not prerender. The Docker build stage has no
+// .env.local (secrets are mounted at runtime), so DATABASE_URL is undefined
+// during `next build`: every delayed-live query throws and the "populates at
+// the end of each trading day" empty state gets baked into the prerendered
+// HTML and served to visitors forever. The DB only exists at runtime.
+// Cost is bounded: each fetcher in DelayedLiveView is unstable_cache'd for
+// 15 min and Confidence7dTracker is cached per ET day — one DB round-trip per
+// window, not per visitor.
+export const dynamic = "force-dynamic";
 
 const toneColor: Record<NonNullable<TeaserStat["tone"]>, string> = {
   cyan: T.cyan,

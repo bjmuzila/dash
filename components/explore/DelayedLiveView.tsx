@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
 import {
   getDb,
@@ -14,10 +15,17 @@ import {
 // gated routes to "/"). Refresh cadence is the page's ISR `revalidate`; the GEX
 // block also prints its own snapshot timestamp so freshness is transparent.
 //
+// The page renders dynamically (force-dynamic) because the build container has
+// no DATABASE_URL — a prerender would freeze the empty states in. Each fetcher
+// below is therefore unstable_cache'd for CACHE_S so the DB sees one query per
+// window per block, not one per visitor.
+//
 // Every block is try/catch + graceful-empty (like Confidence7dTracker): a
 // missing/empty table shows a "populates at end of day" line, never a 500 on a
 // marketing page. flow + confidence-score already have their own dedicated
 // live components (NetDriftExample / Confidence7dTracker) and are skipped here.
+
+const CACHE_S = 900;
 
 type Tone = "cyan" | "green" | "red" | "purple";
 const toneColor: Record<Tone, string> = { cyan: T.cyan, green: T.green, red: T.red, purple: T.purple };
@@ -78,9 +86,16 @@ function EmptyBlock({ label, note }: { label: string; note: string }) {
 
 /* ── GEX: last frozen full-chain snapshot (same row /home serves unpaid) ────── */
 
+const gexSnapshot = unstable_cache(
+  async (): Promise<{ ts: number; payload: unknown } | null> => {
+    try { return (await getLatestHomeStaticSnapshot()) ?? null; } catch { return null; }
+  },
+  ["explore-delayed-gex"],
+  { revalidate: CACHE_S, tags: ["explore-delayed"] }
+);
+
 async function GexLive() {
-  let row: { ts: number; payload: unknown } | undefined;
-  try { row = await getLatestHomeStaticSnapshot(); } catch { row = undefined; }
+  const row = await gexSnapshot();
   const p = (row?.payload ?? null) as Record<string, unknown> | null;
   const rows = Array.isArray(p?.gexRows) ? (p!.gexRows as unknown[]) : [];
   if (!p || !rows.length) {
@@ -103,39 +118,46 @@ async function GexLive() {
 
 /* ── Estimated moves: graded EM-band coverage receipt (em_tracker) ──────────── */
 
+const emStats = unstable_cache(
+  async (): Promise<Record<string, unknown> | null> => {
+    try {
+      const pool = await getDb();
+      const { rows } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE result = 'hit')::int            AS hits,
+          COUNT(*) FILTER (WHERE result IN ('hit','miss'))::int  AS evaluated,
+          COUNT(DISTINCT week_start) FILTER (WHERE result IN ('hit','miss'))::int AS weeks,
+          COUNT(DISTINCT ticker) FILTER (WHERE result IN ('hit','miss'))::int     AS tickers
+        FROM em_tracker
+      `);
+      return rows[0] ?? null;
+    } catch { return null; }
+  },
+  ["explore-delayed-em"],
+  { revalidate: CACHE_S, tags: ["explore-delayed"] }
+);
+
 async function EmLive() {
-  try {
-    const pool = await getDb();
-    const { rows } = await pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE result = 'hit')::int            AS hits,
-        COUNT(*) FILTER (WHERE result IN ('hit','miss'))::int  AS evaluated,
-        COUNT(DISTINCT week_start) FILTER (WHERE result IN ('hit','miss'))::int AS weeks,
-        COUNT(DISTINCT ticker) FILTER (WHERE result IN ('hit','miss'))::int     AS tickers
-      FROM em_tracker
-    `);
-    const r = rows[0] || {};
-    const n = Number(r.evaluated ?? 0);
-    if (n < 30) {
-      return <EmptyBlock label="Estimated moves · graded results" note="Graded EM-band results populate here as tracked weeks resolve." />;
-    }
-    const pct = Math.round((Number(r.hits) / n) * 1000) / 10;
-    return (
-      <Frame label="Estimated moves · graded results">
-        <StatGrid stats={[
-          { label: "Weekly bands contained price", value: `${pct}%`, tone: "green" },
-          { label: "Graded ticker-weeks", value: fmt(n), tone: "cyan" },
-          { label: "Distinct weeks", value: fmt(Number(r.weeks ?? 0)), tone: "purple" },
-          { label: "Tickers tracked", value: fmt(Number(r.tickers ?? 0)), tone: "cyan" },
-        ]} />
-        <p style={{ color: T.muted, fontSize: 12, margin: "12px 0 0", lineHeight: 1.5, opacity: 0.85 }}>
-          A 1-SD weekly band should contain price near 68% of the time — this is calibration, every graded week including the misses.
-        </p>
-      </Frame>
-    );
-  } catch {
+  const r = (await emStats()) ?? {};
+  const n = Number((r as { evaluated?: unknown }).evaluated ?? 0);
+  if (n < 30) {
     return <EmptyBlock label="Estimated moves · graded results" note="Graded EM-band results populate here as tracked weeks resolve." />;
   }
+  const rr = r as Record<string, unknown>;
+  const pct = Math.round((Number(rr.hits) / n) * 1000) / 10;
+  return (
+    <Frame label="Estimated moves · graded results">
+      <StatGrid stats={[
+        { label: "Weekly bands contained price", value: `${pct}%`, tone: "green" },
+        { label: "Graded ticker-weeks", value: fmt(n), tone: "cyan" },
+        { label: "Distinct weeks", value: fmt(Number(rr.weeks ?? 0)), tone: "purple" },
+        { label: "Tickers tracked", value: fmt(Number(rr.tickers ?? 0)), tone: "cyan" },
+      ]} />
+      <p style={{ color: T.muted, fontSize: 12, margin: "12px 0 0", lineHeight: 1.5, opacity: 0.85 }}>
+        A 1-SD weekly band should contain price near 68% of the time — this is calibration, every graded week including the misses.
+      </p>
+    </Frame>
+  );
 }
 
 /* ── Initial Balance: last graded session + trailing base rates (ES) ────────── */
@@ -147,9 +169,16 @@ const rate = (rows: IbDailyResultRow[], key: keyof IbDailyResultRow) => {
   return Math.round((graded.filter((r) => Number(r[key]) === 1).length / graded.length) * 100);
 };
 
+const ibRows = unstable_cache(
+  async (): Promise<IbDailyResultRow[]> => {
+    try { return await getIbDailyResults("ES", 40); } catch { return []; }
+  },
+  ["explore-delayed-ib"],
+  { revalidate: CACHE_S, tags: ["explore-delayed"] }
+);
+
 async function IbLive() {
-  let rows: IbDailyResultRow[] = [];
-  try { rows = await getIbDailyResults("ES", 40); } catch { rows = []; }
+  const rows = await ibRows();
   if (!rows.length) {
     return <EmptyBlock label="Initial Balance · ES, last session" note="Graded IB results populate here at the end of each trading day." />;
   }
@@ -172,15 +201,22 @@ async function IbLive() {
 
 interface TpoRow { date: string; poc: number | null; vah: number | null; val: number | null; }
 
+const tpoRow = unstable_cache(
+  async (): Promise<TpoRow | null> => {
+    try {
+      const rows = await queryAll<TpoRow>(
+        `SELECT date, poc, vah, val FROM tpo_profiles WHERE symbol = ? ORDER BY date DESC LIMIT 1`,
+        ["ESU"]
+      );
+      return rows[0] ?? null;
+    } catch { return null; }
+  },
+  ["explore-delayed-tpo"],
+  { revalidate: CACHE_S, tags: ["explore-delayed"] }
+);
+
 async function TpoLive() {
-  let rows: TpoRow[] = [];
-  try {
-    rows = await queryAll<TpoRow>(
-      `SELECT date, poc, vah, val FROM tpo_profiles WHERE symbol = ? ORDER BY date DESC LIMIT 1`,
-      ["ESU"]
-    );
-  } catch { rows = []; }
-  const r = rows[0];
+  const r = await tpoRow();
   if (!r) {
     return <EmptyBlock label="TPO · ES Market Profile" note="Completed Market Profiles populate here at the end of each session." />;
   }

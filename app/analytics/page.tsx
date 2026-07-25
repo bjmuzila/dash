@@ -630,9 +630,21 @@ function ConfidenceCard() {
           Confidence Score
           <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
         </span>
-        {forDate && (
-          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{forDate}</span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {forDate && (
+            <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{forDate}</span>
+          )}
+          <Link
+            href="/confidence-score"
+            style={{
+              fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
+              color: T.cyan, textDecoration: "none", border: `1px solid ${T.border}`,
+              borderRadius: 6, padding: "3px 9px", whiteSpace: "nowrap",
+            }}
+          >
+            More →
+          </Link>
+        </div>
       </Row>
       {loading || error || score == null ? (
         <CardState loading={loading} error={error} empty="Waiting for today's first CB snapshot." />
