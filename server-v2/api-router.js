@@ -75,6 +75,17 @@ catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e
 let libJournalCsv = null;
 try { libJournalCsv = require('./_lib-journal-csv.cjs'); }
 catch (e) { console.warn('[api-router] _lib-journal-csv.cjs not loaded:', e.message); }
+// TPO k-NN forecaster, extracted to lib/tpo-forecast-compute.ts (pulls lib/tpo +
+// balanceImbalance + valueArea; useEsCandles is type-only → erased):
+//   esbuild lib/tpo-forecast-compute.ts --bundle --platform=node --format=cjs --external:pg --outfile=server-v2/_lib-tpo-forecast.cjs
+let libTpoForecast = null;
+try { libTpoForecast = require('./_lib-tpo-forecast.cjs'); }
+catch (e) { console.warn('[api-router] _lib-tpo-forecast.cjs not loaded:', e.message); }
+// Order-book tenor-split read, extracted to lib/obook-compute.ts (self-contained;
+// forwardGet replaced with a direct /proxy fetch): esbuild → server-v2/_lib-obook.cjs
+let libObook = null;
+try { libObook = require('./_lib-obook.cjs'); }
+catch (e) { console.warn('[api-router] _lib-obook.cjs not loaded:', e.message); }
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -352,6 +363,342 @@ register('/api/flow', {
       timestamp: Date.now(), entries: [],
       summary: { totalCallPremium: 0, totalPutPremium: 0, ratio: 1, dominantSide: 'neutral' },
     });
+  },
+});
+
+// ── Self-contained routes (no libDb): external-API fetches + /proxy compute ──
+
+// /api/semi-strength — Semiconductor Strength Index (from /proxy/semi-quotes).
+register('/api/semi-strength', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const SEMIS = [
+      { sym: 'NVDA', weight: 20.70 }, { sym: 'TSM', weight: 9.09 }, { sym: 'AVGO', weight: 6.12 },
+      { sym: 'AMD', weight: 5.71 }, { sym: 'AMAT', weight: 5.12 }, { sym: 'ASML', weight: 5.11 },
+      { sym: 'MU', weight: 4.95 }, { sym: 'TXN', weight: 4.69 }, { sym: 'KLAC', weight: 4.62 }, { sym: 'LRCX', weight: 4.58 },
+    ];
+    const BENCH = ['SMH', 'SOXL', 'SPY', 'QQQ'];
+    const SCALE = 1.5;
+    const toSSI = (c) => Math.round((50 + 50 * Math.tanh(c / SCALE)) * 10) / 10;
+    const ssiLabel = (ssi) => ssi >= 70 ? 'STRONG' : ssi >= 57 ? 'FIRM' : ssi > 43 ? 'NEUTRAL' : ssi > 30 ? 'SOFT' : 'WEAK';
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const getJson = async (path) => { try { const r = await ctx.internalFetch(path); return r.ok ? await r.json() : null; } catch { return null; } };
+    const symbols = [...SEMIS.map((s) => s.sym), ...BENCH].join(',');
+    const q = await getJson(`/proxy/semi-quotes?symbols=${encodeURIComponent(symbols)}`);
+    const quotes = q?.data?.items ?? [];
+    const qBy = new Map(quotes.map((x) => [String(x.symbol).toUpperCase(), x]));
+    const priceOf = (sym) => { const x = qBy.get(sym); if (!x) return null; if (x.last && x.last > 0) return x.last; if (x.mark && x.mark > 0) return x.mark; return null; };
+    const posOr = (v) => (v && v > 0 ? v : null);
+    const merge = (sym, weight) => ({ sym, weight, price: priceOf(sym), prevClose: posOr(qBy.get(sym)?.prevClose), open: posOr(qBy.get(sym)?.open) });
+    const semiRows = SEMIS.map((s) => merge(s.sym, s.weight));
+    const benchRows = new Map(BENCH.map((b) => [b, merge(b, 0)]));
+    const baseVal = (m, basis) => (basis === 'prevClose' ? m.prevClose : m.open);
+    const pct = (m, basis) => { const b = baseVal(m, basis); return m.price != null && b != null ? ((m.price - b) / b) * 100 : null; };
+    function buildView(basis) {
+      const rows = semiRows.map((m) => { const p = pct(m, basis); return { symbol: m.sym, weight: m.weight, price: m.price, baseline: baseVal(m, basis), pct: p, up: p == null ? null : p > 0 }; });
+      const valid = rows.filter((r) => r.pct != null);
+      const wSum = valid.reduce((a, r) => a + r.weight, 0);
+      const compositePct = wSum > 0 ? valid.reduce((a, r) => a + (r.weight / wSum) * r.pct, 0) : 0;
+      const names = rows.map((r) => ({ ...r, pct: r.pct == null ? null : r2(r.pct), contribution: r.pct == null || wSum <= 0 ? null : r2((r.weight / wSum) * r.pct) })).sort((a, b) => (b.contribution ?? -Infinity) - (a.contribution ?? -Infinity));
+      const ssi = toSSI(compositePct);
+      const breadthTotal = valid.length;
+      const breadthUp = valid.filter((r) => r.pct > 0).length;
+      const breadthPct = breadthTotal > 0 ? Math.round((breadthUp / breadthTotal) * 100) : null;
+      const smhPct = pct(benchRows.get('SMH'), basis), soxlPct = pct(benchRows.get('SOXL'), basis), spyPct = pct(benchRows.get('SPY'), basis), qqqPct = pct(benchRows.get('QQQ'), basis);
+      const rsSpx = smhPct != null && spyPct != null ? r2(smhPct - spyPct) : null;
+      const rsNq = smhPct != null && qqqPct != null ? r2(smhPct - qqqPct) : null;
+      let soxlConfirm = null;
+      if (smhPct != null && soxlPct != null) { const expected = r2(smhPct * 3); const ratio = Math.abs(expected) > 0.05 ? r2(soxlPct / expected) : null; const status = ratio == null ? 'flat' : ratio >= 0.9 ? 'confirming' : ratio >= 0.6 ? 'soft' : 'lagging'; soxlConfirm = { expected, actual: r2(soxlPct), ratio, status }; }
+      const divergence = compositePct > 0.1 && breadthPct != null && breadthPct < 50 ? 'narrow-up' : compositePct < -0.1 && breadthPct != null && breadthPct > 50 ? 'narrow-down' : 'aligned';
+      return { available: breadthTotal > 0, ssi, ssiLabel: ssiLabel(ssi), compositePct: r2(compositePct), breadthUp, breadthTotal, breadthPct, divergence, smhPct: smhPct == null ? null : r2(smhPct), soxlPct: soxlPct == null ? null : r2(soxlPct), spyPct: spyPct == null ? null : r2(spyPct), qqqPct: qqqPct == null ? null : r2(qqqPct), rsSpx, rsNq, soxlConfirm, names };
+    }
+    const rthOpen = buildView('open');
+    const rthOpenAvailable = benchRows.get('SMH').open != null && rthOpen.breadthTotal > 0;
+    send(res, 200, { source: 'thetadata', updatedAt: new Date().toISOString(), rthOpenAvailable, prevClose: buildView('prevClose'), rthOpen }, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
+  },
+});
+
+// /api/weather — ZIP → open-meteo (subscriber).
+const WMO = {
+  0:"Clear",1:"Mainly Clear",2:"Partly Cloudy",3:"Overcast",
+  45:"Fog",48:"Rime Fog",51:"Light Drizzle",53:"Drizzle",55:"Heavy Drizzle",
+  61:"Light Rain",63:"Rain",65:"Heavy Rain",66:"Freezing Rain",67:"Freezing Rain",
+  71:"Light Snow",73:"Snow",75:"Heavy Snow",77:"Snow Grains",
+  80:"Rain Showers",81:"Rain Showers",82:"Violent Showers",
+  85:"Snow Showers",86:"Snow Showers",95:"Thunderstorm",96:"Thunderstorm",99:"Thunderstorm",
+};
+register('/api/weather', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const zip = (sp.get('zip') || '').trim();
+    if (!/^\d{5}$/.test(zip)) return send(res, 400, { error: 'Valid 5-digit US ZIP required' });
+    try {
+      let loc = null;
+      try {
+        const g = await fetch(`https://api.zippopotam.us/us/${zip}`, { cache: 'no-store' });
+        if (g.ok) { const geo = await g.json(); const p = geo?.places?.[0];
+          if (p) loc = { latitude: p.latitude, longitude: p.longitude, name: p['place name'], admin1: p['state abbreviation'] }; }
+      } catch {}
+      if (!loc) {
+        const n = await fetch(`https://nominatim.openstreetmap.org/search?postalcode=${zip}&country=US&format=json&addressdetails=1&limit=1`,
+          { cache: 'no-store', headers: { 'User-Agent': 'cbedge-traders-dashboard/1.0' } });
+        if (n.ok) { const arr = await n.json(); const x = Array.isArray(arr) ? arr[0] : null;
+          if (x) loc = { latitude: x.lat, longitude: x.lon, name: x.address?.town || x.address?.city || x.address?.village || x.display_name?.split(',')[0] || zip, admin1: x.address?.['ISO3166-2-lvl4']?.split('-')[1] || '' }; }
+      }
+      if (!loc) return send(res, 404, { error: 'ZIP not found' });
+      const wRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto`, { cache: 'no-store' });
+      const w = await wRes.json(); const cur = w?.current;
+      if (!cur) return send(res, 502, { error: 'Weather unavailable' });
+      send(res, 200, { tempF: Math.round(cur.temperature_2m), condition: WMO[cur.weather_code] ?? '—', code: cur.weather_code, place: `${loc.name}${loc.admin1 ? ', ' + loc.admin1 : ''}` });
+    } catch (err) { send(res, 500, { error: 'Weather fetch failed', detail: String(err) }); }
+  },
+});
+
+// /api/yahoo-quotes — Yahoo chart per symbol (subscriber).
+const YAHOO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json', 'Accept-Language': 'en-US,en;q=0.9',
+  'Cache-Control': 'no-cache', 'Pragma': 'no-cache',
+  'Origin': 'https://finance.yahoo.com', 'Referer': 'https://finance.yahoo.com/',
+};
+register('/api/yahoo-quotes', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    try {
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const symbols = sp.get('symbols') || '';
+      if (!symbols) return send(res, 400, { error: 'symbols required' });
+      const syms = symbols.split(',').map(s => s.trim()).filter(Boolean);
+      async function fetchOne(sym) {
+        try {
+          const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d&includePrePost=true&_=${Date.now()}`;
+          const r = await fetch(url, { headers: YAHOO_HEADERS, cache: 'no-store' });
+          if (!r.ok) return { price: null, change: null, pct: null, time: null };
+          const data = await r.json(); const result = data?.chart?.result?.[0]; const meta = result?.meta;
+          if (!meta) return { price: null, change: null, pct: null, time: null };
+          const closes = result?.indicators?.quote?.[0]?.close;
+          const lastClose = Array.isArray(closes) ? [...closes].reverse().find(v => typeof v === 'number' && Number.isFinite(v)) : null;
+          const ts = result?.timestamp;
+          const lastTime = Array.isArray(ts) ? [...ts].reverse().find(v => typeof v === 'number' && Number.isFinite(v)) : null;
+          const price = meta.regularMarketPrice ?? lastClose ?? null;
+          const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+          const change = price != null && prevClose != null ? price - prevClose : null;
+          const pct = change != null && prevClose ? (change / prevClose) * 100 : null;
+          const time = meta.regularMarketTime ?? lastTime ?? null;
+          return { price, change, pct, time };
+        } catch { return { price: null, change: null, pct: null, time: null }; }
+      }
+      const results = await Promise.all(syms.map(sym => fetchOne(sym).then(q => ({ sym, q }))));
+      const quotes = {}; results.forEach(({ sym, q }) => { quotes[sym] = q; });
+      send(res, 200, quotes, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
+    } catch (err) { send(res, 500, { error: String(err) }); }
+  },
+});
+
+// /api/insights/vix — Yahoo VIX/VIX1D/GSPC (subscriber).
+register('/api/insights/vix', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    try {
+      const H = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', Accept: 'application/json', 'Accept-Language': 'en-US,en;q=0.9', Origin: 'https://finance.yahoo.com', Referer: 'https://finance.yahoo.com/' };
+      async function fetchSeries(sym, range = '1y') {
+        const empty = { closes: [], last: null };
+        try {
+          const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=${range}&includePrePost=false&_=${Date.now()}`;
+          const r = await fetch(url, { headers: H, cache: 'no-store' });
+          if (!r.ok) return empty;
+          const data = await r.json(); const result = data?.chart?.result?.[0]; const meta = result?.meta;
+          if (!meta) return empty;
+          const raw = result?.indicators?.quote?.[0]?.close;
+          const closes = Array.isArray(raw) ? raw.filter(v => typeof v === 'number' && Number.isFinite(v)) : [];
+          const last = meta.regularMarketPrice ?? (closes.length ? closes[closes.length - 1] : null);
+          return { closes, last };
+        } catch { return empty; }
+      }
+      function realizedVol(values, period = 10) {
+        if (values.length < period + 1) return null;
+        const slice = values.slice(-(period + 1)); const rets = [];
+        for (let i = 1; i < slice.length; i++) rets.push(Math.log(slice[i] / slice[i - 1]));
+        const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+        const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+        return Math.sqrt(variance) * Math.sqrt(252) * 100;
+      }
+      const [vix, vix1d, spx] = await Promise.all([fetchSeries('^VIX', '1y'), fetchSeries('^VIX1D', '1mo'), fetchSeries('^GSPC', '1mo')]);
+      const vixSpot = vix.last; const vix1dVal = vix1d.last ?? vixSpot; const realized10d = realizedVol(spx.closes, 10);
+      let ivRank = null, ivPercentile = null;
+      if (vixSpot != null && vix.closes.length > 20) {
+        const hist = vix.closes; const min = Math.min(...hist); const max = Math.max(...hist);
+        if (max > min) ivRank = ((vixSpot - min) / (max - min)) * 100;
+        ivPercentile = (hist.filter(v => v < vixSpot).length / hist.length) * 100;
+      }
+      const round = (v, d = 2) => v == null || !isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d;
+      send(res, 200, { data: { vix_spot: round(vixSpot), vix_1d: round(vix1dVal), realized_10d: round(realized10d), iv_rank: round(ivRank, 1), iv_percentile: round(ivPercentile, 1), source: 'yahoo' } }, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
+    } catch (err) { send(res, 500, { error: String(err) }); }
+  },
+});
+
+// /api/earnings-today — Yahoo visualization + quote caps (subscriber; 200 on failure).
+register('/api/earnings-today', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+    try {
+      const body = { sortType: 'ASC', entityIdType: 'earnings', sortField: 'companyshortname',
+        includeFields: ['ticker', 'companyshortname', 'startdatetimetype'],
+        query: { operator: 'and', operands: [
+          { operator: 'gte', operands: ['startdatetime', `${day}T00:00:00.000Z`] },
+          { operator: 'lt', operands: ['startdatetime', `${day}T23:59:59.999Z`] },
+          { operator: 'eq', operands: ['region', 'us'] } ] }, offset: 0, size: 100 };
+      const er = await fetch('https://query1.finance.yahoo.com/v1/finance/visualization?lang=en-US&region=US',
+        { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, body: JSON.stringify(body), cache: 'no-store' });
+      if (!er.ok) throw new Error(`Yahoo HTTP ${er.status}`);
+      const json = await er.json(); const result = json?.finance?.result?.[0];
+      const cols = (result?.documents?.[0]?.columns ?? []).map(c => c.id);
+      const rowsRaw = result?.documents?.[0]?.rows ?? []; const ix = id => cols.indexOf(id);
+      const rows = rowsRaw.map(r => ({ symbol: String(r[ix('ticker')] ?? '').toUpperCase(), company: String(r[ix('companyshortname')] ?? ''), callTime: String(r[ix('startdatetimetype')] ?? ''), marketCap: 0 })).filter(r => r.symbol);
+      const symbols = rows.map(r => r.symbol); const capBySym = new Map();
+      for (let i = 0; i < symbols.length; i += 50) {
+        const chunk = symbols.slice(i, i + 50);
+        try {
+          const qr = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(chunk.join(','))}`, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, cache: 'no-store' });
+          if (!qr.ok) continue;
+          const j = await qr.json();
+          for (const q of j?.quoteResponse?.result ?? []) if (q?.symbol) capBySym.set(String(q.symbol).toUpperCase(), Number(q.marketCap) || 0);
+        } catch {}
+      }
+      for (const r of rows) r.marketCap = capBySym.get(r.symbol) ?? 0;
+      rows.sort((a, b) => b.marketCap - a.marketCap);
+      send(res, 200, { date: day, count: rows.length, earnings: rows }, { 'Cache-Control': 'no-store' });
+    } catch (e) {
+      send(res, 200, { date: day, count: 0, earnings: [], error: e?.message ?? 'fetch failed' });
+    }
+  },
+});
+
+// /api/trump-calendar — factba.se feed, 30-min in-memory cache (subscriber).
+const TC_EXCLUDE = ['executive time', 'pool call', 'in-town pool'];
+const TC_CACHE_TTL = 30 * 60 * 1000;
+let _tcCache = { body: [], ts: 0 };
+register('/api/trump-calendar', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res) {
+    if (_tcCache.body.length && Date.now() - _tcCache.ts < TC_CACHE_TTL)
+      return send(res, 200, { events: _tcCache.body }, { 'X-Cache': 'HIT' });
+    try {
+      const r = await fetch('https://media-cdn.factba.se/rss/json/trump/calendar-full.json', { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' });
+      if (!r.ok) return send(res, 502, { events: [], error: `Upstream ${r.status}` });
+      const raw = await r.json();
+      const items = Array.isArray(raw) ? raw : (raw?.events ?? []);
+      const d = new Date(); const cutoff = d.toISOString().slice(0, 10);
+      const events = items
+        .filter(ev => (ev.date ?? '') >= cutoff)
+        .filter(ev => { const name = String(ev.details || ev.type || ev.daily_text || '').toLowerCase(); return !TC_EXCLUDE.some(x => name.includes(x)); })
+        .map(ev => {
+          const title = ev.details || ev.type || ev.daily_text || 'President Event';
+          const date = ev.date ?? ''; const rawTime = ev.time ?? '';
+          let time_formatted = rawTime ? rawTime : 'TBD';
+          if (rawTime && rawTime.includes(':')) { const [h, m] = rawTime.split(':').map(Number); const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 || 12; time_formatted = `${h12}:${String(m).padStart(2, '0')} ${ampm}`; }
+          return { date, time: rawTime, time_formatted, title, country: 'US', impact: 'President', forecast: '', previous: '', actual: '' };
+        })
+        .filter(ev => ev.date);
+      _tcCache = { body: events, ts: Date.now() };
+      send(res, 200, { events });
+    } catch (err) { send(res, 500, { events: [], error: err instanceof Error ? err.message : String(err) }); }
+  },
+});
+
+// /api/cloudflare-metrics — owner card (env creds).
+register('/api/cloudflare-metrics', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res) {
+    try {
+      const TOKEN = process.env.CLOUDFLARE_API_TOKEN ?? ''; const ZONE_ID = process.env.CLOUDFLARE_ZONE_ID ?? '';
+      const GQL = 'https://api.cloudflare.com/client/v4/graphql';
+      const WINDOWS = { live: 3_600_000 * 24, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 };
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const win = sp.get('window') ?? 'live';
+      const downsample = (vals, max = 40) => { if (vals.length <= max) return vals; const bucket = vals.length / max; const out = []; for (let i = 0; i < max; i++) { const slice = vals.slice(Math.floor(i * bucket), Math.floor((i + 1) * bucket)); if (slice.length) out.push(slice.reduce((a, b) => a + b, 0)); } return out; };
+      if (!TOKEN || !ZONE_ID)
+        return send(res, 200, { ok: false, window: win, egress: { value: null, unit: 'MB', window: win, spark: [] }, fetchedAt: new Date().toISOString(), unconfigured: true });
+      const planFor = w => w === 'live' ? { dataset: 'httpRequestsAdaptiveGroups', dim: 'datetimeHour' } : w === 'weekly' ? { dataset: 'httpRequests1hGroups', dim: 'datetimeHour' } : { dataset: 'httpRequests1dGroups', dim: 'date' };
+      const ms = WINDOWS[win] ?? WINDOWS.live; const now = new Date(); const end = now.toISOString(); const start = new Date(now.getTime() - ms).toISOString();
+      const { dataset, dim } = planFor(win);
+      const query = `query Egress($zone: String!, $start: Time!, $end: Time!) { viewer { zones(filter: { zoneTag: $zone }) { ${dataset}(limit: 5000 filter: { datetime_geq: $start, datetime_leq: $end } orderBy: [${dim}_ASC]) { sum { edgeResponseBytes } dimensions { ${dim} } } } } }`;
+      async function fetchCf(qq, variables) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const r = await fetch(GQL, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: qq, variables }), cache: 'no-store' });
+            if (r.ok) { const j = await r.json(); if (j.errors?.length) return null; return j; }
+            if (r.status >= 400 && r.status < 500 && r.status !== 429) return null;
+          } catch {}
+          if (attempt < 2) await new Promise(rs => setTimeout(rs, 250 * (attempt + 1)));
+        }
+        return null;
+      }
+      const resp = await fetchCf(query, { zone: ZONE_ID, start, end });
+      const groups = resp?.data?.viewer?.zones?.[0]?.[dataset] ?? [];
+      const perBucketBytes = groups.map(g => Number(g.sum?.edgeResponseBytes ?? 0)).filter(n => !Number.isNaN(n));
+      const totalBytes = perBucketBytes.reduce((a, b) => a + b, 0);
+      const egressMb = perBucketBytes.length ? totalBytes / (1024 * 1024) : null;
+      const sparkMb = downsample(perBucketBytes.map(b => b / (1024 * 1024)));
+      send(res, 200, { ok: perBucketBytes.length > 0, window: win, egress: { value: egressMb, unit: 'MB', window: win, spark: sparkMb }, fetchedAt: end });
+    } catch (err) { send(res, 500, { error: String(err) }); }
+  },
+});
+
+// /api/hetzner-metrics — owner card (env creds + /proxy/self-metrics).
+register('/api/hetzner-metrics', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    try {
+      const TOKEN = process.env.HETZNER_API_TOKEN ?? ''; const SERVER_ID = process.env.HETZNER_SERVER_ID ?? '';
+      const BASE = 'https://api.hetzner.cloud/v1';
+      const WINDOWS = { live: 3_600_000, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 };
+      const stepFor = w => w === 'live' ? 60 : w === 'weekly' ? 3600 : 21600;
+      const seriesValues = (resp, key) => { const s = resp?.metrics?.time_series?.[key]; if (!s?.values?.length) return []; return s.values.map(([, v]) => Number(v)).filter(n => !Number.isNaN(n)); };
+      const latest = v => v.length ? v[v.length - 1] : null;
+      const avg = v => v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+      const downsample = (vals, max = 40) => { if (vals.length <= max) return vals; const bucket = vals.length / max; const out = []; for (let i = 0; i < max; i++) { const slice = vals.slice(Math.floor(i * bucket), Math.floor((i + 1) * bucket)); if (slice.length) out.push(slice.reduce((a, b) => a + b, 0) / slice.length); } return out; };
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const win = sp.get('window') ?? 'live';
+      let memBytes = null;
+      try { const mr = await ctx.internalFetch('/proxy/self-metrics'); if (mr.ok) memBytes = Number((await mr.json())?.rss ?? 0) || null; } catch {}
+      if (!TOKEN || !SERVER_ID)
+        return send(res, 200, { ok: false, window: win, bandwidth: { value: null, unit: 'MB', window: win, spark: [] }, memory: { value: memBytes, unit: 'bytes', window: win, spark: [] }, cpu: { value: null, unit: 'cpu', window: win, spark: [] }, fetchedAt: new Date().toISOString(), unconfigured: !memBytes });
+      const ms = WINDOWS[win] ?? WINDOWS.live; const now = new Date(); const end = now.toISOString(); const start = new Date(now.getTime() - ms).toISOString(); const step = stepFor(win);
+      async function fetchMetrics(types, s, e, st) {
+        const url = `${BASE}/servers/${SERVER_ID}/metrics?type=${types}&start=${encodeURIComponent(s)}&end=${encodeURIComponent(e)}&step=${st}`;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try { const r = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` }, cache: 'no-store' }); if (r.ok) return await r.json(); if (r.status >= 400 && r.status < 500 && r.status !== 429) return null; } catch {}
+          if (attempt < 2) await new Promise(rs => setTimeout(rs, 250 * (attempt + 1)));
+        }
+        return null;
+      }
+      const resp = await fetchMetrics('cpu,network', start, end, step);
+      const cpuVals = seriesValues(resp, 'cpu');
+      const netIn = seriesValues(resp, 'network.0.bandwidth.in'); const netOut = seriesValues(resp, 'network.0.bandwidth.out');
+      const netLen = Math.max(netIn.length, netOut.length); const netVals = [];
+      for (let i = 0; i < netLen; i++) netVals.push((netIn[i] ?? 0) + (netOut[i] ?? 0));
+      const cpuFn = win === 'live' ? latest : avg;
+      const cpuValRaw = cpuFn(cpuVals); const cpuFraction = cpuValRaw != null ? cpuValRaw / 100 : null;
+      const bytesTransferred = netVals.reduce((acc, bps) => acc + bps * step, 0);
+      const bandwidthMb = netVals.length ? bytesTransferred / (1024 * 1024) : null;
+      const bwSparkMb = downsample(netVals.map(bps => (bps * step) / (1024 * 1024)));
+      const ok = cpuVals.length > 0 || netVals.length > 0;
+      send(res, 200, { ok, window: win, cpu: { value: cpuFraction, unit: 'cpu', window: win, spark: downsample(cpuVals.map(v => v / 100)) }, bandwidth: { value: bandwidthMb, unit: 'MB', window: win, spark: bwSparkMb }, memory: { value: memBytes, unit: 'bytes', window: win, spark: [] }, fetchedAt: end });
+    } catch (err) { send(res, 500, { error: String(err) }); }
+  },
+});
+
+// /api/keepalive — liveness probe (public).
+register('/api/keepalive', {
+  auth: 'public', methods: ['GET'],
+  async handler(req, res, ctx) {
+    try {
+      const r = await ctx.internalFetch('/health');
+      send(res, 200, { ok: r.status < 500 });
+    } catch { send(res, 200, { ok: false }); }
   },
 });
 
@@ -1687,6 +2034,34 @@ if (libDb) {
             warnings: warningsFor(parsed.unknownRoots, parsed.skipped, parsed.fills),
           });
         } catch (err) { return send(res, 500, { error: String(err) }); }
+      },
+    });
+  }
+
+  // /api/tpo-forecast — k-NN TPO day forecast (bundled from lib/tpo-forecast-compute.ts).
+  if (libTpoForecast) {
+    register('/api/tpo-forecast', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const r = await libTpoForecast.computeTpoForecast(sp);
+          send(res, r.status ?? 200, r.body, { 'Cache-Control': 'no-store' });
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
+      },
+    });
+  }
+
+  // /api/obook — order-book tenor-split read (bundled from lib/obook-compute.ts).
+  if (libObook) {
+    register('/api/obook', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const r = await libObook.computeObook(sp);
+          send(res, r.status ?? 200, r.body, r.headers || {});
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }); }
       },
     });
   }
