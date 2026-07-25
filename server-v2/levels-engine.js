@@ -428,8 +428,15 @@ async function estimateMove(ticker, targetExp, engine) {
     const pricedExps = [...new Set(options.filter(isPriced).map((o) => o.expiration))].filter(Boolean).sort();
     const allExps = [...new Set(options.map((o) => o.expiration))].filter(Boolean).sort();
     const pool = pricedExps.length ? pricedExps : allExps;
-    const snapped = pool.find((e) => e >= targetExp) || pool[pool.length - 1];
-    if (snapped) { effectiveExp = snapped; expOptions = options.filter((o) => o.expiration === effectiveExp); }
+    // Never roll past the target week. A weekend-unpriced weekly must FAIL (and
+    // hit the retry backoff) rather than silently become the monthly — that is
+    // what published a 27-DTE 8/21 straddle as the 7/31 weekly EM.
+    const maxSnap = new Date(Date.parse(targetExp + 'T12:00:00') + 3 * 86400000)
+      .toISOString().slice(0, 10);
+    const snapped = pool.find((e) => e >= targetExp && e <= maxSnap);
+    if (!snapped) throw new Error(`no priced chain at ${targetExp}`);
+    effectiveExp = snapped;
+    expOptions = options.filter((o) => o.expiration === effectiveExp);
   }
   if (!expOptions.length) throw new Error('No options for expiration');
 

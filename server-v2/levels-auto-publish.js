@@ -257,8 +257,8 @@ const RETRY_DELAYS_MS = [
  * names drop off and the customer /em page stops showing their expired levels.
  * Returns the first run's result; retries continue in the background.
  */
-async function runWeeklyWithRetry(base) {
-  const first = await publishOnce(base, 'weekly');
+async function runWeeklyWithRetry(base, reason = 'weekly') {
+  const first = await publishOnce(base, reason);
   scheduleRetries(base, 0);
   return first;
 }

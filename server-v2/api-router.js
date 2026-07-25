@@ -2822,8 +2822,11 @@ if (libDb) {
   });
 
   // /api/page-status — page-load beacon. POST upsert + visit log; GET status list.
+  // PUBLIC: the beacon fires on every page load incl. guests/unpaid (source route
+  // was ungated — "guests are fine"); gating it dropped page-load/visit logging
+  // for all non-subscribers. (audit 2026-07-25)
   register('/api/page-status', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
+    auth: 'public', methods: ['GET', 'POST'],
     async handler(req, res, ctx, access) {
       if (req.method === 'POST') {
         try {
@@ -2885,8 +2888,11 @@ if (libDb) {
   });
 
   // /api/far-cb-tickers — Far CB Watch roster. GET list; POST add (needs email).
+  // 'user': source gated on sign-in only (getServerUserId, no paid check) —
+  // "any signed-in user may add a ticker"; 'subscriber' wrongly blocked signed-in
+  // non-paying users. (audit 2026-07-25)
   register('/api/far-cb-tickers', {
-    auth: 'subscriber', methods: ['GET', 'POST'],
+    auth: 'user', methods: ['GET', 'POST'],
     async handler(req, res, ctx, access) {
       const userId = access.userId;
       if (req.method === 'POST') {

@@ -1250,7 +1250,7 @@ async function main() {
       // two browser confirm() pop-ups guard the UI; this token guards the wire.
       // Only the gated "Publish Now" buttons send { confirm: "PUBLISH" }.
       if (pathname === '/proxy/levels-publish' && req.method === 'POST') {
-        const { publishOnce, isPublishing } = require('./levels-auto-publish');
+        const { runWeeklyWithRetry, isPublishing } = require('./levels-auto-publish');
         if (isPublishing()) { sendJson(res, 200, { started: false, running: true }); return; }
         let raw = '';
         req.on('data', (c) => { raw += c; if (raw.length > 1e5) req.destroy(); });
@@ -1265,7 +1265,10 @@ async function main() {
           // Fire-and-forget: a full-roster publish takes minutes. Kick it off and
           // return immediately; the owner page polls /proxy/levels-status for the
           // result. Errors are captured into lastRun by publishOnce itself.
-          publishOnce(`http://localhost:${PORT}`, 'manual').catch((e) => {
+          // Use runWeeklyWithRetry (not publishOnce) so the weekend stragglers
+          // get the same +30m/+2h/+6h/+24h/+36h/+50h backoff the Saturday auto
+          // run gets — a bare publishOnce leaves them stale until a manual retry.
+          runWeeklyWithRetry(`http://localhost:${PORT}`, 'manual').catch((e) => {
             console.log('[levels-pub] manual run error:', e && e.message);
           });
           sendJson(res, 200, { started: true, running: true });

@@ -182,7 +182,11 @@ function thisMonday(): string {
   return d.toISOString().slice(0, 10);
 }
 function weekLabelFromDate(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
+  // week_start arrives from Postgres as a full timestamp ("2026-07-20T00:00:00.000Z"),
+  // so appending "T00:00:00" produced an Invalid Date and rendered "NaN/NaN".
+  const ymd = String(iso || "").slice(0, 10);
+  const d = new Date(ymd + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return ymd || "—";
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
