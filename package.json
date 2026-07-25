@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "v7.25.17",
+    "version":  "v7.25.18",
     "private":  true,
     "workspaces":  [
 
@@ -18,6 +18,12 @@
                     "bot:register":  "node register-commands.js"
                 },
     "dependencies":  {
+                         "@bklitui/ui":  "latest",
+                         "@visx/group":  "^3.3.0",
+                         "@visx/heatmap":  "^3.3.0",
+                         "@visx/responsive":  "^3.3.0",
+                         "@visx/scale":  "^3.5.0",
+                         "motion":  "^11.15.0",
                          "@supabase/supabase-js":  "^2.110.0",
                          "@types/node":  "^20",
                          "@types/pg":  "^8.20.0",
