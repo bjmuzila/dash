@@ -9,7 +9,6 @@ const LINKS: { label: string; to: string }[] = [
   { label: 'Traders Dashboard', to: '/traders-dashboard' },
   { label: 'Multi Greek', to: '/mult-greek' },
   { label: 'Options Chain', to: '/options-chain' },
-  { label: 'Greeks', to: '/greeks' },
   { label: 'Estimated Moves', to: '/em' },
   { label: 'Flow', to: '/flow' },
   { label: 'ES Candles', to: '/es-candles' },

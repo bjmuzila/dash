@@ -19,7 +19,6 @@ const EsCandles    = lazy(() => import('@/app/es-candles/page'))
 const Scanner      = lazy(() => import('@/app/scanner/page'))
 const Ict          = lazy(() => import('@/app/ict/page'))
 const Trading      = lazy(() => import('@/app/trading/page'))
-const Greeks       = lazy(() => import('@/app/greeks/page'))
 const Confidence   = lazy(() => import('@/app/confidence-score/page'))
 const Fails        = lazy(() => import('@/app/fails/page'))
 const Premarket    = lazy(() => import('@/app/premarket/page'))
@@ -53,7 +52,6 @@ export default function App() {
               <Route path="/ict" element={S(<Ict />)} />
               <Route path="/test" element={S(<TestLab />)} />
               <Route path="/trading" element={S(<Trading />)} />
-              <Route path="/greeks" element={S(<Greeks />)} />
               <Route path="/confidence-score" element={S(<Confidence />)} />
               <Route path="/fails" element={S(<Fails />)} />
               <Route path="/premarket" element={S(<Premarket />)} />
