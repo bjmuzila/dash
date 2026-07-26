@@ -265,6 +265,27 @@ function clientIp(req) {
   return req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || null;
 }
 
+// Visitor geo from Cloudflare's "Add visitor location headers" managed
+// transform (Rules → Transform Rules → Managed Transforms). Mirrors
+// app/api/page-status/route.ts's clientGeo() — that Next route handler is
+// bypassed in production (API_ROUTER=1 routes /api/page-status through this
+// file instead), so this in-process copy is what actually needs the geo read.
+// Everything here stays null until the transform is on, and for anything that
+// never crossed the Cloudflare edge (local dev, health checks) — best-effort.
+function clientGeoTrim(v, max) {
+  if (!v) return null;
+  const s = String(v).trim().slice(0, max);
+  return s.length ? s : null;
+}
+function clientGeo(req) {
+  const country = clientGeoTrim(req.headers['cf-ipcountry'], 2);
+  return {
+    country: country ? country.toUpperCase() : null,
+    region: clientGeoTrim(req.headers['cf-region'], 80),
+    city: clientGeoTrim(req.headers['cf-ipcity'], 80),
+  };
+}
+
 // ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
 // Ports app/api/insights/gex/route.ts verbatim in behavior: forward to the
 // in-process /proxy/gex, reshape to the Exposure-tab payload. Subscriber-gated
@@ -2782,7 +2803,11 @@ if (libDb) {
         const rows = await libDb.getRecentPageVisits(limit);
         const visits = rows.map((r) => ({
           id: r.id, pageKey: r.page_key ?? null, pageLabel: r.page_label ?? null,
-          path: r.path ?? null, userId: r.user_id ?? null, ip: r.ip ?? null, createdAt: r.created_at ?? null,
+          path: r.path ?? null, userId: r.user_id ?? null, ip: r.ip ?? null,
+          // Cloudflare geo. Null on rows logged before the managed transform was
+          // enabled, and on anything that reached the origin without crossing the edge.
+          country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
+          createdAt: r.created_at ?? null,
         }));
         send(res, 200, { visits });
       } catch (err) { send(res, 500, { error: String(err) }); }
@@ -2842,12 +2867,16 @@ if (libDb) {
           });
           if (isLoaded) {
             try {
+              const geo = clientGeo(req);
               await libDb.insertPageVisit({
                 page_key: String(body.pageKey ?? body.page_key ?? ''),
                 page_label: body.pageLabel == null ? null : String(body.pageLabel),
                 path: body.path == null ? null : String(body.path),
                 user_id: access.userId ?? null,
                 ip: clientIp(req),
+                country: geo.country,
+                region: geo.region,
+                city: geo.city,
               });
             } catch { /* non-fatal */ }
           }

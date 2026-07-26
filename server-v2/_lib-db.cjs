@@ -472,7 +472,15 @@ async function ensureAllTables(pool) {
       ip TEXT,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    -- Cloudflare geo ("Add visitor location headers" managed transform). Added
+    -- after the table shipped: existing rows keep NULL geo, which the owner
+    -- map renders as "Unknown". insertPageVisit() below writes these on every
+    -- new row now that API_ROUTER's /api/page-status handler passes them in.
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS country TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS region TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS city TEXT;
     CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_page_visits_country ON page_visits(country);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
 
     -- One row per ticker interaction (scanner + anywhere tickers are shown).
@@ -2650,9 +2658,12 @@ var PAGE_VISITS_KEEP = 5e3;
 async function insertPageVisit(r) {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null]
+    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null,
+      r.country ?? null, r.region ?? null, r.city ?? null,
+    ]
   );
   await pool.query(
     `DELETE FROM page_visits
