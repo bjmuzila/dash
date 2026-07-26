@@ -73,6 +73,11 @@ function mid(o) {
   if (o.bid > 0 && o.ask > 0) return (o.bid + o.ask) / 2;
   if (o.mark > 0) return o.mark;
   if (o.last > 0) return o.last;
+  // Last resort: the option's own settlement/prior close. Outside RTH TastyTrade
+  // stops returning bid/ask/mark/IV for everything but the most liquid names, so
+  // without this a weekend or after-hours pass throws "No usable strike" on two
+  // thirds of the roster and those tickers keep serving last week's EM.
+  if (o.close > 0) return o.close;
   return 0;
 }
 
@@ -86,6 +91,23 @@ function getWeekKey(date) {
   const mondayOffset = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - mondayOffset);
   return d.toISOString().slice(0, 10);
+}
+/**
+ * The Monday that starts the week a publish is FOR.
+ *
+ * The publish runs Friday after the close and its retry loop keeps running
+ * Fri→Thu, so this can't be a fixed offset from "now": the old `now + 2 days`
+ * landed on SUNDAY when called on a Friday, and getWeekKey() resolves a Sunday
+ * back to the Monday of the week that just ENDED — seeding em_tracker against
+ * the wrong week. Explicit instead: Fri/Sat/Sun → the next Monday; Mon–Thu →
+ * the Monday of the week already in progress.
+ */
+function upcomingWeekKey(now = getEtNow()) {
+  const d = new Date(now);
+  d.setHours(12, 0, 0, 0);
+  const day = d.getDay(); // 0=Sun .. 6=Sat
+  if (day === 5 || day === 6 || day === 0) d.setDate(d.getDate() + ((8 - day) % 7 || 7));
+  return getWeekKey(d);
 }
 function getCompletedWeekKey() {
   const now = getEtNow();
@@ -148,6 +170,7 @@ function normalizeOptions(chain) {
       ask: Number(o.ask || o.askPrice || o['ask-price'] || 0),
       last: Number(o.last || o['last-price'] || o.lastPrice || 0),
       mark: Number(o.mark || o['mark-price'] || o['mid-price'] || o.midPrice || 0),
+      close: Number(o.close || o['close-price'] || o['prev-close'] || o.prevClose || 0),
       iv: Number(o.iv || o.impliedVolatility || o['implied-volatility'] || o.volatility || 0),
       dte: Number(o.dte || o.daysToExpiration || 0),
     });
@@ -170,6 +193,7 @@ function normalizeOptions(chain) {
           ask: Number(leg.ask || leg.askPrice || leg['ask-price'] || 0),
           last: Number(leg.last || leg['last-price'] || leg.lastPrice || 0),
           mark: Number(leg.mark || leg['mark-price'] || leg['mid-price'] || leg.midPrice || 0),
+          close: Number(leg.close || leg['close-price'] || leg['prev-close'] || leg.prevClose || 0),
           iv: Number(leg.iv || leg['implied-volatility'] || leg.impliedVolatility || leg.volatility || 0),
           dte: Number(leg.dte || leg.daysToExpiration || daysTo(expiration)),
         });
@@ -415,7 +439,11 @@ async function estimateMove(ticker, targetExp, engine) {
 
   let options = normalizeOptions(chain);
   let chainSpot = chainUnderlyingPrice(chain);
-  const isPriced = (o) => (o.bid > 0 && o.ask > 0) || o.mark > 0 || Number(o.iv || 0) > 0;
+  // `close`/`last` count as priced: after hours those are often the ONLY fields
+  // TastyTrade still returns, and a Friday-close straddle is exactly the mark a
+  // next-week EM should be struck from.
+  const isPriced = (o) => (o.bid > 0 && o.ask > 0) || o.mark > 0 || Number(o.iv || 0) > 0
+    || Number(o.close || 0) > 0 || Number(o.last || 0) > 0;
   let effectiveExp = targetExp;
   let expOptions = options.filter((o) => o.expiration === effectiveExp);
   if (!expOptions.length || !expOptions.some(isPriced)) {
@@ -486,7 +514,8 @@ async function estimateMove(ticker, targetExp, engine) {
       // Only refetch marks when the chain leg has NO usable price (no bid/ask AND
       // no mark/last). The chain payload already carries a REST mark, so refetching
       // on every strike fired hundreds of /api/em/option-marks calls per ticker.
-      const haveUsable = (o) => (o.bid > 0 && o.ask > 0) || Number(o.mark) > 0 || Number(o.last) > 0;
+      const haveUsable = (o) => (o.bid > 0 && o.ask > 0) || Number(o.mark) > 0
+        || Number(o.last) > 0 || Number(o.close) > 0;
       if ((!haveUsable(c) || !haveUsable(p)) && (c.symbol || p.symbol)) {
         const marks = await fetchOptionMarks(engine, [c.symbol, p.symbol].filter(Boolean));
         if (marks[c.symbol]) c = Object.assign({}, c, marks[c.symbol]);
@@ -819,7 +848,11 @@ async function computeAllLevels(base, opts = {}) {
     if (!(e && e.skip)) console.log('[levels] zones failed:', e.message);
   }
 
-  return { payloads: Object.values(byTicker), failReasons };
+  // targetExpLabel is the week the run was computed FOR ("7/31"). The publisher
+  // uses it to blank the EM band on any row still carrying an older expiration,
+  // so /em can never serve last week's (or a monthly's) straddle as this week's
+  // move.
+  return { payloads: Object.values(byTicker), failReasons, targetExpLabel: expLabel };
 }
 
 /**
@@ -960,7 +993,7 @@ async function evaluateCompletedWeek(base) {
  * publish. `payloads` is the array computeAllLevels() returns.
  */
 async function seedUpcomingWeek(base, payloads) {
-  const upcomingWeek = getWeekKey(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)); // the coming Mon's week (internal join key — do not change)
+  const upcomingWeek = upcomingWeekKey(); // the coming Mon's week (internal join key — do not change)
   // Display label uses the week's FRIDAY (the expiration the EM band is actually
   // measured against), matching the legacy imported rows (e.g. "11/21" for the
   // week ending Fri 2025-11-21). week_start/upcomingWeek stays Monday-anchored

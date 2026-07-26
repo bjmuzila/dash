@@ -50,6 +50,12 @@ catch (e) { console.warn('[candles] candle-history not loaded:', e.message); }
 let startEtfCandleRecorder = () => {};
 try { ({ startEtfCandleRecorder } = require('./etf-candle-recorder')); }
 catch (e) { console.warn('[etf-candle] recorder not loaded:', e.message); }
+// SPY/QQQ per-strike GEX. Same defensive load as the candle recorder above: a
+// broken chain-fetch dependency here must degrade the ETF heatmap, not kill
+// boot for the whole dashboard.
+let startEtfGexRecorder = () => {};
+try { ({ startEtfGexRecorder } = require('./etf-gex-recorder')); }
+catch (e) { console.warn('[etf-gex] recorder not loaded:', e.message); }
 const { startEodGexRecorder } = require('./eod-gex-recorder');
 // Backs the /mult-greek click card's 15m/30m/open NET GEX change. Optional —
 // load defensively so a missing/broken module can't crash the origin.
@@ -2860,6 +2866,11 @@ async function main() {
     // etf_candles every 60s during RTH (feeds the /test Condition price line's
     // history going forward). Isolated dxLink fetch — see state/etf-candle-recorder.
     startEtfCandleRecorder();
+    // SPY/QQQ per-strike GEX recorder: polls their option chains every 60s
+    // during RTH and writes one row per strike into option_strike_gex_history
+    // with symbol='SPY'/'QQQ' — the same table and writer the live SPX feed
+    // uses. Backs the ES-Candles page's SPY/QQQ heatmap, bubbles and rail.
+    startEtfGexRecorder();
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);

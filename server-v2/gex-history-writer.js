@@ -15,17 +15,34 @@
 
 const PG_WRITE_INTERVAL_MS = Number(process.env.GEX_PG_WRITE_INTERVAL_MS || 60_000);
 
+// Underlying this writer defaults to. option_strike_gex_history was SPX-only by
+// CONVENTION before the symbol column existed, so every legacy row is '$SPX' and
+// every caller that doesn't name a symbol still means SPX.
+const DEFAULT_SYMBOL = '$SPX';
+function normSymbol(sym) {
+  const s = String(sym ?? '').trim().toUpperCase();
+  if (!s || s === 'SPX') return DEFAULT_SYMBOL;
+  return s;
+}
+
 let pool = null;
 let pgUnavailable = false;
-let lastWriteAt = 0;
+// PER-(SYMBOL, EXPIRY) throttle. One shared `lastWriteAt` would let whichever
+// underlying wrote first swallow the others' minute: SPX writing at :00 would
+// turn a SPY write at :05 into a silent no-op, and SPY would only ever land in
+// the gaps. Expiry is in the key too so a recorder sweeping 0DTE + 1DTE in one
+// pass persists both instead of only whichever it happened to submit first.
+// The SPX feed only ever writes its front expiry, so its cadence is unchanged.
+// `${symbol}|${expiry}` → epoch ms of that series' last successful write.
+const lastWriteAt = new Map();
 let columnEnsured = false;
 // Skip diagnostics: the write used to `return` silently when the feed handed it
 // no rows / spot<=0 / no expiry, so an afternoon feed decay (0DTE TT chain
 // thinning out, spot going stale) flatlined the bubble/heatmap trail with NOTHING
 // in the logs. Warn on the reason — throttled + on-change — so it's visible next
-// time instead of a DB autopsy.
-let lastSkipWarnAt = 0;
-let lastSkipReason = '';
+// time instead of a DB autopsy. Keyed per symbol for the same reason as above.
+const lastSkipWarnAt = new Map();
+const lastSkipReason = new Map();
 
 /**
  * Ensure net_vol_gex exists. server-v2 connects to Postgres directly and does
@@ -42,6 +59,12 @@ async function ensureVolColumn(p) {
     // ever having "now"'s value out of the in-memory FlowGexAccumulator.
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_gamma REAL');
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_gamma REAL');
+    // Multi-underlying. Mirrors the DDL in _lib-db.cjs ensureAllTables — kept
+    // here too because server-v2 boots without running that Next-side init, and
+    // this writer must not INSERT a symbol column that doesn't exist yet.
+    await p.query(`ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '${DEFAULT_SYMBOL}'`);
+    await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_ts ON option_strike_gex_history (symbol, timestamp)');
+    await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_lookup ON option_strike_gex_history (symbol, date, expiry, strike, timestamp DESC)');
     columnEnsured = true;
   } catch (e) {
     console.warn('[gex-history] ensure net_vol_gex column failed:', e.message);
@@ -99,8 +122,11 @@ function todayYmdET() {
  * @param {Array<{strike:number, netGEX:number}>} gexRows
  * @param {number} spot
  * @param {string} expiry  YYYY-MM-DD
+ * @param {string} [symbol] Underlying key. Defaults to '$SPX' so the live SPX
+ *   feed's existing call sites are unchanged; SPY/QQQ pass their own ticker.
  */
-async function writeGexSnapshot(gexRows, spot, expiry) {
+async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
+  const sym = normSymbol(symbol);
   const p = getPool();
   if (!p || !Array.isArray(gexRows) || !gexRows.length || !(spot > 0) || !expiry) {
     if (!p) return; // no DB configured — not a feed problem, stay quiet
@@ -108,18 +134,19 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
       : !(spot > 0) ? `spot<=0 (got ${spot})`
       : 'no expiry';
     const t = Date.now();
-    if (reason !== lastSkipReason || t - lastSkipWarnAt > 60_000) {
-      console.warn(`[gex-history] SKIP write — ${reason}; feed not delivering, heatmap/bubbles will stall until it recovers`);
-      lastSkipWarnAt = t;
-      lastSkipReason = reason;
+    if (reason !== lastSkipReason.get(sym) || t - (lastSkipWarnAt.get(sym) ?? 0) > 60_000) {
+      console.warn(`[gex-history] ${sym} SKIP write — ${reason}; feed not delivering, heatmap/bubbles will stall until it recovers`);
+      lastSkipWarnAt.set(sym, t);
+      lastSkipReason.set(sym, reason);
     }
     return;
   }
   // A good write clears the skip state so the next stall re-warns immediately.
-  if (lastSkipReason) { console.warn('[gex-history] feed recovered — resuming writes'); lastSkipReason = ''; }
+  if (lastSkipReason.get(sym)) { console.warn(`[gex-history] ${sym} feed recovered — resuming writes`); lastSkipReason.delete(sym); }
 
   const now = Date.now();
-  if (now - lastWriteAt < PG_WRITE_INTERVAL_MS) return;
+  const throttleKey = `${sym}|${expiry}`;
+  if (now - (lastWriteAt.get(throttleKey) ?? 0) < PG_WRITE_INTERVAL_MS) return;
 
   await ensureVolColumn(p);
 
@@ -147,18 +174,18 @@ async function writeGexSnapshot(gexRows, spot, expiry) {
       let putGamma = Number(row.putGamma);
       if (!Number.isFinite(putGamma)) putGamma = null;
       else if (Math.abs(putGamma) < 1e-30) putGamma = 0;
-      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
-      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma);
+      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
+      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma, sym);
     }
     if (!values.length) return;
     await p.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma)
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma, symbol)
        VALUES ${values.join(', ')}`,
       params
     );
-    lastWriteAt = now; // only throttle after a successful write
+    lastWriteAt.set(throttleKey, now); // only throttle after a successful write
   } catch (e) {
-    console.warn('[gex-history] write failed (will retry next tick):', e.message);
+    console.warn(`[gex-history] ${sym} write failed (will retry next tick):`, e.message);
     // Only rebuild the pool on connection-level failures — a data/range error
     // is not a broken connection and shouldn't tear it down every tick.
     const msg = String(e?.message || '');

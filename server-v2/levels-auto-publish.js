@@ -7,10 +7,15 @@
  * each ticker to /api/levels, which persists them to Postgres. The /em page then
  * reads them per-ticker. No browser, no manual Refresh.
  *
- * Cadence: once per week, Saturday ~09:00 ET (PUBLISH_DOW/PUBLISH_HOUR below).
- * The weekend pass often can't price the whole roster (markets closed), so the
- * run auto-retries the not-found tickers on a backoff (runWeeklyWithRetry) until
- * everything prices. There is intentionally NO startup/boot publish: levels are
+ * Cadence: once per week, FRIDAY ~16:15 ET — just after the cash close, while
+ * the whole option chain is still priced (PUBLISH_DOW/PUBLISH_HOUR below). This
+ * replaced a Saturday-09:00 run: with the markets shut, TastyTrade returns no
+ * bid/ask/mark/IV for anything outside the ~120 most liquid names, so two thirds
+ * of the roster threw ("No usable strike") and kept serving the PRIOR week's EM.
+ * Friday's close is also the correct mark for a next-week estimated move.
+ * Anything that still doesn't price is auto-retried (runWeeklyWithRetry) right
+ * through the trading week until it does. There is intentionally NO
+ * startup/boot publish: levels are
  * frozen for the week and a restart must not overwrite them with mid-week
  * numbers. To (re)publish off-schedule, use the gated "Publish Now" button.
  *
@@ -60,10 +65,18 @@ function armPublishWatchdog() {
   publishWatchdog.unref?.();
 }
 
-const PUBLISH_HOUR = 9;   // ET
-const PUBLISH_MIN = 0;    // ET
-const PUBLISH_DOW = 6;    // Saturday (0=Sun ... 6=Sat)
-const CHECK_MS = 15 * 60 * 1000; // re-check every 15m whether it's time to fire
+const PUBLISH_HOUR = 16;  // ET
+const PUBLISH_MIN = 15;   // ET — 15m after the cash close, chain still priced
+const PUBLISH_DOW = 5;    // Friday (0=Sun ... 6=Sat)
+const CHECK_MS = 5 * 60 * 1000; // re-check every 5m whether it's time to fire
+
+/** True while the US cash session is open (Mon–Fri 09:30–16:00 ET). */
+function isRthET() {
+  const { dow, hour, minute } = etParts();
+  if (dow < 1 || dow > 5) return false;
+  const mins = hour * 60 + minute;
+  return mins >= 9 * 60 + 30 && mins <= 16 * 60;
+}
 
 function etParts(d = new Date()) {
   const p = new Intl.DateTimeFormat('en-US', {
@@ -114,9 +127,9 @@ async function publishOnce(base, reason, opts = {}) {
   const expectedRun = only ? only.slice() : expectedAll;
   const asFails = (list) => list.map((t) => ({ ticker: t, reason: 'not computed' }));
   try {
-    let payloads, failReasons;
+    let payloads, failReasons, targetExpLabel;
     try {
-      ({ payloads, failReasons } = await computeAllLevels(base, only ? { only } : {}));
+      ({ payloads, failReasons, targetExpLabel } = await computeAllLevels(base, only ? { only } : {}));
     } catch (e) {
       console.log(`[levels-pub] compute failed — ${e.message}`);
       // On a subset retry, keep the prior failedEm; on a full run, everything failed.
@@ -147,6 +160,30 @@ async function publishOnce(base, reason, opts = {}) {
       } catch (e) {
         console.log(`[levels-pub] POST ${body.ticker} failed — ${e.message}`);
       }
+    }
+
+    // Blank the EM band on anything still carrying a previous week's expiration.
+    // The upsert treats null as "keep", so a ticker that fails to price would
+    // otherwise go on serving last week's (or a monthly's) straddle on /em with
+    // nothing marking it stale. Zones are untouched. Best-effort — a failure
+    // here must not fail the publish.
+    if (targetExpLabel) {
+      try {
+        const r = await fetch(`${base}/api/levels/expire-stale`, {
+          method: 'POST',
+          headers: Object.assign(
+            { 'Content-Type': 'application/json' },
+            process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+          ),
+          body: JSON.stringify({ exp_label: targetExpLabel }),
+        });
+        if (r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (j && j.expired) console.log(`[levels-pub] blanked EM on ${j.expired} row(s) not on ${targetExpLabel}`);
+        } else {
+          console.log(`[levels-pub] expire-stale ${r.status}`);
+        }
+      } catch (e) { console.log('[levels-pub] expire-stale failed —', e.message); }
     }
 
     // EM coverage for THIS run's scope: a name failed if it has no priced EM.
@@ -236,52 +273,72 @@ function exportToPineSeeds() {
 function getLastRun() { return lastRun; }
 function isPublishing() { return publishing; }
 
-// Auto-retry config for the weekly run. Weekend quotes are often empty, so the
-// Saturday 9am pass typically prices only part of the roster; the rest would
-// otherwise sit on last week's (now-expired) levels until the next manual retry.
-// We re-run JUST the not-found tickers on a backoff — markets reopen Sunday 6pm
-// ET (futures) / Monday (equities), so later passes pick up the stragglers.
-const RETRY_DELAYS_MS = [
-  30 * 60 * 1000,        // +30m
-  2 * 60 * 60 * 1000,    // +2h
-  6 * 60 * 60 * 1000,    // +6h
-  24 * 60 * 60 * 1000,   // +24h (Sunday — futures back)
-  36 * 60 * 60 * 1000,   // +36h
-  50 * 60 * 60 * 1000,   // +50h (Monday cash open)
-];
+// Auto-retry config for the weekly run.
+//
+// This used to be a fixed ladder that ended at +50h (Monday ~11:00 ET) and then
+// gave up for the rest of the week. Any ticker that missed that one window sat
+// on an expired EM until the NEXT Saturday — in practice 162 names were last
+// priced on a Monday and 53 hadn't priced in two weeks. So: no ladder, no
+// attempt budget you can silently exhaust. We keep re-pricing JUST the unpriced
+// names until the roster is complete or the next publish week begins — fast
+// while the cash session is open (that's when an illiquid chain actually fills),
+// slower when it's shut.
+const RETRY_FIRST_MS = 15 * 60 * 1000;      // first pass, 15m after the run
+const RETRY_RTH_MS = 30 * 60 * 1000;        // every 30m while the market is open
+const RETRY_CLOSED_MS = 2 * 60 * 60 * 1000; // every 2h while it's shut
+// Backstop only — at the cadence above a full Fri→Fri week is ~120 passes. This
+// exists so a bug can't spin the loop forever, not to bound coverage.
+const RETRY_MAX_ATTEMPTS = 400;
+
+let retryTimer = null; // the single in-flight retry timer (one loop at a time)
+// Bumped by every full publish. The retry loop carries the generation it was
+// started for and stops as soon as a newer publish supersedes it. (weekKeyET()
+// can't be used for this — it rolls forward on Tuesday, which would have killed
+// the loop three days into the week, exactly the failure we're fixing.)
+let publishGeneration = 0;
+
+const failedTickers = () => (Array.isArray(lastRun?.failedEm)
+  ? lastRun.failedEm.map((f) => (typeof f === 'string' ? f : f && f.ticker)).filter(Boolean)
+  : []);
 
 /**
- * Run the full weekly publish, then auto-retry the not-found tickers on a
- * backoff until every name prices or we run out of attempts. Each retry only
+ * Run the full weekly publish, then keep auto-retrying the not-found tickers
+ * until every name prices or a new publish week starts. Each retry only
  * recomputes lastRun.failedEm (cheap) and merges the result, so successful
  * names drop off and the customer /em page stops showing their expired levels.
  * Returns the first run's result; retries continue in the background.
  */
 async function runWeeklyWithRetry(base, reason = 'weekly') {
+  const gen = ++publishGeneration;
   const first = await publishOnce(base, reason);
-  scheduleRetries(base, 0);
+  scheduleRetries(base, 0, gen);
   return first;
 }
 
-function scheduleRetries(base, attempt) {
-  if (attempt >= RETRY_DELAYS_MS.length) return;
-  const failed = Array.isArray(lastRun?.failedEm)
-    ? lastRun.failedEm.map((f) => (typeof f === 'string' ? f : f && f.ticker)).filter(Boolean)
-    : [];
+function scheduleRetries(base, attempt, gen) {
+  clearTimeout(retryTimer); // never run two retry loops at once
+  if (attempt >= RETRY_MAX_ATTEMPTS) {
+    console.log('[levels-pub] retry backstop hit — stopping until the next publish');
+    return;
+  }
+  // A newer publish supersedes this loop (and starts its own).
+  if (gen !== publishGeneration) {
+    console.log('[levels-pub] superseded by a newer publish — stopping the previous retry loop');
+    return;
+  }
+  const failed = failedTickers();
   if (!failed.length) { console.log('[levels-pub] roster fully priced — no retries needed'); return; }
-  const delay = RETRY_DELAYS_MS[attempt];
-  console.log(`[levels-pub] ${failed.length} ticker(s) unpriced — retry ${attempt + 1}/${RETRY_DELAYS_MS.length} in ${Math.round(delay / 60000)}m`);
-  const t = setTimeout(() => {
-    if (publishing) { scheduleRetries(base, attempt); return; } // a run is live; re-arm same attempt
-    const stillFailed = Array.isArray(lastRun?.failedEm)
-      ? lastRun.failedEm.map((f) => (typeof f === 'string' ? f : f && f.ticker)).filter(Boolean)
-      : [];
+  const delay = attempt === 0 ? RETRY_FIRST_MS : (isRthET() ? RETRY_RTH_MS : RETRY_CLOSED_MS);
+  console.log(`[levels-pub] ${failed.length} ticker(s) unpriced — retry ${attempt + 1} in ${Math.round(delay / 60000)}m (${isRthET() ? 'RTH' : 'closed'})`);
+  retryTimer = setTimeout(() => {
+    if (publishing) { scheduleRetries(base, attempt, gen); return; } // a run is live; re-arm same attempt
+    const stillFailed = failedTickers();
     if (!stillFailed.length) { console.log('[levels-pub] roster now fully priced — stopping retries'); return; }
     publishOnce(base, 'retry', { only: stillFailed })
       .catch((e) => console.log('[levels-pub] auto-retry error:', e && e.message))
-      .finally(() => scheduleRetries(base, attempt + 1));
+      .finally(() => scheduleRetries(base, attempt + 1, gen));
   }, delay);
-  t.unref?.();
+  retryTimer.unref?.();
 }
 
 function startLevelsAutoPublish(port) {
@@ -289,26 +346,28 @@ function startLevelsAutoPublish(port) {
   // Seed from disk so a restart remembers we already published this week.
   let lastPublishedWeek = readPublishedWeek();
 
-  console.log(`[levels-pub] enabled — weekly, Sat ~${PUBLISH_HOUR}:${String(PUBLISH_MIN).padStart(2, '0')} ET`);
+  const DOW_LABEL = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][PUBLISH_DOW];
+  console.log(`[levels-pub] enabled — weekly, ${DOW_LABEL} ~${PUBLISH_HOUR}:${String(PUBLISH_MIN).padStart(2, '0')} ET`);
 
   // NO startup publish: levels are computed once a week (Saturday) and must hold
   // unchanged through Friday's close. Republishing on every boot would overwrite
   // the weekend snapshot with mid-week numbers on any restart. To (re)publish
   // manually, call publishOnce() / hit the manual trigger.
 
-  // Poll: fire ONLY at/after Saturday's publish time, once per upcoming trading
-  // week. No Sunday catch-up — a weekend restart must not recompute levels
-  // (markets are closed, quotes come back NaN, and the moves are stale anyway).
-  // If Saturday's run is ever missed, use the manual "Publish Now" button on the
-  // owner dash (/proxy/levels-publish).
+  // Poll: fire ONLY at/after Friday's publish time, once per upcoming trading
+  // week. No weekend catch-up — with the markets shut the chain is unpriced and
+  // a restart must not recompute levels off it. If Friday's run is ever missed,
+  // use the manual "Publish Now" button on the owner dash
+  // (/proxy/levels-publish); the retry loop then fills the roster in from
+  // Monday's open.
   const tick = () => {
     const { dow, hour, minute } = etParts();
     const mins = hour * 60 + minute;
     const target = PUBLISH_HOUR * 60 + PUBLISH_MIN;
     const wk = weekKeyET();
     if (lastPublishedWeek === wk) return;
-    const isSatAfterTarget = dow === PUBLISH_DOW && mins >= target;
-    if (isSatAfterTarget) {
+    const isPublishDayAfterTarget = dow === PUBLISH_DOW && mins >= target;
+    if (isPublishDayAfterTarget) {
       // Full publish + background auto-retry of any not-found tickers, so the
       // whole roster is current and the /em page never shows expired levels.
       runWeeklyWithRetry(base).then((res) => {

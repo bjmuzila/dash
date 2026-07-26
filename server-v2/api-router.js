@@ -3486,6 +3486,34 @@ if (libDb) {
     },
   });
 
+  // /api/snapshots/etf-candles — SPY / QQQ OHLC history out of the etf_candles
+  // table (written by server-v2/etf-candle-recorder.js).
+  //
+  // Deliberately SEPARATE from /api/snapshots/candles: that route serves the
+  // ES/NQ futures tables via lib/db, keyed by contract with its own slotKey
+  // space and a 20-day window. ETFs are a different instrument with a different
+  // recorder and only 1m storage, so folding them in would mean a symbol switch
+  // inside every branch of that handler. Same ROW SHAPE though — the client can
+  // feed either into the same chart.
+  //
+  // ?symbol=SPY  ?days=5  ?interval=1|5  ?limit=5000
+  register('/api/snapshots/etf-candles', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const symbol = String(sp.get('symbol') ?? '').trim().toUpperCase();
+        if (!symbol) { send(res, 200, { rows: [], error: 'symbol is required' }); return; }
+        const days = Math.max(1, Math.min(30, Number(sp.get('days') ?? 5)));
+        const interval = Number(sp.get('interval') ?? 5) === 1 ? 1 : 5;
+        const limit = Math.max(1, Math.min(50_000, Number(sp.get('limit') ?? 5000)));
+        const { getEtfCandleHistory } = require('./etf-candle-recorder');
+        const rows = await getEtfCandleHistory(symbol, days, interval, limit);
+        send(res, 200, { symbol, interval, days, rows });
+      } catch (err) { send(res, 200, { rows: [], error: String(err) }); }
+    },
+  });
+
   // /api/snapshots/playbook
   register('/api/snapshots/playbook', {
     auth: 'subscriber', methods: ['GET', 'POST'],
@@ -3796,6 +3824,9 @@ if (libDb) {
               strike: Number(row.strike ?? 0),
               net_gex: Number(row.net_gex ?? 0),
               net_vol_gex: row.net_vol_gex == null ? undefined : Number(row.net_vol_gex),
+              // Underlying. Omitted → '$SPX', which is what every row written
+              // before this column existed is.
+              symbol: libDb.normGexSymbol(row.symbol ?? body?.symbol),
             })).filter((row) => row.expiry && row.strike > 0 && Number.isFinite(row.net_gex));
             await libDb.insertOptionStrikeGexRows(normalized);
             send(res, 200, { ok: true, count: normalized.length });
@@ -3807,20 +3838,27 @@ if (libDb) {
           const date = sp.get('date') ?? todayET();
           const expiry = sp.get('expiry') ?? '';
           const mode = sp.get('mode') ?? 'rolling';
+          // Underlying selector. Absent → '$SPX', so every existing caller
+          // (the SPX heatmap, the strike popup, /gex-3d) is byte-for-byte
+          // unchanged. The ES-Candles page passes SPY / QQQ here.
+          const symbol = libDb.normGexSymbol(sp.get('symbol'));
           if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }
 
           if (mode === 'heatmap') {
             const winParam = sp.get('minutes');
             const winMin = winParam == null ? 1440 : Math.max(0, Math.min(2880, Number(winParam)));
             const anyExpiry = sp.get('anyExpiry') === '1';
-            const cacheKey = `${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}`;
+            // Symbol MUST be part of the cache key — without it the first
+            // underlying to warm a given window would serve its columns to the
+            // other two for the next 30s.
+            const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}`;
             const cached = heatmapCache.get(cacheKey);
             if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) { send(res, 200, cached.payload); return; }
             const slots = winMin > 0
               ? anyExpiry
-                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000)
-                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry)
-              : await libDb.getOptionStrikeGexSlots(date, expiry);
+                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
+                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
+              : await libDb.getOptionStrikeGexSlots(date, expiry, symbol);
             const bySlot = new Map();
             const spotBySlot = new Map();
             for (const r of slots) {
@@ -3838,7 +3876,7 @@ if (libDb) {
               const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
               return { slotTs, cells, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
             });
-            const payload = { mode: 'heatmap', columns };
+            const payload = { mode: 'heatmap', symbol, columns };
             heatmapCache.set(cacheKey, { at: Date.now(), payload });
             send(res, 200, payload);
             return;
@@ -3851,22 +3889,22 @@ if (libDb) {
             const tolerant = sp.get('tolerant') === '1';
             const asOf = tolerant ? libDb.getOptionStrikeNetGexAsOfOrNearest : libDb.getOptionStrikeNetGexAsOf;
             const [openRows, ...ageRowSets] = await Promise.all([
-              libDb.getOptionStrikeNetGexAtOpen(date, expiry),
-              ...ages.map((m) => asOf(date, expiry, now - m * 60 * 1000)),
+              libDb.getOptionStrikeNetGexAtOpen(date, expiry, symbol),
+              ...ages.map((m) => asOf(date, expiry, now - m * 60 * 1000, symbol)),
             ]);
             const baselines = {};
             const put = (strike, key, v) => { (baselines[strike] ??= {})[key] = v; };
             const oiVol = (r) => r.net_gex + (Number.isFinite(r.net_vol_gex) ? r.net_vol_gex : 0);
             for (const r of openRows) put(r.strike, 'open', oiVol(r));
             ages.forEach((m, i) => { for (const r of ageRowSets[i]) put(r.strike, String(m), oiVol(r)); });
-            send(res, 200, { mode: 'point', ages, baselines });
+            send(res, 200, { mode: 'point', symbol, ages, baselines });
             return;
           }
 
           const minutes = Math.max(1, Math.min(240, Number(sp.get('minutes') ?? 30)));
           const sinceTimestamp = Date.now() - minutes * 60 * 1000;
-          const rows = await libDb.getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp);
-          send(res, 200, { rows, minutes });
+          const rows = await libDb.getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol);
+          send(res, 200, { rows, minutes, symbol });
         } catch (err) { send(res, 200, { error: String(err), rows: [] }); }
       },
     });
@@ -3951,19 +3989,25 @@ if (libDb) {
   }
 
   // /api/levels — per-ticker weekly levels (ticker_levels). GET subscriber read
-  // with alias resolution; POST NULL-aware upsert with the Saturday-9am-ET em
-  // freeze (trusted internal token may always rewrite). Ported verbatim from
+  // with alias resolution; POST NULL-aware upsert with the publish-window em
+  // freeze (trusted internal token may always rewrite). Ported from
   // app/api/levels/route.ts.
   {
     let levelsEnsured = false;
-    const lastSaturday9amET = (now = new Date()) => {
+    // Start of the current publish window = the most recent Friday 16:00 ET.
+    // Must track levels-auto-publish.js's PUBLISH_DOW/PUBLISH_HOUR: an untrusted
+    // POST may only rewrite an em that predates the window. When the publish ran
+    // Saturday 09:00 this was lastSaturday9amET(); moving the run to Friday's
+    // close without moving this boundary would have made every Friday-evening
+    // publish a no-op for rows already written earlier in the same week.
+    const publishWindowStartET = (now = new Date()) => {
       const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now);
       const get = (t) => parts.find((p) => p.type === t)?.value;
       const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
       const dow = dowMap[get('weekday') || 'Sun'];
       const hour = Number(get('hour')), minute = Number(get('minute'));
-      const minsSinceSat9 = ((dow - 6) * 24 * 60) + hour * 60 + minute - 9 * 60;
-      const offsetMin = minsSinceSat9 >= 0 ? minsSinceSat9 : minsSinceSat9 + 7 * 24 * 60;
+      const minsSinceWindow = ((dow - 5) * 24 * 60) + hour * 60 + minute - 16 * 60;
+      const offsetMin = minsSinceWindow >= 0 ? minsSinceWindow : minsSinceWindow + 7 * 24 * 60;
       return new Date(now.getTime() - offsetMin * 60 * 1000);
     };
     const ensureLevels = async (pool) => {
@@ -3990,7 +4034,7 @@ if (libDb) {
             if (!ticker) { send(res, 400, { error: 'Missing ticker' }); return; }
             const token = req.headers['x-internal-token'] || '';
             const trusted = !!ctx.internalToken && token === ctx.internalToken;
-            const weekStart = lastSaturday9amET();
+            const weekStart = publishWindowStartET();
             await pool.query(
               `INSERT INTO ticker_levels
                 (ticker, label, close, em, up, down, buy_near, buy_far, sell_near, sell_far, pivot, exp_label, em_updated_at)
@@ -4042,6 +4086,44 @@ if (libDb) {
           const result = await pool.query('SELECT * FROM ticker_levels WHERE ticker = ANY($1) LIMIT 1', [candidates]);
           if (!result.rows.length) { send(res, 200, null); return; }
           send(res, 200, result.rows[0]);
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
+
+    // /api/levels/expire-stale — blank the EM band on every row NOT carrying the
+    // current week's expiration.
+    //
+    // The upsert above is NULL-aware ("null means keep"), which is right for a
+    // partial publish but means a ticker that fails to price simply keeps
+    // whatever it had. In practice that shipped last week's 7/24 band — and for
+    // 156 rows a 27-DTE 8/21 MONTHLY straddle — to /em as "this week's expected
+    // move": a number roughly twice too wide, with nothing marking it stale.
+    // The publisher calls this at the end of every run with the week it computed
+    // for. Zones (buy/sell/pivot) are deliberately left alone: they come from
+    // weekly candles, not the straddle, and stay valid.
+    register('/api/levels/expire-stale', {
+      auth: 'owner', methods: ['POST'],
+      async handler(req, res, ctx) {
+        try {
+          if (!tokenOk(req, ctx)) { send(res, 401, { error: 'unauthorized' }); return; }
+          const body = await readJson(req);
+          const expLabel = String(body.exp_label || '').trim();
+          if (!expLabel) { send(res, 400, { error: 'Missing exp_label' }); return; }
+          const pool = await libDb.getDb();
+          await ensureLevels(pool);
+          const r = await pool.query(
+            `UPDATE ticker_levels
+                SET em = NULL, up = NULL, down = NULL, exp_label = NULL
+              WHERE em IS NOT NULL
+                AND exp_label IS DISTINCT FROM $1
+              RETURNING ticker`,
+            [expLabel]
+          );
+          const tickers = r.rows.map((x) => x.ticker);
+          if (tickers.length) {
+            console.log(`[levels] expired ${tickers.length} row(s) not on ${expLabel}: ${tickers.slice(0, 20).join(', ')}${tickers.length > 20 ? '…' : ''}`);
+          }
+          send(res, 200, { ok: true, exp_label: expLabel, expired: tickers.length, tickers });
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });

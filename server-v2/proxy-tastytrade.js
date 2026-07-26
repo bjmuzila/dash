@@ -1401,6 +1401,12 @@ async function fetchOptionMarketData(occSymbols, optionParam = 'equity-option') 
     for (const it of json?.data?.items || []) {
       if (!it.symbol) continue;
       const bid = n(it.bid), ask = n(it.ask);
+      // Settlement / prior close. Outside RTH these are frequently the ONLY
+      // price fields TT still populates — bid, ask, mark and IV all come back
+      // empty for anything but the most liquid roots. Carried as their own
+      // fields (deliberately NOT folded into `mark`) so live GEX/flow math is
+      // untouched; only the estimated-move straddle falls back to them.
+      const close = n(it.close) || n(it['close-price']) || n(it['prev-close']) || n(it['prev-close-price']);
       out.set(normalizeOcc(it.symbol), {
         oi: n(it['open-interest']),
         volume: n(it.volume),
@@ -1411,6 +1417,8 @@ async function fetchOptionMarketData(occSymbols, optionParam = 'equity-option') 
         iv: n(it['implied-volatility']) || n(it.volatility),
         bid,
         ask,
+        last: n(it.last) || n(it['last-price']),
+        close,
         mark: n(it.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0),
       });
     }
@@ -1479,6 +1487,10 @@ async function fetchChainFull(ticker, expiration = '') {
       bid: md.bid || 0,
       ask: md.ask || 0,
       mark: md.mark || 0,
+      // After-hours price of last resort — see fetchOptionMarketData(). Consumers
+      // that only read bid/ask/mark are unaffected.
+      last: md.last || 0,
+      close: md.close || 0,
     };
   }
 
@@ -1520,7 +1532,12 @@ async function fetchOptionMarks(symbols) {
       bid: n(md.bid),
       ask: n(md.ask),
       mark: n(md.mark),
-      last: n(md.mark) || (md.bid > 0 && md.ask > 0 ? (md.bid + md.ask) / 2 : 0),
+      // Real traded last if TT has one, else the synthesized mid, else 0. `close`
+      // is passed through separately as the after-hours fallback (see
+      // fetchOptionMarketData) — that's what lets an illiquid weekly straddle
+      // still price on a Friday-evening or weekend publish pass.
+      last: n(md.last) || n(md.mark) || (md.bid > 0 && md.ask > 0 ? (md.bid + md.ask) / 2 : 0),
+      close: n(md.close),
     });
   }
   return { items };

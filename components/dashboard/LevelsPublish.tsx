@@ -35,17 +35,37 @@ function levelsAreStale(iso: string | null): boolean {
 }
 
 /**
- * A ticker's EM is STALE if the last publish touched its row (updated_at) but did
- * NOT refresh the em value (em_updated_at lags it, or is null). Tolerance: 10 min.
+ * Start of the current publish window — the most recent Friday 16:00 ET. Mirrors
+ * publishWindowStartET() in server-v2/api-router.js and PUBLISH_DOW/PUBLISH_HOUR
+ * in levels-auto-publish.js; keep the three in step.
  */
-function emIsStale(updatedAt: string | null, emUpdatedAt: string | null): boolean {
+function publishWindowStartET(now = new Date()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value;
+  const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = dowMap[get("weekday") || "Sun"];
+  const mins = ((dow - 5) * 24 * 60) + Number(get("hour")) * 60 + Number(get("minute")) - 16 * 60;
+  const offsetMin = mins >= 0 ? mins : mins + 7 * 24 * 60;
+  return now.getTime() - offsetMin * 60 * 1000;
+}
+
+/**
+ * A ticker's EM is STALE if it wasn't priced inside the current publish window —
+ * i.e. em_updated_at predates the most recent Friday 16:00 ET, so /em is showing
+ * a straddle struck for a week that has already expired.
+ *
+ * This used to compare em_updated_at against updated_at with a 10-minute
+ * tolerance, which silently missed the common case: a ticker that THROWS during
+ * the run is never POSTed at all, so both stamps stay frozen together at
+ * whenever it last worked and the row looked fresh.
+ */
+function emIsStale(_updatedAt: string | null, emUpdatedAt: string | null): boolean {
   if (!emUpdatedAt) return true;
   const em = new Date(emUpdatedAt).getTime();
   if (isNaN(em)) return true;
-  if (Date.now() - em > 8 * 24 * 60 * 60 * 1000) return true;
-  const up = updatedAt ? new Date(updatedAt).getTime() : NaN;
-  if (!isNaN(up) && up - em > 10 * 60 * 1000) return true;
-  return false;
+  return em < publishWindowStartET();
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -370,7 +390,7 @@ export default function LevelsPublish() {
           {levels.tickers.some((t) => t.stale) && (
             <div style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.orange, display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.orange, display: "inline-block" }} />
-              {levels.tickers.filter((t) => t.stale).length} ticker(s) showing a STALE EM — straddle didn’t price this run; /em is serving the prior week’s value.
+              {levels.tickers.filter((t) => t.stale).length} of {levels.tickers.length} ticker(s) haven’t priced an EM since Friday’s close — their band is blanked on /em until a retry pass fills it in.
             </div>
           )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
@@ -396,7 +416,7 @@ export default function LevelsPublish() {
                   key={t.ticker}
                   type="button"
                   onClick={() => void copyPine(t.ticker)}
-                  title={`Click to copy Pine script.\n${t.stale ? "EM is stale — carried over from a previous run (this week’s straddle failed to price)" : "EM freshly computed this run"}`}
+                  title={`Click to copy Pine script.\n${t.stale ? "No EM priced since Friday’s close — band blanked on /em, retry loop is still trying this one" : "EM freshly computed this publish window"}`}
                   style={{
                     fontSize: 10, fontWeight: 700, cursor: "pointer",
                     color: copied ? HOME_THEME.green : t.stale ? HOME_THEME.orange : HOME_THEME.cyan,

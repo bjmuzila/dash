@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 // The flip is computed HERE with findGEXFlip, same as the home page, so the two
@@ -282,6 +283,38 @@ function slotFloorMs(ts: number): number {
  *   • non-top-3 ceiling raised 0.18 → 0.30, floor 0.02 → 0.04, but still kept
  *     strictly below the rank-3 wall (0.35) so the wall hierarchy is preserved.
  */
+/**
+ * Reduce one stored GEX column to the rail bars + Call/Put Wall + Flip.
+ *
+ * Walls = the strikes carrying the largest positive / negative net on the active
+ * metric; flip = the zero-cross, computed with findGEXFlip so it agrees with the
+ * home page by construction.
+ *
+ * Two callers, same rule: replay scrubbing (column at the cursor) and the ETF
+ * symbols, whose walls have no live websocket to publish them and are therefore
+ * derived from the newest recorded column instead. Extracted so those two can't
+ * drift into two different definitions of "the wall".
+ */
+function deriveColumnLevels(
+  col: GexColumn | null | undefined,
+  metric: GexMetric,
+): { railRows: RailRow[]; callWall: number | null; putWall: number | null; gexFlip: number | null } | null {
+  if (!col || !col.cells.length) return null;
+  const railRows: RailRow[] = col.cells.map((c) => ({
+    strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol,
+  }));
+  let callWall: number | null = null, putWall: number | null = null, maxPos = 0, maxNeg = 0;
+  for (const r of railRows) {
+    if (r.net > maxPos) { maxPos = r.net; callWall = r.strike; }
+    if (r.net < maxNeg) { maxNeg = r.net; putWall = r.strike; }
+  }
+  const gexFlip = findGEXFlip(
+    col.cells.map((c) => ({ strike: c.strike, netGEX: c.netOiVol })) as ChainRow[],
+    col.spot,
+  );
+  return { railRows, callWall, putWall, gexFlip };
+}
+
 function gexColor(value: number, maxValue: number, intensity: number, top3: number[]): string | null {
   const n = value || 0;
   const m = maxValue || 0;
@@ -314,6 +347,203 @@ const BUBBLE_CFG_KEY = "es-candles-bubble-cfg-v1";
 type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; brightness: number };
 const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 7, brightness: 84 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart symbol
+//
+// This page was built around ONE instrument: ES futures candles with an SPX
+// option overlay, glued together by the ES−SPX basis. SPY and QQQ are a
+// different arrangement — the candles and the option strikes are already in the
+// same price space, so there is no basis to apply. Rather than fork the page,
+// every SPX→ES conversion runs through effectiveBasis(), which returns 0 for a
+// non-ES symbol; the conversions become identities and the same render path
+// draws both. See effectiveBasis() and `isEs` inside the component.
+//
+//   gexSymbol — what the GEX history table is keyed by (server-v2 writes '$SPX'
+//               for the index feed, the plain ticker for the ETF recorders).
+//   candles   — "es" reads the /ws/gex futures stream (useEsCandles); "etf"
+//               reads the recorded etf_candles rows (useEtfCandles).
+// ─────────────────────────────────────────────────────────────────────────────
+type ChartSymbol = "ES" | "SPY" | "QQQ";
+type SymbolDef = { key: ChartSymbol; label: string; gexSymbol: string; candles: "es" | "etf" };
+const SYMBOLS: SymbolDef[] = [
+  { key: "ES",  label: "ES",  gexSymbol: "$SPX", candles: "es"  },
+  { key: "SPY", label: "SPY", gexSymbol: "SPY",  candles: "etf" },
+  { key: "QQQ", label: "QQQ", gexSymbol: "QQQ",  candles: "etf" },
+];
+const SYMBOL_KEYS = SYMBOLS.map((s) => s.key);
+const symbolDef = (k: ChartSymbol): SymbolDef => SYMBOLS.find((s) => s.key === k) ?? SYMBOLS[0];
+
+const SYMBOL_KEY = "es-candles-symbol-v1";
+const FAV_SYMBOLS_KEY = "es-candles-fav-symbols-v1";
+
+function isChartSymbol(v: unknown): v is ChartSymbol {
+  return typeof v === "string" && (SYMBOL_KEYS as string[]).includes(v);
+}
+function loadSymbol(): ChartSymbol {
+  if (typeof window === "undefined") return "ES";
+  try {
+    const raw = window.localStorage.getItem(SYMBOL_KEY);
+    return isChartSymbol(raw) ? raw : "ES";
+  } catch { return "ES"; }
+}
+function loadFavSymbols(): ChartSymbol[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FAV_SYMBOLS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter(isChartSymbol) : [];
+  } catch { return []; }
+}
+function saveFavSymbols(list: ChartSymbol[]): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(FAV_SYMBOLS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+
+/**
+ * Symbol picker — the same searchable, star-to-favorite dropdown the Options
+ * Chain page uses for its ticker list (favorites float to the top, persisted in
+ * localStorage), restyled to the dock theme so it sits inline with the other
+ * dock controls instead of looking like a transplant.
+ *
+ * Rendered through a portal for the same reason the DTE menu is: the dock lives
+ * inside a FitScale transform, and a transformed ancestor makes `position:
+ * fixed` resolve against the dock rather than the viewport — an in-flow menu
+ * gets scaled and clipped along with the toolbar.
+ */
+function SymbolListDropdown({ active, onSelect }: { active: ChartSymbol; onSelect: (s: ChartSymbol) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [favs, setFavs] = useState<ChartSymbol[]>([]);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => { setFavs(loadFavSymbols()); }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = boxRef.current?.getBoundingClientRect();
+      if (r) setRect({ left: r.left, top: r.bottom + 4 });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (boxRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const toggleFav = (s: ChartSymbol) =>
+    setFavs((prev) => {
+      const next = prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s];
+      saveFavSymbols(next);
+      return next;
+    });
+
+  const favSet = new Set(favs);
+  const q = query.trim().toUpperCase();
+  const matches = SYMBOLS.filter((s) => !q || s.key.includes(q) || s.label.toUpperCase().includes(q));
+  const favList = matches.filter((s) => favSet.has(s.key));
+  const rest = matches.filter((s) => !favSet.has(s.key));
+  const rows: Array<{ def?: SymbolDef; fav: boolean; divider?: boolean }> = [
+    ...favList.map((def) => ({ def, fav: true })),
+    ...(favList.length && rest.length ? [{ fav: false, divider: true }] : []),
+    ...rest.map((def) => ({ def, fav: false })),
+  ];
+
+  return (
+    <div ref={boxRef} style={{ flexShrink: 0 }}>
+      <DockButton onClick={() => setOpen((o) => !o)} title="Chart symbol">
+        <span style={{ fontWeight: 800, letterSpacing: "0.06em" }}>{symbolDef(active).label}</span>
+        <span style={{ opacity: 0.5, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+      </DockButton>
+      {open && rect && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: "fixed", left: rect.left, top: rect.top, zIndex: 100000, width: 180,
+            borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
+            background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+            boxShadow: DOCK_THEME.shadow, padding: 6, overflow: "hidden",
+          }}
+        >
+          <div style={{ paddingBottom: 6 }}>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value.toUpperCase())}
+              placeholder="Search…"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                width: "100%", boxSizing: "border-box", fontSize: 11, fontWeight: 700,
+                padding: "5px 8px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`,
+                background: DOCK_THEME.hoverTile, color: HOME_THEME.text, outline: "none",
+                letterSpacing: "0.06em",
+              }}
+            />
+          </div>
+          <div style={{ maxHeight: 260, overflowY: "auto" }}>
+            {rows.length === 0 && (
+              <div style={{ padding: "8px 10px", fontSize: 11, color: HOME_THEME.muted }}>No match</div>
+            )}
+            {rows.map((row, i) => {
+              if (row.divider || !row.def) {
+                return <div key={`div-${i}`} style={{ height: 1, background: HOME_THEME.border, margin: "4px 6px" }} />;
+              }
+              const def = row.def;
+              const isActive = def.key === active;
+              return (
+                <div
+                  key={def.key}
+                  onClick={() => { onSelect(def.key); setOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "6px 10px", fontSize: 12, fontWeight: isActive ? 800 : 600,
+                    cursor: "pointer", whiteSpace: "nowrap", borderRadius: 8,
+                    border: isActive ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent",
+                    background: isActive ? DOCK_THEME.activeTile : "transparent",
+                    color: isActive ? HOME_THEME.cyan : HOME_THEME.text,
+                  }}
+                  onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+                  onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
+                >
+                  <span
+                    onClick={(e) => { e.stopPropagation(); toggleFav(def.key); }}
+                    title={row.fav ? "Unfavorite" : "Favorite"}
+                    style={{
+                      cursor: "pointer", fontSize: 13, lineHeight: 1,
+                      color: row.fav ? HOME_THEME.orange : HOME_THEME.muted,
+                      opacity: row.fav ? 1 : 0.45,
+                    }}
+                  >
+                    {row.fav ? "★" : "☆"}
+                  </span>
+                  <span>{def.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 /**
  * `leading` renders as the first item in the dock, before the "ES 5m Candles"
  * title. Routed as /es-candles it receives nothing (Next passes params /
@@ -337,7 +567,39 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const esShouldConnectRef = useRef(esShouldConnect);
   esShouldConnectRef.current = esShouldConnect;
 
-  const { sessionCandles: liveRows, historical, connected, refresh } = useEsCandles();
+  // ── Active chart symbol ────────────────────────────────────────────────────
+  // Persisted, so the picker survives a reload the way the DTE/overlay choices
+  // do. Read lazily on mount rather than in useState's initializer: this
+  // component is also server-rendered by Next for the /es-candles route, and a
+  // localStorage read during the first render would be a hydration mismatch.
+  const [symbol, setSymbolState] = useState<ChartSymbol>("ES");
+  useEffect(() => { setSymbolState(loadSymbol()); }, []);
+  const setSymbol = useCallback((s: ChartSymbol) => {
+    setSymbolState(s);
+    try { window.localStorage.setItem(SYMBOL_KEY, s); } catch { /* ignore */ }
+  }, []);
+  const sym = symbolDef(symbol);
+  // The one predicate the rest of the page branches on. ES is the futures chart
+  // with an SPX option overlay (basis applies); SPY/QQQ are cash instruments
+  // whose own option strikes are already in the chart's price space.
+  const isEs = sym.candles === "es";
+  // Mirrored for the /ws/gex handler and the imperative canvas draws, which run
+  // outside the render cycle and would otherwise keep whatever value they closed
+  // over when they were set up.
+  const isEsRef = useRef(isEs);
+  isEsRef.current = isEs;
+
+  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles();
+  // ETF bars come over HTTP from the etf_candles recorder, not /ws/gex. Passing
+  // "" when ES is active keeps the hook completely idle — no fetch, no interval.
+  const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, 5, 5);
+
+  // History feed for the derived layers (VSA baselines, prior-session levels,
+  // the ES basis anchor). ES has 20 sessions from SQLite; the ETF side has the
+  // 5-day window the recorder backfills, and that same array doubles as its
+  // "live" rows since there is no separate streaming source.
+  const historical = isEs ? esHistorical : etfRows;
+  const connected = isEs ? esConnected : etfConnected;
 
   // Chart candles: full 5-day rolling window so the heatmap's historical columns
   // resolve via timeToCoordinate (which only works for timestamps on the chart's
@@ -346,12 +608,16 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const rows = useMemo(() => {
     const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
     const cutoff = Date.now() - FIVE_DAYS_MS;
-    const map = new Map<string, typeof liveRows[0]>();
+    const map = new Map<string, EsCandleRecord>();
     for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
-    for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
+    // ETF rows have no second live stream to merge — `historical` already IS the
+    // recorded series, refreshed on the hook's interval.
+    if (isEs) for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
-  }, [historical, liveRows]);
-  const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => { await refresh(); });
+  }, [historical, liveRows, isEs]);
+  const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => {
+    await (isEs ? esRefresh() : etfRefresh());
+  });
 
 
   const chartRef = useRef<HTMLDivElement>(null);
@@ -636,21 +902,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     for (const c of columnsRef.current.values()) {
       if (c.slotTs <= replayTs && (!col || c.slotTs > col.slotTs)) col = c;
     }
-    if (!col || !col.cells.length) return null;
-    const metric = gexMetricRef.current;
-    const railRows: RailRow[] = col.cells.map((c) => ({
-      strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol,
-    }));
-    let callWall: number | null = null, putWall: number | null = null, maxPos = 0, maxNeg = 0;
-    for (const r of railRows) {
-      if (r.net > maxPos) { maxPos = r.net; callWall = r.strike; }
-      if (r.net < maxNeg) { maxNeg = r.net; putWall = r.strike; }
-    }
-    const gexFlip = findGEXFlip(
-      col.cells.map((c) => ({ strike: c.strike, netGEX: c.netOiVol })) as ChainRow[],
-      col.spot,
-    );
-    return { railRows, callWall, putWall, gexFlip };
+    return deriveColumnLevels(col, gexMetricRef.current);
   })();
   const replayGexRef = useRef(replayGex);
   replayGexRef.current = replayGex;
@@ -971,7 +1223,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       // Live gexRows are the FRONT expiry. If the DTE picker is on a different
       // expiry, the heatmap is history-only — don't mix live front columns in.
       const liveExpiry = exp || "";
-      const ingestLive = !selectedExpiryRef.current || selectedExpiryRef.current === liveExpiry;
+      // /ws/gex is an SPX feed — full stop. On SPY/QQQ these rows must not reach
+      // the rail, the bubble map or the column map: columns are keyed by slot
+      // TIMESTAMP, so a live SPX column would both out-rank the recorded ETF
+      // column for that slot ("live wins" in the backfill merge) and become the
+      // newest column that etfGex derives the walls from — putting ~6800 strikes
+      // on a ~640 chart. The expirations/levels handling above still runs; only
+      // the per-strike ingestion is symbol-specific.
+      const ingestLive = isEsRef.current
+        && (!selectedExpiryRef.current || selectedExpiryRef.current === liveExpiry);
       if (ingestLive && Array.isArray(gexRows) && gexRows.length) {
         const cells: GexCell[] = [];
         for (const r of gexRows as Array<Record<string, unknown>>) {
@@ -1047,6 +1307,38 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [esShouldConnect]);
 
+  // ── ETF GEX refresh ────────────────────────────────────────────────────────
+  // SPX columns arrive two ways: this HTTP backfill for history, then the
+  // /ws/gex stream keeps the newest column current minute by minute. SPY/QQQ
+  // have no such stream — their rows are written server-side by
+  // etf-gex-recorder.js — so without a poll the ETF heatmap would freeze at
+  // whatever was on screen when the page loaded. `gexPoll` re-keys the backfill
+  // once a minute (the recorder's own cadence); `gexVersion` bumps AFTER rows
+  // land, so the derived walls/flip republish against real data rather than one
+  // cycle behind it.
+  const [gexPoll, setGexPoll] = useState(0);
+  const [gexVersion, setGexVersion] = useState(0);
+
+  useEffect(() => {
+    if (isEs) return;
+    const id = setInterval(() => setGexPoll((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, [isEs]);
+
+  // Rail bars + walls for the ETF symbols, derived from the newest recorded
+  // column by the same rule the replay cursor uses. `railRows` and `levels` are
+  // both fed by /ws/gex, which only carries SPX.
+  const etfGex = useMemo(() => {
+    if (isEs) return null;
+    void gexVersion; // recompute when a backfill lands
+    let newest: GexColumn | null = null;
+    for (const c of columnsRef.current.values()) {
+      if (!newest || c.slotTs > newest.slotTs) newest = c;
+    }
+    const derived = deriveColumnLevels(newest, gexMetric);
+    return derived ? { ...derived, spot: newest?.spot ?? null } : null;
+  }, [isEs, gexVersion, gexMetric]);
+
   // Heatmap history backfill. Effective expiry = the DTE picker selection, or
   // the live front expiry when nothing is picked. Re-runs whenever the picker
   // OR the 1D/5D range toggle changes: clears the column map and reloads.
@@ -1073,7 +1365,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // NOT cancel it (cancelling raced the ~5s fetch against WS churn and wiped
     // the whole trail). Staleness is instead guarded by re-checking the key at
     // resolution below, so only a genuine key change discards a stale response.
-    const fetchKey = `${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}`;
+    // Symbol is part of the key: switching ES→SPY must invalidate the in-flight
+    // /  cached backfill, otherwise the resolution-time key check below would
+    // accept SPX columns into the SPY chart.
+    const fetchKey = `${sym.gexSymbol}|${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}|${gexPoll}`;
     if (fetchKey === lastHeatmapKeyRef.current) return;
     lastHeatmapKeyRef.current = fetchKey;
     // When the picker or range changes, wipe the existing columns so we don't
@@ -1088,7 +1383,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // by time window alone (anyExpiry=1) — otherwise backfill only ever
         // matches today. An explicit DTE pick keeps the exact expiry match.
         const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
@@ -1129,16 +1424,23 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           if (map.has(slotTs)) continue; // live wins on collisions
           map.set(slotTs, { slotTs, cells, spot });
         }
+        // Rows are in — let the derived walls/flip republish off them.
+        setGexVersion((v) => v + 1);
         drawOverlayRef.current();
       } catch { /* live feed still populates the front expiry going forward */ }
     })();
     // No cleanup cancel: a same-key re-render must not abort a valid in-flight
     // backfill; the resolution-time key check handles real invalidation.
-  }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry]);
+  }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
   // ES conversion happens at draw time with the live basis.
+  //
+  // SPX-ONLY. mvc_snapshots records the SPX central-band strike; there is no
+  // SPY/QQQ equivalent, and plotting SPX strike levels on a SPY chart would put
+  // a line ~10x off-scale. On a non-ES symbol this clears the series instead.
   useEffect(() => {
+    if (!isEs) { setMvcHistory([]); return; }
     let cancelled = false;
     const load = async () => {
       try {
@@ -1190,7 +1492,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     void load();
     const id = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [isEs]);
 
 
   // THE basis used for every SPX→ES conversion on this page (levels, rail, heatmap,
@@ -1198,6 +1500,16 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // numbered notes inline. The rule that fixes this page: never compute the basis
   // against the broker "SPX" spot, because that spot tracks ES, not cash.
   const effectiveBasis = useCallback(() => {
+    // 0. NOT ES → no basis exists. SPY/QQQ candles and SPY/QQQ option strikes are
+    //    quoted on the same instrument, so a strike of 640 belongs at 640 on the
+    //    chart. Returning 0 here turns every conversion downstream (price lines,
+    //    rail, heatmap cells, bubbles, right-axis readout) into an identity, which
+    //    is why the ETF symbols need no separate render path. It is also a hard
+    //    guard: the refs below are fed by the ES/SPX websocket and keep their last
+    //    ES values after a symbol switch, so falling through would offset SPY
+    //    strikes by ~50 points of ES-over-SPX carry.
+    if (!isEs) return 0;
+
     // 1. LIVE, while cash is open: last ES CANDLE close − live SPX spot. Both sides
     //    verified good (spot published 7515.34 vs a 7515.89 cash close), both sampled
     //    now, and the ES side is the charted contract — so this is roll-proof AND
@@ -1229,7 +1541,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     //    missing basis beats one that silently bends every level by ~50pt.
     if (isPlausibleBasis(basisRef.current)) return basisRef.current;
     return 0;
-  }, []);
+  }, [isEs]);
 
   useEffect(() => {
     let canceled = false;
@@ -1490,7 +1802,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   // Pull the off-hours fallback basis (see effectiveBasis §2). Refreshed every 30 min:
   // the real basis decays ~a point a day, so that's ample resolution.
+  // ES-only: there is no ES−SPX basis to fetch when the chart is showing SPY/QQQ,
+  // and leaving the poll running would keep refreshing refs effectiveBasis() is
+  // deliberately short-circuiting anyway.
   useEffect(() => {
+    if (!isEs) return;
     let cancelled = false;
     const pull = async () => {
       try {
@@ -1525,7 +1841,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     void pull();
     const id = setInterval(pull, 1_800_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [isEs]);
 
   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
   // WS frame has arrived recently. Mirrors the server's authoritative
@@ -1545,7 +1861,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Frozen prior-day basis for the overnight / pre-open right axis.
   // prior-day ES 16:00 close (es_candles) − prior-day SPX 16:00 close (eod_gex).
   // Recomputed when history loads; refreshed every 5 min to roll past midnight.
+  // ES-only, same reason as the /proxy/es-spx-basis poll above — and this one
+  // would additionally spam the "NO ANCHOR" warning on every SPY/QQQ refresh,
+  // since ETF bars have no 16:00 ES close to anchor against.
   useEffect(() => {
+    if (!isEs) return;
     let cancelled = false;
     const compute = async () => {
       // Prior-day ES RTH close = the 16:00 ET bar of the most recent past day.
@@ -1612,7 +1932,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     void compute();
     const id = setInterval(compute, 300_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [historical]);
+  }, [historical, isEs]);
 
   // ── Price-line values: ES-tick quantized, republished at most once a minute ──
   // Two separate sources of per-frame churn fed these lines:
@@ -1639,10 +1959,65 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // out the first 60s interval.
   const hasLevels = levels.callWall != null || levels.putWall != null || levels.gexFlip != null;
 
+  // Switching symbol drops every GEX artifact of the previous one. Columns are
+  // keyed by slot TIMESTAMP, not by symbol, so leaving them would let SPX
+  // strikes survive into a SPY render and paint a second cloud of cells ten
+  // times off-scale. The DTE pick resets to Front for a related reason: the
+  // expiration list comes from the SPX feed, and an explicit pick would filter
+  // the new symbol's rows by a string that may not exist for it.
+  // Declared HERE, below the state it touches — see the TDZ note by bubbleCfg.
+  const prevSymbolRef = useRef(symbol);
+  useEffect(() => {
+    if (prevSymbolRef.current === symbol) return;
+    prevSymbolRef.current = symbol;
+    columnsRef.current.clear();
+    minuteColsRef.current.clear();
+    // Deliberately NOT touching lastHeatmapKeyRef. Effects flush in declaration
+    // order, and the backfill effect above already ran for the new symbol — it
+    // set the key and started its fetch. Clearing it here would make that
+    // response fail its own staleness check on arrival and be discarded, and
+    // since nothing else re-triggers the effect (gexPoll is frozen on ES) the
+    // trail would then stay empty until the user touched the DTE or range
+    // control. `fetchKey` already carries sym.gexSymbol, so a real symbol change
+    // invalidates it without help.
+    setSelectedExpiry("");
+    setLineLevels({ callWall: null, putWall: null, gexFlip: null });
+    setRailRows([]);
+    setLiveSpx(null);
+    setCrossSpx(null);
+    // The ES-only basis sources are NOT cleared by their own gated effects (they
+    // simply stop refreshing), so a switch would leave the previous symbol's
+    // ~50pt ES−SPX carry sitting in these refs — and buildBasisAt's
+    // "abs(b) >= 1 wins" rule actively PREFERS that stale value over 0 for every
+    // prior-day column. Wipe them with the columns they belong to.
+    dayBasisRef.current = new Map();
+    prevBasisRef.current = 0;
+    trustedBasisRef.current = 0;
+    basisRef.current = 0;
+    setPrevCloses(null);
+    setGexVersion((v) => v + 1);
+    drawOverlayRef.current();
+    railDrawRef.current();
+  }, [symbol]);
+
   useEffect(() => {
     const publish = () => {
       if (replayOnRef.current) return; // replay owns the lines while scrubbing
-      const l = levelsRef.current;
+      // `levels` is the /ws/gex feed, and that feed is SPX. On SPY/QQQ those
+      // walls would be SPX strikes (~6800) drawn on a ~640 chart — not merely
+      // wrong, but so far off-scale they'd blow out the price axis. Derive the
+      // ETF walls from the newest recorded GEX column instead, which is the same
+      // rule replay uses.
+      const l = isEs
+        ? levelsRef.current
+        : (() => {
+            let newest: GexColumn | null = null;
+            for (const c of columnsRef.current.values()) {
+              if (!newest || c.slotTs > newest.slotTs) newest = c;
+            }
+            return deriveColumnLevels(newest, gexMetricRef.current)
+              ?? { callWall: null, putWall: null, gexFlip: null };
+          })();
       const b = effectiveBasis();
       const es = (spxLevel: number | null) => (spxLevel != null ? toTick(spxLevel + b) : null);
       const next = { callWall: es(l.callWall), putWall: es(l.putWall), gexFlip: es(l.gexFlip) };
@@ -1656,7 +2031,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     publish();
     const id = setInterval(publish, 60_000);
     return () => clearInterval(id);
-  }, [effectiveBasis, hasLevels, replayOn]);
+  }, [effectiveBasis, hasLevels, replayOn, isEs, gexVersion]);
 
   // ── Steady basis for the CANVAS overlay ───────────────────────────────────
   // Same defect the price lines above already fixed, in the other half of the
@@ -1940,6 +2315,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // from the loaded heatmap columns changes with the 1D/5D backfill window,
         // which silently MOVED the CB level when the user toggled the range.
         return (tsMs: number) => {
+          // Non-ES: there is no basis on any day, past or present. This has to be
+          // stated here as well as in effectiveBasis() — the fallback chain below
+          // reaches PAST `basis` into dayBasisRef/prevBasisRef, and its
+          // "abs(b) >= 1 beats 0" rule would actively prefer a leftover ES value
+          // over the correct zero for every prior-day column.
+          if (!isEsRef.current) return 0;
           const k = etDayKey(tsMs);
           // Today, while cash is OPEN, the live basis is the freshest truth and
           // matches the level lines. Today while cash is SHUT, `basis` is already
@@ -2530,8 +2911,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           {leading}
           {leading && <DockGap />}
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
-            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 14, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>ES 5m Candles</span>
-            {(() => {
+            <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 14, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>{sym.label} 5m Candles</span>
+            {isEs ? (() => {
               // effectiveBasis() ONLY — never levels.basis. The server basis is
               // esFut-derived and freezes on the expired contract across a roll.
               const basis = effectiveBasis();
@@ -2540,8 +2921,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   ES Basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}
                 </span>
               );
-            })()}
+            })() : (
+              // No basis line off ES: the strikes are already the chart's own
+              // prices, so there is nothing to offset and nothing to report.
+              <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
+                {sym.gexSymbol} GEX
+              </span>
+            )}
           </div>
+
+          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser */}
+          <SymbolListDropdown active={symbol} onSelect={setSymbol} />
+
           {/* status + count badges */}
           <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
             {status.toUpperCase()}
@@ -2833,10 +3224,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           );
           return (
             <>
-              <StatBox c={HOME_THEME.green} label="Call Wall" v={levels.callWall} />
-              <StatBox c={SOFT_RED} label="Put Wall" v={levels.putWall} />
-              <StatBox c={LIGHT_BLUE} label="Flip" v={levels.gexFlip} />
-              <StatBox c={LIGHT_BLUE} label="CB" v={levels.mvc} />
+              {/* Same source precedence as the rail and the price lines: on
+                  SPY/QQQ the walls come from the recorded column, because
+                  `levels` is the SPX websocket. CB has no ETF equivalent —
+                  mvc_snapshots is SPX-only — so it reads blank rather than
+                  showing the last SPX value frozen under a SPY chart. */}
+              <StatBox c={HOME_THEME.green} label="Call Wall" v={etfGex ? etfGex.callWall : levels.callWall} />
+              <StatBox c={SOFT_RED} label="Put Wall" v={etfGex ? etfGex.putWall : levels.putWall} />
+              <StatBox c={LIGHT_BLUE} label="Flip" v={etfGex ? etfGex.gexFlip : levels.gexFlip} />
+              <StatBox c={LIGHT_BLUE} label="CB" v={isEs ? levels.mvc : null} />
 
             </>
           );
@@ -2851,8 +3247,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               candlesticks always render on the top visible layer. */}
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
           <div ref={chartRef} className="absolute inset-0" style={{ zIndex: 2 }} />
-          {/* SPX equivalent of the live ES price, pinned at the right gutter. */}
-          {liveSpx ? (
+          {/* SPX equivalent of the live ES price, pinned at the right gutter.
+              ES-only: off ES the basis is 0, so these would just restate the
+              price already on the axis under a misleading "SPX" label. */}
+          {isEs && liveSpx ? (
             <div
               className="pointer-events-none absolute z-10 rounded font-mono font-medium"
               style={{
@@ -2877,7 +3275,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             </div>
           ) : null}
           {/* SPX at the crosshair, follows the cursor's y on the right gutter. */}
-          {crossSpx ? (
+          {isEs && crossSpx ? (
             <div
               className="pointer-events-none absolute z-10 rounded font-mono"
               style={{
@@ -2897,7 +3295,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           ) : null}
           {rows.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/50">
-              {connected ? "Waiting for live 5m ES candles" : "Loading candles…"}
+              {connected ? `Waiting for live 5m ${sym.label} candles` : "Loading candles…"}
             </div>
           ) : null}
         </div>
@@ -2908,12 +3306,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             candle chart doesn't get starved down to nothing. */}
         {showRail && railFits ? (
           <div style={{ width: 115, flexShrink: 0, minHeight: 320 }}>
+            {/* Source precedence: replay cursor → ETF derived column → the live
+                SPX websocket. The first two are the same derivation applied to a
+                different column; the last is the only one /ws/gex can supply. */}
             <EsGexRail
-              rows={replayGex ? replayGex.railRows : railRows}
-              callWall={replayGex ? replayGex.callWall : levels.callWall}
-              putWall={replayGex ? replayGex.putWall : levels.putWall}
-              gexFlip={replayGex ? replayGex.gexFlip : levels.gexFlip}
-              spot={levels.spx}
+              rows={replayGex ? replayGex.railRows : etfGex ? etfGex.railRows : railRows}
+              callWall={replayGex ? replayGex.callWall : etfGex ? etfGex.callWall : levels.callWall}
+              putWall={replayGex ? replayGex.putWall : etfGex ? etfGex.putWall : levels.putWall}
+              gexFlip={replayGex ? replayGex.gexFlip : etfGex ? etfGex.gexFlip : levels.gexFlip}
+              spot={etfGex ? etfGex.spot : levels.spx}
               // Steady basis, not effectiveBasis(): this prop is evaluated on
               // EVERY render, and `levels` gets a new identity on every /ws/gex
               // frame, so the raw (lastEsClose − spot) value re-projected the
