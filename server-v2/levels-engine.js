@@ -16,8 +16,14 @@
 const { SYMBOLS, ZONE_SYMBOLS } = require('./em-tickers');
 
 const DISPLAY_LABEL = { ESM: 'ESU', NQM: 'NQU', ESU6: 'ESU', NQM6: 'NQU' };
-const API_SYMBOL = { ESM: '/ESU26', NQM: '/NQ:XCME', SPX: '$SPX', NDX: '$NDX' };
-const CHAIN_SYMBOL = { SPX: '$SPX', NDX: '$NDX' };
+// Roster ticker -> QUOTE-feed symbol. 'BRK.B' quotes as BRK-B on Yahoo (the dot
+// form returns an empty row, which is why it failed every run); its CHAIN symbol
+// on TastyTrade is a third form, BRK/B — add a CHAIN_SYMBOL entry if the chain
+// side also comes back empty.
+const API_SYMBOL = { ESM: '/ESU26', NQM: '/NQ:XCME', SPX: '$SPX', NDX: '$NDX', 'BRK.B': 'BRK-B' };
+// Roster ticker -> CHAIN-feed symbol. Berkshire B is a third spelling again:
+// roster BRK.B, Yahoo BRK-B (API_SYMBOL above), TastyTrade BRK/B.
+const CHAIN_SYMBOL = { SPX: '$SPX', NDX: '$NDX', 'BRK.B': 'BRK/B' };
 const FUTURE_PROXY = { ESM: 'SPX', NQM: 'NDX' };
 
 // dxLink weekly-candle symbol for the zone math (mirrors the client zoneSymbol).
@@ -260,8 +266,21 @@ async function getJson(url) {
   return r.json();
 }
 
+// How long one publish run may reuse its quote sweep. This was 5 SECONDS, which
+// was the single biggest source of "Invalid price for X: NaN" failures: a run
+// walks the roster 4 tickers at a time with a 300ms pause, so the cache expired
+// every few tickers and the ENTIRE roster-wide sweep (419 symbols = 11 chunked
+// HTTP requests) re-ran ~12x a minute for the whole multi-minute publish. Yahoo
+// rate-limits that and starts returning empty 200s, which zero out whole
+// 40-symbol windows at a time. Measured on the 2026-07-26 20:53 run: 224 tickers
+// failed on the quote — and 200 of them quoted perfectly fine through the exact
+// same endpoint moments later. The quotes only need fetching once per run.
+const QUOTE_CACHE_MS = 10 * 60 * 1000;
+
 async function fetchAllQuotes(engine) {
-  if (Date.now() - engine.quoteCacheTime < 5000) return engine.quoteCache;
+  if (Date.now() - engine.quoteCacheTime < QUOTE_CACHE_MS && Object.keys(engine.quoteCache).length) {
+    return engine.quoteCache;
+  }
   // Chunk the quotes-batch call so a large roster (200+ tickers) doesn't blow the
   // query-string length limit. 40 symbols/request keeps the URL well under ~2KB.
   const CHUNK = 40;
@@ -302,14 +321,24 @@ async function fetchAllQuotes(engine) {
     if (anyAlias) map[key] = map[anyAlias];
   });
 
-  // Backstop for the headline ETFs: a bulk-sweep chunk can return an empty/partial
-  // 200 (not a thrown non-200) that silently zeroes a whole 40-symbol window — and
-  // SPY/QQQ/IWM/DIA/SMH sit together in one such window, so they all publish as
-  // "Invalid price: NaN" at once even though the quote is available. Re-fetch each
-  // unpriced critical symbol on its own (bounded retries) so pricing never depends
-  // on that one chunk landing.
-  for (const sym of CRITICAL_QUOTE_SYMBOLS) {
-    if (hasPrice(map[sym])) continue;
+  // Backstop for EVERY unpriced symbol, not just the headline ETFs. A bulk-sweep
+  // chunk can return an empty/partial 200 (not a thrown non-200) that silently
+  // zeroes a whole 40-symbol window, and every name in it then publishes as
+  // "Invalid price: NaN" even though the quote is perfectly available. This used
+  // to re-ask only for SPY/QQQ/IWM/DIA/SMH, so a dropped window anywhere else in
+  // the roster just became ~40 stale tickers for the week.
+  //
+  // Ordered so the headline ETFs are recovered first (they back the /em page and
+  // the home EM bands), then everything else. Individual re-asks are cheap — on a
+  // healthy run there are none, and on a bad one they're the difference between a
+  // full roster and a third of it.
+  const unpriced = [
+    ...CRITICAL_QUOTE_SYMBOLS.filter((s) => !hasPrice(map[s])),
+    ...QUOTE_SYMBOLS.filter((s) => !CRITICAL_QUOTE_SYMBOLS.includes(s) && !hasPrice(map[s])),
+  ];
+  if (unpriced.length) console.log(`[levels-engine] ${unpriced.length} symbol(s) unpriced after the bulk sweep — re-asking individually`);
+  const stillUnpriced = [];
+  for (const sym of unpriced) {
     for (let attempt = 0; attempt < 3 && !hasPrice(map[sym]); attempt++) {
       try {
         const json = await getJson(`${engine.base}/api/quotes-batch?symbols=${encodeURIComponent(sym)}`);
@@ -317,8 +346,15 @@ async function fetchAllQuotes(engine) {
         const row = items.find((q) => q.symbol === sym) || items[0];
         if (hasPrice(row)) { map[sym] = row; break; }
       } catch { /* transient — retry */ }
+      await new Promise((r) => setTimeout(r, 120)); // don't re-create the storm
     }
-    if (!hasPrice(map[sym])) console.log(`[levels-engine] critical symbol ${sym} still unpriced after individual retry`);
+    if (!hasPrice(map[sym])) stillUnpriced.push(sym);
+  }
+  if (stillUnpriced.length) {
+    // Anything here quotes NOWHERE — in practice a delisted/renamed/acquired
+    // ticker still sitting in em-tickers.js. Logged by name so the roster can be
+    // pruned instead of carrying permanent failures.
+    console.log(`[levels-engine] no quote anywhere for: ${stillUnpriced.join(', ')}`);
   }
 
   engine.quoteCache = map;
@@ -344,9 +380,13 @@ async function fetchQuoteDetail(ticker, engine) {
   const dayClose = Number(q['day-close'] || 0);
   const isFutures = ticker === 'ESM' || ticker === 'NQM';
   const isIndex = ticker === 'SPX' || ticker === 'NDX';
+  // NOTE the prevClose/dayClose tail on the equity branch. fetchAllQuotes'
+  // hasPrice() already counts a row as priced when only prev-close is present,
+  // so without it a row could pass the sweep's check and then throw "Invalid
+  // price: NaN" here — the two must agree on what "priced" means.
   let close = isFutures && dayClose > 0 ? dayClose
     : isIndex && prevClose > 0 ? prevClose
-    : Number(q.last || q.mark || ((q.bid + q.ask) / 2));
+    : Number(q.last || q.mark || ((q.bid + q.ask) / 2) || prevClose || dayClose);
   if (isFutures && !(dayClose > 0)) {
     try {
       if (!engine.emClosesCache) {

@@ -1,176 +1,137 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { OWNER_THEME as HOME_THEME, ownerRgba } from "../lib/theme";
+import { ALPHA2_NAME, FEATURE_ID_TO_ALPHA2 } from "../lib/countryMaps";
 
 /**
- * Visitor dot map for the Control Panel.
+ * Visitor choropleth for the Control Panel.
  *
  * Data path: Cloudflare's "Add visitor location headers" managed transform sets
- * cf-ipcountry/cf-ipcity/cf-region/cf-iplatitude/cf-iplongitude → /api/page-status
- * stores them on the page_visits row → the owner reads them back through
- * /api/page-visits. Rows logged before that transform was switched on (or before
- * lat/lon was added) carry no coordinates and are reported honestly in the
- * footer as "unmapped" rather than silently dropped.
- *
- * Each dot is one city (visits are clustered by rounded lat/lon so the same
- * city doesn't render a dozen overlapping points). Click a dot to pin its
- * popup open — shows the city name and the pages loaded from there. Click the
- * same dot again (or anywhere else on the map) to dismiss.
+ * cf-ipcountry → /api/page-status stores it on the page_visits row → the owner
+ * reads it back through /api/page-visits. Rows logged before that transform was
+ * switched on carry a null country and land in the "Unknown" bucket, which is
+ * reported honestly in the footer rather than silently dropped.
  *
  * The world geometry is vendored at public/countries-110m.json (world-atlas@2,
  * 110m resolution ≈ 105 KB) and fetched at runtime, so it never enters the JS
- * bundle — used here only as a faint basemap, not for choropleth fill.
+ * bundle. See src/lib/countryMaps.ts for the id ↔ alpha-2 lookup.
  */
 
 // ── Inputs ───────────────────────────────────────────────────────────────────
 
 export interface VisitorMapRow {
   country?: string | null;
-  region?: string | null;
-  city?: string | null;
-  lat?: number | null;
-  lon?: number | null;
   ip?: string | null;
-  pageLabel?: string | null;
-  path?: string | null;
-  /** Signed-in identity, resolved server-side from users.email/discord_username. */
-  userId?: string | null;
-  userEmail?: string | null;
-  userName?: string | null;
 }
 
-interface CityPoint {
-  key: string;
-  lat: number;
-  lon: number;
-  city: string;
-  region: string | null;
-  country: string | null;
+// cf-ipcountry sentinels that aren't real places: XX = Cloudflare couldn't
+// geolocate the IP, T1 = Tor exit node. Both are grouped with "no country".
+const NON_COUNTRY = new Set(["XX", "T1"]);
+
+// Three world-atlas features carry no ISO numeric id (they're disputed or
+// partially recognised), so the id → alpha-2 table can't reach them. Kosovo is
+// the only one Cloudflare has a code for (XK); the other two stay "no data".
+const NAME_TO_ALPHA2: Record<string, string> = { Kosovo: "XK" };
+
+interface CountryStat {
+  code: string;
+  name: string;
   visits: number;
   unique: number;
-  pages: Array<{ label: string; count: number }>;
-  /** Signed-in visitors seen from this city — empty for guest-only cities. */
-  visitors: Array<{ label: string; count: number }>;
 }
 
 interface Aggregate {
-  points: CityPoint[];
-  ranked: CityPoint[];
+  byCode: Map<string, CountryStat>;
+  ranked: CountryStat[];
   totalVisits: number;
   totalUnique: number;
-  unmappedVisits: number;
+  unknownVisits: number;
   maxUnique: number;
 }
 
-function displayName(city: string | null | undefined, region: string | null | undefined, country: string | null | undefined): string {
-  const parts = [city, region && region !== city ? region : null, country].filter(Boolean);
-  return parts.length ? parts.join(", ") : "Unknown location";
-}
-
 function aggregate(rows: VisitorMapRow[]): Aggregate {
-  // Group by rounded lat/lon (~1.1km grid) so the same city's visits stack into
-  // one dot instead of one per slightly-different IP geolocation.
-  const acc = new Map<
-    string,
-    {
-      lat: number;
-      lon: number;
-      city: string;
-      region: string | null;
-      country: string | null;
-      visits: number;
-      ips: Set<string>;
-      pages: Map<string, number>;
-      visitors: Map<string, number>;
-    }
-  >();
+  // Unique visitors are approximated by distinct client IP — the only stable
+  // per-visitor key we log (guests have no user id). Same IP on two continents
+  // is not a case worth modelling here.
+  const acc = new Map<string, { visits: number; ips: Set<string> }>();
   const globalIps = new Set<string>();
-  let unmappedVisits = 0;
+  let unknownVisits = 0;
   let totalVisits = 0;
 
   for (const r of rows) {
+    const code = (r.country || "").toUpperCase();
     totalVisits++;
     if (r.ip) globalIps.add(r.ip);
-    if (r.lat == null || r.lon == null || !Number.isFinite(r.lat) || !Number.isFinite(r.lon)) {
-      unmappedVisits++;
+    if (!code || NON_COUNTRY.has(code)) {
+      unknownVisits++;
       continue;
     }
-    const key = `${r.lat.toFixed(2)},${r.lon.toFixed(2)}`;
-    let bucket = acc.get(key);
+    let bucket = acc.get(code);
     if (!bucket) {
-      bucket = {
-        lat: r.lat,
-        lon: r.lon,
-        city: r.city || "",
-        region: r.region || null,
-        country: r.country || null,
-        visits: 0,
-        ips: new Set<string>(),
-        pages: new Map<string, number>(),
-        visitors: new Map<string, number>(),
-      };
-      acc.set(key, bucket);
+      bucket = { visits: 0, ips: new Set<string>() };
+      acc.set(code, bucket);
     }
     bucket.visits++;
+    // Fall back to a synthetic key so an IP-less row still counts as one visitor
+    // instead of collapsing every such row into a single phantom visitor.
     bucket.ips.add(r.ip || `anon:${bucket.visits}`);
-    const page = r.pageLabel || r.path || "Unknown page";
-    bucket.pages.set(page, (bucket.pages.get(page) ?? 0) + 1);
-    // Only signed-in visits carry an identity — guests contribute to the dot's
-    // count but never appear in the "Visitors" list.
-    const identity = r.userEmail || r.userName;
-    if (identity) bucket.visitors.set(identity, (bucket.visitors.get(identity) ?? 0) + 1);
   }
 
-  const points: CityPoint[] = [];
-  for (const [key, b] of acc) {
-    points.push({
-      key,
-      lat: b.lat,
-      lon: b.lon,
-      city: displayName(b.city, b.region, b.country),
-      region: b.region,
-      country: b.country,
+  const byCode = new Map<string, CountryStat>();
+  for (const [code, b] of acc) {
+    byCode.set(code, {
+      code,
+      name: ALPHA2_NAME[code] || code,
       visits: b.visits,
       unique: b.ips.size,
-      pages: [...b.pages.entries()]
-        .map(([label, count]) => ({ label, count }))
-        .sort((a, c) => c.count - a.count),
-      visitors: [...b.visitors.entries()]
-        .map(([label, count]) => ({ label, count }))
-        .sort((a, c) => c.count - a.count),
     });
   }
-  const ranked = [...points].sort((a, b) => b.unique - a.unique);
+  const ranked = [...byCode.values()].sort((a, b) => b.unique - a.unique);
 
   return {
-    points,
+    byCode,
     ranked,
     totalVisits,
     totalUnique: globalIps.size,
-    unmappedVisits,
+    unknownVisits,
     maxUnique: ranked.length ? ranked[0].unique : 0,
   };
 }
 
-// ── Dot sizing/color ─────────────────────────────────────────────────────────
+// ── Color ramp ───────────────────────────────────────────────────────────────
 
-const DOT_MIN_R = 3.5;
-const DOT_MAX_R = 11;
+// Three-stop sequential ramp drawn from the owner palette (deep teal → cyan →
+// light blue). Traffic is heavily skewed toward one or two countries, so the
+// domain is square-rooted; a linear ramp would render everything but the top
+// country as the same near-empty shade.
+const RAMP: Array<[number, number, number]> = [
+  [16, 63, 81],   // #103F51
+  [33, 158, 188], // #219EBC  (HOME_THEME.cyan)
+  [155, 216, 236] // #9BD8EC
+];
 
-function dotRadius(unique: number, max: number): number {
-  if (max <= 0) return DOT_MIN_R;
-  // sqrt compresses the long tail so one big city doesn't dwarf everything else.
-  const t = Math.sqrt(unique / max);
-  return DOT_MIN_R + t * (DOT_MAX_R - DOT_MIN_R);
+const EMPTY_FILL = "rgba(255,255,255,0.045)";
+const STROKE = "rgba(255,255,255,0.16)";
+
+function rampColor(t: number): string {
+  const clamped = Math.max(0, Math.min(1, t));
+  const scaled = clamped * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(scaled));
+  const f = scaled - i;
+  const [r1, g1, b1] = RAMP[i];
+  const [r2, g2, b2] = RAMP[i + 1];
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * f);
+  return `rgb(${mix(r1, r2)},${mix(g1, g2)},${mix(b1, b2)})`;
 }
 
-const DOT_FILL = "#219EBC"; // HOME_THEME.cyan
-const DOT_SELECTED_FILL = "#3DDC97"; // accent green for the pinned dot
-const LAND_FILL = "rgba(255,255,255,0.045)";
-const STROKE = "rgba(255,255,255,0.16)";
+function intensity(value: number, max: number): number {
+  if (value <= 0 || max <= 0) return 0;
+  // sqrt compresses the long tail so mid-volume countries stay legible.
+  return Math.sqrt(value / max);
+}
 
 // ── Sizing ───────────────────────────────────────────────────────────────────
 
@@ -199,12 +160,59 @@ function useElementWidth<T extends HTMLElement>() {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
+interface HoverState {
+  code: string | null;
+  name: string;
+  unique: number;
+  visits: number;
+  x: number;
+  y: number;
+}
+
+// ── Zoom / pan ───────────────────────────────────────────────────────────────
+//
+// Hand-rolled rather than pulling in d3-zoom: the whole behaviour is one
+// transform on a <g>, and d3-zoom would add a dependency plus its own event
+// layer fighting the per-country mouse handlers.
+
+interface View { k: number; x: number; y: number }
+
+const IDENTITY: View = { k: 1, x: 0, y: 0 };
+const MIN_K = 1;
+const MAX_K = 12;
+const STEP = 1.6; // per button press
+
+/**
+ * Keep the map covering the viewport: at k=1 the translation is pinned to 0,
+ * and zoomed in you can never drag empty space into frame.
+ */
+function clampView(v: View, w: number, h: number): View {
+  const k = Math.min(MAX_K, Math.max(MIN_K, v.k));
+  return {
+    k,
+    x: Math.min(0, Math.max(w * (1 - k), v.x)),
+    y: Math.min(0, Math.max(h * (1 - k), v.y)),
+  };
+}
+
+/** Zoom to `nextK` while holding the point (px, py) fixed under the cursor. */
+function zoomAbout(v: View, nextK: number, px: number, py: number, w: number, h: number): View {
+  const k = Math.min(MAX_K, Math.max(MIN_K, nextK));
+  const ratio = k / v.k;
+  return clampView({ k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio }, w, h);
+}
+
 export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
   const [features, setFeatures] = useState<Array<Feature<Geometry, { name?: string }>> | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [hoverKey, setHoverKey] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [hover, setHover] = useState<HoverState | null>(null);
   const [wrapRef, width] = useElementWidth<HTMLDivElement>();
+  const [view, setView] = useState<View>(IDENTITY);
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Drag state lives in a ref: panning shouldn't re-render on every pointermove
+  // beyond the one setView call, and a ref avoids stale-closure bugs.
+  const drag = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null);
+  const [panning, setPanning] = useState(false);
 
   // World geometry: fetched once, cached by the browser. A failure here must
   // degrade to a readable message, never an empty card with no explanation.
@@ -233,43 +241,89 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
 
   // Projection is refitted whenever the container resizes so the map always
   // fills the card instead of being letterboxed at a fixed scale.
-  const projection = useMemo(() => {
-    if (!features || !width) return null;
-    return geoNaturalEarth1().fitSize([width, height], {
+  const paths = useMemo(() => {
+    if (!features || !width) return [];
+    const projection = geoNaturalEarth1().fitSize([width, height], {
       type: "FeatureCollection",
       features,
     } as FeatureCollection);
-  }, [features, width, height]);
-
-  const landPaths = useMemo(() => {
-    if (!features || !projection) return [];
     const path = geoPath(projection);
-    return features.map((f) => ({
-      key: String(f.id ?? f.properties?.name ?? Math.random()),
-      d: path(f) || "",
-    }));
-  }, [features, projection]);
+    return features.map((f) => {
+      const code =
+        FEATURE_ID_TO_ALPHA2[String(f.id)] ?? NAME_TO_ALPHA2[f.properties?.name ?? ""] ?? null;
+      const stat = code ? stats.byCode.get(code) : undefined;
+      return {
+        key: String(f.id ?? f.properties?.name ?? Math.random()),
+        d: path(f) || "",
+        code,
+        name: (code && ALPHA2_NAME[code]) || f.properties?.name || "Unknown",
+        unique: stat?.unique ?? 0,
+        visits: stat?.visits ?? 0,
+      };
+    });
+  }, [features, width, height, stats]);
 
-  const dots = useMemo(() => {
-    if (!projection) return [];
-    return stats.points
-      .map((p) => {
-        const xy = projection([p.lon, p.lat]);
-        if (!xy) return null;
-        return { ...p, x: xy[0], y: xy[1] };
-      })
-      .filter((p): p is CityPoint & { x: number; y: number } => p != null);
-  }, [projection, stats.points]);
+  // Re-clamp after a resize so a view that was legal at the old size can't leave
+  // a strip of empty card showing at the new one.
+  useEffect(() => {
+    if (!width) return;
+    setView((v) => (v.k === 1 ? v : clampView(v, width, height)));
+  }, [width, height]);
 
-  const selected = selectedKey ? stats.points.find((p) => p.key === selectedKey) ?? null : null;
-  const hovered = !selected && hoverKey ? stats.points.find((p) => p.key === hoverKey) ?? null : null;
-  const active = selected ?? hovered;
+  // Wheel zoom. Registered manually because React's synthetic wheel handler is
+  // passive — preventDefault there is ignored and the page scrolls instead.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || !width) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const box = svg.getBoundingClientRect();
+      const px = e.clientX - box.left;
+      const py = e.clientY - box.top;
+      setView((v) => zoomAbout(v, v.k * (e.deltaY < 0 ? 1.18 : 1 / 1.18), px, py, width, height));
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, [width, height]);
 
-  const headline = active ? active.unique : stats.totalUnique;
-  const headlineLabel = active ? active.city : "Worldwide";
-  const subline = active
-    ? `${active.visits.toLocaleString()} load${active.visits === 1 ? "" : "s"}`
-    : `${stats.points.length} cit${stats.points.length === 1 ? "y" : "ies"}`;
+  const zoomBy = (factor: number) =>
+    setView((v) => (width ? zoomAbout(v, v.k * factor, width / 2, height / 2, width, height) : v));
+
+  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setPanning(true);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId || !width) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.moved && Math.hypot(dx, dy) < 3) return; // ignore click jitter
+    d.moved = true;
+    d.x = e.clientX;
+    d.y = e.clientY;
+    setHover(null); // a tooltip chasing the cursor mid-drag is just noise
+    setView((v) => clampView({ ...v, x: v.x + dx, y: v.y + dy }, width, height));
+  };
+
+  const endDrag = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (drag.current?.id === e.pointerId) {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      drag.current = null;
+      setPanning(false);
+    }
+  };
+
+  const zoomed = view.k > 1.001;
+
+  const headline = hover && hover.code ? hover.unique : stats.totalUnique;
+  const headlineLabel = hover && hover.code ? hover.name : "Worldwide";
+  const subline = hover && hover.code
+    ? `${hover.visits.toLocaleString()} load${hover.visits === 1 ? "" : "s"}`
+    : `${stats.ranked.length} countr${stats.ranked.length === 1 ? "y" : "ies"}`;
 
   const cardStyle: CSSProperties = {
     background: HOME_THEME.panelBgStrong,
@@ -280,8 +334,6 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
     overflow: "hidden",
     minWidth: 0,
   };
-
-  const activeDot = dots.find((d) => d.key === (selected?.key ?? hovered?.key));
 
   return (
     <div style={cardStyle}>
@@ -304,7 +356,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       >
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 6 }}>
-            Unique visitors · by city
+            Unique visitors · by country
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
             <span
@@ -336,140 +388,140 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
         </div>
       </div>
 
-      <div
-        ref={wrapRef}
-        style={{ position: "relative", width: "100%", minHeight: MIN_HEIGHT }}
-        onClick={(e) => {
-          // Clicking empty map area (not a dot) dismisses the pinned popup.
-          if (e.target === e.currentTarget) setSelectedKey(null);
-        }}
-      >
+      <div ref={wrapRef} style={{ position: "relative", width: "100%", minHeight: MIN_HEIGHT }}>
         {loadError ? (
           <div style={centeredMessage}>Couldn’t load the world map ({loadError}).</div>
         ) : !features ? (
           <div style={centeredMessage}>Loading map…</div>
         ) : (
           <svg
+            ref={svgRef}
             width={width || "100%"}
             height={height}
             viewBox={`0 0 ${width || 900} ${height}`}
-            style={{ display: "block", width: "100%", height }}
+            style={{
+              display: "block",
+              width: "100%",
+              height,
+              cursor: panning ? "grabbing" : zoomed ? "grab" : "default",
+              touchAction: "none", // let pointer events own pan/zoom on touch
+            }}
+            onMouseLeave={() => setHover(null)}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onDoubleClick={() => zoomBy(STEP)}
           >
-            {/* Faint basemap — no per-country coloring, just outlines. */}
-            {landPaths.map((p) => (
-              <path key={p.key} d={p.d} fill={LAND_FILL} stroke={STROKE} strokeWidth={0.4} />
-            ))}
-
-            {/* One dot per city, sized by unique visitors. Click pins the popup;
-                clicking the same dot again (or empty map) dismisses it. */}
-            {dots.map((d) => {
-              const isSelected = selectedKey === d.key;
-              const isHovered = !selectedKey && hoverKey === d.key;
-              const r = dotRadius(d.unique, stats.maxUnique);
+            <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
+            {paths.map((p) => {
+              const t = intensity(p.unique, stats.maxUnique);
+              const isHovered = hover?.code != null && hover.code === p.code;
               return (
-                <circle
-                  key={d.key}
-                  cx={d.x}
-                  cy={d.y}
-                  r={isSelected || isHovered ? r * 1.25 : r}
-                  fill={isSelected ? DOT_SELECTED_FILL : DOT_FILL}
-                  fillOpacity={isSelected ? 0.95 : 0.8}
-                  stroke={isSelected ? DOT_SELECTED_FILL : "rgba(255,255,255,0.5)"}
-                  strokeWidth={isSelected ? 1.5 : 0.8}
-                  style={{ cursor: "pointer", transition: "r 120ms ease, fill 120ms ease" }}
-                  onMouseEnter={() => setHoverKey(d.key)}
-                  onMouseLeave={() => setHoverKey((k) => (k === d.key ? null : k))}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedKey((k) => (k === d.key ? null : d.key));
+                <path
+                  key={p.key}
+                  d={p.d}
+                  fill={p.unique > 0 ? rampColor(t) : EMPTY_FILL}
+                  stroke={isHovered ? HOME_THEME.lightBlue : STROKE}
+                  // Divide by k so borders stay hairline-thin as you zoom in
+                  // instead of swelling into slabs.
+                  strokeWidth={(isHovered ? 1.1 : 0.4) / view.k}
+                  style={{ transition: "fill 120ms linear" }}
+                  onMouseMove={(e) => {
+                    if (drag.current?.moved) return; // suppress hover mid-pan
+                    const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+                    setHover({
+                      code: p.code,
+                      name: p.name,
+                      unique: p.unique,
+                      visits: p.visits,
+                      x: e.clientX - box.left,
+                      y: e.clientY - box.top,
+                    });
                   }}
-                >
-                  <title>{`${d.city} · ${d.unique.toLocaleString()} visitor${d.unique === 1 ? "" : "s"}`}</title>
-                </circle>
+                />
               );
             })}
+            </g>
           </svg>
         )}
 
-        {active && activeDot && (
+        {/* Zoom controls. Sit above the map, out of the header gradient's way. */}
+        {features && !loadError && (
           <div
             style={{
               position: "absolute",
-              left: Math.min(Math.max(activeDot.x + 12, 8), Math.max((width || 0) - 220, 8)),
-              top: Math.max(activeDot.y - 10, 8),
-              pointerEvents: selected ? "auto" : "none",
+              right: 12,
+              bottom: 12,
+              zIndex: 3,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              alignItems: "center",
+            }}
+          >
+            <ZoomButton label="Zoom in" onClick={() => zoomBy(STEP)} disabled={view.k >= MAX_K - 0.001}>
+              +
+            </ZoomButton>
+            <ZoomButton label="Zoom out" onClick={() => zoomBy(1 / STEP)} disabled={!zoomed}>
+              −
+            </ZoomButton>
+            {zoomed && (
+              <>
+                <ZoomButton label="Reset view" onClick={() => setView(IDENTITY)}>
+                  ⟲
+                </ZoomButton>
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontFamily: "var(--font-mono)",
+                    color: HOME_THEME.text,
+                    opacity: 0.55,
+                  }}
+                >
+                  {view.k.toFixed(1)}×
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+        {hover && (
+          <div
+            style={{
+              position: "absolute",
+              left: Math.min(Math.max(hover.x + 12, 8), Math.max((width || 0) - 190, 8)),
+              top: Math.max(hover.y - 10, 8),
+              pointerEvents: "none",
               zIndex: 3,
               background: HOME_THEME.panelBgStrong,
-              border: `1px solid ${selected ? DOT_SELECTED_FILL : HOME_THEME.borderStrong}`,
+              border: `1px solid ${HOME_THEME.borderStrong}`,
               borderRadius: 10,
-              padding: "10px 12px",
-              minWidth: 170,
-              maxWidth: 280,
+              padding: "8px 10px",
+              minWidth: 150,
               boxShadow: `0 6px 22px ${ownerRgba("#000000", 0.55)}`,
             }}
           >
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text }}>{active.city}</div>
-              {selected && (
-                <button
-                  onClick={() => setSelectedKey(null)}
-                  style={{
-                    background: "none", border: "none", cursor: "pointer", color: HOME_THEME.text,
-                    opacity: 0.5, fontSize: 13, lineHeight: 1, padding: 0,
-                  }}
-                  aria-label="Close"
-                >
-                  ✕
-                </button>
-              )}
+            <div style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, marginBottom: 4 }}>
+              {hover.name}
             </div>
             <div
               style={{
                 fontSize: 14,
                 fontFamily: "var(--font-mono)",
-                color: HOME_THEME.lightBlue,
-                marginBottom: (active.visitors.length || active.pages.length) ? 8 : 0,
+                color: hover.unique > 0 ? HOME_THEME.lightBlue : HOME_THEME.text,
+                opacity: hover.unique > 0 ? 1 : 0.55,
               }}
             >
-              {active.unique.toLocaleString()} visitor{active.unique === 1 ? "" : "s"} · {active.visits.toLocaleString()} loads
+              {hover.unique > 0
+                ? `${hover.unique.toLocaleString()} visitor${hover.unique === 1 ? "" : "s"} · ${hover.visits.toLocaleString()} loads`
+                : "No visits"}
             </div>
-            {active.visitors.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: active.pages.length ? 8 : 0 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.5 }}>
-                  Visitors
-                </div>
-                {active.visitors.slice(0, 6).map((v) => (
-                  <div key={v.label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, color: HOME_THEME.text, opacity: 0.85 }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.label}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.lightBlue, flexShrink: 0 }}>{v.count}</span>
-                  </div>
-                ))}
-                {active.visitors.length > 6 && (
-                  <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.45 }}>+{active.visitors.length - 6} more</div>
-                )}
-              </div>
-            )}
-            {active.pages.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.5 }}>
-                  Pages
-                </div>
-                {active.pages.slice(0, 6).map((p) => (
-                  <div key={p.label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, color: HOME_THEME.text, opacity: 0.85 }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.lightBlue, flexShrink: 0 }}>{p.count}</span>
-                  </div>
-                ))}
-                {active.pages.length > 6 && (
-                  <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.45 }}>+{active.pages.length - 6} more</div>
-                )}
-              </div>
-            )}
           </div>
         )}
       </div>
 
-      {/* Top cities + honest footnote about rows with no coordinates. */}
+      {/* Legend + honest footnote about rows with no geo. */}
       <div
         style={{
           display: "flex",
@@ -480,33 +532,77 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
           padding: "9px 15px 13px",
         }}
       >
-        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
-          Click a dot for details
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>0</span>
+          <span
+            style={{
+              width: 128,
+              height: 8,
+              borderRadius: 999,
+              background: `linear-gradient(to right, ${EMPTY_FILL}, ${rampColor(0)}, ${rampColor(0.5)}, ${rampColor(1)})`,
+              border: `1px solid ${HOME_THEME.border}`,
+            }}
+          />
+          <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, fontFamily: "var(--font-mono)" }}>
+            {stats.maxUnique.toLocaleString()}
+          </span>
         </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           {stats.ranked.slice(0, 5).map((c) => (
-            <button
-              key={c.key}
-              onClick={() => setSelectedKey((k) => (k === c.key ? null : c.key))}
-              style={{
-                fontSize: 14, color: HOME_THEME.text, opacity: 0.75, background: "none",
-                border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit",
-              }}
-            >
-              {c.city}{" "}
+            <span key={c.code} style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75 }}>
+              {c.name}{" "}
               <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.lightBlue }}>
                 {c.unique.toLocaleString()}
               </span>
-            </button>
+            </span>
           ))}
-          {stats.unmappedVisits > 0 && (
+          {stats.unknownVisits > 0 && (
             <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45 }}>
-              {stats.unmappedVisits.toLocaleString()} unmapped
+              {stats.unknownVisits.toLocaleString()} unmapped
             </span>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function ZoomButton({
+  children, label, onClick, disabled,
+}: {
+  children: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+      // Stop the press from also starting a pan on the svg underneath.
+      onPointerDown={(e) => e.stopPropagation()}
+      style={{
+        width: 28,
+        height: 28,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 8,
+        border: `1px solid ${HOME_THEME.border}`,
+        background: HOME_THEME.panelBgStrong,
+        color: HOME_THEME.text,
+        fontSize: 15,
+        lineHeight: 1,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.35 : 0.9,
+        padding: 0,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

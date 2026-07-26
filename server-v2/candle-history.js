@@ -29,20 +29,46 @@ const _inflight = new Map();
  * Fetch intraday candles for `symbol` (e.g. "SPY") at `interval` (e.g. "1m"),
  * starting from `fromTime` (epoch ms). Returns [{ time, open, high, low, close,
  * volume }] oldest-first. Cached ~60s per symbol+interval.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.quietMs] Settle window after the last candle event.
+ * @param {number} [opts.hardMs]  Absolute cap on the whole request.
+ * @param {boolean} [opts.cache]  Default true. Pass false for a MULTI-DAY pull:
+ *   the cache key is `symbol|interval` and does NOT include `fromTime`, so a
+ *   cached one-session response would otherwise be handed straight back to a
+ *   five-session request (and, worse, a big backfill would overwrite the cache
+ *   the live path is about to read). Bypasses the in-flight dedupe for the same
+ *   reason.
+ *
+ * The defaults are tuned for the live path — a single session, ~390 bars, on a
+ * request a browser is waiting on. A multi-day replay is several thousand bars
+ * and will be TRUNCATED at HARD_MS, so callers doing that must raise both.
  */
-async function fetchIntradayCandles(symbol, interval, fromTime) {
+async function fetchIntradayCandles(symbol, interval, fromTime, opts = {}) {
   const sym = String(symbol || '').trim().toUpperCase();
   const iv = String(interval || '1m').trim();
   if (!sym) throw new Error('symbol required');
   const key = `${sym}|${iv}`;
+  const quietMs = Number(opts.quietMs) > 0 ? Number(opts.quietMs) : QUIET_MS;
+  const hardMs = Number(opts.hardMs) > 0 ? Number(opts.hardMs) : HARD_MS;
+  const useCache = opts.cache !== false;
 
-  const cached = _cache.get(key);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.rows;
-  if (_inflight.has(key)) return _inflight.get(key);
+  if (useCache) {
+    const cached = _cache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.rows;
+    if (_inflight.has(key)) return _inflight.get(key);
+  }
 
   const run = (async () => {
     const { token, url } = await getQuoteToken();
     const candleSymbol = `${sym}{=${iv}}`;
+    // What the FEED tags events with — which is NOT what we sent. dxFeed
+    // canonicalizes the period, and an implicit multiplier of 1 is dropped, so a
+    // "SPY{=1m}" subscription streams back tagged "SPY{=m}". Comparing against
+    // the sent string discarded every event and resolved [] — silently, because
+    // the filter is a `return`, not an error, and the outer function treats an
+    // empty result as a legitimate "no data". See DxLinkClient.canonCandleSymbol.
+    const wantSymbol = DxLinkClient.canonCandleSymbol(candleSymbol);
     const rows = await new Promise((resolve) => {
       const bars = new Map(); // barTime(ms) → { time, open, high, low, close, volume }
       let done = false, quietTimer = null, subscribed = false;
@@ -60,7 +86,7 @@ async function fetchIntradayCandles(symbol, interval, fromTime) {
         url,
         token,
         onEvent: (ev) => {
-          if (ev.eventType !== 'Candle' || ev.eventSymbol !== candleSymbol) return;
+          if (ev.eventType !== 'Candle' || DxLinkClient.canonCandleSymbol(ev.eventSymbol) !== wantSymbol) return;
           const t = Number(ev.time);
           const close = Number(ev.close);
           if (!(t > 0) || !(close > 0)) return;
@@ -73,7 +99,7 @@ async function fetchIntradayCandles(symbol, interval, fromTime) {
             ? { time: t, open: prev.open, high: Math.max(prev.high, Number(ev.high) || prev.high), low: Math.min(prev.low, Number(ev.low) || prev.low), close, volume: Math.max(prev.volume, volume) }
             : { time: t, open: Number(ev.open) || close, high: Number(ev.high) || close, low: Number(ev.low) || close, close, volume });
           if (quietTimer) clearTimeout(quietTimer);
-          quietTimer = setTimeout(finish, QUIET_MS);
+          quietTimer = setTimeout(finish, quietMs);
         },
         onStatus: (s) => {
           // dxlinkConnected flips true at AUTH; the candle sub queues until the
@@ -85,13 +111,16 @@ async function fetchIntradayCandles(symbol, interval, fromTime) {
         },
       });
 
-      const hardTimer = setTimeout(finish, HARD_MS);
+      const hardTimer = setTimeout(finish, hardMs);
       try { client.connect(); } catch { finish(); }
     });
-    _cache.set(key, { at: Date.now(), rows });
+    // A bypassed (multi-day) pull must not seed the cache the live single-session
+    // path reads — same key, wildly different window.
+    if (useCache) _cache.set(key, { at: Date.now(), rows });
     return rows;
   })();
 
+  if (!useCache) return run;
   _inflight.set(key, run);
   try { return await run; }
   finally { _inflight.delete(key); }

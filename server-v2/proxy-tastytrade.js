@@ -1401,12 +1401,6 @@ async function fetchOptionMarketData(occSymbols, optionParam = 'equity-option') 
     for (const it of json?.data?.items || []) {
       if (!it.symbol) continue;
       const bid = n(it.bid), ask = n(it.ask);
-      // Settlement / prior close. Outside RTH these are frequently the ONLY
-      // price fields TT still populates — bid, ask, mark and IV all come back
-      // empty for anything but the most liquid roots. Carried as their own
-      // fields (deliberately NOT folded into `mark`) so live GEX/flow math is
-      // untouched; only the estimated-move straddle falls back to them.
-      const close = n(it.close) || n(it['close-price']) || n(it['prev-close']) || n(it['prev-close-price']);
       out.set(normalizeOcc(it.symbol), {
         oi: n(it['open-interest']),
         volume: n(it.volume),
@@ -1417,8 +1411,6 @@ async function fetchOptionMarketData(occSymbols, optionParam = 'equity-option') 
         iv: n(it['implied-volatility']) || n(it.volatility),
         bid,
         ask,
-        last: n(it.last) || n(it['last-price']),
-        close,
         mark: n(it.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0),
       });
     }
@@ -1487,10 +1479,6 @@ async function fetchChainFull(ticker, expiration = '') {
       bid: md.bid || 0,
       ask: md.ask || 0,
       mark: md.mark || 0,
-      // After-hours price of last resort — see fetchOptionMarketData(). Consumers
-      // that only read bid/ask/mark are unaffected.
-      last: md.last || 0,
-      close: md.close || 0,
     };
   }
 
@@ -1532,12 +1520,7 @@ async function fetchOptionMarks(symbols) {
       bid: n(md.bid),
       ask: n(md.ask),
       mark: n(md.mark),
-      // Real traded last if TT has one, else the synthesized mid, else 0. `close`
-      // is passed through separately as the after-hours fallback (see
-      // fetchOptionMarketData) — that's what lets an illiquid weekly straddle
-      // still price on a Friday-evening or weekend publish pass.
-      last: n(md.last) || n(md.mark) || (md.bid > 0 && md.ask > 0 ? (md.bid + md.ask) / 2 : 0),
-      close: n(md.close),
+      last: n(md.mark) || (md.bid > 0 && md.ask > 0 ? (md.bid + md.ask) / 2 : 0),
     });
   }
   return { items };
@@ -1878,6 +1861,26 @@ class DxLinkClient {
       return;
     }
     this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [sub] });
+  }
+
+  /**
+   * Canonical form of a dxFeed candle symbol, for COMPARING a received
+   * eventSymbol against one we subscribed with.
+   *
+   * dxFeed echoes candle symbols back CANONICALIZED, and in that form a period
+   * multiplier of 1 is IMPLICIT: subscribe to "SPY{=1m}" and every event arrives
+   * tagged "SPY{=m}". So `ev.eventSymbol === sentSymbol` is false for every
+   * 1-unit period — {=1m}, {=1h}, {=1d} — while working fine for {=5m}/{=15m},
+   * where the multiplier isn't 1 and nothing gets dropped. That asymmetry is why
+   * the ES/NQ 5-minute streams have always worked while every 1-minute
+   * subscription silently produced nothing at all.
+   *
+   * Case is deliberately preserved: dxFeed periods are case-SENSITIVE, where
+   * 'm' is minute and 'M' is month. Upper-casing here would turn a 1-minute
+   * candle into a 1-month one.
+   */
+  static canonCandleSymbol(sym) {
+    return String(sym || '').replace(/\{=1(?=[a-zA-Z])/, '{=');
   }
 
   /** Remove feed subscriptions for the given streamer symbols (all event types). */
@@ -3854,8 +3857,16 @@ class TastytradeProxy {
       // contract, so anything falling through to an `isNq ? nq : es` test would
       // dump 1m bars straight into the 5m map and interleave two aggregations
       // into one series.
-      const isNq = this.nqCandleSymbol && sym === this.nqCandleSymbol;
-      const isEs1m = this.es1mCandleSymbol && sym === this.es1mCandleSymbol;
+      // Compare CANONICAL forms — see DxLinkClient.canonCandleSymbol. The 1m
+      // stream is subscribed as "{=1m}" and echoed as "{=m}", so a raw ===
+      // never matched: every 1m bar failed the isEs1m test and fell through to
+      // the 5m branch, which floored it into a 5-minute slot and merged it into
+      // the 5m map — precisely the "two aggregations in one series" corruption
+      // the note above warns about. {=5m} was unaffected (multiplier isn't 1),
+      // which is why only the 1m stream was ever wrong.
+      const symCanon = DxLinkClient.canonCandleSymbol(sym);
+      const isNq = this.nqCandleSymbol && symCanon === DxLinkClient.canonCandleSymbol(this.nqCandleSymbol);
+      const isEs1m = this.es1mCandleSymbol && symCanon === DxLinkClient.canonCandleSymbol(this.es1mCandleSymbol);
       const intervalMinutes = isEs1m ? 1 : 5;
       const { slotKey, date, time, slotMs } = isEs1m ? etOneMinSlot(barTime) : etFiveMinSlot(barTime);
       const map = isEs1m ? this.es1mCandles : isNq ? this.nqCandles : this.esCandles;

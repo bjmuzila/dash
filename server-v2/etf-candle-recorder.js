@@ -193,19 +193,32 @@ async function tick() {
  *
  * Runs regardless of RTH — the request is historical, not a live subscription.
  */
-async function backfill(days = BACKFILL_DAYS) {
+async function backfill(days = BACKFILL_DAYS, symbols = SYMBOLS) {
   const p = getPool();
-  if (!p || !(await ensureSchema())) return;
+  if (!p || !(await ensureSchema())) return [];
   const from = Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000;
-  for (const symbol of SYMBOLS) {
+  const out = [];
+  for (const symbol of symbols) {
     try {
-      const candles = await fetchIntradayCandles(symbol, '1m', from); // eslint-disable-line no-await-in-loop
+      // cache:false + wide timeouts. The default 7s hard cap is sized for one
+      // session (~390 bars); a five-session replay is several thousand and would
+      // be silently TRUNCATED mid-stream, leaving a partial history that looks
+      // like a successful backfill. cache:false because the cache key is
+      // symbol|interval with no fromTime in it.
+      // eslint-disable-next-line no-await-in-loop
+      const candles = await fetchIntradayCandles(symbol, '1m', from, {
+        cache: false, quietMs: 2_500, hardMs: 60_000,
+      });
       const n = await upsertBars(p, symbol, candles); // eslint-disable-line no-await-in-loop
-      console.log(`[etf-candle] backfill ${symbol}: ${n} 1m bars over ~${days}d`);
+      const dates = [...new Set(candles.map((c) => ymdEtOf(Number(c.time))))].sort();
+      out.push({ symbol, bars: n, dates });
+      console.log(`[etf-candle] backfill ${symbol}: ${n} 1m bars over ~${days}d (${dates.join(', ') || 'no sessions'})`);
     } catch (e) {
+      out.push({ symbol, bars: 0, dates: [], error: e.message });
       console.warn(`[etf-candle] ${symbol} backfill failed:`, e.message);
     }
   }
+  return out;
 }
 
 let _timer = null;
