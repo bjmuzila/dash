@@ -8,6 +8,7 @@ import {
 import { useStrikeGexHistory } from './useStrikeGexHistory'
 import Toolbar from './Toolbar'
 import GexToolbar, { type GexView, type GexMode, type DataMode } from './GexToolbar'
+import type { CandleSymbol } from './EsCandlesView'
 import LevelsStrip, { type Tile } from './LevelsStrip'
 import GexChart from './GexChart'
 import Heatmap from './Heatmap'
@@ -33,6 +34,7 @@ export default function Dashboard() {
   const [expiry, setExpiry] = useState('')
   const feed = useGexFeed(expiry)
   const [view, setView] = useState<GexView>('gex')
+  const [chartSymbol, setChartSymbol] = useState<CandleSymbol>('ES')
   const [mode, setMode] = useState<GexMode>('net')
   const [dataMode, setDataMode] = useState<DataMode>('oi-vol')
   const [showOI, setShowOI] = useState(false)
@@ -115,7 +117,7 @@ export default function Dashboard() {
         <div style={{ width: '55%', display: 'flex', flexDirection: 'column', minWidth: 0, gap: 24, minHeight: 0 }}>
           <div style={{ ...panelStyle, display: 'flex', flexDirection: 'column', flex: '1.6 1 0', minHeight: 0, overflow: 'hidden' }}>
             <div style={ledgerHead}>
-              {view === 'escandles' ? 'ES Candles' : 'Net GEX by Strike'}
+              {view === 'escandles' ? `${chartSymbol} Candles` : 'Net GEX by Strike'}
               <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'none', color: '#fff', opacity: 0.6 }}>SPX · {expiry || '0DTE'}</span>
             </div>
             <GexToolbar
@@ -131,11 +133,12 @@ export default function Dashboard() {
               onToggleGhost30={() => { setShowGhost30((v) => !v); setShowGhost5(false); setShowGhost15(false) }}
               onRefresh={() => setExpiry((e) => e)}
               status={feed.status}
+              chartSymbol={chartSymbol} onChartSymbol={setChartSymbol}
             />
             <LevelsStrip tiles={tiles} />
             <div style={{ flex: 1, minHeight: 0, position: 'relative', padding: '0 8px 8px' }}>
               {view === 'escandles' ? (
-                <EsCandlesView />
+                <EsCandlesView symbol={chartSymbol} />
               ) : feed.chartReady && chain.length > 0 ? (
                 <GexChart
                   chain={chain}

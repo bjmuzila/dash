@@ -156,17 +156,24 @@ export default function SpxHeatmap() {
     return map;
   }, [data]);
 
-  // ---- Monthly stats: average return/close per calendar month across all years. ----
+  // ---- Monthly stats: average return/close per calendar month WITHIN each
+  // year — keyed "YYYY-MM" so Dec 2024 and Dec 2025 are computed separately. ----
   const monthStats = useMemo(() => {
-    const byMonth: SpxDailyClose[][] = Array.from({ length: 12 }, () => []);
-    data.forEach((rec) => byMonth[parseInt(rec.date.slice(5, 7), 10) - 1].push(rec));
-    return byMonth.map((recs, i) => {
-      if (!recs.length) return null;
+    const byYearMonth = new Map<string, SpxDailyClose[]>();
+    data.forEach((rec) => {
+      const key = rec.date.slice(0, 7); // "YYYY-MM"
+      const arr = byYearMonth.get(key) ?? [];
+      arr.push(rec);
+      byYearMonth.set(key, arr);
+    });
+    const map = new Map<string, { name: string; avgRet: number; avgClose: number }>();
+    byYearMonth.forEach((recs, key) => {
       const avgRet = recs.reduce((s, r) => s + r.ret, 0) / recs.length;
       const avgClose = recs.reduce((s, r) => s + r.close, 0) / recs.length;
-      const years = [...new Set(recs.map((r) => r.date.slice(0, 4)))].join(", ");
-      return { name: MONTH_NAMES[i], avgRet, avgClose, years };
+      const monthIdx = parseInt(key.slice(5, 7), 10) - 1;
+      map.set(key, { name: `${MONTH_NAMES[monthIdx]} ${key.slice(0, 4)}`, avgRet, avgClose });
     });
+    return map;
   }, [data]);
 
   // ---- Monthly overlay blocks: merge consecutive weeks sharing a month,
@@ -181,14 +188,15 @@ export default function SpxHeatmap() {
       const count = j - i;
       const left = i * (CELL + GAP);
       const width = count * CELL + (count - 1) * GAP;
-      const stat = monthStats[month];
+      const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+      const stat = monthStats.get(key);
       blocks.push({
         left,
         width,
         ret: stat ? stat.avgRet : null,
         tip: stat
-          ? `${stat.name}\nYears merged: ${stat.years}\nAvg close: ${stat.avgClose.toFixed(2)}\nAvg daily change: ${fmtPct(stat.avgRet)}`
-          : `${MONTH_NAMES[month]}\nNo data`,
+          ? `${stat.name}\nAvg close: ${stat.avgClose.toFixed(2)}\nAvg daily change: ${fmtPct(stat.avgRet)}`
+          : `${MONTH_NAMES[month]} ${year}\nNo data`,
       });
       i = j;
     }
@@ -390,14 +398,14 @@ export default function SpxHeatmap() {
         <span>More</span>
         <span style={{ marginLeft: 10 }}>
           {mode === "monthly"
-            ? "(one solid block = average of that calendar month across all years)"
+            ? "(one solid block = that month's own average, e.g. Dec 2024 shown separately from Dec 2025)"
             : "(red = down day, green = up day, intensity = magnitude)"}
         </span>
       </div>
 
       {/* Provenance note */}
       <div style={{ marginTop: 18, fontSize: 11.5, color: HOME_THEME.text, opacity: 0.6, lineHeight: 1.5, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 14 }}>
-        Pulled live from Yahoo Finance&apos;s historical data table for ^GSPC (Jul 25, 2024 → Jul 24, 2026), read directly in-browser since Yahoo&apos;s API/CSV endpoints block automated fetches. All 501 trading days, real closes. &quot;Merge Years → 1 Day&quot; averages every occurrence of the same calendar day into one cell without changing the grid size. &quot;Merge Into Monthly Avg&quot; collapses each month into one solid block, averaged across every year in range.
+        Pulled live from Yahoo Finance&apos;s historical data table for ^GSPC (Jul 25, 2024 → Jul 24, 2026), read directly in-browser since Yahoo&apos;s API/CSV endpoints block automated fetches. All 501 trading days, real closes. &quot;Merge Years → 1 Day&quot; averages every occurrence of the same calendar day into one cell without changing the grid size. &quot;Merge Into Monthly Avg&quot; collapses each month into one solid block, averaged within that specific month/year only.
       </div>
 
       {tooltip && typeof document !== "undefined" &&

@@ -530,7 +530,9 @@ export default function BzilaAlerts() {
 
           {isOwner && (
             <a
-              href="/owner/dev/bzila-alerts"
+              href="https://owners.cbedge.net/owner/dev/bzila-alerts"
+              target="_blank"
+              rel="noopener noreferrer"
               style={{
                 display: "flex",
                 alignItems: "center",
