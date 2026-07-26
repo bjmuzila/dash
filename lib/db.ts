@@ -242,11 +242,16 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- One row per page load: full visit history with client IP + (optional) user.
     -- Owner-only data (IP is PII). Pruned to the newest rows on insert.
     --
-    -- country/region/city come from Cloudflare's "Add visitor location headers"
-    -- managed transform (cf-ipcountry / cf-region / cf-ipcity). They are NULL
-    -- until that transform is enabled on the zone, and NULL for any request that
-    -- didn't traverse the edge (local dev, direct-to-origin health checks), so
-    -- every consumer must treat them as optional.
+    -- country/region/city/latitude/longitude come from Cloudflare's "Add visitor
+    -- location headers" managed transform (cf-ipcountry / cf-region / cf-ipcity /
+    -- cf-iplatitude / cf-iplongitude). They are NULL until that transform is
+    -- enabled on the zone, and NULL for any request that didn't traverse the edge
+    -- (local dev, direct-to-origin health checks), so every consumer must treat
+    -- them as optional.
+    --
+    -- latitude/longitude are CITY CENTROIDS from Cloudflare's IP database, not
+    -- device GPS. Everyone in a metro shares one coordinate pair, which is
+    -- exactly why the owner map can cluster them into bubbles.
     CREATE TABLE IF NOT EXISTS page_visits (
       id SERIAL PRIMARY KEY,
       page_key TEXT,
@@ -257,6 +262,8 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       country TEXT,
       region TEXT,
       city TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     -- Added after the table shipped: existing rows keep NULL geo (they predate
@@ -264,10 +271,8 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS country TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS region TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS city TEXT;
-    -- City-level pin location (cf-iplatitude / cf-iplongitude) — powers the
-    -- owner visitor map's per-city dots, distinct from the country choropleth.
-    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
-    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
     CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_page_visits_country ON page_visits(country);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
@@ -2036,26 +2041,6 @@ export async function getUserById(id: string): Promise<UserRecord | undefined> {
   return queryOne<UserRecord>(`SELECT * FROM users WHERE id = ?`, [id]);
 }
 
-/**
- * Batch id → { email, discord_username } lookup. Powers the owner visitor
- * map's per-city popup (show who, not just how many) — one query for however
- * many distinct signed-in user_ids appear in a page_visits batch, instead of
- * N getUserById() round-trips.
- */
-export async function getUsersByIds(
-  ids: string[]
-): Promise<Map<string, { email: string | null; discord_username: string | null }>> {
-  const out = new Map<string, { email: string | null; discord_username: string | null }>();
-  const clean = [...new Set(ids.filter(Boolean))];
-  if (!clean.length) return out;
-  const rows = await queryAll<{ id: string; email: string | null; discord_username: string | null }>(
-    `SELECT id, email, discord_username FROM users WHERE id = ANY(?::text[])`,
-    [clean]
-  );
-  for (const r of rows) out.set(r.id, { email: r.email ?? null, discord_username: r.discord_username ?? null });
-  return out;
-}
-
 export async function getUserByGoogleSub(googleSub: string): Promise<UserRecord | undefined> {
   return queryOne<UserRecord>(`SELECT * FROM users WHERE google_sub = ?`, [googleSub]);
 }
@@ -3657,9 +3642,9 @@ export interface PageVisitRecord {
   country?: string | null;
   region?: string | null;
   city?: string | null;
-  /** City-level pin (cf-iplatitude/cf-iplongitude) — powers the visitor dot map. */
-  lat?: number | null;
-  lon?: number | null;
+  /** City-centroid coords from Cloudflare's IP database — not device GPS. */
+  latitude?: number | null;
+  longitude?: number | null;
   created_at?: string | null;
 }
 
@@ -3667,15 +3652,18 @@ export interface PageVisitRecord {
 const PAGE_VISITS_KEEP = 5000;
 
 export async function insertPageVisit(
-  r: Pick<PageVisitRecord, "page_key" | "page_label" | "path" | "user_id" | "ip" | "country" | "region" | "city" | "lat" | "lon">
+  r: Pick<
+    PageVisitRecord,
+    "page_key" | "page_label" | "path" | "user_id" | "ip" | "country" | "region" | "city" | "latitude" | "longitude"
+  >
 ): Promise<void> {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city, lat, lon)
+    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city, latitude, longitude)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null,
-      r.country ?? null, r.region ?? null, r.city ?? null, r.lat ?? null, r.lon ?? null,
+      r.country ?? null, r.region ?? null, r.city ?? null, r.latitude ?? null, r.longitude ?? null,
     ]
   );
   // Opportunistic prune: drop anything older than the newest PAGE_VISITS_KEEP rows.

@@ -33,26 +33,37 @@ function trimmed(v: string | null, max: number): string | null {
   return s.length ? s : null;
 }
 
-function trimmedFloat(v: string | null): number | null {
+/**
+ * Parse a coordinate header. Cloudflare sends these as decimal strings; reject
+ * anything non-finite or out of range so a malformed header can't poison the map
+ * with a bubble in the middle of nowhere.
+ */
+function coord(v: string | null, max: number): number | null {
   if (!v) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  const n = Number(v.trim());
+  if (!Number.isFinite(n) || Math.abs(n) > max) return null;
+  // 0,0 is Null Island — Cloudflare's "no idea" answer, not the Gulf of Guinea.
+  return n;
 }
 
 function clientGeo(req: NextRequest): {
   country: string | null;
   region: string | null;
   city: string | null;
-  lat: number | null;
-  lon: number | null;
+  latitude: number | null;
+  longitude: number | null;
 } {
   const country = trimmed(req.headers.get("cf-ipcountry"), 2);
+  const latitude = coord(req.headers.get("cf-iplatitude"), 90);
+  const longitude = coord(req.headers.get("cf-iplongitude"), 180);
+  // Drop the pair if either half is missing or it's exactly Null Island.
+  const usable = latitude != null && longitude != null && !(latitude === 0 && longitude === 0);
   return {
     country: country ? country.toUpperCase() : null,
     region: trimmed(req.headers.get("cf-region"), 80),
     city: trimmed(req.headers.get("cf-ipcity"), 80),
-    lat: trimmedFloat(req.headers.get("cf-iplatitude")),
-    lon: trimmedFloat(req.headers.get("cf-iplongitude")),
+    latitude: usable ? latitude : null,
+    longitude: usable ? longitude : null,
   };
 }
 
@@ -87,8 +98,8 @@ export async function POST(req: NextRequest) {
           country: geo.country,
           region: geo.region,
           city: geo.city,
-          lat: geo.lat,
-          lon: geo.lon,
+          latitude: geo.latitude,
+          longitude: geo.longitude,
         });
       } catch { /* non-fatal */ }
     }

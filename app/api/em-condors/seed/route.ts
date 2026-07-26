@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, getEmBandsForWeek, getEmCondors, upsertEmCondor, type EmCondorRow } from "@/lib/db";
+import { getDb, getEmBandsForWeek, getEmCondors, upsertEmCondor, queryAll, type EmCondorRow } from "@/lib/db";
 import {
   deriveLegs, defaultWing, strikeIncrement, economics, mondayOf, weekLabel,
 } from "@/lib/em-condor/compute";
@@ -49,6 +49,29 @@ function bandOf(r: { up?: number | null; down?: number | null; ref_close?: numbe
   return { up, down, ref: ref ?? (up + down) / 2, em: Number.isFinite(em) ? em : (up - down) / 2 };
 }
 
+/**
+ * The tickers the EM publisher currently maintains — i.e. the same watchlist the
+ * Levels Publish chips show on the EM Tracker tab.
+ *
+ * ticker_levels IS that roster: the publisher upserts every name it prices and
+ * prunes anything no longer in em-tickers.js on each full run, so reading the
+ * table needs no import from server-v2 and can't drift from the roster file.
+ *
+ * Why the condor board needs it: em_tracker keeps bands forever (that's the
+ * win/loss history), so seeding straight off it kept offering names that had
+ * been dropped from the roster — 285 candidates against a 234-name watchlist,
+ * including monthly-only names like ACAD/ACLS/AEIS that have no weekly
+ * expiration to build a condor on at all.
+ */
+async function rosterTickers(): Promise<Set<string>> {
+  try {
+    const rows = await queryAll<{ ticker: string }>("SELECT ticker FROM ticker_levels");
+    return new Set(rows.map((r) => String(r.ticker).toUpperCase()).filter(Boolean));
+  } catch {
+    return new Set(); // table unreadable — fall through unfiltered rather than blank the board
+  }
+}
+
 async function build(week_start: string, opts: {
   wing?: number | null;
   wings?: Record<string, number>;
@@ -61,11 +84,15 @@ async function build(week_start: string, opts: {
   const only = opts.tickers?.length
     ? new Set(opts.tickers.map((t) => t.toUpperCase()))
     : null;
+  const roster = await rosterTickers();
 
   const out: Seeded[] = [];
   for (const b of bands) {
     const ticker = String(b.ticker).toUpperCase();
     if (only && !only.has(ticker)) continue;
+    // Off the current watchlist — historical band, not a tradeable candidate.
+    // Empty roster = couldn't read the table; don't filter on that.
+    if (roster.size && !roster.has(ticker)) continue;
     const band = bandOf(b);
     if (!band) continue;
 

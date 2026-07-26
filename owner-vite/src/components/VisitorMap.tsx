@@ -24,6 +24,11 @@ import { ALPHA2_NAME, FEATURE_ID_TO_ALPHA2 } from "../lib/countryMaps";
 
 export interface VisitorMapRow {
   country?: string | null;
+  region?: string | null;
+  city?: string | null;
+  /** City-centroid latitude/longitude from Cloudflare. Null pre-transform. */
+  lat?: number | null;
+  lon?: number | null;
   ip?: string | null;
 }
 
@@ -43,13 +48,32 @@ interface CountryStat {
   unique: number;
 }
 
+/**
+ * One plotted bubble. Cloudflare returns a CITY CENTROID, not a device position,
+ * so every visitor in a metro shares one coordinate — which is what makes them
+ * safe to cluster and count. Keyed on rounded coords so tiny float differences
+ * between rows don't split one city into a cluster of near-identical dots.
+ */
+interface PlaceStat {
+  key: string;
+  lat: number;
+  lon: number;
+  label: string;
+  country: string | null;
+  visits: number;
+  unique: number;
+}
+
 interface Aggregate {
   byCode: Map<string, CountryStat>;
   ranked: CountryStat[];
+  places: PlaceStat[];
+  placesWithCoords: number;
   totalVisits: number;
   totalUnique: number;
   unknownVisits: number;
   maxUnique: number;
+  maxPlaceUnique: number;
 }
 
 function aggregate(rows: VisitorMapRow[]): Aggregate {
@@ -58,6 +82,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   // is not a case worth modelling here.
   const acc = new Map<string, { visits: number; ips: Set<string> }>();
   const globalIps = new Set<string>();
+  const placeAcc = new Map<string, { lat: number; lon: number; label: string; country: string | null; visits: number; ips: Set<string> }>();
   let unknownVisits = 0;
   let totalVisits = 0;
 
@@ -65,6 +90,32 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     const code = (r.country || "").toUpperCase();
     totalVisits++;
     if (r.ip) globalIps.add(r.ip);
+
+    // Bubble layer is independent of the choropleth: a row can have coords even
+    // if its country code is a sentinel, and vice versa.
+    if (typeof r.lat === "number" && typeof r.lon === "number" && Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+      // 2dp ≈ 1 km — tight enough to keep distinct cities apart, loose enough
+      // that one city's rows collapse to a single bubble.
+      const pk = `${r.lat.toFixed(2)},${r.lon.toFixed(2)}`;
+      let place = placeAcc.get(pk);
+      if (!place) {
+        const label = [r.city, r.region, code && !NON_COUNTRY.has(code) ? (ALPHA2_NAME[code] || code) : null]
+          .filter(Boolean)
+          .join(", ");
+        place = {
+          lat: r.lat,
+          lon: r.lon,
+          label: label || `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`,
+          country: code && !NON_COUNTRY.has(code) ? code : null,
+          visits: 0,
+          ips: new Set<string>(),
+        };
+        placeAcc.set(pk, place);
+      }
+      place.visits++;
+      place.ips.add(r.ip || `anon:${pk}:${place.visits}`);
+    }
+
     if (!code || NON_COUNTRY.has(code)) {
       unknownVisits++;
       continue;
@@ -91,13 +142,29 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   }
   const ranked = [...byCode.values()].sort((a, b) => b.unique - a.unique);
 
+  // Biggest bubbles drawn first so small ones land on top and stay clickable.
+  const places: PlaceStat[] = [...placeAcc.entries()]
+    .map(([key, p]) => ({
+      key,
+      lat: p.lat,
+      lon: p.lon,
+      label: p.label,
+      country: p.country,
+      visits: p.visits,
+      unique: p.ips.size,
+    }))
+    .sort((a, b) => b.unique - a.unique);
+
   return {
     byCode,
     ranked,
+    places,
+    placesWithCoords: places.reduce((n, p) => n + p.visits, 0),
     totalVisits,
     totalUnique: globalIps.size,
     unknownVisits,
     maxUnique: ranked.length ? ranked[0].unique : 0,
+    maxPlaceUnique: places.length ? places[0].unique : 0,
   };
 }
 
@@ -133,6 +200,23 @@ function intensity(value: number, max: number): number {
   return Math.sqrt(value / max);
 }
 
+// ── Bubbles ──────────────────────────────────────────────────────────────────
+
+const BUBBLE_MIN_R = 2.5;
+const BUBBLE_MAX_R = 15;
+const BUBBLE_FILL = "rgba(255,183,3,0.42)";   // OWNER_THEME.gold, translucent
+const BUBBLE_STROKE = "rgba(255,183,3,0.95)";
+
+/**
+ * Radius by sqrt of count so AREA tracks the value — the standard for
+ * proportional symbols. Scaling radius linearly would make a 10× city look
+ * 100× bigger.
+ */
+function bubbleRadius(value: number, max: number): number {
+  if (value <= 0 || max <= 0) return BUBBLE_MIN_R;
+  return BUBBLE_MIN_R + (BUBBLE_MAX_R - BUBBLE_MIN_R) * Math.sqrt(value / max);
+}
+
 // ── Sizing ───────────────────────────────────────────────────────────────────
 
 const ASPECT = 2.5;
@@ -161,6 +245,8 @@ function useElementWidth<T extends HTMLElement>() {
 // ── Component ────────────────────────────────────────────────────────────────
 
 interface HoverState {
+  /** "place" hovers come from a bubble, "country" from the choropleth beneath. */
+  kind: "country" | "place";
   code: string | null;
   name: string;
   unique: number;
@@ -208,6 +294,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
   const [hover, setHover] = useState<HoverState | null>(null);
   const [wrapRef, width] = useElementWidth<HTMLDivElement>();
   const [view, setView] = useState<View>(IDENTITY);
+  const [showBubbles, setShowBubbles] = useState(true);
   const svgRef = useRef<SVGSVGElement>(null);
   // Drag state lives in a ref: panning shouldn't re-render on every pointermove
   // beyond the one setView call, and a ref avoids stale-closure bugs.
@@ -241,12 +328,18 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
 
   // Projection is refitted whenever the container resizes so the map always
   // fills the card instead of being letterboxed at a fixed scale.
-  const paths = useMemo(() => {
-    if (!features || !width) return [];
-    const projection = geoNaturalEarth1().fitSize([width, height], {
+  // One projection shared by the choropleth and the bubble layer, so a dot always
+  // lands inside the country it belongs to.
+  const projection = useMemo(() => {
+    if (!features || !width) return null;
+    return geoNaturalEarth1().fitSize([width, height], {
       type: "FeatureCollection",
       features,
     } as FeatureCollection);
+  }, [features, width, height]);
+
+  const paths = useMemo(() => {
+    if (!features || !projection) return [];
     const path = geoPath(projection);
     return features.map((f) => {
       const code =
@@ -261,7 +354,20 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
         visits: stat?.visits ?? 0,
       };
     });
-  }, [features, width, height, stats]);
+  }, [features, projection, stats]);
+
+  // Project each city centroid once. Natural Earth clips nothing, but guard the
+  // null return anyway — a bad coord would otherwise throw inside the render.
+  const bubbles = useMemo(() => {
+    if (!projection) return [];
+    const out: Array<PlaceStat & { cx: number; cy: number; r: number }> = [];
+    for (const p of stats.places) {
+      const xy = projection([p.lon, p.lat]);
+      if (!xy || !Number.isFinite(xy[0]) || !Number.isFinite(xy[1])) continue;
+      out.push({ ...p, cx: xy[0], cy: xy[1], r: bubbleRadius(p.unique, stats.maxPlaceUnique) });
+    }
+    return out;
+  }, [projection, stats]);
 
   // Re-clamp after a resize so a view that was legal at the old size can't leave
   // a strip of empty card showing at the new one.
@@ -319,11 +425,15 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
 
   const zoomed = view.k > 1.001;
 
-  const headline = hover && hover.code ? hover.unique : stats.totalUnique;
-  const headlineLabel = hover && hover.code ? hover.name : "Worldwide";
-  const subline = hover && hover.code
-    ? `${hover.visits.toLocaleString()} load${hover.visits === 1 ? "" : "s"}`
-    : `${stats.ranked.length} countr${stats.ranked.length === 1 ? "y" : "ies"}`;
+  // A bubble hover always has a value; a country hover only counts when the
+  // feature maps to a code we track.
+  const active = hover && (hover.kind === "place" || hover.code) ? hover : null;
+  const headline = active ? active.unique : stats.totalUnique;
+  const headlineLabel = active ? active.name : "Worldwide";
+  const subline = active
+    ? `${active.visits.toLocaleString()} load${active.visits === 1 ? "" : "s"}`
+    : `${stats.ranked.length} countr${stats.ranked.length === 1 ? "y" : "ies"}` +
+      (stats.places.length ? ` · ${stats.places.length} cit${stats.places.length === 1 ? "y" : "ies"}` : "");
 
   const cardStyle: CSSProperties = {
     background: HOME_THEME.panelBgStrong,
@@ -416,7 +526,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
             {paths.map((p) => {
               const t = intensity(p.unique, stats.maxUnique);
-              const isHovered = hover?.code != null && hover.code === p.code;
+              const isHovered = hover?.kind === "country" && hover.code != null && hover.code === p.code;
               return (
                 <path
                   key={p.key}
@@ -431,10 +541,43 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                     if (drag.current?.moved) return; // suppress hover mid-pan
                     const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
                     setHover({
+                      kind: "country",
                       code: p.code,
                       name: p.name,
                       unique: p.unique,
                       visits: p.visits,
+                      x: e.clientX - box.left,
+                      y: e.clientY - box.top,
+                    });
+                  }}
+                />
+              );
+            })}
+
+            {/* Bubble layer — one dot per city centroid, area ∝ visitors.
+                Radius and stroke divide by k so a bubble keeps a constant
+                on-screen size while zooming separates overlapping cities. */}
+            {showBubbles && bubbles.map((b) => {
+              const isHovered = hover?.kind === "place" && hover.code === b.key;
+              return (
+                <circle
+                  key={b.key}
+                  cx={b.cx}
+                  cy={b.cy}
+                  r={b.r / view.k}
+                  fill={BUBBLE_FILL}
+                  stroke={isHovered ? HOME_THEME.text : BUBBLE_STROKE}
+                  strokeWidth={(isHovered ? 1.6 : 0.9) / view.k}
+                  style={{ cursor: "crosshair" }}
+                  onMouseMove={(e) => {
+                    if (drag.current?.moved) return;
+                    const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+                    setHover({
+                      kind: "place",
+                      code: b.key,
+                      name: b.label,
+                      unique: b.unique,
+                      visits: b.visits,
                       x: e.clientX - box.left,
                       y: e.clientY - box.top,
                     });
@@ -517,6 +660,11 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 ? `${hover.unique.toLocaleString()} visitor${hover.unique === 1 ? "" : "s"} · ${hover.visits.toLocaleString()} loads`
                 : "No visits"}
             </div>
+            {hover.kind === "place" && (
+              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45, marginTop: 3 }}>
+                city-level, from IP
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -546,6 +694,44 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
           <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, fontFamily: "var(--font-mono)" }}>
             {stats.maxUnique.toLocaleString()}
           </span>
+
+          {/* Bubble toggle doubles as the bubble legend. Disabled (with a reason)
+              when no row has coordinates yet, so an empty layer isn't a mystery. */}
+          <button
+            type="button"
+            onClick={() => setShowBubbles((v) => !v)}
+            disabled={stats.places.length === 0}
+            title={
+              stats.places.length === 0
+                ? "No coordinates logged yet — enable Cloudflare's visitor location headers"
+                : `${stats.places.length} cities · bubble area ∝ visitors · toggle off to see the country shading alone`
+            }
+            style={{
+              marginLeft: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 9px",
+              borderRadius: 999,
+              border: `1px solid ${showBubbles && stats.places.length ? BUBBLE_STROKE : HOME_THEME.border}`,
+              background: showBubbles && stats.places.length ? "rgba(255,183,3,0.10)" : "transparent",
+              color: HOME_THEME.text,
+              fontSize: 14,
+              cursor: stats.places.length === 0 ? "default" : "pointer",
+              opacity: stats.places.length === 0 ? 0.4 : 0.85,
+            }}
+          >
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: 999,
+                background: BUBBLE_FILL,
+                border: `1px solid ${BUBBLE_STROKE}`,
+              }}
+            />
+            Cities
+          </button>
         </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           {stats.ranked.slice(0, 5).map((c) => (

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
-import { getRecentPageVisits, getUsersByIds } from "@/lib/db";
+import { getRecentPageVisits } from "@/lib/db";
 
 // Owner-only: the visit log exposes client IPs (PII), so gate reads to the owner.
 // Writes happen in /api/page-status (public, every page load); this is read-only.
@@ -19,31 +19,24 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const limit = Math.min(Number(searchParams.get("limit") ?? 100), 5000);
     const rows = await getRecentPageVisits(limit);
-    // Batch-resolve email/discord for the distinct signed-in user_ids in this
-    // page so the owner map can show "who", not just an opaque user_id — one
-    // query for the whole page instead of one per row.
-    const userMap = await getUsersByIds(rows.map((r) => r.user_id).filter((v): v is string => !!v));
-    const visits = rows.map((r) => {
-      const u = r.user_id ? userMap.get(r.user_id) : undefined;
-      return {
-        id: r.id,
-        pageKey: r.page_key ?? null,
-        pageLabel: r.page_label ?? null,
-        path: r.path ?? null,
-        userId: r.user_id ?? null,
-        userEmail: u?.email ?? null,
-        userName: u?.discord_username ?? null,
-        ip: r.ip ?? null,
-        // Cloudflare geo. Null on rows logged before the managed transform was
-        // enabled, and on anything that reached the origin without crossing the edge.
-        country: r.country ?? null,
-        region: r.region ?? null,
-        city: r.city ?? null,
-        lat: r.lat ?? null,
-        lon: r.lon ?? null,
-        createdAt: r.created_at ?? null,
-      };
-    });
+    const visits = rows.map((r) => ({
+      id: r.id,
+      pageKey: r.page_key ?? null,
+      pageLabel: r.page_label ?? null,
+      path: r.path ?? null,
+      userId: r.user_id ?? null,
+      ip: r.ip ?? null,
+      // Cloudflare geo. Null on rows logged before the managed transform was
+      // enabled, and on anything that reached the origin without crossing the edge.
+      country: r.country ?? null,
+      region: r.region ?? null,
+      city: r.city ?? null,
+      // City centroids, so the owner map can plot bubbles. Numbers, not strings —
+      // pg hands DOUBLE PRECISION back as a JS number already.
+      lat: r.latitude ?? null,
+      lon: r.longitude ?? null,
+      createdAt: r.created_at ?? null,
+    }));
     return NextResponse.json({ visits });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

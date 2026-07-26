@@ -57,11 +57,13 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>Approximate location.</strong> Our content delivery provider (Cloudflare) derives an
-          approximate location from your IP address, and we log the country, region, and city it reports
-          alongside the page-activity data described above. This is coarse, IP-derived location only &mdash; we
-          do not collect GPS or precise device location, and the Service does not request access to your
-          device&rsquo;s location services. We use it to understand where our traffic comes from and to
-          prioritize the markets and hours we support.
+          approximate location from your IP address, and we log the country, region, and city it reports,
+          along with the approximate latitude and longitude of that city, alongside the page-activity data
+          described above. These coordinates identify a city center, not your device &mdash; everyone
+          connecting from the same city is recorded at the same point. We do not collect GPS or precise
+          device location, and the Service does not request access to your device&rsquo;s location services.
+          We use this to understand where our traffic comes from and to prioritize the markets and hours we
+          support.
         </li>
         <li>
           <strong>Cookies and similar technologies.</strong> We and our providers use cookies and similar
@@ -166,8 +168,8 @@ export default function PrivacyPage() {
         The categories of personal information we collect are described in Section 1 and include identifiers
         (such as name, email address, IP address, and account identifier), commercial information (subscription
         and payment-related data processed by our payment provider), internet activity information (such as
-        pages viewed and usage data), and coarse geolocation data (country, region, and city derived from your
-        IP address). To exercise any of these rights, contact us at{" "}
+        pages viewed and usage data), and coarse geolocation data (country, region, city, and approximate
+        city-level coordinates derived from your IP address). To exercise any of these rights, contact us at{" "}
         <a href="mailto:support@cbedge.net">support@cbedge.net</a>. We may need to verify your identity before
         responding, and you may use an authorized agent where permitted by law.
       </p>

@@ -177,14 +177,11 @@ interface PageVisit {
   pageLabel: string | null;
   path: string | null;
   userId: string | null;
-  /** Resolved from users.email/discord_username when userId is a signed-in user. */
-  userEmail?: string | null;
-  userName?: string | null;
   ip: string | null;
   country?: string | null;
   region?: string | null;
   city?: string | null;
-  /** City-level pin (cf-iplatitude/cf-iplongitude) — powers the visitor dot map. */
+  /** City-centroid coords from Cloudflare — what the map's bubbles plot. */
   lat?: number | null;
   lon?: number | null;
   createdAt: string | null;
