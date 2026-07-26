@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
+// Type-only: erased at build time, so the runtime stripe import below stays lazy.
+import type { Stripe as StripeNS } from "stripe";
 
 // Lazy-load stripe so the app still boots without the key configured
 async function getStripe() {
@@ -16,6 +18,81 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || "").trim();
+
+// ── Actual-pay math ──────────────────────────────────────────────────────────
+//
+// price.unit_amount is the LIST price. Anyone on a promo code or launch coupon
+// pays less than that, so summing unit_amount overstates income — which is why
+// the Sales page's revenue numbers read high. Everything below works from the
+// amount actually billed: list price with the subscription's live coupon applied.
+//
+// Deliberate choice: coupons with duration "once" are NOT applied here. They hit
+// a single invoice and are gone, so folding them into a run-rate would understate
+// what the subscription pays every month from here on. That first-invoice
+// discount is real money — it just isn't recurring income.
+
+/** How many months one billing period covers (yearly → 12, monthly → 1). */
+function monthsPerInterval(price: StripeNS.Price | undefined | null): number {
+  const rec = price?.recurring;
+  if (!rec) return 1;
+  const n = rec.interval_count || 1;
+  switch (rec.interval) {
+    case "year": return 12 * n;
+    case "month": return n;
+    case "week": return (12 * n) / 52;
+    case "day": return (12 * n) / 365;
+    default: return n;
+  }
+}
+
+/** Sum of list amounts on one invoice for this subscription, in cents. */
+function invoiceGross(sub: StripeNS.Subscription): number {
+  let total = 0;
+  for (const item of sub.items.data) {
+    if (!item.price.unit_amount) continue;
+    total += item.price.unit_amount * (item.quantity ?? 1);
+  }
+  return total;
+}
+
+/**
+ * Apply the subscription's recurring discount to a per-invoice amount. Handles
+ * both the legacy singular `discount` and the newer `discounts` array so this
+ * keeps working across a Stripe API version bump.
+ */
+function applyRecurringDiscount(sub: StripeNS.Subscription, grossCents: number): number {
+  const legacy = (sub as unknown as { discount?: StripeNS.Discount | null }).discount;
+  const modern = (sub as unknown as { discounts?: Array<StripeNS.Discount | string> }).discounts;
+  const discounts: StripeNS.Discount[] = [];
+  if (legacy) discounts.push(legacy);
+  if (Array.isArray(modern)) {
+    for (const d of modern) if (d && typeof d !== "string") discounts.push(d);
+  }
+  if (!discounts.length) return grossCents;
+
+  let amount = grossCents;
+  for (const d of discounts) {
+    const coupon = d.coupon;
+    if (!coupon || coupon.duration === "once") continue;
+    if (coupon.percent_off) amount -= Math.round((amount * coupon.percent_off) / 100);
+    else if (coupon.amount_off) amount -= coupon.amount_off;
+  }
+  return Math.max(0, amount);
+}
+
+/** What this subscription actually bills per month, after recurring discounts. */
+function netMonthly(sub: StripeNS.Subscription): number {
+  const months = monthsPerInterval(sub.items.data[0]?.price);
+  if (months <= 0) return 0;
+  return Math.round(applyRecurringDiscount(sub, invoiceGross(sub)) / months);
+}
+
+/** Same, at list price — kept so the UI can show the size of the discount gap. */
+function grossMonthly(sub: StripeNS.Subscription): number {
+  const months = monthsPerInterval(sub.items.data[0]?.price);
+  if (months <= 0) return 0;
+  return Math.round(invoiceGross(sub) / months);
+}
 
 export async function GET() {
   const userId = await getServerUserId();
@@ -44,16 +121,18 @@ export async function GET() {
     const launchCutoff = Math.floor(new Date("2026-07-01T00:00:00Z").getTime() / 1000);
     const realSubs = subList.data.filter((sub) => sub.created >= launchCutoff);
 
-    // MRR: sum of monthly-normalized amounts
+    // MRR, two ways. `mrr` is what actually gets billed each month (discounts
+    // applied) and is what every card on the Sales page reads. `grossMrr` is the
+    // same book of business at list price, kept only so the UI can show the gap.
     let mrr = 0;
+    let grossMrr = 0;
+    let discountedSubscriptions = 0;
     for (const sub of realSubs) {
-      for (const item of sub.items.data) {
-        const price = item.price;
-        if (!price.unit_amount) continue;
-        const interval = price.recurring?.interval;
-        if (interval === "month") mrr += price.unit_amount * item.quantity!;
-        else if (interval === "year") mrr += Math.round((price.unit_amount * item.quantity!) / 12);
-      }
+      const net = netMonthly(sub);
+      const gross = grossMonthly(sub);
+      mrr += net;
+      grossMrr += gross;
+      if (net < gross) discountedSubscriptions++;
     }
 
     // Real paying customers — unique customers among the filtered subs above.
@@ -97,6 +176,10 @@ export async function GET() {
           status: sub.status,
           plan_name: price?.nickname ?? price?.lookup_key ?? price?.id ?? "—",
           amount: price?.unit_amount ?? 0,
+          // What this subscription actually bills per period and per month, with
+          // recurring discounts applied. net_amount === amount when undiscounted.
+          net_amount: applyRecurringDiscount(sub, invoiceGross(sub)),
+          net_monthly: netMonthly(sub),
           interval, // "month" | "year"
           current_period_end: sub.current_period_end,
           created: sub.created,
@@ -129,7 +212,9 @@ export async function GET() {
     return NextResponse.json({
       configured: true,
       summary: {
-        mrr,
+        mrr, // net of recurring discounts — the number the page should trust
+        grossMrr, // same subs at list price, for the discount-gap tooltip
+        discountedSubscriptions,
         activeSubscriptions: realSubs.length,
         totalCustomers: payingCustomerIds.size,
         churnedThisMonth: canceledThisMonth.data.length,

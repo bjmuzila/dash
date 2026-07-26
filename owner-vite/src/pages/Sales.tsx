@@ -24,7 +24,14 @@ interface StripeSubscription {
   customer_email: string;
   status: string;
   plan_name: string;
+  /** List price per billing period — what the plan costs with no discount. */
   amount: number;
+  /** Actually billed per period after recurring discounts. Optional because a
+   *  response cached from before this shipped won't have it; callers fall back
+   *  to `amount`. */
+  net_amount?: number;
+  /** Actually billed per month after recurring discounts (yearly ÷ 12). */
+  net_monthly?: number;
   interval: "month" | "year";
   current_period_end: number;
   created: number;
@@ -33,10 +40,22 @@ interface StripeSubscription {
 }
 
 interface StripeSummary {
+  /** Net of recurring discounts — the real monthly billing rate. */
   mrr: number;
+  /** Same subscriptions at list price. Only used to show the discount gap. */
+  grossMrr?: number;
+  discountedSubscriptions?: number;
   activeSubscriptions: number;
   totalCustomers: number;
   churnedThisMonth: number;
+}
+
+/** Monthly amount a subscription actually bills, with graceful fallback to the
+ *  list price when the API response predates the net fields. */
+function netMonthlyOf(s: StripeSubscription): number {
+  if (typeof s.net_monthly === "number") return s.net_monthly;
+  const per = typeof s.net_amount === "number" ? s.net_amount : s.amount;
+  return s.interval === "year" ? Math.round(per / 12) : per;
 }
 
 interface SalesData {
@@ -258,7 +277,8 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
     for (const sub of subs) {
       const d = new Date(sub.created * 1000);
       if (d < p.start || d > p.end) continue;
-      mrrAdded += sub.interval === "year" ? Math.round(sub.amount / 12) : sub.amount;
+      // Actual billed rate, not list price — a discounted sub adds what it pays.
+      mrrAdded += netMonthlyOf(sub);
       count += 1;
     }
     const expenses = Math.round(expensePerPeriod);
@@ -371,10 +391,14 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
           </div>
         ) : subs.map((s) => {
           const discordName = discordByEmail.get(s.customer_email.toLowerCase());
+          // Show what they actually pay; note the list price only when it differs.
+          const perPeriod = typeof s.net_amount === "number" ? s.net_amount : s.amount;
+          const discounted = perPeriod < s.amount;
+          const unit = s.interval === "year" ? "yr" : "mo";
           return (
           <div
             key={s.id}
-            title={`${s.customer_email} · ${discordName ? `Discord: ${discordName} · ` : ""}${fmtMoney(s.amount)}/${s.interval === "year" ? "yr" : "mo"} · ${s.status} · renews ${fmtDateShort(s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
+            title={`${s.customer_email} · ${discordName ? `Discord: ${discordName} · ` : ""}${fmtMoney(perPeriod)}/${unit}${discounted ? ` (list ${fmtMoney(s.amount)}/${unit})` : ""} · ${s.status} · renews ${fmtDateShort(s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
             style={{
               display: "grid",
               gridTemplateColumns: SUB_TABLE_COLS,
@@ -396,8 +420,13 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
             <span style={{ color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {discordName ?? "—"}
             </span>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14 }}>
-              {fmtMoney(s.amount)}/{s.interval === "year" ? "yr" : "mo"}
+            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14, display: "flex", alignItems: "baseline", gap: 5 }}>
+              <span>{fmtMoney(perPeriod)}/{unit}</span>
+              {discounted && (
+                <span style={{ color: T.muted, fontWeight: 500, textDecoration: "line-through", opacity: 0.7 }}>
+                  {fmtMoney(s.amount)}
+                </span>
+              )}
             </span>
             <span>
               <span style={{
@@ -710,7 +739,7 @@ export default function Sales() {
       const d = new Date(s.created * 1000);
       const b = byKey.get(dayKey(d));
       if (!b) continue;
-      b.mrr += s.interval === "year" ? Math.round(s.amount / 12) : s.amount;
+      b.mrr += netMonthlyOf(s);
       b.subs += 1;
     }
     for (const c of customers) {
@@ -767,12 +796,33 @@ export default function Sales() {
           <>
             {/* KPI row — each card's sparkline traces the last 14 days, hover any point for the exact day/value. */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+              {/* Headline: what actually gets paid, annualized. Discounts applied,
+                  expenses NOT deducted — that's the "Yearly Expectation" card. */}
+              <KpiCard
+                label="Net Pay · Yearly"
+                value={fmtMoney(data.summary.mrr * 12)}
+                sub={`${fmtMoney(data.summary.mrr)}/mo actual × 12`}
+                spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr * 12 }))}
+                sparkColor={T.green}
+                tooltip={
+                  `What subscriptions actually bill, annualized: ${fmtMoney(data.summary.mrr)}/mo × 12.` +
+                  (data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
+                    ? ` At list price this would read ${fmtMoney(data.summary.grossMrr * 12)} — ${data.summary.discountedSubscriptions ?? 0} discounted sub(s) account for the ${fmtMoney((data.summary.grossMrr - data.summary.mrr) * 12)}/yr difference.`
+                    : " No active discounts, so this matches list price.") +
+                  " Before Stripe fees and before expenses."
+                }
+              />
               <KpiCard
                 label="Monthly Recurring Revenue"
                 value={fmtMoney(data.summary.mrr)}
+                sub={
+                  data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
+                    ? `${fmtMoney(data.summary.grossMrr)}/mo at list price`
+                    : undefined
+                }
                 spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr }))}
                 sparkColor={T.cyan}
-                tooltip="Sum of active subscription amounts, normalized to a monthly rate (yearly ÷ 12)"
+                tooltip="Sum of active subscription amounts as actually billed (promo codes and coupons applied), normalized to a monthly rate (yearly ÷ 12)"
               />
               <KpiCard
                 label="Active Subscriptions"
@@ -794,13 +844,13 @@ export default function Sales() {
                 sub={data.summary.churnedThisMonth === 0 ? "No churn 🎉" : `${data.summary.churnedThisMonth} churned this month`}
                 spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr - expensesMonthly }))}
                 sparkColor={T.cyan}
-                tooltip={`MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate`}
+                tooltip={`Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate`}
               />
               <KpiCard
                 label="Yearly Expectation"
                 value={fmtMoney((data.summary.mrr - expensesMonthly) * 12)}
-                sub="net run-rate × 12"
-                tooltip={`(MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo) × 12 months`}
+                sub="after expenses × 12"
+                tooltip={`(Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo) × 12 months. Net Pay above is the same figure before expenses.`}
               />
             </div>
 
