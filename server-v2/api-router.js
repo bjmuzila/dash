@@ -4127,6 +4127,46 @@ if (libDb) {
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });
+
+    // /api/levels/prune — delete rows for tickers no longer on the publish roster.
+    //
+    // ticker_levels is an upsert-only table, so a name removed from
+    // em-tickers.js keeps its row forever: never republished, never updated,
+    // permanently "stale". After the 2026-07-26 roster prune that left 168 dead
+    // rows behind — the publish itself was 234/234 with zero failures, but the
+    // owner page still rendered a wall of orange chips for tickers that are no
+    // longer published at all. Those rows also still answer GET /api/levels
+    // per-ticker, so /em could serve a band for a name the publisher dropped.
+    //
+    // Called by the publisher after a FULL run only — never after a subset
+    // retry, whose payload is just the not-yet-priced stragglers and would wipe
+    // almost the whole table.
+    register('/api/levels/prune', {
+      auth: 'owner', methods: ['POST'],
+      async handler(req, res, ctx) {
+        try {
+          if (!tokenOk(req, ctx)) { send(res, 401, { error: 'unauthorized' }); return; }
+          const body = await readJson(req);
+          const keep = Array.isArray(body.tickers)
+            ? [...new Set(body.tickers.map((t) => String(t || '').trim().toUpperCase()).filter(Boolean))]
+            : [];
+          // A short list means a bad/partial caller, not an empty roster. Refuse
+          // rather than empty the table.
+          if (keep.length < 50) { send(res, 400, { error: `refusing to prune against only ${keep.length} ticker(s)` }); return; }
+          const pool = await libDb.getDb();
+          await ensureLevels(pool);
+          const r = await pool.query(
+            'DELETE FROM ticker_levels WHERE ticker <> ALL($1) RETURNING ticker',
+            [keep]
+          );
+          const removed = r.rows.map((x) => x.ticker);
+          if (removed.length) {
+            console.log(`[levels] pruned ${removed.length} off-roster row(s): ${removed.slice(0, 30).join(', ')}${removed.length > 30 ? '…' : ''}`);
+          }
+          send(res, 200, { ok: true, kept: keep.length, pruned: removed.length, tickers: removed });
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
   }
 
   // /api/backtests?test=... — owner-only research panels (read-only SELECTs +

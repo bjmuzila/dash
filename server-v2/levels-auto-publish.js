@@ -186,6 +186,30 @@ async function publishOnce(base, reason, opts = {}) {
       } catch (e) { console.log('[levels-pub] expire-stale failed —', e.message); }
     }
 
+    // Drop rows for tickers that are no longer on the roster. ticker_levels is
+    // upsert-only, so a name removed from em-tickers.js would otherwise keep its
+    // row forever — never republished, permanently stale on the owner page, and
+    // still answering a per-ticker GET on /em. Full runs only: `only` retries
+    // carry just the stragglers and would wipe the table. Best-effort.
+    if (!only) {
+      try {
+        const r = await fetch(`${base}/api/levels/prune`, {
+          method: 'POST',
+          headers: Object.assign(
+            { 'Content-Type': 'application/json' },
+            process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+          ),
+          body: JSON.stringify({ tickers: expectedAll }),
+        });
+        if (r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (j && j.pruned) console.log(`[levels-pub] pruned ${j.pruned} off-roster row(s)`);
+        } else {
+          console.log(`[levels-pub] prune ${r.status}`);
+        }
+      } catch (e) { console.log('[levels-pub] prune failed —', e.message); }
+    }
+
     // EM coverage for THIS run's scope: a name failed if it has no priced EM.
     // failReasons (from the engine) already explains why; fall back generically.
     const withEm = new Set(payloads.filter((p) => p.em != null && p.em !== '').map((p) => p.ticker));

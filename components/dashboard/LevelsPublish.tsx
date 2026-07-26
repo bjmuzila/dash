@@ -314,12 +314,13 @@ export default function LevelsPublish() {
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "var(--font-mono)" }}>Sat ~09:00 ET</span>
+          {/* Mirrors PUBLISH_DOW/PUBLISH_HOUR in server-v2/levels-auto-publish.js. */}
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "var(--font-mono)" }}>Fri ~16:15 ET</span>
         </div>
         <button
           onClick={triggerPublish}
           disabled={publishing || pubRun.running}
-          title="Compute & publish weekly EM levels for the whole roster now (takes a few minutes for ~370 tickers). Overwrites the current weekly snapshot."
+          title="Compute & publish weekly EM levels for the whole roster now (~45s for the current roster). Overwrites the current weekly snapshot."
           style={{
             ...homeButtonStyle, padding: "6px 16px", borderRadius: 8, fontSize: 12, marginLeft: "auto",
             opacity: (publishing || pubRun.running) ? 0.6 : 1,
