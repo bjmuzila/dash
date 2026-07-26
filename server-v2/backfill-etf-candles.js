@@ -72,13 +72,24 @@ const ET_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_Yo
   const results = await backfill(days, symbols);
 
   // Report what's actually IN the table per session, not just what the fetch
-  // returned. A dxFeed replay that gets cut short still "succeeds"; the row
-  // counts are what tell you whether a given day is really complete. A full RTH
-  // session is 390 one-minute bars.
-  console.log('\netf_candles rows by session (RTH is 390 bars):');
+  // returned — a dxFeed replay that gets cut short still "succeeds".
+  //
+  // Completeness is judged on RTH bars ONLY. dxFeed's SPY/QQQ 1m aggregation
+  // covers the full extended day (and, on these two, the overnight ATS session
+  // as well), so the raw per-day count runs well past 390 and tells you nothing
+  // about whether the part you care about is intact. 09:30–15:59 ET is exactly
+  // 390 one-minute bars; a minute with no prints produces no bar, so a
+  // low-liquidity name can legitimately land just under.
+  const RTH_EXPR = `(EXTRACT(HOUR FROM to_timestamp(timestamp/1000) AT TIME ZONE 'America/New_York') * 60
+                   + EXTRACT(MINUTE FROM to_timestamp(timestamp/1000) AT TIME ZONE 'America/New_York'))`;
+  console.log('\netf_candles by session — RTH 09:30–15:59 ET is 390 bars:');
   for (const symbol of symbols) {
     const { rows } = await pool.query( // eslint-disable-line no-await-in-loop
-      `SELECT date, COUNT(*)::int AS bars,
+      `SELECT date,
+              COUNT(*)::int AS bars,
+              COUNT(*) FILTER (WHERE ${RTH_EXPR} BETWEEN 570 AND 959)::int AS rth_bars,
+              MIN(timestamp) FILTER (WHERE ${RTH_EXPR} BETWEEN 570 AND 959) AS rth_first,
+              MAX(timestamp) FILTER (WHERE ${RTH_EXPR} BETWEEN 570 AND 959) AS rth_last,
               MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
          FROM etf_candles
         WHERE symbol = $1 AND timestamp >= $2
@@ -88,13 +99,21 @@ const ET_DATE_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_Yo
     );
     if (!rows.length) { console.log(`  ${symbol}: nothing in range`); continue; }
     for (const r of rows) {
-      const hm = (ts) => new Intl.DateTimeFormat('en-US', {
+      const hm = (ts) => (ts == null ? '--:--' : new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
-      }).format(new Date(Number(ts)));
-      const flag = r.bars >= 390 ? 'ok' : 'PARTIAL';
-      console.log(`  ${symbol} ${r.date}  ${String(r.bars).padStart(4)} bars  ${hm(r.first_ts)}–${hm(r.last_ts)} ET  ${flag}`);
+      }).format(new Date(Number(ts))));
+      const rth = Number(r.rth_bars);
+      const flag = rth >= 390 ? 'RTH COMPLETE'
+        : rth >= 385 ? `RTH ${rth}/390 (thin minutes)`
+        : rth === 0 ? 'NO RTH DATA'
+        : `RTH ${rth}/390 PARTIAL`;
+      console.log(
+        `  ${symbol} ${r.date}  rth ${String(rth).padStart(3)}/390 ${hm(r.rth_first)}–${hm(r.rth_last)}` +
+        `  ·  all ${String(r.bars).padStart(4)} bars ${hm(r.first_ts)}–${hm(r.last_ts)} ET  ${flag}`,
+      );
     }
   }
+  console.log('\nA partial FIRST day is expected — the window starts mid-session that many days back.');
 
   const failed = results.filter((r) => r.error);
   if (failed.length) {
