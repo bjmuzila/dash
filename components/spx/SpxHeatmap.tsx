@@ -92,9 +92,22 @@ export default function SpxHeatmap() {
 
   const data = SPX_2Y_DAILY;
 
-  const first = useMemo(() => new Date(`${data[0].date}T00:00:00`), [data]);
-  const last = useMemo(() => new Date(`${data[data.length - 1].date}T00:00:00`), [data]);
-  const weeks = useMemo(() => buildWeeks(first, last), [first, last]);
+  // ---- Split into one row per calendar year — a new year automatically
+  // gets its own row the moment data for it starts appearing. ----
+  const years = useMemo(() => {
+    const set = new Set(data.map((d) => d.date.slice(0, 4)));
+    return Array.from(set).sort(); // ascending — oldest row on top, newest at bottom
+  }, [data]);
+
+  const yearWeeks = useMemo(() => {
+    const map = new Map<string, Week[]>();
+    years.forEach((y) => {
+      const yFirst = new Date(`${y}-01-01T00:00:00`);
+      const yLast = new Date(`${y}-12-31T00:00:00`);
+      map.set(y, buildWeeks(yFirst, yLast));
+    });
+    return map;
+  }, [years]);
 
   const stats = useMemo(() => {
     const closes = data.map((d) => d.close);
@@ -156,8 +169,9 @@ export default function SpxHeatmap() {
     });
   }, [data]);
 
-  // ---- Monthly overlay blocks: merge consecutive weeks sharing a month. ----
-  const monthBlocks = useMemo(() => {
+  // ---- Monthly overlay blocks: merge consecutive weeks sharing a month,
+  // computed separately for each year's row. ----
+  function buildMonthBlocks(weeks: Week[]) {
     const blocks: { left: number; width: number; ret: number | null; tip: string }[] = [];
     let i = 0;
     while (i < weeks.length) {
@@ -179,7 +193,12 @@ export default function SpxHeatmap() {
       i = j;
     }
     return blocks;
-  }, [weeks, monthStats]);
+  }
+  const yearMonthBlocks = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof buildMonthBlocks>>();
+    years.forEach((y) => map.set(y, buildMonthBlocks(yearWeeks.get(y)!)));
+    return map;
+  }, [years, yearWeeks, monthStats]);
 
   const showTooltip = useCallback((e: React.MouseEvent, text: string) => {
     setTooltip({ x: e.clientX, y: e.clientY, text });
@@ -237,101 +256,117 @@ export default function SpxHeatmap() {
         </ModeButton>
       </div>
 
-      {/* Grid */}
+      {/* Grid — one row per calendar year; a new year automatically gets its own row */}
       <div className={scrollClass}>
-        <div style={{ display: "flex", gap: 10, width: "max-content" }}>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: GAP,
-              paddingTop: 20,
-              position: "sticky",
-              left: 0,
-              zIndex: 6,
-              background: HOME_THEME.panel,
-              paddingRight: 8,
-            }}
-          >
-            {["Mon", "Tue", "Wed", "Thu", "Fri"].map((d) => (
-              <span key={d} style={{ height: CELL, display: "flex", alignItems: "center", fontSize: 9.5, color: HOME_THEME.text, opacity: 0.55, lineHeight: `${CELL}px` }}>
-                {d}
-              </span>
-            ))}
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18, width: "max-content" }}>
+          {years.map((y) => {
+            const weeks = yearWeeks.get(y)!;
+            const monthBlocks = yearMonthBlocks.get(y)!;
+            return (
+              <div key={y} style={{ display: "flex", gap: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    position: "sticky",
+                    left: 0,
+                    zIndex: 6,
+                    background: HOME_THEME.panel,
+                    paddingRight: 10,
+                    minWidth: 44,
+                  }}
+                >
+                  <span style={{ height: 14, marginBottom: 4 }} />
+                  <span
+                    style={{
+                      height: colHeight,
+                      display: "flex",
+                      alignItems: "center",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: HOME_THEME.text,
+                      opacity: 0.75,
+                    }}
+                  >
+                    {y}
+                  </span>
+                </div>
 
-          <div>
-            {/* Month header row */}
-            <div style={{ display: "flex", gap: GAP, marginBottom: 4, height: 14 }}>
-              {weeks.map((w, i) => {
-                const showLabel = i === 0 || weeks[i - 1].month !== w.month;
-                return (
-                  <div key={i} style={{ minWidth: CELL, flex: `0 0 ${CELL}px`, fontSize: 10, color: HOME_THEME.text, opacity: 0.55, whiteSpace: "nowrap" }}>
-                    {showLabel ? `${MONTH_NAMES[w.month]}${w.month === 0 ? ` '${String(w.year).slice(2)}` : ""}` : ""}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Day cells (Daily / Overlay) or invisible spacer + blocks (Monthly) */}
-            <div style={{ position: "relative" }}>
-              <div style={{ display: "flex", gap: GAP, visibility: mode === "monthly" ? "hidden" : "visible" }}>
-                {weeks.map((w, wi) => (
-                  <div key={wi} style={{ display: "flex", flexDirection: "column", gap: GAP }}>
-                    {w.days.map((d, di) => {
-                      if (!d) {
-                        return <div key={di} style={{ width: CELL, height: CELL }} />;
-                      }
-                      const iso = toISO(d);
-                      const entry = entries.get(iso);
-                      const bg = entry ? levelColor(entry.ret) : "rgba(255,255,255,0.03)";
-                      const tip = entry ? entry.tip : `${iso}\nMarket closed`;
+                <div>
+                  {/* Month header row (per-year, since each year's Jan 1 falls on a different weekday) */}
+                  <div style={{ display: "flex", gap: GAP, marginBottom: 4, height: 14 }}>
+                    {weeks.map((w, i) => {
+                      const showLabel = i === 0 || weeks[i - 1].month !== w.month;
                       return (
-                        <div
-                          key={di}
-                          onMouseEnter={(e) => showTooltip(e, tip)}
-                          onMouseMove={moveTooltip}
-                          onMouseLeave={hideTooltip}
-                          style={{
-                            width: CELL,
-                            height: CELL,
-                            borderRadius: 3,
-                            background: bg,
-                            border: "1px solid rgba(255,255,255,0.03)",
-                            opacity: entry ? 1 : 0.5,
-                          }}
-                        />
+                        <div key={i} style={{ minWidth: CELL, flex: `0 0 ${CELL}px`, fontSize: 10, color: HOME_THEME.text, opacity: 0.55, whiteSpace: "nowrap" }}>
+                          {showLabel ? MONTH_NAMES[w.month] : ""}
+                        </div>
                       );
                     })}
                   </div>
-                ))}
-              </div>
 
-              {mode === "monthly" && (
-                <div style={{ position: "absolute", inset: 0 }}>
-                  {monthBlocks.map((b, i) => (
-                    <div
-                      key={i}
-                      onMouseEnter={(e) => showTooltip(e, b.tip)}
-                      onMouseMove={moveTooltip}
-                      onMouseLeave={hideTooltip}
-                      style={{
-                        position: "absolute",
-                        left: b.left,
-                        top: 0,
-                        width: b.width,
-                        height: colHeight,
-                        borderRadius: 4,
-                        border: "1px solid rgba(255,255,255,0.06)",
-                        background: b.ret != null ? levelColor(b.ret, 0.003) : "rgba(255,255,255,0.03)",
-                        opacity: b.ret != null ? 1 : 0.5,
-                      }}
-                    />
-                  ))}
+                  {/* Day cells (Daily / Overlay) or invisible spacer + blocks (Monthly) */}
+                  <div style={{ position: "relative" }}>
+                    <div style={{ display: "flex", gap: GAP, visibility: mode === "monthly" ? "hidden" : "visible" }}>
+                      {weeks.map((w, wi) => (
+                        <div key={wi} style={{ display: "flex", flexDirection: "column", gap: GAP }}>
+                          {w.days.map((d, di) => {
+                            if (!d) {
+                              return <div key={di} style={{ width: CELL, height: CELL }} />;
+                            }
+                            const iso = toISO(d);
+                            const entry = entries.get(iso);
+                            const bg = entry ? levelColor(entry.ret) : "rgba(255,255,255,0.03)";
+                            const tip = entry ? entry.tip : `${iso}\nNo data`;
+                            return (
+                              <div
+                                key={di}
+                                onMouseEnter={(e) => showTooltip(e, tip)}
+                                onMouseMove={moveTooltip}
+                                onMouseLeave={hideTooltip}
+                                style={{
+                                  width: CELL,
+                                  height: CELL,
+                                  borderRadius: 3,
+                                  background: bg,
+                                  border: "1px solid rgba(255,255,255,0.03)",
+                                  opacity: entry ? 1 : 0.5,
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+
+                    {mode === "monthly" && (
+                      <div style={{ position: "absolute", inset: 0 }}>
+                        {monthBlocks.map((b, i) => (
+                          <div
+                            key={i}
+                            onMouseEnter={(e) => showTooltip(e, b.tip)}
+                            onMouseMove={moveTooltip}
+                            onMouseLeave={hideTooltip}
+                            style={{
+                              position: "absolute",
+                              left: b.left,
+                              top: 0,
+                              width: b.width,
+                              height: colHeight,
+                              borderRadius: 4,
+                              border: "1px solid rgba(255,255,255,0.06)",
+                              background: b.ret != null ? levelColor(b.ret, 0.003) : "rgba(255,255,255,0.03)",
+                              opacity: b.ret != null ? 1 : 0.5,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
