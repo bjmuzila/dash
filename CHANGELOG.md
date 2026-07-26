@@ -2351,3 +2351,8 @@ Branch: `server-v2-wirein` (ahead of `main`; not yet merged or pushed)
 3. (Optional) Restore SPX Flow: extend server-v2 `FlowProcessor` to emit a capped per-order tape over the `flow` WS message.
 4. Rotate the exposed secrets.
 5. Merge `server-v2-wirein` → `main` when verified.
+
+## 2026-07-26
+
+- Wired the SPX heatmap into the live `/options` page (`app/options/page.tsx`): added `components/spx/SpxHeatmap.tsx` (daily/merge-years/monthly-avg calendar heatmap using `HOME_THEME` tokens) and `components/spx/spxHeatmapData.ts` (501 real ^GSPC daily closes, Jul 2024–Jul 2026, scraped from Yahoo Finance).
+- Fixed heatmap tooltip in `components/spx/SpxHeatmap.tsx` rendering far from the cursor (under the cards below) by portaling it into `document.body` via `createPortal`, avoiding the containing-block issue caused by the `Card` component's `.card-hover` transform.

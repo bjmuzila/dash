@@ -20,6 +20,7 @@
  */
 
 import { useMemo, useState, useCallback, useId } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { SPX_2Y_DAILY, SPX_2Y_AVERAGE_CLOSE, type SpxDailyClose } from "./spxHeatmapData";
 
@@ -364,28 +365,30 @@ export default function SpxHeatmap() {
         Pulled live from Yahoo Finance&apos;s historical data table for ^GSPC (Jul 25, 2024 → Jul 24, 2026), read directly in-browser since Yahoo&apos;s API/CSV endpoints block automated fetches. All 501 trading days, real closes. &quot;Merge Years → 1 Day&quot; averages every occurrence of the same calendar day into one cell without changing the grid size. &quot;Merge Into Monthly Avg&quot; collapses each month into one solid block, averaged across every year in range.
       </div>
 
-      {tooltip && (
-        <div
-          style={{
-            position: "fixed",
-            left: tooltip.x,
-            top: tooltip.y,
-            transform: "translate(-50%, calc(-100% - 16px))",
-            zIndex: 1000,
-            background: "#1c2027",
-            border: `1px solid ${HOME_THEME.border}`,
-            color: HOME_THEME.text,
-            padding: "7px 9px",
-            borderRadius: 8,
-            fontSize: 11,
-            whiteSpace: "pre",
-            boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
-            pointerEvents: "none",
-          }}
-        >
-          {tooltip.text}
-        </div>
-      )}
+      {tooltip && typeof document !== "undefined" &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              left: tooltip.x,
+              top: tooltip.y,
+              transform: "translate(-50%, calc(-100% - 16px))",
+              zIndex: 10000,
+              background: "#1c2027",
+              border: `1px solid ${HOME_THEME.border}`,
+              color: HOME_THEME.text,
+              padding: "7px 9px",
+              borderRadius: 8,
+              fontSize: 11,
+              whiteSpace: "pre",
+              boxShadow: "0 6px 18px rgba(0,0,0,0.45)",
+              pointerEvents: "none",
+            }}
+          >
+            {tooltip.text}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

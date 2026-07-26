@@ -232,3 +232,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Streamlined GEX navigation to the most-used pages.
 * Estimated Moves win/loss scoring is now more accurate.
 * Various performance and reliability improvements behind the scenes.
+
+## Sunday 7/26/2026
+
+* Added a new SPX heatmap on the Options page showing 2 years of daily market performance.
+* Fixed the heatmap's info popup so it now appears right next to your cursor instead of jumping to the bottom of the page.
