@@ -36,6 +36,10 @@ export interface VisitorMapRow {
   ip?: string | null;
   pageLabel?: string | null;
   path?: string | null;
+  /** Signed-in identity, resolved server-side from users.email/discord_username. */
+  userId?: string | null;
+  userEmail?: string | null;
+  userName?: string | null;
 }
 
 interface CityPoint {
@@ -48,6 +52,8 @@ interface CityPoint {
   visits: number;
   unique: number;
   pages: Array<{ label: string; count: number }>;
+  /** Signed-in visitors seen from this city — empty for guest-only cities. */
+  visitors: Array<{ label: string; count: number }>;
 }
 
 interface Aggregate {
@@ -78,6 +84,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
       visits: number;
       ips: Set<string>;
       pages: Map<string, number>;
+      visitors: Map<string, number>;
     }
   >();
   const globalIps = new Set<string>();
@@ -103,6 +110,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
         visits: 0,
         ips: new Set<string>(),
         pages: new Map<string, number>(),
+        visitors: new Map<string, number>(),
       };
       acc.set(key, bucket);
     }
@@ -110,6 +118,10 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     bucket.ips.add(r.ip || `anon:${bucket.visits}`);
     const page = r.pageLabel || r.path || "Unknown page";
     bucket.pages.set(page, (bucket.pages.get(page) ?? 0) + 1);
+    // Only signed-in visits carry an identity — guests contribute to the dot's
+    // count but never appear in the "Visitors" list.
+    const identity = r.userEmail || r.userName;
+    if (identity) bucket.visitors.set(identity, (bucket.visitors.get(identity) ?? 0) + 1);
   }
 
   const points: CityPoint[] = [];
@@ -124,6 +136,9 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
       visits: b.visits,
       unique: b.ips.size,
       pages: [...b.pages.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, c) => c.count - a.count),
+      visitors: [...b.visitors.entries()]
         .map(([label, count]) => ({ label, count }))
         .sort((a, c) => c.count - a.count),
     });
@@ -389,7 +404,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
               borderRadius: 10,
               padding: "10px 12px",
               minWidth: 170,
-              maxWidth: 240,
+              maxWidth: 280,
               boxShadow: `0 6px 22px ${ownerRgba("#000000", 0.55)}`,
             }}
           >
@@ -413,11 +428,27 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 fontSize: 14,
                 fontFamily: "var(--font-mono)",
                 color: HOME_THEME.lightBlue,
-                marginBottom: active.pages.length ? 8 : 0,
+                marginBottom: (active.visitors.length || active.pages.length) ? 8 : 0,
               }}
             >
               {active.unique.toLocaleString()} visitor{active.unique === 1 ? "" : "s"} · {active.visits.toLocaleString()} loads
             </div>
+            {active.visitors.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: active.pages.length ? 8 : 0 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.5 }}>
+                  Visitors
+                </div>
+                {active.visitors.slice(0, 6).map((v) => (
+                  <div key={v.label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, color: HOME_THEME.text, opacity: 0.85 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.label}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.lightBlue, flexShrink: 0 }}>{v.count}</span>
+                  </div>
+                ))}
+                {active.visitors.length > 6 && (
+                  <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.45 }}>+{active.visitors.length - 6} more</div>
+                )}
+              </div>
+            )}
             {active.pages.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.5 }}>

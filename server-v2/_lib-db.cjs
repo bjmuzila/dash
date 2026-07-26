@@ -130,6 +130,7 @@ __export(db_exports, {
   getUserByEmail: () => getUserByEmail,
   getUserByGoogleSub: () => getUserByGoogleSub,
   getUserById: () => getUserById,
+  getUsersByIds: () => getUsersByIds,
   getUserBzilaReactions: () => getUserBzilaReactions,
   getWatchHistory: () => getWatchHistory,
   getWatchHistorySince: () => getWatchHistorySince,
@@ -1915,6 +1916,19 @@ async function getUserByEmail(email) {
 }
 async function getUserById(id) {
   return queryOne(`SELECT * FROM users WHERE id = ?`, [id]);
+}
+// Batch id -> { email, discord_username } lookup. Powers the owner visitor
+// map's per-city popup (show who, not just how many) — one query for however
+// many distinct signed-in user_ids appear in a page_visits batch. Mirrors
+// lib/db.ts's getUsersByIds() — kept as a separate copy since this file is the
+// CommonJS DB layer api-router.js actually runs in production.
+async function getUsersByIds(ids) {
+  const out = new Map();
+  const clean = [...new Set((ids || []).filter(Boolean))];
+  if (!clean.length) return out;
+  const rows = await queryAll(`SELECT id, email, discord_username FROM users WHERE id = ANY(?::text[])`, [clean]);
+  for (const r of rows) out.set(r.id, { email: r.email ?? null, discord_username: r.discord_username ?? null });
+  return out;
 }
 async function getUserByGoogleSub(googleSub) {
   return queryOne(`SELECT * FROM users WHERE google_sub = ?`, [googleSub]);
@@ -3912,6 +3926,7 @@ async function getLatestMultGreekStaticSnapshot() {
   getUserByEmail,
   getUserByGoogleSub,
   getUserById,
+  getUsersByIds,
   getUserBzilaReactions,
   getWatchHistory,
   getWatchHistorySince,

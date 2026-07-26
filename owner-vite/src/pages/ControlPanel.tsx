@@ -177,6 +177,9 @@ interface PageVisit {
   pageLabel: string | null;
   path: string | null;
   userId: string | null;
+  /** Resolved from users.email/discord_username when userId is a signed-in user. */
+  userEmail?: string | null;
+  userName?: string | null;
   ip: string | null;
   country?: string | null;
   region?: string | null;

@@ -2808,15 +2808,22 @@ if (libDb) {
       try {
         const limit = Math.min(Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit') ?? 100), 5000);
         const rows = await libDb.getRecentPageVisits(limit);
-        const visits = rows.map((r) => ({
-          id: r.id, pageKey: r.page_key ?? null, pageLabel: r.page_label ?? null,
-          path: r.path ?? null, userId: r.user_id ?? null, ip: r.ip ?? null,
-          // Cloudflare geo. Null on rows logged before the managed transform was
-          // enabled, and on anything that reached the origin without crossing the edge.
-          country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
-          lat: r.lat ?? null, lon: r.lon ?? null,
-          createdAt: r.created_at ?? null,
-        }));
+        // Batch-resolve email/discord for the distinct signed-in user_ids in this
+        // page so the owner map can show "who", not just an opaque user_id.
+        const userMap = await libDb.getUsersByIds(rows.map((r) => r.user_id).filter(Boolean));
+        const visits = rows.map((r) => {
+          const u = r.user_id ? userMap.get(r.user_id) : undefined;
+          return {
+            id: r.id, pageKey: r.page_key ?? null, pageLabel: r.page_label ?? null,
+            path: r.path ?? null, userId: r.user_id ?? null, ip: r.ip ?? null,
+            userEmail: u?.email ?? null, userName: u?.discord_username ?? null,
+            // Cloudflare geo. Null on rows logged before the managed transform was
+            // enabled, and on anything that reached the origin without crossing the edge.
+            country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
+            lat: r.lat ?? null, lon: r.lon ?? null,
+            createdAt: r.created_at ?? null,
+          };
+        });
         send(res, 200, { visits });
       } catch (err) { send(res, 500, { error: String(err) }); }
     },

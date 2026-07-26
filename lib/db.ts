@@ -2036,6 +2036,26 @@ export async function getUserById(id: string): Promise<UserRecord | undefined> {
   return queryOne<UserRecord>(`SELECT * FROM users WHERE id = ?`, [id]);
 }
 
+/**
+ * Batch id → { email, discord_username } lookup. Powers the owner visitor
+ * map's per-city popup (show who, not just how many) — one query for however
+ * many distinct signed-in user_ids appear in a page_visits batch, instead of
+ * N getUserById() round-trips.
+ */
+export async function getUsersByIds(
+  ids: string[]
+): Promise<Map<string, { email: string | null; discord_username: string | null }>> {
+  const out = new Map<string, { email: string | null; discord_username: string | null }>();
+  const clean = [...new Set(ids.filter(Boolean))];
+  if (!clean.length) return out;
+  const rows = await queryAll<{ id: string; email: string | null; discord_username: string | null }>(
+    `SELECT id, email, discord_username FROM users WHERE id = ANY(?::text[])`,
+    [clean]
+  );
+  for (const r of rows) out.set(r.id, { email: r.email ?? null, discord_username: r.discord_username ?? null });
+  return out;
+}
+
 export async function getUserByGoogleSub(googleSub: string): Promise<UserRecord | undefined> {
   return queryOne<UserRecord>(`SELECT * FROM users WHERE google_sub = ?`, [googleSub]);
 }
