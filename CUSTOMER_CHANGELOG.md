@@ -4,6 +4,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Saturday 7/25/2026
 * Fixed the free feature pages (Initial Balance, GEX, TPO, Estimated Moves and Confidence Score) — the real delayed results now actually load instead of showing "results populate at the end of each trading day."
+* Added a new **Options** page to the toolbar, replacing the old unused Lookup button. It's a placeholder for now while the real thing gets built out over the next few days.
 
 ## Friday 7/24/2026
 * Fixed the Multi-Greek strike popup so its 15-minute, 30-minute and since-open GEX change actually loads instead of getting stuck on "building…"
