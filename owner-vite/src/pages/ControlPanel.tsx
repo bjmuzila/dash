@@ -181,6 +181,9 @@ interface PageVisit {
   country?: string | null;
   region?: string | null;
   city?: string | null;
+  /** City-level pin (cf-iplatitude/cf-iplongitude) — powers the visitor dot map. */
+  lat?: number | null;
+  lon?: number | null;
   createdAt: string | null;
 }
 

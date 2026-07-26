@@ -33,12 +33,26 @@ function trimmed(v: string | null, max: number): string | null {
   return s.length ? s : null;
 }
 
-function clientGeo(req: NextRequest): { country: string | null; region: string | null; city: string | null } {
+function trimmedFloat(v: string | null): number | null {
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function clientGeo(req: NextRequest): {
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  lat: number | null;
+  lon: number | null;
+} {
   const country = trimmed(req.headers.get("cf-ipcountry"), 2);
   return {
     country: country ? country.toUpperCase() : null,
     region: trimmed(req.headers.get("cf-region"), 80),
     city: trimmed(req.headers.get("cf-ipcity"), 80),
+    lat: trimmedFloat(req.headers.get("cf-iplatitude")),
+    lon: trimmedFloat(req.headers.get("cf-iplongitude")),
   };
 }
 
@@ -73,6 +87,8 @@ export async function POST(req: NextRequest) {
           country: geo.country,
           region: geo.region,
           city: geo.city,
+          lat: geo.lat,
+          lon: geo.lon,
         });
       } catch { /* non-fatal */ }
     }

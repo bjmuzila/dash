@@ -31,6 +31,8 @@ export async function GET(req: NextRequest) {
       country: r.country ?? null,
       region: r.region ?? null,
       city: r.city ?? null,
+      lat: r.lat ?? null,
+      lon: r.lon ?? null,
       createdAt: r.created_at ?? null,
     }));
     return NextResponse.json({ visits });

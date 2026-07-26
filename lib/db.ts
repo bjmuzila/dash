@@ -264,6 +264,10 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS country TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS region TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS city TEXT;
+    -- City-level pin location (cf-iplatitude / cf-iplongitude) — powers the
+    -- owner visitor map's per-city dots, distinct from the country choropleth.
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION;
     CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_page_visits_country ON page_visits(country);
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
@@ -3633,6 +3637,9 @@ export interface PageVisitRecord {
   country?: string | null;
   region?: string | null;
   city?: string | null;
+  /** City-level pin (cf-iplatitude/cf-iplongitude) — powers the visitor dot map. */
+  lat?: number | null;
+  lon?: number | null;
   created_at?: string | null;
 }
 
@@ -3640,15 +3647,15 @@ export interface PageVisitRecord {
 const PAGE_VISITS_KEEP = 5000;
 
 export async function insertPageVisit(
-  r: Pick<PageVisitRecord, "page_key" | "page_label" | "path" | "user_id" | "ip" | "country" | "region" | "city">
+  r: Pick<PageVisitRecord, "page_key" | "page_label" | "path" | "user_id" | "ip" | "country" | "region" | "city" | "lat" | "lon">
 ): Promise<void> {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city, lat, lon)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null,
-      r.country ?? null, r.region ?? null, r.city ?? null,
+      r.country ?? null, r.region ?? null, r.city ?? null, r.lat ?? null, r.lon ?? null,
     ]
   );
   // Opportunistic prune: drop anything older than the newest PAGE_VISITS_KEEP rows.

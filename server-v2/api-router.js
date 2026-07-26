@@ -277,12 +277,19 @@ function clientGeoTrim(v, max) {
   const s = String(v).trim().slice(0, max);
   return s.length ? s : null;
 }
+function clientGeoFloat(v) {
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 function clientGeo(req) {
   const country = clientGeoTrim(req.headers['cf-ipcountry'], 2);
   return {
     country: country ? country.toUpperCase() : null,
     region: clientGeoTrim(req.headers['cf-region'], 80),
     city: clientGeoTrim(req.headers['cf-ipcity'], 80),
+    lat: clientGeoFloat(req.headers['cf-iplatitude']),
+    lon: clientGeoFloat(req.headers['cf-iplongitude']),
   };
 }
 
@@ -2807,6 +2814,7 @@ if (libDb) {
           // Cloudflare geo. Null on rows logged before the managed transform was
           // enabled, and on anything that reached the origin without crossing the edge.
           country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
+          lat: r.lat ?? null, lon: r.lon ?? null,
           createdAt: r.created_at ?? null,
         }));
         send(res, 200, { visits });
@@ -2877,6 +2885,8 @@ if (libDb) {
                 country: geo.country,
                 region: geo.region,
                 city: geo.city,
+                lat: geo.lat,
+                lon: geo.lon,
               });
             } catch { /* non-fatal */ }
           }
