@@ -221,9 +221,7 @@ function buildPeriods(gran: Granularity, subs: StripeSubscription[]) {
   });
 }
 
-function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; expensesMonthly: number }) {
-  const [gran, setGran] = useState<Granularity>("weekly");
-
+function RevenueChart({ subs, expensesMonthly, gran }: { subs: StripeSubscription[]; expensesMonthly: number; gran: Granularity }) {
   const periods = buildPeriods(gran, subs);
   const periodsPerYear = gran === "yearly" ? 1 : gran === "monthly" ? 12 : gran === "weekly" ? 52 : 365;
   const expensePerPeriod = expensesMonthly * (12 / periodsPerYear);
@@ -254,7 +252,6 @@ function RevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; e
             <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Revenue Summary</div>
             <div style={{ fontSize: 14, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
           </div>
-          <GranTabs value={gran} onChange={setGran} />
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: gran === "weekly" ? 8 : 4, height: 150, marginTop: 14 }}>
           {rows.map((b, i) => {
@@ -590,6 +587,11 @@ export default function Sales() {
   const [expensesLoading, setExpensesLoading] = useState(true);
   const [expensesBusy, setExpensesBusy] = useState(false);
 
+  // One granularity for the whole page: KPI cards, Revenue Summary and Sale
+  // Summary all read it. The subscription table and Recent Customers are
+  // deliberately excluded — they're rosters of the current state, not series.
+  const [gran, setGran] = useState<Granularity>("weekly");
+
   // email (lowercase) -> Discord username, for the Active Subscriptions table's
   // Discord column. Best-effort — a failed fetch just leaves the column blank.
   const [discordByEmail, setDiscordByEmail] = useState<Map<string, string>>(new Map());
@@ -675,77 +677,61 @@ export default function Sales() {
     }
   };
 
-  // Daily buckets (last 14 days) driving each KPI card's sparkline — real
-  // signup/MRR history, not synthetic data.
-  const sparkSeries = useMemo(() => {
-    const subs = data?.subscriptions ?? [];
-    const customers = data?.recentCustomers ?? [];
-    const days = 14;
-    const now = new Date();
-    const buckets = Array.from({ length: days }, (_, i) => {
-      const d = new Date(now);
-      d.setDate(now.getDate() - (days - 1 - i));
-      d.setHours(0, 0, 0, 0);
-      return { date: d, label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }), mrr: 0, subs: 0, customers: 0 };
-    });
-    const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    const byKey = new Map(buckets.map(b => [dayKey(b.date), b]));
-
-    for (const s of subs) {
-      const d = new Date(s.created * 1000);
-      const b = byKey.get(dayKey(d));
-      if (!b) continue;
-      b.mrr += netMonthlyOf(s);
-      b.subs += 1;
-    }
-    for (const c of customers) {
-      const d = new Date(c.created * 1000);
-      const b = byKey.get(dayKey(d));
-      if (b) b.customers += 1;
-    }
-
-    // Running totals so the sparkline shows growth, not just that day's delta.
-    let mrrCum = 0, subsCum = 0, customersCum = 0;
-    return buckets.map(b => {
-      mrrCum += b.mrr; subsCum += b.subs; customersCum += b.customers;
-      return { label: b.label, mrr: mrrCum, subs: subsCum, customers: customersCum };
-    });
-  }, [data]);
-
   const expensesMonthly = (expenses ?? []).reduce((a, e) => a + monthlyEquivalent(e), 0);
 
-  // Turn the cumulative day buckets into per-card chart series.
+  // Every KPI card's curve is bucketed at the granularity picked in the header,
+  // using the same buildPeriods() windows the revenue bar charts use — so the
+  // cards and the charts below them always describe the same span of time.
   //
-  // sparkSeries counts *additions* inside the 14-day window, so its last value
-  // is "MRR added this fortnight", not total MRR — the old sparkline quietly
-  // charted a different number than the one printed above it. Anchoring each
-  // series so its final point equals the live Stripe total, and back-filling
-  // earlier days by subtracting what was added since, makes the curve a real
-  // history that lands exactly on the headline figure. The delta pill then
-  // means something: growth across the window.
-  const kpiSeries = useMemo(() => {
-    const s = data?.summary;
-    const anchor = (key: "mrr" | "subs" | "customers", total: number): LivePoint[] => {
-      if (!sparkSeries.length) return [];
-      const addedTotal = sparkSeries[sparkSeries.length - 1][key];
-      return sparkSeries.map(b => ({
-        label: b.label,
-        value: total - (addedTotal - b[key]),
-      }));
-    };
-    if (!s) return { mrr: [], subs: [], customers: [], net: [], netYearly: [], netYearlyAfterExpenses: [] };
+  // Buckets hold *running totals*, not per-period additions: a card headline
+  // reads "18 active subscriptions", so its curve has to be the path to 18, not
+  // the handful added this week.
+  const periodSeries = useMemo(() => {
+    const subs = data?.subscriptions ?? [];
+    const customers = data?.recentCustomers ?? [];
+    const periods = buildPeriods(gran, subs);
+    let mrrCum = 0, subsCum = 0, custCum = 0;
+    return periods.map(p => {
+      for (const sub of subs) {
+        const d = new Date(sub.created * 1000);
+        if (d < p.start || d > p.end) continue;
+        mrrCum += netMonthlyOf(sub);
+        subsCum += 1;
+      }
+      for (const c of customers) {
+        const d = new Date(c.created * 1000);
+        if (d >= p.start && d <= p.end) custCum += 1;
+      }
+      return { label: p.label, mrr: mrrCum, subs: subsCum, customers: custCum };
+    });
+  }, [data, gran]);
 
-    const mrr = anchor("mrr", s.mrr);
+  // Anchor each series so its final point equals the live Stripe total, then
+  // back-fill earlier buckets by subtracting what was added since. Without this
+  // a card would print "$1.2K MRR" above a curve topping out at whatever was
+  // signed inside the visible window — two different numbers on one card. It
+  // also makes the delta pill read as growth across the selected period.
+  const kpiSeries = useMemo(() => {
+    const sum = data?.summary;
+    if (!sum) return { mrr: [], subs: [], customers: [], net: [], netYearly: [], netYearlyAfterExpenses: [] };
+
+    const anchor = (key: "mrr" | "subs" | "customers", total: number): LivePoint[] => {
+      if (!periodSeries.length) return [];
+      const addedTotal = periodSeries[periodSeries.length - 1][key];
+      return periodSeries.map(b => ({ label: b.label, value: total - (addedTotal - b[key]) }));
+    };
     const scale = (pts: LivePoint[], f: (v: number) => number) => pts.map(p => ({ ...p, value: f(p.value) }));
+
+    const mrr = anchor("mrr", sum.mrr);
     return {
       mrr,
-      subs: anchor("subs", s.activeSubscriptions),
-      customers: anchor("customers", s.totalCustomers),
+      subs: anchor("subs", sum.activeSubscriptions),
+      customers: anchor("customers", sum.totalCustomers),
       net: scale(mrr, v => v - expensesMonthly),
       netYearly: scale(mrr, v => v * 12),
       netYearlyAfterExpenses: scale(mrr, v => (v - expensesMonthly) * 12),
     };
-  }, [data?.summary, sparkSeries, expensesMonthly]);
+  }, [data?.summary, periodSeries, expensesMonthly]);
 
   return (
     <div style={homeShellStyle}>
@@ -760,6 +746,7 @@ export default function Sales() {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <GranTabs value={gran} onChange={setGran} />
           <button
             onClick={() => { load(); loadExpenses(); loadDiscord(); }}
             disabled={loading}
@@ -783,9 +770,10 @@ export default function Sales() {
 
         {data?.configured && data.summary && (
           <>
-            {/* KPI row — every card carries a live line chart of the last 14 days.
-                Hover anywhere on a curve for the crosshair readout (day + exact
-                value); the pill top-right is the change across that window. */}
+            {/* KPI row — every card carries a live line chart bucketed at the
+                granularity selected in the header. Hover anywhere on a curve for
+                the crosshair readout (period + exact value); the pill top-right
+                is the change across the whole visible window. */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(272px, 1fr))", gap: 12 }}>
               {/* Headline: what actually gets paid, annualized. Discounts applied,
                   expenses NOT deducted — that's the "Yearly Expectation" card. */}
@@ -856,7 +844,7 @@ export default function Sales() {
             </div>
 
             {/* Revenue + sale summary charts */}
-            <RevenueChart subs={data.subscriptions} expensesMonthly={expensesMonthly} />
+            <RevenueChart subs={data.subscriptions} expensesMonthly={expensesMonthly} gran={gran} />
 
             {/* Active Subscriptions + Recent Customers — above Expenses */}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>

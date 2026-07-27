@@ -20,6 +20,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
       { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞", key: "ControlPanel" },
       { label: "Infra", href: "/owner/dev/owner?tab=infra", glyph: "◈", key: "ControlPanel" },
+      { label: "Visitors", href: "/owner/visitors", glyph: "◍", key: "Visitors" },
       { label: "Probe", href: "/owner/probe", glyph: "🔍", key: "Probe" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤", key: "Results" },
       { label: "Backtests", href: "/owner/backtests", glyph: "∿", key: "Backtests" },

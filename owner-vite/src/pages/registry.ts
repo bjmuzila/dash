@@ -11,6 +11,7 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   ControlPanel: lazy(() => import("./ControlPanel")),
   Admin: lazy(() => import("./Admin")),
   Sales: lazy(() => import("./Sales")),
+  Visitors: lazy(() => import("./Visitors")),
   Probe: lazy(() => import("./Probe")),
   Results: lazy(() => import("./Results")),
   Backtests: lazy(() => import("./Backtests")),

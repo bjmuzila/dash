@@ -501,6 +501,148 @@ function DiscordConnectionsPanel() {
   );
 }
 
+// ─── Feedback ──────────────────────────────────────────────────────────────────
+// Moved here from the Owner → Overview tab: it's a support queue about
+// customers, so it belongs beside the other customer panels rather than in a
+// wall of traffic metrics. Rebuilt on Admin's flat-panel idiom (the accordion
+// wrapper it used over there never actually collapsed anything).
+
+interface FeedbackItem {
+  id: number;
+  clerk_user_id: string | null;
+  email: string | null;
+  category: string;
+  message: string;
+  page: string | null;
+  status: string;
+  created_at: string | null;
+}
+
+function FeedbackPanel() {
+  const [rows, setRows] = useState<FeedbackItem[] | null>(null);
+  const [openCount, setOpenCount] = useState(0);
+  const [showResolved, setShowResolved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/feedback", { cache: "no-store" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows(Array.isArray(j.items) ? j.items : []);
+      setOpenCount(Number(j.openCount ?? 0));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const setStatus = useCallback(async (id: number, status: "open" | "resolved") => {
+    setBusyId(id);
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Update failed");
+    } finally {
+      setBusyId(null);
+    }
+  }, [load]);
+
+  const catColor: Record<string, string> = {
+    bug: T.red, idea: T.orange, note: T.cyan, other: T.green,
+  };
+  const visible = (rows ?? []).filter((f) => showResolved || f.status !== "resolved");
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.cyan }}>Feedback</span>
+        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, fontWeight: 700 }}>
+          {openCount} open
+        </span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>
+          {rows ? `${rows.length} total` : "…"} · submitted from the in-app widget
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: T.text, cursor: "pointer" }}>
+            <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} />
+            Show resolved
+          </label>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "…" : "↻"}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ maxHeight: 420, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 14 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>Loading…</div>
+        ) : visible.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>
+            {rows && rows.length > 0 ? "Nothing open — tick “Show resolved” to see the archive." : "No feedback yet."}
+          </div>
+        ) : (
+          visible.map((f) => {
+            const resolved = f.status === "resolved";
+            const accent = catColor[f.category] ?? T.cyan;
+            return (
+              <div
+                key={f.id}
+                style={{
+                  display: "flex", gap: 12, padding: "12px 16px",
+                  borderBottom: `1px solid ${T.border}`,
+                  opacity: resolved ? 0.55 : 1,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{
+                      fontSize: 14, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
+                      padding: "2px 8px", borderRadius: 20,
+                      color: accent, background: `${accent}1a`, border: `1px solid ${accent}44`,
+                    }}>
+                      {f.category}
+                    </span>
+                    <span style={{ fontSize: 14, color: T.text }}>{f.email || f.clerk_user_id || "unknown"}</span>
+                    {f.page && <span style={{ fontSize: 14, color: T.textSecondary, fontFamily: "var(--font-mono)" }}>{f.page}</span>}
+                    {f.created_at && (
+                      <span style={{ fontSize: 14, color: T.textSecondary }}>{new Date(f.created_at).toLocaleString()}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 14, color: T.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {f.message}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setStatus(f.id, resolved ? "open" : "resolved")}
+                  disabled={busyId === f.id}
+                  style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap", padding: "4px 12px", fontSize: 14, opacity: busyId === f.id ? 0.5 : 1 }}
+                >
+                  {busyId === f.id ? "…" : resolved ? "Reopen" : "Resolve"}
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
@@ -532,6 +674,9 @@ export default function Admin() {
 
       {/* Body */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 20 }}>
+
+        {/* Customer feedback queue — moved off the Owner → Overview tab. */}
+        <FeedbackPanel />
 
         {/* Always shown — sourced from Supabase auth, independent of Stripe config. */}
         <NotPayingPanel />

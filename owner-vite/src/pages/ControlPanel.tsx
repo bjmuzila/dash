@@ -2,8 +2,6 @@
 
 import React, { useEffect, useRef, useState, useCallback, Fragment } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useRefreshButton } from "../hooks/useRefreshButton";
-import { VisitorMap } from "../components/VisitorMap";
 import {
   LiveKpiCard,
   LiveLineChart,
@@ -602,16 +600,6 @@ const SECTION_TAB = {
   controls: "infra",
 } as const;
 
-interface FeedbackItem {
-  id: number;
-  clerk_user_id: string | null;
-  email: string | null;
-  category: string;
-  message: string;
-  page: string | null;
-  status: string;
-  created_at: string | null;
-}
 
 /**
  * Collapsible section card for the owner dashboard. The whole header is the
@@ -955,29 +943,104 @@ function monthlySignupSeries(
   return { counts, labels };
 }
 
+// ─── Overview granularity ─────────────────────────────────────────────────────
+// One control in the page header drives every card on the Overview tab, so the
+// KPI strip, the traffic/signup charts and the cumulative curve always describe
+// the same span. Same four steps and the same pill styling as the Sales page.
+
+export type OverviewGran = "daily" | "weekly" | "monthly" | "yearly";
+
+function GranTabs({ value, onChange }: { value: OverviewGran; onChange: (g: OverviewGran) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: 3 }}>
+      {(["daily", "weekly", "monthly", "yearly"] as const).map((g) => (
+        <button
+          key={g}
+          onClick={() => onChange(g)}
+          style={{
+            padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+            fontSize: 14, fontWeight: 700, textTransform: "capitalize", fontFamily: "inherit",
+            background: value === g ? HOME_THEME.cyan : "transparent",
+            color: value === g ? "#04141a" : HOME_THEME.text,
+          }}
+        >
+          {g}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Calendar-year buckets, oldest first. Yearly is "lifetime" — it spans from
+ *  the first year that has data through the current one, so the axis grows by
+ *  one bucket a year instead of showing a fixed rolling window. */
+function yearlyVisitSeries(visits: PageVisit[]): { counts: number[]; labels: string[] } {
+  const byYear = new Map<number, number>();
+  for (const v of visits) {
+    if (v.createdAt == null) continue;
+    const t = new Date(v.createdAt);
+    if (isNaN(t.getTime())) continue;
+    byYear.set(t.getFullYear(), (byYear.get(t.getFullYear()) ?? 0) + 1);
+  }
+  return yearBuckets(byYear);
+}
+
+function yearlySignupSeries(signups: Array<{ createdAt: number | null }>): { counts: number[]; labels: string[] } {
+  const byYear = new Map<number, number>();
+  for (const s of signups) {
+    if (s.createdAt == null) continue;
+    const t = new Date(s.createdAt);
+    if (isNaN(t.getTime())) continue;
+    byYear.set(t.getFullYear(), (byYear.get(t.getFullYear()) ?? 0) + 1);
+  }
+  return yearBuckets(byYear);
+}
+
+function yearBuckets(byYear: Map<number, number>): { counts: number[]; labels: string[] } {
+  const nowYear = new Date().getFullYear();
+  const years = [...byYear.keys()];
+  const first = years.length ? Math.min(Math.min(...years), nowYear) : nowYear;
+  const counts: number[] = [];
+  const labels: string[] = [];
+  for (let y = first; y <= nowYear; y++) {
+    counts.push(byYear.get(y) ?? 0);
+    labels.push(String(y));
+  }
+  return { counts, labels };
+}
+
+/** The visit/signup series for a granularity, plus the caption describing the
+ *  window. One place to change if a window length ever moves. */
+function seriesFor(gran: OverviewGran, visits: PageVisit[], signups: Array<{ createdAt: number | null }>) {
+  if (gran === "yearly") {
+    return { traffic: yearlyVisitSeries(visits), signups: yearlySignupSeries(signups), caption: "lifetime" };
+  }
+  if (gran === "monthly") {
+    return { traffic: monthlyVisitSeries(visits, 12), signups: monthlySignupSeries(signups, 12), caption: "12 months" };
+  }
+  if (gran === "weekly") {
+    return { traffic: weeklyVisitSeries(visits, 12), signups: weeklySignupSeries(signups, 12), caption: "12 weeks" };
+  }
+  return { traffic: dailyVisitSeries(visits, 7), signups: dailySignupSeries(signups, 7), caption: "7 days" };
+}
+
 /**
  * Tabbed metrics section — shows Traffic, Signups, and Cumulative Users
  * with daily/weekly/monthly time period tabs (defaults to daily).
  */
 function MetricsTabSection({
-  visits, signups, users, activeSessions
+  visits, signups, users, activeSessions, period
 }: {
   visits: PageVisit[];
   signups: Array<{ createdAt: number | null }>;
   users: number | null;
   activeSessions: number | null;
+  /** Owned by the page header now, not by this section. */
+  period: OverviewGran;
 }) {
-  const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
   const isMobile = useIsMobile();
 
-  // Generate series based on selected period
-  const traffic = period === "daily" ? dailyVisitSeries(visits, 7)
-    : period === "weekly" ? weeklyVisitSeries(visits, 12)
-    : monthlyVisitSeries(visits, 12);
-
-  const signupsSeries = period === "daily" ? dailySignupSeries(signups, 7)
-    : period === "weekly" ? weeklySignupSeries(signups, 7)
-    : monthlySignupSeries(signups, 12);
+  const { traffic, signups: signupsSeries, caption } = seriesFor(period, visits, signups);
 
   const cumulativeSeries = (() => {
     const cum: number[] = [];
@@ -992,36 +1055,12 @@ function MetricsTabSection({
   const trafficDelta = traffic.counts.length >= 2 && traffic.counts[0] > 0
     ? Math.round(((traffic.counts[traffic.counts.length - 1] - traffic.counts[0]) / traffic.counts[0]) * 100) : null;
 
-  const TabButton = ({ p, label }: { p: typeof period; label: string }) => (
-    <button
-      onClick={() => setPeriod(p)}
-      style={{
-        padding: "4px 10px",
-        fontSize: 14,
-        borderRadius: 5,
-        border: `1px solid ${period === p ? HOME_THEME.cyan : HOME_THEME.border}`,
-        background: period === p ? `${HOME_THEME.cyan}18` : "transparent",
-        color: period === p ? HOME_THEME.cyan : HOME_THEME.text,
-        fontWeight: period === p ? 600 : 400,
-        cursor: "pointer",
-        fontFamily: "inherit",
-      }}
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {/* Tab buttons */}
-      <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "space-between" }}>
-        <div className="tab-strip" style={{ display: "flex", gap: 6 }}>
-          <TabButton p="daily" label="Daily" />
-          <TabButton p="weekly" label="Weekly" />
-          <TabButton p="monthly" label="Monthly" />
-        </div>
+      {/* Window caption — the picker itself lives in the page header. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
         <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
-          {period === "daily" ? "7 days" : period === "weekly" ? "12 weeks" : "12 months"}
+          {caption}
         </span>
       </div>
 
@@ -1111,7 +1150,7 @@ function MetricsTabSection({
  *  is appended to an in-memory rolling series — that is what makes the line
  *  "live" rather than a static 7-point sparkline. */
 function KpiStrip({
-  isMobile, totalVisits, users, onToday, activeSessions, waitlist, infra, daily, dailySignups, cumUsers,
+  isMobile, totalVisits, users, onToday, activeSessions, waitlist, infra, visits, signups, gran,
 }: {
   isMobile: boolean;
   totalVisits: number;
@@ -1120,9 +1159,9 @@ function KpiStrip({
   activeSessions: number | null;
   waitlist: number | null;
   infra: { cpu: { value: string; spark: number[] }; wsPerHr: string };
-  daily: { counts: number[]; labels: string[] };
-  dailySignups: { counts: number[]; labels: string[] };
-  cumUsers: number[];
+  visits: PageVisit[];
+  signups: Array<{ createdAt: number | null }>;
+  gran: OverviewGran;
 }) {
   // Scalars with no server-side history — accumulated from each poll.
   const onTodaySeries = useLiveSeries(onToday);
@@ -1131,19 +1170,31 @@ function KpiStrip({
   const wsPerHrNum = Number.parseFloat(String(infra.wsPerHr).replace(/[^0-9.\-]/g, ""));
   const wsSeries = useLiveSeries(Number.isFinite(wsPerHrNum) ? wsPerHrNum : null);
 
-  // Visits: daily.counts are per-day loads. Running-total them and baseline so
-  // the final point lands exactly on the printed 12-day total.
+  // Bucketed at the header's granularity, so the strip re-scales with the rest
+  // of the page.
+  const { traffic, signups: signupBuckets } = seriesFor(gran, visits, signups);
+
+  // Visits: per-bucket loads. Running-total them and baseline so the final
+  // point lands exactly on the printed total.
   const visitsSeries: LivePoint[] = (() => {
-    if (!daily.counts.length) return [];
-    const total = daily.counts.reduce((a, b) => a + b, 0);
+    if (!traffic.counts.length) return [];
+    const total = traffic.counts.reduce((a, b) => a + b, 0);
     let run = 0;
-    return daily.counts.map((c, i) => {
+    return traffic.counts.map((c, i) => {
       run += c;
-      return { label: daily.labels[i] ?? "", value: totalVisits - (total - run) };
+      return { label: traffic.labels[i] ?? "", value: totalVisits - (total - run) };
     });
   })();
 
-  const usersSeries: LivePoint[] = cumUsers.map((v, i) => ({ label: dailySignups.labels[i] ?? "", value: v }));
+  // Same trick for users: cumulative signups, baselined onto the live total.
+  const usersSeries: LivePoint[] = (() => {
+    const base = (users ?? 0) - signupBuckets.counts.reduce((a, b) => a + b, 0);
+    let run = base;
+    return signupBuckets.counts.map((c, i) => {
+      run += c;
+      return { label: signupBuckets.labels[i] ?? "", value: run };
+    });
+  })();
   const cpuSeries: LivePoint[] = infra.cpu.spark.map((v) => ({ value: v }));
 
   const A = ["#5B9BD5", "#3FB8A0", "#E8A23D", "#4FB3C9", "#88C97A", "#E06C5E", "#E0A85E"];
@@ -1181,7 +1232,8 @@ function KpiStrip({
   );
 }
 
-function OverviewSection({ metrics }: {
+function OverviewSection({ metrics, gran }: {
+  gran: OverviewGran;
   metrics: {
     daily: { counts: number[]; labels: string[] };
     heatmap: { grid: number[][]; max: number };
@@ -1207,17 +1259,9 @@ function OverviewSection({ metrics }: {
       wsPerHr: string;
       wsSplit: string;
     };
-    ops: {
-      feedbackOpen: number;
-      levelsCount: number;
-      levelsRun: string | null;
-      staleEm: number;
-      eodToday: number;
-      maintenance: boolean;
-    };
   };
 }) {
-  const { daily, heatmap, dailySignups, weekly, totalVisits, activePages, users, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra, ops } = metrics;
+  const { heatmap, totalVisits, activePages, users, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1229,23 +1273,11 @@ function OverviewSection({ metrics }: {
   const cardStyle: React.CSSProperties = { ...homePanelStyle, padding: "13px 15px", display: "flex", flexDirection: "column", minWidth: 0 };
   const titleStyle: React.CSSProperties = { fontSize: 17, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 };
 
-  // Traffic — 7-day rolling daily bar chart (bars read far more clearly than a
-  // squished min/max line, especially when daily counts are close together).
-  const traffic = daily.counts.length ? daily.counts : [0];
-  const tMax = Math.max(...traffic, 1);
-
-  // Cumulative users — 7-day rolling: running total of daily signups, baselined
-  // so the last bar lands on the current total user count.
-  const cum: number[] = [];
-  dailySignups.counts.reduce((acc, v) => { const n = acc + v; cum.push(n); return n; }, (users ?? 0) - dailySignups.counts.reduce((a, b) => a + b, 0));
-  const cMax = Math.max(...(cum.length ? cum : [1]), 1);
-
-  const wkMax = weekly.counts.length ? Math.max(...weekly.counts) : 1;
+  // Traffic / signups / cumulative all moved into MetricsTabSection, which
+  // buckets them at the header's granularity. Only the two bar lists and the
+  // heatmap still need local maxima.
   const topMax = topPages.length ? Math.max(...topPages.map((p) => p.loads), 1) : 1;
-  const rowsMax = rowsToday.length ? Math.max(...rowsToday.map((r) => r.rows), 1) : 1; void tMax; void cMax; void wkMax;
-  const trafficDelta = traffic.length >= 2 && traffic[0] > 0
-    ? Math.round(((traffic[traffic.length - 1] - traffic[0]) / traffic[0]) * 100) : null;
-  void trafficDelta;
+  const rowsMax = rowsToday.length ? Math.max(...rowsToday.map((r) => r.rows), 1) : 1;
 
   // Mini horizontal-bar list — each row its own color.
   const BarList = ({ rows, max, mono }: { rows: { label: string; n: number }[]; max: number; mono?: boolean }) => (
@@ -1266,23 +1298,6 @@ function OverviewSection({ metrics }: {
     </div>
   );
 
-  const InfraRow = ({ label, value, spark, color }: { label: string; value: string; spark: number[]; color: string }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `0.5px solid ${HOME_THEME.border}` }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 14, fontWeight: 600, color: HOME_THEME.text, width: 110 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />{label}
-      </span>
-      <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "var(--font-mono)", width: 90, color: HOME_THEME.text }}>{value}</span>
-      <div style={{ marginLeft: "auto", width: 64 }}><Sparkline data={spark} accent={color} height={20} /></div>
-    </div>
-  );
-
-  const OpsRow = ({ label, children, last }: { label: string; children: React.ReactNode; last?: boolean }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, padding: "10px 0", borderBottom: last ? "none" : `0.5px solid ${HOME_THEME.border}`, color: HOME_THEME.text }}>
-      <span>{label}</span>
-      <span style={{ fontSize: 14, fontWeight: 500, fontFamily: "var(--font-mono)" }}>{children}</span>
-    </div>
-  );
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {/* KPI strip — every tile carries a live line chart, not a sparkline.
@@ -1297,13 +1312,13 @@ function OverviewSection({ metrics }: {
         activeSessions={activeSessions}
         waitlist={waitlist}
         infra={infra}
-        daily={daily}
-        dailySignups={dailySignups}
-        cumUsers={cum}
+        visits={visits}
+        signups={signups}
+        gran={gran}
       />
 
       {/* Traffic · signups · cumulative with tabs */}
-      <MetricsTabSection visits={visits} signups={signups} users={users} activeSessions={activeSessions} />
+      <MetricsTabSection visits={visits} signups={signups} users={users} activeSessions={activeSessions} period={gran} />
 
       {/* Top pages · rows today */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1fr 1fr", gap: 10 }}>
@@ -1319,10 +1334,9 @@ function OverviewSection({ metrics }: {
         </div>
       </div>
 
-      {/* Visitor choropleth — same page_visits rows, bucketed by cf-ipcountry.
-          Renders an all-grey world until the Cloudflare "Add visitor location
-          headers" managed transform is enabled (rows before that have no geo). */}
-      <VisitorMap rows={visits} />
+      {/* Visitor choropleth moved to its own /owner/visitors page — the d3
+          projection + 177-feature re-render on every hover was dominating this
+          tab's frame budget. */}
 
       {/* Hourly heatmap — real page_visits rows, bucketed by hour × weekday (ET). */}
       <div style={cardStyle}>
@@ -1355,36 +1369,6 @@ function OverviewSection({ metrics }: {
         </div>
       </div>
 
-      {/* Infra · ops */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1fr 1fr", gap: 10 }}>
-        <div style={cardStyle}>
-          <div style={titleStyle}>Infra · live</div>
-          <InfraRow label="CPU" value={infra.cpu.value} spark={infra.cpu.spark} color={pc(4)} />
-          <InfraRow label="Memory" value={infra.memory.value} spark={infra.memory.spark} color={pc(2)} />
-          <InfraRow label="Host net 1h" value={infra.hostNet.value} spark={infra.hostNet.spark} color={pc(3)} />
-          <InfraRow label="CF egress 24h" value={infra.cfEgress.value} spark={infra.cfEgress.spark} color={pc(6)} />
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0" }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: HOME_THEME.text, opacity: 1, width: 110 }}>WS split</span>
-            <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>{infra.wsSplit}</span>
-          </div>
-        </div>
-        <div style={cardStyle}>
-          <div style={titleStyle}>Ops queues</div>
-          <OpsRow label="Feedback open">{ops.feedbackOpen}</OpsRow>
-          <OpsRow label="Levels published">{ops.levelsCount} <span style={{ color: HOME_THEME.text, opacity: 1 }}>· {fmtLastRun(ops.levelsRun)}</span></OpsRow>
-          <OpsRow label="Stale EM tickers">
-            {ops.staleEm > 0
-              ? <span style={{ color: HOME_THEME.red }}>{ops.staleEm}</span>
-              : <span style={{ color: HOME_THEME.text, opacity: 1 }}>0</span>}
-          </OpsRow>
-          <OpsRow label="EOD GEX today">
-            {ops.eodToday > 0 ? `${ops.eodToday} saved` : <span style={{ color: HOME_THEME.text, opacity: 1 }}>not yet · fires 3:55pm</span>}
-          </OpsRow>
-          <OpsRow label="Maintenance" last>
-            {ops.maintenance ? <span style={{ color: HOME_THEME.red }}>ON</span> : <span style={{ color: HOME_THEME.text, opacity: 1 }}>off</span>}
-          </OpsRow>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1399,6 +1383,10 @@ export default function ControlPanel() {
   const isMobile = useIsMobile();
   // Active page tab (persisted). Sections are assigned to a tab via SECTION_TAB.
   const [ownerTab, setOwnerTab] = useState<OwnerTab>("overview");
+
+  // Overview's one time-window control. Lives here so the header can render it
+  // and every card under the Overview tab reads the same value.
+  const [overviewGran, setOverviewGran] = useState<OverviewGran>("daily");
   useEffect(() => {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
@@ -1501,37 +1489,25 @@ export default function ControlPanel() {
       : [];
 
   // EOD GEX save status (today's rows from eod_gex table)
+  // Rows still loaded for the EOD GEX panel's own fetch; the Ops queue card that
+  // read the array is gone.
   const [eodGex, setEodGex] = useState<EodGexRow[]>([]);
+  void eodGex;
 
   // Auth status (Supabase). Null until first fetch.
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
 
-  // Customer feedback feed
-  const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
+  // Open-feedback count — the card itself lives on Admin now; this is only the
+  // number behind the Overview nav badge.
   const [feedbackOpenCount, setFeedbackOpenCount] = useState(0);
-  const [feedbackShowResolved, setFeedbackShowResolved] = useState(false);
-  const loadFeedback = useCallback(async (throwOnError = false) => {
-    try {
-      const r = await fetch("/api/feedback", { cache: "no-store" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
-      setFeedback(Array.isArray(j.items) ? j.items : []);
-      setFeedbackOpenCount(Number(j.openCount ?? 0));
-    } catch (e) { if (throwOnError) throw e; /* else ignore */ }
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/feedback", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive && j) setFeedbackOpenCount(Number(j.openCount ?? 0)); })
+      .catch(() => { /* badge is cosmetic — a failure just leaves it at 0 */ });
+    return () => { alive = false; };
   }, []);
-  const { trigger: feedbackRefresh, label: feedbackRefreshLabel, style: feedbackRefreshStyle } =
-    useRefreshButton(useCallback(async () => { await loadFeedback(true); }, [loadFeedback]));
-  const resolveFeedback = useCallback(async (id: number, status: "open" | "resolved") => {
-    try {
-      await fetch("/api/feedback", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status }),
-      });
-      await loadFeedback();
-    } catch { /* ignore */ }
-  }, [loadFeedback]);
-  useEffect(() => { loadFeedback(); }, [loadFeedback]);
 
   // Visit log (page loads w/ IP). Collapsed state persisted in localStorage.
   const [visits, setVisits] = useState<PageVisit[]>([]);
@@ -2255,17 +2231,6 @@ export default function ControlPanel() {
         : "—",
     };
 
-    // Ops queue — real counts/states.
-    const staleEm = levels.tickers.filter((t) => t.stale).length;
-    const ops = {
-      feedbackOpen: feedbackOpenCount,
-      levelsCount: levels.count,
-      levelsRun: levels.lastRun,
-      staleEm,
-      eodToday: eodGex.length,
-      maintenance: maint === true,
-    };
-
     // Unique visitors "on today" — distinct user (ip fallback for logged-out)
     // seen since midnight ET. The real "who came today", unlike activeSessions
     // which counts 30-day-unexpired logins regardless of recent activity.
@@ -2299,7 +2264,7 @@ export default function ControlPanel() {
       visits,
       signups,
       infra,
-      ops,
+
     };
   })();
 
@@ -2506,6 +2471,7 @@ export default function ControlPanel() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {ownerTab === "overview" && <GranTabs value={overviewGran} onChange={setOverviewGran} />}
             {lastRefresh && !isMobile && (
               <span style={{ fontSize: 14, color: `${HOME_THEME.text}`, fontFamily: "var(--font-mono)" }}>
                 {lastRefresh.toLocaleTimeString("en-US", { hour12: false })}
@@ -2579,7 +2545,7 @@ export default function ControlPanel() {
           } as React.CSSProperties}
         >
         {/* ── Overview dashboard (real front-end data) ── */}
-        {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} />}
+        {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} gran={overviewGran} />}
 
         {/* ── Flow / EM ticker visit trackers (overview tab, above feedback) ── */}
         {ownerTab === "overview" && (
@@ -2589,95 +2555,9 @@ export default function ControlPanel() {
           </>
         )}
 
-        {/* ── Customer feedback feed (overview tab) ── */}
-        {ownerTab === "overview" && (
-        <AccordionCard
-          id="feedback"
-          title="Feedback"
-          subtitle={`${feedbackOpenCount} open · ${feedback.length} total`}
-          open={openSet.has("feedback")}
-          onToggle={toggleSection}
-          accent={HOME_THEME.orange}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button
-                style={{ ...homeSecondaryButtonStyle, color: (feedbackRefreshStyle.color as string) ?? (homeSecondaryButtonStyle as { color?: string }).color }}
-                onClick={feedbackRefresh}
-              >
-                {feedbackRefreshLabel}
-              </button>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: HOME_THEME.text, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={feedbackShowResolved}
-                  onChange={(e) => setFeedbackShowResolved(e.target.checked)}
-                />
-                Show resolved
-              </label>
-            </div>
-
-            {(() => {
-              const visible = feedback.filter((f) => feedbackShowResolved || f.status !== "resolved");
-              if (visible.length === 0) {
-                return <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>No feedback yet.</span>;
-              }
-              const catColor: Record<string, string> = {
-                bug: HOME_THEME.red, idea: HOME_THEME.orange, note: HOME_THEME.cyan, other: HOME_THEME.green,
-              };
-              return (
-                <div className="owner-scroll" style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
-              {visible.map((f) => {
-                const resolved = f.status === "resolved";
-                return (
-                  <div
-                    key={f.id}
-                    style={{
-                      display: "flex", gap: 12, padding: "12px 14px", borderRadius: 10,
-                      border: `1px solid ${HOME_THEME.border}`,
-                      background: resolved ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
-                      opacity: resolved ? 0.55 : 1,
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{
-                          fontSize: 14, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em",
-                          padding: "2px 8px", borderRadius: 20,
-                          color: catColor[f.category] ?? HOME_THEME.cyan,
-                          background: `${catColor[f.category] ?? HOME_THEME.cyan}1a`,
-                          border: `1px solid ${catColor[f.category] ?? HOME_THEME.cyan}44`,
-                        }}>
-                          {f.category}
-                        </span>
-                        <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>
-                          {f.email || f.clerk_user_id || "unknown"}
-                        </span>
-                        {f.created_at && (
-                          <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>
-                            {new Date(f.created_at).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 14, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {f.message}
-                      </div>
-                    </div>
-                    <button
-                      style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", whiteSpace: "nowrap" }}
-                      onClick={() => resolveFeedback(f.id, resolved ? "open" : "resolved")}
-                    >
-                      {resolved ? "Reopen" : "Resolve"}
-                    </button>
-                  </div>
-                );
-              })}
-                </div>
-              );
-            })()}
-          </div>
-        </AccordionCard>
-        )}
+        {/* Feedback moved to the Admin page — it's a support queue, not a
+            metric, and it belongs next to the other customer panels. The open
+            count is still fetched here to badge the Overview nav item. */}
 
         {/* ── System KPIs ── */}
         {/* Note: live status dots (server/postgres/theta/feed/etc.) already show

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
@@ -30,7 +30,17 @@ export interface VisitorMapRow {
   lat?: number | null;
   lon?: number | null;
   ip?: string | null;
+  /** Optional per-visit detail. Only used to populate the click-to-pin card —
+   *  the choropleth and bubbles never read these. */
+  path?: string | null;
+  pageLabel?: string | null;
+  userId?: string | null;
+  createdAt?: string | null;
 }
+
+/** How many raw rows each country/city keeps for its detail card. Enough to
+ *  fill the card's scroll area without holding the whole log twice. */
+const SAMPLE_CAP = 60;
 
 // cf-ipcountry sentinels that aren't real places: XX = Cloudflare couldn't
 // geolocate the IP, T1 = Tor exit node. Both are grouped with "no country".
@@ -46,6 +56,8 @@ interface CountryStat {
   name: string;
   visits: number;
   unique: number;
+  /** Most recent raw rows, for the pinned detail card. */
+  sample: VisitorMapRow[];
 }
 
 /**
@@ -62,6 +74,7 @@ interface PlaceStat {
   country: string | null;
   visits: number;
   unique: number;
+  sample: VisitorMapRow[];
 }
 
 interface Aggregate {
@@ -80,9 +93,9 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   // Unique visitors are approximated by distinct client IP — the only stable
   // per-visitor key we log (guests have no user id). Same IP on two continents
   // is not a case worth modelling here.
-  const acc = new Map<string, { visits: number; ips: Set<string> }>();
+  const acc = new Map<string, { visits: number; ips: Set<string>; sample: VisitorMapRow[] }>();
   const globalIps = new Set<string>();
-  const placeAcc = new Map<string, { lat: number; lon: number; label: string; country: string | null; visits: number; ips: Set<string> }>();
+  const placeAcc = new Map<string, { lat: number; lon: number; label: string; country: string | null; visits: number; ips: Set<string>; sample: VisitorMapRow[] }>();
   let unknownVisits = 0;
   let totalVisits = 0;
 
@@ -109,11 +122,13 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
           country: code && !NON_COUNTRY.has(code) ? code : null,
           visits: 0,
           ips: new Set<string>(),
+          sample: [],
         };
         placeAcc.set(pk, place);
       }
       place.visits++;
       place.ips.add(r.ip || `anon:${pk}:${place.visits}`);
+      if (place.sample.length < SAMPLE_CAP) place.sample.push(r);
     }
 
     if (!code || NON_COUNTRY.has(code)) {
@@ -122,10 +137,11 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     }
     let bucket = acc.get(code);
     if (!bucket) {
-      bucket = { visits: 0, ips: new Set<string>() };
+      bucket = { visits: 0, ips: new Set<string>(), sample: [] };
       acc.set(code, bucket);
     }
     bucket.visits++;
+    if (bucket.sample.length < SAMPLE_CAP) bucket.sample.push(r);
     // Fall back to a synthetic key so an IP-less row still counts as one visitor
     // instead of collapsing every such row into a single phantom visitor.
     bucket.ips.add(r.ip || `anon:${bucket.visits}`);
@@ -138,6 +154,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
       name: ALPHA2_NAME[code] || code,
       visits: b.visits,
       unique: b.ips.size,
+      sample: b.sample,
     });
   }
   const ranked = [...byCode.values()].sort((a, b) => b.unique - a.unique);
@@ -152,6 +169,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
       country: p.country,
       visits: p.visits,
       unique: p.ips.size,
+      sample: p.sample,
     }))
     .sort((a, b) => b.unique - a.unique);
 
@@ -244,6 +262,15 @@ function useElementWidth<T extends HTMLElement>() {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
+/** A pinned country or city, with the raw rows behind it. */
+interface SelectedPlace {
+  kind: "country" | "place";
+  name: string;
+  unique: number;
+  visits: number;
+  sample: VisitorMapRow[];
+}
+
 interface HoverState {
   /** "place" hovers come from a bubble, "country" from the choropleth beneath. */
   kind: "country" | "place";
@@ -288,14 +315,151 @@ function zoomAbout(v: View, nextK: number, px: number, py: number, w: number, h:
   return clampView({ k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio }, w, h);
 }
 
+/** Detail card for a clicked country or city. Everything here is derived from
+ *  the sampled raw rows the aggregator kept — no extra fetch. */
+function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => void }) {
+  const { topPages, recent, ips } = useMemo(() => {
+    const pageCounts = new Map<string, number>();
+    const ipSet = new Set<string>();
+    for (const r of place.sample) {
+      const label = r.pageLabel || r.path || "(unknown page)";
+      pageCounts.set(label, (pageCounts.get(label) ?? 0) + 1);
+      if (r.ip) ipSet.add(r.ip);
+    }
+    const withTime = place.sample
+      .filter((r) => r.createdAt)
+      .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime());
+    return {
+      topPages: [...pageCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6),
+      recent: withTime.slice(0, 12),
+      ips: [...ipSet],
+    };
+  }, [place]);
+
+  const Row = ({ label, value }: { label: string; value: ReactNode }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 14, padding: "4px 0" }}>
+      <span style={{ color: HOME_THEME.text, opacity: 0.6, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+      <span style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        position: "absolute", top: 12, right: 12, zIndex: 5,
+        width: 300, maxHeight: "calc(100% - 24px)",
+        display: "flex", flexDirection: "column",
+        background: HOME_THEME.panelBgStrong,
+        border: `1px solid ${HOME_THEME.borderStrong}`,
+        borderRadius: 12,
+        boxShadow: `0 10px 34px ${ownerRgba("#000000", 0.6)}`,
+        overflow: "hidden",
+      }}
+      // Don't let a drag that starts on the card pan the map underneath.
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ padding: "10px 12px", borderBottom: `1px solid ${HOME_THEME.border}`, display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {place.name}
+          </div>
+          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.lightBlue, marginTop: 2 }}>
+            {place.kind === "place" ? "City · from IP" : "Country"}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          style={{
+            background: "transparent", border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.text,
+            borderRadius: 6, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "3px 7px", flexShrink: 0,
+          }}
+        >×</button>
+      </div>
+
+      <div className="owner-scroll" style={{ overflowY: "auto", padding: "8px 12px 12px" }}>
+        <Row label="Unique visitors" value={place.unique.toLocaleString()} />
+        <Row label="Page loads" value={place.visits.toLocaleString()} />
+        {ips.length > 0 && <Row label="Distinct IPs seen" value={ips.length.toLocaleString()} />}
+
+        {topPages.length > 0 && (
+          <>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.45, margin: "10px 0 4px" }}>
+              Top pages
+            </div>
+            {topPages.map(([label, n]) => (
+              <Row key={label} label={label} value={n.toLocaleString()} />
+            ))}
+          </>
+        )}
+
+        {recent.length > 0 && (
+          <>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.45, margin: "10px 0 4px" }}>
+              Recent visits
+            </div>
+            {recent.map((r, i) => (
+              <div key={i} style={{ padding: "5px 0", borderBottom: i === recent.length - 1 ? "none" : `1px solid ${HOME_THEME.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 14 }}>
+                  <span style={{ color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {r.pageLabel || r.path || "—"}
+                  </span>
+                  <span style={{ color: HOME_THEME.text, opacity: 0.55, fontFamily: "var(--font-mono)", flexShrink: 0, fontSize: 10 }}>
+                    {new Date(r.createdAt!).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                  </span>
+                </div>
+                {r.ip && (
+                  <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.4, fontFamily: "var(--font-mono)", marginTop: 1 }}>
+                    {r.ip}{r.userId ? ` · ${r.userId.slice(0, 12)}…` : ""}
+                  </div>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+
+        {place.sample.length >= SAMPLE_CAP && (
+          <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.35, marginTop: 8 }}>
+            Showing the first {SAMPLE_CAP} logged rows for this location.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
   const [features, setFeatures] = useState<Array<Feature<Geometry, { name?: string }>> | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
+  // Click pins a place; hover only previews it. Kept separate so moving the
+  // mouse away doesn't dismiss the card you just opened.
+  const [selected, setSelected] = useState<SelectedPlace | null>(null);
   const [wrapRef, width] = useElementWidth<HTMLDivElement>();
   const [view, setView] = useState<View>(IDENTITY);
   const [showBubbles, setShowBubbles] = useState(true);
   const svgRef = useRef<SVGSVGElement>(null);
+  // What a click right now would pin. Written by the same mousemove handlers
+  // that drive the tooltip, and read on pointerup — see endDrag for why this
+  // can't just be an onClick on the geometry.
+  const pending = useRef<SelectedPlace | null>(null);
+  // getBoundingClientRect() forces a layout flush; calling it on every
+  // mousemove was a measurable chunk of this component's hover cost. Cache it
+  // and invalidate on resize/scroll instead.
+  const rectRef = useRef<DOMRect | null>(null);
+  const svgRect = useCallback((): DOMRect | null => {
+    if (!rectRef.current && svgRef.current) rectRef.current = svgRef.current.getBoundingClientRect();
+    return rectRef.current;
+  }, []);
+  useEffect(() => {
+    const invalidate = () => { rectRef.current = null; };
+    window.addEventListener("scroll", invalidate, true);
+    window.addEventListener("resize", invalidate);
+    return () => {
+      window.removeEventListener("scroll", invalidate, true);
+      window.removeEventListener("resize", invalidate);
+    };
+  }, []);
   // Drag state lives in a ref: panning shouldn't re-render on every pointermove
   // beyond the one setView call, and a ref avoids stale-closure bugs.
   const drag = useRef<{ id: number; x: number; y: number; moved: boolean } | null>(null);
@@ -352,6 +516,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
         name: (code && ALPHA2_NAME[code]) || f.properties?.name || "Unknown",
         unique: stat?.unique ?? 0,
         visits: stat?.visits ?? 0,
+        sample: stat?.sample ?? [],
       };
     });
   }, [features, projection, stats]);
@@ -368,6 +533,70 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
     }
     return out;
   }, [projection, stats]);
+
+  // ── Layers ────────────────────────────────────────────────────────────────
+  //
+  // Both layers are memoized on geometry + zoom only, deliberately NOT on
+  // `hover`. Hover used to restyle the matching element in place, which meant
+  // every mousemove re-ran `paths.map` over ~177 features (plus a fresh style
+  // object each) and re-reconciled the whole tree. Now hover just draws one
+  // extra outline on top, and pointer movement costs a single element.
+  const countryLayer = useMemo(() => paths.map((p) => (
+    <path
+      key={p.key}
+      d={p.d}
+      fill={p.unique > 0 ? rampColor(intensity(p.unique, stats.maxUnique)) : EMPTY_FILL}
+      stroke={STROKE}
+      // Divide by k so borders stay hairline-thin as you zoom in instead of
+      // swelling into slabs.
+      strokeWidth={0.4 / view.k}
+      style={{ transition: "fill 120ms linear", cursor: p.unique > 0 ? "pointer" : "default" }}
+      onMouseMove={(e) => {
+        if (drag.current?.moved) return; // suppress hover mid-pan
+        const box = svgRect();
+        if (!box) return;
+        setHover({
+          kind: "country", code: p.code, name: p.name,
+          unique: p.unique, visits: p.visits,
+          x: e.clientX - box.left, y: e.clientY - box.top,
+        });
+        pending.current = p.unique > 0
+          ? { kind: "country", name: p.name, unique: p.unique, visits: p.visits, sample: p.sample }
+          : null;
+      }}
+    />
+  )), [paths, stats.maxUnique, view.k, svgRect]);
+
+  const bubbleLayer = useMemo(() => bubbles.map((b) => (
+    <circle
+      key={b.key}
+      cx={b.cx}
+      cy={b.cy}
+      r={b.r / view.k}
+      fill={BUBBLE_FILL}
+      stroke={BUBBLE_STROKE}
+      strokeWidth={0.9 / view.k}
+      style={{ cursor: "pointer" }}
+      onMouseMove={(e) => {
+        if (drag.current?.moved) return;
+        const box = svgRect();
+        if (!box) return;
+        setHover({
+          kind: "place", code: b.key, name: b.label,
+          unique: b.unique, visits: b.visits,
+          x: e.clientX - box.left, y: e.clientY - box.top,
+        });
+        pending.current = { kind: "place", name: b.label, unique: b.unique, visits: b.visits, sample: b.sample };
+      }}
+    />
+  )), [bubbles, view.k, svgRect]);
+
+  const hoveredCountry = hover?.kind === "country" && hover.code
+    ? paths.find((p) => p.code === hover.code) ?? null
+    : null;
+  const hoveredBubble = hover?.kind === "place"
+    ? bubbles.find((b) => b.key === hover.code) ?? null
+    : null;
 
   // Re-clamp after a resize so a view that was legal at the old size can't leave
   // a strip of empty card showing at the new one.
@@ -417,9 +646,17 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
 
   const endDrag = (e: React.PointerEvent<SVGSVGElement>) => {
     if (drag.current?.id === e.pointerId) {
+      const wasPan = drag.current.moved;
       if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
       drag.current = null;
       setPanning(false);
+      // Selection is resolved here rather than from an onClick on the country
+      // path / city circle: onPointerDown captures the pointer on the <svg>, and
+      // pointer capture retargets the follow-up click event to the capture
+      // element — so a handler on the child would never fire. `pending` is set
+      // by the same mousemove that drives the tooltip, so it's already the thing
+      // under the cursor. A drag that happens to end on a country isn't a click.
+      if (!wasPan) setSelected(pending.current);
     }
   };
 
@@ -516,7 +753,8 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
               cursor: panning ? "grabbing" : zoomed ? "grab" : "default",
               touchAction: "none", // let pointer events own pan/zoom on touch
             }}
-            onMouseLeave={() => setHover(null)}
+            onMouseLeave={() => { setHover(null); pending.current = null; }}
+            onMouseMoveCapture={() => { pending.current = null; }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
@@ -524,67 +762,36 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             onDoubleClick={() => zoomBy(STEP)}
           >
             <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
-            {paths.map((p) => {
-              const t = intensity(p.unique, stats.maxUnique);
-              const isHovered = hover?.kind === "country" && hover.code != null && hover.code === p.code;
-              return (
-                <path
-                  key={p.key}
-                  d={p.d}
-                  fill={p.unique > 0 ? rampColor(t) : EMPTY_FILL}
-                  stroke={isHovered ? HOME_THEME.lightBlue : STROKE}
-                  // Divide by k so borders stay hairline-thin as you zoom in
-                  // instead of swelling into slabs.
-                  strokeWidth={(isHovered ? 1.1 : 0.4) / view.k}
-                  style={{ transition: "fill 120ms linear" }}
-                  onMouseMove={(e) => {
-                    if (drag.current?.moved) return; // suppress hover mid-pan
-                    const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
-                    setHover({
-                      kind: "country",
-                      code: p.code,
-                      name: p.name,
-                      unique: p.unique,
-                      visits: p.visits,
-                      x: e.clientX - box.left,
-                      y: e.clientY - box.top,
-                    });
-                  }}
-                />
-              );
-            })}
+            {countryLayer}
+            {hoveredCountry && (
+              // Highlight drawn as one extra path on top rather than by
+              // restyling the hovered country in place — that keeps the base
+              // layer independent of `hover`, so a mousemove no longer
+              // rebuilds and reconciles all ~177 country paths.
+              <path
+                d={hoveredCountry.d}
+                fill="none"
+                stroke={HOME_THEME.lightBlue}
+                strokeWidth={1.1 / view.k}
+                pointerEvents="none"
+              />
+            )}
 
             {/* Bubble layer — one dot per city centroid, area ∝ visitors.
                 Radius and stroke divide by k so a bubble keeps a constant
                 on-screen size while zooming separates overlapping cities. */}
-            {showBubbles && bubbles.map((b) => {
-              const isHovered = hover?.kind === "place" && hover.code === b.key;
-              return (
-                <circle
-                  key={b.key}
-                  cx={b.cx}
-                  cy={b.cy}
-                  r={b.r / view.k}
-                  fill={BUBBLE_FILL}
-                  stroke={isHovered ? HOME_THEME.text : BUBBLE_STROKE}
-                  strokeWidth={(isHovered ? 1.6 : 0.9) / view.k}
-                  style={{ cursor: "crosshair" }}
-                  onMouseMove={(e) => {
-                    if (drag.current?.moved) return;
-                    const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
-                    setHover({
-                      kind: "place",
-                      code: b.key,
-                      name: b.label,
-                      unique: b.unique,
-                      visits: b.visits,
-                      x: e.clientX - box.left,
-                      y: e.clientY - box.top,
-                    });
-                  }}
-                />
-              );
-            })}
+            {showBubbles && bubbleLayer}
+            {showBubbles && hoveredBubble && (
+              <circle
+                cx={hoveredBubble.cx}
+                cy={hoveredBubble.cy}
+                r={hoveredBubble.r / view.k}
+                fill="none"
+                stroke={HOME_THEME.text}
+                strokeWidth={1.6 / view.k}
+                pointerEvents="none"
+              />
+            )}
             </g>
           </svg>
         )}
@@ -667,6 +874,12 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             )}
           </div>
         )}
+
+        {/* Pinned detail card — click a country or city bubble. Unlike the
+            tooltip above this is interactive (scrollable, dismissible), so it
+            gets pointer events and sits anchored to the corner rather than
+            chasing the cursor. */}
+        {selected && <PlaceCard place={selected} onClose={() => setSelected(null)} />}
       </div>
 
       {/* Legend + honest footnote about rows with no geo. */}
