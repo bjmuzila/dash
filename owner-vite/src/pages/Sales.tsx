@@ -122,6 +122,30 @@ function fmtMoneyTick(cents: number) {
 
 const fmtCountTick = (v: number) => String(Math.round(v));
 
+/** Multiplier taking a MONTHLY rate to the selected period. Daily uses 365/12
+ *  rather than 30 so daily × 365 lands back on the yearly figure exactly. */
+const PERIOD_FACTOR: Record<Granularity, number> = {
+  daily: 12 / 365,
+  weekly: 12 / 52,
+  monthly: 1,
+  yearly: 12,
+};
+
+const PERIOD_WORD: Record<Granularity, string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+};
+
+/** "per day" / "per year" — for the sub-line under a rescaled money card. */
+const PERIOD_PER: Record<Granularity, string> = {
+  daily: "per day",
+  weekly: "per week",
+  monthly: "per month",
+  yearly: "per year",
+};
+
 function SetupBanner() {
   return (
     <div style={{ ...homePanelStyle, padding: "32px 28px", textAlign: "center", border: `1px solid ${T.cyan}33` }}>
@@ -713,7 +737,7 @@ export default function Sales() {
   // also makes the delta pill read as growth across the selected period.
   const kpiSeries = useMemo(() => {
     const sum = data?.summary;
-    if (!sum) return { mrr: [], subs: [], customers: [], net: [], netYearly: [], netYearlyAfterExpenses: [] };
+    if (!sum) return { mrr: [], subs: [], customers: [], net: [] };
 
     const anchor = (key: "mrr" | "subs" | "customers", total: number): LivePoint[] => {
       if (!periodSeries.length) return [];
@@ -722,16 +746,17 @@ export default function Sales() {
     };
     const scale = (pts: LivePoint[], f: (v: number) => number) => pts.map(p => ({ ...p, value: f(p.value) }));
 
-    const mrr = anchor("mrr", sum.mrr);
+    // Both money curves are expressed in the same period as their headline, so
+    // the tip badge always matches the big number above it.
+    const f = PERIOD_FACTOR[gran];
+    const monthly = anchor("mrr", sum.mrr);
     return {
-      mrr,
+      mrr: scale(monthly, v => v * f),
       subs: anchor("subs", sum.activeSubscriptions),
       customers: anchor("customers", sum.totalCustomers),
-      net: scale(mrr, v => v - expensesMonthly),
-      netYearly: scale(mrr, v => v * 12),
-      netYearlyAfterExpenses: scale(mrr, v => (v - expensesMonthly) * 12),
+      net: scale(monthly, v => (v - expensesMonthly) * f),
     };
-  }, [data?.summary, periodSeries, expensesMonthly]);
+  }, [data?.summary, periodSeries, expensesMonthly, gran]);
 
   return (
     <div style={homeShellStyle}>
@@ -777,33 +802,30 @@ export default function Sales() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(272px, 1fr))", gap: 12 }}>
               {/* Headline: what actually gets paid, annualized. Discounts applied,
                   expenses NOT deducted — that's the "Yearly Expectation" card. */}
+              {/* The money cards re-express themselves in the selected period —
+                  pick Yearly and this IS the old "Net Pay · Yearly" card, which
+                  is why that one (and its after-expenses twin) are gone. Counts
+                  don't rescale: 18 subscriptions is 18 whatever window you pick. */}
               <LiveKpiCard
-                label="Net Pay · Yearly"
-                value={fmtMoney(data.summary.mrr * 12)}
-                sub={`${fmtMoney(data.summary.mrr)}/mo actual × 12`}
-                points={kpiSeries.netYearly}
-                accent={T.green}
-                formatValue={fmtMoneyTick}
-                tooltip={
-                  `What subscriptions actually bill, annualized: ${fmtMoney(data.summary.mrr)}/mo × 12.` +
-                  (data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
-                    ? ` At list price this would read ${fmtMoney(data.summary.grossMrr * 12)} — ${data.summary.discountedSubscriptions ?? 0} discounted sub(s) account for the ${fmtMoney((data.summary.grossMrr - data.summary.mrr) * 12)}/yr difference.`
-                    : " No active discounts, so this matches list price.") +
-                  " Before Stripe fees and before expenses."
-                }
-              />
-              <LiveKpiCard
-                label="Monthly Recurring Revenue"
-                value={fmtMoney(data.summary.mrr)}
+                label={`${PERIOD_WORD[gran]} Recurring Revenue`}
+                value={fmtMoney(data.summary.mrr * PERIOD_FACTOR[gran])}
                 sub={
                   data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
-                    ? `${fmtMoney(data.summary.grossMrr)}/mo at list price`
-                    : undefined
+                    ? `${fmtMoney(data.summary.grossMrr * PERIOD_FACTOR[gran])} at list price`
+                    : PERIOD_PER[gran]
                 }
                 points={kpiSeries.mrr}
                 accent={T.cyan}
                 formatValue={fmtMoneyTick}
-                tooltip="Sum of active subscription amounts as actually billed (promo codes and coupons applied), normalized to a monthly rate (yearly ÷ 12)"
+                tooltip={
+                  `Active subscriptions as actually billed (promo codes and coupons applied), ` +
+                  `normalized to a monthly rate then scaled to the selected period ` +
+                  `(${fmtMoney(data.summary.mrr)}/mo × ${PERIOD_FACTOR[gran].toFixed(4)}).` +
+                  (data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
+                    ? ` ${data.summary.discountedSubscriptions ?? 0} discounted sub(s) account for the gap to list price.`
+                    : " No active discounts, so this matches list price.") +
+                  " Before Stripe fees and before expenses."
+                }
               />
               <LiveKpiCard
                 label="Active Subscriptions"
@@ -824,22 +846,13 @@ export default function Sales() {
                 tooltip="Unique paying customers with a subscription created on/after 2026-07-01"
               />
               <LiveKpiCard
-                label="Net (Rev − Expenses)"
-                value={fmtMoney(data.summary.mrr - expensesMonthly)}
-                sub={data.summary.churnedThisMonth === 0 ? "No churn 🎉" : `${data.summary.churnedThisMonth} churned this month`}
+                label={`Net · ${PERIOD_WORD[gran]}`}
+                value={fmtMoney((data.summary.mrr - expensesMonthly) * PERIOD_FACTOR[gran])}
+                sub={data.summary.churnedThisMonth === 0 ? "after expenses · no churn 🎉" : `after expenses · ${data.summary.churnedThisMonth} churned this month`}
                 points={kpiSeries.net}
                 accent={T.lightBlue}
                 formatValue={fmtMoneyTick}
-                tooltip={`Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate`}
-              />
-              <LiveKpiCard
-                label="Yearly Expectation"
-                value={fmtMoney((data.summary.mrr - expensesMonthly) * 12)}
-                sub="after expenses × 12"
-                points={kpiSeries.netYearlyAfterExpenses}
-                accent={T.gold}
-                formatValue={fmtMoneyTick}
-                tooltip={`(Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo) × 12 months. Net Pay above is the same figure before expenses.`}
+                tooltip={`(Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate), scaled to the selected period. At Yearly this is the old "Yearly Expectation" figure.`}
               />
             </div>
 

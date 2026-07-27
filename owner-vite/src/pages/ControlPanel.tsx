@@ -626,12 +626,23 @@ function monthlySignupSeries(
 // KPI strip, the traffic/signup charts and the cumulative curve always describe
 // the same span. Same four steps and the same pill styling as the Sales page.
 
-export type OverviewGran = "daily" | "weekly" | "monthly" | "yearly";
+export type OverviewGran = "live" | "daily" | "weekly" | "monthly" | "yearly";
+
+/** Every consumer maps the shared granularity onto its own nearest supported
+ *  window. Hetzner/Cloudflare only expose live/7d/30d, so yearly folds back to
+ *  monthly there rather than showing an empty chart. */
+export const HOSTING_WINDOW: Record<OverviewGran, "live" | "weekly" | "monthly"> = {
+  live: "live",
+  daily: "live",
+  weekly: "weekly",
+  monthly: "monthly",
+  yearly: "monthly",
+};
 
 function GranTabs({ value, onChange }: { value: OverviewGran; onChange: (g: OverviewGran) => void }) {
   return (
     <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: 3 }}>
-      {(["daily", "weekly", "monthly", "yearly"] as const).map((g) => (
+      {(["live", "daily", "weekly", "monthly", "yearly"] as const).map((g) => (
         <button
           key={g}
           onClick={() => onChange(g)}
@@ -647,6 +658,36 @@ function GranTabs({ value, onChange }: { value: OverviewGran; onChange: (g: Over
       ))}
     </div>
   );
+}
+
+/** Last 24 hours in one-hour ET buckets — the "live" step. Finer than daily,
+ *  and the only window where you can see today's shape as it happens. */
+function hourlyVisitSeries(visits: PageVisit[], hours = 24): { counts: number[]; labels: string[] } {
+  return hourBuckets(visits.map((v) => v.createdAt), hours);
+}
+
+function hourlySignupSeries(signups: Array<{ createdAt: number | null }>, hours = 24): { counts: number[]; labels: string[] } {
+  return hourBuckets(signups.map((s) => s.createdAt), hours);
+}
+
+function hourBuckets(stamps: Array<string | number | null | undefined>, hours: number): { counts: number[]; labels: string[] } {
+  const hourKey = (d: Date) => d.toLocaleString("en-US", { timeZone: ET_TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false });
+  const byHour = new Map<string, number>();
+  for (const raw of stamps) {
+    if (raw == null) continue;
+    const t = new Date(raw);
+    if (isNaN(t.getTime())) continue;
+    byHour.set(hourKey(t), (byHour.get(hourKey(t)) ?? 0) + 1);
+  }
+  const counts: number[] = [];
+  const labels: string[] = [];
+  const now = Date.now();
+  for (let i = hours - 1; i >= 0; i--) {
+    const d = new Date(now - i * 3_600_000);
+    counts.push(byHour.get(hourKey(d)) ?? 0);
+    labels.push(d.toLocaleTimeString("en-US", { timeZone: ET_TZ, hour: "numeric", hour12: true }).replace(" ", ""));
+  }
+  return { counts, labels };
 }
 
 /** Calendar-year buckets, oldest first. Yearly is "lifetime" — it spans from
@@ -699,7 +740,10 @@ function seriesFor(gran: OverviewGran, visits: PageVisit[], signups: Array<{ cre
   if (gran === "weekly") {
     return { traffic: weeklyVisitSeries(visits, 12), signups: weeklySignupSeries(signups, 12), caption: "12 weeks" };
   }
-  return { traffic: dailyVisitSeries(visits, 7), signups: dailySignupSeries(signups, 7), caption: "7 days" };
+  if (gran === "daily") {
+    return { traffic: dailyVisitSeries(visits, 7), signups: dailySignupSeries(signups, 7), caption: "7 days" };
+  }
+  return { traffic: hourlyVisitSeries(visits, 24), signups: hourlySignupSeries(signups, 24), caption: "24 hours" };
 }
 
 /**
@@ -926,7 +970,7 @@ function SystemStrip({
  *  daily/weekly/monthly/yearly control: those are different time concepts, and
  *  the upstream APIs only expose these three windows (there is no yearly). */
 function HostingStrip({
-  isMobile, renderMetrics, cfMetrics, renderWindow, renderLoading, onWindow, memAccent, cpuAccent,
+  isMobile, renderMetrics, cfMetrics, renderWindow, renderLoading, onWindow, memAccent, cpuAccent, gran,
 }: {
   isMobile: boolean;
   renderMetrics: RenderMetrics | null;
@@ -936,7 +980,20 @@ function HostingStrip({
   onWindow: (w: "live" | "weekly" | "monthly") => void;
   memAccent: string;
   cpuAccent: string;
+  gran: OverviewGran;
 }) {
+  // No toolbar of its own any more — the page header's control is the single
+  // time-frame switch for the whole tab. Refetch whenever the mapped upstream
+  // window actually changes, not on every granularity step (daily and live both
+  // map to the same Hetzner/CF window, so stepping between them is free).
+  const wanted = HOSTING_WINDOW[gran];
+  useEffect(() => {
+    if (wanted !== renderWindow) onWindow(wanted);
+    // onWindow identity is stable (useCallback in the parent); depending on
+    // renderWindow here would re-fire mid-fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted]);
+
   const hostMs = renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000;
   const cfMs = renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000;
   const winLabel = renderWindow === "live" ? "24h" : renderWindow === "weekly" ? "7d" : "30d";
@@ -951,22 +1008,9 @@ function HostingStrip({
         <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.45 }}>
           Hosting · Hetzner + Cloudflare
         </span>
-        <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: 3 }}>
-          {(["live", "weekly", "monthly"] as const).map((w) => (
-            <button
-              key={w}
-              onClick={() => onWindow(w)}
-              style={{
-                padding: "3px 10px", borderRadius: 6, border: "none", cursor: "pointer",
-                fontSize: 12, fontWeight: 700, fontFamily: "inherit", letterSpacing: "0.04em",
-                background: renderWindow === w ? HOME_THEME.cyan : "transparent",
-                color: renderWindow === w ? "#04141a" : HOME_THEME.text,
-              }}
-            >
-              {w === "live" ? "Live" : w === "weekly" ? "7 Day" : "30 Day"}
-            </button>
-          ))}
-        </div>
+        <span style={{ fontSize: 10, fontFamily: "var(--font-mono), monospace", color: HOME_THEME.text, opacity: 0.35 }}>
+          {gran === "yearly" ? "30 day — no yearly upstream" : renderWindow === "live" ? "live window" : renderWindow === "weekly" ? "7 day window" : "30 day window"}
+        </span>
       </div>
 
       <div style={{
@@ -1030,11 +1074,12 @@ function HostingStrip({
  *  is appended to an in-memory rolling series — that is what makes the line
  *  "live" rather than a static 7-point sparkline. */
 function KpiStrip({
-  isMobile, totalVisits, users, onToday, activeSessions, waitlist, infra, visits, signups, gran,
+  isMobile, totalVisits, users, subscribers, onToday, activeSessions, waitlist, infra, visits, signups, gran,
 }: {
   isMobile: boolean;
   totalVisits: number;
   users: number | null;
+  subscribers: number | null;
   onToday: number;
   activeSessions: number | null;
   waitlist: number | null;
@@ -1049,6 +1094,9 @@ function KpiStrip({
   const waitlistSeries = useLiveSeries(waitlist);
   const wsPerHrNum = Number.parseFloat(String(infra.wsPerHr).replace(/[^0-9.\-]/g, ""));
   const wsSeries = useLiveSeries(Number.isFinite(wsPerHrNum) ? wsPerHrNum : null);
+  // Stripe reports a current count only — no per-day history — so this builds
+  // from polls like the other scalars.
+  const subsSeries = useLiveSeries(subscribers);
 
   // Bucketed at the header's granularity, so the strip re-scales with the rest
   // of the page.
@@ -1077,7 +1125,7 @@ function KpiStrip({
   })();
   const cpuSeries: LivePoint[] = infra.cpu.spark.map((v) => ({ value: v }));
 
-  const A = ["#5B9BD5", "#3FB8A0", "#E8A23D", "#4FB3C9", "#88C97A", "#E06C5E", "#E0A85E"];
+  const A = ["#5B9BD5", "#3FB8A0", "#E8A23D", "#4FB3C9", "#88C97A", "#E06C5E", "#E0A85E", "#B58BD8"];
   const int = (v: number) => Math.round(v).toLocaleString();
 
   const tiles: {
@@ -1086,6 +1134,7 @@ function KpiStrip({
   }[] = [
     { label: "Visits · 12d", value: totalVisits.toLocaleString(), points: visitsSeries, accent: A[0], fmt: int },
     { label: "Total users", value: users != null ? users.toLocaleString() : "—", points: usersSeries, accent: A[1], fmt: int },
+    { label: "Subscribers", value: subscribers != null ? subscribers.toLocaleString() : "—", points: subsSeries, accent: A[7], fmt: int },
     { label: "On today", value: onToday.toLocaleString(), points: onTodaySeries, accent: A[2], fmt: int },
     { label: "Logged in · 30d", value: activeSessions != null ? activeSessions.toLocaleString() : "—", points: sessionsSeries, accent: A[3], fmt: int },
     { label: "Waitlist", value: waitlist != null ? waitlist.toLocaleString() : "—", points: waitlistSeries, accent: A[4], fmt: int },
@@ -1121,6 +1170,7 @@ function OverviewSection({ metrics, gran }: {
     totalVisits: number;
     activePages: number;
     users: number | null;
+    subscribers: number | null;
     waitlist: number | null;
     activeSessions: number | null;
     onToday: number;
@@ -1140,7 +1190,7 @@ function OverviewSection({ metrics, gran }: {
     };
   };
 }) {
-  const { totalVisits, activePages, users, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra } = metrics;
+  const { totalVisits, activePages, users, subscribers, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1187,6 +1237,7 @@ function OverviewSection({ metrics, gran }: {
         isMobile={isMobile}
         totalVisits={totalVisits}
         users={users}
+        subscribers={subscribers}
         onToday={onToday}
         activeSessions={activeSessions}
         waitlist={waitlist}
@@ -1274,6 +1325,21 @@ export default function ControlPanel() {
 
   const [server, setServer] = useState<ServerStatus>({});
   const [waitlistCount, setWaitlistCount] = useState<number | null>(null);
+  // Paying subscribers, straight from Stripe. `users` next to it counts every
+  // signed-up account — the vast majority of which never pay — so the two
+  // side by side are the conversion story.
+  const [subscriberCount, setSubscriberCount] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/admin/stripe-summary", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!alive || !j?.summary) return;
+        setSubscriberCount(Number(j.summary.activeSubscriptions ?? 0));
+      })
+      .catch(() => { /* Stripe unconfigured or down — the tile just reads — */ });
+    return () => { alive = false; };
+  }, []);
   // Wall-clock time (ms) when server.uptime was last received, so we can tick the
   // displayed uptime forward without drift across snapshots.
   const uptimeBaseRef = useRef<{ uptime: number; at: number } | null>(null);
@@ -1978,6 +2044,7 @@ export default function ControlPanel() {
       totalVisits,
       activePages,
       users: authStatus?.stats?.userCount ?? null,
+      subscribers: subscriberCount,
       waitlist: waitlistCount,
       activeSessions: authStatus?.stats?.activeSessions ?? null,
       onToday,
@@ -2289,6 +2356,7 @@ export default function ControlPanel() {
               onWindow={fetchRenderWindow}
               memAccent={memAccent}
               cpuAccent={cpuAccent}
+              gran={overviewGran}
             />
           </>
         )}

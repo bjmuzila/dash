@@ -34,13 +34,21 @@ export interface VisitorMapRow {
   lat?: number | null;
   lon?: number | null;
   ip?: string | null;
-  /** Per-visit detail for the click-to-pin card. `userId` is the exception: it
-   *  is also the strongest visitor identity, so it decides which dot a row
-   *  belongs to (see `visitorKey`). */
+  /** Per-visit detail for the click-to-pin card. */
   path?: string | null;
   pageLabel?: string | null;
-  userId?: string | null;
   createdAt?: string | null;
+  /** Account behind the visit, resolved server-side in /api/page-visits by
+   *  joining page_visits.user_id against `users`. All null for signed-out
+   *  traffic — those dots are labelled "Visitor". A `userId` with no
+   *  `userEmail` means the session belonged to an account that's since gone.
+   *  `userEmail` is also the strongest identity available, so it decides which
+   *  dot a row belongs to (see `visitorKey`). */
+  userId?: string | null;
+  userEmail?: string | null;
+  userCreatedAt?: string | null;
+  userLastLoginAt?: string | null;
+  isOwner?: boolean | null;
 }
 
 /** How many raw rows each country/visitor keeps for its detail card. Enough to
@@ -86,11 +94,21 @@ interface VisitorDot {
   slotCount: number;
   /** "Denver, Colorado, United States" */
   placeLabel: string;
-  /** How this visitor is identified — IP, else user id, else "anonymous". */
+  /** What the map calls this person: their email if they were signed in,
+   *  otherwise the honest "Visitor". */
   visitorLabel: string;
+  /** True when at least one of this dot's rows carried a session. Drives both
+   *  the label and the filled-vs-hollow dot styling. */
+  signedIn: boolean;
   country: string | null;
   ip: string | null;
+  /** Every IP this person was seen on at this location. */
+  ips: string[];
   userId: string | null;
+  email: string | null;
+  accountCreatedAt: string | null;
+  lastLoginAt: string | null;
+  isOwner: boolean;
   /** Page loads by this one visitor. */
   visits: number;
   sample: VisitorMapRow[];
@@ -100,6 +118,8 @@ interface Aggregate {
   byCode: Map<string, CountryStat>;
   ranked: CountryStat[];
   dots: VisitorDot[];
+  /** How many of those dots are identified accounts rather than anonymous. */
+  signedInDots: number;
   placeCount: number;
   visitsWithCoords: number;
   totalVisits: number;
@@ -109,12 +129,18 @@ interface Aggregate {
   maxDotVisits: number;
 }
 
-/** One identity per visitor, best effort: a signed-in user id wins because it
- *  survives a changing IP, then the IP, then a per-row synthetic key so an
- *  unidentifiable row counts as its own visitor rather than merging with every
- *  other one. Used for the country counts AND the dots, so the choropleth and
- *  the dot layer can never report a different number of people. */
+/** One identity per visitor, best effort: the account wins (email first, then
+ *  user id) because it survives a changing IP, then the IP, then a per-row
+ *  synthetic key so an unidentifiable row counts as its own visitor rather than
+ *  merging with every other one. Used for the country counts AND the dots, so
+ *  the choropleth and the dot layer can never report a different number of
+ *  people.
+ *
+ *  Signed-out rows from the same IP as a signed-in one stay a SEPARATE dot on
+ *  purpose: we know a session was attached to one and not the other, and
+ *  quietly merging them would claim an identification the log doesn't support. */
 function visitorKey(r: VisitorMapRow, fallback: number): string {
+  if (r.userEmail) return `e:${r.userEmail.trim().toLowerCase()}`;
   if (r.userId) return `u:${r.userId}`;
   if (r.ip) return `ip:${r.ip}`;
   return `anon:${fallback}`;
@@ -126,7 +152,9 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   // One entry per (coordinate cluster × visitor) — the dot layer's unit of work.
   const dotAcc = new Map<string, {
     lat: number; lon: number; placeKey: string; placeLabel: string;
-    visitorLabel: string; country: string | null; ip: string | null; userId: string | null;
+    signedIn: boolean; country: string | null; ips: Set<string>;
+    userId: string | null; email: string | null;
+    accountCreatedAt: string | null; lastLoginAt: string | null; isOwner: boolean;
     visits: number; sample: VisitorMapRow[];
   }>();
   // Fan-out needs to know how crowded each coordinate is, so count dots per place.
@@ -162,10 +190,14 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
           lon: r.lon,
           placeKey: pk,
           placeLabel: label || `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`,
-          visitorLabel: r.ip || (r.userId ? `${r.userId.slice(0, 12)}…` : "anonymous"),
+          signedIn: Boolean(r.userEmail || r.userId),
           country: code && !NON_COUNTRY.has(code) ? code : null,
-          ip: r.ip ?? null,
+          ips: new Set<string>(),
           userId: r.userId ?? null,
+          email: r.userEmail ?? null,
+          accountCreatedAt: r.userCreatedAt ?? null,
+          lastLoginAt: r.userLastLoginAt ?? null,
+          isOwner: Boolean(r.isOwner),
           visits: 0,
           sample: [],
         };
@@ -173,7 +205,15 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
         placeSizes.set(pk, (placeSizes.get(pk) ?? 0) + 1);
       }
       dot.visits++;
+      if (r.ip) dot.ips.add(r.ip);
+      // Later rows can carry detail the first one lacked (an account row logged
+      // before the email join existed, a session that started mid-visit).
       if (!dot.userId && r.userId) dot.userId = r.userId;
+      if (!dot.email && r.userEmail) dot.email = r.userEmail;
+      if (!dot.accountCreatedAt && r.userCreatedAt) dot.accountCreatedAt = r.userCreatedAt;
+      if (!dot.lastLoginAt && r.userLastLoginAt) dot.lastLoginAt = r.userLastLoginAt;
+      if (r.isOwner) dot.isOwner = true;
+      if (r.userEmail || r.userId) dot.signedIn = true;
       if (dot.sample.length < SAMPLE_CAP) dot.sample.push(r);
     }
 
@@ -211,6 +251,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     .map(([key, d]) => {
       const slot = slotCursor.get(d.placeKey) ?? 0;
       slotCursor.set(d.placeKey, slot + 1);
+      const ips = [...d.ips];
       return {
         key,
         lat: d.lat,
@@ -219,10 +260,18 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
         slot,
         slotCount: placeSizes.get(d.placeKey) ?? 1,
         placeLabel: d.placeLabel,
-        visitorLabel: d.visitorLabel,
+        // An account without a resolvable email still isn't anonymous, so it
+        // reads as the id rather than being demoted to "Visitor".
+        visitorLabel: d.email || (d.userId ? `${d.userId.slice(0, 12)}…` : "Visitor"),
+        signedIn: d.signedIn,
         country: d.country,
-        ip: d.ip,
+        ip: ips[0] ?? null,
+        ips,
         userId: d.userId,
+        email: d.email,
+        accountCreatedAt: d.accountCreatedAt,
+        lastLoginAt: d.lastLoginAt,
+        isOwner: d.isOwner,
         visits: d.visits,
         sample: d.sample,
       };
@@ -233,6 +282,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     byCode,
     ranked,
     dots,
+    signedInDots: dots.reduce((n, d) => n + (d.signedIn ? 1 : 0), 0),
     placeCount: placeSizes.size,
     visitsWithCoords,
     totalVisits,
@@ -281,8 +331,13 @@ function intensity(value: number, max: number): number {
 // person, and the only thing it varies by is how many pages that person loaded.
 const BUBBLE_MIN_R = 2.4;
 const BUBBLE_MAX_R = 6;
-const BUBBLE_FILL = "rgba(255,183,3,0.42)";   // OWNER_THEME.gold, translucent
+// Hue says "a person"; FILL says "we know who". A signed-in account is a solid
+// gold dot, an anonymous visitor is a hollow ring — one channel, readable at
+// 3px, and it survives colour-blindness in a way two warm hues would not.
+const BUBBLE_FILL = "rgba(255,183,3,0.18)";   // OWNER_THEME.gold, translucent
 const BUBBLE_STROKE = "rgba(255,183,3,0.95)";
+const MEMBER_FILL = "rgba(255,183,3,0.92)";
+const MEMBER_STROKE = "rgba(255,255,255,0.92)";
 
 /**
  * Radius by sqrt of count so AREA tracks the value — the standard for
@@ -358,6 +413,8 @@ interface SelectedPlace {
   unique: number;
   visits: number;
   sample: VisitorMapRow[];
+  /** The dot itself, so the card can show who this was. Absent for countries. */
+  account?: VisitorDot | null;
 }
 
 interface HoverState {
@@ -366,6 +423,7 @@ interface HoverState {
   code: string | null;
   name: string;
   sub?: string | null;
+  signedIn?: boolean;
   unique: number;
   visits: number;
   x: number;
@@ -405,9 +463,24 @@ function zoomAbout(v: View, nextK: number, px: number, py: number, w: number, h:
   return clampView({ k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio }, w, h);
 }
 
+const sectionLabel: CSSProperties = {
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  color: HOME_THEME.text,
+  opacity: 0.45,
+  margin: "10px 0 4px",
+};
+
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const fmtDateTime = (iso: string) =>
+  new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
 /** Detail card for a clicked country or visitor. Everything here is derived from
  *  the sampled raw rows the aggregator kept — no extra fetch. */
 function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => void }) {
+  const acct = place.kind === "visitor" ? place.account ?? null : null;
   const { topPages, recent, ips } = useMemo(() => {
     const pageCounts = new Map<string, number>();
     const ipSet = new Set<string>();
@@ -429,7 +502,7 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
   const Row = ({ label, value }: { label: string; value: ReactNode }) => (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 14, padding: "4px 0" }}>
       <span style={{ color: HOME_THEME.text, opacity: 0.6, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)", flexShrink: 0 }}>{value}</span>
+      <span style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)", textAlign: "right", overflowWrap: "anywhere", minWidth: 0 }}>{value}</span>
     </div>
   );
 
@@ -453,8 +526,14 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
           <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis" }}>
             {place.name}
           </div>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.lightBlue, marginTop: 2 }}>
-            {place.kind === "visitor" ? "Visitor · located by IP" : "Country"}
+          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: acct?.signedIn ? HOME_THEME.gold : HOME_THEME.lightBlue, marginTop: 2 }}>
+            {place.kind !== "visitor"
+              ? "Country"
+              : acct?.isOwner
+                ? "Signed in · owner (you)"
+                : acct?.signedIn
+                  ? "Signed-in account"
+                  : "Visitor · not signed in"}
           </div>
           {place.sub && (
             <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.55, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -473,17 +552,42 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
       </div>
 
       <div className="owner-scroll" style={{ overflowY: "auto", padding: "8px 12px 12px" }}>
-        {place.kind === "country"
-          ? <Row label="Unique visitors" value={place.unique.toLocaleString()} />
-          : <Row label="Identified by" value={ips[0] || place.name} />}
+        {place.kind === "country" && <Row label="Unique visitors" value={place.unique.toLocaleString()} />}
         <Row label="Page loads" value={place.visits.toLocaleString()} />
         {place.kind === "country" && ips.length > 0 && <Row label="Distinct IPs seen" value={ips.length.toLocaleString()} />}
 
+        {/* Who this was. Present only for a visitor dot; an account section that
+            says "not signed in" is more useful than no section, because it
+            answers the question rather than leaving it ambiguous. */}
+        {acct && (
+          <>
+            <div style={sectionLabel}>Account</div>
+            {acct.signedIn ? (
+              <>
+                {acct.email && <Row label="Email" value={acct.email} />}
+                {acct.userId && <Row label="User ID" value={`${acct.userId.slice(0, 14)}…`} />}
+                {acct.accountCreatedAt && <Row label="Member since" value={fmtDate(acct.accountCreatedAt)} />}
+                <Row
+                  label="Last login"
+                  value={acct.lastLoginAt ? fmtDateTime(acct.lastLoginAt) : "never (no session row)"}
+                />
+              </>
+            ) : (
+              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: "4px 0", lineHeight: 1.5 }}>
+                No session on any of these loads — anonymous visitor, identified
+                only by IP.
+              </div>
+            )}
+            {acct.placeLabel && <Row label="Location" value={acct.placeLabel} />}
+            {acct.ips.length > 0 && (
+              <Row label={acct.ips.length === 1 ? "IP" : `IPs (${acct.ips.length})`} value={acct.ips.join(", ")} />
+            )}
+          </>
+        )}
+
         {topPages.length > 0 && (
           <>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.45, margin: "10px 0 4px" }}>
-              Top pages
-            </div>
+            <div style={sectionLabel}>Top pages</div>
             {topPages.map(([label, n]) => (
               <Row key={label} label={label} value={n.toLocaleString()} />
             ))}
@@ -492,9 +596,7 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
 
         {recent.length > 0 && (
           <>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.45, margin: "10px 0 4px" }}>
-              Recent visits
-            </div>
+            <div style={sectionLabel}>Recent visits</div>
             {recent.map((r, i) => (
               <div key={i} style={{ padding: "5px 0", borderBottom: i === recent.length - 1 ? "none" : `1px solid ${HOME_THEME.border}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 14 }}>
@@ -680,9 +782,9 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       cx={b.cx}
       cy={b.cy}
       r={b.r / sizeK}
-      fill={BUBBLE_FILL}
-      stroke={BUBBLE_STROKE}
-      strokeWidth={0.9}
+      fill={b.signedIn ? MEMBER_FILL : BUBBLE_FILL}
+      stroke={b.signedIn ? MEMBER_STROKE : BUBBLE_STROKE}
+      strokeWidth={b.signedIn ? 1.2 : 0.9}
       vectorEffect="non-scaling-stroke"
       style={{ cursor: "pointer" }}
       onMouseMove={(e) => {
@@ -691,10 +793,13 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
         if (!box) return;
         setHover({
           kind: "visitor", code: b.key, name: b.visitorLabel, sub: b.placeLabel,
-          unique: 1, visits: b.visits,
+          signedIn: b.signedIn, unique: 1, visits: b.visits,
           x: e.clientX - box.left, y: e.clientY - box.top,
         });
-        pending.current = { kind: "visitor", name: b.visitorLabel, sub: b.placeLabel, unique: 1, visits: b.visits, sample: b.sample };
+        pending.current = {
+          kind: "visitor", name: b.visitorLabel, sub: b.placeLabel,
+          unique: 1, visits: b.visits, sample: b.sample, account: b,
+        };
       }}
     />
   )), [bubbles, sizeK, svgRect]);
@@ -996,9 +1101,14 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                   : "No visits"}
             </div>
             {hover.kind === "visitor" && (
-              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45, marginTop: 3 }}>
-                {hover.sub || "one visitor"}
-              </div>
+              <>
+                <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45, marginTop: 3 }}>
+                  {hover.sub || "located by IP"}
+                </div>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: hover.signedIn ? HOME_THEME.gold : HOME_THEME.text, opacity: hover.signedIn ? 0.9 : 0.35, marginTop: 2 }}>
+                  {hover.signedIn ? "signed-in account" : "not signed in"}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1045,7 +1155,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             title={
               stats.dots.length === 0
                 ? "No coordinates logged yet — enable Cloudflare's visitor location headers"
-                : `${stats.dots.length} visitors across ${stats.placeCount} locations · one dot per visitor, size ∝ their page loads · zoom in to separate visitors sharing a city`
+                : `${stats.dots.length} visitors across ${stats.placeCount} locations · one dot per visitor (solid = signed-in account, hollow = anonymous), size ∝ their page loads · zoom in to separate visitors sharing a city`
             }
             style={{
               marginLeft: 6,
@@ -1063,6 +1173,17 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             }}
           >
             <span
+              title="Signed-in account"
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: 999,
+                background: MEMBER_FILL,
+                border: `1px solid ${MEMBER_STROKE}`,
+              }}
+            />
+            <span
+              title="Anonymous visitor"
               style={{
                 width: 9,
                 height: 9,
@@ -1073,6 +1194,21 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             />
             Visitors
           </button>
+
+          {/* Solid vs hollow is the whole legend for identity, so spell the split
+              out in numbers too — a glance at the map can't count them. */}
+          {stats.dots.length > 0 && (
+            <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
+              <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.gold }}>
+                {stats.signedInDots.toLocaleString()}
+              </span>{" "}
+              signed in ·{" "}
+              <span style={{ fontFamily: "var(--font-mono)" }}>
+                {(stats.dots.length - stats.signedInDots).toLocaleString()}
+              </span>{" "}
+              anonymous
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           {stats.ranked.slice(0, 5).map((c) => (
