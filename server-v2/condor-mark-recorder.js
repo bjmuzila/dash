@@ -79,12 +79,32 @@ function currentWeekStartET(d = new Date()) {
 async function post(base, pathname, body) {
   const res = await fetch(`${base}${pathname}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    // The /api/* middleware gate redirects an unauthenticated call to "/".
+    // fetch follows that by default, so the landing page came back as 200 HTML,
+    // JSON.parse'd to {}, and every counter below printed as `0/0 priced` — a
+    // silent no-op indistinguishable from an empty board. Manual redirects turn
+    // that into a loud 307 instead.
+    redirect: 'manual',
+    headers: {
+      'content-type': 'application/json',
+      // Same shared-secret bypass every other server-v2 recorder uses
+      // (levels-engine, eod-gex-recorder, ref-levels-recorder, …).
+      ...(process.env.INTERNAL_API_TOKEN
+        ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN }
+        : {}),
+    },
     body: JSON.stringify(body || {}),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`${pathname} ${res.status}: ${text.slice(0, 200)}`);
-  try { return JSON.parse(text); } catch { return {}; }
+  // Anything non-JSON on a 200 means we were handed a page, not an API response.
+  // Failing here is the whole point: the old `catch { return {} }` is what let
+  // this run unnoticed.
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${pathname} returned non-JSON (${res.status}) — ${text.slice(0, 120)}`);
+  }
 }
 
 async function runHourly(base, weekStart, reason) {
