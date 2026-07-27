@@ -7,6 +7,7 @@ import {
   homeShellStyle,
   homeSecondaryButtonStyle,
 } from "../lib/theme";
+import { LiveKpiCard, type LivePoint } from "../components/LiveKpiCard";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -108,63 +109,18 @@ function monthlyEquivalent(e: ExpenseRow): number {
   return 0;
 }
 
-// ─── Sparkline ─────────────────────────────────────────────────────────────────
-// Small inline trend line for a KPI card. Each point gets an invisible hit
-// target with a native <title> so hovering any part of the line shows the
-// day + value — "hover over stats" per the design brief.
-function Sparkline({ points, color }: { points: { label: string; value: number }[]; color: string }) {
-  const W = 72, H = 26, PAD = 3;
-  const vals = points.map(p => p.value);
-  const max = Math.max(...vals, 1);
-  const min = Math.min(...vals, 0);
-  const range = max - min || 1;
-  const step = points.length > 1 ? (W - PAD * 2) / (points.length - 1) : 0;
-  const coords = points.map((p, i) => ({
-    x: PAD + i * step,
-    y: H - PAD - ((p.value - min) / range) * (H - PAD * 2),
-    ...p,
-  }));
-  const linePath = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
-
-  return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: "visible" }}>
-      <path d={linePath} fill="none" stroke={color} strokeWidth={1.6} />
-      {coords.map((c, i) => (
-        <g key={i}>
-          <circle cx={c.x} cy={c.y} r={i === coords.length - 1 ? 2.4 : 1.2} fill={color} opacity={i === coords.length - 1 ? 1 : 0.55} />
-          {/* Invisible larger hit target carries the hover tooltip. */}
-          <circle cx={c.x} cy={c.y} r={5} fill="transparent" style={{ cursor: "default" }}>
-            <title>{`${c.label}: ${c.value}`}</title>
-          </circle>
-        </g>
-      ))}
-    </svg>
-  );
-}
-
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
-function KpiCard({
-  label, value, sub, spark, sparkColor, tooltip,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  spark?: { label: string; value: number }[];
-  sparkColor?: string;
-  tooltip?: string;
-}) {
-  return (
-    <div style={{ ...homePanelStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 8 }} title={tooltip}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: T.gold, letterSpacing: "0.01em" }}>{label}</div>
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ fontSize: 14, fontWeight: 500, color: T.text, lineHeight: 1 }}>{value}</div>
-        {spark && spark.length > 1 && <Sparkline points={spark} color={sparkColor ?? T.cyan} />}
-      </div>
-      {sub && <div style={{ fontSize: 14, color: T.textSecondary }}>{sub}</div>}
-    </div>
-  );
+/** Money formatter for chart axes/badges — takes raw cents like fmtMoney, but
+ *  always compact so it fits the 40px y-axis gutter. */
+function fmtMoneyTick(cents: number) {
+  const d = cents / 100;
+  if (Math.abs(d) >= 1_000_000) return `$${(d / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(d) >= 1000) return `$${(d / 1000).toFixed(1)}K`;
+  return `$${d.toFixed(0)}`;
 }
+
+const fmtCountTick = (v: number) => String(Math.round(v));
 
 function SetupBanner() {
   return (
@@ -758,6 +714,39 @@ export default function Sales() {
 
   const expensesMonthly = (expenses ?? []).reduce((a, e) => a + monthlyEquivalent(e), 0);
 
+  // Turn the cumulative day buckets into per-card chart series.
+  //
+  // sparkSeries counts *additions* inside the 14-day window, so its last value
+  // is "MRR added this fortnight", not total MRR — the old sparkline quietly
+  // charted a different number than the one printed above it. Anchoring each
+  // series so its final point equals the live Stripe total, and back-filling
+  // earlier days by subtracting what was added since, makes the curve a real
+  // history that lands exactly on the headline figure. The delta pill then
+  // means something: growth across the window.
+  const kpiSeries = useMemo(() => {
+    const s = data?.summary;
+    const anchor = (key: "mrr" | "subs" | "customers", total: number): LivePoint[] => {
+      if (!sparkSeries.length) return [];
+      const addedTotal = sparkSeries[sparkSeries.length - 1][key];
+      return sparkSeries.map(b => ({
+        label: b.label,
+        value: total - (addedTotal - b[key]),
+      }));
+    };
+    if (!s) return { mrr: [], subs: [], customers: [], net: [], netYearly: [], netYearlyAfterExpenses: [] };
+
+    const mrr = anchor("mrr", s.mrr);
+    const scale = (pts: LivePoint[], f: (v: number) => number) => pts.map(p => ({ ...p, value: f(p.value) }));
+    return {
+      mrr,
+      subs: anchor("subs", s.activeSubscriptions),
+      customers: anchor("customers", s.totalCustomers),
+      net: scale(mrr, v => v - expensesMonthly),
+      netYearly: scale(mrr, v => v * 12),
+      netYearlyAfterExpenses: scale(mrr, v => (v - expensesMonthly) * 12),
+    };
+  }, [data?.summary, sparkSeries, expensesMonthly]);
+
   return (
     <div style={homeShellStyle}>
       {/* Header */}
@@ -794,16 +783,19 @@ export default function Sales() {
 
         {data?.configured && data.summary && (
           <>
-            {/* KPI row — each card's sparkline traces the last 14 days, hover any point for the exact day/value. */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+            {/* KPI row — every card carries a live line chart of the last 14 days.
+                Hover anywhere on a curve for the crosshair readout (day + exact
+                value); the pill top-right is the change across that window. */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(272px, 1fr))", gap: 12 }}>
               {/* Headline: what actually gets paid, annualized. Discounts applied,
                   expenses NOT deducted — that's the "Yearly Expectation" card. */}
-              <KpiCard
+              <LiveKpiCard
                 label="Net Pay · Yearly"
                 value={fmtMoney(data.summary.mrr * 12)}
                 sub={`${fmtMoney(data.summary.mrr)}/mo actual × 12`}
-                spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr * 12 }))}
-                sparkColor={T.green}
+                points={kpiSeries.netYearly}
+                accent={T.green}
+                formatValue={fmtMoneyTick}
                 tooltip={
                   `What subscriptions actually bill, annualized: ${fmtMoney(data.summary.mrr)}/mo × 12.` +
                   (data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
@@ -812,7 +804,7 @@ export default function Sales() {
                   " Before Stripe fees and before expenses."
                 }
               />
-              <KpiCard
+              <LiveKpiCard
                 label="Monthly Recurring Revenue"
                 value={fmtMoney(data.summary.mrr)}
                 sub={
@@ -820,36 +812,45 @@ export default function Sales() {
                     ? `${fmtMoney(data.summary.grossMrr)}/mo at list price`
                     : undefined
                 }
-                spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr }))}
-                sparkColor={T.cyan}
+                points={kpiSeries.mrr}
+                accent={T.cyan}
+                formatValue={fmtMoneyTick}
                 tooltip="Sum of active subscription amounts as actually billed (promo codes and coupons applied), normalized to a monthly rate (yearly ÷ 12)"
               />
-              <KpiCard
+              <LiveKpiCard
                 label="Active Subscriptions"
                 value={String(data.summary.activeSubscriptions)}
-                spark={sparkSeries.map(s => ({ label: s.label, value: s.subs }))}
-                sparkColor={T.green}
+                sub="active now"
+                points={kpiSeries.subs}
+                accent={T.green}
+                formatValue={fmtCountTick}
                 tooltip="Count of subscriptions currently in 'active' status"
               />
-              <KpiCard
+              <LiveKpiCard
                 label="Total Customers"
                 value={String(data.summary.totalCustomers)}
-                spark={sparkSeries.map(s => ({ label: s.label, value: s.customers }))}
-                sparkColor={T.orange}
+                sub="lifetime paying"
+                points={kpiSeries.customers}
+                accent={T.orange}
+                formatValue={fmtCountTick}
                 tooltip="Unique paying customers with a subscription created on/after 2026-07-01"
               />
-              <KpiCard
+              <LiveKpiCard
                 label="Net (Rev − Expenses)"
                 value={fmtMoney(data.summary.mrr - expensesMonthly)}
                 sub={data.summary.churnedThisMonth === 0 ? "No churn 🎉" : `${data.summary.churnedThisMonth} churned this month`}
-                spark={sparkSeries.map(s => ({ label: s.label, value: s.mrr - expensesMonthly }))}
-                sparkColor={T.cyan}
+                points={kpiSeries.net}
+                accent={T.lightBlue}
+                formatValue={fmtMoneyTick}
                 tooltip={`Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate`}
               />
-              <KpiCard
+              <LiveKpiCard
                 label="Yearly Expectation"
                 value={fmtMoney((data.summary.mrr - expensesMonthly) * 12)}
                 sub="after expenses × 12"
+                points={kpiSeries.netYearlyAfterExpenses}
+                accent={T.gold}
+                formatValue={fmtMoneyTick}
                 tooltip={`(Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo) × 12 months. Net Pay above is the same figure before expenses.`}
               />
             </div>

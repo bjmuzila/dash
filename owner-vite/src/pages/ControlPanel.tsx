@@ -5,6 +5,12 @@ import { useSearchParams } from "react-router-dom";
 import { useRefreshButton } from "../hooks/useRefreshButton";
 import { VisitorMap } from "../components/VisitorMap";
 import {
+  LiveKpiCard,
+  LiveLineChart,
+  useLiveSeries,
+  type LivePoint,
+} from "../components/LiveKpiCard";
+import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
   homeHeaderStyle,
@@ -361,144 +367,100 @@ function sparkTimeLabels(durationMs: number, endIso?: string | null): [string, s
   return [fmt(start), fmt(end)];
 }
 
-/** Tiny inline area sparkline. Scales to its container width; fixed small height.
- *  Pass `axisLabels` (from sparkTimeLabels) to print start/end time under the line.
- *  Pass `durationMs` + `endIso` (same values fed to sparkTimeLabels) to enable a
- *  hover tooltip showing each point's real timestamp + value. `formatValue` controls
- *  how the raw number in that tooltip is displayed (defaults to 2-decimal). */
+/** Card trend line. Same call signature the old inline sparkline had — every
+ *  existing `<Sparkline data={...} accent={...} />` call site keeps working —
+ *  but it now renders the shared live line chart: monotone curve, gradient
+ *  fill, pulsing tip dot, crosshair tooltip, animated y-axis.
+ *
+ *  `durationMs` + `endIso` still map each sample index back to a real
+ *  timestamp for the tooltip; `axisLabels` still overrides the start/end
+ *  labels printed under the line. Tiny inline uses (height < 34, e.g. the
+ *  Overview infra rows) drop the axes and the value badge automatically so
+ *  they stay legible at 64px wide. */
 function Sparkline({
   data, accent, height = 22, axisLabels, durationMs, endIso, formatValue,
 }: {
   data: number[]; accent: string; height?: number; axisLabels?: [string, string];
   durationMs?: number; endIso?: string | null; formatValue?: (v: number) => string;
 }) {
-  const [hoverI, setHoverI] = useState<number | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
   if (!data || data.length < 1) return null;
-  const W = 100; // viewBox width; SVG stretches to container via width:100%
-  // A single point can't show a trend — draw a flat baseline so the card isn't empty.
-  const series = data.length === 1 ? [data[0], data[0]] : data;
-  const min = Math.min(...series);
-  const max = Math.max(...series);
-  const range = max - min || 1;
-  const stepX = W / (series.length - 1);
-  const pts = series.map((v, i) => {
-    const x = i * stepX;
-    const y = height - 2 - ((v - min) / range) * (height - 4);
-    return [x, y] as const;
-  });
-  const line = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-  const area = `${line} L${W},${height} L0,${height} Z`;
-  const gradId = `spark-${accent.replace(/[^a-z0-9]/gi, "")}`;
+  const compact = height < 34;
 
-  const canHover = series.length > 1;
-  const hoverTime = (i: number): string => {
+  const stamp = (i: number, n: number): string => {
     if (!durationMs || !endIso) return "";
     const end = new Date(endIso).getTime();
     if (isNaN(end)) return "";
-    const t = end - durationMs + (i / (series.length - 1)) * durationMs;
+    const t = end - durationMs + (n > 1 ? (i / (n - 1)) * durationMs : durationMs);
     const d = new Date(t);
     return durationMs > 36 * 3_600_000
       ? d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: false, timeZone: "America/New_York" })
       : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "America/New_York" }) + " ET";
   };
-  const handleMove: React.MouseEventHandler<SVGSVGElement> = (e) => {
-    if (!canHover || !svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    setHoverI(Math.round(frac * (series.length - 1)));
-  };
+
+  const points: LivePoint[] = data.map((value, i) => ({ value, label: stamp(i, data.length) }));
+  // axisLabels wins for the two printed end labels when there is no timestamp.
+  if (axisLabels && points.length) {
+    if (!points[0].label) points[0] = { ...points[0], label: axisLabels[0] };
+    const li = points.length - 1;
+    if (!points[li].label) points[li] = { ...points[li], label: axisLabels[1] };
+  }
 
   return (
-    <div style={{ width: "100%", position: "relative" }}>
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${W} ${height}`}
-        preserveAspectRatio="none"
-        style={{ width: "100%", height, display: "block", cursor: canHover ? "crosshair" : "default" }}
-        onMouseMove={handleMove}
-        onMouseLeave={() => setHoverI(null)}
-      >
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={accent} stopOpacity="0.35" />
-            <stop offset="100%" stopColor={accent} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={area} fill={`url(#${gradId})`} />
-        <path d={line} fill="none" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-        {hoverI != null && (
-          <>
-            <line x1={pts[hoverI][0]} y1={0} x2={pts[hoverI][0]} y2={height} stroke={accent} strokeWidth="0.6" strokeOpacity="0.5" vectorEffect="non-scaling-stroke" />
-            <circle cx={pts[hoverI][0]} cy={pts[hoverI][1]} r={2.2} fill={accent} stroke="#0d1119" strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
-          </>
-        )}
-      </svg>
-      {hoverI != null && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: `calc(100% + 4px)`,
-            left: `${(pts[hoverI][0] / W) * 100}%`,
-            transform: `translateX(${hoverI === 0 ? "0%" : hoverI === series.length - 1 ? "-100%" : "-50%"})`,
-            background: "#0d1119",
-            border: `1px solid ${accent}66`,
-            borderRadius: 6,
-            padding: "4px 8px",
-            fontSize: 14,
-            fontFamily: "var(--font-mono)",
-            color: "#fff",
-            whiteSpace: "nowrap",
-            pointerEvents: "none",
-            zIndex: 10,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
-          }}
-        >
-          <div style={{ fontWeight: 700, color: accent }}>{(formatValue ?? ((v: number) => v.toFixed(2)))(series[hoverI])}</div>
-          {hoverTime(hoverI) && <div style={{ opacity: 0.7, marginTop: 1 }}>{hoverTime(hoverI)}</div>}
-        </div>
-      )}
-      {axisLabels && (axisLabels[0] || axisLabels[1]) && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2, fontSize: 14, fontFamily: "var(--font-mono)", color: "#fff", opacity: 1, lineHeight: 1 }}>
-          <span>{axisLabels[0]}</span>
-          <span>{axisLabels[1]}</span>
-        </div>
-      )}
-    </div>
+    <LiveLineChart
+      points={points}
+      color={accent}
+      height={height}
+      formatValue={formatValue ?? ((v: number) => v.toFixed(2))}
+      showYAxis={!compact}
+      showXAxis={!compact}
+      showGrid={!compact}
+      showBadge={!compact}
+      pulse={!compact}
+    />
   );
+}
+
+/** % change across a raw sample array — feeds the delta pill on stat cards
+ *  whose history arrives as `number[]` rather than LivePoint[]. */
+function pctDelta(data: number[] | undefined | null): number | null {
+  if (!data || data.length < 2) return null;
+  const first = data[0], last = data[data.length - 1];
+  if (first === 0) return last === 0 ? 0 : null;
+  return ((last - first) / Math.abs(first)) * 100;
 }
 
 function StatCard({
   label,
   value,
-  accent: _accent = HOME_THEME.cyan,
+  accent = HOME_THEME.cyan,
   mono = false,
   footer,
+  sub,
+  delta,
+  invertDelta = false,
 }: {
   label: string;
   value: React.ReactNode;
   accent?: string;
   mono?: boolean;
   footer?: React.ReactNode;
+  sub?: React.ReactNode;
+  /** % change vs. the start of the card's window. `null`/omitted hides the pill. */
+  delta?: number | null;
+  /** Metrics where down is good — egress, memory, CPU. */
+  invertDelta?: boolean;
 }) {
   return (
-    <div style={{
-      ...homePanelStyle,
-      minHeight: 0,
-      padding: "12px 14px",
-      display: "flex",
-      flexDirection: "column",
-      gap: 6,
-      borderRadius: 12,
-    }}>
-      <div style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, fontFamily: mono ? "monospace" : "inherit", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {value}
-      </div>
-      {footer != null && <div style={{ marginTop: 6 }}>{footer}</div>}
-    </div>
+    <LiveKpiCard
+      label={label}
+      value={value}
+      sub={sub}
+      accent={accent}
+      mono={mono}
+      delta={delta ?? null}
+      invertDelta={invertDelta}
+      footer={footer}
+    />
   );
 }
 
@@ -1141,6 +1103,84 @@ function MetricsTabSection({
   );
 }
 
+/** Overview's headline tiles.
+ *
+ *  Split out of OverviewSection so the `useLiveSeries` hooks below can run at a
+ *  stable, unconditional top level. Two of these metrics ship real per-day
+ *  history from the API; the other five are point-in-time scalars, so each poll
+ *  is appended to an in-memory rolling series — that is what makes the line
+ *  "live" rather than a static 7-point sparkline. */
+function KpiStrip({
+  isMobile, totalVisits, users, onToday, activeSessions, waitlist, infra, daily, dailySignups, cumUsers,
+}: {
+  isMobile: boolean;
+  totalVisits: number;
+  users: number | null;
+  onToday: number;
+  activeSessions: number | null;
+  waitlist: number | null;
+  infra: { cpu: { value: string; spark: number[] }; wsPerHr: string };
+  daily: { counts: number[]; labels: string[] };
+  dailySignups: { counts: number[]; labels: string[] };
+  cumUsers: number[];
+}) {
+  // Scalars with no server-side history — accumulated from each poll.
+  const onTodaySeries = useLiveSeries(onToday);
+  const sessionsSeries = useLiveSeries(activeSessions);
+  const waitlistSeries = useLiveSeries(waitlist);
+  const wsPerHrNum = Number.parseFloat(String(infra.wsPerHr).replace(/[^0-9.\-]/g, ""));
+  const wsSeries = useLiveSeries(Number.isFinite(wsPerHrNum) ? wsPerHrNum : null);
+
+  // Visits: daily.counts are per-day loads. Running-total them and baseline so
+  // the final point lands exactly on the printed 12-day total.
+  const visitsSeries: LivePoint[] = (() => {
+    if (!daily.counts.length) return [];
+    const total = daily.counts.reduce((a, b) => a + b, 0);
+    let run = 0;
+    return daily.counts.map((c, i) => {
+      run += c;
+      return { label: daily.labels[i] ?? "", value: totalVisits - (total - run) };
+    });
+  })();
+
+  const usersSeries: LivePoint[] = cumUsers.map((v, i) => ({ label: dailySignups.labels[i] ?? "", value: v }));
+  const cpuSeries: LivePoint[] = infra.cpu.spark.map((v) => ({ value: v }));
+
+  const A = ["#5B9BD5", "#3FB8A0", "#E8A23D", "#4FB3C9", "#88C97A", "#E06C5E", "#E0A85E"];
+  const int = (v: number) => Math.round(v).toLocaleString();
+
+  const tiles: {
+    label: string; value: string; points: LivePoint[]; accent: string;
+    fmt?: (v: number) => string; invert?: boolean;
+  }[] = [
+    { label: "Visits · 12d", value: totalVisits.toLocaleString(), points: visitsSeries, accent: A[0], fmt: int },
+    { label: "Total users", value: users != null ? users.toLocaleString() : "—", points: usersSeries, accent: A[1], fmt: int },
+    { label: "On today", value: onToday.toLocaleString(), points: onTodaySeries, accent: A[2], fmt: int },
+    { label: "Logged in · 30d", value: activeSessions != null ? activeSessions.toLocaleString() : "—", points: sessionsSeries, accent: A[3], fmt: int },
+    { label: "Waitlist", value: waitlist != null ? waitlist.toLocaleString() : "—", points: waitlistSeries, accent: A[4], fmt: int },
+    { label: "CPU", value: infra.cpu.value, points: cpuSeries, accent: A[5], fmt: (v) => `${(v * 100).toFixed(1)}%`, invert: true },
+    { label: "WS out/hr", value: infra.wsPerHr, points: wsSeries, accent: A[6], fmt: int },
+  ];
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(4, minmax(0,1fr))", gap: 10 }}>
+      {tiles.map((t) => (
+        <LiveKpiCard
+          key={t.label}
+          label={t.label}
+          value={t.value}
+          accent={t.accent}
+          points={t.points}
+          formatValue={t.fmt}
+          invertDelta={t.invert}
+          height={64}
+          showAxes={false}
+        />
+      ))}
+    </div>
+  );
+}
+
 function OverviewSection({ metrics }: {
   metrics: {
     daily: { counts: number[]; labels: string[] };
@@ -1245,23 +1285,22 @@ function OverviewSection({ metrics }: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* KPI strip */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(7, minmax(0,1fr))", gap: 10 }}>
-        {[
-          { l: "Visits · 12d", v: totalVisits.toLocaleString() },
-          { l: "Total users", v: users != null ? users.toLocaleString() : "—" },
-          { l: "On today", v: onToday.toLocaleString() },
-          { l: "Logged in · 30d", v: activeSessions != null ? activeSessions.toLocaleString() : "—" },
-          { l: "Waitlist", v: waitlist != null ? waitlist.toLocaleString() : "—" },
-          { l: "CPU", v: infra.cpu.value },
-          { l: "WS out/hr", v: infra.wsPerHr },
-        ].map((k) => (
-          <div key={k.l} style={{ ...homePanelStyle, padding: "11px 13px" }}>
-            <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, opacity: 0.6, marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", letterSpacing: "0.01em" }}>{k.l}</div>
-            <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, lineHeight: 1 }}>{k.v}</div>
-          </div>
-        ))}
-      </div>
+      {/* KPI strip — every tile carries a live line chart, not a sparkline.
+          Visits and Total users have real daily history; the rest are scalars
+          the API only reports for "now", so `useLiveSeries` accumulates each
+          poll into a streaming series (see KpiStrip below). */}
+      <KpiStrip
+        isMobile={isMobile}
+        totalVisits={totalVisits}
+        users={users}
+        onToday={onToday}
+        activeSessions={activeSessions}
+        waitlist={waitlist}
+        infra={infra}
+        daily={daily}
+        dailySignups={dailySignups}
+        cumUsers={cum}
+      />
 
       {/* Traffic · signups · cumulative with tabs */}
       <MetricsTabSection visits={visits} signups={signups} users={users} activeSessions={activeSessions} />
@@ -2723,6 +2762,8 @@ export default function ControlPanel() {
                   : "—"}
               accent={HOME_THEME.orange}
               mono
+              delta={pctDelta(cfMetrics?.egress.spark)}
+              invertDelta
               footer={cfMetrics?.unconfigured && cfMetrics.egress.value == null
                 ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
                 : <Sparkline
@@ -2749,6 +2790,8 @@ export default function ControlPanel() {
                   : "—"}
               accent={HOME_THEME.cyan}
               mono
+              delta={pctDelta(renderMetrics?.bandwidth.spark)}
+              invertDelta
               footer={renderMetrics?.unconfigured && renderMetrics.bandwidth.value == null
                 ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
                 : <Sparkline
@@ -2773,6 +2816,8 @@ export default function ControlPanel() {
                 : "—"}
               accent={memAccent}
               mono
+              delta={pctDelta(renderMetrics?.memory.spark)}
+              invertDelta
               footer={<Sparkline
                 data={renderMetrics?.memory.spark ?? []}
                 accent={memAccent}
@@ -2793,6 +2838,8 @@ export default function ControlPanel() {
                 : "—"}
               accent={cpuAccent}
               mono
+              delta={pctDelta(renderMetrics?.cpu.spark)}
+              invertDelta
               footer={<Sparkline
                 data={renderMetrics?.cpu.spark ?? []}
                 accent={cpuAccent}
