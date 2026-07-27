@@ -2,11 +2,23 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Monday 7/27/2026
+
+* Started the new Options dashboard layout — ticker dropdown with Favorites and Watchlist, a daily/yearly heatmap, the S&P 500 sunburst, a candlestick chart and live orderflow, all following whichever ticker you pick.
+* The heatmap and sunburst now stay on screen no matter which Options tab you're on. Everything is still empty placeholders while the live data gets connected.
+
+## Sunday 7/26/2026
+
+* Added a new SPX heatmap on the Options page showing 2 years of daily market performance.
+* Fixed the heatmap's info popup so it now appears right next to your cursor instead of jumping to the bottom of the page.
+
 ## Saturday 7/25/2026
+
 * Fixed the free feature pages (Initial Balance, GEX, TPO, Estimated Moves and Confidence Score) — the real delayed results now actually load instead of showing "results populate at the end of each trading day."
 * Added a new **Options** page to the toolbar, replacing the old unused Lookup button. It's a placeholder for now while the real thing gets built out over the next few days.
 
 ## Friday 7/24/2026
+
 * Fixed the Multi-Greek strike popup so its 15-minute, 30-minute and since-open GEX change actually loads instead of getting stuck on "building…"
 * Made the Multi-Greek strike ladder text match the Option Chain page's size for a more consistent look.
 * Rebuilt the Multi-Greek page: each ticker now shows its own 4 closest expirations of Net GEX side by side (instead of the DEX/CHEX/VEX columns), and uses that ticker's real expiration dates — so TSLA starts at its nearest Friday instead of a blank day.
@@ -16,15 +28,18 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Fixed the blank rows in Option Chain Replay — it now captures more strikes at each snapshot, so the replay shows a fuller strike ladder instead of gaps.
 
 ## Thursday 7/23/2026
+
 * Streamlined the IB Stats page down to the three cards that matter — the Live Read, the IB Read (4 families), and the 10:30 Probability Engine gauges — and cleared out the rest of the clutter.
 * The "Last 5 Sessions" strip on the IB Read card now refreshes on its own every trading day instead of getting stuck on old dates.
 * Cleaned up the look of the cards across the dashboard — the faint gray glow at the top of each card is gone, so card backgrounds are now a clean, solid color.
 
 ## Tuesday 7/21/2026
-* Added an **IB tab** to the home page calendar tab group, so you can pull up the full Initial Balance board straight from the home screen without opening the ES-candles chart.
 
+* Added an **IB tab** to the home page calendar tab group, so you can pull up the full Initial Balance board straight from the home screen without opening the ES-candles chart.
 * Added a new **Condition** view for SPY and QQQ (on the Test page) that reads each one's market condition at a glance — a bullish/bearish rating with stars, a live call-vs-put money-flow (WAVE) chart, and a 0-DTE gamma map marking support/resistance levels versus acceleration zones. The price line now tracks the correct SPY/QQQ price.
+
 ## Monday 7/20/2026
+
 * Added a new IB stat that shows how a **narrow, normal, or wide opening range** tends to play out — whether it breaks one side, both sides, or neither — with the actual point ranges for each.
 * Added two new "reference candle" stats: the **8am hour** (how often the day later takes out both its high and its low, and by what time) and the **2–3pm hour** (breaks one side, both, or neither into the close).
 * Reworked the **streaks** stat to answer it directly — at 2 bars in a row, your odds of a 3rd; at 3, your odds of a 4th; and so on — plus the odds a fresh move ever runs that long.
@@ -35,14 +50,13 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * End-of-day GEX now also records the combined gamma across all expirations excluding 0DTE.
 
 ## Sunday 7/19/2026
+
 * Cleaned up the Scanner's **Market Profile (TPO)** tab — all the faint gray text is now crisp white, and the section titles are color-coded so each card is easier to pick out at a glance.
 * The **Signals & Alerts** list on that tab now has a bold header with a live counter that turns green and shows how many alerts are triggering right now.
 * Moved the TPO profile chart to the top of the tab, above the signals, so you see the profile first.
-
 * Added a new **Squeeze** page — a single-screen Gamma Exposure board with the live spot, Net / Call / Put / Total GEX, the Call Wall, Put Wall and Zero Gamma (flip) level all across the top.
 * The Strike Profile chart shows gamma stacked by strike — green for call gamma, red for put gamma — with the spot marked and the Call Wall and Put Wall strikes outlined, plus an All / Near toggle to zoom to the strikes around price.
 * Added a **Gamma Squeeze Screener** that scores how primed the tape is for a squeeze out of 100, calls the bias bullish or bearish, and breaks the score down by gamma regime, wall proximity, flow, volume and dealer positioning — with the key levels and trigger price listed underneath. Everything updates live off the same feed as the rest of the desk.
-
 * Added a new **Order Book** view — its own page plus a tab in the Test Lab — that reads the live options tape for SPX, SPY and QQQ and shows whether traders are buying the near-term dip or hedging further out, with key metrics and a bar for each expiration.
 
 ## Saturday 7/18/2026
@@ -65,9 +79,6 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * The ES candle chart is now a tab right on the main GEX chart on the home page — click **ES Candles** to swap the gamma bars for the live 5-minute chart, and click **GEX** to swap back. It's the full chart with its own toolbar, and it opens with the gamma bubbles already turned on.
 * ES Candles has moved off the bottom of the home page, out of the Economic Calendar row.
 * Added an optional **VSA** overlay to the ES candle chart that highlights candles where the effort and the result don't match — heavy volume that went nowhere (absorption), or a big move nobody showed up for (a run through thin liquidity). Flagged candles are drawn hollow so they stand out at a glance. Volume for each bar is compared against what's normal *for that time of day*, so the 9:30 open isn't judged against lunch. Five sliders let you tune how strict it is — start loose, then tighten until only the genuinely unusual bars get marked.
-
-## Wednesday 7/15/2026
-
 * The TPO Structures tab now labels today's profile in plain English — the levels the market left behind are outlined right on the chart, and hovering one tells you what it is and what it usually means ("Excess high — selling tail. Singles at the high, period closed back inside. Fade it.") instead of a colored tick mark you had to decode.
 * The "Open business" list now names each level the same way, so a rejection high and an unfinished high no longer look alike at a glance — they're opposite trades.
 * Added 5 / 10 / 30-session views to the TPO profile. The chart opens on today's profile centered on price, and the 30-session view also gives the historical hit rates a much deeper sample to work from.
@@ -97,9 +108,6 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Before 10:30am the board clearly labels every read as provisional, since the IB isn't final until then.
 * Fixed the IB width tables, which were showing all zeros — narrow, normal and wide day-type stats now populate correctly.
 * Fixed a bug where the previous day's session could bleed into today's Initial Balance levels.
-
-## Monday 7/13/2026
-
 * ES Candles has a new **Bubbles** overlay: every minute it drops a bubble at each strike, sized by how much gamma is sitting there — blue for calls, red for puts. Watch the bubbles swell and shrink through the day to see exactly where dealers are building or bleeding gamma. It loads with the full session already filled in, and there's a slider to dial the bubble size to your taste.
 * The old GEX Lines overlay has been retired — the bubbles show the same thing with a time dimension.
 
@@ -232,13 +240,3 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Streamlined GEX navigation to the most-used pages.
 * Estimated Moves win/loss scoring is now more accurate.
 * Various performance and reliability improvements behind the scenes.
-
-## Sunday 7/26/2026
-
-* Added a new SPX heatmap on the Options page showing 2 years of daily market performance.
-* Fixed the heatmap's info popup so it now appears right next to your cursor instead of jumping to the bottom of the page.
-
-## Monday 7/27/2026
-
-* Started the new Options dashboard layout — ticker dropdown with Favorites and Watchlist, a daily/yearly heatmap, the S&P 500 sunburst, a candlestick chart and live orderflow, all following whichever ticker you pick.
-* The heatmap and sunburst now stay on screen no matter which Options tab you're on. Everything is still empty placeholders while the live data gets connected.

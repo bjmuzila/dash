@@ -30,7 +30,34 @@ interface GexChartProps {
   onStrikeClick?: (row: ChainRow, pos: { x: number; y: number }) => void;
   /** When true, skip the opaque chart background so the panel shows through. */
   transparentBg?: boolean;
+  /**
+   * Track the MVC (peak |netGEX| strike) once spot touches it: latch the touched
+   * level, draw where the MVC migrated afterwards, and mark the biggest cluster
+   * on the opposite side of spot. Defaults on.
+   */
+  trackMvcTouch?: boolean;
 }
+
+/** MVC touch-tracking state (session-scoped, resets on expiry change). */
+interface MvcTrack {
+  /** Current MVC strike, updated every draw. */
+  liveStrike:  number | null;
+  /** True once spot has traded into the MVC bar. */
+  touched:     boolean;
+  /** MVC strike at the moment of the touch. */
+  touchStrike: number | null;
+  /** MVC net GEX at the moment of the touch. */
+  touchGex:    number | null;
+  /** Epoch ms of the touch. */
+  touchAt:     number | null;
+  /** Every relocation of the MVC after the touch. */
+  path:        { strike: number; t: number }[];
+}
+
+const emptyMvcTrack = (): MvcTrack => ({
+  liveStrike: null, touched: false, touchStrike: null,
+  touchGex: null, touchAt: null, path: [],
+});
 
 // Ghost-layer tints per age (older = dimmer). Each is a lighter shade of the
 // live bar's color, drawn behind the current bar.
@@ -61,6 +88,15 @@ function fmtGex(v: number): string {
 
 function fmtPos(v: number): string {
   return v >= 1000 ? (v / 1000).toFixed(1) + "K" : String(Math.round(v));
+}
+
+/** "4m" / "1h12m" since an epoch-ms timestamp. */
+function fmtAgo(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
 function getNiceStep(range: number): number {
@@ -145,6 +181,7 @@ export default function GexChart({
   showGhost30 = false,
   onStrikeClick,
   transparentBg = false,
+  trackMvcTouch = true,
 }: GexChartProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -175,6 +212,10 @@ export default function GexChart({
   const [tooltip, setTooltip] = useState<{ x: number; y: number; row: ChainRow } | null>(null);
   // Track pointer-down position so a drag (pan) isn't treated as a click.
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
+  // MVC touch tracking — see MvcTrack. Mutated inside draw(); reset on expiry.
+  const mvcRef     = useRef<MvcTrack>(emptyMvcTrack());
+  // Mirror of the track for the HTML readout (canvas draw can't trigger React).
+  const [mvcBadge, setMvcBadge] = useState<{ from: number; to: number; at: number } | null>(null);
 
   // ── draw ───────────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -606,6 +647,42 @@ export default function GexChart({
       const bv = b ? Math.abs(getNet(b)) : -1;
       return rv > bv ? r : b;
     }, null);
+    // ── MVC touch tracking ────────────────────────────────────────────────────
+    // "Touched" = spot traded inside the MVC bar (± half a strike step). Once
+    // that happens we latch the level and record every subsequent relocation of
+    // the MVC, so the chart shows where the cluster went after price reached it.
+    const track      = mvcRef.current;
+    const peakStrike = peak?.strike ?? null;
+    if (trackMvcTouch && peakStrike != null) {
+      const now = Date.now();
+      const tol = Math.max(detectedStep / 2, 0.5);
+      if (!track.touched && spotPrice > 0 && Math.abs(spotPrice - peakStrike) <= tol) {
+        track.touched     = true;
+        track.touchStrike = peakStrike;
+        track.touchGex    = getNet(peak!);
+        track.touchAt     = now;
+        track.path        = [{ strike: peakStrike, t: now }];
+      }
+      if (track.touched && track.liveStrike != null && peakStrike !== track.liveStrike) {
+        track.path.push({ strike: peakStrike, t: now });
+        if (track.path.length > 60) track.path.shift();
+      }
+      track.liveStrike = peakStrike;
+    }
+
+    // ── Counterpart cluster on the other side of spot ─────────────────────────
+    // The MVC sits on one side of spot; this is the largest |GEX| strike on the
+    // opposite side — the level price rotates toward once the MVC is worked.
+    const oppBelow = peakStrike != null && peakStrike >= spotPrice;   // MVC above → look below
+    const oppPeak  = (trackMvcTouch && peakStrike != null && spotPrice > 0)
+      ? chain.reduce<ChainRow | null>((b, r) => {
+          const onOtherSide = oppBelow ? r.strike < spotPrice : r.strike > spotPrice;
+          if (!onOtherSide) return b;
+          const rv = Math.abs(getNet(r));
+          return rv > (b ? Math.abs(getNet(b)) : 0) ? r : b;
+        }, null)
+      : null;
+
     const peakIdx = peak ? data.findIndex(r => r.strike === peak.strike) : -1;
     if (peak && peakIdx >= 0) {
       const pi  = peakIdx;
@@ -626,6 +703,82 @@ export default function GexChart({
       ctx.fillStyle = col; ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(lbl, bx + bw / 2, by + bh / 2 + 0.5);
       ctx.textBaseline = "alphabetic";
+      ctx.restore();
+    }
+
+    // Only draw MVC-track marks whose strike is actually inside the viewport —
+    // xForStrike clamps to the edges, which would otherwise pin them to the frame.
+    const inView = (s: number | null | undefined) =>
+      s != null && data.length > 0 && s >= data[0].strike && s <= data[data.length - 1].strike;
+
+    // ── Opposite-side cluster label (dimmer twin of the MVC box) ──────────────
+    if (oppPeak && oppPeak.strike !== peakStrike && inView(oppPeak.strike)) {
+      const ov = getNet(oppPeak);
+      const ox = xForStrike(oppPeak.strike);
+      const oy = clamp(yFor(ov), PAD_T + 2, PAD_T + cH - 2);
+      const oc = ov >= 0 ? "rgba(41,182,246,0.55)" : "rgba(255,179,0,0.55)";
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = oc; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(ox, PAD_T); ctx.lineTo(ox, PAD_T + cH); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "bold 9px Arial";
+      const olbl = `${oppBelow ? "▼" : "▲"} ${oppPeak.strike.toLocaleString()}`;
+      const otw  = ctx.measureText(olbl).width;
+      const obw  = otw + 8, obh = 13;
+      const obx  = clamp(ox - obw / 2, 2, W - obw - 2);
+      const oby  = Math.max(2, oy - 17);
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
+      ctx.fillRect(obx, oby, obw, obh);
+      ctx.strokeStyle = oc; ctx.strokeRect(obx, oby, obw, obh);
+      ctx.fillStyle = oc; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(olbl, obx + obw / 2, oby + obh / 2 + 0.5);
+      ctx.textBaseline = "alphabetic";
+      ctx.restore();
+    }
+
+    // ── MVC touch overlay: origin marker + migration arrow ────────────────────
+    if (trackMvcTouch && track.touched && inView(track.touchStrike)) {
+      const tx = xForStrike(track.touchStrike!);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(PAD_L, PAD_T, cW, cH); ctx.clip();
+
+      // Where the MVC was when spot tagged it.
+      ctx.setLineDash([2, 4]);
+      ctx.strokeStyle = "rgba(203,213,225,0.50)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(tx, PAD_T); ctx.lineTo(tx, PAD_T + cH); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(203,213,225,0.70)";
+      ctx.font = "bold 8px Arial"; ctx.textAlign = "center";
+      ctx.fillText("TOUCHED", clamp(tx, PAD_L + 22, PAD_L + cW - 22), PAD_T + cH - 6);
+
+      // Breadcrumbs for each intermediate relocation.
+      if (track.path.length > 1) {
+        const yArrow = PAD_T + 32;
+        ctx.fillStyle = "rgba(148,163,184,0.55)";
+        track.path.slice(1, -1).forEach(p => {
+          ctx.beginPath();
+          ctx.arc(xForStrike(p.strike), yArrow, 2, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // Arrow from the touched level to where the MVC lives now.
+      if (peakStrike != null && peakStrike !== track.touchStrike) {
+        const px     = xForStrike(peakStrike);
+        const yArrow = PAD_T + 32;
+        const col    = peakStrike > (track.touchStrike ?? 0) ? "#22c55e" : "#ef4444";
+        ctx.strokeStyle = col; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(tx, yArrow); ctx.lineTo(px, yArrow); ctx.stroke();
+        const dir = px >= tx ? 1 : -1;
+        ctx.beginPath();
+        ctx.moveTo(px, yArrow);
+        ctx.lineTo(px - dir * 7, yArrow - 4);
+        ctx.lineTo(px - dir * 7, yArrow + 4);
+        ctx.closePath();
+        ctx.fillStyle = col; ctx.fill();
+      }
       ctx.restore();
     }
 
@@ -670,7 +823,15 @@ export default function GexChart({
     ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
     ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg, getDensified]);
+    // ── Sync the HTML readout with the latched track (no-ops when unchanged) ──
+    if (trackMvcTouch && track.touched && track.touchStrike != null && track.liveStrike != null && track.touchAt != null) {
+      const from = track.touchStrike, to = track.liveStrike, at = track.touchAt;
+      setMvcBadge(prev => (prev && prev.from === from && prev.to === to && prev.at === at) ? prev : { from, to, at });
+    } else if (!track.touched) {
+      setMvcBadge(prev => (prev === null ? prev : null));
+    }
+
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg, trackMvcTouch, getDensified]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
@@ -694,6 +855,7 @@ export default function GexChart({
       vpRef.current = { start: null, count: 121 };
       yScaleRef.current = 1;
       dragRef.current = null;
+      mvcRef.current = emptyMvcTrack();
     };
   }, []);
 
@@ -704,8 +866,17 @@ export default function GexChart({
     const initCount = Math.max(MIN_COUNT, Math.round(200 / step) + 1);
     vpRef.current    = { start: atmStart(rows, spotPrice, initCount), count: initCount };
     yScaleRef.current = 1;
+    mvcRef.current    = emptyMvcTrack();
+    setMvcBadge(null);
     draw();
   }, [expiry]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the "Xm ago" readout fresh while a touch is latched.
+  useEffect(() => {
+    if (!mvcBadge) return;
+    const id = setInterval(() => setMvcBadge(prev => (prev ? { ...prev } : prev)), 30_000);
+    return () => clearInterval(id);
+  }, [mvcBadge?.at]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
   // NOTE: attached as a native non-passive listener (see effect below) so
@@ -835,6 +1006,36 @@ export default function GexChart({
       onDoubleClick={onDblClick}
     >
       <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+
+      {/* MVC touch readout — appears once spot trades into the peak-GEX strike */}
+      {mvcBadge && (() => {
+        const drift  = mvcBadge.to - mvcBadge.from;
+        const held   = drift === 0;
+        const col    = held ? "#8B94A7" : drift > 0 ? "#22c55e" : "#ef4444";
+        return (
+          <div style={{
+            position: "absolute", zIndex: 90, pointerEvents: "none",
+            top: 8, left: 8,
+            background: "rgba(13,17,25,0.90)", border: `1px solid ${col}44`,
+            borderRadius: 6, padding: "4px 9px",
+            fontSize: 10, fontFamily: "var(--font-mono)", letterSpacing: 0.3,
+            color: "#fff", display: "flex", alignItems: "center", gap: 7,
+            backdropFilter: "blur(8px)", whiteSpace: "nowrap",
+          }}>
+            <span style={{ color: "#8B94A7" }}>CB TOUCHED</span>
+            <span style={{ fontWeight: 700 }}>{mvcBadge.from.toLocaleString()}</span>
+            {!held && (
+              <>
+                <span style={{ color: col }}>→</span>
+                <span style={{ fontWeight: 700, color: col }}>{mvcBadge.to.toLocaleString()}</span>
+                <span style={{ color: col }}>{drift > 0 ? "+" : ""}{drift}</span>
+              </>
+            )}
+            {held && <span style={{ color: "#8B94A7" }}>held</span>}
+            <span style={{ color: "#4B5565" }}>{fmtAgo(mvcBadge.at)}</span>
+          </div>
+        );
+      })()}
 
       {/* Tooltip */}
       {tooltip && (() => {

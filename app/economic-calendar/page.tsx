@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 
 interface CalEvent {
@@ -103,6 +104,14 @@ function fullDayLabel(dateStr: string, today: string): string {
 }
 
 export default function EconomicCalendarPage() {
+  // Feed-health text is OWNER-ONLY — it names upstream hosts, HTTP status codes
+  // and cache timestamps. Strict derivation (claim OR explicit id match) so a
+  // build missing NEXT_PUBLIC_OWNER_USER_ID fails CLOSED rather than showing the
+  // diagnostics to every signed-in customer.
+  const { user, isOwnerClaim } = useAuth();
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = isOwnerClaim || (!!ownerId && user?.id === ownerId);
+
   const [events,        setEvents]        = useState<CalEvent[]>([]);
   const [loading,       setLoading]       = useState(false);
   const [error,         setError]         = useState<string | null>(null);
@@ -383,16 +392,21 @@ export default function EconomicCalendarPage() {
         </div>
       )}
 
-      {/* Warning */}
-      {warning && !error && (
+      {/* Feed-health warning — OWNER ONLY (see isOwner above). This is the banner
+          that was showing raw upstream text to customers. The hardcoded "showing
+          saved events" prefix is gone too: it was wrong whenever the source was
+          the cache rather than events.json, and `warning` already says which. */}
+      {isOwner && warning && !error && (
         <div style={{ padding: "6px 16px", fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,0.06)", borderBottom: "1px solid rgba(245,158,11,0.25)", flexShrink: 0 }}>
-          ⚠ Live feed unavailable — showing saved events. ({warning})
+          ⚠ {warning}
         </div>
       )}
 
       {/* Event list */}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {error ? (
+        {error && isOwner ? (
+          // Raw fetch error, owner only. Customers fall through to the neutral
+          // empty-state line below rather than seeing upstream status text.
           <div style={{ fontSize: 14, color: HT.red, padding: 16, margin: 16, border: `1px solid rgba(239,68,68,0.3)`, borderRadius: 4, background: "rgba(239,68,68,0.05)" }}>
             ⚠ {error}
           </div>

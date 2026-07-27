@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 
 /**
@@ -16,6 +17,12 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
  * labels only, tickers printed inside a bar when it is both wide and long
  * enough, and everything else in the hover tooltip. Click a sector to zoom in,
  * click the middle to come back out.
+ *
+ * "⤢ Expand" pops the card out into a large centered overlay (and from there,
+ * "⛶ Full screen" hands it to the browser's Fullscreen API). The overlay is
+ * portaled to <body> so the page shell's overflow can't clip it; Esc or a click
+ * on the backdrop closes it. Zoom level, scale cap and the loaded payload are
+ * component state, so they carry over both ways.
  *
  * Data: /api/spx-sunburst (cached server-side, see that route).
  * No chart library — the arcs are plain SVG paths, so this adds no dependency.
@@ -103,9 +110,16 @@ export default function SectorSunburst() {
   const [err, setErr] = useState(false);
   const [cap, setCap] = useState(3);
   const [focus, setFocus] = useState<string | null>(null);
-  const [hover, setHover] = useState<{ x: number; y: number; title: string; sub: string; val: number } | null>(null);
+  const [hover, setHover] = useState<{ x: number; y: number; bw: number; title: string; sub: string; val: number } | null>(null);
+  // Pop-out: `expanded` lifts the whole card into a fixed overlay (portaled to
+  // <body> so the page shell's overflow can't clip it); `isFs` is the real
+  // browser Fullscreen API on top of that. State lives here, so zoom level,
+  // cap and the loaded payload all survive the move.
+  const [expanded, setExpanded] = useState(false);
+  const [isFs, setIsFs] = useState(false);
   const RING = focus ? RING_FOCUS : RING_ALL;
   const boxRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -121,6 +135,37 @@ export default function SectorSunburst() {
     const id = setInterval(load, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  // ── pop-out plumbing ──
+  const toggleFullscreen = useCallback(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else el.requestFullscreen?.().catch(() => {});
+  }, []);
+
+  const close = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    setExpanded(false);
+    setHover(null);
+  }, []);
+
+  // Esc closes the pop-out (the browser eats the first Esc when we're in real
+  // fullscreen, which just drops back to the windowed overlay — that's fine).
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.fullscreenElement) close(); };
+    const onFs = () => setIsFs(!!document.fullscreenElement);
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onFs);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onFs);
+      document.body.style.overflow = prev;
+    };
+  }, [expanded, close]);
 
   // ── hierarchy + angles ──
   const { sectors, industries, leaves, net, up, down } = useMemo(() => {
@@ -192,15 +237,30 @@ export default function SectorSunburst() {
     [cap]
   );
 
+  // Three names each fits under the card; the pop-out has room for a real list.
+  const moverCount = expanded ? 8 : 3;
   const movers = useMemo(() => {
     const rs = [...(data?.rows ?? [])].sort((a, b) => b.c - a.c);
-    return { top: rs.slice(0, 3), bottom: rs.slice(-3).reverse() };
+    return { top: rs.slice(0, moverCount), bottom: rs.slice(-moverCount).reverse() };
+  }, [data, moverCount]);
+
+  // Sector leaderboard for the pop-out rail — always the full universe, so it
+  // doesn't collapse to one row when the wheel is zoomed into a sector.
+  const sectorRank = useMemo(() => {
+    const by = new Map<string, Row[]>();
+    (data?.rows ?? []).forEach((r) => { const l = by.get(r.s) ?? []; l.push(r); by.set(r.s, l); });
+    return [...by.entries()]
+      .map(([name, rs]) => {
+        const tw = rs.reduce((a, r) => a + r.w, 0);
+        return { name, n: rs.length, chg: tw ? rs.reduce((a, r) => a + r.c * r.w, 0) / tw : 0 };
+      })
+      .sort((a, b) => b.chg - a.chg);
   }, [data]);
 
   const showTip = (e: React.MouseEvent, title: string, sub: string, val: number) => {
     const b = boxRef.current?.getBoundingClientRect();
     if (!b) return;
-    setHover({ x: e.clientX - b.left, y: e.clientY - b.top, title, sub, val });
+    setHover({ x: e.clientX - b.left, y: e.clientY - b.top, bw: b.width, title, sub, val });
   };
   const fmt = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`;
 
@@ -215,16 +275,32 @@ export default function SectorSunburst() {
     background: active ? rgba(HT.cyan, 0.14) : "transparent",
     color: active ? HT.cyan : HT.muted, opacity: active ? 1 : 0.6,
   });
+  const iconBtn: React.CSSProperties = {
+    padding: "2px 7px", borderRadius: 4, cursor: "pointer", fontSize: 10, fontWeight: 700,
+    border: `1px solid ${HT.border}`, background: "transparent", color: HT.muted, opacity: 0.75,
+    lineHeight: 1.6,
+  };
 
-  return (
-    <div>
+  const content = (
+    <>
       {/* header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>🌐 S&amp;P Sector Wheel</div>
+        <div style={{ fontSize: expanded ? 20 : 17, fontWeight: 700, color: HT.cyan }}>🌐 S&amp;P Sector Wheel</div>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {CAPS.map((c) => (
             <button key={c} onClick={() => setCap(c)} style={capBtn(cap === c)}>{c}%</button>
           ))}
+          <span style={{ width: 6 }} />
+          {expanded ? (
+            <>
+              <button onClick={toggleFullscreen} style={iconBtn} title={isFs ? "Exit full screen" : "Full screen"}>
+                {isFs ? "⤡ Exit full screen" : "⛶ Full screen"}
+              </button>
+              <button onClick={close} style={iconBtn} title="Close (Esc)">✕ Close</button>
+            </>
+          ) : (
+            <button onClick={() => setExpanded(true)} style={iconBtn} title="Pop out to a larger window">⤢ Expand</button>
+          )}
         </div>
       </div>
       <div style={{ fontSize: 12, color: HT.muted, opacity: 0.65, marginBottom: 10 }}>
@@ -233,7 +309,18 @@ export default function SectorSunburst() {
           : <>Bar length = size of move, color = direction. Click a sector to zoom.</>}
       </div>
 
-      <div ref={boxRef} style={{ position: "relative" }}>
+      {/* body — stacked in the card, wheel-beside-movers when popped out */}
+      <div style={{
+        display: "flex", flexWrap: "wrap",
+        flexDirection: expanded ? "row" : "column",
+        alignItems: expanded ? "flex-start" : "stretch",
+        gap: expanded ? 28 : 0,
+      }}>
+      <div style={{ flex: expanded ? "1 1 460px" : undefined, minWidth: 0, display: "flex", justifyContent: "center" }}>
+      <div ref={boxRef} style={{
+        position: "relative", width: "100%",
+        maxWidth: expanded ? "min(100%, calc(100vh - 200px))" : undefined,
+      }}>
         {!data && !err && (
           <div style={{ padding: "48px 12px", textAlign: "center", color: HT.muted, opacity: 0.6, fontSize: 12 }}>
             Loading sector data…
@@ -303,7 +390,10 @@ export default function SectorSunburst() {
 
             {/* sector labels — tangential, only where the arc genuinely fits one */}
             {sectors.map((s) => {
-              const fs = 9;
+              // Type is sized in viewBox units, so the fit test is the same at
+              // any render size — popped out we can afford smaller units (they
+              // land bigger on screen), which is what lets more names show.
+              const fs = expanded ? 7 : 9;
               const ri = R * RING.holeOut, ro = R * RING.secOut - 1.5;
               const rr = (ri + ro) / 2;
               if (ro - ri < fs + 3) return null;      // thin accent band — no room
@@ -332,7 +422,7 @@ export default function SectorSunburst() {
             {/* industry labels — only ever fit in the zoomed layout, and the fit
                 test is what decides that, so there is no special case here */}
             {industries.map((n, k) => {
-              const fs = 8;
+              const fs = expanded ? 6.5 : 8;
               const ri = R * RING.secOut, ro = R * RING.indOut - 1.5;
               const rr = (ri + ro) / 2;
               if (ro - ri < fs + 3) return null;
@@ -353,7 +443,7 @@ export default function SectorSunburst() {
 
             {/* tickers, printed inside a bar that is both wide and long enough */}
             {leaves.map((l, k) => {
-              const fs = 7.5;
+              const fs = expanded ? 5.6 : 7.5;
               const len = barLen(l.chg);
               const w = textW(l.name, fs);
               if (w > len - 7) return null;
@@ -395,7 +485,7 @@ export default function SectorSunburst() {
 
         {hover && (
           <div style={{
-            position: "absolute", left: Math.min(hover.x + 12, 240), top: hover.y + 12, pointerEvents: "none", zIndex: 5,
+            position: "absolute", left: Math.max(0, Math.min(hover.x + 12, hover.bw - 150)), top: hover.y + 12, pointerEvents: "none", zIndex: 5,
             background: HT.panelBgStrong, backdropFilter: "blur(10px)", border: `1px solid ${HT.border}`,
             borderRadius: 8, padding: "7px 9px", minWidth: 120,
           }}>
@@ -407,7 +497,10 @@ export default function SectorSunburst() {
           </div>
         )}
       </div>
+      </div>
 
+      {/* side rail when popped out, footer stack when in the card */}
+      <div style={{ flex: expanded ? "0 1 280px" : undefined, minWidth: expanded ? 220 : 0, width: expanded ? undefined : "100%" }}>
       {/* biggest movers — the wheel is too small for callouts, so name them here */}
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
@@ -427,12 +520,73 @@ export default function SectorSunburst() {
         </div>
       )}
 
+      {/* sector leaderboard — only the pop-out has the room for it */}
+      {data && expanded && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ ...label, fontSize: 10, marginBottom: 6, opacity: 0.55 }}>Sectors</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {sectorRank.map((s) => (
+              <button
+                key={s.name}
+                onClick={() => setFocus(focus === s.name ? null : s.name)}
+                title={`${s.n} names · click to zoom the wheel`}
+                style={{
+                  display: "grid", gridTemplateColumns: "1fr 56px", alignItems: "center", gap: 8,
+                  padding: "3px 6px", borderRadius: 5, cursor: "pointer", textAlign: "left",
+                  border: `1px solid ${focus === s.name ? HT.cyan : "transparent"}`,
+                  background: focus === s.name ? rgba(HT.cyan, 0.12) : "transparent",
+                  color: HT.text, fontSize: 11, fontWeight: 600,
+                }}
+              >
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+                <span style={{ textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums", color: s.chg >= 0 ? HT.green : HT.red }}>
+                  {fmt(s.chg)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {data && (
         <div style={{ marginTop: 10, fontSize: 10, color: HT.muted, opacity: 0.5, display: "flex", justifyContent: "space-between" }}>
           <span>{data.covered}/{data.universe} names{data.stale ? " · cached" : ""}</span>
           {asOf && <span>as of {asOf} ET</span>}
         </div>
       )}
-    </div>
+      </div>
+      </div>
+    </>
   );
+
+  if (expanded && typeof document !== "undefined") {
+    return createPortal(
+      <div
+        ref={overlayRef}
+        onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}
+        style={{
+          position: "fixed", inset: 0, zIndex: 4000,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          padding: isFs ? 0 : "clamp(10px, 2.5vw, 32px)",
+          background: isFs ? HT.bg : rgba(HT.bg, 0.82),
+          backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)",
+        }}
+      >
+        <div style={{
+          width: "100%", maxWidth: isFs ? "none" : 1320, maxHeight: "100%", overflow: "auto",
+          background: isFs ? "transparent" : HT.panelBg,
+          backdropFilter: isFs ? undefined : "blur(16px)",
+          border: isFs ? "none" : `1px solid ${HT.border}`,
+          borderRadius: isFs ? 0 : 18,
+          boxShadow: isFs ? "none" : "0 40px 100px -30px rgba(0,0,0,0.6)",
+          padding: "clamp(16px, 2vw, 28px)",
+        }}>
+          {content}
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  return <div>{content}</div>;
 }

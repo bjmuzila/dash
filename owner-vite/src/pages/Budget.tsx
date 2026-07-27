@@ -181,15 +181,13 @@ export default function Budget() {
   const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  // Overview: cash-flow bucket size + the right-hand panel's tab.
-  const [cfMode, setCfMode] = useState<RangeMode>("daily");
   const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
-  // Per-card range tabs. Each card remembers its own period independently so
-  // you can look at today's spend next to the whole year's pace.
-  const [safeRange, setSafeRange] = useState<RangeMode>("daily");
-  const [paceRange, setPaceRange] = useState<RangeMode>("monthly");
-  const [donutRange, setDonutRange] = useState<RangeMode>("monthly");
-  const [catRange, setCatRange] = useState<RangeMode>("monthly");
+  // ONE range for the whole overview. Every card that can honestly be re-cut by
+  // period follows it; the ones that can't (All Banks, Weekly Balance Check,
+  // Rent, Bank Accounts) simply ignore it and keep showing what they mean.
+  const [range, setRange] = useState<RangeMode>("monthly");
+  const cfMode = range;
+  const paceRange = range;
 
   // Add-row composer
   const [rwDate, setRwDate] = useState(todayIso());
@@ -795,6 +793,29 @@ export default function Budget() {
     return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
   }, [paceRange, intel, computed.groups, yearMonths.months, year, month]);
 
+  // Income / expenses / net for whatever range the switcher is on. The monthly
+  // view keeps the old behaviour exactly (register totals + Amazon net) so the
+  // headline numbers don't move; the other ranges read off the windowed rows.
+  const rangeTotals = useMemo(() => {
+    if (range === "monthly") {
+      const income = computed.income + amazonComputed.totalNet;
+      return { income, expenses: Math.abs(computed.payments), net: computed.netCashFlow + amazonComputed.totalNet };
+    }
+    const w = spendWindow[range];
+    return { income: w.income, expenses: w.spend, net: w.income - w.spend };
+  }, [range, spendWindow, computed, amazonComputed.totalNet]);
+
+  // Net per day across the whole year — powers the yearly calendar heatmap.
+  // Logged rows only (recurring rules aren't projected 12 months out).
+  const yearNet = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of yearRows) {
+      if (r.is_beginning) continue;
+      m.set(r.entry_date, (m.get(r.entry_date) || 0) + r.amount);
+    }
+    return m;
+  }, [yearRows]);
+
   // Recent transactions = real logged rows (what has actually been paid/received).
   const recentPaid = useMemo(() => {
     return register
@@ -960,6 +981,12 @@ export default function Budget() {
             <div style={labelCap()}>Month</div>
             <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
           </div>
+          {tab === "overview" && (
+            <div>
+              <div style={labelCap()}>Range</div>
+              <RangeTabs value={range} onChange={setRange} wide />
+            </div>
+          )}
         </div>
 
         {/* Tabs (top-level nav) */}
@@ -998,18 +1025,20 @@ export default function Budget() {
             delta={prevAllBanks !== null ? allBanks - prevAllBanks : null}
             currency={currency}
           />
-          <StatTile label="Income" value={fmtMoney(computed.income + amazonComputed.totalNet, currency)} sub={`${monthLabel.split(" ")[0]} inflows · incl. Amazon`} valueColor={HOME_THEME.green} />
-          <StatTile label="Expenses" value={fmtMoney(Math.abs(computed.payments), currency)} sub={`${monthLabel.split(" ")[0]} outflows`} valueColor={SOFT_RED} />
-          <StatTile label="Net Profit" value={fmtMoney(computed.netCashFlow + amazonComputed.totalNet, currency)} sub="Income − expenses" valueColor={computed.netCashFlow + amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.green} />
+          {/* These three follow the range switcher. Amazon net is only folded in
+              on the month view, where it's actually scoped to the same period. */}
+          <StatTile label="Income" value={fmtMoney(rangeTotals.income, currency)} sub={`${RANGE_WINDOW_LABEL[range]} inflows${range === "monthly" ? " · incl. Amazon" : ""}`} valueColor={HOME_THEME.green} />
+          <StatTile label="Expenses" value={fmtMoney(rangeTotals.expenses, currency)} sub={`${RANGE_WINDOW_LABEL[range]} outflows`} valueColor={SOFT_RED} />
+          <StatTile label="Net Profit" value={fmtMoney(rangeTotals.net, currency)} sub="Income − expenses" valueColor={rangeTotals.net < 0 ? SOFT_RED : HOME_THEME.green} />
           <StatTile label="Amazon" value={fmtMoney(amazonComputed.totalNet, currency)} sub={`${amazonComputed.rows.length} day${amazonComputed.rows.length === 1 ? "" : "s"} · net of gas`} valueColor={amazonComputed.totalNet < 0 ? SOFT_RED : HOME_THEME.text} />
           <StatTile label="Bzila" value={fmtMoney(bzilaMonth.net, currency)} sub={`${fmtMoney(bzilaMonth.inAmt, currency)} in · ${fmtMoney(bzilaMonth.outAmt, currency)} out`} valueColor={bzilaMonth.net < 0 ? SOFT_RED : HOME_THEME.green} />
         </div>
 
         {/* Daily/weekly budgeting intelligence */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
-          <SafeToSpendCard intel={intel} currency={currency} range={safeRange} onRange={setSafeRange} />
-          <SpendPaceCard series={paceSeries} currency={currency} range={paceRange} onRange={setPaceRange} />
-          <CategoryDonutCard slices={slicesFor(donutRange)} currency={currency} range={donutRange} onRange={setDonutRange} />
+          <SafeToSpendCard intel={intel} currency={currency} range={range} />
+          <SpendPaceCard series={paceSeries} currency={currency} range={range} />
+          <CategoryDonutCard slices={slicesFor(range)} currency={currency} range={range} />
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
@@ -1021,13 +1050,10 @@ export default function Budget() {
                 <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Cash Flow</div>
                 <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 2 }}>{cfMode === "monthly" || cfMode === "yearly" ? String(year) : monthLabel}</div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.green }} /> In
-                  <span style={{ width: 8, height: 8, borderRadius: 2, background: SOFT_RED, marginLeft: 8 }} /> Out
-                </span>
-                <RangeTabs value={cfMode} onChange={setCfMode} />
-              </div>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.green }} /> In
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: SOFT_RED, marginLeft: 8 }} /> Out
+              </span>
             </div>
             <CashFlowBars buckets={cashflow} currency={currency} beginningBalance={computed.anyBeginning ? computed.beginningBalance : 0} />
           </div>
@@ -1035,7 +1061,7 @@ export default function Budget() {
           <div style={{ ...card(), padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>
-                {rightTab === "calendar" ? "Cashflow Calendar" : "Balance Projection"}
+                {rightTab === "calendar" ? (range === "weekly" ? "This Week" : range === "yearly" ? `${year} Calendar` : "Cashflow Calendar") : "Balance Projection"}
               </div>
               <Segmented
                 value={rightTab}
@@ -1044,7 +1070,7 @@ export default function Budget() {
               />
             </div>
             {rightTab === "calendar" ? (
-              <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} />
+              <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
             ) : (
               <ProjectionChart series={computed.series} currency={currency} />
             )}
@@ -1063,14 +1089,13 @@ export default function Budget() {
           <RecentTransactions rows={recentPaid} currency={currency} categories={categories} />
           <CategorySpendCard
             categories={categories}
-            spent={spendWindow[catRange].byCat}
-            unsortedCount={spendWindow[catRange].unsortedCount}
-            unsortedTotal={spendWindow[catRange].unsorted}
+            spent={spendWindow[range].byCat}
+            unsortedCount={spendWindow[range].unsortedCount}
+            unsortedTotal={spendWindow[range].unsorted}
             currency={currency}
             onOpenCategories={() => setTab("categories")}
-            range={catRange}
-            onRange={setCatRange}
-            budgetScale={catRange === "yearly" ? 12 : catRange === "monthly" ? 1 : catRange === "weekly" ? 7 / intel.daysInMonth : 1 / intel.daysInMonth}
+            range={range}
+            budgetScale={range === "yearly" ? 12 : range === "monthly" ? 1 : range === "weekly" ? 7 / intel.daysInMonth : 1 / intel.daysInMonth}
           />
         </div>
         </>
@@ -1325,73 +1350,174 @@ function ProjectionChart({ series, currency }: { series: { date: string; balance
   );
 }
 
-// Cashflow calendar grid: a month of days, each tinted + labelled with its net
-// change (green surplus / red deficit). Clicking a day lifts the selection to
-// the page so the transactions panel below can show that day.
+// Cashflow calendar. Three shapes behind one control:
+//   Daily / Monthly → the month grid (Daily just pins the highlight on today)
+//   Weekly          → a 7-day strip for the week containing today
+//   Yearly          → twelve mini-months, each day tinted by its net
+// Day tiles are a FIXED pixel size so every cell is identical no matter how
+// wide the window (or the card) gets. The grid is centred and the wrapper
+// scrolls horizontally on very narrow viewports instead of squashing cells.
+const CELL_W = 104, CELL_H = 78;
+
+function DayCell({ d, iso, g, currency, isSel, isToday, onSelect, w = CELL_W, h = CELL_H }: {
+  d: number; iso: string; g: DayGroup | undefined; currency: string; isSel: boolean; isToday: boolean;
+  onSelect: (date: string) => void; w?: number; h?: number;
+}) {
+  const net = g?.dailyNet ?? 0;
+  const pos = net > 0, neg = net < 0;
+  const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+  return (
+    <button
+      onClick={() => g && onSelect(iso)}
+      disabled={!g}
+      style={{
+        textAlign: "left", width: w, height: h, boxSizing: "border-box", padding: "6px 7px", borderRadius: 9,
+        cursor: g ? "pointer" : "default", overflow: "hidden", background: tint,
+        border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
+        boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",
+        color: HOME_THEME.text, transition: "all 0.12s ease",
+      }}
+    >
+      <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>{d}</span>
+      </div>
+      {g && <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+    </button>
+  );
+}
+
+const WD = ["S", "M", "T", "W", "T", "F", "S"];
+
 function CalendarGrid({
   month,
   groups,
   currency,
   selected,
   onSelect,
+  mode,
+  yearNet,
+  year,
 }: {
   month: string;
   groups: DayGroup[];
   currency: string;
   selected: string | null;
   onSelect: (date: string) => void;
+  mode: RangeMode;
+  /** iso → net, for the whole year. Powers the yearly heatmap. */
+  yearNet: Map<string, number>;
+  year: number;
 }) {
+  const byDate = new Map(groups.map((g) => [g.date, g]));
+  const todayStr = todayIso();
+
+  // ── Weekly: the seven days of the week containing today ───────────────────
+  if (mode === "weekly") {
+    const now = new Date(todayStr + "T00:00:00");
+    const sunday = addDays(todayStr, -now.getDay());
+    const days = Array.from({ length: 7 }, (_, i) => addDays(sunday, i));
+    return (
+      <div style={{ width: "100%", overflowX: "auto", display: "flex", justifyContent: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL_W}px)`, gap: 5, flex: "none" }}>
+          {WD.map((w, i) => (
+            <div key={i} style={{ width: CELL_W, boxSizing: "border-box", textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+          ))}
+          {days.map((iso) => (
+            <DayCell
+              key={iso}
+              d={Number(iso.slice(8, 10))}
+              iso={iso}
+              g={byDate.get(iso)}
+              currency={currency}
+              isSel={selected === iso}
+              isToday={iso === todayStr}
+              onSelect={onSelect}
+              h={CELL_H + 14}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Yearly: twelve mini-months, one dot per day tinted by net ─────────────
+  if (mode === "yearly") {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))", gap: 10 }}>
+        {Array.from({ length: 12 }, (_, mi) => {
+          const ym = `${year}-${String(mi + 1).padStart(2, "0")}`;
+          const dim = new Date(year, mi + 1, 0).getDate();
+          const lead = new Date(year, mi, 1).getDay();
+          return (
+            <div key={ym} style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: "7px 8px 9px", background: "rgba(255,255,255,0.02)" }}>
+              <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 6 }}>
+                {new Date(year, mi, 1).toLocaleDateString("en-US", { month: "short" })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+                {Array.from({ length: lead }, (_, i) => <div key={`p${i}`} style={{ aspectRatio: "1 / 1" }} />)}
+                {Array.from({ length: dim }, (_, i) => {
+                  const iso = `${ym}-${String(i + 1).padStart(2, "0")}`;
+                  const net = yearNet.get(iso);
+                  const has = net !== undefined && net !== 0;
+                  const neg = (net ?? 0) < 0;
+                  return (
+                    <button
+                      key={iso}
+                      title={has ? `${iso} · ${fmtMoney(net as number, currency)}` : iso}
+                      onClick={() => onSelect(iso)}
+                      style={{
+                        aspectRatio: "1 / 1", borderRadius: 3, padding: 0, cursor: "pointer",
+                        border: iso === todayStr ? "1px solid rgba(255,255,255,0.7)" : selected === iso ? "1px solid #7dd3fc" : "1px solid transparent",
+                        background: has ? (neg ? bRgba(SOFT_RED, 0.75) : bRgba(HOME_THEME.green, 0.75)) : "rgba(255,255,255,0.06)",
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: HOME_THEME.muted, opacity: 0.7, marginTop: 2 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: bRgba(HOME_THEME.green, 0.75) }} />Up on the day</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: bRgba(SOFT_RED, 0.75) }} />Down on the day</span>
+          <span style={{ opacity: 0.7 }}>Logged rows only</span>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Daily / Monthly: the month grid ───────────────────────────────────────
   const [y, m] = month.split("-").map(Number);
   const daysInMonth = new Date(y, m, 0).getDate();
   const firstWeekday = new Date(y, m - 1, 1).getDay(); // 0 = Sun
-  const byDate = new Map(groups.map((g) => [g.date, g]));
   const iso = (d: number) => `${month}-${String(d).padStart(2, "0")}`;
-  const todayStr = todayIso();
   const todayDay = todayStr.slice(0, 7) === month ? Number(todayStr.slice(8, 10)) : null;
-  const WD = ["S", "M", "T", "W", "T", "F", "S"];
   const cells: (number | null)[] = [
     ...Array(firstWeekday).fill(null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
-  // Day tiles are a FIXED pixel size so every cell is identical no matter how
-  // wide the window (or the card) gets. The grid is centred and the wrapper
-  // scrolls horizontally on very narrow viewports instead of squashing cells.
-  const CELL_W = 104, CELL_H = 78;
   return (
     <div style={{ width: "100%", overflowX: "auto", display: "flex", justifyContent: "center" }}>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL_W}px)`, gap: 5, flex: "none" }}>
         {WD.map((w, i) => (
           <div key={i} style={{ width: CELL_W, boxSizing: "border-box", textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
         ))}
-        {cells.map((d, i) => {
-          if (d === null) return <div key={`e${i}`} style={{ width: CELL_W, height: CELL_H, boxSizing: "border-box" }} />;
-          const g = byDate.get(iso(d));
-          const net = g?.dailyNet ?? 0;
-          const isSel = selected === iso(d);
-          const isToday = d === todayDay;
-          const pos = net > 0, neg = net < 0;
-          const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
-          return (
-            <button
+        {cells.map((d, i) =>
+          d === null ? (
+            <div key={`e${i}`} style={{ width: CELL_W, height: CELL_H, boxSizing: "border-box" }} />
+          ) : (
+            <DayCell
               key={d}
-              onClick={() => g && onSelect(iso(d))}
-              disabled={!g}
-              style={{
-                textAlign: "left", width: CELL_W, height: CELL_H, boxSizing: "border-box", padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
-                overflow: "hidden",
-                background: tint,
-                border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
-                boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",
-                color: HOME_THEME.text, transition: "all 0.12s ease",
-              }}
-            >
-              <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span>{d}</span>
-              </div>
-              {g && <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
-            </button>
-          );
-        })}
+              d={d}
+              iso={iso(d)}
+              g={byDate.get(iso(d))}
+              currency={currency}
+              isSel={selected === iso(d)}
+              isToday={d === todayDay}
+              onSelect={onSelect}
+            />
+          )
+        )}
       </div>
     </div>
   );
@@ -1601,9 +1727,9 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
  * title; letters (not words) so it fits in a 280px card without wrapping —
  * the full word is on the tooltip.
  */
-function RangeTabs({ value, onChange, options = RANGE_MODES }: { value: RangeMode; onChange: (v: RangeMode) => void; options?: RangeMode[] }) {
+function RangeTabs({ value, onChange, options = RANGE_MODES, wide }: { value: RangeMode; onChange: (v: RangeMode) => void; options?: RangeMode[]; wide?: boolean }) {
   return (
-    <div style={{ display: "inline-flex", gap: 2, padding: 2, borderRadius: 999, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.40)", flex: "none" }}>
+    <div style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 999, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.40)", flex: "none" }}>
       {options.map((o) => {
         const on = o === value;
         return (
@@ -1613,15 +1739,16 @@ function RangeTabs({ value, onChange, options = RANGE_MODES }: { value: RangeMod
             title={RANGE_TITLE[o]}
             onClick={() => onChange(o)}
             style={{
-              padding: "3px 9px", borderRadius: 999, border: "none", cursor: "pointer",
+              padding: wide ? "6px 16px" : "3px 9px", borderRadius: 999, border: "none", cursor: "pointer",
               background: on ? bRgba(HOME_THEME.cyan, 0.30) : "transparent",
               boxShadow: on ? `0 0 14px ${bRgba(HOME_THEME.cyan, 0.40)}, ${EDGE_LIGHT}` : "none",
               color: on ? LIGHT_BLUE : "rgba(255,255,255,0.48)",
-              fontSize: 11, fontWeight: 900, letterSpacing: "0.08em", lineHeight: 1.4,
+              fontSize: wide ? 13 : 11, fontWeight: 900, letterSpacing: "0.08em", lineHeight: 1.4,
+              textTransform: "uppercase",
               transition: "background .15s ease, color .15s ease",
             }}
           >
-            {RANGE_LETTER[o]}
+            {wide ? RANGE_TITLE[o] : RANGE_LETTER[o]}
           </button>
         );
       })}
@@ -1702,16 +1829,18 @@ function IntelHeader({ title, right }: { title: string; right?: React.ReactNode 
  * at whatever cadence the tab asks for. There's no yearly reading — the pot is
  * this month's — so the card offers D / W / M only.
  */
-function SafeToSpendCard({ intel, currency, range, onRange }: { intel: Intel; currency: string; range: RangeMode; onRange: (v: RangeMode) => void }) {
+function SafeToSpendCard({ intel, currency, range }: { intel: Intel; currency: string; range: RangeMode }) {
   // safe is a fixed pot for the rest of the month; the tab just re-expresses
   // the burn rate: per day, per week (7 days of it), or the whole pot.
-  const rate = range === "monthly" ? intel.safe : range === "weekly" ? intel.safePerDay * 7 : intel.safePerDay;
-  const unit = range === "monthly" ? "left" : range === "weekly" ? "/week" : "/day";
+  // There is no yearly reading — the pot is this month's — so Yearly falls
+  // back to the whole-month figure rather than inventing a number.
+  const rate = range === "monthly" || range === "yearly" ? intel.safe : range === "weekly" ? intel.safePerDay * 7 : intel.safePerDay;
+  const unit = range === "monthly" || range === "yearly" ? "left this month" : range === "weekly" ? "/week" : "/day";
   const neg = rate < 0;
   const pct = Math.min(100, Math.max(0, (intel.todayDay / intel.daysInMonth) * 100));
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Safe to Spend" right={<RangeTabs value={range} onChange={onRange} options={["daily", "weekly", "monthly"]} />} />
+      <IntelHeader title="Safe to Spend" right={<span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.55 }}>{RANGE_TITLE[range].toUpperCase()}</span>} />
       <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
         {fmtMoney(rate, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> {unit}</span>
       </div>
@@ -1738,7 +1867,7 @@ function SafeToSpendCard({ intel, currency, range, onRange }: { intel: Intel; cu
  * real point.
  */
 type PaceSeries = { cum: number[]; labels: string[]; budget: number; upTo: number; span: number; scope: string };
-function SpendPaceCard({ series, currency, range, onRange }: { series: PaceSeries; currency: string; range: RangeMode; onRange: (v: RangeMode) => void }) {
+function SpendPaceCard({ series, currency, range }: { series: PaceSeries; currency: string; range: RangeMode }) {
   const W = 300, H = 132, PADB = 16;
   const n = Math.max(series.span, 1);
   const maxV = Math.max(series.budget, series.cum[series.cum.length - 1] || 0, 1);
@@ -1757,7 +1886,7 @@ function SpendPaceCard({ series, currency, range, onRange }: { series: PaceSerie
   const step = Math.max(1, Math.ceil(series.labels.length / 7));
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Spend Pace" right={<RangeTabs value={range} onChange={onRange} />} />
+      <IntelHeader title="Spend Pace" right={<span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.55 }}>{RANGE_TITLE[range].toUpperCase()}</span>} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: -6, marginBottom: 8 }}>
         <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>{series.scope}</span>
         <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>
@@ -1793,42 +1922,100 @@ function SpendPaceCard({ series, currency, range, onRange }: { series: PaceSerie
   );
 }
 
-/** Category donut — where the spend in the selected window actually went. */
-function CategoryDonutCard({ slices, currency, range, onRange }: { slices: Intel["slices"]; currency: string; range: RangeMode; onRange: (v: RangeMode) => void }) {
+/**
+ * Where It Went — interactive pie, bklit-style.
+ *
+ * Hovering a wedge pushes it out of the ring and lights the matching legend
+ * row; hovering a legend row does the same in reverse. The centre swaps from
+ * the window total to the hovered slice. Pointer state is shared, so the two
+ * halves always agree.
+ */
+function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"]; currency: string; range: RangeMode }) {
+  const [hover, setHover] = useState<number | null>(null);
   const total = slices.reduce((s, x) => s + x.value, 0);
-  const R = 44, C = 2 * Math.PI * R;
-  let cumFrac = 0;
+  const CX = 60, CY = 60, R = 46, POP = 5;
+
+  // Wedge path. `push` offsets the slice along its own mid-angle so the hovered
+  // one lifts out of the pie instead of just changing colour.
+  const wedge = (a0: number, a1: number, push: number) => {
+    const rad = (deg: number) => ((deg - 90) * Math.PI) / 180;
+    const mid = rad((a0 + a1) / 2);
+    const ox = Math.cos(mid) * push, oy = Math.sin(mid) * push;
+    const x0 = CX + ox + R * Math.cos(rad(a0)), y0 = CY + oy + R * Math.sin(rad(a0));
+    const x1 = CX + ox + R * Math.cos(rad(a1)), y1 = CY + oy + R * Math.sin(rad(a1));
+    const large = a1 - a0 > 180 ? 1 : 0;
+    return `M ${CX + ox} ${CY + oy} L ${x0} ${y0} A ${R} ${R} 0 ${large} 1 ${x1} ${y1} Z`;
+  };
+
+  const active = hover !== null ? slices[hover] : null;
+  let acc = 0;
+  const arcs = slices.map((sl) => {
+    const a0 = (acc / total) * 360;
+    acc += sl.value;
+    return { sl, a0, a1: (acc / total) * 360 };
+  });
+
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Where It Went" right={<RangeTabs value={range} onChange={onRange} />} />
+      <IntelHeader title="Where It Went" right={<span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.55 }}>{RANGE_TITLE[range].toUpperCase()}</span>} />
       <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6, marginBottom: 8 }}>{RANGE_WINDOW_LABEL[range]}</div>
       {total <= 0 ? (
         <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14, textAlign: "center" }}>No categorized spend {RANGE_WINDOW_LABEL[range].toLowerCase()}.</div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 0 }}>
-          <svg viewBox="0 0 120 120" width={128} height={128} style={{ flex: "none", filter: "drop-shadow(0 0 10px rgba(125,211,252,0.25))" }}>
-            <circle cx={60} cy={60} r={R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={16} />
-            {slices.map((s, i) => {
-              const frac = s.value / total;
-              const el = (
-                <circle key={i} cx={60} cy={60} r={R} fill="none" stroke={s.color} strokeWidth={16}
-                  strokeDasharray={`${Math.max(frac * C - 1.5, 0.5)} ${C}`} strokeDashoffset={-cumFrac * C}
-                  transform="rotate(-90 60 60)" strokeLinecap="butt" />
-              );
-              cumFrac += frac;
-              return el;
-            })}
-            <text x={60} y={57} textAnchor="middle" fill={HOME_THEME.text} fontSize={15} fontWeight={900} style={{ fontVariantNumeric: "tabular-nums" }}>{fmtMoney(total, currency).replace(/\.\d+$/, "")}</text>
-            <text x={60} y={72} textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize={9} fontWeight={800} letterSpacing="0.1em">SPENT</text>
-          </svg>
-          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 6, fontSize: 12, fontVariantNumeric: "tabular-nums", overflow: "hidden" }}>
-            {slices.slice(0, 6).map((s, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color, boxShadow: `0 0 8px ${s.color}`, flex: "none" }} />
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }}>{s.label}</span>
-                <b>{Math.round((s.value / total) * 100)}%</b>
+          <div style={{ position: "relative", flex: "none" }}>
+            <svg viewBox="0 0 120 120" width={132} height={132} onMouseLeave={() => setHover(null)} style={{ overflow: "visible" }}>
+              {arcs.map(({ sl, a0, a1 }, i) => {
+                const on = hover === i;
+                const dim = hover !== null && !on;
+                return (
+                  <path
+                    key={i}
+                    d={wedge(a0, a1, on ? POP : 0)}
+                    fill={sl.color}
+                    stroke={INK}
+                    strokeWidth={1.5}
+                    opacity={dim ? 0.32 : 1}
+                    onMouseEnter={() => setHover(i)}
+                    style={{ cursor: "pointer", transition: "opacity .15s ease, d .15s ease", filter: on ? `drop-shadow(0 0 10px ${sl.color})` : "none" }}
+                  />
+                );
+              })}
+            </svg>
+            {/* Centre readout floats over the pie so the wedges stay solid. */}
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", pointerEvents: "none", textAlign: "center" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 900, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
+                  {fmtMoney(active ? active.value : total, currency).replace(/\.\d+$/, "")}
+                </div>
+                <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.1em", color: "rgba(255,255,255,0.65)", textTransform: "uppercase", maxWidth: 78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
+                  {active ? active.label : "Spent"}
+                </div>
               </div>
-            ))}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 2, fontSize: 12, fontVariantNumeric: "tabular-nums", overflow: "hidden" }} onMouseLeave={() => setHover(null)}>
+            {slices.slice(0, 6).map((sl, i) => {
+              const on = hover === i;
+              return (
+                <div
+                  key={i}
+                  onMouseEnter={() => setHover(i)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 7, padding: "3px 6px", borderRadius: 7, cursor: "pointer",
+                    background: on ? "rgba(255,255,255,0.07)" : "transparent",
+                    opacity: hover !== null && !on ? 0.45 : 1,
+                    transition: "background .15s ease, opacity .15s ease",
+                  }}
+                >
+                  <span style={{ width: 9, height: 9, borderRadius: 999, background: sl.color, boxShadow: `0 0 8px ${sl.color}`, flex: "none" }} />
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: on ? 800 : 600, color: on ? HOME_THEME.text : "rgba(255,255,255,0.8)" }}>{sl.label}</span>
+                  <b style={{ color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
+                  <span style={{ width: 32, textAlign: "right", opacity: 0.55 }}>{Math.round((sl.value / total) * 100)}%</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -2283,7 +2470,6 @@ function CategorySpendCard({
   currency,
   onOpenCategories,
   range,
-  onRange,
   budgetScale,
 }: {
   categories: Category[];
@@ -2293,7 +2479,6 @@ function CategorySpendCard({
   currency: string;
   onOpenCategories: () => void;
   range: RangeMode;
-  onRange: (v: RangeMode) => void;
   /** Category budgets are monthly — scale them to the window being shown. */
   budgetScale: number;
 }) {
@@ -2312,10 +2497,7 @@ function CategorySpendCard({
             {fmtMoney(totalSpent, currency)} categorized · {RANGE_WINDOW_LABEL[range].toLowerCase()}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
-          <RangeTabs value={range} onChange={onRange} />
-          <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 12, borderRadius: 8 }}>Manage</button>
-        </div>
+        <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 12, borderRadius: 8 }}>Manage</button>
       </div>
 
       {unsortedCount > 0 && (

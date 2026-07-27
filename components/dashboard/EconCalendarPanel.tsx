@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 
@@ -132,6 +133,17 @@ function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
 }
 
 export default function EconCalendarPanel({ todayOnly = false, hideToolbar = false, controlsPortalEl = null }: { todayOnly?: boolean; hideToolbar?: boolean; controlsPortalEl?: HTMLElement | null }) {
+  // Feed-health text is OWNER-ONLY. It names upstream hosts, HTTP status codes
+  // and cache timestamps — diagnostics, not customer copy. Derived with the
+  // strict form (claim OR explicit id match) rather than the `: !!isSignedIn`
+  // fallback used in EconCalendarDiscordBtn/NavMenu/TopBar: NEXT_PUBLIC_OWNER_USER_ID
+  // is only a Docker build ARG, so if it's ever missing from a build that
+  // fallback makes every signed-in CUSTOMER an "owner" and leaks the diagnostics
+  // to exactly the people who must not see them. This form fails CLOSED.
+  const { user, isOwnerClaim } = useAuth();
+  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
+  const isOwner = isOwnerClaim || (!!ownerId && user?.id === ownerId);
+
   const [events,        setEvents]        = useState<CalEvent[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState<string | null>(null);
@@ -495,10 +507,11 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         </div>
       )}
 
-      {/* Feed-health banner. Amber = degraded (stale cache / saved fallback),
-          red = the feed produced nothing at all. Shown ABOVE the list so a
-          partial week is still readable underneath it. */}
-      {!loading && !error && warning && (
+      {/* Feed-health banner — OWNER ONLY (see isOwner above). Amber = degraded
+          (stale cache / saved fallback), red = the feed produced nothing at all.
+          Customers see no banner in either case: when data is present it's real
+          data, and when it isn't they get the plain empty-state line below. */}
+      {isOwner && !loading && !error && warning && (
         <div style={{
           display: "flex", gap: 6, alignItems: "flex-start",
           padding: "5px 10px",
@@ -516,11 +529,13 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
       <div style={{ flex: 1, overflowY: "auto" }}>
         {loading ? (
           <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>Loading…</div>
-        ) : error ? (
+        ) : error && isOwner ? (
+          // Raw fetch error, owner only — it can carry upstream hostnames and
+          // status text. Customers fall through to the neutral line below.
           <div style={{ color: "#ef4444", fontSize: 10, padding: "6px 10px", wordBreak: "break-all" }}>⚠ {error}</div>
         ) : weekEvents.length === 0 && !anyEarnings ? (
           <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>
-            {warning ? "No events available — see the notice above." : "No events this week."}
+            {isOwner && warning ? "No events available — see the notice above." : "No events this week."}
           </div>
         ) : (
           <>
