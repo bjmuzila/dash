@@ -823,6 +823,17 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // NOT delta: dxFeed candles carry no aggressor side, and per-print TimeAndSale
   // classification saturated the streamer last time. See lib/vsa.ts.
   const [showVsa, setShowVsa] = useState(false);
+  // Flip Cross Pulse — rings the bars where price actually CROSSED the gamma
+  // flip, plus the derived flip path itself.
+  //
+  // The flip series is computed from the SAME 1-min GEX columns that feed the
+  // bubbles (minuteColsRef), not from lineLevels.gexFlip or mvc_snapshots:
+  //   • lineLevels.gexFlip is a now-value only — there's no history to cross.
+  //   • mvc_snapshots.gexFlip is poisoned (both recorders backfill it with the
+  //     MVC strike when /api/gex omits a flip — see the note at the top).
+  // Deriving it per-column means the marker can never disagree with the bubbles
+  // the user is looking at, and it costs no new fetch. Single-day, like bubbles.
+  const [showFlipCross, setShowFlipCross] = useState(false);
   const [vsaTuning, setVsaTuning] = useState<VsaTuning>(VSA_DEFAULTS);
   // VSA classification for the visible bars. MUST stay below the showVsa /
   // vsaTuning declarations above: it closes over both, and hoisting it up beside
@@ -2822,6 +2833,135 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         ctx.restore();
       }
 
+      // ── 4) Flip Cross Pulse ─────────────────────────────────────────────
+      // (a) Per-minute gamma flip, derived from the same columns the bubbles
+      //     draw: walk the strikes ascending, accumulate net GEX, and take the
+      //     price where the running total crosses zero — linearly interpolated
+      //     between the two bracketing strikes so the level isn't quantised to
+      //     the 5-point grid. SPX strike space → ES via basisAt(), same as the
+      //     bubbles and the CB line.
+      // (b) The flip path draws as a thin dotted amber line. Without it the
+      //     rings look like they're floating; with it the cross is obvious.
+      // (c) A cross = the bar-to-bar sign change of (close − flip). Blue ring +
+      //     up arrow = into +GEX (dealers long gamma → pin / fade); red ring +
+      //     down arrow = into −GEX (dealers short gamma → trend / chase).
+      if (showFlipCross) {
+        const metricFc = gexMetricRef.current;
+        const valFc = (c: GexCell) => (metricFc === "vol" ? c.netVol : c.netOiVol);
+        const flipPts: Array<{ ts: number; es: number }> = [];
+        for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
+          if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
+          const cells = [...m.cells].sort((a, b) => a.strike - b.strike);
+          if (cells.length < 3) continue;
+          let acc = 0, prevAcc = 0, prevStrike = cells[0].strike;
+          let hit: number | null = null;
+          for (const c of cells) {
+            acc += valFc(c);
+            // First upward zero-crossing of the cumulative profile = the flip.
+            if (hit == null && prevAcc < 0 && acc >= 0) {
+              const span = acc - prevAcc;
+              const t = span !== 0 ? -prevAcc / span : 0;
+              hit = prevStrike + t * (c.strike - prevStrike);
+            }
+            prevAcc = acc; prevStrike = c.strike;
+          }
+          // No crossing = the whole loaded profile is one sign (common early in
+          // the session, or on a deep one-sided day). Skip rather than invent one.
+          if (hit != null) flipPts.push({ ts: m.slotTs, es: hit + basisAt(m.slotTs) });
+        }
+
+        if (flipPts.length >= 2) {
+          // Last reading at or before t, held flat forward — but never across a
+          // gap bigger than 30m, or a stale pre-lunch flip would "cross" a bar
+          // hours later.
+          const flipEsAt = (tMs: number): number | null => {
+            let lo = 0, hiIdx = flipPts.length - 1, found = -1;
+            while (lo <= hiIdx) {
+              const mid = (lo + hiIdx) >> 1;
+              if (flipPts[mid].ts <= tMs) { found = mid; lo = mid + 1; } else hiIdx = mid - 1;
+            }
+            if (found < 0) return null;
+            if (tMs - flipPts[found].ts > 30 * 60 * 1000) return null;
+            return flipPts[found].es;
+          };
+
+          ctx.save();
+
+          // (b) the flip path
+          ctx.setLineDash([2, 5]);
+          ctx.strokeStyle = "rgba(251,133,1,.55)";
+          ctx.lineWidth = 1.3;
+          ctx.beginPath();
+          let started = false;
+          for (const p of flipPts) {
+            const px = xAt(p.ts);
+            const py = series.priceToCoordinate(p.es);
+            if (px == null || py == null) { started = false; continue; }
+            if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // (c) crossings — today's bars only (the flip series is single-day)
+          const flipDay = etDayKey(flipPts[flipPts.length - 1].ts);
+          const crosses: Array<{ ts: number; es: number; up: boolean }> = [];
+          let prevSide: number | null = null;
+          for (const r of rows) {
+            if (etDayKey(r.timestamp) !== flipDay) continue;
+            if (replayTsRef.current != null && r.timestamp > replayTsRef.current) continue;
+            const f = flipEsAt(r.timestamp);
+            if (f == null) { prevSide = null; continue; }
+            const side = r.close >= f ? 1 : -1;
+            if (prevSide != null && side !== prevSide) crosses.push({ ts: r.timestamp, es: f, up: side > 0 });
+            prevSide = side;
+          }
+
+          for (const c of crosses) {
+            const cx = xAt(c.ts);
+            const cy = series.priceToCoordinate(c.es);
+            if (cx == null || cy == null || cx < -30 || cx > w + 30 || cy < -30 || cy > h + 30) continue;
+            const rgb = c.up ? "125,211,252" : "244,148,142";
+            ctx.beginPath(); ctx.arc(cx, cy, 13, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(${rgb},.28)`; ctx.lineWidth = 4; ctx.stroke();
+            ctx.beginPath(); ctx.arc(cx, cy, 8.5, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(${rgb},.85)`; ctx.lineWidth = 1.6; ctx.stroke();
+            ctx.beginPath(); ctx.arc(cx, cy, 2.6, 0, Math.PI * 2);
+            ctx.fillStyle = `rgb(${rgb})`; ctx.fill();
+            // Arrow points the way price went through the level.
+            const d = c.up ? -1 : 1;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy + d * 17);
+            ctx.lineTo(cx - 3.6, cy + d * 23);
+            ctx.lineTo(cx + 3.6, cy + d * 23);
+            ctx.closePath();
+            ctx.fillStyle = `rgba(${rgb},.9)`; ctx.fill();
+          }
+
+          // Label the MOST RECENT cross only — one chip, not N overlapping ones.
+          const last = crosses[crosses.length - 1];
+          if (last) {
+            const lx = xAt(last.ts);
+            const ly = series.priceToCoordinate(last.es);
+            if (lx != null && ly != null) {
+              const rgb = last.up ? "125,211,252" : "244,148,142";
+              const txt = `${last.up ? "▲" : "▼"} INTO ${last.up ? "+" : "−"}GEX  ${Math.round(last.es)}`;
+              ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+              const tw = ctx.measureText(txt).width + 12;
+              const bx = Math.min(Math.max(2, lx + 12), Math.max(2, w - tw - 4));
+              const by = last.up ? ly - 34 : ly + 24;
+              ctx.fillStyle = "rgba(5,6,10,.88)";
+              ctx.fillRect(bx, by - 8, tw, 16);
+              ctx.strokeStyle = `rgba(${rgb},.6)`; ctx.lineWidth = 1;
+              ctx.strokeRect(bx + 0.5, by - 7.5, tw - 1, 15);
+              ctx.fillStyle = `rgb(${rgb})`;
+              ctx.fillText(txt, bx + 6, by + 3.5);
+            }
+          }
+
+          ctx.restore();
+        }
+      }
+
       // (Greek-flow is now rendered as an HTML mini-chart, top-left of the chart
 
     };
@@ -2867,7 +3007,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, mvcHistory]);
+  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -2984,7 +3124,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             <DockButton onClick={openOvl} title="Chart overlays">
               <span>Overlays</span>
               {(() => {
-                const n = [showHeatmap, showProfile, showTpo, showLevels, showSessions, showRail, showGexBubbles, showVsa].filter(Boolean).length;
+                const n = [showHeatmap, showProfile, showTpo, showLevels, showSessions, showRail, showGexBubbles, showVsa, showFlipCross].filter(Boolean).length;
                 return n ? (
                   <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 999, background: DOCK_THEME.activeTile, border: `1px solid ${DOCK_THEME.activeBorder}`, color: HOME_THEME.cyan }}>{n}</span>
                 ) : null;
@@ -3006,6 +3146,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 { label: "PDH/ON", on: showSessions, toggle: () => setShowSessions((v) => !v) },
                 { label: "GEX Rail", on: showRail, toggle: () => setShowRail((v) => !v) },
                 { label: "Bubbles", on: showGexBubbles, toggle: () => setShowGexBubbles((v) => !v) },
+                { label: "Flip X", on: showFlipCross, toggle: () => setShowFlipCross((v) => !v) },
                 { label: "VSA", on: showVsa, toggle: () => setShowVsa((v) => !v) },
               ] as const).map((o) => (
                 <button
