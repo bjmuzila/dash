@@ -5,6 +5,7 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useMobileNav } from "@/components/shared/MobileNavContext";
+import SectorSunburst from "@/components/dashboard/SectorSunburst";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -417,45 +418,6 @@ export default function TradersDashboardPage() {
           {/* RIGHT COLUMN */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
 
-            {/* Quick Links */}
-            <Card accent="cyan" variant="classic" padding={20}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>🔗 Quick Links</div>
-                <button onClick={() => setEditLinks((v) => !v)} style={miniBtn}>{editLinks ? "Done" : "Edit"}</button>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {links.map((l) => editLinks ? (
-                  <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <select
-                      value={l.href}
-                      onChange={(e) => {
-                        const page = ALL_PAGES.find((p) => p.href === e.target.value);
-                        updLinks(links.map((x) => x.id === l.id ? { ...x, href: e.target.value, label: page?.label ?? x.label } : x));
-                      }}
-                      style={{ ...inputStyle, flex: 1, minWidth: 0 }}
-                    >
-                      {ALL_PAGES.map((p) => <option key={p.href} value={p.href}>{p.label}</option>)}
-                    </select>
-                    <button onClick={() => updLinks(links.filter((x) => x.id !== l.id))} style={{ ...miniBtn, color: HT.red }}>✕</button>
-                  </div>
-                ) : (
-                  <a
-                    key={l.id}
-                    href={l.href}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.25)", color: HT.text, textDecoration: "none", fontWeight: 600, fontSize: 14, transition: "background .15s, border-color .15s" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = rgba(HT.cyan, 0.12); e.currentTarget.style.borderColor = HT.cyan; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.25)"; e.currentTarget.style.borderColor = HT.border; }}
-                  >
-                    <span>{l.label}</span>
-                    <span style={{ color: HT.cyan }}>→</span>
-                  </a>
-                ))}
-              </div>
-              {editLinks && (
-                <button onClick={() => { const p = ALL_PAGES.find((p) => !links.some((l) => l.href === p.href)) ?? ALL_PAGES[0]; updLinks([...links, { id: uid(), label: p.label, href: p.href }]); }} style={{ ...miniBtn, marginTop: 12 }}>+ Add</button>
-              )}
-            </Card>
-
             {/* Schedule */}
             <Card accent="red" variant="classic" padding={20}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -516,6 +478,50 @@ export default function TradersDashboardPage() {
                 </div>
               )}
             </Card>
+            {/* Sector wheel — sits under Pre-Market Tasks, ahead of Quick Links */}
+            <Card accent="cyan" variant="classic" padding={20}>
+              <SectorSunburst />
+            </Card>
+
+            {/* Quick Links */}
+            <Card accent="cyan" variant="classic" padding={20}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>🔗 Quick Links</div>
+                <button onClick={() => setEditLinks((v) => !v)} style={miniBtn}>{editLinks ? "Done" : "Edit"}</button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {links.map((l) => editLinks ? (
+                  <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <select
+                      value={l.href}
+                      onChange={(e) => {
+                        const page = ALL_PAGES.find((p) => p.href === e.target.value);
+                        updLinks(links.map((x) => x.id === l.id ? { ...x, href: e.target.value, label: page?.label ?? x.label } : x));
+                      }}
+                      style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                    >
+                      {ALL_PAGES.map((p) => <option key={p.href} value={p.href}>{p.label}</option>)}
+                    </select>
+                    <button onClick={() => updLinks(links.filter((x) => x.id !== l.id))} style={{ ...miniBtn, color: HT.red }}>✕</button>
+                  </div>
+                ) : (
+                  <a
+                    key={l.id}
+                    href={l.href}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.25)", color: HT.text, textDecoration: "none", fontWeight: 600, fontSize: 14, transition: "background .15s, border-color .15s" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = rgba(HT.cyan, 0.12); e.currentTarget.style.borderColor = HT.cyan; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.25)"; e.currentTarget.style.borderColor = HT.border; }}
+                  >
+                    <span>{l.label}</span>
+                    <span style={{ color: HT.cyan }}>→</span>
+                  </a>
+                ))}
+              </div>
+              {editLinks && (
+                <button onClick={() => { const p = ALL_PAGES.find((p) => !links.some((l) => l.href === p.href)) ?? ALL_PAGES[0]; updLinks([...links, { id: uid(), label: p.label, href: p.href }]); }} style={{ ...miniBtn, marginTop: 12 }}>+ Add</button>
+              )}
+            </Card>
+
           </div>
         </div>
     </PageShell>
