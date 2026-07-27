@@ -148,11 +148,11 @@ export default function Visitors() {
 
         <div style={{ fontSize: 14, color: T.textSecondary, opacity: 0.55, lineHeight: 1.6 }}>
           One dot per visitor, not per city — visitors sharing a location are fanned out around it,
-          so zoom in to separate them. A solid dot is a signed-in account (click it for the email,
-          user id, member-since and last login); a hollow dot is an anonymous visitor, known only by
-          IP. Click a country or a dot to pin its detail card. Scroll to zoom, drag to pan,
-          double-click to zoom in. Positions are Cloudflare metro centroids from the visitor's IP,
-          not device locations.
+          so zoom in to separate them. A solid gold dot is a signed-in account (click it for the
+          email, Discord, user id, member-since and last login); a hollow slate dot is an anonymous
+          visitor, known only by IP. Click a country or a dot to pin its detail card. Scroll to
+          zoom, drag to pan, double-click to zoom in. Positions are Cloudflare metro centroids from
+          the visitor's IP, not device locations.
         </div>
       </div>
     </div>

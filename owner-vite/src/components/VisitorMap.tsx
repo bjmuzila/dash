@@ -301,18 +301,27 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
 
 // ── Color ramp ───────────────────────────────────────────────────────────────
 
-// Three-stop sequential ramp drawn from the owner palette (deep teal → cyan →
-// light blue). Traffic is heavily skewed toward one or two countries, so the
+// Three-stop sequential ramp in ONE hue (the owner teal), running near-surface →
+// theme cyan. Traffic is heavily skewed toward one or two countries, so the
 // domain is square-rooted; a linear ramp would render everything but the top
 // country as the same near-empty shade.
+//
+// The old ramp topped out at a near-white #9BD8EC, which is where the busiest
+// country sits — and gold-on-#9BD8EC is a 1.12:1 contrast ratio, i.e. the dots
+// vanished into exactly the country you most want to read. Capping the ramp at
+// HOME_THEME.cyan costs nothing (the choropleth is context; the dots are the
+// data) and takes that worst case to 1.80:1, with the surface ring below doing
+// the rest of the work.
 const RAMP: Array<[number, number, number]> = [
-  [16, 63, 81],   // #103F51
-  [33, 158, 188], // #219EBC  (HOME_THEME.cyan)
-  [155, 216, 236] // #9BD8EC
+  [10, 38, 50],   // #0A2632  — barely above the panel
+  [22, 90, 116],  // #165A74
+  [33, 158, 188], // #219EBC  (HOME_THEME.cyan) — the ceiling, not near-white
 ];
 
 const EMPTY_FILL = "rgba(255,255,255,0.045)";
 const STROKE = "rgba(255,255,255,0.16)";
+// The card surface, used as the dots' separating ring (see MEMBER_STROKE).
+const SURFACE = "#0D1119"; // HOME_THEME.panelBgStrong
 
 function rampColor(t: number): string {
   const clamped = Math.max(0, Math.min(1, t));
@@ -335,15 +344,35 @@ function intensity(value: number, max: number): number {
 
 // One dot per visitor, so the size range is deliberately narrow — a dot is a
 // person, and the only thing it varies by is how many pages that person loaded.
-const BUBBLE_MIN_R = 2.4;
-const BUBBLE_MAX_R = 6;
+const BUBBLE_MIN_R = 3.2;
+const BUBBLE_MAX_R = 7;
 // Hue says "a person"; FILL says "we know who". A signed-in account is a solid
-// gold dot, an anonymous visitor is a hollow ring — one channel, readable at
-// 3px, and it survives colour-blindness in a way two warm hues would not.
-const BUBBLE_FILL = "rgba(255,183,3,0.18)";   // OWNER_THEME.gold, translucent
-const BUBBLE_STROKE = "rgba(255,183,3,0.95)";
-const MEMBER_FILL = "rgba(255,183,3,0.92)";
-const MEMBER_STROKE = "rgba(255,255,255,0.92)";
+// gold dot, an anonymous visitor is a dark disc with a gold ring — one channel,
+// readable at 3px, and it survives colour-blindness in a way two warm hues would
+// not.
+//
+// Colour separates the two: a signed-in account is GOLD (warm, the identified
+// person you can act on), an anonymous visitor is SLATE (neutral, context).
+// Fill reinforces it — solid vs hollow — so the pair survives colour-blindness
+// and 3px rendering without relying on hue alone.
+//
+// Each mark pairs its colour with the SURFACE colour, and that is what keeps it
+// visible over every country shade, because the two are contrast-complementary
+// against the ramp. A gold fill over the busiest (palest) country is weak at
+// 1.8:1, but its dark ring there is 6.0:1; over an empty near-black country the
+// ring vanishes and the gold fill carries it at 9.0:1. Same trick inverted for
+// the visitor dot: its dark fill is 6.0:1 on a pale country, its slate ring is
+// 5.1:1 on a dark one. Whichever half of a mark loses contrast, the other half
+// holds — so no dot goes missing at any step of the ramp. (Slate alone would
+// have been 1.02:1 on the busiest country: invisible. Hence the dark fill.)
+// A ring in the surface colour is also the standard way to keep overlapping
+// dots legible, which matters here because co-located visitors are a tight fan.
+const BUBBLE_FILL = "rgba(13,17,25,0.85)";      // surface, so it reads hollow
+const BUBBLE_STROKE = "rgba(138,147,166,0.95)"; // #8A93A6 slate — anonymous
+const MEMBER_FILL = "#FFB703";                  // OWNER_THEME.gold — identified
+const MEMBER_STROKE = SURFACE;
+/** Text/badge colour for anonymous visitors, matching their dot. */
+const VISITOR_INK = "#8A93A6";
 
 /**
  * Radius by sqrt of count so AREA tracks the value — the standard for
@@ -532,7 +561,7 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
           <div style={{ fontSize: 15, fontWeight: 700, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis" }}>
             {place.name}
           </div>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: acct?.signedIn ? HOME_THEME.gold : HOME_THEME.lightBlue, marginTop: 2 }}>
+          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: place.kind !== "visitor" ? HOME_THEME.lightBlue : acct?.signedIn ? HOME_THEME.gold : VISITOR_INK, marginTop: 2 }}>
             {place.kind !== "visitor"
               ? "Country"
               : acct?.isOwner
@@ -791,7 +820,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       r={b.r / sizeK}
       fill={b.signedIn ? MEMBER_FILL : BUBBLE_FILL}
       stroke={b.signedIn ? MEMBER_STROKE : BUBBLE_STROKE}
-      strokeWidth={b.signedIn ? 1.2 : 0.9}
+      strokeWidth={b.signedIn ? 1.8 : 1.5}
       vectorEffect="non-scaling-stroke"
       style={{ cursor: "pointer" }}
       onMouseMove={(e) => {
@@ -1022,7 +1051,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
               <circle
                 cx={hoveredBubble.cx}
                 cy={hoveredBubble.cy}
-                r={hoveredBubble.r / sizeK}
+                r={hoveredBubble.r / sizeK + 2.5}
                 fill="none"
                 stroke={HOME_THEME.text}
                 strokeWidth={1.6}
@@ -1112,7 +1141,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45, marginTop: 3 }}>
                   {hover.sub || "located by IP"}
                 </div>
-                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: hover.signedIn ? HOME_THEME.gold : HOME_THEME.text, opacity: hover.signedIn ? 0.9 : 0.35, marginTop: 2 }}>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: hover.signedIn ? HOME_THEME.gold : VISITOR_INK, opacity: 0.9, marginTop: 2 }}>
                   {hover.signedIn ? "signed-in account" : "not signed in"}
                 </div>
               </>
@@ -1162,7 +1191,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             title={
               stats.dots.length === 0
                 ? "No coordinates logged yet — enable Cloudflare's visitor location headers"
-                : `${stats.dots.length} visitors across ${stats.placeCount} locations · one dot per visitor (solid = signed-in account, hollow = anonymous), size ∝ their page loads · zoom in to separate visitors sharing a city`
+                : `${stats.dots.length} visitors across ${stats.placeCount} locations · one dot per visitor (gold = signed-in account, slate = anonymous), size ∝ their page loads · zoom in to separate visitors sharing a city`
             }
             style={{
               marginLeft: 6,
@@ -1182,21 +1211,21 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             <span
               title="Signed-in account"
               style={{
-                width: 9,
-                height: 9,
+                width: 10,
+                height: 10,
                 borderRadius: 999,
                 background: MEMBER_FILL,
-                border: `1px solid ${MEMBER_STROKE}`,
+                border: `1.5px solid ${MEMBER_STROKE}`,
               }}
             />
             <span
               title="Anonymous visitor"
               style={{
-                width: 9,
-                height: 9,
+                width: 10,
+                height: 10,
                 borderRadius: 999,
                 background: BUBBLE_FILL,
-                border: `1px solid ${BUBBLE_STROKE}`,
+                border: `1.5px solid ${BUBBLE_STROKE}`,
               }}
             />
             Visitors
@@ -1210,7 +1239,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 {stats.signedInDots.toLocaleString()}
               </span>{" "}
               signed in ·{" "}
-              <span style={{ fontFamily: "var(--font-mono)" }}>
+              <span style={{ fontFamily: "var(--font-mono)", color: VISITOR_INK }}>
                 {(stats.dots.length - stats.signedInDots).toLocaleString()}
               </span>{" "}
               anonymous

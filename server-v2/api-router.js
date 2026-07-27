@@ -1179,28 +1179,181 @@ register('/api/gex', {
 // saved-events.json fallback). GET-only, subscriber. Ported verbatim from
 // app/api/calendar/route.ts (module-level Trump cache preserved).
 {
-  const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+  // Both the current AND next ForexFactory week. Upstream "thisweek" is Sun–Sat
+  // but EconCalendarPanel renders a ROLLING today→today+6 window, so past Sunday
+  // the tail of that window falls outside "thisweek" and can never have data.
+  const FF_URLS = [
+    'https://nfs.faireconomy.media/ff_calendar_thisweek.json',
+    'https://nfs.faireconomy.media/ff_calendar_nextweek.json',
+  ];
   const SAVED_EVENTS_PATH = nodePath.join(process.cwd(), 'app/api/econ-calendar/events.json');
+  // Last-good upstream response. state/ is the ONLY bind-mounted dir in
+  // docker-compose (./state:/app/state) — anywhere else is ephemeral and the
+  // cache would reset on every redeploy, defeating its whole purpose.
+  const CACHE_PATH = nodePath.join(process.cwd(), 'state', 'econ-calendar-cache.json');
+  const FF_TIMEOUT_MS = 10_000;
+  // OBSERVED FAILURE (2026-07-27): faireconomy returned `429 Rate Limited` HTML,
+  // so this route fell through to a saved events.json last touched in June and
+  // the panel rendered "No events this week." The rate limit was self-inflicted —
+  // server-v2/econ-alert-recorder.js polls /api/calendar every 20s and NOTHING
+  // between that and the CDN was cached, so one VPS IP was issuing thousands of
+  // upstream requests a day against a feed that publishes a few times an hour.
+  // getEconEvents() below is the actual fix; the disk cache, window-aware
+  // fallback and surfaced warning are damage limitation for real outages.
+  const ECON_TTL_MS = 30 * 60 * 1000;      // faireconomy's own guidance is ~30 min
+  const ECON_BACKOFF_MS = 15 * 60 * 1000;  // after a hard failure, stop hammering
+  let econCache = null;                    // { events, ts, savedAt, partialError }
+  let econBackoffUntil = 0;
   const TRUMP_EXCLUDE = ['executive time', 'pool call', 'in-town pool'];
   const TRUMP_CACHE_TTL = 30 * 60 * 1000;
   let trumpCache = { body: [], ts: 0 };
-  const fetchForexFactoryEvents = async () => {
-    const res = await fetch(FF_URL, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', Accept: 'application/json', Referer: 'https://www.forexfactory.com/' } });
+  // Upstream answers rate limits with a full HTML error page. Dumping 200 chars
+  // of that into the error string put "<!DOCTYPE html> <html> <head>..." in the
+  // user-facing warning banner. Keep the <title> ("Rate Limited") and drop the
+  // markup; pass plain-text bodies through truncated.
+  const briefDetail = (text) => {
+    const t = String(text || '').trim();
+    if (!t) return '';
+    if (/^<(!doctype|html)/i.test(t)) {
+      const title = t.match(/<title>([^<]*)<\/title>/i)?.[1]?.trim();
+      return title ? `: ${title}` : ': HTML error page';
+    }
+    return `: ${t.slice(0, 120)}`;
+  };
+  const fetchFFWeek = async (url) => {
+    // No "Referer: forexfactory.com" header. Spoofing a cross-origin Referer onto
+    // the faireconomy CDN is pointless and is one of the signals that gets an IP
+    // classified as a scraper — exactly what we do not want while climbing out of
+    // a 429. A complete, honest UA is enough.
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'application/json, text/plain, */*',
+      },
+      signal: AbortSignal.timeout(FF_TIMEOUT_MS),
+    });
+    const name = url.split('/').pop();
     if (!res.ok) {
-      const detail = await res.text().then((t) => t.slice(0, 200)).catch(() => '');
-      throw new Error(`ForexFactory ${res.status}${detail ? `: ${detail}` : ''}`);
+      const detail = await res.text().then(briefDetail).catch(() => '');
+      throw new Error(`${name} ${res.status}${detail}`);
     }
     const raw = await res.json();
-    return Array.isArray(raw) ? raw : [];
+    if (!Array.isArray(raw)) throw new Error(`${name}: non-array payload`);
+    return raw;
+  };
+  // Succeeds if AT LEAST ONE week file returned events, so a broken nextweek
+  // file can't take down the current week.
+  const fetchForexFactoryEvents = async () => {
+    const results = await Promise.allSettled(FF_URLS.map(fetchFFWeek));
+    const events = [];
+    const seen = new Set();
+    const errors = [];
+    for (const r of results) {
+      if (r.status === 'rejected') { errors.push(r.reason?.message || String(r.reason)); continue; }
+      for (const ev of r.value) {
+        const key = `${ev.date}|${ev.country}|${ev.title}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        events.push(ev);
+      }
+    }
+    if (!events.length) throw new Error(errors.length ? errors.join(' / ') : 'ForexFactory returned no events');
+    return { events, partialError: errors.length ? errors.join(' / ') : undefined };
+  };
+  // savedAt is passed in rather than stamped here so the disk copy and the
+  // in-process copy carry the SAME timestamp — the TTL check compares against it
+  // after a restart, and two independently-taken clocks would make the seeded
+  // cache look older (or newer) than it is.
+  const writeCache = (events, savedAt) => {
+    try {
+      fs.mkdirSync(nodePath.dirname(CACHE_PATH), { recursive: true });
+      fs.writeFileSync(CACHE_PATH, JSON.stringify({ savedAt, events }));
+    } catch (err) { console.warn(`[calendar] cache write failed: ${err.message}`); }
+  };
+  const readCache = () => {
+    try {
+      const j = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf-8'));
+      if (!Array.isArray(j?.events) || !j.events.length) return null;
+      return { events: j.events, savedAt: String(j.savedAt ?? 'unknown') };
+    } catch { return null; }
+  };
+  // The single gate in front of the upstream CDN. Every caller — page loads, the
+  // 20s alert recorder, the Discord snapshot — goes through here, so upstream
+  // sees at most one request per ECON_TTL_MS regardless of local traffic.
+  const getEconEvents = async () => {
+    const now = Date.now();
+
+    if (econCache && now - econCache.ts < ECON_TTL_MS) return { ...econCache, fresh: true };
+
+    // Seed from disk on the first call after a restart so a redeploy doesn't send
+    // a fetch upstream before the TTL has had a chance to apply.
+    if (!econCache) {
+      const disk = readCache();
+      if (disk) {
+        const diskTs = Date.parse(disk.savedAt);
+        econCache = { events: disk.events, ts: Number.isFinite(diskTs) ? diskTs : 0, savedAt: disk.savedAt };
+        if (now - econCache.ts < ECON_TTL_MS) return { ...econCache, fresh: true };
+      }
+    }
+
+    if (now < econBackoffUntil) {
+      const mins = Math.ceil((econBackoffUntil - now) / 60_000);
+      if (econCache) return { ...econCache, fresh: false };
+      throw new Error(`upstream in backoff after a failed fetch; retrying in ~${mins}m`);
+    }
+
+    try {
+      const { events, partialError } = await fetchForexFactoryEvents();
+      const savedAt = new Date(now).toISOString();
+      econCache = { events, ts: now, savedAt, partialError };
+      writeCache(events, savedAt);
+      econBackoffUntil = 0;
+      return { ...econCache, fresh: true };
+    } catch (err) {
+      econBackoffUntil = now + ECON_BACKOFF_MS;
+      // A stale cache beats no calendar. Flagged not-fresh so the caller warns
+      // instead of silently presenting old data as live.
+      if (econCache) return { ...econCache, fresh: false };
+      throw err;
+    }
+  };
+  // Solve a New-York wall-clock date+time to a real UTC instant. The old code
+  // hardcoded '-04:00', shifting every saved event an hour outside DST.
+  const etWallClockToISO = (dateStr, timeStr) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const [hh, mm] = (timeStr || '00:00').split(':').map(Number);
+    const target = Date.UTC(y, m - 1, d, hh, mm);
+    let utc = target;
+    for (let i = 0; i < 2; i++) {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }).formatToParts(new Date(utc));
+      const g = (t) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+      const diff = target - Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute'));
+      if (!diff) break;
+      utc += diff;
+    }
+    return new Date(utc).toISOString();
   };
   const fetchSavedEvents = () => {
     const raw = JSON.parse(fs.readFileSync(SAVED_EVENTS_PATH, 'utf-8'));
     if (!Array.isArray(raw)) return [];
     return raw.map((ev) => ({
       title: ev.title ?? ev.name ?? '', country: ev.country ?? 'USD',
-      date: `${ev.date}T${ev.time || '00:00'}:00-04:00`, impact: ev.impact ?? 'High',
+      date: etWallClockToISO(ev.date, ev.time), impact: ev.impact ?? 'High',
       forecast: ev.forecast ?? '', previous: ev.previous ?? ev.period ?? '', actual: ev.actual ?? '',
     }));
+  };
+  // The rolling ET window the panel renders. Date-only UTC arithmetic so a DST
+  // boundary inside the window can't skip or repeat a day.
+  const etWindowDays = (days = 7) => {
+    const todayStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+    const [y, m, d] = todayStr.split('-').map(Number);
+    const base = Date.UTC(y, m - 1, d);
+    return Array.from({ length: days }, (_, i) => new Date(base + i * 86_400_000).toISOString().slice(0, 10));
   };
   const toET = (iso) => {
     const d = new Date(iso);
@@ -1246,18 +1399,55 @@ register('/api/gex', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
       try {
-        const [econResult, trumpEvents] = await Promise.allSettled([fetchForexFactoryEvents(), fetchTrumpEvents()]);
-        let raw = [], source = 'forexfactory', warning;
-        if (econResult.status === 'fulfilled' && econResult.value.length > 0) raw = econResult.value;
-        else { warning = econResult.status === 'rejected' ? econResult.reason?.message : 'ForexFactory returned no events'; raw = fetchSavedEvents(); source = 'saved'; }
-        const econEvents = raw.map((ev) => {
+        const [econResult, trumpEvents] = await Promise.allSettled([getEconEvents(), fetchTrumpEvents()]);
+        const normalize = (list) => list.map((ev) => {
           const { date, time, time_formatted } = toET(ev.date);
           return { date, time, time_formatted, title: ev.title, country: ev.country, impact: ev.impact, forecast: ev.forecast, previous: ev.previous, actual: ev.actual ?? '' };
         });
+        const window = new Set(etWindowDays(7));
+        const coversWindow = (list) => list.some((e) => window.has(e.date));
+
+        let econEvents = [], source = 'forexfactory', warning;
+        if (econResult.status === 'fulfilled') {
+          econEvents = normalize(econResult.value.events);
+          source = econResult.value.fresh ? 'forexfactory' : 'cache';
+          if (!econResult.value.fresh) warning = `Live economic feed unavailable — showing cached data from ${econResult.value.savedAt}.`;
+          else if (econResult.value.partialError) warning = `Partial feed: ${econResult.value.partialError}`;
+        } else {
+          const upstreamErr = econResult.reason?.message || String(econResult.reason);
+          // Fall back ONLY to something that actually covers the window the panel
+          // renders. The old code fell back unconditionally, so a months-old
+          // events.json got served as source:"saved" with every row filtered out —
+          // indistinguishable from a genuinely quiet week.
+          const candidates = [];
+          const cached = readCache();
+          if (cached) candidates.push({ src: 'cache', list: normalize(cached.events), note: `cached feed from ${cached.savedAt}` });
+          try { candidates.push({ src: 'saved', list: normalize(fetchSavedEvents()), note: 'manually saved events.json' }); }
+          catch (e) { console.warn(`[calendar] saved fallback unreadable: ${e.message}`); }
+          const hit = candidates.find((c) => coversWindow(c.list));
+          if (hit) {
+            econEvents = hit.list; source = hit.src;
+            warning = `Live economic feed unavailable (${upstreamErr}) — showing ${hit.note}.`;
+          } else {
+            source = 'unavailable';
+            warning = `Economic calendar feed unavailable (${upstreamErr}). No cached or saved events cover the current week.`;
+          }
+        }
+
         const events = [...econEvents, ...(trumpEvents.status === 'fulfilled' ? trumpEvents.value : [])]
           .sort((a, b) => (a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time)));
+        const inWindow = econEvents.filter((e) => window.has(e.date)).length;
+        console.log(`[calendar] ${econEvents.length} econ events (${inWindow} in the next 7d) from ${source} + ${trumpEvents.status === 'fulfilled' ? trumpEvents.value.length : 0} Trump events${warning ? ` — ${warning}` : ''}`);
         send(res, 200, { events, source, warning }, { 'Cache-Control': 's-maxage=1800, stale-while-revalidate=3600' });
-      } catch (err) { send(res, 200, { error: err instanceof Error ? err.message : String(err), events: [] }); }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[calendar] error: ${msg}`);
+        // Also send `warning` + source:"unavailable". This response is HTTP 200, so
+        // clients checking res.ok see success — without a warning here a hard
+        // failure renders as an ordinary empty week, which is how this broke
+        // unnoticed for six weeks.
+        send(res, 200, { error: msg, warning: `Economic calendar failed to load: ${msg}`, source: 'unavailable', events: [] });
+      }
     },
   });
 }

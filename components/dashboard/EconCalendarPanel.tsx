@@ -135,6 +135,12 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
   const [events,        setEvents]        = useState<CalEvent[]>([]);
   const [loading,       setLoading]       = useState(true);
   const [error,         setError]         = useState<string | null>(null);
+  // A DEGRADED-but-usable feed (stale cache, saved fallback, 429'd upstream).
+  // This must be rendered: /api/calendar answers HTTP 200 even when it has
+  // nothing, so without it the panel showed a bare "No events this week." and a
+  // six-week-dead feed looked identical to a genuinely quiet calendar.
+  const [warning,       setWarning]       = useState<string | null>(null);
+  const [source,        setSource]        = useState<string | null>(null);
   const [quote,         setQuote]         = useState<string | null>(null);
   const [now,           setNow]           = useState(() => Date.now());
   const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all-usd", "trump", "earnings"]));
@@ -170,6 +176,8 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
 
   const doLoad = useCallback(async () => {
     setError(null);
+    setWarning(null);
+    setSource(null);
     const [econRes, qRes, earnRes] = await Promise.all([
       fetch("/api/calendar", { cache: "no-store" }),
       fetch("/api/calendar-quote", { cache: "no-store" }),
@@ -181,6 +189,8 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
       setEvents([]);
       return;
     }
+    setSource(econJson.source ?? null);
+    setWarning(econJson.warning ?? null);
     const sorted = (econJson.events ?? [])
       .sort((a: CalEvent, b: CalEvent) =>
         a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time)
@@ -485,6 +495,23 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         </div>
       )}
 
+      {/* Feed-health banner. Amber = degraded (stale cache / saved fallback),
+          red = the feed produced nothing at all. Shown ABOVE the list so a
+          partial week is still readable underneath it. */}
+      {!loading && !error && warning && (
+        <div style={{
+          display: "flex", gap: 6, alignItems: "flex-start",
+          padding: "5px 10px",
+          borderTop: `1px solid ${HT.border}`,
+          background: source === "unavailable" ? "rgba(239,68,68,0.10)" : "rgba(245,158,11,0.10)",
+          color: source === "unavailable" ? "#ef4444" : "#f59e0b",
+          fontSize: 10, lineHeight: 1.35,
+        }}>
+          <span style={{ flexShrink: 0 }}>⚠</span>
+          <span style={{ wordBreak: "break-word" }}>{warning}</span>
+        </div>
+      )}
+
       {/* Events (earnings rows woven in per day) */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {loading ? (
@@ -492,7 +519,9 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
         ) : error ? (
           <div style={{ color: "#ef4444", fontSize: 10, padding: "6px 10px", wordBreak: "break-all" }}>⚠ {error}</div>
         ) : weekEvents.length === 0 && !anyEarnings ? (
-          <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>No events this week.</div>
+          <div style={{ color: "#fff", fontSize: 12, padding: "8px 10px" }}>
+            {warning ? "No events available — see the notice above." : "No events this week."}
+          </div>
         ) : (
           <>
             {renderWithDaySeparators(activeEvents, false)}
