@@ -305,43 +305,132 @@ async function priceCondors(condors, opts = {}) {
 
 // ── live intraday snapshot (hourly writer) ──────────────────────────────────
 
-/**
- * Live NBBO mid for every strike on one expiration, indexed by `strike|right`.
- *
- * fetchQuoteTheta keys its Map by `expiration|strike|type`, and the expiration
- * format it echoes back is Theta's, not necessarily what we passed in. Re-index
- * off the parsed key so this never depends on that format. The expiration
- * argument itself is tried as ISO first (what fetchChainTheta emits, and what
- * the GEX path passes) and retried compact if the snapshot comes back empty.
- */
-async function chainMids(ticker, expiryIso) {
-  const tryOne = async (exp) => {
-    const m = await theta.fetchQuoteTheta(ticker, exp);
-    const out = new Map();
-    for (const [k, v] of m) {
-      const parts = String(k).split('|');
-      const strike = Number(parts[1]);
-      const right = parts[2];
-      if (!(strike > 0) || !right) continue;
-      const bid = Number(v.bid), ask = Number(v.ask);
-      // Mid only when BOTH sides quote. A one-sided book on a far wing would
-      // otherwise halve the leg and quietly inflate the condor's mark.
-      const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
-      if (mid != null) out.set(`${strike}|${right}`, mid);
-    }
-    return out;
-  };
-  let mids = await tryOne(expiryIso);
-  if (!mids.size) mids = await tryOne(String(expiryIso).replace(/-/g, ''));
-  return mids;
+// ── live pricing source: TastyTrade chains, not Theta ───────────────────────
+//
+// Theta's option endpoints require a paid tier and 403 on this account
+// ("Requesting an option endpoint requiring a value subscription, but you only
+// have a FREE subscription"), which nulled every leg on every tick. The
+// TastyTrade chain behind /api/chains carries bid/ask/mark for the whole
+// expiration in one call — the same payload the Estimated-Move engine prices
+// its straddles from — so the live path reads from there instead.
+//
+// Theta is still required by the EOD path below (per-contract daily history has
+// no TastyTrade equivalent), so the require stays.
+
+function localBase() {
+  return `http://localhost:${process.env.PORT || 3001}`;
 }
 
-/** Live underlying print. Index and equity snapshots live on different routes. */
+function internalHeaders() {
+  return process.env.INTERNAL_API_TOKEN
+    ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN }
+    : {};
+}
+
+async function getJson(pathname) {
+  const res = await fetch(`${localBase()}${pathname}`, {
+    // The /api/* gate redirects an unauthenticated call to "/" — following it
+    // would hand back landing HTML as a 200.
+    redirect: 'manual',
+    headers: internalHeaders(),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${pathname} ${res.status}: ${text.slice(0, 160)}`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${pathname} returned non-JSON (${res.status})`);
+  }
+}
+
+/**
+ * One leg's price.
+ *
+ * NBBO mid when both sides quote, else the chain's REST `mark`. The mark is what
+ * makes this work outside RTH, when bid/ask are 0 across the board and a
+ * bid/ask-only rule would null every leg. `last` is deliberately not used: a
+ * stale print on a far wing is worse than admitting we have no price.
+ */
+function legMid(leg) {
+  if (!leg) return null;
+  const bid = Number(leg.bid ?? leg['bid-price']);
+  const ask = Number(leg.ask ?? leg['ask-price']);
+  if (bid > 0 && ask > 0) return (bid + ask) / 2;
+  const mark = Number(leg.mark ?? leg['mark-price'] ?? leg['mid-price']);
+  return mark > 0 ? mark : null;
+}
+
+/** Broker spot off the chain payload, if it carries one. */
+function chainSpot(json) {
+  const v = Number(
+    json?.data?.underlyingPrice ?? json?.underlyingPrice
+    ?? json?.data?.['underlying-price'] ?? json?.data?.underlying_price ?? 0
+  );
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * Every strike on one expiration, indexed `strike|C` / `strike|P`, plus the
+ * underlying spot when the payload carries it. Handles both chain shapes:
+ * nested (data.items[].strikes[].call/put) and flat (options[]).
+ */
+async function chainMids(ticker, expiryIso) {
+  const json = await getJson(
+    `/api/chains?ticker=${encodeURIComponent(ticker)}`
+    + `&expiration=${encodeURIComponent(expiryIso)}&noSubscribe=1`
+  );
+  const out = new Map();
+  const want = String(expiryIso).slice(0, 10);
+
+  const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+  for (const grp of items) {
+    const exp = grp?.['expiration-date'] || grp?.expirationDate || grp?.expiration;
+    if (exp && String(exp).slice(0, 10) !== want) continue;
+    const strikes = Array.isArray(grp?.strikes) ? grp.strikes : [];
+    for (const row of strikes) {
+      const strike = Number(row?.['strike-price'] ?? row?.strikePrice ?? row?.strike);
+      if (!(strike > 0)) continue;
+      const c = legMid(row?.call);
+      const p = legMid(row?.put);
+      if (c != null) out.set(`${strike}|C`, c);
+      if (p != null) out.set(`${strike}|P`, p);
+    }
+  }
+
+  const flat = Array.isArray(json?.options) ? json.options : [];
+  for (const o of flat) {
+    const exp = o?.expiration || o?.expirationDate;
+    if (exp && String(exp).slice(0, 10) !== want) continue;
+    const strike = Number(o?.strike ?? o?.strikePrice);
+    if (!(strike > 0)) continue;
+    const right = String(o?.optionType || o?.type || '').toUpperCase().startsWith('C') ? 'C' : 'P';
+    const m = legMid(o);
+    if (m != null && !out.has(`${strike}|${right}`)) out.set(`${strike}|${right}`, m);
+  }
+
+  return { mids: out, spot: chainSpot(json) };
+}
+
+/**
+ * Underlying print, for the cushion column. Only called when the chain payload
+ * didn't carry a spot. Indices are keyed with a $ prefix in quotes-batch, so try
+ * both forms before giving up.
+ */
 async function spotNow(ticker) {
   const t = String(ticker).toUpperCase();
-  if (INDICES.has(t)) return theta.fetchIndexPriceTheta(t);
-  const q = await theta.fetchStockQuoteTheta(t);
-  return q ? (q.mark || q.last || null) : null;
+  const candidates = INDICES.has(t) ? [`$${t}`, t] : [t];
+  const json = await getJson(
+    `/api/quotes-batch?symbols=${encodeURIComponent(candidates.join(','))}`
+  );
+  const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+  const bySymbol = new Map(items.map((q) => [String(q?.symbol), q]));
+  for (const sym of candidates) {
+    const q = bySymbol.get(sym);
+    if (!q) continue;
+    const v = Number(q.last ?? q.mark ?? q['prev-close'] ?? q.prevClose);
+    if (Number.isFinite(v) && v > 0) return v;
+  }
+  return null;
 }
 
 /**
@@ -380,14 +469,19 @@ async function snapshotCondorsNow(condors) {
     let mids = new Map();
     let spot = null;
     try {
-      mids = await chainMids(ticker, expiry);
+      const chain = await chainMids(ticker, expiry);
+      mids = chain.mids;
+      spot = chain.spot;
     } catch (e) {
       errors.push(`${ticker} chain: ${e && e.message ? e.message : String(e)}`);
     }
-    try {
-      spot = await spotNow(ticker);
-    } catch (e) {
-      errors.push(`${ticker} spot: ${e && e.message ? e.message : String(e)}`);
+    // Only a second round trip when the chain didn't carry the underlying.
+    if (spot == null) {
+      try {
+        spot = await spotNow(ticker);
+      } catch (e) {
+        errors.push(`${ticker} spot: ${e && e.message ? e.message : String(e)}`);
+      }
     }
 
     for (const c of list) {

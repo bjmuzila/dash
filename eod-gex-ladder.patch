@@ -1,0 +1,215 @@
+diff --git a/server-v2/eod-gex-recorder.js b/server-v2/eod-gex-recorder.js
+index 98e0905..d6726e6 100644
+--- a/server-v2/eod-gex-recorder.js
++++ b/server-v2/eod-gex-recorder.js
+@@ -166,9 +166,107 @@ function isAmWindow() {
+ 
+ // ── Data fetchers ─────────────────────────────────────────────────────────────
+ 
++// Epoch ms for `hh:mm` ET on an ET date string, DST-correct (no hardcoded -4/-5).
++function etEpochMs(dateStr, hh, mm) {
++  const asUtc = Date.parse(
++    `${dateStr}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00Z`
++  );
++  const tzn = new Intl.DateTimeFormat('en-US', {
++    timeZone: 'America/New_York', timeZoneName: 'longOffset',
++  }).formatToParts(new Date(asUtc)).find((p) => p.type === 'timeZoneName')?.value || 'GMT-4';
++  const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(tzn);
++  const offMin = m
++    ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0))
++    : -240;
++  return asUtc - offMin * 60_000;
++}
++
++/**
++ * $SPX net GEX from the PERSISTED per-strike ladder, not from live market-state.
++ *
++ * WHY THIS EXISTS. fetchSpxState() below reads totalNetGex off /proxy/gex, and
++ * that value does not reconcile with the chain this same process is writing to
++ * option_strike_gex_history every minute. Measured over 2026-07-17..27:
++ *
++ *   date        ladder sum      eod_gex.total_gex   ratio
++ *   2026-07-23   -19.0B          +345B              -17.3   <- sign inverted
++ *   2026-07-22   -10.6B         -1783B              166.7
++ *   2026-07-27    -2.6B          +283B             -150.2   <- sign inverted
++ *
++ * Not a unit bug (the ratio wanders 17x..167x) and not a T->0 gamma blowup (the
++ * ladder is stable at -16B..-20B for the full 45 minutes into the close, and
++ * stays clean through 16:10). The header value is simply not the chain. The
++ * ladder is, it is already persisted every minute, and its magnitudes are the
++ * ones that match a real SPX print — so read that instead.
++ *
++ * Anchored at the last snapshot STRICTLY BEFORE 16:00 ET: post-close snapshots
++ * drift materially on some sessions (2026-07-24 moves -21.3B -> -8.9B if you
++ * take max(timestamp) instead), so the cutoff is load-bearing, not cosmetic.
++ *
++ * Returns { totalNetGex, totalFlowGex, spot, pinStrike, pinNetGex, pinShare }.
++ */
++async function fetchSpxLadder(date) {
++  const p = getPool();
++  if (!p) throw new Error('$SPX ladder: no DATABASE_URL');
++
++  const cutoff = etEpochMs(date, 16, 0);
++  const { rows } = await p.query(
++    `WITH snap AS (
++       SELECT max(timestamp) AS t
++       FROM option_strike_gex_history
++       WHERE symbol = $1 AND date = $2 AND expiry = $2 AND timestamp < $3
++     )
++     SELECT h.strike, h.spot, h.net_gex, h.call_gamma, h.put_gamma, h.timestamp
++     FROM option_strike_gex_history h, snap
++     WHERE h.symbol = $1 AND h.date = $2 AND h.expiry = $2
++       AND h.timestamp = snap.t`,
++    ['$SPX', date, cutoff]
++  );
++
++  if (!rows.length) throw new Error(`$SPX ladder: no 0DTE rows before 16:00 ET on ${date}`);
++
++  const populated = rows.filter(
++    (r) => Number(r.net_gex) !== 0 && (Number(r.call_gamma) > 0 || Number(r.put_gamma) > 0)
++  ).length;
++  if (populated < MIN_POPULATED_STRIKES) {
++    throw new Error(`$SPX ladder: only ${populated} populated strikes (min ${MIN_POPULATED_STRIKES}) — skipping`);
++  }
++
++  let tng = 0, absSum = 0, pin = null;
++  for (const r of rows) {
++    const g = Number(r.net_gex) || 0;
++    tng += g;
++    absSum += Math.abs(g);
++    if (!pin || Math.abs(g) > Math.abs(pin.g)) pin = { g, strike: Number(r.strike) };
++  }
++
++  const spot = Number(rows[0].spot) || 0;
++  if (!(spot > 0)) throw new Error('$SPX ladder: spot is 0');
++
++  // How much of the session's gamma rides on its single biggest strike. 13% and
++  // 86% are both real readings in this window (2026-07-17 vs 2026-07-22) — a
++  // day pinned to one strike and a day spread across the ladder are different
++  // animals, and the scalar alone cannot tell them apart. Persist it.
++  const pinShare = absSum > 0 ? (Math.abs(pin.g) / absSum) * 100 : null;
++
++  return {
++    totalNetGex: tng,
++    totalFlowGex: 0,
++    spot,
++    pinStrike: pin.strike,
++    pinNetGex: pin.g,
++    pinShare,
++    snapMs: Number(rows[0].timestamp),
++  };
++}
++
+ /**
+  * Get totalNetGex + totalFlowGex + spot for $SPX from /proxy/gex (reads market-state directly).
+  * Returns null if data is not ready.
++ *
++ * NO LONGER THE SOURCE OF total_gex — see fetchSpxLadder() above. Still called
++ * for totalFlowGex (which the ladder table has no equivalent of) and as the
++ * fallback when the ladder has no rows for the session.
+  */
+ async function fetchSpxState(base) {
+   const res = await fetch(`${base}/proxy/gex`, {
+@@ -379,6 +477,14 @@ async function ensureColumns(p) {
+     // matches the session date). Nullable — a row written before it could be
+     // computed (e.g. the chain fetch failed) leaves it NULL, never a bogus 0.
+     await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_gex_ex0dte DOUBLE PRECISION`);
++    // The 0DTE close collapses onto a small number of strikes, and how small
++    // varies enormously session to session (13% of |GEX| on the top strike on
++    // 2026-07-17, 86% on 2026-07-22). total_gex alone hides that, so record the
++    // dominant strike and its share alongside it. Nullable — rows written from
++    // the /proxy/gex fallback or the theta backfill leave them NULL.
++    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS pin_strike DOUBLE PRECISION`);
++    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS pin_net_gex DOUBLE PRECISION`);
++    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS pin_share DOUBLE PRECISION`);
+   } catch (e) {
+     _colsChecked = false; // let a later write retry
+     console.warn('[eod-gex] could not ensure columns:', e.message);
+@@ -389,21 +495,26 @@ async function ensureColumns(p) {
+ // existing call site stays valid; only callers that have the value pass it.
+ // COALESCE on update: a later provisional write that couldn't compute ex0dte
+ // (null) must not wipe a good value already stored for the row.
+-async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live', total_gex_ex0dte = null) {
++async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live', total_gex_ex0dte = null, pin = null) {
+   const p = getPool();
+   if (!p) { console.warn('[eod-gex] no DB — skipping write'); return; }
+   await ensureColumns(p);
+   await p.query(
+-    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte)
+-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
++    `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte,
++                          pin_strike, pin_net_gex, pin_share)
++     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (date, symbol) DO UPDATE SET
+        total_gex        = EXCLUDED.total_gex,
+        total_flow_gex   = EXCLUDED.total_flow_gex,
+        spot             = EXCLUDED.spot,
+        computed_at      = EXCLUDED.computed_at,
+        source           = EXCLUDED.source,
+-       total_gex_ex0dte = COALESCE(EXCLUDED.total_gex_ex0dte, eod_gex.total_gex_ex0dte)`,
+-    [date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte]
++       total_gex_ex0dte = COALESCE(EXCLUDED.total_gex_ex0dte, eod_gex.total_gex_ex0dte),
++       pin_strike       = COALESCE(EXCLUDED.pin_strike,  eod_gex.pin_strike),
++       pin_net_gex      = COALESCE(EXCLUDED.pin_net_gex, eod_gex.pin_net_gex),
++       pin_share        = COALESCE(EXCLUDED.pin_share,   eod_gex.pin_share)`,
++    [date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte,
++     pin?.strike ?? null, pin?.netGex ?? null, pin?.share ?? null]
+   );
+ }
+ 
+@@ -469,8 +580,35 @@ async function collectEodGex(base, opts = {}) {
+   for (const { symbol, fetchMode, chainTicker } of EOD_SYMBOLS) {
+     try {
+       let result;
++      let writeSource = 'live';
+       if (fetchMode === 'state') {
+-        result = await fetchSpxState(base);
++        // Flow GEX has no ladder equivalent, and the header is still the only
++        // place it exists — so fetch it either way, but never let it decide
++        // total_gex. Best-effort: a header failure must not sink the row.
++        const state = await fetchSpxState(base).catch((e) => {
++          console.warn(`[eod-gex] $SPX /proxy/gex unavailable (flow GEX will be 0): ${e.message}`);
++          return null;
++        });
++        try {
++          result = await fetchSpxLadder(date);
++          result.totalFlowGex = state?.totalFlowGex ?? 0;
++          writeSource = 'ladder';
++          if (state && Number.isFinite(state.totalNetGex) && result.totalNetGex !== 0) {
++            const ratio = state.totalNetGex / result.totalNetGex;
++            if (!(Math.abs(ratio) < 3) || ratio < 0) {
++              console.warn(
++                `[eod-gex] $SPX header/ladder disagree — header ${(state.totalNetGex / 1e9).toFixed(2)}B ` +
++                `vs ladder ${(result.totalNetGex / 1e9).toFixed(2)}B (ratio ${ratio.toFixed(1)}). ` +
++                `Writing the ladder. If this is quiet for a week, /proxy/gex is fixed.`
++              );
++            }
++          }
++        } catch (e) {
++          if (!state) throw e; // no ladder AND no header — nothing to write
++          console.warn(`[eod-gex] $SPX ladder unavailable (${e.message}) — falling back to /proxy/gex`);
++          result = state;
++          writeSource = 'live_state';
++        }
+       } else {
+         result = await fetchChainGex(base, chainTicker);
+       }
+@@ -487,10 +625,16 @@ async function collectEodGex(base, opts = {}) {
+       // COALESCE in upsert without disturbing the front total_gex.
+       const ex0dte = await pmGexEx0dte(symbol, date, spot);
+ 
+-      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, 'live', ex0dte);
++      const pin = result.pinStrike != null
++        ? { strike: result.pinStrike, netGex: result.pinNetGex, share: result.pinShare }
++        : null;
++
++      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, writeSource, ex0dte, pin);
+       saved.push(symbol);
+       console.log(
+-        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  exFrontGEX ${ex0dte == null ? 'n/a' : `${ex0dte >= 0 ? '+' : ''}${(ex0dte / 1e9).toFixed(3)}B`}  spot=${spot.toFixed(2)}`
++        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  exFrontGEX ${ex0dte == null ? 'n/a' : `${ex0dte >= 0 ? '+' : ''}${(ex0dte / 1e9).toFixed(3)}B`}  spot=${spot.toFixed(2)}` +
++        (pin ? `  pin=${pin.strike} (${pin.share.toFixed(0)}% of |GEX|)` : '') +
++        `  src=${writeSource}`
+       );
+     } catch (e) {
+       console.warn(`[eod-gex] ${symbol} — ${e.message}`);
