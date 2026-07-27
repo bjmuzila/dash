@@ -37,8 +37,30 @@ function etDateStr(ms) {
   }).format(new Date(ms));
 }
 
+/**
+ * Normalize anything date-shaped to "YYYY-MM-DD", or "" if it isn't a date.
+ *
+ * node-postgres parses a DATE column into a JS Date, so `week_start` read back
+ * off em_condors is an object — not the ISO string this module assumed. The old
+ * `String(v).slice(0, 10)` turned that into "Mon Jul 27", which parsed to an
+ * Invalid Date and surfaced two frames later as "RangeError: Invalid time
+ * value". It went unnoticed because em_condors was empty every time these paths
+ * ran; the first seeded week made it reachable.
+ */
+function ymdOf(v) {
+  if (v instanceof Date) {
+    return Number.isNaN(v.getTime()) ? '' : v.toISOString().slice(0, 10);
+  }
+  const s = String(v == null ? '' : v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
 function addDays(ymd, n) {
-  const d = new Date(`${String(ymd).slice(0, 10)}T00:00:00Z`);
+  const base = ymdOf(ymd);
+  // Name the bad input. A bare RangeError from toISOString says nothing about
+  // which value was malformed or where it came from.
+  if (!base) throw new Error(`addDays: not a date — ${JSON.stringify(ymd)}`);
+  const d = new Date(`${base}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
@@ -49,7 +71,9 @@ function fridayOf(weekStart) {
 }
 
 function toDate(ymd) {
-  return new Date(`${String(ymd).slice(0, 10)}T12:00:00Z`);
+  const base = ymdOf(ymd);
+  if (!base) throw new Error(`toDate: not a date — ${JSON.stringify(ymd)}`);
+  return new Date(`${base}T12:00:00Z`);
 }
 
 // ── symbol routing ──────────────────────────────────────────────────────────
@@ -156,10 +180,13 @@ async function legSeries(ticker, expiry, strike, right, startYmd, endYmd, ref) {
  */
 async function priceCondorWeek(c, opts = {}) {
   const ticker = String(c.ticker).toUpperCase();
-  const weekStart = String(c.week_start).slice(0, 10);
+  const weekStart = ymdOf(c.week_start);
+  if (!weekStart) return { rows: [], errors: [`${ticker}: bad week_start ${JSON.stringify(c.week_start)}`], legs_available: 0 };
   const expiry = fridayOf(weekStart);
   const todayEt = etDateStr(Date.now());
-  const through = opts.through ? String(opts.through).slice(0, 10) : todayEt;
+  // A malformed `through` falls back to today rather than sorting to "" and
+  // silently reporting every week as "not started".
+  const through = ymdOf(opts.through) || todayEt;
   // Never ask for sessions past expiration or past today.
   const end = [expiry, through].sort()[0];
   if (end < weekStart) return { rows: [], errors: ['week has not started'], legs_available: 0 };
@@ -336,7 +363,14 @@ async function snapshotCondorsNow(condors) {
   for (const c of condors) {
     const ticker = String(c.ticker).toUpperCase();
     if (isFutures(ticker)) continue; // no Theta options feed
-    const key = `${ticker}|${fridayOf(String(c.week_start).slice(0, 10))}`;
+    const weekStart = ymdOf(c.week_start);
+    if (!weekStart) {
+      // One unparseable row must not take the whole board down — the old code
+      // threw out of the grouping loop and killed every condor's tick.
+      errors.push(`${ticker}: bad week_start ${JSON.stringify(c.week_start)}`);
+      continue;
+    }
+    const key = `${ticker}|${fridayOf(weekStart)}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(c);
   }

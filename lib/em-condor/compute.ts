@@ -61,7 +61,10 @@ export const STRIKE_INCREMENT: Record<string, number> = {
   NQM: 10, NQU: 10, NQZ: 10, NQH: 10,
   SPY: 1, QQQ: 1, IWM: 1, SMH: 1,
   AAPL: 1, AMD: 1, AMZN: 1, GOOGL: 1, META: 5, MSFT: 5,
-  NVDA: 1, TSLA: 5, COIN: 5, HOOD: 1, NFLX: 5, PLTR: 1,
+  // NFLX lists $1 strikes (verified on the 7/31 chain: 57→82 unbroken). It sat
+  // at 5 from when the name traded in the hundreds; at ~$70 that snapped the
+  // shorts ~3 points past the EM band.
+  NVDA: 1, TSLA: 5, COIN: 5, HOOD: 1, NFLX: 1, PLTR: 1,
 };
 
 /** Default wing width (distance from short to long) in strike POINTS. Chosen to
@@ -73,7 +76,9 @@ export const DEFAULT_WING: Record<string, number> = {
   NQM: 100, NQU: 100, NQZ: 100, NQH: 100,
   SPY: 5, QQQ: 5, IWM: 3, SMH: 5,
   AAPL: 5, AMD: 5, AMZN: 5, GOOGL: 5, META: 20, MSFT: 15,
-  NVDA: 5, TSLA: 15, COIN: 20, HOOD: 5, NFLX: 25, PLTR: 3,
+  // NFLX: 3, matching PLTR — same $1 ladder, same ~$70–120 price area. The old
+  // 25 was a 36%-of-underlying wing once the stock repriced.
+  NVDA: 5, TSLA: 15, COIN: 20, HOOD: 5, NFLX: 3, PLTR: 3,
 };
 
 export function strikeIncrement(ticker: string): number {
