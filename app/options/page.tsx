@@ -40,9 +40,16 @@ export default function OptionsPage() {
 
         <div className="opt-cols">
           <div className="opt-left">
-            <Card variant="budget" accent={LIGHT_BLUE} padding={16}>
-              <TickerSelect />
-            </Card>
+            {/* Cards use backdrop-filter (+ a hover transform), so each one is
+                its own stacking context — a later sibling paints over an
+                earlier one's overflow no matter what z-index the dropdown
+                carries internally. Raising THIS card lifts the whole context,
+                which is what keeps the open menu above the heatmap below. */}
+            <div className="no-card-lift" style={{ position: "relative", zIndex: 30 }}>
+              <Card variant="budget" accent={LIGHT_BLUE} padding={16} style={{ overflow: "visible" }}>
+                <TickerSelect />
+              </Card>
+            </div>
 
             <HeatmapCard />
 

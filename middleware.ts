@@ -28,6 +28,14 @@ const PUBLIC_PATTERNS: RegExp[] = [
   /^\/api\/unsubscribe(\/.*)?$/,
   /^\/unsubscribe$/,
   /^\/api\/stripe\/webhook$/,
+  // Page-load beacon. Public because it fires on EVERY load including guests
+  // and unpaid users — gating it silently drops visit logging for exactly the
+  // traffic the visitor map exists to show. It writes nothing a caller controls
+  // beyond the page key, and resolves the session itself when one is present.
+  // (In production server-v2/api-router.js intercepts this path before
+  // middleware runs; this entry is what keeps the fallback path correct if the
+  // API_ROUTER kill-switch is ever flipped off.)
+  /^\/api\/page-status$/,
   /^\/maintenance$/,
   /^\/terms$/,
   /^\/risk-disclosure$/,

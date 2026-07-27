@@ -6,6 +6,11 @@ import { DockButton, type SegOption } from "../components/DockToolbar";
 
 type Audience = "all" | "subscribers" | "not_paying" | "waitlist" | "old_emails" | "old_emails2" | "custom";
 
+// Order matches the requested send priority: All users now includes every
+// address on file (signed-up + waitlist + both legacy lists, deduped), with
+// the legacy lists sent LAST within that combined send. The standalone
+// old_emails / old_emails2 options below stay available for a targeted send
+// to just the legacy addresses.
 const AUDIENCE_OPTIONS: SegOption[] = [
   { value: "all", label: "👥 All users" },
   { value: "subscribers", label: "💳 Subscribers" },
@@ -189,7 +194,10 @@ export default function Emails() {
     <PageShell maxWidth={680} align="center">
       <Card accent="cyan">
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>📧 Email Broadcast</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <img src="https://cbedge.net/cb-edge-logo.png" alt="CB Edge" style={{ height: 22, width: "auto", display: "block" }} />
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.02em" }}>📧 Email Broadcast</div>
+          </div>
           <div style={{ fontSize: 14, color: HOME_THEME.green, marginTop: 4 }}>
             Send an announcement to your users. Recipients are hidden via BCC.
           </div>
@@ -207,16 +215,44 @@ export default function Emails() {
           {presets.length > 0 && (
             <div>
               {label("Templates")}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {presets.map((p) => (
-                  <DockButton
-                    key={p.id}
-                    onClick={() => loadPreset(p.id)}
-                    style={{ height: 32, padding: "0 14px", fontSize: 14, opacity: loadingPreset === p.id ? 0.6 : 1 }}
-                  >
-                    {loadingPreset === p.id ? "Loading…" : `📨 ${p.label}`}
-                  </DockButton>
-                ))}
+              <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.7, marginTop: -4, marginBottom: 8 }}>
+                Newest first · click a template to load it into the composer below.
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  maxHeight: 280,
+                  overflowY: "auto",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${HOME_THEME.border}`,
+                  background: "rgba(0,0,0,0.25)",
+                }}
+              >
+                {presets.map((p) => {
+                  const active = loadingPreset === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => loadPreset(p.id)}
+                      style={{
+                        textAlign: "left",
+                        cursor: active ? "default" : "pointer",
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.08)"}`,
+                        background: active ? "rgba(33,158,188,0.10)" : "rgba(255,255,255,0.03)",
+                        color: HOME_THEME.text,
+                        fontSize: 14,
+                        opacity: active ? 0.7 : 1,
+                      }}
+                    >
+                      {active ? "Loading…" : `📨 ${p.label}`}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -226,10 +262,12 @@ export default function Emails() {
             <div
               style={{
                 display: "flex",
-                flexWrap: "wrap",
+                flexDirection: "column",
                 gap: 6,
                 width: "100%",
-                padding: 4,
+                maxHeight: 180,
+                overflowY: "auto",
+                padding: 8,
                 background: "rgba(0,0,0,0.22)",
                 borderRadius: 12,
                 border: "1px solid rgba(255,255,255,0.04)",
@@ -243,7 +281,8 @@ export default function Emails() {
                     key={o.value}
                     onClick={() => setAudience(o.value as Audience)}
                     style={{
-                      padding: "6px 12px",
+                      textAlign: "left",
+                      padding: "8px 12px",
                       borderRadius: 9,
                       fontSize: 14,
                       fontWeight: on ? 700 : 500,
@@ -419,6 +458,10 @@ export default function Emails() {
           </div>
         )}
       </Card>
+
+      <div style={{ textAlign: "center", padding: "18px 0 4px", fontSize: 14, color: HOME_THEME.muted, opacity: 0.6 }}>
+        CB Edge · <a href="https://cbedge.net" target="_blank" rel="noreferrer" style={{ color: HOME_THEME.muted }}>cbedge.net</a>
+      </div>
     </PageShell>
   );
 }

@@ -13,6 +13,7 @@ import { flowCatchEmail, flowCatchText, FLOW_CATCH_SUBJECT } from "@/lib/emails/
 import { autoGexTrialEmail, autoGexTrialText, AUTO_GEX_TRIAL_SUBJECT } from "@/lib/emails/auto-gex-trial";
 import { cbConfidenceEmail, cbConfidenceText, CB_CONFIDENCE_SUBJECT } from "@/lib/emails/cb-confidence";
 import { reorgBetaNoticeEmail, reorgBetaNoticeText, REORG_BETA_NOTICE_SUBJECT } from "@/lib/emails/reorg-beta-notice";
+import { weeklyEdgeEmail, weeklyEdgeText, WEEKLY_EDGE_SUBJECT } from "@/lib/emails/weekly-edge";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -116,7 +117,21 @@ function buildTemplates(): Template[] {
       html: launchPromoEmail(),
       text: launchPromoText(),
     },
+    {
+      id: "weekly-edge",
+      label: "📰 The Weekly Edge — market recap + FOMC/earnings preview + CB results",
+      subject: WEEKLY_EDGE_SUBJECT,
+      html: weeklyEdgeEmail(),
+      text: weeklyEdgeText(),
+    },
   ];
+}
+
+// buildTemplates() is maintained oldest-first (new templates are appended per
+// the checklist in EMAILS_HANDOFF.md). The picker wants newest-first, so
+// reverse once here rather than requiring every caller to remember to.
+function newestFirst(templates: Template[]): Template[] {
+  return [...templates].reverse();
 }
 
 export async function GET(req: NextRequest) {
@@ -133,9 +148,9 @@ export async function GET(req: NextRequest) {
     if (!t) return NextResponse.json({ error: "Unknown template" }, { status: 404 });
     return NextResponse.json({ ok: true, template: t });
   }
-  // No id: return the list (id + label only) for a picker.
+  // No id: return the list (id + label only) for a picker, newest template on top.
   return NextResponse.json({
     ok: true,
-    templates: templates.map((t) => ({ id: t.id, label: t.label })),
+    templates: newestFirst(templates).map((t) => ({ id: t.id, label: t.label })),
   });
 }

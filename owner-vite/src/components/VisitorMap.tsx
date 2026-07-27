@@ -46,6 +46,8 @@ export interface VisitorMapRow {
    *  dot a row belongs to (see `visitorKey`). */
   userId?: string | null;
   userEmail?: string | null;
+  /** Linked Discord username, when the account has one. */
+  userName?: string | null;
   userCreatedAt?: string | null;
   userLastLoginAt?: string | null;
   isOwner?: boolean | null;
@@ -106,6 +108,7 @@ interface VisitorDot {
   ips: string[];
   userId: string | null;
   email: string | null;
+  discord: string | null;
   accountCreatedAt: string | null;
   lastLoginAt: string | null;
   isOwner: boolean;
@@ -153,7 +156,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   const dotAcc = new Map<string, {
     lat: number; lon: number; placeKey: string; placeLabel: string;
     signedIn: boolean; country: string | null; ips: Set<string>;
-    userId: string | null; email: string | null;
+    userId: string | null; email: string | null; discord: string | null;
     accountCreatedAt: string | null; lastLoginAt: string | null; isOwner: boolean;
     visits: number; sample: VisitorMapRow[];
   }>();
@@ -195,6 +198,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
           ips: new Set<string>(),
           userId: r.userId ?? null,
           email: r.userEmail ?? null,
+          discord: r.userName ?? null,
           accountCreatedAt: r.userCreatedAt ?? null,
           lastLoginAt: r.userLastLoginAt ?? null,
           isOwner: Boolean(r.isOwner),
@@ -210,6 +214,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
       // before the email join existed, a session that started mid-visit).
       if (!dot.userId && r.userId) dot.userId = r.userId;
       if (!dot.email && r.userEmail) dot.email = r.userEmail;
+      if (!dot.discord && r.userName) dot.discord = r.userName;
       if (!dot.accountCreatedAt && r.userCreatedAt) dot.accountCreatedAt = r.userCreatedAt;
       if (!dot.lastLoginAt && r.userLastLoginAt) dot.lastLoginAt = r.userLastLoginAt;
       if (r.isOwner) dot.isOwner = true;
@@ -262,13 +267,14 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
         placeLabel: d.placeLabel,
         // An account without a resolvable email still isn't anonymous, so it
         // reads as the id rather than being demoted to "Visitor".
-        visitorLabel: d.email || (d.userId ? `${d.userId.slice(0, 12)}…` : "Visitor"),
+        visitorLabel: d.email || d.discord || (d.userId ? `${d.userId.slice(0, 12)}…` : "Visitor"),
         signedIn: d.signedIn,
         country: d.country,
         ip: ips[0] ?? null,
         ips,
         userId: d.userId,
         email: d.email,
+        discord: d.discord,
         accountCreatedAt: d.accountCreatedAt,
         lastLoginAt: d.lastLoginAt,
         isOwner: d.isOwner,
@@ -565,6 +571,7 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
             {acct.signedIn ? (
               <>
                 {acct.email && <Row label="Email" value={acct.email} />}
+                {acct.discord && <Row label="Discord" value={acct.discord} />}
                 {acct.userId && <Row label="User ID" value={`${acct.userId.slice(0, 14)}…`} />}
                 {acct.accountCreatedAt && <Row label="Member since" value={fmtDate(acct.accountCreatedAt)} />}
                 <Row

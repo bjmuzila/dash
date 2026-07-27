@@ -114,7 +114,7 @@ catch (e) { console.warn('[api-router] levels-engine.js not loaded:', e.message)
 // Auth
 // ---------------------------------------------------------------------------
 
-async function enforceAuth(level, req, ctx) {
+async function enforceAuth(level, req, ctx, identify = false) {
   // Internal server-to-server bypass — mirrors middleware.ts (hasInternalToken →
   // next()) and proxy-auth. Cron/internal callers carry the shared secret and
   // must reach every /api/* route without a user session, exactly as before.
@@ -122,7 +122,23 @@ async function enforceAuth(level, req, ctx) {
   if (tok && ctx.internalToken && tok === ctx.internalToken) {
     return { ok: true, who: 'internal' };
   }
-  if (level === 'public') return { ok: true };
+  if (level === 'public') {
+    // "Public" means never REJECTED — it does not have to mean never IDENTIFIED.
+    // Routes that opt in with `identify: true` still get access.userId when the
+    // caller has a session. This is why the page-load beacon logged user_id as
+    // NULL for everyone, owner included: the beacon is public, so this branch
+    // returned before any session lookup and the visit row had nobody attached.
+    // Opt-in rather than always-on because every other public route is a hot
+    // read path that would otherwise pay for a session query it never uses.
+    // Guests carry no cbe_session cookie, so verifyWsRequest returns before
+    // touching the DB — only signed-in requests cost a lookup. userId is
+    // populated even when access is DENIED (unpaid session → ok:false with a
+    // userId), so unpaid members get attributed too.
+    if (!identify) return { ok: true };
+    let access = null;
+    try { access = await ctx.verifyWsRequest(req); } catch { /* treat as guest */ }
+    return { ok: true, userId: access?.userId ?? null };
+  }
   let access;
   try {
     access = await ctx.verifyWsRequest(req); // { ok, userId?, reason }
@@ -875,7 +891,7 @@ async function handleApiRoute(req, res, ctx) {
     return true;
   }
 
-  const verdict = await enforceAuth(def.auth, req, ctx);
+  const verdict = await enforceAuth(def.auth, req, ctx, def.identify);
   if (!verdict.ok) {
     ctx.sendJson(res, verdict.code, { error: verdict.reason }, req);
     return true;
@@ -2866,19 +2882,48 @@ if (libDb) {
   // /api/page-visits — owner-only visit log (exposes client IPs / PII).
   register('/api/page-visits', {
     auth: 'owner', methods: ['GET'],
-    async handler(req, res) {
+    async handler(req, res, ctx) {
       try {
         const limit = Math.min(Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit') ?? 100), 5000);
         const rows = await libDb.getRecentPageVisits(limit);
-        // Batch-resolve email/discord for the distinct signed-in user_ids in this
-        // page so the owner map can show "who", not just an opaque user_id.
-        const userMap = await libDb.getUsersByIds(rows.map((r) => r.user_id).filter(Boolean));
+        // Batch-resolve the account behind each distinct signed-in user_id in
+        // this page, so the owner map can show WHO was on the page — identity
+        // (email / discord), how long they've had an account, and when they
+        // last signed in. One query for the whole batch. Inline rather than via
+        // getUsersByIds() because that helper only returns email + discord.
+        // last_login_at: sessions rows are only ever created at login (see
+        // lib/auth/session.ts createSession), so MAX(created_at) is the login.
+        const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
+        const userMap = new Map();
+        if (ids.length) {
+          try {
+            const accounts = await libDb.queryAll(
+              `SELECT u.id, u.email, u.discord_username, u.created_at, u.is_owner,
+                      s.last_login_at
+                 FROM users u
+                 LEFT JOIN (
+                   SELECT user_id, MAX(created_at) AS last_login_at
+                     FROM sessions GROUP BY user_id
+                 ) s ON s.user_id = u.id
+                WHERE u.id = ANY(?::text[])`,
+              [ids]
+            );
+            for (const a of accounts) userMap.set(a.id, a);
+          } catch (e) {
+            // Identity is an enrichment, not the payload — a failure here must
+            // degrade to "everyone is anonymous", never 500 the visit log.
+            console.warn('[api-router] page-visits account lookup failed:', e?.message || e);
+          }
+        }
         const visits = rows.map((r) => {
           const u = r.user_id ? userMap.get(r.user_id) : undefined;
           return {
             id: r.id, pageKey: r.page_key ?? null, pageLabel: r.page_label ?? null,
             path: r.path ?? null, userId: r.user_id ?? null, ip: r.ip ?? null,
             userEmail: u?.email ?? null, userName: u?.discord_username ?? null,
+            userCreatedAt: u?.created_at ?? null,
+            userLastLoginAt: u?.last_login_at ?? null,
+            isOwner: Boolean(u?.is_owner) || Boolean(ctx?.ownerUserId && r.user_id === ctx.ownerUserId),
             // Cloudflare geo. Null on rows logged before the managed transform was
             // enabled, and on anything that reached the origin without crossing the edge.
             country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
@@ -2945,7 +2990,9 @@ if (libDb) {
   // was ungated — "guests are fine"); gating it dropped page-load/visit logging
   // for all non-subscribers. (audit 2026-07-25)
   register('/api/page-status', {
-    auth: 'public', methods: ['GET', 'POST'],
+    // identify: log WHO when a session is present. Without it every visit row
+    // is anonymous — see enforceAuth's 'public' branch. Still never rejects.
+    auth: 'public', identify: true, methods: ['GET', 'POST'],
     async handler(req, res, ctx, access) {
       if (req.method === 'POST') {
         try {

@@ -36,6 +36,24 @@ async function listWaitlistEmails(): Promise<string[]> {
     .map((r) => r.email.trim().toLowerCase());
 }
 
+// "All users" combined list: signed-up accounts, then waitlist, then the two
+// legacy CSV lists — in that order, deduped. JS Set preserves first-seen
+// insertion order, so this both (a) removes duplicates across sources and
+// (b) keeps the old/legacy addresses at the tail of the array, which is what
+// the per-recipient send loop below walks in order. That means if a send run
+// ever gets interrupted partway, it's the stale legacy addresses that don't
+// go out yet — not live users/subscribers.
+function allUsersList(lists: {
+  signedUp: string[]; waitlist: string[]; oldEmails: string[]; oldEmails2: string[];
+}): string[] {
+  const seen = new Set<string>();
+  for (const email of [...lists.signedUp, ...lists.waitlist, ...lists.oldEmails, ...lists.oldEmails2]) {
+    const key = email.trim().toLowerCase();
+    if (key) seen.add(key);
+  }
+  return Array.from(seen);
+}
+
 // GET — owner only.
 //   ?history=1 → returns the broadcast send history (summary rows).
 //   (default)  → returns recipient lists/counts for the compose UI preview.
@@ -53,7 +71,7 @@ export async function GET(req: NextRequest) {
     const recipients = (await listAllUsersForBroadcast()).filter(
       (r) => !suppressed.has(r.email.trim().toLowerCase())
     );
-    const all = recipients.map((r) => r.email);
+    const signedUp = recipients.map((r) => r.email);
     const subscribers = recipients.filter((r) => r.paid).map((r) => r.email);
     // Signed up (has an account) but never converted to a paid plan.
     const notPaying = recipients.filter((r) => !r.paid).map((r) => r.email);
@@ -62,6 +80,12 @@ export async function GET(req: NextRequest) {
     const legacy = loadLegacyEmails();
     const oldEmails = legacy.oldEmails.filter((e) => !suppressed.has(e.trim().toLowerCase()));
     const oldEmails2 = legacy.oldEmails2.filter((e) => !suppressed.has(e.trim().toLowerCase()));
+    // "All users" = every address we have on file, deduped. Built in send
+    // priority order — signed-up accounts (subscribers + not-paying) first,
+    // then the waitlist, then the legacy CSV lists LAST — so if a name shows
+    // up in more than one source it's counted/sent under the more current
+    // list, and the old/stale addresses are always the last to go out.
+    const all = allUsersList({ signedUp, waitlist, oldEmails, oldEmails2 });
     return NextResponse.json({
       ok: true,
       configured: !!RESEND_API_KEY,
@@ -137,12 +161,17 @@ export async function POST(req: NextRequest) {
 
     // Resolve recipients.
     let to: string[] = [];
-    if (audience === "all" || audience === "subscribers" || audience === "not_paying") {
+    if (audience === "all") {
+      // Every address we have — signed-up accounts, waitlist, and the legacy
+      // lists — deduped, legacy addresses sent last. See allUsersList().
       const recipients = await listAllUsersForBroadcast();
-      const picked =
-        audience === "subscribers" ? recipients.filter((r) => r.paid)
-        : audience === "not_paying" ? recipients.filter((r) => !r.paid)
-        : recipients;
+      const signedUp = recipients.map((r) => r.email);
+      const waitlist = await listWaitlistEmails().catch(() => []);
+      const { oldEmails, oldEmails2 } = loadLegacyEmails();
+      to = allUsersList({ signedUp, waitlist, oldEmails, oldEmails2 });
+    } else if (audience === "subscribers" || audience === "not_paying") {
+      const recipients = await listAllUsersForBroadcast();
+      const picked = audience === "subscribers" ? recipients.filter((r) => r.paid) : recipients.filter((r) => !r.paid);
       to = picked.map((r) => r.email);
     } else if (audience === "waitlist") {
       to = await listWaitlistEmails();
