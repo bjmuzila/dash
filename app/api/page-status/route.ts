@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
 import { getPageLoadStatus, upsertPageLoadStatus, insertPageVisit } from "@/lib/db";
+import { buildAttribution, SELF_HOSTS } from "@/lib/visitorAttribution";
 
 // Pull the client IP from the proxy headers (Cloudflare / VPS set these). The
 // browser never sends its own IP, so this is the trustworthy source. Takes the
@@ -67,6 +68,49 @@ function clientGeo(req: NextRequest): {
   };
 }
 
+/**
+ * Acquisition + device for one beacon.
+ *
+ * referrer/query come from the BODY (document.referrer, window.location.search
+ * — sent by lib/pageStatus.ts), never from req.headers.referer: on a beacon that
+ * header is the page firing it, so reading it would attribute every visit to us.
+ *
+ * Attribution is written only on the session's first beacon (body.isEntry);
+ * device fields come from the UA header and are written on every row.
+ */
+function visitAttribution(req: NextRequest, body: Record<string, unknown>) {
+  const isEntry = Boolean(body.isEntry ?? body.is_entry);
+  // The host this request arrived on counts as "us" too, so staging hostnames
+  // and preview domains don't show up as external referrers.
+  const selfHosts = new Set(SELF_HOSTS);
+  const host = (req.headers.get("host") || "").split(":")[0].toLowerCase().replace(/^www\./, "");
+  if (host) selfHosts.add(host);
+
+  const a = buildAttribution({
+    referrer: isEntry ? body.referrer : null,
+    query: isEntry ? body.query : null,
+    userAgent: req.headers.get("user-agent"),
+    selfHosts,
+  });
+  return {
+    is_entry: isEntry,
+    referrer: a.referrer,
+    referrer_host: a.referrerHost,
+    utm_source: a.utmSource,
+    utm_medium: a.utmMedium,
+    utm_campaign: a.utmCampaign,
+    utm_term: a.utmTerm,
+    utm_content: a.utmContent,
+    // Only meaningful for an arrival — a mid-session row would always read
+    // "direct" and drag every report toward it.
+    channel: isEntry ? a.channel : null,
+    browser: a.browser,
+    os: a.os,
+    device_type: a.deviceType,
+    is_bot: a.isBot,
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -100,6 +144,8 @@ export async function POST(req: NextRequest) {
           city: geo.city,
           latitude: geo.latitude,
           longitude: geo.longitude,
+          // Referrer / UTM (entry rows only) + browser/OS/device (every row).
+          ...visitAttribution(req, body),
         });
       } catch { /* non-fatal */ }
     }

@@ -7,7 +7,11 @@ import { OWNER_THEME as HOME_THEME, ownerRgba } from "../lib/theme";
 import { ALPHA2_NAME, FEATURE_ID_TO_ALPHA2 } from "../lib/countryMaps";
 
 /**
- * Visitor choropleth for the Control Panel.
+ * Visitor map for the Control Panel: a country choropleth with one dot per
+ * VISITOR on top — not one dot per city. Cloudflare geolocates to a metro
+ * centroid, so people who share a city share a coordinate; each visitor still
+ * gets their own dot, fanned out around that shared point, so any single person
+ * can be hovered and clicked. Zooming pulls the fan apart.
  *
  * Data path: Cloudflare's "Add visitor location headers" managed transform sets
  * cf-ipcountry → /api/page-status stores it on the page_visits row → the owner
@@ -30,15 +34,16 @@ export interface VisitorMapRow {
   lat?: number | null;
   lon?: number | null;
   ip?: string | null;
-  /** Optional per-visit detail. Only used to populate the click-to-pin card —
-   *  the choropleth and bubbles never read these. */
+  /** Per-visit detail for the click-to-pin card. `userId` is the exception: it
+   *  is also the strongest visitor identity, so it decides which dot a row
+   *  belongs to (see `visitorKey`). */
   path?: string | null;
   pageLabel?: string | null;
   userId?: string | null;
   createdAt?: string | null;
 }
 
-/** How many raw rows each country/city keeps for its detail card. Enough to
+/** How many raw rows each country/visitor keeps for its detail card. Enough to
  *  fill the card's scroll area without holding the whole log twice. */
 const SAMPLE_CAP = 60;
 
@@ -61,74 +66,115 @@ interface CountryStat {
 }
 
 /**
- * One plotted bubble. Cloudflare returns a CITY CENTROID, not a device position,
- * so every visitor in a metro shares one coordinate — which is what makes them
- * safe to cluster and count. Keyed on rounded coords so tiny float differences
- * between rows don't split one city into a cluster of near-identical dots.
+ * One plotted dot = ONE VISITOR, not one city.
+ *
+ * Cloudflare returns a city centroid, not a device position, so every visitor in
+ * a metro shares a single coordinate. Rather than collapsing them into one fat
+ * bubble, each visitor keeps its own dot and the co-located ones are fanned out
+ * around the centroid (see `spreadOffset`) so they can be hovered and clicked
+ * individually. `placeKey` identifies the shared coordinate — it's what the
+ * fan-out is computed against, and what the location label reads from.
  */
-interface PlaceStat {
+interface VisitorDot {
   key: string;
+  /** Shared city-centroid coordinate, before fan-out. */
   lat: number;
   lon: number;
-  label: string;
+  /** Coordinate-cluster key, and this dot's slot within that cluster. */
+  placeKey: string;
+  slot: number;
+  slotCount: number;
+  /** "Denver, Colorado, United States" */
+  placeLabel: string;
+  /** How this visitor is identified — IP, else user id, else "anonymous". */
+  visitorLabel: string;
   country: string | null;
+  ip: string | null;
+  userId: string | null;
+  /** Page loads by this one visitor. */
   visits: number;
-  unique: number;
   sample: VisitorMapRow[];
 }
 
 interface Aggregate {
   byCode: Map<string, CountryStat>;
   ranked: CountryStat[];
-  places: PlaceStat[];
-  placesWithCoords: number;
+  dots: VisitorDot[];
+  placeCount: number;
+  visitsWithCoords: number;
   totalVisits: number;
   totalUnique: number;
   unknownVisits: number;
   maxUnique: number;
-  maxPlaceUnique: number;
+  maxDotVisits: number;
+}
+
+/** One identity per visitor, best effort: a signed-in user id wins because it
+ *  survives a changing IP, then the IP, then a per-row synthetic key so an
+ *  unidentifiable row counts as its own visitor rather than merging with every
+ *  other one. Used for the country counts AND the dots, so the choropleth and
+ *  the dot layer can never report a different number of people. */
+function visitorKey(r: VisitorMapRow, fallback: number): string {
+  if (r.userId) return `u:${r.userId}`;
+  if (r.ip) return `ip:${r.ip}`;
+  return `anon:${fallback}`;
 }
 
 function aggregate(rows: VisitorMapRow[]): Aggregate {
-  // Unique visitors are approximated by distinct client IP — the only stable
-  // per-visitor key we log (guests have no user id). Same IP on two continents
-  // is not a case worth modelling here.
   const acc = new Map<string, { visits: number; ips: Set<string>; sample: VisitorMapRow[] }>();
-  const globalIps = new Set<string>();
-  const placeAcc = new Map<string, { lat: number; lon: number; label: string; country: string | null; visits: number; ips: Set<string>; sample: VisitorMapRow[] }>();
+  const globalVisitors = new Set<string>();
+  // One entry per (coordinate cluster × visitor) — the dot layer's unit of work.
+  const dotAcc = new Map<string, {
+    lat: number; lon: number; placeKey: string; placeLabel: string;
+    visitorLabel: string; country: string | null; ip: string | null; userId: string | null;
+    visits: number; sample: VisitorMapRow[];
+  }>();
+  // Fan-out needs to know how crowded each coordinate is, so count dots per place.
+  const placeSizes = new Map<string, number>();
   let unknownVisits = 0;
   let totalVisits = 0;
+  let visitsWithCoords = 0;
+  let anonSeq = 0;
 
   for (const r of rows) {
     const code = (r.country || "").toUpperCase();
     totalVisits++;
-    if (r.ip) globalIps.add(r.ip);
+    const vid = visitorKey(r, ++anonSeq);
+    globalVisitors.add(vid);
 
-    // Bubble layer is independent of the choropleth: a row can have coords even
+    // Dot layer is independent of the choropleth: a row can have coords even
     // if its country code is a sentinel, and vice versa.
     if (typeof r.lat === "number" && typeof r.lon === "number" && Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
+      visitsWithCoords++;
       // 2dp ≈ 1 km — tight enough to keep distinct cities apart, loose enough
-      // that one city's rows collapse to a single bubble.
+      // that one city's rows share one centroid to fan out from.
       const pk = `${r.lat.toFixed(2)},${r.lon.toFixed(2)}`;
-      let place = placeAcc.get(pk);
-      if (!place) {
+      // Keyed per (location × visitor): the same person seen in two cities is
+      // two dots, because each dot answers "who was here", not "who exists".
+      const dk = `${pk}|${vid}`;
+      let dot = dotAcc.get(dk);
+      if (!dot) {
         const label = [r.city, r.region, code && !NON_COUNTRY.has(code) ? (ALPHA2_NAME[code] || code) : null]
           .filter(Boolean)
           .join(", ");
-        place = {
+        dot = {
           lat: r.lat,
           lon: r.lon,
-          label: label || `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`,
+          placeKey: pk,
+          placeLabel: label || `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`,
+          visitorLabel: r.ip || (r.userId ? `${r.userId.slice(0, 12)}…` : "anonymous"),
           country: code && !NON_COUNTRY.has(code) ? code : null,
+          ip: r.ip ?? null,
+          userId: r.userId ?? null,
           visits: 0,
-          ips: new Set<string>(),
           sample: [],
         };
-        placeAcc.set(pk, place);
+        dotAcc.set(dk, dot);
+        placeSizes.set(pk, (placeSizes.get(pk) ?? 0) + 1);
       }
-      place.visits++;
-      place.ips.add(r.ip || `anon:${pk}:${place.visits}`);
-      if (place.sample.length < SAMPLE_CAP) place.sample.push(r);
+      dot.visits++;
+      if (!dot.userId && r.userId) dot.userId = r.userId;
+      if (dot.sample.length < SAMPLE_CAP) dot.sample.push(r);
     }
 
     if (!code || NON_COUNTRY.has(code)) {
@@ -142,9 +188,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     }
     bucket.visits++;
     if (bucket.sample.length < SAMPLE_CAP) bucket.sample.push(r);
-    // Fall back to a synthetic key so an IP-less row still counts as one visitor
-    // instead of collapsing every such row into a single phantom visitor.
-    bucket.ips.add(r.ip || `anon:${bucket.visits}`);
+    bucket.ips.add(vid);
   }
 
   const byCode = new Map<string, CountryStat>();
@@ -159,30 +203,43 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   }
   const ranked = [...byCode.values()].sort((a, b) => b.unique - a.unique);
 
-  // Biggest bubbles drawn first so small ones land on top and stay clickable.
-  const places: PlaceStat[] = [...placeAcc.entries()]
-    .map(([key, p]) => ({
-      key,
-      lat: p.lat,
-      lon: p.lon,
-      label: p.label,
-      country: p.country,
-      visits: p.visits,
-      unique: p.ips.size,
-      sample: p.sample,
-    }))
-    .sort((a, b) => b.unique - a.unique);
+  // Assign each dot its slot within its coordinate cluster, in insertion order,
+  // so a visitor's position on the map is stable between refreshes as long as
+  // the log's ordering is. Busiest dots sort last → drawn on top → clickable.
+  const slotCursor = new Map<string, number>();
+  const dots: VisitorDot[] = [...dotAcc.entries()]
+    .map(([key, d]) => {
+      const slot = slotCursor.get(d.placeKey) ?? 0;
+      slotCursor.set(d.placeKey, slot + 1);
+      return {
+        key,
+        lat: d.lat,
+        lon: d.lon,
+        placeKey: d.placeKey,
+        slot,
+        slotCount: placeSizes.get(d.placeKey) ?? 1,
+        placeLabel: d.placeLabel,
+        visitorLabel: d.visitorLabel,
+        country: d.country,
+        ip: d.ip,
+        userId: d.userId,
+        visits: d.visits,
+        sample: d.sample,
+      };
+    })
+    .sort((a, b) => a.visits - b.visits);
 
   return {
     byCode,
     ranked,
-    places,
-    placesWithCoords: places.reduce((n, p) => n + p.visits, 0),
+    dots,
+    placeCount: placeSizes.size,
+    visitsWithCoords,
     totalVisits,
-    totalUnique: globalIps.size,
+    totalUnique: globalVisitors.size,
     unknownVisits,
     maxUnique: ranked.length ? ranked[0].unique : 0,
-    maxPlaceUnique: places.length ? places[0].unique : 0,
+    maxDotVisits: dots.length ? dots[dots.length - 1].visits : 0,
   };
 }
 
@@ -218,21 +275,50 @@ function intensity(value: number, max: number): number {
   return Math.sqrt(value / max);
 }
 
-// ── Bubbles ──────────────────────────────────────────────────────────────────
+// ── Visitor dots ─────────────────────────────────────────────────────────────
 
-const BUBBLE_MIN_R = 2.5;
-const BUBBLE_MAX_R = 15;
+// One dot per visitor, so the size range is deliberately narrow — a dot is a
+// person, and the only thing it varies by is how many pages that person loaded.
+const BUBBLE_MIN_R = 2.4;
+const BUBBLE_MAX_R = 6;
 const BUBBLE_FILL = "rgba(255,183,3,0.42)";   // OWNER_THEME.gold, translucent
 const BUBBLE_STROKE = "rgba(255,183,3,0.95)";
 
 /**
  * Radius by sqrt of count so AREA tracks the value — the standard for
- * proportional symbols. Scaling radius linearly would make a 10× city look
+ * proportional symbols. Scaling radius linearly would make a 10× visitor look
  * 100× bigger.
  */
 function bubbleRadius(value: number, max: number): number {
-  if (value <= 0 || max <= 0) return BUBBLE_MIN_R;
-  return BUBBLE_MIN_R + (BUBBLE_MAX_R - BUBBLE_MIN_R) * Math.sqrt(value / max);
+  if (value <= 1 || max <= 1) return BUBBLE_MIN_R;
+  return BUBBLE_MIN_R + (BUBBLE_MAX_R - BUBBLE_MIN_R) * Math.sqrt((value - 1) / (max - 1));
+}
+
+// Golden angle: successive slots land on opposite sides of the cluster, so a
+// sunflower spiral fills evenly instead of forming spokes.
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+// Degrees of latitude the widest cluster may span. Small on purpose: at k=1 the
+// fan is a couple of pixels wide and reads as one place; zooming in is what
+// separates the individual people.
+const SPREAD_MAX_DEG = 0.9;
+
+/**
+ * Fan co-located visitors out around their shared city centroid.
+ *
+ * Cloudflare geolocates to a metro, not a device, so without this every visitor
+ * in a city would stack into one dot and only the topmost would be clickable.
+ * The offset is deterministic (slot index → position), never random, so a dot
+ * doesn't jump between renders. Longitude is divided by cos(lat) so the fan
+ * stays circular on screen instead of stretching near the poles.
+ */
+function spreadOffset(lat: number, lon: number, slot: number, count: number): [number, number] {
+  if (count <= 1) return [lat, lon];
+  const spread = Math.min(SPREAD_MAX_DEG, 0.12 * Math.sqrt(count));
+  const radius = spread * Math.sqrt((slot + 0.5) / count);
+  const angle = (slot + 1) * GOLDEN_ANGLE;
+  const dLat = radius * Math.sin(angle);
+  const dLon = (radius * Math.cos(angle)) / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  return [lat + dLat, lon + dLon];
 }
 
 // ── Sizing ───────────────────────────────────────────────────────────────────
@@ -262,20 +348,24 @@ function useElementWidth<T extends HTMLElement>() {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-/** A pinned country or city, with the raw rows behind it. */
+/** A pinned country or visitor, with the raw rows behind it. */
 interface SelectedPlace {
-  kind: "country" | "place";
+  kind: "country" | "visitor";
   name: string;
+  /** Secondary line — the visitor's location, or nothing for a country. */
+  sub?: string | null;
+  /** Countries report distinct visitors; a visitor dot is always 1. */
   unique: number;
   visits: number;
   sample: VisitorMapRow[];
 }
 
 interface HoverState {
-  /** "place" hovers come from a bubble, "country" from the choropleth beneath. */
-  kind: "country" | "place";
+  /** "visitor" hovers come from a dot, "country" from the choropleth beneath. */
+  kind: "country" | "visitor";
   code: string | null;
   name: string;
+  sub?: string | null;
   unique: number;
   visits: number;
   x: number;
@@ -315,7 +405,7 @@ function zoomAbout(v: View, nextK: number, px: number, py: number, w: number, h:
   return clampView({ k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio }, w, h);
 }
 
-/** Detail card for a clicked country or city. Everything here is derived from
+/** Detail card for a clicked country or visitor. Everything here is derived from
  *  the sampled raw rows the aggregator kept — no extra fetch. */
 function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => void }) {
   const { topPages, recent, ips } = useMemo(() => {
@@ -364,8 +454,13 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
             {place.name}
           </div>
           <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.lightBlue, marginTop: 2 }}>
-            {place.kind === "place" ? "City · from IP" : "Country"}
+            {place.kind === "visitor" ? "Visitor · located by IP" : "Country"}
           </div>
+          {place.sub && (
+            <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.55, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {place.sub}
+            </div>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -378,9 +473,11 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
       </div>
 
       <div className="owner-scroll" style={{ overflowY: "auto", padding: "8px 12px 12px" }}>
-        <Row label="Unique visitors" value={place.unique.toLocaleString()} />
+        {place.kind === "country"
+          ? <Row label="Unique visitors" value={place.unique.toLocaleString()} />
+          : <Row label="Identified by" value={ips[0] || place.name} />}
         <Row label="Page loads" value={place.visits.toLocaleString()} />
-        {ips.length > 0 && <Row label="Distinct IPs seen" value={ips.length.toLocaleString()} />}
+        {place.kind === "country" && ips.length > 0 && <Row label="Distinct IPs seen" value={ips.length.toLocaleString()} />}
 
         {topPages.length > 0 && (
           <>
@@ -521,18 +618,26 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
     });
   }, [features, projection, stats]);
 
-  // Project each city centroid once. Natural Earth clips nothing, but guard the
-  // null return anyway — a bad coord would otherwise throw inside the render.
+  // Project each visitor once, after fanning it out from its city centroid.
+  // Natural Earth clips nothing, but guard the null return anyway — a bad coord
+  // would otherwise throw inside the render.
   const bubbles = useMemo(() => {
     if (!projection) return [];
-    const out: Array<PlaceStat & { cx: number; cy: number; r: number }> = [];
-    for (const p of stats.places) {
-      const xy = projection([p.lon, p.lat]);
+    const out: Array<VisitorDot & { cx: number; cy: number; r: number }> = [];
+    for (const d of stats.dots) {
+      const [lat, lon] = spreadOffset(d.lat, d.lon, d.slot, d.slotCount);
+      const xy = projection([lon, lat]);
       if (!xy || !Number.isFinite(xy[0]) || !Number.isFinite(xy[1])) continue;
-      out.push({ ...p, cx: xy[0], cy: xy[1], r: bubbleRadius(p.unique, stats.maxPlaceUnique) });
+      out.push({ ...d, cx: xy[0], cy: xy[1], r: bubbleRadius(d.visits, stats.maxDotVisits) });
     }
     return out;
   }, [projection, stats]);
+
+  // Dot radius has to divide by k to stay a constant size on screen, so the dot
+  // layer is the one thing that genuinely depends on zoom. Quantising to 0.05
+  // steps means a smooth wheel zoom rebuilds it a handful of times instead of
+  // once per event, and the ≤2.5% size error is invisible.
+  const sizeK = Math.round(view.k * 20) / 20;
 
   // ── Layers ────────────────────────────────────────────────────────────────
   //
@@ -547,9 +652,11 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       d={p.d}
       fill={p.unique > 0 ? rampColor(intensity(p.unique, stats.maxUnique)) : EMPTY_FILL}
       stroke={STROKE}
-      // Divide by k so borders stay hairline-thin as you zoom in instead of
-      // swelling into slabs.
-      strokeWidth={0.4 / view.k}
+      // non-scaling-stroke keeps borders hairline-thin at every zoom level
+      // WITHOUT the width depending on k — which is what lets this layer drop
+      // `view.k` from its deps and stop rebuilding all ~177 paths per wheel tick.
+      strokeWidth={0.5}
+      vectorEffect="non-scaling-stroke"
       style={{ transition: "fill 120ms linear", cursor: p.unique > 0 ? "pointer" : "default" }}
       onMouseMove={(e) => {
         if (drag.current?.moved) return; // suppress hover mid-pan
@@ -565,36 +672,37 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
           : null;
       }}
     />
-  )), [paths, stats.maxUnique, view.k, svgRect]);
+  )), [paths, stats.maxUnique, svgRect]);
 
   const bubbleLayer = useMemo(() => bubbles.map((b) => (
     <circle
       key={b.key}
       cx={b.cx}
       cy={b.cy}
-      r={b.r / view.k}
+      r={b.r / sizeK}
       fill={BUBBLE_FILL}
       stroke={BUBBLE_STROKE}
-      strokeWidth={0.9 / view.k}
+      strokeWidth={0.9}
+      vectorEffect="non-scaling-stroke"
       style={{ cursor: "pointer" }}
       onMouseMove={(e) => {
         if (drag.current?.moved) return;
         const box = svgRect();
         if (!box) return;
         setHover({
-          kind: "place", code: b.key, name: b.label,
-          unique: b.unique, visits: b.visits,
+          kind: "visitor", code: b.key, name: b.visitorLabel, sub: b.placeLabel,
+          unique: 1, visits: b.visits,
           x: e.clientX - box.left, y: e.clientY - box.top,
         });
-        pending.current = { kind: "place", name: b.label, unique: b.unique, visits: b.visits, sample: b.sample };
+        pending.current = { kind: "visitor", name: b.visitorLabel, sub: b.placeLabel, unique: 1, visits: b.visits, sample: b.sample };
       }}
     />
-  )), [bubbles, view.k, svgRect]);
+  )), [bubbles, sizeK, svgRect]);
 
   const hoveredCountry = hover?.kind === "country" && hover.code
     ? paths.find((p) => p.code === hover.code) ?? null
     : null;
-  const hoveredBubble = hover?.kind === "place"
+  const hoveredBubble = hover?.kind === "visitor"
     ? bubbles.find((b) => b.key === hover.code) ?? null
     : null;
 
@@ -607,6 +715,12 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
 
   // Wheel zoom. Registered manually because React's synthetic wheel handler is
   // passive — preventDefault there is ignored and the page scrolls instead.
+  //
+  // `features` and `loadError` are in the deps for a reason: the <svg> is only
+  // mounted once the world geometry has loaded, so on first paint svgRef.current
+  // is null and this effect bailed out. Width/height rarely change after that,
+  // so without a re-run when the map finally mounts the listener was never
+  // attached and the wheel just scrolled the page.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg || !width) return;
@@ -615,11 +729,17 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       const box = svg.getBoundingClientRect();
       const px = e.clientX - box.left;
       const py = e.clientY - box.top;
-      setView((v) => zoomAbout(v, v.k * (e.deltaY < 0 ? 1.18 : 1 / 1.18), px, py, width, height));
+      // Trackpads emit many small deltas and mice one big one; normalising by
+      // the magnitude keeps both feeling like the same zoom speed. DOM_DELTA_LINE
+      // (=1) and _PAGE (=2) report in lines/pages, not pixels.
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? height : 1;
+      const px_delta = e.deltaY * unit;
+      const factor = Math.exp(-px_delta * 0.0022);
+      setView((v) => zoomAbout(v, v.k * factor, px, py, width, height));
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
-  }, [width, height]);
+  }, [width, height, features, loadError]);
 
   const zoomBy = (factor: number) =>
     setView((v) => (width ? zoomAbout(v, v.k * factor, width / 2, height / 2, width, height) : v));
@@ -662,15 +782,18 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
 
   const zoomed = view.k > 1.001;
 
-  // A bubble hover always has a value; a country hover only counts when the
+  // A visitor hover always has a value; a country hover only counts when the
   // feature maps to a code we track.
-  const active = hover && (hover.kind === "place" || hover.code) ? hover : null;
+  const active = hover && (hover.kind === "visitor" || hover.code) ? hover : null;
   const headline = active ? active.unique : stats.totalUnique;
   const headlineLabel = active ? active.name : "Worldwide";
   const subline = active
-    ? `${active.visits.toLocaleString()} load${active.visits === 1 ? "" : "s"}`
+    ? (active.kind === "visitor" ? `${active.sub} · ` : "") +
+      `${active.visits.toLocaleString()} load${active.visits === 1 ? "" : "s"}`
     : `${stats.ranked.length} countr${stats.ranked.length === 1 ? "y" : "ies"}` +
-      (stats.places.length ? ` · ${stats.places.length} cit${stats.places.length === 1 ? "y" : "ies"}` : "");
+      (stats.dots.length
+        ? ` · ${stats.dots.length.toLocaleString()} plotted from ${stats.placeCount.toLocaleString()} location${stats.placeCount === 1 ? "" : "s"}`
+        : "");
 
   const cardStyle: CSSProperties = {
     background: HOME_THEME.panelBgStrong,
@@ -703,7 +826,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       >
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 6 }}>
-            Unique visitors · by country
+            Visitors · by country, one dot per person
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 9 }}>
             <span
@@ -772,23 +895,26 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 d={hoveredCountry.d}
                 fill="none"
                 stroke={HOME_THEME.lightBlue}
-                strokeWidth={1.1 / view.k}
+                strokeWidth={1.4}
+                vectorEffect="non-scaling-stroke"
                 pointerEvents="none"
               />
             )}
 
-            {/* Bubble layer — one dot per city centroid, area ∝ visitors.
-                Radius and stroke divide by k so a bubble keeps a constant
-                on-screen size while zooming separates overlapping cities. */}
+            {/* Visitor layer — one dot per visitor, fanned out around the city
+                centroid they share. Radius and stroke divide by k so a dot keeps
+                a constant on-screen size while zooming pulls the fan apart, which
+                is what makes individual people in one metro reachable. */}
             {showBubbles && bubbleLayer}
             {showBubbles && hoveredBubble && (
               <circle
                 cx={hoveredBubble.cx}
                 cy={hoveredBubble.cy}
-                r={hoveredBubble.r / view.k}
+                r={hoveredBubble.r / sizeK}
                 fill="none"
                 stroke={HOME_THEME.text}
-                strokeWidth={1.6 / view.k}
+                strokeWidth={1.6}
+                vectorEffect="non-scaling-stroke"
                 pointerEvents="none"
               />
             )}
@@ -863,19 +989,21 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 opacity: hover.unique > 0 ? 1 : 0.55,
               }}
             >
-              {hover.unique > 0
-                ? `${hover.unique.toLocaleString()} visitor${hover.unique === 1 ? "" : "s"} · ${hover.visits.toLocaleString()} loads`
-                : "No visits"}
+              {hover.kind === "visitor"
+                ? `1 visitor · ${hover.visits.toLocaleString()} load${hover.visits === 1 ? "" : "s"}`
+                : hover.unique > 0
+                  ? `${hover.unique.toLocaleString()} visitor${hover.unique === 1 ? "" : "s"} · ${hover.visits.toLocaleString()} loads`
+                  : "No visits"}
             </div>
-            {hover.kind === "place" && (
+            {hover.kind === "visitor" && (
               <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45, marginTop: 3 }}>
-                city-level, from IP
+                {hover.sub || "one visitor"}
               </div>
             )}
           </div>
         )}
 
-        {/* Pinned detail card — click a country or city bubble. Unlike the
+        {/* Pinned detail card — click a country or a visitor dot. Unlike the
             tooltip above this is interactive (scrollable, dismissible), so it
             gets pointer events and sits anchored to the corner rather than
             chasing the cursor. */}
@@ -908,16 +1036,16 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             {stats.maxUnique.toLocaleString()}
           </span>
 
-          {/* Bubble toggle doubles as the bubble legend. Disabled (with a reason)
+          {/* Dot toggle doubles as the dot legend. Disabled (with a reason)
               when no row has coordinates yet, so an empty layer isn't a mystery. */}
           <button
             type="button"
             onClick={() => setShowBubbles((v) => !v)}
-            disabled={stats.places.length === 0}
+            disabled={stats.dots.length === 0}
             title={
-              stats.places.length === 0
+              stats.dots.length === 0
                 ? "No coordinates logged yet — enable Cloudflare's visitor location headers"
-                : `${stats.places.length} cities · bubble area ∝ visitors · toggle off to see the country shading alone`
+                : `${stats.dots.length} visitors across ${stats.placeCount} locations · one dot per visitor, size ∝ their page loads · zoom in to separate visitors sharing a city`
             }
             style={{
               marginLeft: 6,
@@ -926,12 +1054,12 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
               gap: 6,
               padding: "3px 9px",
               borderRadius: 999,
-              border: `1px solid ${showBubbles && stats.places.length ? BUBBLE_STROKE : HOME_THEME.border}`,
-              background: showBubbles && stats.places.length ? "rgba(255,183,3,0.10)" : "transparent",
+              border: `1px solid ${showBubbles && stats.dots.length ? BUBBLE_STROKE : HOME_THEME.border}`,
+              background: showBubbles && stats.dots.length ? "rgba(255,183,3,0.10)" : "transparent",
               color: HOME_THEME.text,
               fontSize: 14,
-              cursor: stats.places.length === 0 ? "default" : "pointer",
-              opacity: stats.places.length === 0 ? 0.4 : 0.85,
+              cursor: stats.dots.length === 0 ? "default" : "pointer",
+              opacity: stats.dots.length === 0 ? 0.4 : 0.85,
             }}
           >
             <span
@@ -943,7 +1071,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 border: `1px solid ${BUBBLE_STROKE}`,
               }}
             />
-            Cities
+            Visitors
           </button>
         </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>

@@ -1,0 +1,389 @@
+import { useMemo, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { OWNER_THEME as T, ownerRgba, homePanelStyle } from "../lib/theme";
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ACQUISITION — where the traffic came from.
+ *
+ * Reads the columns added to page_visits in 2026-07 (see lib/visitorAttribution.ts):
+ * channel / referrerHost / utm* on ENTRY rows only, and browser/os/deviceType on
+ * every row.
+ *
+ * THE ONE THING TO KNOW ABOUT THESE NUMBERS:
+ * a "session" here is a row with isEntry — the first beacon of a browser session,
+ * the only row that carries attribution. A "pageview" is any row. So sessions and
+ * pageviews are counted off different denominators ON PURPOSE, and every
+ * acquisition breakdown below is sessions, never pageviews. Mixing them is the
+ * easiest way to make this page lie.
+ *
+ * Bots (isBot) are excluded from every human-facing number and reported
+ * separately, because Googlebot and Discord's link preview would otherwise be a
+ * large share of a small site's traffic.
+ *
+ * COLOR: every bar is one hue (theme cyan). These are nominal categories in a
+ * ranked list — the bar length already encodes the magnitude and the row label
+ * already encodes identity, so a second hue per row would be decoration that also
+ * fails CVD checks. (Verified: the four theme hues as a categorical set FAIL the
+ * lightness-band and chroma-floor checks against this panel; a single cyan PASSES
+ * all five.)
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+// ── Input ────────────────────────────────────────────────────────────────────
+
+/** One row of /api/page-visits. Every field optional — old rows predate all of them. */
+export interface AcquisitionRow {
+  isEntry?: boolean | null;
+  channel?: string | null;
+  referrerHost?: string | null;
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+  browser?: string | null;
+  os?: string | null;
+  deviceType?: string | null;
+  isBot?: boolean | null;
+  createdAt?: string | null;
+}
+
+type WindowKey = "24h" | "7d" | "30d" | "all";
+const WINDOWS: { key: WindowKey; label: string; hours: number | null }[] = [
+  { key: "24h", label: "24h", hours: 24 },
+  { key: "7d", label: "7d", hours: 24 * 7 },
+  { key: "30d", label: "30d", hours: 24 * 30 },
+  { key: "all", label: "All", hours: null },
+];
+
+// ── Small pieces ─────────────────────────────────────────────────────────────
+
+const num = (n: number) => n.toLocaleString();
+const pct = (n: number, of: number) => (of > 0 ? `${Math.round((n / of) * 100)}%` : "0%");
+
+const labelStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  color: T.text,
+  opacity: 0.75,
+};
+
+const monoStyle: CSSProperties = { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" };
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      <span style={{ ...monoStyle, fontSize: 26, fontWeight: 700, color: T.text, lineHeight: 1.1 }}>{value}</span>
+      <span style={{ fontSize: 12, color: T.textSecondary, opacity: 0.6 }}>{label}</span>
+      {hint && <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * One ranked bar. Thin (8px), 4px rounded ends anchored to the left baseline,
+ * recessive track, value direct-labelled on the right — six rows is few enough
+ * that a label per row reads as a table, not as noise.
+ */
+function Bar({ name, value, total, max }: { name: string; value: number; total: number; max: number }) {
+  const w = max > 0 ? Math.max(2, (value / max) * 100) : 0;
+  return (
+    <div
+      title={`${name} — ${num(value)} (${pct(value, total)})`}
+      style={{ display: "flex", flexDirection: "column", gap: 5 }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+        <span
+          style={{
+            fontSize: 13, color: T.text, opacity: 0.9,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </span>
+        <span style={{ ...monoStyle, fontSize: 13, color: T.text, flexShrink: 0 }}>
+          {num(value)}
+          <span style={{ color: T.textSecondary, opacity: 0.45, marginLeft: 6 }}>{pct(value, total)}</span>
+        </span>
+      </div>
+      <div style={{ height: 8, borderRadius: 999, background: ownerRgba(T.text, 0.05), overflow: "hidden" }}>
+        <div style={{ width: `${w}%`, height: "100%", borderRadius: 4, background: T.cyan }} />
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
+  return (
+    <div style={{ ...homePanelStyle, padding: 18, display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={labelStyle}>{title}</span>
+        {subtitle && <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.45 }}>{subtitle}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ fontSize: 13, color: T.textSecondary, opacity: 0.45, padding: "10px 0", lineHeight: 1.6 }}>
+      {children}
+    </div>
+  );
+}
+
+/** Count into a map, skipping null/blank keys. */
+function tally<T2>(rows: T2[], key: (r: T2) => string | null | undefined): [string, number][] {
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    const k = key(r);
+    if (!k) continue;
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+/** Keep the top N and fold the rest into "Other" — never grow the category count. */
+function topN(pairs: [string, number][], n: number): [string, number][] {
+  if (pairs.length <= n) return pairs;
+  const head = pairs.slice(0, n);
+  const rest = pairs.slice(n).reduce((s, [, v]) => s + v, 0);
+  return rest > 0 ? [...head, ["Other", rest] as [string, number]] : head;
+}
+
+/**
+ * A ranked bar list. The percentage denominator is the SUM OF THIS LIST, not the
+ * session or pageview count — rows logged before this feature shipped carry no
+ * channel, referrer or user agent, and dividing by the full count would print a
+ * set of shares that quietly add up to 76% with nothing explaining the gap.
+ * Percentages here always total 100% of the rows that actually have the field.
+ */
+function BarList({ pairs }: { pairs: [string, number][] }) {
+  const sum = pairs.reduce((s, [, v]) => s + v, 0);
+  const max = pairs[0]?.[1] ?? 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {pairs.map(([name, v]) => (
+        <Bar key={name} name={name} value={v} total={sum} max={max} />
+      ))}
+    </div>
+  );
+}
+
+// ── Panel ────────────────────────────────────────────────────────────────────
+
+export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
+  const [win, setWin] = useState<WindowKey>("7d");
+
+  const view = useMemo(() => {
+    const hours = WINDOWS.find((w) => w.key === win)?.hours ?? null;
+    const cutoff = hours == null ? null : Date.now() - hours * 3600_000;
+
+    const inWindow = rows.filter((r) => {
+      if (cutoff == null) return true;
+      const t = r.createdAt ? Date.parse(r.createdAt) : NaN;
+      // Undated rows can't be placed in a window — drop them rather than let
+      // them inflate whichever range happens to be selected.
+      return Number.isFinite(t) && t >= cutoff;
+    });
+
+    const bots = inWindow.filter((r) => r.isBot);
+    const human = inWindow.filter((r) => !r.isBot);
+    // Attribution lives only on entry rows. Everything below this line is
+    // sessions; `human.length` is the only pageview number on the panel.
+    const sessions = human.filter((r) => r.isEntry);
+
+    const channels = topN(tally(sessions, (r) => r.channel), 7);
+    const referrers = topN(tally(sessions, (r) => r.referrerHost), 7);
+    const devices = tally(human, (r) => r.deviceType);
+    const browsers = topN(tally(human, (r) => r.browser), 5);
+
+    // Grouped on source+medium+campaign. Joined with an escaped NUL, NOT a
+    // space or a dash — campaign names contain both, and splitting on either
+    // would shred them back into the wrong columns.
+    const SEP = "\u0000";
+    const campaignCounts = new Map<string, number>();
+    for (const r of sessions) {
+      if (!r.utmSource) continue;
+      const k = [r.utmSource, r.utmMedium ?? "", r.utmCampaign ?? ""].join(SEP);
+      campaignCounts.set(k, (campaignCounts.get(k) ?? 0) + 1);
+    }
+    const campaigns = [...campaignCounts.entries()]
+      .map(([k, v]) => {
+        const [source, medium, campaign] = k.split(SEP);
+        return { source, medium, campaign, sessions: v };
+      })
+      .sort((a, b) => b.sessions - a.sessions)
+      .slice(0, 12);
+
+    return {
+      pageviews: human.length,
+      botLoads: bots.length,
+      sessionCount: sessions.length,
+      topChannel: channels[0]?.[0] ?? null,
+      channels, referrers, devices, browsers, campaigns,
+      // Attribution only exists on rows logged after the feature shipped. If
+      // there are rows but no entries at all, say so instead of showing zeros
+      // that read like "nobody visited".
+      hasAnyEntry: inWindow.some((r) => r.isEntry),
+      hasAnyRow: inWindow.length > 0,
+    };
+  }, [rows, win]);
+
+  const s = view.sessionCount;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Filters — one row, above the charts. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <span style={labelStyle}>Acquisition</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          {WINDOWS.map((w) => {
+            const on = w.key === win;
+            return (
+              <button
+                key={w.key}
+                onClick={() => setWin(w.key)}
+                style={{
+                  padding: "4px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  color: on ? T.cyan : T.text,
+                  background: on ? ownerRgba(T.cyan, 0.12) : ownerRgba(T.text, 0.04),
+                  border: `1px solid ${on ? ownerRgba(T.cyan, 0.3) : T.border}`,
+                }}
+              >
+                {w.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* KPI row. */}
+      <div
+        style={{
+          ...homePanelStyle,
+          padding: 18,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          gap: 18,
+        }}
+      >
+        <Stat label="sessions" value={num(s)} hint="first beacon of a visit" />
+        <Stat label="pageviews" value={num(view.pageviews)} hint="every load, humans only" />
+        <Stat
+          label="pages / session"
+          value={s > 0 ? (view.pageviews / s).toFixed(1) : "—"}
+        />
+        <Stat label="top channel" value={view.topChannel ?? "—"} />
+        <Stat label="bot loads" value={num(view.botLoads)} hint="excluded above" />
+      </div>
+
+      {!view.hasAnyRow ? (
+        <Section title="No visits in this window">
+          <Empty>Nothing logged in the last {WINDOWS.find((w) => w.key === win)?.label}. Try a wider range.</Empty>
+        </Section>
+      ) : !view.hasAnyEntry ? (
+        <Section title="Waiting for the first tracked session">
+          <Empty>
+            {num(view.pageviews)} loads logged, but none carry attribution yet. Entry rows only start
+            appearing after the referrer/UTM build is deployed — every row logged before that has
+            <b style={{ color: T.cyan }}> is_entry = false</b> and no channel. Device and browser
+            below will fill in at the same time.
+          </Empty>
+        </Section>
+      ) : null}
+
+      {/* Two ranked bar lists, side by side on wide screens. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
+        <Section title="Sessions by channel" subtitle="how people arrived">
+          {view.channels.length === 0 ? (
+            <Empty>No attributed sessions yet.</Empty>
+          ) : (
+            <BarList pairs={view.channels} />
+          )}
+        </Section>
+
+        <Section title="Top referrers" subtitle="external sites only — self-referrals are dropped">
+          {view.referrers.length === 0 ? (
+            <Empty>
+              No external referrers yet. Direct traffic (typed URL, bookmark, an app that strips the
+              referrer) never has one, so this staying empty is a real answer, not a bug.
+            </Empty>
+          ) : (
+            <BarList pairs={view.referrers} />
+          )}
+        </Section>
+      </div>
+
+      {/* Campaigns — a table, because three dimensions can't be a bar. */}
+      <Section title="Campaigns" subtitle="tagged links (utm_*) and inferred ad clicks">
+        {view.campaigns.length === 0 ? (
+          <Empty>
+            No tagged traffic in this window. Add <code style={{ color: T.cyan }}>?utm_source=…&amp;utm_medium=…&amp;utm_campaign=…</code>{" "}
+            to links you post and they'll show up here; bare <code style={{ color: T.cyan }}>gclid</code> /{" "}
+            <code style={{ color: T.cyan }}>fbclid</code> clicks are picked up automatically.
+          </Empty>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ color: T.textSecondary, opacity: 0.5, textAlign: "left" }}>
+                  <th style={{ padding: "6px 10px 6px 0", fontWeight: 600 }}>Source</th>
+                  <th style={{ padding: "6px 10px", fontWeight: 600 }}>Medium</th>
+                  <th style={{ padding: "6px 10px", fontWeight: 600 }}>Campaign</th>
+                  <th style={{ padding: "6px 0 6px 10px", fontWeight: 600, textAlign: "right" }}>Sessions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.campaigns.map((c) => (
+                  <tr key={`${c.source}|${c.medium}|${c.campaign}`} style={{ borderTop: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "8px 10px 8px 0", color: T.text }}>{c.source}</td>
+                    <td style={{ padding: "8px 10px", color: T.textSecondary, opacity: 0.7 }}>{c.medium || "—"}</td>
+                    <td style={{ padding: "8px 10px", color: T.textSecondary, opacity: 0.7 }}>{c.campaign || "—"}</td>
+                    <td style={{ ...monoStyle, padding: "8px 0 8px 10px", textAlign: "right", color: T.text }}>
+                      {num(c.sessions)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      {/* Device + browser — counted over pageviews, not sessions, because the UA
+          is on every row and there's no reason to throw that resolution away. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
+        <Section title="Device" subtitle="share of loads with a user agent">
+          {view.devices.length === 0 ? (
+            <Empty>No device data yet.</Empty>
+          ) : (
+            <BarList pairs={view.devices} />
+          )}
+        </Section>
+
+        <Section title="Browser" subtitle="share of loads with a user agent">
+          {view.browsers.length === 0 ? (
+            <Empty>No browser data yet.</Empty>
+          ) : (
+            <BarList pairs={view.browsers} />
+          )}
+        </Section>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.textSecondary, opacity: 0.45, lineHeight: 1.6 }}>
+        Sessions are entry rows — one per browser session, the only rows carrying a referrer, so a
+        visitor who reads six pages counts once here and six times under pageviews. Bots are excluded
+        everywhere except the bot counter. The visit log is capped (PAGE_VISITS_KEEP, default 5,000
+        rows) and the oldest rows are pruned on insert, so the widest window can only reach as far
+        back as that cap allows.
+      </div>
+    </div>
+  );
+}

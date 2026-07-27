@@ -237,3 +237,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 * Added a new SPX heatmap on the Options page showing 2 years of daily market performance.
 * Fixed the heatmap's info popup so it now appears right next to your cursor instead of jumping to the bottom of the page.
+
+## Monday 7/27/2026
+
+* Started the new Options dashboard layout — ticker dropdown with Favorites and Watchlist, a daily/yearly heatmap, the S&P 500 sunburst, a candlestick chart and live orderflow, all following whichever ticker you pick.
+* The heatmap and sunburst now stay on screen no matter which Options tab you're on. Everything is still empty placeholders while the live data gets connected.

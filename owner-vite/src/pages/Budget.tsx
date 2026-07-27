@@ -1145,50 +1145,6 @@ function smoothPath(pts: [number, number][], t = 0.2): string {
   return d;
 }
 
-// Monotone cubic (Fritsch–Carlson) → cubic-bezier. Smooth but guarantees NO
-// overshoot: the curve never invents a hump or dip between data points, so it
-// reads as an honest running balance instead of a wavy spline.
-function monotonePath(pts: [number, number][]): string {
-  const n = pts.length;
-  if (n < 2) return n ? `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}` : "";
-  const xs = pts.map((p) => p[0]);
-  const ys = pts.map((p) => p[1]);
-  const dx: number[] = [];
-  const slope: number[] = [];
-  for (let i = 0; i < n - 1; i++) {
-    const h = xs[i + 1] - xs[i] || 1e-6;
-    dx.push(h);
-    slope.push((ys[i + 1] - ys[i]) / h);
-  }
-  const m: number[] = new Array(n);
-  m[0] = slope[0];
-  m[n - 1] = slope[n - 2];
-  for (let i = 1; i < n - 1; i++) {
-    if (slope[i - 1] * slope[i] <= 0) m[i] = 0;
-    else m[i] = (slope[i - 1] + slope[i]) / 2;
-  }
-  for (let i = 0; i < n - 1; i++) {
-    if (slope[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
-    const a = m[i] / slope[i];
-    const b = m[i + 1] / slope[i];
-    const s = a * a + b * b;
-    if (s > 9) {
-      const tau = 3 / Math.sqrt(s);
-      m[i] = tau * a * slope[i];
-      m[i + 1] = tau * b * slope[i];
-    }
-  }
-  let d = `M ${xs[0].toFixed(1)} ${ys[0].toFixed(1)}`;
-  for (let i = 0; i < n - 1; i++) {
-    const c1x = xs[i] + dx[i] / 3;
-    const c1y = ys[i] + (m[i] * dx[i]) / 3;
-    const c2x = xs[i + 1] - dx[i] / 3;
-    const c2y = ys[i + 1] - (m[i + 1] * dx[i]) / 3;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${xs[i + 1].toFixed(1)} ${ys[i + 1].toFixed(1)}`;
-  }
-  return d;
-}
-
 // SVG line chart of the running combined balance across the month, with a
 // hover guide + tooltip showing the exact date and balance under the cursor.
 function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
@@ -1273,39 +1229,46 @@ function CalendarGrid({
     ...Array(firstWeekday).fill(null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
+  // Day tiles are a FIXED pixel size so every cell is identical no matter how
+  // wide the window (or the card) gets. The grid is centred and the wrapper
+  // scrolls horizontally on very narrow viewports instead of squashing cells.
+  const CELL_W = 104, CELL_H = 78;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
-      {WD.map((w, i) => (
-        <div key={i} style={{ textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
-      ))}
-      {cells.map((d, i) => {
-        if (d === null) return <div key={`e${i}`} />;
-        const g = byDate.get(iso(d));
-        const net = g?.dailyNet ?? 0;
-        const isSel = selected === iso(d);
-        const isToday = d === todayDay;
-        const pos = net > 0, neg = net < 0;
-        const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
-        return (
-          <button
-            key={d}
-            onClick={() => g && onSelect(iso(d))}
-            disabled={!g}
-            style={{
-              textAlign: "left", height: 74, boxSizing: "border-box", padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
-              background: tint,
-              border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
-              boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",
-              color: HOME_THEME.text, transition: "all 0.12s ease",
-            }}
-          >
-            <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span>{d}</span>
-            </div>
-            {g && <div style={{ fontSize: 14, fontWeight: 800, marginTop: 2, color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
-          </button>
-        );
-      })}
+    <div style={{ width: "100%", overflowX: "auto", display: "flex", justifyContent: "center" }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL_W}px)`, gap: 5, flex: "none" }}>
+        {WD.map((w, i) => (
+          <div key={i} style={{ width: CELL_W, boxSizing: "border-box", textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+        ))}
+        {cells.map((d, i) => {
+          if (d === null) return <div key={`e${i}`} style={{ width: CELL_W, height: CELL_H, boxSizing: "border-box" }} />;
+          const g = byDate.get(iso(d));
+          const net = g?.dailyNet ?? 0;
+          const isSel = selected === iso(d);
+          const isToday = d === todayDay;
+          const pos = net > 0, neg = net < 0;
+          const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
+          return (
+            <button
+              key={d}
+              onClick={() => g && onSelect(iso(d))}
+              disabled={!g}
+              style={{
+                textAlign: "left", width: CELL_W, height: CELL_H, boxSizing: "border-box", padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
+                overflow: "hidden",
+                background: tint,
+                border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
+                boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",
+                color: HOME_THEME.text, transition: "all 0.12s ease",
+              }}
+            >
+              <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>{d}</span>
+              </div>
+              {g && <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1582,7 +1545,7 @@ function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }
   const neg = intel.safePerDay < 0;
   const pct = Math.min(100, Math.max(0, (intel.todayDay / intel.daysInMonth) * 100));
   return (
-    <div style={{ ...card(), padding: 16, background: "#000000", border: `1px solid ${bRgba(LIGHT_BLUE, 0.6)}`, boxShadow: `${EDGE_LIGHT}, 0 0 36px -6px ${bRgba(LIGHT_BLUE, 0.55)}, 0 24px 60px -16px rgba(0,0,0,0.75)`, display: "flex", flexDirection: "column" }}>
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Safe to Spend" />
       <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
         {fmtMoney(intel.safePerDay, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> /day</span>
@@ -1705,7 +1668,9 @@ function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency
     );
   }
   const off = Math.abs(data.drift) >= 1; // ignore sub-dollar rounding
-  const flagColor = !off ? HOME_THEME.green : SOFT_RED;
+  // Colour follows the DIRECTION of the money, not whether it reconciles:
+  // up (or flat) = green, down = red.
+  const flagColor = data.drift >= 0 ? HOME_THEME.green : SOFT_RED;
   const fmtDay = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const Row = ({ label, value, color, sign, strong, top }: { label: string; value: number; color?: string; sign?: boolean; strong?: boolean; top?: boolean }) => (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, fontVariantNumeric: "tabular-nums", padding: "5px 0", borderTop: top ? `1px solid ${HAIRLINE}` : undefined }}>
@@ -1759,23 +1724,10 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
   const H = 240;
   const grid = [0, 0.5, 1];
 
-  // Running-balance line = beginning balance + cumulative net (in − out) through
-  // each bucket. Drawn as real dollars on its OWN right-hand axis (kept separate
-  // so a large balance doesn't squash the daily-flow bars), with monotone
-  // smoothing so the curve never overshoots into fake humps.
+  // Running balance is still computed for the hover tooltip, but it is no longer
+  // drawn as a line/axis on the chart — the bars alone carry the story.
   let run = beginningBalance;
   const balances = buckets.map((b) => (run += b.inflow - b.outflow));
-  const bMax = Math.max(...balances, beginningBalance);
-  const bMin = Math.min(...balances, beginningBalance, 0);
-  const bSpan = Math.max(bMax - bMin, 1);
-  const padT = 12, padB = 8;
-  const lineY = (v: number) => padT + (1 - (v - bMin) / bSpan) * (H - padT - padB);
-  const lineX = (i: number) => (buckets.length === 1 ? 50 : ((i + 0.5) / buckets.length) * 100);
-  const pts = balances.map((v, i) => [lineX(i), lineY(v)] as [number, number]);
-  const linePath = monotonePath(pts);
-  const areaPath = pts.length > 1 ? `${linePath} L ${pts[pts.length - 1][0].toFixed(1)} ${H} L ${pts[0][0].toFixed(1)} ${H} Z` : "";
-  const balTicks = [bMax, bMin + bSpan / 2, bMin];
-  const showZero = bMin < 0;
 
   return (
     <div style={{ position: "relative", display: "flex", gap: 10 }}>
@@ -1792,7 +1744,7 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
           {grid.map((g) => (
             <div key={g} style={{ position: "absolute", left: 0, right: 0, top: (1 - g) * H, borderTop: `1px dashed ${HOME_THEME.border}` }} />
           ))}
-          <div style={{ position: "absolute", left: 0, right: 44, top: 0, bottom: 0 }}>
+          <div style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}>
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", gap: buckets.length > 20 ? 2 : 8 }}>
               {buckets.map((b, i) => (
                 <div
@@ -1814,40 +1766,13 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
                 </div>
               ))}
             </div>
-            {/* Running-balance line overlay (real dollars, right axis) */}
-            {pts.length > 1 && (
-              <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
-                <defs>
-                  <linearGradient id="cfProjFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.38} />
-                    <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                {showZero && <line x1={0} x2={100} y1={lineY(0)} y2={lineY(0)} stroke={bRgba(SOFT_RED, 0.4)} strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />}
-                <path d={areaPath} fill="url(#cfProjFill)" stroke="none" />
-                {/* soft under-stroke = neon glow without an SVG filter */}
-                <path d={linePath} fill="none" stroke={bRgba(LIGHT_BLUE, 0.45)} strokeWidth={9} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-                <path d={linePath} fill="none" stroke={LIGHT_BLUE} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-              </svg>
-            )}
           </div>
-          {/* Right-hand balance axis (light blue = running balance in $) */}
-          {pts.length > 1 && (
-            <div style={{ position: "absolute", right: 0, top: 0, width: 42, height: H, pointerEvents: "none" }}>
-              {balTicks.map((v, i) => (
-                <div key={i} style={{ position: "absolute", right: 0, top: lineY(v) - 7, fontSize: 12, fontWeight: 700, color: LIGHT_BLUE, opacity: 0.7, whiteSpace: "nowrap" }}>
-                  {fmtMoney(v, currency).replace(/\.\d+$/, "")}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10, fontSize: 12, color: HOME_THEME.muted }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: HOME_THEME.green }} />In</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: SOFT_RED }} />Out</span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 2, borderRadius: 2, background: LIGHT_BLUE }} />Running balance ($, right)</span>
         </div>
-        <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 8, paddingRight: 44 }}>
+        <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 8 }}>
           {buckets.map((b, i) => (
             <div key={`${b.label}-l-${i}`} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 12, color: HOME_THEME.muted, opacity: hover === i ? 1 : 0.5, overflow: "hidden", whiteSpace: "nowrap" }}>
               {buckets.length > 16 && i % 2 === 1 ? "" : b.label}

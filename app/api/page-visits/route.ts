@@ -35,6 +35,23 @@ export async function GET(req: NextRequest) {
       // pg hands DOUBLE PRECISION back as a JS number already.
       lat: r.latitude ?? null,
       lon: r.longitude ?? null,
+      // Acquisition. Non-null only on entry rows (the first beacon of a browser
+      // session) — see lib/visitorAttribution.ts. Count sessions with isEntry,
+      // then group those by channel / referrerHost / utmSource.
+      isEntry: Boolean(r.is_entry),
+      referrer: r.referrer ?? null,
+      referrerHost: r.referrer_host ?? null,
+      utmSource: r.utm_source ?? null,
+      utmMedium: r.utm_medium ?? null,
+      utmCampaign: r.utm_campaign ?? null,
+      utmTerm: r.utm_term ?? null,
+      utmContent: r.utm_content ?? null,
+      channel: r.channel ?? null,
+      // Device is filled on every row (it comes from the UA header).
+      browser: r.browser ?? null,
+      os: r.os ?? null,
+      deviceType: r.device_type ?? null,
+      isBot: Boolean(r.is_bot),
       createdAt: r.created_at ?? null,
     }));
     return NextResponse.json({ visits });

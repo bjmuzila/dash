@@ -273,8 +273,41 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS city TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+
+    -- Acquisition + device, added 2026-07. Parsing lives in lib/visitorAttribution.ts.
+    --
+    -- Attribution columns are populated ONLY on the first beacon of a browser
+    -- session (the is_entry row). Inside the SPA, document.referrer keeps
+    -- returning the original external referrer for every client-side navigation,
+    -- so writing it on every row would report ONE Google visit as twenty.
+    -- One entry row per session means COUNT(*) WHERE is_entry is a session count,
+    -- and grouping those by referrer_host / utm_source / channel is real
+    -- acquisition data. Non-entry rows keep NULL here BY DESIGN — that is the
+    -- intended shape, not missing data.
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS is_entry BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS referrer TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS referrer_host TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_source TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_medium TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_term TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_content TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS channel TEXT;
+    -- browser/os/device_type come from the User-Agent header, which is present on
+    -- EVERY request — so unlike attribution these are written on every row.
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS browser TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS os TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS device_type TEXT;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT FALSE;
+
     CREATE INDEX IF NOT EXISTS idx_page_visits_created ON page_visits(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_page_visits_country ON page_visits(country);
+    -- Partial indexes: acquisition queries always filter to entry rows, and
+    -- entries are a small slice of the table, so these stay cheap.
+    CREATE INDEX IF NOT EXISTS idx_page_visits_entry_channel
+      ON page_visits(channel, created_at DESC) WHERE is_entry;
+    CREATE INDEX IF NOT EXISTS idx_page_visits_entry_referrer
+      ON page_visits(referrer_host, created_at DESC) WHERE is_entry AND referrer_host IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_page_load_status_updated ON page_load_status(updated_at);
 
     -- One row per ticker interaction (scanner + anywhere tickers are shown).
@@ -3645,25 +3678,68 @@ export interface PageVisitRecord {
   /** City-centroid coords from Cloudflare's IP database — not device GPS. */
   latitude?: number | null;
   longitude?: number | null;
+
+  // ── Acquisition (entry rows only — see the schema comment above) ───────────
+  /** True on the first beacon of a browser session. Attribution below is only
+   *  meaningful on these rows; everywhere else it is NULL by design. */
+  is_entry?: boolean | null;
+  /** Full document.referrer of the inbound visit. NULL for direct + self-referrals. */
+  referrer?: string | null;
+  /** www-stripped hostname of `referrer` — the column you GROUP BY. */
+  referrer_host?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_term?: string | null;
+  utm_content?: string | null;
+  /** direct | search | social | paid | email | referral | internal */
+  channel?: string | null;
+
+  // ── Device (every row) ─────────────────────────────────────────────────────
+  browser?: string | null;
+  os?: string | null;
+  /** mobile | tablet | desktop | bot */
+  device_type?: string | null;
+  is_bot?: boolean | null;
+
   created_at?: string | null;
 }
 
 // Keep the visit log bounded so it can't grow without limit.
-const PAGE_VISITS_KEEP = 5000;
+//
+// NOTE: this is a HARD cap on how far back any acquisition report can look —
+// once you're past PAGE_VISITS_KEEP visits, the oldest entry rows are deleted
+// and that traffic is gone. Raise it via the env var rather than editing code;
+// the rows are narrow (a few hundred bytes), so 100k costs tens of MB.
+const PAGE_VISITS_KEEP = Math.max(1000, Number(process.env.PAGE_VISITS_KEEP) || 5000);
 
 export async function insertPageVisit(
   r: Pick<
     PageVisitRecord,
-    "page_key" | "page_label" | "path" | "user_id" | "ip" | "country" | "region" | "city" | "latitude" | "longitude"
+    | "page_key" | "page_label" | "path" | "user_id" | "ip"
+    | "country" | "region" | "city" | "latitude" | "longitude"
+    | "is_entry" | "referrer" | "referrer_host"
+    | "utm_source" | "utm_medium" | "utm_campaign" | "utm_term" | "utm_content"
+    | "channel" | "browser" | "os" | "device_type" | "is_bot"
   >
 ): Promise<void> {
   const pool = await getDb();
   await pool.query(
-    `INSERT INTO page_visits (page_key, page_label, path, user_id, ip, country, region, city, latitude, longitude)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    `INSERT INTO page_visits (
+       page_key, page_label, path, user_id, ip, country, region, city, latitude, longitude,
+       is_entry, referrer, referrer_host,
+       utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+       channel, browser, os, device_type, is_bot
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
     [
       r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null,
       r.country ?? null, r.region ?? null, r.city ?? null, r.latitude ?? null, r.longitude ?? null,
+      r.is_entry ?? false, r.referrer ?? null, r.referrer_host ?? null,
+      r.utm_source ?? null, r.utm_medium ?? null, r.utm_campaign ?? null,
+      r.utm_term ?? null, r.utm_content ?? null,
+      r.channel ?? null, r.browser ?? null, r.os ?? null, r.device_type ?? null, r.is_bot ?? false,
     ]
   );
   // Opportunistic prune: drop anything older than the newest PAGE_VISITS_KEEP rows.

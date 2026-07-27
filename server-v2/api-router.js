@@ -96,6 +96,14 @@ catch (e) { console.warn('[api-router] _lib-obook.cjs not loaded:', e.message); 
 let libIct = null;
 try { libIct = require('./_lib-ict.cjs'); }
 catch (e) { console.warn('[api-router] _lib-ict.cjs not loaded — ict-setups stays on Next:', e.message); }
+// Referrer / UTM / user-agent parsing for the visit log (lib/visitorAttribution.ts —
+// pure, zero imports):
+//   esbuild lib/visitorAttribution.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-attribution.cjs
+// Optional by design: if it fails to load, /api/page-status still logs every
+// visit, just with null acquisition columns. Visit logging never depends on it.
+let libAttribution = null;
+try { libAttribution = require('./_lib-attribution.cjs'); }
+catch (e) { console.warn('[api-router] _lib-attribution.cjs not loaded — visits log without referrer/UTM:', e.message); }
 // server-v2 levels-engine (CommonJS, already on disk) — required directly for
 // the em-tracker routes' evaluate/commit paths.
 let levelsEngine = null;
@@ -291,6 +299,60 @@ function clientGeo(req) {
     lat: clientGeoFloat(req.headers['cf-iplatitude']),
     lon: clientGeoFloat(req.headers['cf-iplongitude']),
   };
+}
+
+// Acquisition + device for a /api/page-status beacon.
+//
+// The referrer and query string come from the BODY (document.referrer and
+// window.location.search, sent by lib/pageStatus.ts) — never from
+// req.headers.referer, which on a beacon points at the page that fired it and
+// would attribute every visit to ourselves.
+//
+// Only the first beacon of a browser session carries attribution (body.isEntry);
+// every other row gets nulls. Device info comes from the User-Agent header and
+// is filled on every row. See lib/visitorAttribution.ts for the reasoning.
+const EMPTY_ATTRIBUTION = {
+  is_entry: false, referrer: null, referrer_host: null,
+  utm_source: null, utm_medium: null, utm_campaign: null, utm_term: null, utm_content: null,
+  channel: null, browser: null, os: null, device_type: null, is_bot: false,
+};
+function visitAttribution(req, body) {
+  if (!libAttribution) return { ...EMPTY_ATTRIBUTION };
+  try {
+    const isEntry = Boolean(body && (body.isEntry ?? body.is_entry));
+    // Treat the host this request arrived on as "us" too, so previews, staging
+    // hostnames and the bare IP don't show up as external referrers.
+    const selfHosts = new Set(libAttribution.SELF_HOSTS);
+    const host = String(req.headers['host'] || '').split(':')[0].toLowerCase().replace(/^www\./, '');
+    if (host) selfHosts.add(host);
+
+    const a = libAttribution.buildAttribution({
+      referrer: isEntry ? body?.referrer : null,
+      query: isEntry ? body?.query : null,
+      userAgent: req.headers['user-agent'],
+      selfHosts,
+    });
+    return {
+      is_entry: isEntry,
+      referrer: a.referrer,
+      referrer_host: a.referrerHost,
+      utm_source: a.utmSource,
+      utm_medium: a.utmMedium,
+      utm_campaign: a.utmCampaign,
+      utm_term: a.utmTerm,
+      utm_content: a.utmContent,
+      // Channel is only meaningful for an arrival; a mid-session row would
+      // always read "direct" and drag every report toward it.
+      channel: isEntry ? a.channel : null,
+      browser: a.browser,
+      os: a.os,
+      device_type: a.deviceType,
+      is_bot: a.isBot,
+    };
+  } catch {
+    // A malformed referrer must never cost us the visit row.
+    return { ...EMPTY_ATTRIBUTION };
+  }
 }
 
 // ── PROOF-OF-PATTERN: /api/insights/gex ──────────────────────────────────────
@@ -2821,6 +2883,23 @@ if (libDb) {
             // enabled, and on anything that reached the origin without crossing the edge.
             country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
             lat: r.lat ?? null, lon: r.lon ?? null,
+            // Acquisition. Non-null only on entry rows (the first beacon of a
+            // browser session) — see lib/visitorAttribution.ts. Count sessions
+            // with isEntry, then group those by channel / referrerHost / utmSource.
+            isEntry: Boolean(r.is_entry),
+            referrer: r.referrer ?? null,
+            referrerHost: r.referrer_host ?? null,
+            utmSource: r.utm_source ?? null,
+            utmMedium: r.utm_medium ?? null,
+            utmCampaign: r.utm_campaign ?? null,
+            utmTerm: r.utm_term ?? null,
+            utmContent: r.utm_content ?? null,
+            channel: r.channel ?? null,
+            // Device is filled on every row (it comes from the UA header).
+            browser: r.browser ?? null,
+            os: r.os ?? null,
+            deviceType: r.device_type ?? null,
+            isBot: Boolean(r.is_bot),
             createdAt: r.created_at ?? null,
           };
         });
@@ -2894,6 +2973,8 @@ if (libDb) {
                 city: geo.city,
                 lat: geo.lat,
                 lon: geo.lon,
+                // Referrer / UTM (entry rows only) + browser/OS/device (every row).
+                ...visitAttribution(req, body),
               });
             } catch { /* non-fatal */ }
           }

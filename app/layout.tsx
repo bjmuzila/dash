@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import LayoutShell from "@/components/shared/LayoutShell";
+import MarketingPageTracker from "@/components/analytics/MarketingPageTracker";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://cbedge.net"),
@@ -37,6 +38,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className="flex h-screen flex-col overflow-hidden" suppressHydrationWarning>
         <AuthProvider>
+          {/* Visit beacon for the public marketing routes only — the dashboard
+              pages fire their own. See components/analytics/MarketingPageTracker. */}
+          <MarketingPageTracker />
           <LayoutShell>{children}</LayoutShell>
         </AuthProvider>
       </body>
