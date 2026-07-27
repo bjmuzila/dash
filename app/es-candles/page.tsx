@@ -2835,11 +2835,21 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
       // ── 4) Flip Cross Pulse ─────────────────────────────────────────────
       // (a) Per-minute gamma flip, derived from the same columns the bubbles
-      //     draw: walk the strikes ascending, accumulate net GEX, and take the
-      //     price where the running total crosses zero — linearly interpolated
-      //     between the two bracketing strikes so the level isn't quantised to
-      //     the 5-point grid. SPX strike space → ES via basisAt(), same as the
-      //     bubbles and the CB line.
+      //     draw. This MUST use the app's canonical flip definition (see
+      //     findGEXFlip in the shared calc): the per-strike net-GEX SIGN
+      //     CROSSING, linearly interpolated between the two bracketing strikes,
+      //     picking the crossing NEAREST SPOT when there are several.
+      //
+      //     The first version of this summed net GEX cumulatively from the
+      //     lowest strike up and took where the running total crossed zero.
+      //     That is a different quantity ("equal gamma above and below") and it
+      //     printed 40–130 points ABOVE the real flip, because the cumulative
+      //     sum has to claw back every negative strike below before it can turn
+      //     positive. It is also window-dependent: this table stores a band of
+      //     strikes around spot, so truncating the wings moves a cumulative
+      //     crossing arbitrarily. A sign crossing is local and immune to both.
+      //
+      //     SPX strike space → ES via basisAt(), same as the bubbles / CB line.
       // (b) The flip path draws as a thin dotted amber line. Without it the
       //     rings look like they're floating; with it the cross is obvious.
       // (c) A cross = the bar-to-bar sign change of (close − flip). Blue ring +
@@ -2849,25 +2859,36 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         const metricFc = gexMetricRef.current;
         const valFc = (c: GexCell) => (metricFc === "vol" ? c.netVol : c.netOiVol);
         const flipPts: Array<{ ts: number; es: number }> = [];
+        let prevPickSpx: number | null = null;
         for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
           if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
           const cells = [...m.cells].sort((a, b) => a.strike - b.strike);
           if (cells.length < 3) continue;
-          let acc = 0, prevAcc = 0, prevStrike = cells[0].strike;
-          let hit: number | null = null;
-          for (const c of cells) {
-            acc += valFc(c);
-            // First upward zero-crossing of the cumulative profile = the flip.
-            if (hit == null && prevAcc < 0 && acc >= 0) {
-              const span = acc - prevAcc;
-              const t = span !== 0 ? -prevAcc / span : 0;
-              hit = prevStrike + t * (c.strike - prevStrike);
+          const crossings: number[] = [];
+          for (let i = 0; i < cells.length - 1; i++) {
+            const a = valFc(cells[i]);
+            const b = valFc(cells[i + 1]);
+            if (a === 0) { crossings.push(cells[i].strike); continue; }
+            if (b === 0) { crossings.push(cells[i + 1].strike); continue; }
+            if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+              const sA = cells[i].strike, sB = cells[i + 1].strike;
+              const zero = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+              if (Number.isFinite(zero)) crossings.push(Math.round(zero * 10) / 10);
             }
-            prevAcc = acc; prevStrike = c.strike;
           }
-          // No crossing = the whole loaded profile is one sign (common early in
-          // the session, or on a deep one-sided day). Skip rather than invent one.
-          if (hit != null) flipPts.push({ ts: m.slotTs, es: hit + basisAt(m.slotTs) });
+          // No crossing = the whole loaded band is one sign (deep one-sided day,
+          // or the wings got truncated). Skip rather than invent a level.
+          if (!crossings.length) continue;
+          // Reference for "nearest": this column's stored SPX spot — the same
+          // argument the live flip is computed with. Legacy rows have no spot;
+          // fall back to the last accepted flip so the series stays continuous
+          // instead of snapping to the bottom crossing.
+          const ref = m.spot && m.spot > 0 ? m.spot : prevPickSpx;
+          const pick = ref == null
+            ? crossings[0]
+            : crossings.reduce((best, c) => (Math.abs(c - ref) < Math.abs(best - ref) ? c : best));
+          prevPickSpx = pick;
+          flipPts.push({ ts: m.slotTs, es: pick + basisAt(m.slotTs) });
         }
 
         if (flipPts.length >= 2) {
