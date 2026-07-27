@@ -1179,13 +1179,19 @@ register('/api/gex', {
 // saved-events.json fallback). GET-only, subscriber. Ported verbatim from
 // app/api/calendar/route.ts (module-level Trump cache preserved).
 {
-  // Both the current AND next ForexFactory week. Upstream "thisweek" is Sun–Sat
-  // but EconCalendarPanel renders a ROLLING today→today+6 window, so past Sunday
-  // the tail of that window falls outside "thisweek" and can never have data.
-  const FF_URLS = [
-    'https://nfs.faireconomy.media/ff_calendar_thisweek.json',
-    'https://nfs.faireconomy.media/ff_calendar_nextweek.json',
-  ];
+  // VERIFIED 2026-07-27: thisweek is the ONLY file faireconomy publishes here.
+  // ff_calendar_nextweek.json, ff_calendar_lastweek.json and
+  // ff_calendar_thismonth.json all return 404 — do not add them back.
+  //
+  // That file is Sun–Sat, but EconCalendarPanel renders a ROLLING today→today+6
+  // window, so the tail is data upstream hasn't published yet. Since it can't be
+  // fetched, the cache ACCUMULATES instead: each successful fetch is merged into
+  // the stored set rather than replacing it, so after a Sunday rollover the cache
+  // holds both the outgoing and incoming week and the window stays populated.
+  const FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+  // How much history the accumulating cache keeps. Two weeks covers a rollover
+  // plus the panel's dimmed "already happened" section, and bounds the file.
+  const CACHE_RETAIN_DAYS = 14;
   const SAVED_EVENTS_PATH = nodePath.join(process.cwd(), 'app/api/econ-calendar/events.json');
   // Last-good upstream response. state/ is the ONLY bind-mounted dir in
   // docker-compose (./state:/app/state) — anywhere else is ephemeral and the
@@ -1202,7 +1208,7 @@ register('/api/gex', {
   // fallback and surfaced warning are damage limitation for real outages.
   const ECON_TTL_MS = 30 * 60 * 1000;      // faireconomy's own guidance is ~30 min
   const ECON_BACKOFF_MS = 15 * 60 * 1000;  // after a hard failure, stop hammering
-  let econCache = null;                    // { events, ts, savedAt, partialError }
+  let econCache = null;                    // { events, ts, savedAt }
   let econBackoffUntil = 0;
   const TRUMP_EXCLUDE = ['executive time', 'pool call', 'in-town pool'];
   const TRUMP_CACHE_TTL = 30 * 60 * 1000;
@@ -1241,24 +1247,23 @@ register('/api/gex', {
     if (!Array.isArray(raw)) throw new Error(`${name}: non-array payload`);
     return raw;
   };
-  // Succeeds if AT LEAST ONE week file returned events, so a broken nextweek
-  // file can't take down the current week.
   const fetchForexFactoryEvents = async () => {
-    const results = await Promise.allSettled(FF_URLS.map(fetchFFWeek));
-    const events = [];
-    const seen = new Set();
-    const errors = [];
-    for (const r of results) {
-      if (r.status === 'rejected') { errors.push(r.reason?.message || String(r.reason)); continue; }
-      for (const ev of r.value) {
-        const key = `${ev.date}|${ev.country}|${ev.title}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        events.push(ev);
-      }
-    }
-    if (!events.length) throw new Error(errors.length ? errors.join(' / ') : 'ForexFactory returned no events');
-    return { events, partialError: errors.length ? errors.join(' / ') : undefined };
+    const events = await fetchFFWeek(FF_URL);
+    if (!events.length) throw new Error('ForexFactory returned no events');
+    return events;
+  };
+  const eventKey = (ev) => `${ev.date}|${ev.country}|${ev.title}`;
+  // Merge a freshly fetched week into what we already hold. Incoming rows WIN on
+  // a key collision so forecast/actual values revise in place as the week plays
+  // out; anything older than CACHE_RETAIN_DAYS is dropped.
+  const mergeEvents = (existing, incoming) => {
+    const cutoff = Date.now() - CACHE_RETAIN_DAYS * 86_400_000;
+    const byKey = new Map();
+    for (const ev of existing) byKey.set(eventKey(ev), ev);
+    for (const ev of incoming) byKey.set(eventKey(ev), ev);
+    return [...byKey.values()]
+      .filter((ev) => { const t = Date.parse(ev.date); return !Number.isFinite(t) || t >= cutoff; })
+      .sort((a, b) => a.date.localeCompare(b.date));
   };
   // savedAt is passed in rather than stamped here so the disk copy and the
   // in-process copy carry the SAME timestamp — the TTL check compares against it
@@ -1303,9 +1308,12 @@ register('/api/gex', {
     }
 
     try {
-      const { events, partialError } = await fetchForexFactoryEvents();
+      const fetched = await fetchForexFactoryEvents();
+      // Accumulate rather than replace — see the FF_URL comment. Without this the
+      // Sunday rollover would silently drop the outgoing week from the cache.
+      const events = mergeEvents(econCache?.events ?? [], fetched);
       const savedAt = new Date(now).toISOString();
-      econCache = { events, ts: now, savedAt, partialError };
+      econCache = { events, ts: now, savedAt };
       writeCache(events, savedAt);
       econBackoffUntil = 0;
       return { ...econCache, fresh: true };
@@ -1412,7 +1420,6 @@ register('/api/gex', {
           econEvents = normalize(econResult.value.events);
           source = econResult.value.fresh ? 'forexfactory' : 'cache';
           if (!econResult.value.fresh) warning = `Live economic feed unavailable — showing cached data from ${econResult.value.savedAt}.`;
-          else if (econResult.value.partialError) warning = `Partial feed: ${econResult.value.partialError}`;
         } else {
           const upstreamErr = econResult.reason?.message || String(econResult.reason);
           // Fall back ONLY to something that actually covers the window the panel

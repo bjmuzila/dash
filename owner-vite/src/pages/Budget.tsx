@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { HOME_THEME } from "../lib/theme";
 import { ThemedSelect } from "../components/ThemedSelect";
@@ -67,6 +67,33 @@ const SHELL_GLOW_DEEP = `radial-gradient(1100px 520px at 12% -10%, rgba(33,158,1
 
 // Swatch palette for category dots.
 const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
+
+// ── Range switcher (Daily / Weekly / Monthly / Yearly) ───────────────────────
+// One control, shared by every card that can honestly be re-cut by period.
+// It reads two ways, and both are the natural reading in context:
+//   • SERIES cards (Cash Flow, Spend Pace) — the tab sets chart RESOLUTION:
+//     day-by-day or week-by-week across the month, month-by-month or quarter-
+//     by-quarter across the year.
+//   • SUMMARY cards (Where It Went, Category Spend, Safe to Spend) — the tab
+//     sets the WINDOW being summarised: today / last 7 days / this month /
+//     this year.
+type RangeMode = "daily" | "weekly" | "monthly" | "yearly";
+const RANGE_MODES: RangeMode[] = ["daily", "weekly", "monthly", "yearly"];
+const RANGE_LETTER: Record<RangeMode, string> = { daily: "D", weekly: "W", monthly: "M", yearly: "Y" };
+const RANGE_TITLE: Record<RangeMode, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" };
+const RANGE_WINDOW_LABEL: Record<RangeMode, string> = { daily: "Today", weekly: "Last 7 days", monthly: "This month", yearly: "This year" };
+
+// Chart palette lifted straight from /owner/charts-ui so every chart on this
+// page reads as the same family as the reference page.
+const CHART = {
+  cyan: "#219EBC",
+  lightBlue: "#7dd3fc",
+  gold: "#FFB703",
+  orange: "#FB8501",
+  red: HOME_THEME.red,
+  grid: "rgba(255,255,255,0.08)",
+  axis: "rgba(255,255,255,0.45)",
+} as const;
 
 const BANKS: Bank[] = ["coastal", "truist", "secu"];
 const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST", secu: "SECU" };
@@ -155,8 +182,14 @@ export default function Budget() {
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // Overview: cash-flow bucket size + the right-hand panel's tab.
-  const [cfMode, setCfMode] = useState<"daily" | "weekly" | "monthly">("daily");
+  const [cfMode, setCfMode] = useState<RangeMode>("daily");
   const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
+  // Per-card range tabs. Each card remembers its own period independently so
+  // you can look at today's spend next to the whole year's pace.
+  const [safeRange, setSafeRange] = useState<RangeMode>("daily");
+  const [paceRange, setPaceRange] = useState<RangeMode>("monthly");
+  const [donutRange, setDonutRange] = useState<RangeMode>("monthly");
+  const [catRange, setCatRange] = useState<RangeMode>("monthly");
 
   // Add-row composer
   const [rwDate, setRwDate] = useState(todayIso());
@@ -645,6 +678,17 @@ export default function Budget() {
 
   // Cash-flow buckets (in vs out) at day / week / month resolution.
   const cashflow = useMemo(() => {
+    if (cfMode === "yearly") {
+      // The year at a glance — four quarter buckets.
+      return [1, 2, 3, 4].map((q) => {
+        const ms = yearMonths.months.filter((mo) => Math.floor((mo.m - 1) / 3) + 1 === q);
+        return {
+          label: `Q${q}`,
+          inflow: ms.reduce((s, mo) => s + mo.income, 0),
+          outflow: ms.reduce((s, mo) => s + mo.expenses, 0),
+        };
+      });
+    }
     if (cfMode === "monthly") {
       return yearMonths.months.map((mo) => ({
         label: new Date(2000, mo.m - 1, 1).toLocaleDateString("en-US", { month: "short" }),
@@ -669,6 +713,87 @@ export default function Budget() {
     }
     return Array.from(weeks.entries()).sort((a, b) => a[0] - b[0]).map(([w, v]) => ({ label: `W${w}`, inflow: v.inflow, outflow: v.outflow }));
   }, [cfMode, computed.groups, yearMonths.months]);
+
+  // ── Windowed spend, one bucket per range tab ──────────────────────────────
+  // Feeds the SUMMARY cards (Safe to Spend, Where It Went, Category Spend).
+  // Reads from the year's rows when they're loaded so "today" and "last 7 days"
+  // stay correct across a month boundary; falls back to the month's rows.
+  const spendWindow = useMemo(() => {
+    const today = todayIso();
+    const weekFrom = addDays(today, -6);
+    const rows = yearRows.length ? yearRows : register;
+    const yearStr = String(year);
+    const match: Record<RangeMode, (d: string) => boolean> = {
+      daily: (d) => d === today,
+      weekly: (d) => d >= weekFrom && d <= today,
+      monthly: (d) => d.slice(0, 7) === month,
+      yearly: (d) => d.slice(0, 4) === yearStr,
+    };
+    const build = (mode: RangeMode) => {
+      const ok = match[mode];
+      const byCat: Record<number, number> = {};
+      let unsorted = 0, unsortedCount = 0, spend = 0, income = 0, count = 0;
+      for (const r of rows) {
+        if (r.is_beginning || !ok(r.entry_date)) continue;
+        if (r.amount > 0) { income += r.amount; continue; }
+        const v = Math.abs(r.amount);
+        spend += v; count++;
+        if (r.category_id == null) { unsorted += v; unsortedCount++; }
+        else byCat[r.category_id] = (byCat[r.category_id] || 0) + v;
+      }
+      return { byCat, unsorted, unsortedCount, spend, income, count };
+    };
+    return { daily: build("daily"), weekly: build("weekly"), monthly: build("monthly"), yearly: build("yearly") };
+  }, [yearRows, register, month, year]);
+
+  // Donut slices for whichever window the "Where It Went" card is showing.
+  const slicesFor = useCallback((mode: RangeMode) => {
+    const w = spendWindow[mode];
+    const out = categories
+      .map((c, i) => ({ label: c.name, value: w.byCat[c.id] || 0, color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length] }))
+      .filter((s) => s.value > 0)
+      .sort((a, b) => b.value - a.value);
+    if (w.unsorted > 0) out.push({ label: "Unsorted", value: w.unsorted, color: "rgba(255,255,255,0.35)" });
+    return out;
+  }, [spendWindow, categories]);
+
+  // ── Spend pace at each resolution ─────────────────────────────────────────
+  // Cumulative spend vs a straight-line budget, re-bucketed per tab:
+  // daily = days of the month, weekly = W1..W5, monthly = Jan..Dec,
+  // yearly = Q1..Q4. Budget scales with the span (monthly budget × 12 for the
+  // year-wide views), so "over/under pace" means the same thing on every tab.
+  const paceSeries = useMemo(() => {
+    const monthBudget = intel.budgetTotal;
+    const yearBudget = monthBudget * 12;
+    const spendByDay = new Array<number>(intel.daysInMonth).fill(0);
+    for (const g of computed.groups) {
+      const d = Number(g.date.split("-")[2]) - 1;
+      if (d < 0 || d >= intel.daysInMonth) continue;
+      for (const r of g.rows) if (r.amount < 0) spendByDay[d] += -r.amount;
+    }
+    const cumulate = (vals: number[]) => { let a = 0; return vals.map((v) => (a += v)); };
+    const nowMonth = Number(todayIso().slice(5, 7));
+    const yearIsCurrent = String(year) === todayIso().slice(0, 4);
+    const monthsUpTo = yearIsCurrent ? nowMonth : String(year) < todayIso().slice(0, 4) ? 12 : 0;
+    const monthShort = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+    if (paceRange === "daily") {
+      return { cum: intel.cum, labels: intel.cum.map((_, i) => String(i + 1)), budget: monthBudget, upTo: intel.todayDay, span: intel.daysInMonth, scope: monthShort };
+    }
+    if (paceRange === "weekly") {
+      const nWeeks = Math.ceil(intel.daysInMonth / 7);
+      const weeks = new Array<number>(nWeeks).fill(0);
+      spendByDay.forEach((v, i) => { weeks[Math.floor(i / 7)] += v; });
+      const upTo = intel.todayDay > 0 ? Math.floor((intel.todayDay - 1) / 7) + 1 : 0;
+      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, upTo, span: nWeeks, scope: monthShort };
+    }
+    if (paceRange === "monthly") {
+      const vals = yearMonths.months.map((m) => m.expenses);
+      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, upTo: monthsUpTo, span: 12, scope: String(year) };
+    }
+    const quarters = [1, 2, 3, 4].map((q) => yearMonths.months.filter((m) => Math.floor((m.m - 1) / 3) + 1 === q).reduce((s, m) => s + m.expenses, 0));
+    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
+  }, [paceRange, intel, computed.groups, yearMonths.months, year, month]);
 
   // Recent transactions = real logged rows (what has actually been paid/received).
   const recentPaid = useMemo(() => {
@@ -882,9 +1007,9 @@ export default function Budget() {
 
         {/* Daily/weekly budgeting intelligence */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
-          <SafeToSpendCard intel={intel} currency={currency} />
-          <SpendPaceCard intel={intel} currency={currency} />
-          <CategoryDonutCard slices={intel.slices} currency={currency} />
+          <SafeToSpendCard intel={intel} currency={currency} range={safeRange} onRange={setSafeRange} />
+          <SpendPaceCard series={paceSeries} currency={currency} range={paceRange} onRange={setPaceRange} />
+          <CategoryDonutCard slices={slicesFor(donutRange)} currency={currency} range={donutRange} onRange={setDonutRange} />
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
@@ -894,18 +1019,14 @@ export default function Budget() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Cash Flow</div>
-                <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 2 }}>{cfMode === "monthly" ? String(year) : monthLabel}</div>
+                <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 2 }}>{cfMode === "monthly" || cfMode === "yearly" ? String(year) : monthLabel}</div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.green }} /> In
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: SOFT_RED, marginLeft: 8 }} /> Out
                 </span>
-                <Segmented
-                  value={cfMode}
-                  onChange={(v) => setCfMode(v as "daily" | "weekly" | "monthly")}
-                  options={[{ value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]}
-                />
+                <RangeTabs value={cfMode} onChange={setCfMode} />
               </div>
             </div>
             <CashFlowBars buckets={cashflow} currency={currency} beginningBalance={computed.anyBeginning ? computed.beginningBalance : 0} />
@@ -942,11 +1063,14 @@ export default function Budget() {
           <RecentTransactions rows={recentPaid} currency={currency} categories={categories} />
           <CategorySpendCard
             categories={categories}
-            spent={categoryStats.spent}
-            unsortedCount={categoryStats.unsorted.length}
-            unsortedTotal={categoryStats.unsortedTotal}
+            spent={spendWindow[catRange].byCat}
+            unsortedCount={spendWindow[catRange].unsortedCount}
+            unsortedTotal={spendWindow[catRange].unsorted}
             currency={currency}
             onOpenCategories={() => setTab("categories")}
+            range={catRange}
+            onRange={setCatRange}
+            budgetScale={catRange === "yearly" ? 12 : catRange === "monthly" ? 1 : catRange === "weekly" ? 7 / intel.daysInMonth : 1 / intel.daysInMonth}
           />
         </div>
         </>
@@ -1472,6 +1596,39 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
 
 // ── Overview building blocks ─────────────────────────────────────────────────
 
+/**
+ * Compact D / W / M / Y period switcher. Sits in a card header next to the
+ * title; letters (not words) so it fits in a 280px card without wrapping —
+ * the full word is on the tooltip.
+ */
+function RangeTabs({ value, onChange, options = RANGE_MODES }: { value: RangeMode; onChange: (v: RangeMode) => void; options?: RangeMode[] }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 2, padding: 2, borderRadius: 999, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.40)", flex: "none" }}>
+      {options.map((o) => {
+        const on = o === value;
+        return (
+          <button
+            key={o}
+            type="button"
+            title={RANGE_TITLE[o]}
+            onClick={() => onChange(o)}
+            style={{
+              padding: "3px 9px", borderRadius: 999, border: "none", cursor: "pointer",
+              background: on ? bRgba(HOME_THEME.cyan, 0.30) : "transparent",
+              boxShadow: on ? `0 0 14px ${bRgba(HOME_THEME.cyan, 0.40)}, ${EDGE_LIGHT}` : "none",
+              color: on ? LIGHT_BLUE : "rgba(255,255,255,0.48)",
+              fontSize: 11, fontWeight: 900, letterSpacing: "0.08em", lineHeight: 1.4,
+              transition: "background .15s ease, color .15s ease",
+            }}
+          >
+            {RANGE_LETTER[o]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Segmented({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
@@ -1540,15 +1697,23 @@ function IntelHeader({ title, right }: { title: string; right?: React.ReactNode 
   );
 }
 
-/** Safe-to-Spend: what's left per day after every bill still due this month. */
-function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }) {
-  const neg = intel.safePerDay < 0;
+/**
+ * Safe-to-Spend: what's left after every bill still due this month, expressed
+ * at whatever cadence the tab asks for. There's no yearly reading — the pot is
+ * this month's — so the card offers D / W / M only.
+ */
+function SafeToSpendCard({ intel, currency, range, onRange }: { intel: Intel; currency: string; range: RangeMode; onRange: (v: RangeMode) => void }) {
+  // safe is a fixed pot for the rest of the month; the tab just re-expresses
+  // the burn rate: per day, per week (7 days of it), or the whole pot.
+  const rate = range === "monthly" ? intel.safe : range === "weekly" ? intel.safePerDay * 7 : intel.safePerDay;
+  const unit = range === "monthly" ? "left" : range === "weekly" ? "/week" : "/day";
+  const neg = rate < 0;
   const pct = Math.min(100, Math.max(0, (intel.todayDay / intel.daysInMonth) * 100));
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Safe to Spend" />
+      <IntelHeader title="Safe to Spend" right={<RangeTabs value={range} onChange={onRange} options={["daily", "weekly", "monthly"]} />} />
       <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
-        {fmtMoney(intel.safePerDay, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> /day</span>
+        {fmtMoney(rate, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> {unit}</span>
       </div>
       <div style={{ marginTop: 10, display: "grid", gap: 6, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
         <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ opacity: 0.6 }}>Free this month</span><b style={{ color: intel.safe < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(intel.safe, currency)}</b></div>
@@ -1565,55 +1730,80 @@ function SafeToSpendCard({ intel, currency }: { intel: Intel; currency: string }
   );
 }
 
-/** Spend Pace: cumulative month spend vs the straight-line budget pace. */
-function SpendPaceCard({ intel, currency }: { intel: Intel; currency: string }) {
-  const W = 300, H = 132;
-  const maxV = Math.max(intel.budgetTotal, intel.cum[intel.cum.length - 1] || 0, 1);
-  const px = (i: number) => (i / (intel.daysInMonth - 1)) * W;
-  const py = (v: number) => H - (v / maxV) * (H - 10);
-  const upTo = Math.max(1, Math.min(intel.todayDay, intel.daysInMonth));
-  const actual = intel.cum.slice(0, upTo).map((v, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`).join(" ");
-  const area = `${actual} L ${px(upTo - 1).toFixed(1)} ${H} L 0 ${H} Z`;
-  const over = intel.spentMtd > intel.paceNow;
-  const delta = Math.abs(intel.spentMtd - intel.paceNow);
+/**
+ * Spend Pace: cumulative spend vs a straight-line budget, at whatever
+ * resolution the tab asks for (days of the month → weeks → months of the year
+ * → quarters). Drawn in the /owner/charts-ui area-chart idiom: dashed grid,
+ * gradient fill under a smooth curve, dashed pace line, marker on the last
+ * real point.
+ */
+type PaceSeries = { cum: number[]; labels: string[]; budget: number; upTo: number; span: number; scope: string };
+function SpendPaceCard({ series, currency, range, onRange }: { series: PaceSeries; currency: string; range: RangeMode; onRange: (v: RangeMode) => void }) {
+  const W = 300, H = 132, PADB = 16;
+  const n = Math.max(series.span, 1);
+  const maxV = Math.max(series.budget, series.cum[series.cum.length - 1] || 0, 1);
+  const px = (i: number) => (n === 1 ? W / 2 : (i / (n - 1)) * W);
+  const py = (v: number) => H - PADB - (v / maxV) * (H - PADB - 10);
+  const upTo = Math.max(0, Math.min(series.upTo, series.cum.length));
+  const pts = series.cum.slice(0, upTo);
+  const line = pts.map((v, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`).join(" ");
+  const area = pts.length ? `${line} L ${px(pts.length - 1).toFixed(1)} ${H - PADB} L ${px(0).toFixed(1)} ${H - PADB} Z` : "";
+  const spent = pts.length ? pts[pts.length - 1] : 0;
+  const pace = (series.budget * upTo) / n;
+  const over = spent > pace;
+  const delta = Math.abs(spent - pace);
+  const accent = over ? SOFT_RED : LIGHT_BLUE;
+  // Sparse x labels — every label would collide at 31 days wide.
+  const step = Math.max(1, Math.ceil(series.labels.length / 7));
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader
-        title="Spend Pace"
-        right={<span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>{over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")}</span>}
-      />
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+      <IntelHeader title="Spend Pace" right={<RangeTabs value={range} onChange={onRange} />} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: -6, marginBottom: 8 }}>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>{series.scope}</span>
+        <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>
+          {over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img">
         <defs>
           <linearGradient id="paceFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={over ? SOFT_RED : LIGHT_BLUE} stopOpacity={0.3} />
-            <stop offset="100%" stopColor={over ? SOFT_RED : LIGHT_BLUE} stopOpacity={0} />
+            <stop offset="0%" stopColor={accent} stopOpacity={0.42} />
+            <stop offset="100%" stopColor={accent} stopOpacity={0} />
           </linearGradient>
         </defs>
-        {/* budget pace line */}
-        <line x1={0} y1={py(0)} x2={W} y2={py(intel.budgetTotal)} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
-        <path d={area} fill="url(#paceFill)" />
-        <path d={actual} fill="none" stroke={bRgba(over ? SOFT_RED : LIGHT_BLUE, 0.45)} strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />
-        <path d={actual} fill="none" stroke={over ? SOFT_RED : LIGHT_BLUE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-        {upTo > 0 && <circle cx={px(upTo - 1)} cy={py(intel.cum[upTo - 1] || 0)} r={4} fill={over ? SOFT_RED : LIGHT_BLUE} stroke={INK} strokeWidth={1.5} />}
+        {/* dashed grid, charts-ui style */}
+        {[0, 0.25, 0.5, 0.75, 1].map((g) => (
+          <line key={g} x1={0} x2={W} y1={10 + g * (H - PADB - 10)} y2={10 + g * (H - PADB - 10)} stroke={CHART.grid} strokeDasharray="4 4" />
+        ))}
+        {/* straight-line budget pace */}
+        <line x1={px(0)} y1={py(series.budget / n)} x2={px(n - 1)} y2={py(series.budget)} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
+        {area && <path d={area} fill="url(#paceFill)" />}
+        {line && <path d={line} fill="none" stroke={bRgba(accent, 0.45)} strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />}
+        {line && <path d={line} fill="none" stroke={accent} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />}
+        {pts.length > 0 && <circle cx={px(pts.length - 1)} cy={py(spent)} r={4} fill={accent} stroke={INK} strokeWidth={1.5} />}
+        <g fill={CHART.axis} fontSize={8} textAnchor="middle">
+          {series.labels.map((l, i) => (i % step === 0 ? <text key={i} x={px(i)} y={H - 3}>{l}</text> : null))}
+        </g>
       </svg>
       <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
-        <span style={{ opacity: 0.6 }}>Spent MTD <b style={{ color: HOME_THEME.text }}>{fmtMoney(intel.spentMtd, currency)}</b></span>
-        <span style={{ opacity: 0.6 }}>Budget <b style={{ color: HOME_THEME.text }}>{fmtMoney(intel.budgetTotal, currency)}</b></span>
+        <span style={{ opacity: 0.6 }}>Spent <b style={{ color: HOME_THEME.text }}>{fmtMoney(spent, currency)}</b></span>
+        <span style={{ opacity: 0.6 }}>Budget <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.budget, currency)}</b></span>
       </div>
     </div>
   );
 }
 
-/** Category donut — where the month's spend actually went. */
-function CategoryDonutCard({ slices, currency }: { slices: Intel["slices"]; currency: string }) {
+/** Category donut — where the spend in the selected window actually went. */
+function CategoryDonutCard({ slices, currency, range, onRange }: { slices: Intel["slices"]; currency: string; range: RangeMode; onRange: (v: RangeMode) => void }) {
   const total = slices.reduce((s, x) => s + x.value, 0);
   const R = 44, C = 2 * Math.PI * R;
   let cumFrac = 0;
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Where It Went" />
+      <IntelHeader title="Where It Went" right={<RangeTabs value={range} onChange={onRange} />} />
+      <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6, marginBottom: 8 }}>{RANGE_WINDOW_LABEL[range]}</div>
       {total <= 0 ? (
-        <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14 }}>No categorized spend yet.</div>
+        <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14, textAlign: "center" }}>No categorized spend {RANGE_WINDOW_LABEL[range].toLowerCase()}.</div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 0 }}>
           <svg viewBox="0 0 120 120" width={128} height={128} style={{ flex: "none", filter: "drop-shadow(0 0 10px rgba(125,211,252,0.25))" }}>
@@ -1851,7 +2041,7 @@ function RentCountdown({
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
               {/* What else lands before rent — e.g. both pay runs. */}
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted }}>
-                <span>Coming in before then</span>
+                <span>Coming in by the 5th</span>
                 <span style={{ color: incomingTotal > 0 ? HOME_THEME.green : HOME_THEME.muted }}>+{fmtMoney(incomingTotal, currency)}</span>
               </div>
               {incoming.length
@@ -1859,16 +2049,20 @@ function RentCountdown({
                 : <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
 
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted, marginTop: 10 }}>
-                <span>Going out before then</span>
+                <span>Going out by the 5th</span>
                 <span style={{ color: outgoingTotal > 0 ? SOFT_RED : HOME_THEME.muted }}>{outgoingTotal > 0 ? "−" : ""}{fmtMoney(outgoingTotal, currency)}</span>
               </div>
               {outgoing.length
                 ? outgoing.map((f, i) => flowLine(f, "out" + i, false))
                 : <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
 
-              {/* Cash on hand the moment rent is due. */}
+              {/* Cash on hand the moment rent is due — BEFORE rent leaves. The
+                  window is inclusive of the 5th, so same-day pay counts here. */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 12 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>Projected on the 5th</span>
+                <span style={{ display: "flex", flexDirection: "column" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>Projected on the 5th, for rent</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.muted, opacity: 0.7 }}>before rent is paid</span>
+                </span>
                 <span style={{ fontSize: 17, fontWeight: 900, color: accent }}>{fmtMoney(projected, currency)}</span>
               </div>
             </div>
@@ -2088,6 +2282,9 @@ function CategorySpendCard({
   unsortedTotal,
   currency,
   onOpenCategories,
+  range,
+  onRange,
+  budgetScale,
 }: {
   categories: Category[];
   spent: Record<number, number>;
@@ -2095,6 +2292,10 @@ function CategorySpendCard({
   unsortedTotal: number;
   currency: string;
   onOpenCategories: () => void;
+  range: RangeMode;
+  onRange: (v: RangeMode) => void;
+  /** Category budgets are monthly — scale them to the window being shown. */
+  budgetScale: number;
 }) {
   const rows = categories
     .map((c) => ({ c, s: spent[c.id] || 0 }))
@@ -2108,10 +2309,13 @@ function CategorySpendCard({
         <div>
           <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Category Spend</div>
           <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55, marginTop: 2 }}>
-            {fmtMoney(totalSpent, currency)} categorized this month
+            {fmtMoney(totalSpent, currency)} categorized · {RANGE_WINDOW_LABEL[range].toLowerCase()}
           </div>
         </div>
-        <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 12, borderRadius: 8 }}>Manage</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none" }}>
+          <RangeTabs value={range} onChange={onRange} />
+          <button onClick={onOpenCategories} style={{ ...ghost(), padding: "5px 10px", fontSize: 12, borderRadius: 8 }}>Manage</button>
+        </div>
       </div>
 
       {unsortedCount > 0 && (
@@ -2138,7 +2342,7 @@ function CategorySpendCard({
           </div>
         )}
         {rows.map(({ c, s }) => {
-          const budget = c.amount || 0;
+          const budget = (c.amount || 0) * budgetScale;
           const pct = budget > 0 ? Math.min(100, (s / budget) * 100) : 0;
           const over = budget > 0 && s > budget;
           const cc = c.color || LIGHT_BLUE;
