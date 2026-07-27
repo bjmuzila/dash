@@ -3,7 +3,17 @@
  * server-v2/condor-mark-recorder.js
  *
  * Keeps the Owner → Est. Moves BE → Iron Condors tab priced without anyone
- * pressing a button. Two jobs, both weekday-only:
+ * pressing a button. Three jobs, all weekday-only:
+ *
+ *   ENTRY   09:35 ET, once per week (Monday, or the week's first open session)
+ *           POST /api/em-condors/seed  → build the week's condors off the EM
+ *           bands, then POST /api/em-condors/entry → stamp put/call/net credit
+ *           from live NBBO mids. This is the position's opening price; without
+ *           it every P&L column downstream stays null.
+ *
+ *           Five minutes past the open, not 09:30: the auction needs to clear
+ *           before far wings quote two-sided, and chainMids drops any leg that
+ *           doesn't, which would void the whole condor's credit.
  *
  *   HOURLY  at :00 of each RTH hour (10:00–16:00 ET)
  *           POST /api/em-condors/ticks  → live NBBO mid on all four legs of
@@ -32,6 +42,12 @@ const RTH_FIRST_HOUR = 10;        // first hourly snapshot (ET)
 const RTH_LAST_HOUR = 16;         // last hourly snapshot (ET) — the 16:00 print
 const EOD_HOUR = 16;
 const EOD_MIN = 15;
+const ENTRY_HOUR = 9;             // weekly entry-credit stamp (ET)
+const ENTRY_MIN = 35;
+// Hard stop for the entry stamp. If the app was down all morning, a "Monday open"
+// credit priced at 2pm is worse than none — it would read as an entry fill the
+// position never had. Past this hour the week simply goes uncredited.
+const ENTRY_LAST_HOUR = 11;
 
 function etParts(d = new Date()) {
   const p = new Intl.DateTimeFormat('en-US', {
@@ -86,6 +102,38 @@ async function runHourly(base, weekStart, reason) {
   }
 }
 
+/**
+ * Seed the week, then stamp each condor's entry credit. Returns true only when a
+ * credit actually landed — the caller uses that to decide whether the week is
+ * done, so a market holiday (seeds fine, prices nothing) retries next session.
+ */
+async function runEntry(base, weekStart, reason) {
+  try {
+    const s = await post(base, '/api/em-condors/seed', { week_start: weekStart, contracts: 1 });
+    console.log(
+      `[condor-entry] seed (${reason}): ${s.seeded ?? 0} new, ${s.skipped ?? 0} existing`
+      + `${s.note ? ` — ${s.note}` : ''}`
+    );
+  } catch (e) {
+    console.log(`[condor-entry] seed failed — ${e.message}`);
+    // Keep going: the week may already be seeded by hand, in which case the
+    // stamp below is still the whole point of this run.
+  }
+  try {
+    const r = await post(base, '/api/em-condors/entry', { week_start: weekStart });
+    const errs = (r.errors || []).length;
+    console.log(
+      `[condor-entry] credit (${reason}): ${r.written ?? 0} stamped, `
+      + `${r.skipped ?? 0} skipped of ${r.condors ?? 0} candidate(s)`
+      + `${errs ? `, ${errs} leg issue(s)` : ''}${r.note ? ` — ${r.note}` : ''}`
+    );
+    return (r.written ?? 0) > 0;
+  } catch (e) {
+    console.log(`[condor-entry] credit failed — ${e.message}`);
+    return false;
+  }
+}
+
 async function runEod(base, weekStart, reason) {
   try {
     const r = await post(base, '/api/em-condors/marks', { week_start: weekStart });
@@ -106,11 +154,14 @@ async function runEod(base, weekStart, reason) {
 
 function startCondorMarkRecorder(port) {
   const base = `http://localhost:${port}`;
-  let lastHourKey = null;   // `${etDate}:${hour}`
-  let lastEodDate = null;   // ET date string
+  let lastHourKey = null;      // `${etDate}:${hour}`
+  let lastEodDate = null;      // ET date string
+  let lastEntryDate = null;    // ET date the entry stamp was last ATTEMPTED
+  let entryDoneWeek = null;    // week_start whose entry stamp SUCCEEDED
 
   console.log(
-    `[condor-marks] enabled — hourly ${RTH_FIRST_HOUR}:00–${RTH_LAST_HOUR}:00 ET, `
+    `[condor-marks] enabled — entry ${ENTRY_HOUR}:${String(ENTRY_MIN).padStart(2, '0')} ET weekly, `
+    + `hourly ${RTH_FIRST_HOUR}:00–${RTH_LAST_HOUR}:00 ET, `
     + `EOD ${EOD_HOUR}:${String(EOD_MIN).padStart(2, '0')} ET, weekdays only`
   );
 
@@ -124,6 +175,21 @@ function startCondorMarkRecorder(port) {
     if (lastEodDate !== date && (hour > EOD_HOUR || (hour === EOD_HOUR && minute >= EOD_MIN))) {
       lastEodDate = date;                             // claim before awaiting so a
       runEod(base, weekStart, 'daily');               // slow run can't double-fire
+      return;
+    }
+
+    // Entry stamp: once per week, at the first session that reaches 09:35 ET.
+    // Attempted at most once per day, and the week is only claimed once a credit
+    // actually lands — so a Monday holiday rolls to Tuesday on its own.
+    if (entryDoneWeek !== weekStart
+      && lastEntryDate !== date
+      && hour <= ENTRY_LAST_HOUR
+      && (hour > ENTRY_HOUR || (hour === ENTRY_HOUR && minute >= ENTRY_MIN))
+    ) {
+      lastEntryDate = date;                           // claim before awaiting
+      const claimed = weekStart;
+      runEntry(base, claimed, `${ENTRY_HOUR}:${String(ENTRY_MIN).padStart(2, '0')} ET`)
+        .then((ok) => { if (ok) entryDoneWeek = claimed; });
       return;
     }
 
@@ -142,4 +208,4 @@ function startCondorMarkRecorder(port) {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startCondorMarkRecorder, runHourly, runEod, currentWeekStartET };
+module.exports = { startCondorMarkRecorder, runHourly, runEod, runEntry, currentWeekStartET };

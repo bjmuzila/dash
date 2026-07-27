@@ -346,6 +346,48 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 const BUBBLE_CFG_KEY = "es-candles-bubble-cfg-v1";
 type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; brightness: number };
 const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 7, brightness: 84 };
+const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "brightness"];
+
+// The blob also carries two settings that are NOT slider values and therefore
+// live in their own React state: `mins` (the 1m/5m bucket) and `on` (the
+// Bubbles overlay toggle). They used to reset on every visit, which is what
+// made the whole panel feel like it wasn't saving — the sizes came back but the
+// bucket and the on/off didn't, so the chart never looked like you left it.
+//
+// Both helpers READ-MODIFY-WRITE the single blob. A plain setItem(next) would
+// drop whichever keys the caller didn't know about — that's exactly how the
+// slider write used to clobber `mins`.
+function readBubbleBlob(): Record<string, unknown> {
+  try {
+    const raw = window.localStorage.getItem(BUBBLE_CFG_KEY);
+    const p = raw ? JSON.parse(raw) : null;
+    return p && typeof p === "object" ? (p as Record<string, unknown>) : {};
+  } catch { return {}; } // private mode / bad blob
+}
+function writeBubbleBlob(patch: Record<string, unknown>) {
+  try { window.localStorage.setItem(BUBBLE_CFG_KEY, JSON.stringify({ ...readBubbleBlob(), ...patch })); } catch { /* ignore */ }
+}
+
+// ── "Save default" ──────────────────────────────────────────────────────────
+// TWO separate stores, on purpose:
+//   BUBBLE_CFG_KEY — the WORKING state. Every slider nudge overwrites it, so
+//                    the page always reopens exactly as you left it.
+//   BUBBLE_DEF_KEY — the DEFAULT you deliberately pinned. Only "Save default"
+//                    writes it; nothing else can trample it.
+// Reset restores the pinned default when one exists, and the factory values
+// when it doesn't — so you can fiddle freely and always get back to your setup.
+//
+// Both live in localStorage, which survives a hard refresh (Ctrl+Shift+R only
+// re-fetches assets), a browser restart, and a deploy. It is per-browser
+// profile, and clearing site data clears it — there is no server-side copy.
+const BUBBLE_DEF_KEY = "es-candles-bubble-default-v1";
+function readBubbleDefault(): Record<string, unknown> | null {
+  try {
+    const raw = window.localStorage.getItem(BUBBLE_DEF_KEY);
+    const p = raw ? JSON.parse(raw) : null;
+    return p && typeof p === "object" ? (p as Record<string, unknown>) : null;
+  } catch { return null; }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart symbol
@@ -933,12 +975,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // initializer) so SSR and the first client render agree. Merged over defaults
   // so a partial/older blob still yields a complete, valid config.
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(BUBBLE_CFG_KEY);
-      if (!raw) return;
-      const p = JSON.parse(raw);
-      if (p && typeof p === "object") setBubbleCfg((c) => ({ ...c, ...p }));
-    } catch { /* private mode / bad blob — keep the defaults */ }
+    const p = readBubbleBlob();
+    // Slider values: copy ONLY the known numeric keys. Spreading the whole blob
+    // would inject `mins` / `on` into bubbleCfg and give them two owners.
+    const patch: Partial<BubbleCfg> = {};
+    for (const k of BUBBLE_CFG_KEYS) {
+      const v = p[k];
+      if (typeof v === "number" && Number.isFinite(v)) patch[k] = v;
+    }
+    if (Object.keys(patch).length) setBubbleCfg((c) => ({ ...c, ...patch }));
+    // The two non-slider settings.
+    if (p.mins === 1 || p.mins === 5) setBubbleMins(p.mins);
+    if (typeof p.on === "boolean") setShowGexBubbles(p.on);
   }, []);
   // Patch the config with slider constraints enforced, then persist:
   //   • Highlight can't exceed Show Top Strikes (lowering N pulls X down).
@@ -950,9 +998,41 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         if ("minSize" in patch) next.maxSize = next.minSize; else next.minSize = next.maxSize;
       }
       next.highlight = Math.max(0, Math.min(next.highlight, next.topStrikes));
-      try { window.localStorage.setItem(BUBBLE_CFG_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      writeBubbleBlob({ ...next }); // merge — must not drop `mins` / `on`
       return next;
     });
+  }, []);
+  // The 1m/5m bucket and the Bubbles on/off both persist into the same blob, so
+  // the panel comes back exactly as you left it.
+  const updateBubbleMins = useCallback((m: 1 | 5) => { setBubbleMins(m); writeBubbleBlob({ mins: m }); }, []);
+  const updateShowBubbles = useCallback((on: boolean) => { setShowGexBubbles(on); writeBubbleBlob({ on }); }, []);
+  // Pin the current panel as the default. Snapshots the sliders + the 1m/5m
+  // bucket; the on/off toggle is deliberately NOT part of a default (you turn
+  // the overlay on and off constantly — that's working state, not a preset).
+  const [defSavedFlash, setDefSavedFlash] = useState(false);
+  const defFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveBubbleDefault = useCallback(() => {
+    try { window.localStorage.setItem(BUBBLE_DEF_KEY, JSON.stringify({ ...bubbleCfg, mins: bubbleMins })); } catch { /* ignore */ }
+    setDefSavedFlash(true);
+    if (defFlashTimer.current) clearTimeout(defFlashTimer.current);
+    defFlashTimer.current = setTimeout(() => setDefSavedFlash(false), 1600);
+  }, [bubbleCfg, bubbleMins]);
+  useEffect(() => () => { if (defFlashTimer.current) clearTimeout(defFlashTimer.current); }, []);
+  // Reset → the pinned default if there is one, else the factory values.
+  const resetBubbleCfg = useCallback(() => {
+    const saved = readBubbleDefault();
+    const next: BubbleCfg = { ...BUBBLE_CFG_DEFAULT };
+    let mins: 1 | 5 = 5;
+    if (saved) {
+      for (const k of BUBBLE_CFG_KEYS) {
+        const v = saved[k];
+        if (typeof v === "number" && Number.isFinite(v)) next[k] = v;
+      }
+      if (saved.mins === 1 || saved.mins === 5) mins = saved.mins;
+    }
+    setBubbleCfg(next);
+    setBubbleMins(mins);
+    writeBubbleBlob({ ...next, mins });
   }, []);
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing. Must stay BELOW the useState above (see bubbleCfgRef).
@@ -3166,7 +3246,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 { label: "Levels", on: showLevels, toggle: () => setShowLevels((v) => !v) },
                 { label: "PDH/ON", on: showSessions, toggle: () => setShowSessions((v) => !v) },
                 { label: "GEX Rail", on: showRail, toggle: () => setShowRail((v) => !v) },
-                { label: "Bubbles", on: showGexBubbles, toggle: () => setShowGexBubbles((v) => !v) },
+                { label: "Bubbles", on: showGexBubbles, toggle: () => updateShowBubbles(!showGexBubbles) },
                 { label: "Flip X", on: showFlipCross, toggle: () => setShowFlipCross((v) => !v) },
                 { label: "VSA", on: showVsa, toggle: () => setShowVsa((v) => !v) },
               ] as const).map((o) => (
@@ -3237,8 +3317,35 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   <SegGroup
                     options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
                     active={String(bubbleMins)}
-                    onChange={(v) => setBubbleMins(Number(v) === 1 ? 1 : 5)}
+                    onChange={(v) => updateBubbleMins(Number(v) === 1 ? 1 : 5)}
                   />
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                    <button
+                      onClick={saveBubbleDefault}
+                      title="Pin the current sliders + bucket as your default. Survives a hard refresh; Reset comes back here."
+                      style={{
+                        fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase",
+                        padding: "3px 9px", borderRadius: 6, cursor: "pointer", fontWeight: 700,
+                        border: `1px solid ${DOCK_THEME.activeBorder}`, background: DOCK_THEME.activeTile, color: HOME_THEME.cyan,
+                      }}
+                    >
+                      Save default
+                    </button>
+                    <button
+                      onClick={resetBubbleCfg}
+                      title="Restore your saved default (or the factory values if you haven't saved one)"
+                      style={{
+                        fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase",
+                        padding: "3px 9px", borderRadius: 6, cursor: "pointer",
+                        border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.muted,
+                      }}
+                    >
+                      Reset
+                    </button>
+                    <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase", color: defSavedFlash ? "#1FD98A" : HOME_THEME.muted, opacity: defSavedFlash ? 1 : 0.55, transition: "opacity .2s, color .2s" }}>
+                      {defSavedFlash ? "saved ✓" : "auto-saved"}
+                    </span>
+                  </div>
                 </div>
               )}
               {showVsa && (
